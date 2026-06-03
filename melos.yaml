@@ -5,7 +5,7 @@ repository: https://github.com/supremedomotics/os-app
 # the pnpm/Turborepo workspace that manages the JS/TS + Python sides (§4).
 packages:
   - apps/mobile
-  - apps/installer
+  # apps/installer — form factor (Flutter vs web) is a deferred open item (§4 / open #2)
   - packages/aureon-flutter
   - packages/supreme-sdk-dart
 

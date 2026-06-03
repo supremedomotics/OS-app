@@ -1,0 +1,110 @@
+# Supreme OS — Home Hub (blueprint §2.1, §14).
+#
+# The hub is the whole product: it runs control, automation, data, identity and
+# AI entirely on the box, with zero internet required. Supreme services run as
+# sidecar containers beside a HEADLESS, HIDDEN Home Assistant Core. Only the SIL
+# (inside the gateway for Phase 0) ever talks to HA — and HA is never published to
+# the host, so its UI/branding can't leak (§7, §12, §17).
+#
+# Networks:
+#   supreme-edge   — client-facing; ONLY the gateway is attached here.
+#   supreme-core   — internal; HA, Postgres, Redis, NATS, MQTT. No host ports.
+# This segmentation enforces "HA admin bound to loopback" at the topology level.
+
+name: supreme-hub
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/gateway.Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPREME_HOST: 0.0.0.0
+      SUPREME_PORT: "8080"
+      SUPREME_BACKEND: ${SUPREME_BACKEND:-ha}
+      SUPREME_HA_URL: ws://homeassistant:8123/api/websocket
+      SUPREME_HA_TOKEN: ${SUPREME_HA_TOKEN:?provide a long-lived HA token in .env}
+      SUPREME_TOKEN_SECRET: ${SUPREME_TOKEN_SECRET:?provide a 32+ char secret in .env}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      # The ONLY host-published port in the whole hub: the Supreme API.
+      - "8080:8080"
+    networks:
+      - supreme-edge
+      - supreme-core
+    depends_on:
+      homeassistant:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  # Headless Home Assistant Core — hidden backend. NO published ports; reachable
+  # only on the internal supreme-core network by the SIL. Supervisor not used.
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2024.12
+    restart: unless-stopped
+    volumes:
+      - ./homeassistant:/config
+      - ha-data:/config/.storage
+    environment:
+      TZ: ${SUPREME_TZ:-UTC}
+    networks:
+      - supreme-core
+    # Intentionally NO `ports:` — HA must never be exposed to the host/LAN.
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: supreme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?provide a db password in .env}
+      POSTGRES_DB: supreme
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - supreme-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supreme"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - supreme-core
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-js", "-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data
+    networks:
+      - supreme-core
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+    networks:
+      - supreme-core
+
+networks:
+  supreme-edge:
+    driver: bridge
+  supreme-core:
+    driver: bridge
+    internal: true # no outbound/inbound to host — pure internal plane
+
+volumes:
+  ha-data:
+  pg-data:
+  nats-data:
+  mqtt-data:
