@@ -1,0 +1,25 @@
+name: aureon_flutter
+description: Aureon design system for Flutter — tokens, theme, and luxury controls.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  fonts:
+    - family: Aureon Display
+      fonts:
+        - asset: fonts/AureonDisplay-Regular.otf
+        - asset: fonts/AureonDisplay-SemiBold.otf
+          weight: 600

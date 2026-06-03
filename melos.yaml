@@ -1,0 +1,25 @@
+name: supreme_flutter
+repository: https://github.com/supremedomotics/os-app
+
+# Melos manages the Dart/Flutter workspace (apps + Flutter packages), parallel to
+# the pnpm/Turborepo workspace that manages the JS/TS + Python sides (§4).
+packages:
+  - apps/mobile
+  - apps/installer
+  - packages/aureon-flutter
+  - packages/supreme-sdk-dart
+
+command:
+  bootstrap:
+    runPubGetInParallel: true
+
+scripts:
+  analyze:
+    description: Analyze all Dart packages.
+    run: melos exec -- dart analyze .
+  test:
+    description: Run all Flutter/Dart tests.
+    run: melos exec -- flutter test
+  format:
+    description: Format all Dart code.
+    run: melos exec -- dart format .

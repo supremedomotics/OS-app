@@ -1,0 +1,120 @@
+import {
+  ApiError,
+  CurrentUser,
+  DeviceList,
+  HomeView,
+  LoginResponse,
+  SupremeError,
+  TokenPair,
+  type CommandResponse,
+} from "@supreme/contracts";
+import type { CapabilityCommand, DeviceId, RoomId } from "@supreme/domain-model";
+
+/**
+ * Supreme TypeScript SDK (§6). Clients (web homeowner/installer) bind to this, not
+ * to raw endpoints — and certainly never to HA. The SDK validates responses with
+ * the shared contracts, so a backend contract drift is caught at the boundary.
+ *
+ * Token storage is injected so the SDK is environment-agnostic (browser, node).
+ */
+export interface TokenStore {
+  get(): { accessToken: string; refreshToken: string } | null;
+  set(tokens: { accessToken: string; refreshToken: string } | null): void;
+}
+
+export class MemoryTokenStore implements TokenStore {
+  private tokens: { accessToken: string; refreshToken: string } | null = null;
+  get() {
+    return this.tokens;
+  }
+  set(tokens: { accessToken: string; refreshToken: string } | null) {
+    this.tokens = tokens;
+  }
+}
+
+export interface SupremeClientOptions {
+  baseUrl: string;
+  tokenStore?: TokenStore;
+  fetchImpl?: typeof fetch;
+}
+
+export class SupremeClient {
+  private readonly baseUrl: string;
+  private readonly tokens: TokenStore;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(opts: SupremeClientOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/$/, "");
+    this.tokens = opts.tokenStore ?? new MemoryTokenStore();
+    this.fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  }
+
+  // ── Auth ─────────────────────────────────────────────────────────────────────
+  async login(email: string, password: string): Promise<LoginResponse> {
+    const res = await this.request("POST", "/v1/auth/login", { email, password }, false);
+    const parsed = LoginResponse.parse(res);
+    if (parsed.status === "ok") {
+      this.tokens.set({ accessToken: parsed.accessToken, refreshToken: parsed.refreshToken });
+    }
+    return parsed;
+  }
+
+  async refresh(): Promise<TokenPair> {
+    const current = this.tokens.get();
+    if (!current) throw new SupremeError("unauthorized", "no refresh token");
+    const res = await this.request("POST", "/v1/auth/refresh", { refreshToken: current.refreshToken }, false);
+    const pair = TokenPair.parse(res);
+    this.tokens.set({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+    return pair;
+  }
+
+  // ── Queries & commands ─────────────────────────────────────────────────────
+  async me(): Promise<CurrentUser> {
+    return CurrentUser.parse(await this.request("GET", "/v1/me"));
+  }
+
+  async home(): Promise<HomeView> {
+    return HomeView.parse(await this.request("GET", "/v1/home"));
+  }
+
+  async devicesInRoom(roomId: RoomId): Promise<DeviceList> {
+    return DeviceList.parse(await this.request("GET", `/v1/rooms/${roomId}/devices`));
+  }
+
+  /** The core control verb — tap a light, set a level, etc. */
+  async command(deviceId: DeviceId, command: CapabilityCommand): Promise<CommandResponse> {
+    return this.request("POST", `/v1/devices/${deviceId}/command`, { command }) as Promise<CommandResponse>;
+  }
+
+  get accessToken(): string | null {
+    return this.tokens.get()?.accessToken ?? null;
+  }
+
+  // ── transport ────────────────────────────────────────────────────────────────
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    auth = true,
+  ): Promise<unknown> {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (auth) {
+      const token = this.tokens.get()?.accessToken;
+      if (!token) throw new SupremeError("unauthorized", "not authenticated");
+      headers.authorization = `Bearer ${token}`;
+    }
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    const json = text ? JSON.parse(text) : undefined;
+    if (!res.ok) {
+      const err = ApiError.safeParse(json);
+      if (err.success) throw new SupremeError(err.data.code, err.data.message, err.data.details);
+      throw new SupremeError("internal", `request failed (${res.status})`);
+    }
+    return json;
+  }
+}

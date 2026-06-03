@@ -24,6 +24,15 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  packages/aureon-web:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   packages/domain-model:
     dependencies:
       zod:
@@ -45,6 +54,22 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/supreme-sdk-ts:
+    dependencies:
+      '@supreme/contracts':
+        specifier: workspace:*
+        version: link:../supreme-contracts
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../domain-model
     devDependencies:
       typescript:
         specifier: ^5.7.3
@@ -149,6 +174,25 @@ importers:
         specifier: workspace:*
         version: link:../../packages/domain-model
     devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  tools/codegen:
+    dependencies:
+      '@supreme/aureon-web':
+        specifier: workspace:*
+        version: link:../../packages/aureon-web
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
       typescript:
         specifier: ^5.7.3
         version: 5.9.3

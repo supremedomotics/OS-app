@@ -1,0 +1,22 @@
+{
+  "name": "@supreme/codegen",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Codegen tools — generate the Aureon Flutter tokens from the canonical JSON.",
+  "type": "module",
+  "scripts": {
+    "gen:aureon-dart": "tsx src/generate-aureon-dart.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/aureon-web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$comment": "Aureon — the canonical design-token source of truth (blueprint §11.2). Dark, architectural, gold-accented, room-first. Both aureon-web (CSS) and aureon-flutter (Dart) are generated/derived from this file so the two clients share one visual truth. Edit values HERE only.",
+  "meta": {
+    "name": "Aureon",
+    "version": "0.1.0",
+    "mode": "dark"
+  },
+  "color": {
+    "base": {
+      "void": "#0A0A0C",
+      "surface": "#121317",
+      "surfaceRaised": "#1A1C22",
+      "surfaceOverlay": "#22242C",
+      "hairline": "#2C2F38"
+    },
+    "gold": {
+      "50": "#FBF3DE",
+      "200": "#F0D9A0",
+      "400": "#E3BE6A",
+      "500": "#D4A24A",
+      "600": "#B7842F",
+      "700": "#8A6020"
+    },
+    "text": {
+      "primary": "#F4F1EA",
+      "secondary": "#B6B2A8",
+      "muted": "#7E7B73",
+      "inverse": "#0A0A0C"
+    },
+    "status": {
+      "good": "#6FBF8B",
+      "info": "#6FA8BF",
+      "warning": "#D9A441",
+      "critical": "#CF6B5A"
+    }
+  },
+  "typography": {
+    "fontFamilyDisplay": "Aureon Display, Georgia, serif",
+    "fontFamilyBody": "Inter, system-ui, sans-serif",
+    "scale": {
+      "display": { "size": 40, "lineHeight": 44, "weight": 600, "tracking": -0.5 },
+      "title": { "size": 28, "lineHeight": 34, "weight": 600, "tracking": -0.25 },
+      "headline": { "size": 22, "lineHeight": 28, "weight": 600, "tracking": 0 },
+      "body": { "size": 16, "lineHeight": 24, "weight": 400, "tracking": 0 },
+      "label": { "size": 13, "lineHeight": 18, "weight": 500, "tracking": 0.4 },
+      "caption": { "size": 11, "lineHeight": 14, "weight": 500, "tracking": 0.6 }
+    }
+  },
+  "spacing": { "unit": 4, "xs": 4, "sm": 8, "md": 16, "lg": 24, "xl": 40, "xxl": 64 },
+  "radius": { "sm": 8, "md": 16, "lg": 24, "pill": 999 },
+  "elevation": {
+    "card": "0 8px 24px rgba(0,0,0,0.45)",
+    "sheet": "0 -12px 40px rgba(0,0,0,0.55)",
+    "blurBackdrop": 24
+  },
+  "motion": {
+    "durationFastMs": 140,
+    "durationBaseMs": 260,
+    "durationSlowMs": 420,
+    "easeQuietOut": [0.16, 1, 0.3, 1],
+    "easeSlowIn": [0.4, 0, 0.2, 1]
+  }
+}
