@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+  - "services/*"
+  - "cloud/*"
+  - "drivers/*"
+  - "tools/*"
+# Flutter workspaces (apps/mobile, apps/installer, packages/aureon-flutter)
+# are managed by Melos, not pnpm — see melos.yaml.
