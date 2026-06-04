@@ -9,7 +9,10 @@
     { "path": "../../packages/supreme-contracts" },
     { "path": "../integration-layer" },
     { "path": "../identity" },
-    { "path": "../permissions" }
+    { "path": "../permissions" },
+    { "path": "../home" },
+    { "path": "../scenes" },
+    { "path": "../notifications" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

@@ -1,18 +1,15 @@
-import {
-  ClientFrame,
-  SupremeError,
-  type ServerFrame,
-} from "@supreme/contracts";
+import { ClientFrame, SupremeError, type ServerFrame } from "@supreme/contracts";
 import type { DeviceId, User } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
+import { can, enforce } from "./auth.js";
 import type { AppContext } from "./context.js";
 
 /**
- * WSS `/v1/stream` (§3.2, §6). Bidirectional realtime: clients subscribe to room
- * scopes and issue commands; the gateway pushes permission-filtered, room-scoped
- * state deltas. Per-device monotonic sequence numbers let clients drop stale or
- * out-of-order frames.
+ * WSS `/v1/stream` (§3.2, §6, §13). Bidirectional realtime: clients subscribe to
+ * room scopes and issue commands; the gateway pushes permission-filtered,
+ * room-scoped state deltas and the user's notifications. Per-device monotonic
+ * sequence numbers let clients drop stale or out-of-order frames.
  *
  * Auth: the access token is passed as `?access_token=` because browsers cannot set
  * Authorization headers on a WebSocket handshake. It is validated once at connect.
@@ -37,33 +34,46 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
   const subscribedRooms = new Set<string>();
   const seqByDevice = new Map<string, number>();
 
-  const unsubscribe = ctx.onState((event) => {
-    const roomId = ctx.roomOf(event.deviceId);
-    const scoped = subscribedRooms.has("*") || (roomId !== null && subscribedRooms.has(roomId));
-    if (!scoped) return;
-    const allowed = ctx.policy.decide(
-      { user, resourceType: "device", resourceId: event.deviceId, action: "view" },
-      ctx.grantsFor(user.id),
-    ).allowed;
-    if (!allowed) return;
+  const unsubState = ctx.onState((event) => {
+    void (async () => {
+      const roomId = await ctx.roomOf(event.deviceId);
+      const scoped = subscribedRooms.has("*") || (roomId !== null && subscribedRooms.has(roomId));
+      if (!scoped) return;
+      if (!(await can(ctx, user, "device", event.deviceId, "view"))) return;
 
-    const seq = (seqByDevice.get(event.deviceId) ?? 0) + 1;
-    seqByDevice.set(event.deviceId, seq);
+      const seq = (seqByDevice.get(event.deviceId) ?? 0) + 1;
+      seqByDevice.set(event.deviceId, seq);
+      const home = await ctx.home.getHome();
+      send(socket, {
+        type: "state",
+        homeId: home?.id ?? "",
+        roomId,
+        deviceId: event.deviceId,
+        state: event.state,
+        seq,
+        ts: event.ts,
+      });
+    })();
+  });
+
+  const unsubNotify = ctx.onNotification((n) => {
+    if (n.userId !== null && n.userId !== user.id) return;
     send(socket, {
-      type: "state",
-      homeId: ctx.home.getHome()?.id ?? "",
-      roomId,
-      deviceId: event.deviceId,
-      state: event.state,
-      seq,
-      ts: event.ts,
+      type: "notification",
+      level: n.level,
+      title: n.title,
+      body: n.body,
+      ts: n.createdAt,
     });
   });
 
   socket.on("message", (raw: Buffer) => {
     void handleFrame(ctx, socket, user, subscribedRooms, raw);
   });
-  socket.on("close", () => unsubscribe());
+  socket.on("close", () => {
+    unsubState();
+    unsubNotify();
+  });
 }
 
 async function handleFrame(
@@ -94,13 +104,10 @@ async function handleFrame(
     case "command": {
       const deviceId = frame.deviceId as DeviceId;
       try {
-        if (!ctx.home.getDevice(deviceId)) {
+        if (!(await ctx.home.getDevice(deviceId))) {
           throw new SupremeError("not_found", "device not found");
         }
-        ctx.policy.enforce(
-          { user, resourceType: "device", resourceId: deviceId, action: "control" },
-          ctx.grantsFor(user.id),
-        );
+        await enforce(ctx, user, "device", deviceId, "control");
         await ctx.sil.command(deviceId, frame.command);
         send(socket, { type: "ack", requestId: frame.requestId, accepted: true });
       } catch (err) {

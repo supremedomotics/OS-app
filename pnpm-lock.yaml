@@ -89,15 +89,24 @@ importers:
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
+      '@supreme/home':
+        specifier: workspace:*
+        version: link:../home
       '@supreme/identity':
         specifier: workspace:*
         version: link:../identity
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+      '@supreme/notifications':
+        specifier: workspace:*
+        version: link:../notifications
       '@supreme/permissions':
         specifier: workspace:*
         version: link:../permissions
+      '@supreme/scenes':
+        specifier: workspace:*
+        version: link:../scenes
       fastify:
         specifier: ^5.2.1
         version: 5.8.5
