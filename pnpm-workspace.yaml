@@ -4,5 +4,8 @@ packages:
   - "cloud/*"
   - "drivers/*"
   - "tools/*"
+  # JS/TS apps only (web). Flutter apps under apps/* have no package.json and are
+  # ignored by pnpm; they are managed by Melos (see melos.yaml).
+  - "apps/web-installer"
 # Flutter workspaces (apps/mobile, apps/installer, packages/aureon-flutter)
 # are managed by Melos, not pnpm — see melos.yaml.

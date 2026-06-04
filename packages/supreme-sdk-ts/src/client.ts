@@ -6,9 +6,24 @@ import {
   LoginResponse,
   SupremeError,
   TokenPair,
+  type CatalogList,
   type CommandResponse,
+  type CommissionRequest,
+  type DiagnosticsReport,
+  type DiscoveryList,
+  type InstalledDriverList,
+  type InstalledDriverResponse,
+  type LicenseStatus,
+  type ProjectExport,
 } from "@supreme/contracts";
-import type { CapabilityCommand, DeviceId, RoomId } from "@supreme/domain-model";
+import type {
+  CapabilityCommand,
+  DeviceId,
+  DriverId,
+  License,
+  ProtocolKind,
+  RoomId,
+} from "@supreme/domain-model";
 
 /**
  * Supreme TypeScript SDK (§6). Clients (web homeowner/installer) bind to this, not
@@ -84,6 +99,53 @@ export class SupremeClient {
   /** The core control verb — tap a light, set a level, etc. */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<CommandResponse> {
     return this.request("POST", `/v1/devices/${deviceId}/command`, { command }) as Promise<CommandResponse>;
+  }
+
+  // ── Installer surface (§9, §14) ──────────────────────────────────────────────
+  driversCatalog(): Promise<CatalogList> {
+    return this.request("GET", "/v1/drivers/catalog") as Promise<CatalogList>;
+  }
+  installedDrivers(): Promise<InstalledDriverList> {
+    return this.request("GET", "/v1/drivers") as Promise<InstalledDriverList>;
+  }
+  installDriver(key: string, version?: string): Promise<InstalledDriverResponse> {
+    return this.request("POST", "/v1/drivers/install", { key, version }) as Promise<InstalledDriverResponse>;
+  }
+  setDriverEnabled(id: DriverId, enabled: boolean): Promise<InstalledDriverResponse> {
+    return this.request("POST", `/v1/drivers/${id}/enabled`, { enabled }) as Promise<InstalledDriverResponse>;
+  }
+  uninstallDriver(id: DriverId): Promise<void> {
+    return this.request("DELETE", `/v1/drivers/${id}`) as Promise<void>;
+  }
+
+  discover(protocol?: ProtocolKind): Promise<DiscoveryList> {
+    return this.request("POST", "/v1/commissioning/discover", { protocol }) as Promise<DiscoveryList>;
+  }
+  commission(input: CommissionRequest): Promise<{ device: { id: string; name: string } }> {
+    return this.request("POST", "/v1/commissioning/commission", input) as Promise<{
+      device: { id: string; name: string };
+    }>;
+  }
+
+  diagnostics(): Promise<DiagnosticsReport> {
+    return this.request("GET", "/v1/diagnostics") as Promise<DiagnosticsReport>;
+  }
+  projectExport(): Promise<ProjectExport> {
+    return this.request("GET", "/v1/project/export") as Promise<ProjectExport>;
+  }
+
+  backup(): Promise<{ meta: { id: string; rowCount: number }; document: string }> {
+    return this.request("POST", "/v1/backup") as Promise<{ meta: { id: string; rowCount: number }; document: string }>;
+  }
+  restore(document: string): Promise<{ tables: number; rows: number }> {
+    return this.request("POST", "/v1/backup/restore", { document }) as Promise<{ tables: number; rows: number }>;
+  }
+
+  licenseStatus(): Promise<LicenseStatus> {
+    return this.request("GET", "/v1/license") as Promise<LicenseStatus>;
+  }
+  activateLicense(token: License): Promise<LicenseStatus> {
+    return this.request("POST", "/v1/license/activate", { token }) as Promise<LicenseStatus>;
   }
 
   get accessToken(): string | null {
