@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { CapabilityKind, CapabilityState } from "./capabilities.js";
 import {
-  AutomationId,
   DeviceId,
   DriverId,
   HomeId,
@@ -121,21 +120,5 @@ export const Scene = z.object({
 });
 export type Scene = z.infer<typeof Scene>;
 
-/**
- * Supreme automation DSL (engine-agnostic). For Phase 1 the SIL compiles this to
- * an HA automation (`engine = "ha"`) and stores the backend ref; a future native
- * engine (`engine = "supreme"`) executes the same DSL unchanged (§10).
- */
-export const Automation = z.object({
-  id: AutomationId,
-  homeId: HomeId,
-  name: z.string().min(1),
-  enabled: z.boolean().default(true),
-  trigger: z.record(z.unknown()),
-  condition: z.record(z.unknown()).nullable(),
-  action: z.array(z.record(z.unknown())),
-  engine: z.enum(["ha", "supreme"]).default("ha"),
-  /** Opaque backend reference (e.g. HA automation id) — owned by the SIL. */
-  externalRef: z.string().nullable(),
-});
-export type Automation = z.infer<typeof Automation>;
+// Automations live in their own module (./automations-dsl.ts) — a typed,
+// engine-agnostic DSL. Re-exported from the package index alongside these entities.

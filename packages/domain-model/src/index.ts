@@ -12,3 +12,4 @@ export * from "./entities.js";
 export * from "./users.js";
 export * from "./notifications.js";
 export * from "./drivers.js";
+export * from "./automations-dsl.js";
