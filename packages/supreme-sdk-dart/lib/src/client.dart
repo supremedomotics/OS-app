@@ -66,6 +66,53 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  // ── Scenes ─────────────────────────────────────────────────────────────────
+  Future<List<Scene>> scenes() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/scenes'), headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['scenes'] as List<dynamic>)
+        .map((s) => Scene.fromJson(s as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> activateScene(String sceneId) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/scenes/$sceneId/activate'),
+      headers: _authHeaders,
+    );
+    _ensureOk(res);
+  }
+
+  // ── Favorites ────────────────────────────────────────────────────────────────
+  Future<List<Favorite>> favorites() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/favorites'), headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['favorites'] as List<dynamic>)
+        .map((f) => Favorite.fromJson(f as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> setFavorite(Map<String, dynamic> ref, {required bool favorite}) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/favorites'),
+      headers: _authHeaders,
+      body: jsonEncode({'ref': ref, 'favorite': favorite}),
+    );
+    _ensureOk(res);
+  }
+
+  // ── Notifications ────────────────────────────────────────────────────────────
+  Future<List<NotificationItem>> notifications() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/notifications'), headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['notifications'] as List<dynamic>)
+        .map((n) => NotificationItem.fromJson(n as Map<String, dynamic>))
+        .toList();
+  }
+
   void _ensureOk(http.Response res) {
     if (res.statusCode >= 400) {
       throw SupremeApiException(res.statusCode, res.body);

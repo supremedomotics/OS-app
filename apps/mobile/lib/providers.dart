@@ -28,3 +28,18 @@ final roomDevicesProvider =
   final client = ref.watch(clientProvider);
   return client.devicesInRoom(roomId);
 });
+
+/// Scenes available to the current user (§10).
+final scenesProvider = FutureProvider<List<Scene>>((ref) async {
+  return ref.watch(clientProvider).scenes();
+});
+
+/// Dashboard favorites (§11.3).
+final favoritesProvider = FutureProvider<List<Favorite>>((ref) async {
+  return ref.watch(clientProvider).favorites();
+});
+
+/// Notification history; live alerts also arrive over the WSS stream.
+final notificationsProvider = FutureProvider<List<NotificationItem>>((ref) async {
+  return ref.watch(clientProvider).notifications();
+});

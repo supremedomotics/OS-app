@@ -5,7 +5,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import 'providers.dart';
 import 'screens/login_screen.dart';
-import 'screens/room_view.dart';
+import 'screens/home_shell.dart';
 
 class SupremeApp extends ConsumerWidget {
   const SupremeApp({super.key});
@@ -48,6 +48,6 @@ class _RootState extends ConsumerState<_Root> {
     if (!_authed) {
       return LoginScreen(onAuthenticated: _onAuthenticated);
     }
-    return const HomePager();
+    return const HomeShell();
   }
 }

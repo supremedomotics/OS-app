@@ -74,3 +74,57 @@ class HomeView {
             .toList(),
       );
 }
+
+class Scene {
+  Scene({required this.id, required this.name, required this.icon});
+  final String id;
+  final String name;
+  final String? icon;
+
+  factory Scene.fromJson(Map<String, dynamic> json) => Scene(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        icon: json['icon'] as String?,
+      );
+}
+
+class NotificationItem {
+  NotificationItem({
+    required this.id,
+    required this.level,
+    required this.title,
+    required this.body,
+    required this.createdAt,
+    required this.readAt,
+  });
+  final String id;
+  final String level;
+  final String title;
+  final String body;
+  final String createdAt;
+  final String? readAt;
+
+  bool get unread => readAt == null;
+
+  factory NotificationItem.fromJson(Map<String, dynamic> json) => NotificationItem(
+        id: json['id'] as String,
+        level: json['level'] as String,
+        title: json['title'] as String,
+        body: json['body'] as String,
+        createdAt: json['createdAt'] as String,
+        readAt: json['readAt'] as String?,
+      );
+}
+
+/// A dashboard favorite referencing a device or a scene.
+class Favorite {
+  Favorite({required this.type, required this.refId});
+  final String type; // 'device' | 'scene'
+  final String refId;
+
+  factory Favorite.fromJson(Map<String, dynamic> json) {
+    final ref = json['ref'] as Map<String, dynamic>;
+    final type = ref['type'] as String;
+    return Favorite(type: type, refId: (ref['${type}Id']) as String);
+  }
+}

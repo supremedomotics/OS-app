@@ -9,3 +9,6 @@ export 'src/tokens.g.dart';
 export 'src/theme.dart';
 export 'src/widgets/fill_tile.dart';
 export 'src/widgets/slide_to_confirm.dart';
+export 'src/widgets/scene_button.dart';
+export 'src/widgets/climate_card.dart';
+export 'src/widgets/media_card.dart';
