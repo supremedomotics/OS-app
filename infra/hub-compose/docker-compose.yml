@@ -26,6 +26,7 @@ services:
       SUPREME_HA_URL: ws://homeassistant:8123/api/websocket
       SUPREME_HA_TOKEN: ${SUPREME_HA_TOKEN:?provide a long-lived HA token in .env}
       SUPREME_TOKEN_SECRET: ${SUPREME_TOKEN_SECRET:?provide a 32+ char secret in .env}
+      DATABASE_URL: postgres://supreme:${POSTGRES_PASSWORD:?provide a db password in .env}@postgres:5432/supreme
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:
       # The ONLY host-published port in the whole hub: the Supreme API.

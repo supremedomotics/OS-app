@@ -11,6 +11,8 @@ export interface GatewayConfig {
   backend: "mock" | "ha";
   haUrl: string;
   haToken: string;
+  /** Postgres connection string; empty = use in-memory stores (dev/tests). */
+  databaseUrl: string;
   logLevel: string;
 }
 
@@ -24,6 +26,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     backend,
     haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
     haToken: env.SUPREME_HA_TOKEN ?? "",
+    databaseUrl: env.DATABASE_URL ?? "",
     logLevel: env.SUPREME_LOG_LEVEL ?? "info",
   };
 }

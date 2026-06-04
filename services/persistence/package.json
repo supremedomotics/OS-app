@@ -1,8 +1,8 @@
 {
-  "name": "@supreme/gateway",
+  "name": "@supreme/persistence",
   "version": "0.0.0",
   "private": true,
-  "description": "Supreme API Gateway / BFF — REST + WSS, the only client-facing surface.",
+  "description": "Postgres-backed repositories for the Supreme system of record (§5).",
   "type": "module",
   "exports": {
     ".": {
@@ -12,36 +12,27 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": ["dist", "migrations"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
     "@supreme/domain-model": "workspace:*",
-    "@supreme/contracts": "workspace:*",
-    "@supreme/integration-layer": "workspace:*",
     "@supreme/identity": "workspace:*",
-    "@supreme/permissions": "workspace:*",
     "@supreme/home": "workspace:*",
     "@supreme/scenes": "workspace:*",
+    "@supreme/permissions": "workspace:*",
     "@supreme/notifications": "workspace:*",
-    "@supreme/persistence": "workspace:*",
-    "@fastify/websocket": "^11.0.2",
-    "fastify": "^5.2.1",
-    "pino": "^9.6.0",
-    "zod": "^3.24.1"
+    "pg": "^8.13.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
-    "tsx": "^4.19.2",
+    "@electric-sql/pglite": "^0.2.17",
+    "@supreme/integration-layer": "workspace:*",
+    "@types/pg": "^8.11.10",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8",
-    "ws": "^8.18.0",
-    "@types/ws": "^8.5.13"
+    "vitest": "^2.1.8"
   }
 }

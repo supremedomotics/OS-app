@@ -6,14 +6,11 @@
   },
   "references": [
     { "path": "../../packages/domain-model" },
-    { "path": "../../packages/supreme-contracts" },
-    { "path": "../integration-layer" },
     { "path": "../identity" },
-    { "path": "../permissions" },
     { "path": "../home" },
     { "path": "../scenes" },
-    { "path": "../notifications" },
-    { "path": "../persistence" }
+    { "path": "../permissions" },
+    { "path": "../notifications" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

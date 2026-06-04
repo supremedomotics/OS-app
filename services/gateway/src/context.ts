@@ -1,9 +1,9 @@
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
-import { IdentityService } from "@supreme/identity";
-import { HomeService, seedDemoHome } from "@supreme/home";
-import { SceneService } from "@supreme/scenes";
-import { NotificationService } from "@supreme/notifications";
+import { IdentityService, type IIdentityStore } from "@supreme/identity";
+import { HomeService, seedDemoHome, type IHomeStore } from "@supreme/home";
+import { SceneService, type ISceneStore } from "@supreme/scenes";
+import { NotificationService, type INotificationStore } from "@supreme/notifications";
 import {
   InMemoryGrantStore,
   PolicyEngine,
@@ -13,6 +13,17 @@ import {
 } from "@supreme/permissions";
 import type { DeviceId, Grant, Notification, UserId } from "@supreme/domain-model";
 import type { GatewayConfig } from "./config.js";
+
+/** Injected dependencies — the SIL and the persisted stores. Anything omitted
+ * falls back to the in-memory default (used by dev and tests). */
+export interface AppDeps {
+  sil?: SupremeIntegrationLayer;
+  identityStore?: IIdentityStore;
+  homeStore?: IHomeStore;
+  sceneStore?: ISceneStore;
+  grantStore?: IGrantStore;
+  notificationStore?: INotificationStore;
+}
 
 /**
  * Composition root for the hub's Supreme plane (§4, §13). Phase-1 runs the domain
@@ -27,7 +38,7 @@ export type NotificationSubscriber = (n: Notification) => void;
 export class AppContext {
   readonly identity: IdentityService;
   readonly policy = new PolicyEngine();
-  readonly grants: IGrantStore = new InMemoryGrantStore();
+  readonly grants: IGrantStore;
   readonly sil: SupremeIntegrationLayer;
   readonly home: HomeService;
   readonly scenes: SceneService;
@@ -36,12 +47,16 @@ export class AppContext {
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
 
-  private constructor(readonly config: GatewayConfig, sil?: SupremeIntegrationLayer) {
-    this.identity = new IdentityService({ tokenSecret: config.tokenSecret });
-    this.sil = sil ?? buildSil(config);
-    this.home = new HomeService(this.sil);
-    this.scenes = new SceneService(this.sil);
-    this.notifications = new NotificationService();
+  private constructor(readonly config: GatewayConfig, deps: AppDeps = {}) {
+    this.identity = new IdentityService({
+      tokenSecret: config.tokenSecret,
+      store: deps.identityStore,
+    });
+    this.sil = deps.sil ?? buildSil(config);
+    this.home = new HomeService(this.sil, deps.homeStore);
+    this.scenes = new SceneService(this.sil, deps.sceneStore);
+    this.notifications = new NotificationService(deps.notificationStore);
+    this.grants = deps.grantStore ?? new InMemoryGrantStore();
 
     // Fan SIL state events out to live WSS connections and update the device cache.
     this.sil.subscribe((event) => {
@@ -55,23 +70,29 @@ export class AppContext {
   }
 
   /**
-   * Build and start the context. A pre-built SIL may be injected (e.g. the HA-backed
-   * SIL assembled by {@link createHubContext}); otherwise the mock backend is used.
+   * Build and start the context. A pre-built SIL and/or persisted stores may be
+   * injected (see {@link createHubContext}); otherwise the mock backend and
+   * in-memory stores are used.
+   *
+   * First boot commissions a demo home + Master User and seeds demo devices. On a
+   * persisted hub, subsequent boots find the existing home and instead rebind the
+   * stored devices' capabilities into the SIL registry — no re-commission.
    */
-  static async create(
-    config: GatewayConfig,
-    overrides?: { sil?: SupremeIntegrationLayer },
-  ): Promise<AppContext> {
-    const ctx = new AppContext(config, overrides?.sil);
+  static async create(config: GatewayConfig, deps: AppDeps = {}): Promise<AppContext> {
+    const ctx = new AppContext(config, deps);
     await ctx.sil.start();
 
-    const { home } = await ctx.identity.commission({
-      homeName: "Supreme Residence",
-      email: "owner@supreme.local",
-      password: "supreme-owner-demo-pass",
-      displayName: "Home Owner",
-    });
-    await seedDemoHome(ctx.home, home);
+    if (await ctx.home.getHome()) {
+      await ctx.home.rebindRegistry();
+    } else {
+      const { home } = await ctx.identity.commission({
+        homeName: "Supreme Residence",
+        email: "owner@supreme.local",
+        password: "supreme-owner-demo-pass",
+        displayName: "Home Owner",
+      });
+      await seedDemoHome(ctx.home, home);
+    }
     return ctx;
   }
 
