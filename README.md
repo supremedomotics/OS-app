@@ -59,6 +59,25 @@ SUPREME_BACKEND=mock pnpm --filter @supreme/gateway dev
 cd infra/hub-compose && cp .env.example .env && docker compose up -d --build
 ```
 
+### Native toolchains (Flutter & Docker)
+
+The TS/Python work needs no extra setup. For the Flutter app and the Docker/Compose
+stack, run the idempotent provisioner (also wired as a Claude Code **SessionStart
+hook** in `.claude/settings.json`, so web sessions auto-provision in the background):
+
+```bash
+bash scripts/dev/enable-native-tools.sh   # installs Flutter, starts dockerd
+export PATH="/opt/flutter/bin:$PATH"
+cd apps/mobile && flutter pub get && flutter test && flutter build web
+```
+
+> **Docker image pulls** depend on the environment's network policy. In the default
+> managed web environment, container-registry blob CDNs (Docker Hub, GHCR, ECR,
+> Quay) are blocked, so the daemon starts but `docker compose up` can't fetch base
+> images — allowlist those registry hosts (or configure a registry mirror / Docker
+> Hub credentials) in your environment to run the full hub stack locally. CI uses
+> GitHub-hosted runners, which can pull images and install Flutter normally.
+
 ### What's verified by tests
 
 - **Tap a light through the full stack** (`services/gateway/src/e2e.test.ts`):
