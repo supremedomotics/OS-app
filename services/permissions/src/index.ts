@@ -4,3 +4,9 @@
  */
 export { PolicyEngine, type AccessRequest, type Decision } from "./policy.js";
 export { BASELINE_ROLES, baselineAllows, type RolePolicy } from "./roles.js";
+export {
+  InMemoryGrantStore,
+  buildGrant,
+  type IGrantStore,
+  type CreateGrantInput,
+} from "./grant-store.js";

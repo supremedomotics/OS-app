@@ -1,0 +1,212 @@
+import {
+  newId,
+  type CapabilityState,
+  type Device,
+  type DeviceId,
+  type Favorite,
+  type Home,
+  type Room,
+  type RoomId,
+  type UserId,
+} from "@supreme/domain-model";
+import { SupremeError } from "@supreme/contracts";
+import type { SupremeIntegrationLayer } from "@supreme/integration-layer";
+import { InMemoryHomeStore, type IHomeStore } from "./store.js";
+
+/**
+ * Home service (§4 rooms + devices services, plus favorites). Owns the Supreme
+ * topology and binds each device capability to a backend entity in the SIL entity
+ * registry — the only place the HA mapping lives. Clients see pure Supreme data.
+ */
+export class HomeService {
+  private readonly store: IHomeStore;
+
+  constructor(
+    private readonly sil: SupremeIntegrationLayer,
+    store?: IHomeStore,
+  ) {
+    this.store = store ?? new InMemoryHomeStore();
+  }
+
+  /** Rebind every stored device's capabilities into the SIL registry (on boot). */
+  async rebindRegistry(): Promise<void> {
+    for (const { device, backendIds } of await this.store.listDevices()) {
+      this.bind(device, backendIds);
+    }
+  }
+
+  getHome(): Promise<Home | null> {
+    return this.store.getHome();
+  }
+  setHome(home: Home): Promise<void> {
+    return this.store.putHome(home);
+  }
+
+  listRooms(): Promise<Room[]> {
+    return this.store.listRooms();
+  }
+  getRoom(id: RoomId): Promise<Room | null> {
+    return this.store.getRoom(id);
+  }
+  addRoom(room: Room): Promise<void> {
+    return this.store.putRoom(room);
+  }
+
+  async getDevice(id: DeviceId): Promise<Device | null> {
+    return (await this.store.getDevice(id))?.device ?? null;
+  }
+  async listDevices(): Promise<Device[]> {
+    return (await this.store.listDevices()).map((d) => d.device);
+  }
+  async listDevicesInRoom(roomId: RoomId): Promise<Device[]> {
+    return (await this.store.listDevices())
+      .map((d) => d.device)
+      .filter((d) => d.roomId === roomId);
+  }
+
+  async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
+    await this.store.putDevice(device, backendIds);
+    this.bind(device, backendIds);
+  }
+
+  /** Apply a normalized state delta from the SIL onto the cached/persisted device. */
+  async applyState(deviceId: DeviceId, state: CapabilityState): Promise<Device | null> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) return null;
+    const nextState = { ...stored.device.state, [state.kind]: state };
+    await this.store.updateDeviceState(deviceId, nextState);
+    return { ...stored.device, state: nextState };
+  }
+
+  async roomOf(deviceId: DeviceId): Promise<string | null> {
+    return (await this.store.getDevice(deviceId))?.device.roomId ?? null;
+  }
+
+  // ── Favorites ──────────────────────────────────────────────────────────────
+  listFavorites(userId: UserId): Promise<Favorite[]> {
+    return this.store.listFavorites(userId);
+  }
+  async setFavorite(userId: UserId, ref: Favorite["ref"], on: boolean): Promise<void> {
+    if (on) {
+      const count = (await this.store.listFavorites(userId)).length;
+      await this.store.putFavorite({ userId, ref, sortOrder: count });
+    } else {
+      await this.store.removeFavorite(userId, ref);
+    }
+  }
+
+  /** Resolve a room id, throwing a typed 404 if absent (route convenience). */
+  async requireRoom(roomId: RoomId): Promise<Room> {
+    const room = await this.store.getRoom(roomId);
+    if (!room) throw new SupremeError("not_found", "room not found");
+    return room;
+  }
+
+  private bind(device: Device, backendIds: Record<string, string>): void {
+    for (const cap of device.capabilities) {
+      const backendId = backendIds[cap.kind];
+      if (backendId) {
+        this.sil.mapEntity(device.id, cap.kind, {
+          backendId,
+          backendDomain: backendId.split(".")[0] ?? "unknown",
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Seed a demonstration home (dev/demo only) covering the Phase-1 device classes:
+ * lighting, climate, media, and covers — so the homeowner MVP has a full surface.
+ */
+export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise<void> {
+  await home.setHome(homeRecord);
+  const hid = homeRecord.id;
+
+  const rooms: Room[] = [
+    room(hid, "Living Room", "living", 0, "sofa"),
+    room(hid, "Kitchen", "kitchen", 1, "kitchen"),
+    room(hid, "Bedroom", "bedroom", 2, "bed"),
+  ];
+  for (const r of rooms) await home.addRoom(r);
+  const [living, kitchen, bedroom] = rooms as [Room, Room, Room];
+
+  await home.addDevice(
+    device(hid, living.id, "Living Room Lights", "dimmer", [
+      { kind: "onoff", config: {} },
+      { kind: "brightness", config: {} },
+    ], { brightness: { kind: "brightness", on: false, level: 0 } }),
+    { onoff: "light.living_room", brightness: "light.living_room" },
+  );
+  await home.addDevice(
+    device(hid, living.id, "Living Room Blinds", "cover", [{ kind: "position", config: {} }], {
+      position: { kind: "position", position: 100, moving: false },
+    }),
+    { position: "cover.living_room" },
+  );
+  await home.addDevice(
+    device(hid, living.id, "Media", "media_player", [{ kind: "media", config: {} }], {
+      media: {
+        kind: "media",
+        playback: "idle",
+        volume: 30,
+        muted: false,
+        title: null,
+        artist: null,
+        source: null,
+        artworkUrl: null,
+      },
+    }),
+    { media: "media_player.living_room" },
+  );
+  await home.addDevice(
+    device(hid, kitchen.id, "Kitchen Lights", "light", [{ kind: "onoff", config: {} }], {
+      onoff: { kind: "onoff", on: false },
+    }),
+    { onoff: "light.kitchen" },
+  );
+  await home.addDevice(
+    device(hid, bedroom.id, "Bedroom Climate", "thermostat", [{ kind: "temperature", config: {} }], {
+      temperature: { kind: "temperature", ambientC: 21, targetC: 21, mode: "auto" },
+    }),
+    { temperature: "climate.bedroom" },
+  );
+}
+
+function room(homeId: Home["id"], name: string, areaType: Room["areaType"], sort: number, icon: string): Room {
+  return {
+    id: newId("room") as RoomId,
+    homeId,
+    name,
+    floor: 0,
+    areaType,
+    sortOrder: sort,
+    icon,
+    heroImageUrl: null,
+    parentRoomId: null,
+  };
+}
+
+function device(
+  homeId: Home["id"],
+  roomId: RoomId,
+  name: string,
+  supremeType: Device["supremeType"],
+  capabilities: Device["capabilities"],
+  state: Device["state"],
+): Device {
+  return {
+    id: newId("device") as DeviceId,
+    homeId,
+    roomId,
+    name,
+    supremeType,
+    manufacturer: "Supreme",
+    model: "Aureon",
+    driverId: null,
+    status: "online",
+    capabilities,
+    state,
+    metadata: {},
+  };
+}

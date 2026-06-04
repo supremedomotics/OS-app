@@ -29,6 +29,7 @@ export const UserId = idPattern("usr").brand<"UserId">();
 export const SessionId = idPattern("ses").brand<"SessionId">();
 export const GrantId = idPattern("grt").brand<"GrantId">();
 export const DriverId = idPattern("drv").brand<"DriverId">();
+export const NotificationId = idPattern("ntf").brand<"NotificationId">();
 
 export type HomeId = z.infer<typeof HomeId>;
 export type RoomId = z.infer<typeof RoomId>;
@@ -39,6 +40,7 @@ export type UserId = z.infer<typeof UserId>;
 export type SessionId = z.infer<typeof SessionId>;
 export type GrantId = z.infer<typeof GrantId>;
 export type DriverId = z.infer<typeof DriverId>;
+export type NotificationId = z.infer<typeof NotificationId>;
 
 const PREFIXES = {
   home: "home",
@@ -50,6 +52,7 @@ const PREFIXES = {
   session: "ses",
   grant: "grt",
   driver: "drv",
+  notification: "ntf",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

@@ -10,3 +10,4 @@ export * from "./ids.js";
 export * from "./capabilities.js";
 export * from "./entities.js";
 export * from "./users.js";
+export * from "./notifications.js";

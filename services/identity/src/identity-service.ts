@@ -158,6 +158,23 @@ export class IdentityService {
     return this.store.listUsers();
   }
 
+  async getUser(id: UserId): Promise<User> {
+    const user = await this.store.getUser(id);
+    if (!user) throw new SupremeError("not_found", "user not found");
+    return user;
+  }
+
+  /** Suspend or reactivate a user (master/admin flow, §8). */
+  async setUserStatus(id: UserId, status: "active" | "suspended"): Promise<User> {
+    const user = await this.getUser(id);
+    if (user.userType === "master" && status === "suspended") {
+      throw new SupremeError("conflict", "the master user cannot be suspended");
+    }
+    const next: User = { ...user, status };
+    await this.store.putUser(next);
+    return next;
+  }
+
   private async issueTokens(user: User): Promise<TokenPair> {
     const base = { sub: user.id, homeId: user.homeId, userType: user.userType };
     return {

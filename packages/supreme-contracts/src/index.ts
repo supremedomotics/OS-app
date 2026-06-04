@@ -9,3 +9,4 @@
 export * from "./errors.js";
 export * from "./rest.js";
 export * from "./events.js";
+export * from "./management.js";
