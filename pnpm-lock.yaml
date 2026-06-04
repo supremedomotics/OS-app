@@ -122,6 +122,53 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  services/backup:
+    dependencies:
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../../packages/domain-model
+      '@supreme/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.2.17
+        version: 0.2.17
+      '@supreme/identity':
+        specifier: workspace:*
+        version: link:../identity
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  services/commissioning:
+    dependencies:
+      '@supreme/contracts':
+        specifier: workspace:*
+        version: link:../../packages/supreme-contracts
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../../packages/domain-model
+      '@supreme/home':
+        specifier: workspace:*
+        version: link:../home
+      '@supreme/integration-layer':
+        specifier: workspace:*
+        version: link:../integration-layer
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   services/drivers:
     dependencies:
       '@supreme/contracts':
