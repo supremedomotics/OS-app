@@ -42,3 +42,18 @@ jobs:
             (cd "$pkg" && flutter pub get && dart analyze .)
             echo "::endgroup::"
           done
+
+  python:
+    name: Python commissioning (ruff · pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/commissioning-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install fastapi "uvicorn[standard]" pydantic pytest httpx ruff
+      - run: ruff check .
+      - run: pytest -q

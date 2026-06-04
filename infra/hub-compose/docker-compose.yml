@@ -27,6 +27,8 @@ services:
       SUPREME_HA_TOKEN: ${SUPREME_HA_TOKEN:?provide a long-lived HA token in .env}
       SUPREME_TOKEN_SECRET: ${SUPREME_TOKEN_SECRET:?provide a 32+ char secret in .env}
       DATABASE_URL: postgres://supreme:${POSTGRES_PASSWORD:?provide a db password in .env}@postgres:5432/supreme
+      SUPREME_COMMISSIONING_URL: http://commissioning:9100
+      SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.2.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:
       # The ONLY host-published port in the whole hub: the Supreme API.
@@ -39,6 +41,30 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+      commissioning:
+        condition: service_started
+
+  # Python protocol-commissioning tooling (KNX/DALI/Modbus). Internal only — the
+  # gateway's commissioning orchestrator calls it over the core network.
+  commissioning:
+    build:
+      context: ../../services/commissioning-py
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - supreme-core
+
+  # Installer Portal (web). Static bundle served to installers on the LAN. Talks to
+  # the Supreme API only (VITE_SUPREME_API_URL), never to any backend.
+  installer-portal:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/web-installer.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8090:80"
+    networks:
+      - supreme-edge
 
   # Headless Home Assistant Core — hidden backend. NO published ports; reachable
   # only on the internal supreme-core network by the SIL. Supervisor not used.
