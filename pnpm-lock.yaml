@@ -196,12 +196,24 @@ importers:
       '@fastify/websocket':
         specifier: ^11.0.2
         version: 11.2.0
+      '@supreme/backup':
+        specifier: workspace:*
+        version: link:../backup
+      '@supreme/commissioning':
+        specifier: workspace:*
+        version: link:../commissioning
       '@supreme/contracts':
         specifier: workspace:*
         version: link:../../packages/supreme-contracts
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
+      '@supreme/drivers':
+        specifier: workspace:*
+        version: link:../drivers
       '@supreme/home':
         specifier: workspace:*
         version: link:../home
@@ -211,6 +223,9 @@ importers:
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+      '@supreme/licensing':
+        specifier: workspace:*
+        version: link:../../cloud/licensing
       '@supreme/notifications':
         specifier: workspace:*
         version: link:../notifications
@@ -349,6 +364,9 @@ importers:
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
+      '@supreme/drivers':
+        specifier: workspace:*
+        version: link:../drivers
       '@supreme/home':
         specifier: workspace:*
         version: link:../home

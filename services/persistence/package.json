@@ -26,6 +26,7 @@
     "@supreme/scenes": "workspace:*",
     "@supreme/permissions": "workspace:*",
     "@supreme/notifications": "workspace:*",
+    "@supreme/drivers": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {

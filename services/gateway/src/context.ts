@@ -11,8 +11,12 @@ import {
   type CreateGrantInput,
   type IGrantStore,
 } from "@supreme/permissions";
-import type { DeviceId, Grant, Notification, UserId } from "@supreme/domain-model";
+import type { DeviceId, Grant, HomeId, Notification, UserId } from "@supreme/domain-model";
+import type { IInstalledDriverStore } from "@supreme/drivers";
+import type { IProtocolScanner } from "@supreme/commissioning";
+import type { SqlDb } from "@supreme/persistence";
 import type { GatewayConfig } from "./config.js";
+import { InstallerServices } from "./installer-context.js";
 
 /** Injected dependencies — the SIL and the persisted stores. Anything omitted
  * falls back to the in-memory default (used by dev and tests). */
@@ -23,6 +27,11 @@ export interface AppDeps {
   sceneStore?: ISceneStore;
   grantStore?: IGrantStore;
   notificationStore?: INotificationStore;
+  driverStore?: IInstalledDriverStore;
+  /** The underlying SQL database (when persistence is enabled) — for backup/restore. */
+  db?: SqlDb;
+  /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
+  scanners?: IProtocolScanner[];
 }
 
 /**
@@ -43,11 +52,15 @@ export class AppContext {
   readonly home: HomeService;
   readonly scenes: SceneService;
   readonly notifications: NotificationService;
+  /** Installer/admin surfaces (drivers, commissioning, diagnostics, backup, licensing). */
+  installer!: InstallerServices;
 
+  private readonly deps: AppDeps;
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
 
   private constructor(readonly config: GatewayConfig, deps: AppDeps = {}) {
+    this.deps = deps;
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,
@@ -82,17 +95,33 @@ export class AppContext {
     const ctx = new AppContext(config, deps);
     await ctx.sil.start();
 
-    if (await ctx.home.getHome()) {
+    let home = await ctx.home.getHome();
+    if (home) {
       await ctx.home.rebindRegistry();
     } else {
-      const { home } = await ctx.identity.commission({
+      const commissioned = await ctx.identity.commission({
         homeName: "Supreme Residence",
         email: "owner@supreme.local",
         password: "supreme-owner-demo-pass",
         displayName: "Home Owner",
       });
+      home = commissioned.home;
       await seedDemoHome(ctx.home, home);
     }
+
+    // The installer services need the commissioned home id and the persisted stores.
+    ctx.installer = new InstallerServices({
+      config,
+      sil: ctx.sil,
+      home: ctx.home,
+      scenes: ctx.scenes,
+      identity: ctx.identity,
+      homeId: home.id as HomeId,
+      driverStore: deps.driverStore,
+      db: deps.db,
+      scanners: deps.scanners,
+    });
+    await ctx.installer.init();
     return ctx;
   }
 

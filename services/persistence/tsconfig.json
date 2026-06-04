@@ -10,7 +10,8 @@
     { "path": "../home" },
     { "path": "../scenes" },
     { "path": "../permissions" },
-    { "path": "../notifications" }
+    { "path": "../notifications" },
+    { "path": "../drivers" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

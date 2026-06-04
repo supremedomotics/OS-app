@@ -13,7 +13,12 @@
     { "path": "../home" },
     { "path": "../scenes" },
     { "path": "../notifications" },
-    { "path": "../persistence" }
+    { "path": "../persistence" },
+    { "path": "../../packages/crypto" },
+    { "path": "../drivers" },
+    { "path": "../commissioning" },
+    { "path": "../../cloud/licensing" },
+    { "path": "../backup" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

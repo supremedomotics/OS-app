@@ -28,6 +28,8 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.sceneStore = stores.scenes;
     deps.grantStore = stores.grants;
     deps.notificationStore = stores.notifications;
+    deps.driverStore = stores.drivers;
+    deps.db = stores.db;
   }
 
   if (config.backend === "ha") {

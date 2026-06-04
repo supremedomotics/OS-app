@@ -13,6 +13,17 @@ export interface GatewayConfig {
   haToken: string;
   /** Postgres connection string; empty = use in-memory stores (dev/tests). */
   databaseUrl: string;
+  /** Hub software version reported by diagnostics / project export. */
+  hubVersion: string;
+  /**
+   * Trust anchors for the Driver Store + licensing (PEM). When empty, the gateway
+   * generates an ephemeral dev keypair and seeds a self-signed first-party catalog
+   * so the driver store is exercisable locally. Production injects the real Supreme
+   * store + licensing public keys at the hub boot edge.
+   */
+  driverStorePublicKey: string;
+  driverStoreKeyId: string;
+  licensingPublicKey: string;
   logLevel: string;
 }
 
@@ -27,6 +38,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
     haToken: env.SUPREME_HA_TOKEN ?? "",
     databaseUrl: env.DATABASE_URL ?? "",
+    hubVersion: env.SUPREME_HUB_VERSION ?? "0.2.0",
+    driverStorePublicKey: env.SUPREME_DRIVER_STORE_PUBLIC_KEY ?? "",
+    driverStoreKeyId: env.SUPREME_DRIVER_STORE_KEY_ID ?? "supreme-store",
+    licensingPublicKey: env.SUPREME_LICENSING_PUBLIC_KEY ?? "",
     logLevel: env.SUPREME_LOG_LEVEL ?? "info",
   };
 }

@@ -7,6 +7,7 @@ import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerSceneRoutes } from "./routes/scenes.js";
 import { registerUserRoutes } from "./routes/users.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
+import { registerInstallerRoutes } from "./routes/installer.js";
 import { attachStream } from "./stream.js";
 
 /**
@@ -49,6 +50,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerSceneRoutes(app, ctx);
   registerUserRoutes(app, ctx);
   registerNotificationRoutes(app, ctx);
+  registerInstallerRoutes(app, ctx);
   attachStream(app, ctx);
 
   return app;

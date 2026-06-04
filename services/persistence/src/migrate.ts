@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 /** Ordered migration files. Append new ones; never edit a shipped migration. */
-const MIGRATIONS = ["0001_init.sql"] as const;
+const MIGRATIONS = ["0001_init.sql", "0002_drivers_licenses.sql"] as const;
 
 /**
  * Apply pending migrations idempotently. A `schema_migrations` table records which
