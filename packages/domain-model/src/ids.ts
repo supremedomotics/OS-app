@@ -59,6 +59,8 @@ const PREFIXES = {
   notification: "ntf",
   license: "lic",
   backup: "bak",
+  sample: "smp",
+  audit: "aud",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

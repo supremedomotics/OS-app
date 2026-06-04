@@ -1,0 +1,26 @@
+{
+  "name": "@supreme/analytics",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Energy & telemetry analytics — time-series ingestion + aggregation.",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/domain-model": "workspace:*",
+    "@supreme/persistence": "workspace:*"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
