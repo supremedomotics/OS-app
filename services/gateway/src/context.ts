@@ -15,6 +15,15 @@ import type { DeviceId, Grant, HomeId, Notification, UserId } from "@supreme/dom
 import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
+import {
+  AutomationEngine,
+  AutomationService,
+  type AutomationExecutors,
+  type IAutomationStore,
+} from "@supreme/automations";
+import { AnalyticsService } from "@supreme/analytics";
+import { AuditService } from "@supreme/audit";
+import { AssistantService } from "@supreme/ai";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
 
@@ -28,7 +37,8 @@ export interface AppDeps {
   grantStore?: IGrantStore;
   notificationStore?: INotificationStore;
   driverStore?: IInstalledDriverStore;
-  /** The underlying SQL database (when persistence is enabled) — for backup/restore. */
+  automationStore?: IAutomationStore;
+  /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
   db?: SqlDb;
   /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
   scanners?: IProtocolScanner[];
@@ -54,7 +64,14 @@ export class AppContext {
   readonly notifications: NotificationService;
   /** Installer/admin surfaces (drivers, commissioning, diagnostics, backup, licensing). */
   installer!: InstallerServices;
+  /** Intelligence & scale (§16): automations, energy analytics, audit, AI assistant. */
+  automations!: AutomationService;
+  analytics: AnalyticsService | null = null;
+  audit: AuditService | null = null;
+  readonly ai: AssistantService;
+  homeId!: HomeId;
 
+  private ready = false;
   private readonly deps: AppDeps;
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
@@ -70,11 +87,12 @@ export class AppContext {
     this.scenes = new SceneService(this.sil, deps.sceneStore);
     this.notifications = new NotificationService(deps.notificationStore);
     this.grants = deps.grantStore ?? new InMemoryGrantStore();
+    this.ai = new AssistantService({ modelUrl: config.aiUrl || undefined });
 
-    // Fan SIL state events out to live WSS connections and update the device cache.
+    // Fan SIL state events out to live WSS connections, the device cache, the
+    // automation engine, and the analytics time-series.
     this.sil.subscribe((event) => {
-      void this.home.applyState(event.deviceId, event.state);
-      for (const sub of this.stateSubs) sub(event);
+      void this.onBackendState(event);
     });
     // Bridge created notifications to WSS subscribers.
     this.notifications.onNotification((n) => {
@@ -122,7 +140,67 @@ export class AppContext {
       scanners: deps.scanners,
     });
     await ctx.installer.init();
+
+    ctx.homeId = home.id as HomeId;
+
+    // Intelligence services. The automation engine's side effects flow through the
+    // SIL, scenes, and notifications; analytics + audit require a database.
+    const executors: AutomationExecutors = {
+      command: (deviceId, command) => ctx.sil.command(deviceId, command),
+      activateScene: async (sceneId) => {
+        await ctx.scenes.activate(sceneId);
+      },
+      notify: async (input) => {
+        await ctx.notifications.create({
+          homeId: ctx.homeId,
+          userId: input.userId,
+          level: input.level,
+          title: input.title,
+          body: input.body,
+        });
+      },
+      getState: (deviceId, capability) => ctx.sil.getState(deviceId, capability),
+    };
+    const engine = new AutomationEngine({
+      executors,
+      onRun: (id, ok) => {
+        void ctx.audit?.record({
+          homeId: ctx.homeId,
+          action: ok ? "automation.run" : "automation.error",
+          resourceType: "automation",
+          resourceId: id,
+        });
+      },
+    });
+    ctx.automations = new AutomationService(engine, deps.automationStore);
+    await ctx.automations.start();
+
+    if (deps.db) {
+      ctx.analytics = new AnalyticsService(deps.db);
+      ctx.audit = new AuditService(deps.db);
+    }
+
+    ctx.ready = true;
     return ctx;
+  }
+
+  /** Handle a normalized backend state delta: cache, fan-out, automations, analytics. */
+  private async onBackendState(event: BackendStateEvent): Promise<void> {
+    await this.home.applyState(event.deviceId, event.state);
+    for (const sub of this.stateSubs) sub(event);
+    if (!this.ready) return;
+    await this.automations.onDeviceState({
+      deviceId: event.deviceId,
+      capability: event.capability,
+      state: event.state,
+    });
+    if (this.analytics) {
+      const roomId = (await this.home.roomOf(event.deviceId)) as never;
+      await this.analytics.ingestState(
+        { homeId: this.homeId, deviceId: event.deviceId, roomId },
+        event.state,
+      );
+    }
   }
 
   grantsFor(userId: UserId): Promise<Grant[]> {

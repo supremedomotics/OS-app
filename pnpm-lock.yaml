@@ -306,6 +306,18 @@ importers:
       '@fastify/websocket':
         specifier: ^11.0.2
         version: 11.2.0
+      '@supreme/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@supreme/analytics':
+        specifier: workspace:*
+        version: link:../analytics
+      '@supreme/audit':
+        specifier: workspace:*
+        version: link:../audit
+      '@supreme/automations':
+        specifier: workspace:*
+        version: link:../automations
       '@supreme/backup':
         specifier: workspace:*
         version: link:../backup
@@ -471,6 +483,9 @@ importers:
 
   services/persistence:
     dependencies:
+      '@supreme/automations':
+        specifier: workspace:*
+        version: link:../automations
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model

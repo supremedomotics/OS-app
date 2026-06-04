@@ -11,6 +11,7 @@ const MIGRATIONS = [
   "0001_init.sql",
   "0002_drivers_licenses.sql",
   "0003_phase3.sql",
+  "0004_automations.sql",
 ] as const;
 
 /**

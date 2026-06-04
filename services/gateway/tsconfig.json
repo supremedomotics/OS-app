@@ -18,7 +18,11 @@
     { "path": "../drivers" },
     { "path": "../commissioning" },
     { "path": "../../cloud/licensing" },
-    { "path": "../backup" }
+    { "path": "../backup" },
+    { "path": "../automations" },
+    { "path": "../analytics" },
+    { "path": "../audit" },
+    { "path": "../ai" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

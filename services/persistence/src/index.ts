@@ -11,6 +11,7 @@ import type { ISceneStore } from "@supreme/scenes";
 import type { IGrantStore } from "@supreme/permissions";
 import type { INotificationStore } from "@supreme/notifications";
 import type { IInstalledDriverStore } from "@supreme/drivers";
+import type { IAutomationStore } from "@supreme/automations";
 import { migrate } from "./migrate.js";
 import { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
 import { IdentityRepo } from "./repositories/identity-repo.js";
@@ -19,6 +20,7 @@ import { SceneRepo } from "./repositories/scene-repo.js";
 import { GrantRepo } from "./repositories/grant-repo.js";
 import { NotificationRepo } from "./repositories/notification-repo.js";
 import { InstalledDriverRepo } from "./repositories/driver-repo.js";
+import { AutomationRepo } from "./repositories/automation-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -28,6 +30,7 @@ export { SceneRepo } from "./repositories/scene-repo.js";
 export { GrantRepo } from "./repositories/grant-repo.js";
 export { NotificationRepo } from "./repositories/notification-repo.js";
 export { InstalledDriverRepo } from "./repositories/driver-repo.js";
+export { AutomationRepo } from "./repositories/automation-repo.js";
 
 /** The full set of persisted stores, ready to inject into the domain services. */
 export interface PersistenceStores {
@@ -38,6 +41,7 @@ export interface PersistenceStores {
   grants: IGrantStore;
   notifications: INotificationStore;
   drivers: IInstalledDriverStore;
+  automations: IAutomationStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -49,6 +53,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     grants: new GrantRepo(db),
     notifications: new NotificationRepo(db),
     drivers: new InstalledDriverRepo(db),
+    automations: new AutomationRepo(db),
   };
 }
 

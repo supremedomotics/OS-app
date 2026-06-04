@@ -18,6 +18,14 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
 
       const { command } = CommandRequest.parse(req.body);
       await ctx.sil.command(deviceId, command);
+      await ctx.audit?.record({
+        homeId: ctx.homeId,
+        actorUserId: user.id,
+        action: "device.command",
+        resourceType: "device",
+        resourceId: deviceId,
+        metadata: { capability: command.capability },
+      });
       const body: CommandResponse = {
         accepted: true,
         device: (await ctx.home.getDevice(deviceId)) ?? undefined,

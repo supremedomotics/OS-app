@@ -11,3 +11,4 @@ export * from "./rest.js";
 export * from "./events.js";
 export * from "./management.js";
 export * from "./installer.js";
+export * from "./phase3.js";

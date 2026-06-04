@@ -11,7 +11,8 @@
     { "path": "../scenes" },
     { "path": "../permissions" },
     { "path": "../notifications" },
-    { "path": "../drivers" }
+    { "path": "../drivers" },
+    { "path": "../automations" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]
