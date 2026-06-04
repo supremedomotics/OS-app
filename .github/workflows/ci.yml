@@ -62,3 +62,18 @@ jobs:
       - run: pip install fastapi "uvicorn[standard]" pydantic pytest httpx ruff
       - run: ruff check .
       - run: pytest -q
+
+  docker:
+    name: Docker images build + run smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hub images (gateway · commissioning · installer-portal)
+        working-directory: infra/hub-compose
+        env:
+          SUPREME_HA_TOKEN: ci
+          SUPREME_TOKEN_SECRET: ci-token-secret-ci-token-secret-0123456789
+          POSTGRES_PASSWORD: ci
+        run: docker compose build gateway commissioning installer-portal
+      - name: Gateway run smoke (gateway + Postgres, mock backend)
+        run: bash scripts/dev/compose-smoke.sh

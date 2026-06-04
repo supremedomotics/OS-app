@@ -48,8 +48,10 @@ services:
   # gateway's commissioning orchestrator calls it over the core network.
   commissioning:
     build:
-      context: ../../services/commissioning-py
-      dockerfile: Dockerfile
+      # Repo-root context so the build can pick up the egress-proxy CA (if any)
+      # from infra/hub-compose/ca-certs for pip behind a TLS-intercepting proxy.
+      context: ../..
+      dockerfile: services/commissioning-py/Dockerfile
     restart: unless-stopped
     networks:
       - supreme-core
@@ -69,7 +71,10 @@ services:
   # Headless Home Assistant Core — hidden backend. NO published ports; reachable
   # only on the internal supreme-core network by the SIL. Supervisor not used.
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:2024.12
+    # Official HA image. Docker Hub coordinates (also published to ghcr.io) are used
+    # so the image is pullable through a Docker Hub registry mirror in restricted
+    # networks; switch to ghcr.io/home-assistant/home-assistant if you prefer.
+    image: homeassistant/home-assistant:2024.12
     restart: unless-stopped
     volumes:
       - ./homeassistant:/config

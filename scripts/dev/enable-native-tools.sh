@@ -48,15 +48,39 @@ start_docker() {
     log "dockerd not installed; skipping."
     return 0
   fi
+  # This environment's egress proxy allowlists Google hosts but blocks Docker Hub's
+  # blob CDN and rate-limits anonymous pulls. Google's Docker Hub mirror
+  # (mirror.gcr.io) is on an allowlisted host, so routing pulls through it makes
+  # `docker pull` / `compose up` work WITHOUT any network-policy change.
+  mkdir -p /etc/docker
+  if [ ! -f /etc/docker/daemon.json ]; then
+    echo '{ "registry-mirrors": ["https://mirror.gcr.io"] }' > /etc/docker/daemon.json
+    log "Configured Docker Hub mirror mirror.gcr.io."
+  fi
   log "Starting Docker daemon …"
   nohup dockerd >/tmp/dockerd.log 2>&1 &
   for _ in $(seq 1 15); do
-    docker info >/dev/null 2>&1 && { log "Docker daemon up."; return 0; }
+    docker info >/dev/null 2>&1 && { log "Docker daemon up (mirror: mirror.gcr.io)."; return 0; }
     sleep 1
   done
   log "WARN: Docker daemon did not become ready (see /tmp/dockerd.log)."
 }
 
+stage_proxy_ca() {
+  # If this environment uses a TLS-intercepting egress proxy, copy its CA into the
+  # Docker build context so image builds (pnpm/pip behind the proxy) trust it.
+  local dest="$(dirname "$0")/../../infra/hub-compose/ca-certs"
+  mkdir -p "$dest"
+  local found=0
+  for ca in /usr/local/share/ca-certificates/*egress*.crt /usr/local/share/ca-certificates/*swp*.crt; do
+    [ -f "$ca" ] || continue
+    cp -f "$ca" "$dest/" && found=1
+  done
+  [ "$found" = 1 ] && log "Staged egress proxy CA(s) for Docker builds." \
+                    || log "No egress proxy CA found (normal network); skipping."
+}
+
 install_flutter
+stage_proxy_ca
 start_docker
 log "Done. (Flutter on PATH via /etc/profile.d/flutter.sh)"

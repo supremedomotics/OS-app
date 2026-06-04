@@ -66,17 +66,25 @@ stack, run the idempotent provisioner (also wired as a Claude Code **SessionStar
 hook** in `.claude/settings.json`, so web sessions auto-provision in the background):
 
 ```bash
-bash scripts/dev/enable-native-tools.sh   # installs Flutter, starts dockerd
+bash scripts/dev/enable-native-tools.sh   # installs Flutter, starts dockerd (+ mirror + proxy CA)
 export PATH="/opt/flutter/bin:$PATH"
 cd apps/mobile && flutter pub get && flutter test && flutter build web
+
+# Docker: build images + run the gateway against real Postgres and hit the API
+bash scripts/dev/compose-smoke.sh
 ```
 
-> **Docker image pulls** depend on the environment's network policy. In the default
-> managed web environment, container-registry blob CDNs (Docker Hub, GHCR, ECR,
-> Quay) are blocked, so the daemon starts but `docker compose up` can't fetch base
-> images — allowlist those registry hosts (or configure a registry mirror / Docker
-> Hub credentials) in your environment to run the full hub stack locally. CI uses
-> GitHub-hosted runners, which can pull images and install Flutter normally.
+> **Docker behind a restricted network.** The managed web environment routes egress
+> through a TLS-intercepting, host-allowlisting proxy: Docker Hub anonymous pulls
+> are rate-limited and its blob CDN is blocked, and in-container package fetches
+> fail CA validation. `enable-native-tools.sh` resolves both **without any
+> network-policy change**: it points the daemon at Google's Docker Hub mirror
+> (`mirror.gcr.io`, an allowlisted host) and stages the proxy CA into
+> `infra/hub-compose/ca-certs/` so the Dockerfiles trust it at build time. On normal
+> networks (CI, real hubs) that CA dir is empty and the steps are a no-op. Verified
+> here: all hub images pull, all three images build, and the gateway serves the API
+> against a Postgres container. The full `docker compose up` additionally needs the
+> required `.env` secrets.
 
 ### What's verified by tests
 

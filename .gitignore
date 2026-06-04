@@ -45,3 +45,6 @@ infra/hub-compose/.data/
 # Dart/Flutter library lockfiles (libraries should not pin; apps keep theirs)
 packages/aureon-flutter/pubspec.lock
 packages/supreme-sdk-dart/pubspec.lock
+
+# Environment-specific proxy CA certs (populated by enable-native-tools.sh)
+infra/hub-compose/ca-certs/*.crt
