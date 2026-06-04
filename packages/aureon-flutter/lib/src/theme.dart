@@ -60,7 +60,8 @@ class AureonTheme {
       fontWeight: FontWeight.w600,
       color: AureonText.primary,
     ),
-    bodyLarge: TextStyle(fontSize: 16, height: 24 / 16, color: AureonText.primary),
+    bodyLarge:
+        TextStyle(fontSize: 16, height: 24 / 16, color: AureonText.primary),
     labelMedium: TextStyle(
       fontSize: 13,
       height: 18 / 13,

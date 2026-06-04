@@ -5,7 +5,11 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// A normalized device state delta received over the WSS stream.
 class StateDelta {
-  StateDelta({required this.deviceId, required this.roomId, required this.state, required this.seq});
+  StateDelta(
+      {required this.deviceId,
+      required this.roomId,
+      required this.state,
+      required this.seq});
   final String deviceId;
   final String? roomId;
   final Map<String, dynamic> state;
@@ -46,7 +50,8 @@ class SupremeStream {
     _channel?.sink.add(jsonEncode({'type': 'subscribe', 'rooms': rooms}));
   }
 
-  void command(String requestId, String deviceId, Map<String, dynamic> command) {
+  void command(
+      String requestId, String deviceId, Map<String, dynamic> command) {
     _channel?.sink.add(jsonEncode({
       'type': 'command',
       'requestId': requestId,

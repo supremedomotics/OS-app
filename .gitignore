@@ -41,3 +41,7 @@ secrets/
 
 # Local data volumes
 infra/hub-compose/.data/
+
+# Dart/Flutter library lockfiles (libraries should not pin; apps keep theirs)
+packages/aureon-flutter/pubspec.lock
+packages/supreme-sdk-dart/pubspec.lock

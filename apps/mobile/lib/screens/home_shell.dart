@@ -33,10 +33,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.meeting_room_outlined), label: 'Rooms'),
-          NavigationDestination(icon: Icon(Icons.auto_awesome_outlined), label: 'Scenes'),
-          NavigationDestination(icon: Icon(Icons.notifications_outlined), label: 'Alerts'),
+          NavigationDestination(
+              icon: Icon(Icons.dashboard_outlined), label: 'Home'),
+          NavigationDestination(
+              icon: Icon(Icons.meeting_room_outlined), label: 'Rooms'),
+          NavigationDestination(
+              icon: Icon(Icons.auto_awesome_outlined), label: 'Scenes'),
+          NavigationDestination(
+              icon: Icon(Icons.notifications_outlined), label: 'Alerts'),
         ],
       ),
     );

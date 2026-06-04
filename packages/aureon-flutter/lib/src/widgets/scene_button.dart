@@ -4,7 +4,8 @@ import '../tokens.g.dart';
 
 /// Quick-scene chip for the dashboard scene row (§11.1): "Arrive", "Movie", etc.
 class SceneButton extends StatelessWidget {
-  const SceneButton({super.key, required this.label, required this.onTap, this.icon});
+  const SceneButton(
+      {super.key, required this.label, required this.onTap, this.icon});
 
   final String label;
   final IconData? icon;
@@ -26,7 +27,8 @@ class SceneButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon ?? Icons.auto_awesome, size: 18, color: AureonGold.c400),
+              Icon(icon ?? Icons.auto_awesome,
+                  size: 18, color: AureonGold.c400),
               const SizedBox(width: AureonSpacing.sm),
               Text(label, style: Theme.of(context).textTheme.labelMedium),
             ],

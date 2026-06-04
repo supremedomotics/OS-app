@@ -22,18 +22,24 @@ class ScenesScreen extends ConsumerWidget {
             Expanded(
               child: scenes.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => Center(child: Text('Could not load scenes\n$e')),
+                error: (e, _) =>
+                    Center(child: Text('Could not load scenes\n$e')),
                 data: (list) => list.isEmpty
-                    ? Text('No scenes yet', style: Theme.of(context).textTheme.labelMedium)
+                    ? Text('No scenes yet',
+                        style: Theme.of(context).textTheme.labelMedium)
                     : ListView.separated(
                         itemCount: list.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: AureonSpacing.sm),
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: AureonSpacing.sm),
                         itemBuilder: (context, i) => Card(
                           child: ListTile(
-                            leading: const Icon(Icons.auto_awesome, color: AureonGold.c400),
+                            leading: const Icon(Icons.auto_awesome,
+                                color: AureonGold.c400),
                             title: Text(list[i].name),
                             trailing: const Icon(Icons.play_arrow),
-                            onTap: () => ref.read(clientProvider).activateScene(list[i].id),
+                            onTap: () => ref
+                                .read(clientProvider)
+                                .activateScene(list[i].id),
                           ),
                         ),
                       ),

@@ -20,7 +20,8 @@ class HomePager extends ConsumerWidget {
         data: (view) => SafeArea(
           child: PageView(
             children: [
-              for (final room in view.rooms) RoomView(roomId: room.id, roomName: room.name),
+              for (final room in view.rooms)
+                RoomView(roomId: room.id, roomName: room.name),
             ],
           ),
         ),
@@ -95,7 +96,8 @@ class _RoomViewState extends ConsumerState<RoomView> {
 
   Future<void> _toggle(Device device) async {
     final client = ref.read(clientProvider);
-    final cap = device.capabilities.contains('brightness') ? 'brightness' : 'onoff';
+    final cap =
+        device.capabilities.contains('brightness') ? 'brightness' : 'onoff';
     await client.command(device.id, {
       'capability': cap,
       'action': device.isOn ? 'off' : 'on',

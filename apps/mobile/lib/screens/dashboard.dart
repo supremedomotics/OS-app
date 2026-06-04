@@ -38,7 +38,8 @@ class DashboardScreen extends ConsumerWidget {
               data: (list) => ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: list.length,
-                separatorBuilder: (_, __) => const SizedBox(width: AureonSpacing.sm),
+                separatorBuilder: (_, __) =>
+                    const SizedBox(width: AureonSpacing.sm),
                 itemBuilder: (context, i) => SceneButton(
                   label: list[i].name,
                   onTap: () async {
@@ -56,13 +57,16 @@ class DashboardScreen extends ConsumerWidget {
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Text('Could not load favorites: $e'),
             data: (list) => list.isEmpty
-                ? Text('No favorites yet', style: Theme.of(context).textTheme.labelMedium)
+                ? Text('No favorites yet',
+                    style: Theme.of(context).textTheme.labelMedium)
                 : Wrap(
                     spacing: AureonSpacing.sm,
                     runSpacing: AureonSpacing.sm,
                     children: [
                       for (final f in list)
-                        Chip(label: Text('${f.type}: ${f.refId.substring(0, 8)}…')),
+                        Chip(
+                            label:
+                                Text('${f.type}: ${f.refId.substring(0, 8)}…')),
                     ],
                   ),
           ),

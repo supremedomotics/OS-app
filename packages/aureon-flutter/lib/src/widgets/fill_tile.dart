@@ -91,7 +91,8 @@ class _FillTileState extends State<FillTile> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Icon(widget.icon ?? Icons.lightbulb_outline,
-                          color: widget.on ? AureonGold.c200 : AureonText.muted),
+                          color:
+                              widget.on ? AureonGold.c200 : AureonText.muted),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [

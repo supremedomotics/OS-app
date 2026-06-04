@@ -29,21 +29,26 @@ class AlertsScreen extends ConsumerWidget {
             Expanded(
               child: alerts.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => Center(child: Text('Could not load alerts\n$e')),
+                error: (e, _) =>
+                    Center(child: Text('Could not load alerts\n$e')),
                 data: (list) => list.isEmpty
-                    ? Text('All clear', style: Theme.of(context).textTheme.labelMedium)
+                    ? Text('All clear',
+                        style: Theme.of(context).textTheme.labelMedium)
                     : ListView.separated(
                         itemCount: list.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: AureonSpacing.sm),
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: AureonSpacing.sm),
                         itemBuilder: (context, i) {
                           final n = list[i];
                           return Card(
                             child: ListTile(
-                              leading: Icon(Icons.circle, size: 12, color: _color(n.level)),
+                              leading: Icon(Icons.circle,
+                                  size: 12, color: _color(n.level)),
                               title: Text(n.title),
                               subtitle: Text(n.body),
                               trailing: n.unread
-                                  ? const Icon(Icons.fiber_new, color: AureonGold.c400)
+                                  ? const Icon(Icons.fiber_new,
+                                      color: AureonGold.c400)
                                   : null,
                             ),
                           );

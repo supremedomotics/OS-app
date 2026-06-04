@@ -41,13 +41,15 @@ class ClimateCard extends StatelessWidget {
             children: [
               IconButton(
                 onPressed: () => onTarget(target - 0.5),
-                icon: const Icon(Icons.remove_circle_outline, color: AureonGold.c400),
+                icon: const Icon(Icons.remove_circle_outline,
+                    color: AureonGold.c400),
               ),
               Text('${target.toStringAsFixed(1)}°',
                   style: Theme.of(context).textTheme.displayLarge),
               IconButton(
                 onPressed: () => onTarget(target + 0.5),
-                icon: const Icon(Icons.add_circle_outline, color: AureonGold.c400),
+                icon: const Icon(Icons.add_circle_outline,
+                    color: AureonGold.c400),
               ),
             ],
           ),

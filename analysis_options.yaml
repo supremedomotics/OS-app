@@ -13,4 +13,5 @@ linter:
     - prefer_const_constructors
     - prefer_final_locals
     - avoid_print
-    - require_trailing_commas
+    # require_trailing_commas is intentionally omitted: it conflicts with the
+    # output of `dart format`, which is the canonical formatter we run in CI.

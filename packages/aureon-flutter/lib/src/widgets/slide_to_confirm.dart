@@ -48,7 +48,8 @@ class _SlideToConfirmState extends State<SlideToConfirm> {
               Positioned(
                 left: _dx.clamp(0, maxDx),
                 child: GestureDetector(
-                  onHorizontalDragUpdate: (d) => setState(() => _dx += d.delta.dx),
+                  onHorizontalDragUpdate: (d) =>
+                      setState(() => _dx += d.delta.dx),
                   onHorizontalDragEnd: (_) {
                     if (_dx >= maxDx * 0.85) {
                       setState(() {

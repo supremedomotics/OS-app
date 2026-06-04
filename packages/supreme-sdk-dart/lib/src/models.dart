@@ -2,7 +2,11 @@
 /// Phase 0; the full set is generated from `supreme-contracts` in Phase 1.
 
 class Room {
-  Room({required this.id, required this.name, required this.areaType, this.heroImageUrl});
+  Room(
+      {required this.id,
+      required this.name,
+      required this.areaType,
+      this.heroImageUrl});
 
   final String id;
   final String name;
@@ -106,7 +110,8 @@ class NotificationItem {
 
   bool get unread => readAt == null;
 
-  factory NotificationItem.fromJson(Map<String, dynamic> json) => NotificationItem(
+  factory NotificationItem.fromJson(Map<String, dynamic> json) =>
+      NotificationItem(
         id: json['id'] as String,
         level: json['level'] as String,
         title: json['title'] as String,

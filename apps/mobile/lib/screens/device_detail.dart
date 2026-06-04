@@ -48,12 +48,16 @@ class DeviceDetailScreen extends ConsumerWidget {
         playing: playing,
         volume: ((m?['volume'] as num?) ?? 30).toDouble() / 100.0,
         artworkUrl: m?['artworkUrl'] as String?,
-        onPlayPause: () =>
-            _cmd(ref, {'capability': 'media', 'action': playing ? 'pause' : 'play'}),
+        onPlayPause: () => _cmd(
+            ref, {'capability': 'media', 'action': playing ? 'pause' : 'play'}),
         onNext: () => _cmd(ref, {'capability': 'media', 'action': 'next'}),
-        onPrevious: () => _cmd(ref, {'capability': 'media', 'action': 'previous'}),
-        onVolume: (v) =>
-            _cmd(ref, {'capability': 'media', 'action': 'volume', 'volume': (v * 100).round()}),
+        onPrevious: () =>
+            _cmd(ref, {'capability': 'media', 'action': 'previous'}),
+        onVolume: (v) => _cmd(ref, {
+          'capability': 'media',
+          'action': 'volume',
+          'volume': (v * 100).round()
+        }),
       );
     }
     if (device.capabilities.contains('position')) {
@@ -64,32 +68,40 @@ class DeviceDetailScreen extends ConsumerWidget {
         subtitle: '${(pos * 100).round()}% open',
         value: pos,
         on: pos > 0,
-        onToggle: () =>
-            _cmd(ref, {'capability': 'position', 'action': pos > 0 ? 'close' : 'open'}),
-        onChanged: (v) =>
-            _cmd(ref, {'capability': 'position', 'action': 'set', 'position': (v * 100).round()}),
+        onToggle: () => _cmd(ref,
+            {'capability': 'position', 'action': pos > 0 ? 'close' : 'open'}),
+        onChanged: (v) => _cmd(ref, {
+          'capability': 'position',
+          'action': 'set',
+          'position': (v * 100).round()
+        }),
       );
     }
     if (device.capabilities.contains('lock')) {
       return SlideToConfirm(
         label: 'Slide to unlock',
         icon: Icons.lock_open,
-        onConfirmed: () => _cmd(ref, {'capability': 'lock', 'action': 'unlock'}),
+        onConfirmed: () =>
+            _cmd(ref, {'capability': 'lock', 'action': 'unlock'}),
       );
     }
     // Lighting fallback (onoff / brightness).
     final hasBrightness = device.capabilities.contains('brightness');
     return FillTile(
       label: device.name,
-      subtitle: device.isOn ? '${(device.brightnessFraction * 100).round()}%' : 'Off',
+      subtitle:
+          device.isOn ? '${(device.brightnessFraction * 100).round()}%' : 'Off',
       value: device.brightnessFraction,
       on: device.isOn,
       onToggle: () => _cmd(ref, {
         'capability': hasBrightness ? 'brightness' : 'onoff',
         'action': device.isOn ? 'off' : 'on',
       }),
-      onChanged: (v) =>
-          _cmd(ref, {'capability': 'brightness', 'action': 'set', 'level': (v * 100).round()}),
+      onChanged: (v) => _cmd(ref, {
+        'capability': 'brightness',
+        'action': 'set',
+        'level': (v * 100).round()
+      }),
     );
   }
 }

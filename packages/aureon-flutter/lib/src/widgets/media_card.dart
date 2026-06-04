@@ -45,12 +45,14 @@ class MediaCard extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(AureonRadius.sm),
                 child: artworkUrl != null
-                    ? Image.network(artworkUrl!, width: 64, height: 64, fit: BoxFit.cover)
+                    ? Image.network(artworkUrl!,
+                        width: 64, height: 64, fit: BoxFit.cover)
                     : Container(
                         width: 64,
                         height: 64,
                         color: AureonBase.surfaceOverlay,
-                        child: const Icon(Icons.music_note, color: AureonText.muted),
+                        child: const Icon(Icons.music_note,
+                            color: AureonText.muted),
                       ),
               ),
               const SizedBox(width: AureonSpacing.md),
@@ -63,7 +65,8 @@ class MediaCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis),
                     if (artist != null)
-                      Text(artist!, style: Theme.of(context).textTheme.labelMedium),
+                      Text(artist!,
+                          style: Theme.of(context).textTheme.labelMedium),
                   ],
                 ),
               ),
@@ -73,7 +76,8 @@ class MediaCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              IconButton(onPressed: onPrevious, icon: const Icon(Icons.skip_previous)),
+              IconButton(
+                  onPressed: onPrevious, icon: const Icon(Icons.skip_previous)),
               IconButton(
                 iconSize: 40,
                 color: AureonGold.c400,

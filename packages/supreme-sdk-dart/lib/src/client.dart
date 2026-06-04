@@ -41,14 +41,31 @@ class SupremeClient {
   }
 
   Future<HomeView> home() async {
-    final res = await _http.get(Uri.parse('$baseUrl/v1/home'), headers: _authHeaders);
+    final res =
+        await _http.get(Uri.parse('$baseUrl/v1/home'), headers: _authHeaders);
     _ensureOk(res);
     return HomeView.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  /// Exchange the stored refresh token for a fresh access/refresh pair.
+  Future<void> refresh() async {
+    if (_refreshToken == null) {
+      throw SupremeApiException(401, 'no refresh token');
+    }
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/auth/refresh'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'refreshToken': _refreshToken}),
+    );
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    _accessToken = body['accessToken'] as String;
+    _refreshToken = body['refreshToken'] as String;
+  }
+
   Future<List<Device>> devicesInRoom(String roomId) async {
-    final res =
-        await _http.get(Uri.parse('$baseUrl/v1/rooms/$roomId/devices'), headers: _authHeaders);
+    final res = await _http.get(Uri.parse('$baseUrl/v1/rooms/$roomId/devices'),
+        headers: _authHeaders);
     _ensureOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return (body['devices'] as List<dynamic>)
@@ -68,7 +85,8 @@ class SupremeClient {
 
   // ── Scenes ─────────────────────────────────────────────────────────────────
   Future<List<Scene>> scenes() async {
-    final res = await _http.get(Uri.parse('$baseUrl/v1/scenes'), headers: _authHeaders);
+    final res =
+        await _http.get(Uri.parse('$baseUrl/v1/scenes'), headers: _authHeaders);
     _ensureOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return (body['scenes'] as List<dynamic>)
@@ -86,7 +104,8 @@ class SupremeClient {
 
   // ── Favorites ────────────────────────────────────────────────────────────────
   Future<List<Favorite>> favorites() async {
-    final res = await _http.get(Uri.parse('$baseUrl/v1/favorites'), headers: _authHeaders);
+    final res = await _http.get(Uri.parse('$baseUrl/v1/favorites'),
+        headers: _authHeaders);
     _ensureOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return (body['favorites'] as List<dynamic>)
@@ -94,7 +113,8 @@ class SupremeClient {
         .toList();
   }
 
-  Future<void> setFavorite(Map<String, dynamic> ref, {required bool favorite}) async {
+  Future<void> setFavorite(Map<String, dynamic> ref,
+      {required bool favorite}) async {
     final res = await _http.put(
       Uri.parse('$baseUrl/v1/favorites'),
       headers: _authHeaders,
@@ -105,7 +125,8 @@ class SupremeClient {
 
   // ── Notifications ────────────────────────────────────────────────────────────
   Future<List<NotificationItem>> notifications() async {
-    final res = await _http.get(Uri.parse('$baseUrl/v1/notifications'), headers: _authHeaders);
+    final res = await _http.get(Uri.parse('$baseUrl/v1/notifications'),
+        headers: _authHeaders);
     _ensureOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return (body['notifications'] as List<dynamic>)

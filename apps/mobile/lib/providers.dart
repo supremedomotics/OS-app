@@ -40,6 +40,7 @@ final favoritesProvider = FutureProvider<List<Favorite>>((ref) async {
 });
 
 /// Notification history; live alerts also arrive over the WSS stream.
-final notificationsProvider = FutureProvider<List<NotificationItem>>((ref) async {
+final notificationsProvider =
+    FutureProvider<List<NotificationItem>>((ref) async {
   return ref.watch(clientProvider).notifications();
 });

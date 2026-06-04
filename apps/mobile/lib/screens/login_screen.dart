@@ -52,7 +52,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Supreme', style: Theme.of(context).textTheme.displayLarge),
+                Text('Supreme',
+                    style: Theme.of(context).textTheme.displayLarge),
                 const SizedBox(height: AureonSpacing.sm),
                 Text('Welcome home',
                     style: Theme.of(context).textTheme.labelMedium),
