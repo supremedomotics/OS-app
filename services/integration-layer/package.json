@@ -21,10 +21,12 @@
   },
   "dependencies": {
     "@supreme/domain-model": "workspace:*",
-    "@supreme/contracts": "workspace:*"
+    "@supreme/contracts": "workspace:*",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "@types/ws": "^8.5.13"
   }
 }

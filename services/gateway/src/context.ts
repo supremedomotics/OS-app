@@ -36,9 +36,9 @@ export class AppContext {
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
 
-  private constructor(readonly config: GatewayConfig) {
+  private constructor(readonly config: GatewayConfig, sil?: SupremeIntegrationLayer) {
     this.identity = new IdentityService({ tokenSecret: config.tokenSecret });
-    this.sil = buildSil(config);
+    this.sil = sil ?? buildSil(config);
     this.home = new HomeService(this.sil);
     this.scenes = new SceneService(this.sil);
     this.notifications = new NotificationService();
@@ -54,8 +54,15 @@ export class AppContext {
     });
   }
 
-  static async create(config: GatewayConfig): Promise<AppContext> {
-    const ctx = new AppContext(config);
+  /**
+   * Build and start the context. A pre-built SIL may be injected (e.g. the HA-backed
+   * SIL assembled by {@link createHubContext}); otherwise the mock backend is used.
+   */
+  static async create(
+    config: GatewayConfig,
+    overrides?: { sil?: SupremeIntegrationLayer },
+  ): Promise<AppContext> {
+    const ctx = new AppContext(config, overrides?.sil);
     await ctx.sil.start();
 
     const { home } = await ctx.identity.commission({

@@ -6,4 +6,5 @@
 export { buildServer } from "./server.js";
 export { authenticate } from "./auth.js";
 export { AppContext } from "./context.js";
+export { createHubContext } from "./bootstrap.js";
 export { loadConfig, type GatewayConfig } from "./config.js";

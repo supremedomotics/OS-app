@@ -185,7 +185,13 @@ importers:
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
     devDependencies:
+      '@types/ws':
+        specifier: ^8.5.13
+        version: 8.18.1
       typescript:
         specifier: ^5.7.3
         version: 5.9.3

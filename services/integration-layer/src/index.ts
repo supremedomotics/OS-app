@@ -15,4 +15,5 @@ export { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 export { SupremeIntegrationLayer, type SilOptions } from "./sil.js";
 export { MockAdapter } from "./mock-adapter.js";
 export { HaAdapter, type HaTransport, type HaAdapterOptions } from "./ha/ha-adapter.js";
+export { HaWsTransport, type HaWsTransportOptions } from "./ha/ha-ws-transport.js";
 export { commandToHaService, haStateToCapability, type HaServiceCall } from "./ha/capability-mapper.js";

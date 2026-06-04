@@ -1,5 +1,5 @@
 import { loadConfig } from "./config.js";
-import { AppContext } from "./context.js";
+import { createHubContext } from "./bootstrap.js";
 import { buildServer } from "./server.js";
 
 /**
@@ -9,7 +9,7 @@ import { buildServer } from "./server.js";
  */
 async function main(): Promise<void> {
   const config = loadConfig();
-  const ctx = await AppContext.create(config);
+  const ctx = await createHubContext(config);
   const app = await buildServer(ctx);
 
   const shutdown = async (signal: string) => {
