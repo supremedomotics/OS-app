@@ -112,6 +112,8 @@ export class CommissioningService {
   }
 }
 
+export { HttpProtocolScanner, type HttpScannerOptions } from "./http-scanner.js";
+
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   return {
     backendId: d.backendId,

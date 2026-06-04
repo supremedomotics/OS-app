@@ -5,6 +5,8 @@ import {
   SupremeIntegrationLayer,
 } from "@supreme/integration-layer";
 import { createPersistence } from "@supreme/persistence";
+import { HttpProtocolScanner } from "@supreme/commissioning";
+import type { ProtocolKind } from "@supreme/domain-model";
 import type { GatewayConfig } from "./config.js";
 import { AppContext, type AppDeps } from "./context.js";
 
@@ -30,6 +32,14 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.notificationStore = stores.notifications;
     deps.driverStore = stores.drivers;
     deps.db = stores.db;
+  }
+
+  // Register protocol scanners (KNX/DALI/Modbus) backed by the Python tooling.
+  if (config.commissioningUrl) {
+    const protocols: ProtocolKind[] = ["knx", "dali", "modbus"];
+    deps.scanners = protocols.map(
+      (protocol) => new HttpProtocolScanner({ protocol, baseUrl: config.commissioningUrl }),
+    );
   }
 
   if (config.backend === "ha") {

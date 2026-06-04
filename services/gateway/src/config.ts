@@ -24,6 +24,8 @@ export interface GatewayConfig {
   driverStorePublicKey: string;
   driverStoreKeyId: string;
   licensingPublicKey: string;
+  /** Base URL of the Python protocol-commissioning service; empty = no scanners. */
+  commissioningUrl: string;
   logLevel: string;
 }
 
@@ -42,6 +44,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     driverStorePublicKey: env.SUPREME_DRIVER_STORE_PUBLIC_KEY ?? "",
     driverStoreKeyId: env.SUPREME_DRIVER_STORE_KEY_ID ?? "supreme-store",
     licensingPublicKey: env.SUPREME_LICENSING_PUBLIC_KEY ?? "",
+    commissioningUrl: env.SUPREME_COMMISSIONING_URL ?? "",
     logLevel: env.SUPREME_LOG_LEVEL ?? "info",
   };
 }
