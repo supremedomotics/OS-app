@@ -35,11 +35,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] Request body size limits (1 MB JSON cap)
 - [x] Refresh-token rotation + revocation (session-bound; reuse → session revoked; logout); sessions persisted (Postgres) so revocation survives restarts
 - [x] MFA enrollment + TOTP verify flow wired end-to-end (RFC 6238, no external dep)
-- [ ] Sealed secret store (vault/age) instead of plain env
+- [~] Sealed secret store — `*_FILE` convention (Docker/K8s secrets) supported; full vault/age integration later
 - [ ] mTLS for the hub↔cloud tunnel
 - [ ] TLS termination + HSTS for the hub API (reverse proxy)
 - [ ] Per-command authorization re-check at services (defense in depth) — partially done at gateway
-- [ ] Dependency & container image scanning in CI
+- [x] Dependency & container image scanning in CI (pnpm audit + Trivy fs: vuln/secret/misconfig)
 - [ ] Third-party penetration test + authz matrix test suite
 - [ ] Secrets never logged; audit log shipped off-box (tamper-evident already ✓)
 

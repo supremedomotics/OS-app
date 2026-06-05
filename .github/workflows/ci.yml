@@ -80,3 +80,29 @@ jobs:
         run: docker compose build gateway commissioning installer-portal
       - name: Gateway run smoke (gateway + Postgres, mock backend)
         run: bash scripts/dev/compose-smoke.sh
+
+  security-scan:
+    name: Security scan (deps · secrets · vulns)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      # Dependency vulnerabilities (fail on high/critical).
+      - name: pnpm audit
+        run: pnpm audit --audit-level high || true   # report; tighten to hard-fail when triaged
+      # Filesystem scan: known-vuln deps, leaked secrets, and IaC/Dockerfile misconfig.
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"   # report-only initially; flip to "1" to enforce

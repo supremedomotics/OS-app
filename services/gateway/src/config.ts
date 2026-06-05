@@ -1,8 +1,19 @@
+import { existsSync, readFileSync } from "node:fs";
+
 /**
  * Gateway configuration. All values come from the hub environment; sensible
  * local defaults keep the dev/test loop frictionless. Secrets must be provided
  * in production (the hub's sealed store injects them) — see infra/hub-compose.
+ *
+ * Secrets support the `*_FILE` convention (Docker/Kubernetes secrets): if
+ * `SUPREME_TOKEN_SECRET_FILE` points at a readable file, its contents are used in
+ * preference to `SUPREME_TOKEN_SECRET` — so plaintext secrets never live in env.
  */
+function secret(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const file = env[`${name}_FILE`];
+  if (file && existsSync(file)) return readFileSync(file, "utf8").trim();
+  return env[name];
+}
 export interface GatewayConfig {
   host: string;
   port: number;
@@ -47,15 +58,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
-    tokenSecret: env.SUPREME_TOKEN_SECRET ?? DEV_TOKEN_SECRET,
+    tokenSecret: secret(env, "SUPREME_TOKEN_SECRET") ?? DEV_TOKEN_SECRET,
     backend,
     haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
-    haToken: env.SUPREME_HA_TOKEN ?? "",
-    databaseUrl: env.DATABASE_URL ?? "",
+    haToken: secret(env, "SUPREME_HA_TOKEN") ?? "",
+    databaseUrl: secret(env, "DATABASE_URL") ?? "",
     hubVersion: env.SUPREME_HUB_VERSION ?? "0.2.0",
-    driverStorePublicKey: env.SUPREME_DRIVER_STORE_PUBLIC_KEY ?? "",
+    driverStorePublicKey: secret(env, "SUPREME_DRIVER_STORE_PUBLIC_KEY") ?? "",
     driverStoreKeyId: env.SUPREME_DRIVER_STORE_KEY_ID ?? "supreme-store",
-    licensingPublicKey: env.SUPREME_LICENSING_PUBLIC_KEY ?? "",
+    licensingPublicKey: secret(env, "SUPREME_LICENSING_PUBLIC_KEY") ?? "",
     commissioningUrl: env.SUPREME_COMMISSIONING_URL ?? "",
     aiUrl: env.SUPREME_AI_URL ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
