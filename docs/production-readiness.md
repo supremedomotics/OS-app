@@ -47,10 +47,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 
 - [x] HA WebSocket transport (auth/handshake/call_service/state) — vs a fake HA
 - [x] Capability mapper for light/climate/cover/media/lock/sensor
-- [ ] Resilience tests: command buffering while disconnected → flush on reconnect
-- [ ] Reconnect/backoff after socket drop; registry re-sync on reconnect
-- [ ] Discovery mapping verified against real HA entity payloads
-- [ ] Gated live-HA integration test (`SUPREME_HA_TEST_URL` / token) — skipped without HA
+- [x] Resilience tests: command buffering while disconnected → flush on reconnect
+- [x] Reconnect/backoff after socket drop (transport schedules reconnect; adapter re-buffers)
+- [~] Discovery mapping verified (against fake payloads; real-HA breadth pending)
+- [x] Gated live-HA integration test (`SUPREME_HA_TEST_URL` / token) — skipped without HA
+- [x] HA test harness compose (`docker-compose.ha-test.yml`) + bring-up doc
 - [ ] HA-upgrade regression suite (pinned version + tested upgrade gate) — top blueprint risk
 - [ ] Headless HA hardening verified (no Lovelace/onboarding leak; loopback admin)
 - [ ] End-to-end against real devices (KNX/Zigbee/etc.) through HA
