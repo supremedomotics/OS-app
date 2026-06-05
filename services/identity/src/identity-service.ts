@@ -15,6 +15,7 @@ import {
   type ISessionStore,
 } from "./store.js";
 import { TokenService } from "./tokens.js";
+import { generateTotpSecret, otpauthUrl, verifyTotp } from "./totp.js";
 
 /**
  * Supreme identity service (§8, §12).
@@ -36,6 +37,8 @@ const ARGON2 = { memoryCost: 19456, timeCost: 2, parallelism: 1 } as const;
 export class IdentityService {
   private readonly store: IIdentityStore;
   private readonly sessions: ISessionStore;
+  /** Pending (un-activated) TOTP secrets during enrollment, keyed by user. */
+  private readonly pendingMfa = new Map<UserId, string>();
   readonly tokens: TokenService;
 
   constructor(opts: IdentityServiceOptions) {
@@ -173,6 +176,58 @@ export class IdentityService {
     const nextJti = newId("session") as string;
     await this.sessions.setCurrentJti(claims.sid, nextJti);
     return this.issueTokens(user, claims.sid, nextJti);
+  }
+
+  /**
+   * Complete an MFA-gated login: verify the 6-digit TOTP against the short-lived
+   * mfa token issued by {@link login}, then issue access/refresh tokens.
+   */
+  async verifyMfaLogin(mfaToken: string, code: string): Promise<TokenPair> {
+    const claims = await this.tokens.verify(mfaToken, "mfa");
+    const user = await this.store.getUser(claims.sub);
+    if (!user || user.status !== "active") {
+      throw new SupremeError("unauthorized", "session is no longer valid");
+    }
+    const cred = await this.store.getCredential(user.id);
+    if (!cred?.mfaSecret || !verifyTotp(cred.mfaSecret, code)) {
+      throw new SupremeError("unauthorized", "invalid authentication code");
+    }
+    const sid = newId("session") as string;
+    const jti = newId("session") as string;
+    await this.sessions.create({ id: sid, userId: user.id, currentJti: jti, revoked: false, createdAt: new Date().toISOString() });
+    return this.issueTokens(user, sid, jti);
+  }
+
+  /** Begin TOTP enrollment: returns the secret + otpauth URL to show as a QR code. */
+  async startMfaEnrollment(userId: UserId): Promise<{ secret: string; otpauthUrl: string }> {
+    const user = await this.getUser(userId);
+    const secret = generateTotpSecret();
+    this.pendingMfa.set(userId, secret);
+    return { secret, otpauthUrl: otpauthUrl(secret, user.email) };
+  }
+
+  /** Confirm enrollment by verifying a code against the pending secret; activates MFA. */
+  async confirmMfaEnrollment(userId: UserId, code: string): Promise<void> {
+    const secret = this.pendingMfa.get(userId);
+    if (!secret) throw new SupremeError("conflict", "no pending MFA enrollment");
+    if (!verifyTotp(secret, code)) throw new SupremeError("unauthorized", "invalid authentication code");
+    const cred = await this.store.getCredential(userId);
+    if (!cred) throw new SupremeError("not_found", "credential not found");
+    await this.store.putCredential({ ...cred, mfaSecret: secret });
+    this.pendingMfa.delete(userId);
+  }
+
+  /** Disable MFA after verifying a current code. */
+  async disableMfa(userId: UserId, code: string): Promise<void> {
+    const cred = await this.store.getCredential(userId);
+    if (!cred?.mfaSecret) return;
+    if (!verifyTotp(cred.mfaSecret, code)) throw new SupremeError("unauthorized", "invalid authentication code");
+    await this.store.putCredential({ ...cred, mfaSecret: null });
+  }
+
+  /** Whether a user has MFA enabled. */
+  async hasMfa(userId: UserId): Promise<boolean> {
+    return Boolean((await this.store.getCredential(userId))?.mfaSecret);
   }
 
   /** Revoke a session from any of its tokens (logout / "sign out everywhere"). */

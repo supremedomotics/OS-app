@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { IdentityService } from "./identity-service.js";
+import { totpAt } from "./totp.js";
 
 const SECRET = "test-secret-test-secret-test-secret-123";
 
@@ -67,6 +68,32 @@ describe("login + token lifecycle", () => {
     // and it revokes the whole session.
     await expect(s.refresh(login.refreshToken)).rejects.toThrow(/reuse detected/);
     await expect(s.refresh(rotated2.refreshToken)).rejects.toThrow(/revoked/);
+  });
+
+  it("enrolls TOTP MFA and requires it on subsequent logins", async () => {
+    const s = svc();
+    const { master } = await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+    });
+
+    // Enroll: get a secret, confirm with a valid code.
+    const { secret } = await s.startMfaEnrollment(master.id);
+    await expect(s.confirmMfaEnrollment(master.id, "000000")).rejects.toThrow(/invalid/);
+    await s.confirmMfaEnrollment(master.id, totpAt(secret));
+    expect(await s.hasMfa(master.id)).toBe(true);
+
+    // Login now requires a second factor.
+    const login = await s.login("owner@example.com", "correct horse battery staple");
+    expect(login.status).toBe("mfa_required");
+    if (login.status !== "mfa_required") return;
+
+    // Wrong code rejected; correct code completes login.
+    await expect(s.verifyMfaLogin(login.mfaToken, "000000")).rejects.toThrow(/invalid/);
+    const pair = await s.verifyMfaLogin(login.mfaToken, totpAt(secret));
+    expect((await s.authenticate(pair.accessToken)).email).toBe("owner@example.com");
   });
 
   it("revokes a session on logout so its access token stops working", async () => {

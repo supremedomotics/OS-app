@@ -51,6 +51,17 @@ export const MfaVerifyRequest = z.object({
 });
 export type MfaVerifyRequest = z.infer<typeof MfaVerifyRequest>;
 
+/** TOTP enrollment: the secret + provisioning URL to render as a QR code. */
+export const MfaEnrollResponse = z.object({
+  secret: z.string(),
+  otpauthUrl: z.string(),
+});
+export type MfaEnrollResponse = z.infer<typeof MfaEnrollResponse>;
+
+/** A bare 6-digit TOTP code (confirm enrollment / disable MFA). */
+export const MfaCodeRequest = z.object({ code: z.string().regex(/^\d{6}$/) });
+export type MfaCodeRequest = z.infer<typeof MfaCodeRequest>;
+
 // ── Topology & devices ───────────────────────────────────────────────────────
 
 export const RoomList = z.object({ rooms: z.array(Room) });

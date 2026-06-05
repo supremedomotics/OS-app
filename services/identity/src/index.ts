@@ -4,6 +4,7 @@
  */
 export { IdentityService, type IdentityServiceOptions } from "./identity-service.js";
 export { TokenService, type SupremeClaims, type TokenServiceOptions } from "./tokens.js";
+export { generateTotpSecret, otpauthUrl, totpAt, verifyTotp } from "./totp.js";
 export {
   InMemoryIdentityStore,
   InMemorySessionStore,
