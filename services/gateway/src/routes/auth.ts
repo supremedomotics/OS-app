@@ -6,7 +6,10 @@ import { sendError } from "../http-errors.js";
 
 /** Auth + current-user routes (§6, §12). Supreme-branded; no HA login surface. */
 export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void {
-  app.post("/v1/auth/login", async (req, reply) => {
+  // Credential endpoints get a stricter per-IP rate limit to blunt brute force.
+  const authLimit = { config: { rateLimit: { max: ctx.config.authRateMax, timeWindow: "1 minute" } } };
+
+  app.post("/v1/auth/login", authLimit, async (req, reply) => {
     try {
       const body = LoginRequest.parse(req.body);
       reply.send(await ctx.identity.login(body.email, body.password));
@@ -15,7 +18,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
-  app.post("/v1/auth/refresh", async (req, reply) => {
+  app.post("/v1/auth/refresh", authLimit, async (req, reply) => {
     try {
       const body = RefreshRequest.parse(req.body);
       reply.send(await ctx.identity.refresh(body.refreshToken));

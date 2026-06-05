@@ -12,7 +12,7 @@ import {
 import { createPersistence } from "@supreme/persistence";
 import { HttpProtocolScanner } from "@supreme/commissioning";
 import type { ProtocolKind } from "@supreme/domain-model";
-import type { GatewayConfig } from "./config.js";
+import { assertSecureConfig, type GatewayConfig } from "./config.js";
 import { AppContext, type AppDeps } from "./context.js";
 
 /**
@@ -26,6 +26,8 @@ import { AppContext, type AppDeps } from "./context.js";
  * in dev and tests: in-memory stores + the mock backend.
  */
 export async function createHubContext(config: GatewayConfig): Promise<AppContext> {
+  // Fail closed: never boot a production hub with insecure defaults.
+  assertSecureConfig(config);
   const deps: AppDeps = {};
 
   if (config.databaseUrl) {

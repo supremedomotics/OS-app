@@ -28,16 +28,26 @@ export interface GatewayConfig {
   commissioningUrl: string;
   /** Base URL of the on-box AI model service; empty = built-in planner only. */
   aiUrl: string;
+  /** Deployment environment; "production" enables fail-closed checks. */
+  nodeEnv: string;
+  /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
+  corsOrigins: string[];
+  /** Global request rate limit (per IP, per minute). */
+  rateMax: number;
+  /** Stricter rate limit for /v1/auth/* (per IP, per minute). */
+  authRateMax: number;
   logLevel: string;
 }
+
+/** The insecure development default — refused in production (fail-closed). */
+export const DEV_TOKEN_SECRET = "dev-only-insecure-secret-change-me-change-me";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const backend = env.SUPREME_BACKEND === "ha" ? "ha" : "mock";
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
-    tokenSecret:
-      env.SUPREME_TOKEN_SECRET ?? "dev-only-insecure-secret-change-me-change-me",
+    tokenSecret: env.SUPREME_TOKEN_SECRET ?? DEV_TOKEN_SECRET,
     backend,
     haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
     haToken: env.SUPREME_HA_TOKEN ?? "",
@@ -48,6 +58,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     licensingPublicKey: env.SUPREME_LICENSING_PUBLIC_KEY ?? "",
     commissioningUrl: env.SUPREME_COMMISSIONING_URL ?? "",
     aiUrl: env.SUPREME_AI_URL ?? "",
+    nodeEnv: env.NODE_ENV ?? "development",
+    corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),
+    authRateMax: Number(env.SUPREME_AUTH_RATE_MAX ?? 50),
     logLevel: env.SUPREME_LOG_LEVEL ?? "info",
   };
+}
+
+/**
+ * Fail-closed validation for production boots. Refuses to start with insecure
+ * defaults so a misconfigured hub never ships weak auth. Called at the boot edge.
+ */
+export function assertSecureConfig(config: GatewayConfig): void {
+  if (config.nodeEnv !== "production") return;
+  const problems: string[] = [];
+  if (config.tokenSecret === DEV_TOKEN_SECRET) problems.push("SUPREME_TOKEN_SECRET is the insecure dev default");
+  if (config.tokenSecret.length < 32) problems.push("SUPREME_TOKEN_SECRET must be >= 32 chars");
+  if (config.corsOrigins.length === 0) problems.push("SUPREME_CORS_ORIGINS must be set in production");
+  if (problems.length > 0) {
+    throw new Error(`refusing to boot (production hardening): ${problems.join("; ")}`);
+  }
 }

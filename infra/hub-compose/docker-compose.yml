@@ -31,6 +31,10 @@ services:
       SUPREME_AI_URL: http://ai:9200
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+      SUPREME_CORS_ORIGINS: ${SUPREME_CORS_ORIGINS:-}
+      SUPREME_RATE_MAX: ${SUPREME_RATE_MAX:-1000}
+      SUPREME_AUTH_RATE_MAX: ${SUPREME_AUTH_RATE_MAX:-20}
     ports:
       # The ONLY host-published port in the whole hub: the Supreme API.
       - "8080:8080"

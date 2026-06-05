@@ -1,4 +1,7 @@
 import fastifyWebsocket from "@fastify/websocket";
+import fastifyHelmet from "@fastify/helmet";
+import fastifyCors from "@fastify/cors";
+import fastifyRateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { AppContext } from "./context.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -20,7 +23,28 @@ import { attachStream } from "./stream.js";
  * and the Supreme domain services.
  */
 export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: ctx.config.logLevel } });
+  // 1 MB body cap blunts oversized-payload abuse on the JSON API.
+  const app = Fastify({ logger: { level: ctx.config.logLevel }, bodyLimit: 1_048_576 });
+
+  // ── Security middleware (§ production hardening) ──────────────────────────────
+  // Standard hardening headers (HSTS, no-sniff, frame-deny, etc.).
+  await app.register(fastifyHelmet, { contentSecurityPolicy: false });
+  // CORS allow-list: explicit origins in production; permissive in dev only.
+  await app.register(fastifyCors, {
+    origin:
+      ctx.config.corsOrigins.length > 0
+        ? ctx.config.corsOrigins
+        : ctx.config.nodeEnv === "production"
+          ? false
+          : true,
+    credentials: true,
+  });
+  // Rate limiting: a generous global ceiling; auth routes opt into a stricter cap.
+  await app.register(fastifyRateLimit, {
+    global: true,
+    max: ctx.config.rateMax,
+    timeWindow: "1 minute",
+  });
 
   // Tolerate empty bodies on action POSTs (e.g. scene activate, user suspend) that
   // still carry a JSON content-type — treat them as an undefined body, not an error.

@@ -28,11 +28,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 
 ## 1. Security hardening  ← CRITICAL PATH (in progress)
 
-- [ ] Fail-closed config: refuse to boot in production with the dev token secret / weak secrets
-- [ ] HTTP security headers (helmet) on the gateway
-- [ ] CORS allow-list (no wildcard in production)
-- [ ] Rate limiting (global + strict on `/v1/auth/*`) to blunt brute force
-- [ ] Request body size limits
+- [x] Fail-closed config: refuse to boot in production with the dev token secret / weak secrets
+- [x] HTTP security headers (helmet) on the gateway
+- [x] CORS allow-list (no wildcard in production)
+- [x] Rate limiting (global + strict on `/v1/auth/*`) to blunt brute force
+- [x] Request body size limits (1 MB JSON cap)
 - [ ] Refresh-token rotation + revocation (session store, `jti` deny-list)
 - [ ] MFA enrollment + TOTP verify flow wired end-to-end
 - [ ] Sealed secret store (vault/age) instead of plain env
