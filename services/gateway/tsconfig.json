@@ -22,7 +22,8 @@
     { "path": "../automations" },
     { "path": "../analytics" },
     { "path": "../audit" },
-    { "path": "../ai" }
+    { "path": "../ai" },
+    { "path": "../security" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

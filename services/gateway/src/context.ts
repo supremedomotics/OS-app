@@ -24,6 +24,7 @@ import {
 import { AnalyticsService } from "@supreme/analytics";
 import { AuditService } from "@supreme/audit";
 import { AssistantService } from "@supreme/ai";
+import { SecurityService } from "@supreme/security";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
 
@@ -69,6 +70,7 @@ export class AppContext {
   analytics: AnalyticsService | null = null;
   audit: AuditService | null = null;
   readonly ai: AssistantService;
+  readonly security: SecurityService;
   homeId!: HomeId;
 
   private ready = false;
@@ -88,6 +90,26 @@ export class AppContext {
     this.notifications = new NotificationService(deps.notificationStore);
     this.grants = deps.grantStore ?? new InMemoryGrantStore();
     this.ai = new AssistantService({ modelUrl: config.aiUrl || undefined });
+    this.security = new SecurityService({
+      onChange: (state, actor) => {
+        void this.audit?.record({
+          homeId: this.homeId,
+          actorUserId: actor,
+          action: state.triggered ? "security.triggered" : `security.${state.mode}`,
+          resourceType: "home",
+          resourceId: this.homeId,
+        });
+        if (state.triggered) {
+          void this.notifications.create({
+            homeId: this.homeId,
+            userId: null,
+            level: "critical",
+            title: "Security alarm",
+            body: "A sensor was triggered while the system was armed.",
+          });
+        }
+      },
+    });
 
     // Fan SIL state events out to live WSS connections, the device cache, the
     // automation engine, and the analytics time-series.

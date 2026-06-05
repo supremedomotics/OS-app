@@ -98,3 +98,34 @@ export const AiAssistResponse = z.object({
   ]),
 });
 export type AiAssistResponse = z.infer<typeof AiAssistResponse>;
+
+// ── Security & cameras ───────────────────────────────────────────────────────
+
+export const SecurityMode = z.enum(["disarmed", "armed_home", "armed_away", "armed_night"]);
+export type SecurityMode = z.infer<typeof SecurityMode>;
+
+export const SecurityStateResponse = z.object({
+  mode: SecurityMode,
+  triggered: z.boolean(),
+  lastChangedBy: z.string().nullable(),
+  lastChangedAt: z.string(),
+});
+export type SecurityStateResponse = z.infer<typeof SecurityStateResponse>;
+
+export const ArmRequest = z.object({
+  mode: z.enum(["armed_home", "armed_away", "armed_night"]),
+  pin: z.string().optional(),
+});
+export type ArmRequest = z.infer<typeof ArmRequest>;
+
+export const DisarmRequest = z.object({ pin: z.string().optional() });
+export type DisarmRequest = z.infer<typeof DisarmRequest>;
+
+export const CameraView = z.object({
+  id: z.string(),
+  name: z.string(),
+  roomId: z.string().nullable(),
+  snapshotUrl: z.string().nullable(),
+});
+export const CameraList = z.object({ cameras: z.array(CameraView) });
+export type CameraList = z.infer<typeof CameraList>;

@@ -136,6 +136,21 @@ describe("Phase-3 intelligence & scale", () => {
     expect(list.entries.some((e) => e.action === "device.command")).toBe(true);
   });
 
+  it("arms and disarms the security panel", async () => {
+    const armed = (await (
+      await fetch(`${baseUrl}/v1/security/arm`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ mode: "armed_away" }),
+      })
+    ).json()) as { mode: string };
+    expect(armed.mode).toBe("armed_away");
+    const disarmed = (await (
+      await fetch(`${baseUrl}/v1/security/disarm`, { method: "POST", headers: auth() })
+    ).json()) as { mode: string };
+    expect(disarmed.mode).toBe("disarmed");
+  });
+
   it("AI assistant turns natural language into a draft", async () => {
     const res = await fetch(`${baseUrl}/v1/ai/assistant`, {
       method: "POST",

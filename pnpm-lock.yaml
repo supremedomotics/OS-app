@@ -64,6 +64,19 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  cloud/fleet:
+    dependencies:
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../../packages/domain-model
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   cloud/licensing:
     dependencies:
       '@supreme/crypto':
@@ -360,6 +373,9 @@ importers:
       '@supreme/scenes':
         specifier: workspace:*
         version: link:../scenes
+      '@supreme/security':
+        specifier: workspace:*
+        version: link:../security
       fastify:
         specifier: ^5.2.1
         version: 5.8.5
@@ -538,6 +554,25 @@ importers:
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  services/security:
+    dependencies:
+      '@supreme/contracts':
+        specifier: workspace:*
+        version: link:../../packages/supreme-contracts
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../../packages/domain-model
     devDependencies:
       typescript:
         specifier: ^5.7.3
