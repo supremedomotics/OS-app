@@ -10,6 +10,7 @@ import type {
   IBackendAdapter,
   StateListener,
 } from "./adapter.js";
+import { applyCommand } from "./apply.js";
 
 /**
  * In-memory backend adapter for Phase-0 verification and tests.
@@ -70,56 +71,7 @@ export class MockAdapter implements IBackendAdapter {
 
   /** Compute the resulting state of applying a command (the "device" responds). */
   private apply(deviceId: DeviceId, command: CapabilityCommand): CapabilityState | null {
-    const prev = this.states.get(`${deviceId}:${command.capability}`);
-    switch (command.capability) {
-      case "onoff":
-        return { kind: "onoff", on: command.action === "on" ? true : command.action === "off" ? false : !(prev as { on?: boolean })?.on };
-      case "brightness": {
-        const level = command.level ?? (prev?.kind === "brightness" ? prev.level : 100);
-        const on = command.action === "off" ? false : true;
-        return { kind: "brightness", on, level };
-      }
-      case "color": {
-        const base = prev?.kind === "color" ? prev : null;
-        return {
-          kind: "color",
-          on: true,
-          level: command.level ?? base?.level ?? 100,
-          hue: command.hue ?? base?.hue ?? null,
-          saturation: command.saturation ?? base?.saturation ?? null,
-          kelvin: command.kelvin ?? base?.kelvin ?? null,
-        };
-      }
-      case "position": {
-        const position = command.position ?? (command.action === "open" ? 100 : command.action === "close" ? 0 : prev?.kind === "position" ? prev.position : 0);
-        return { kind: "position", position, moving: false };
-      }
-      case "lock":
-        return { kind: "lock", locked: command.action === "lock", jammed: false };
-      case "temperature": {
-        const base = prev?.kind === "temperature" ? prev : null;
-        return {
-          kind: "temperature",
-          ambientC: base?.ambientC ?? 21,
-          targetC: command.targetC ?? base?.targetC ?? 21,
-          mode: command.mode ?? base?.mode ?? "auto",
-        };
-      }
-      case "media": {
-        const base = prev?.kind === "media" ? prev : null;
-        const playback = command.action === "play" ? "playing" : command.action === "pause" ? "paused" : command.action === "stop" ? "stopped" : base?.playback ?? "idle";
-        return {
-          kind: "media",
-          playback,
-          volume: command.volume ?? base?.volume ?? 30,
-          muted: command.action === "mute" ? true : command.action === "unmute" ? false : base?.muted ?? false,
-          title: base?.title ?? null,
-          artist: base?.artist ?? null,
-          source: base?.source ?? null,
-          artworkUrl: base?.artworkUrl ?? null,
-        };
-      }
-    }
+    return applyCommand(this.states.get(`${deviceId}:${command.capability}`), command);
   }
 
   /** Test/seed helper: set an initial state without emitting a command. */

@@ -2,7 +2,12 @@ import {
   EntityRegistryMirror,
   HaAdapter,
   HaWsTransport,
+  MigrationPolicy,
+  MockAdapter,
+  RoutingBackendAdapter,
   SupremeIntegrationLayer,
+  SupremeNativeAdapter,
+  type IBackendAdapter,
 } from "@supreme/integration-layer";
 import { createPersistence } from "@supreme/persistence";
 import { HttpProtocolScanner } from "@supreme/commissioning";
@@ -43,15 +48,26 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     );
   }
 
+  // The SIL is always backed by a routing adapter so per-domain native migration
+  // (§16 Phase 4) is available: the "ha" side is the real HaAdapter or the mock
+  // backend, and the native side is the Supreme-native engine. The shared registry
+  // is what the router consults to route each domain.
+  const registry = new EntityRegistryMirror();
+  let haSide: IBackendAdapter;
   if (config.backend === "ha") {
     if (!config.haToken) throw new Error("SUPREME_BACKEND=ha requires SUPREME_HA_TOKEN");
-    // The registry must be shared between the SIL facade (which records Supreme →
-    // backend mappings) and the HaAdapter (which resolves them when commanding).
-    const registry = new EntityRegistryMirror();
     const transport = new HaWsTransport({ url: config.haUrl, token: config.haToken });
-    const adapter = new HaAdapter({ transport, registry });
-    deps.sil = new SupremeIntegrationLayer({ adapter, registry });
+    haSide = new HaAdapter({ transport, registry });
+  } else {
+    haSide = new MockAdapter();
   }
+  const router = new RoutingBackendAdapter({
+    ha: haSide,
+    native: new SupremeNativeAdapter(),
+    registry,
+    policy: new MigrationPolicy(),
+  });
+  deps.sil = new SupremeIntegrationLayer({ adapter: router, registry });
 
   return AppContext.create(config, deps);
 }

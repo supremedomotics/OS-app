@@ -8,6 +8,8 @@ import { READONLY_CAPABILITIES } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
 import type { BackendStateEvent, IBackendAdapter } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
+import { RoutingBackendAdapter } from "./routing-adapter.js";
+import type { EngineKind } from "./migration.js";
 
 /**
  * Supreme Integration Layer — the facade the rest of the hub talks to.
@@ -41,6 +43,36 @@ export class SupremeIntegrationLayer {
 
   get backendKind(): string {
     return this.adapter.kind;
+  }
+
+  /**
+   * Native-migration controls (§16 Phase 4), available only when the SIL is backed
+   * by a {@link RoutingBackendAdapter}. Returns null for single-backend setups.
+   */
+  private get router(): RoutingBackendAdapter | null {
+    return this.adapter instanceof RoutingBackendAdapter ? this.adapter : null;
+  }
+
+  /** Whether per-domain HA→native migration is available on this hub. */
+  get migrationEnabled(): boolean {
+    return this.router !== null;
+  }
+
+  /** Current per-domain routing (ha/native). Domains are seeded from the registry. */
+  migrationStatus(): { domain: string; engine: EngineKind }[] {
+    const router = this.router;
+    if (!router) return [];
+    for (const d of this.registry.domains()) router.policy.register(d);
+    return router.policy.status();
+  }
+
+  /** Migrate a backend domain onto the Supreme-native engine. Returns pairs moved. */
+  async migrateDomain(domain: string, engine: EngineKind): Promise<number> {
+    const router = this.router;
+    if (!router) throw new SupremeError("conflict", "native migration is not enabled on this hub");
+    if (engine === "native") return router.migrateDomainToNative(domain);
+    router.policy.setEngine(domain, "ha");
+    return 0;
   }
 
   isHealthy(): boolean {

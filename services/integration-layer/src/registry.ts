@@ -50,4 +50,33 @@ export class EntityRegistryMirror {
   get size(): number {
     return this.forward.size;
   }
+
+  /** Distinct backend domains currently mapped (used by the migration router/UI). */
+  domains(): string[] {
+    return [...new Set([...this.forward.values()].map((r) => r.backendDomain))].sort();
+  }
+
+  /** Resolve the backend domain for a device capability, if mapped. */
+  domainOf(deviceId: DeviceId, capability: CapabilityKind): string | undefined {
+    return this.forward.get(key(deviceId, capability))?.backendDomain;
+  }
+
+  /** Distinct device ids that have at least one capability in a domain. */
+  devicesInDomain(domain: string): DeviceId[] {
+    const set = new Set<DeviceId>();
+    for (const [k, ref] of this.forward) {
+      if (ref.backendDomain === domain) set.add(k.split(":")[0] as DeviceId);
+    }
+    return [...set];
+  }
+
+  /** Capabilities of a device that map to a given domain. */
+  capabilitiesOf(deviceId: DeviceId, domain: string): CapabilityKind[] {
+    const out: CapabilityKind[] = [];
+    for (const [k, ref] of this.forward) {
+      const [dev, cap] = k.split(":");
+      if (dev === deviceId && ref.backendDomain === domain) out.push(cap as CapabilityKind);
+    }
+    return out;
+  }
 }
