@@ -121,6 +121,31 @@ class NotificationItem {
       );
 }
 
+/// An automation summary for the visual Builder list.
+class AutomationSummary {
+  AutomationSummary({
+    required this.id,
+    required this.name,
+    required this.enabled,
+    required this.triggerCount,
+    required this.actionCount,
+  });
+  final String id;
+  final String name;
+  final bool enabled;
+  final int triggerCount;
+  final int actionCount;
+
+  factory AutomationSummary.fromJson(Map<String, dynamic> json) =>
+      AutomationSummary(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        enabled: json['enabled'] as bool? ?? true,
+        triggerCount: (json['triggers'] as List<dynamic>?)?.length ?? 0,
+        actionCount: (json['actions'] as List<dynamic>?)?.length ?? 0,
+      );
+}
+
 /// A dashboard favorite referencing a device or a scene.
 class Favorite {
   Favorite({required this.type, required this.refId});

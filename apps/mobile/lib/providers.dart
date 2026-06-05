@@ -54,3 +54,20 @@ final securityProvider = FutureProvider<Map<String, dynamic>>((ref) async {
 final energyProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   return ref.watch(clientProvider).energySummary();
 });
+
+/// Automations for the visual Builder (§10).
+final automationsProvider =
+    FutureProvider<List<AutomationSummary>>((ref) async {
+  return ref.watch(clientProvider).automations();
+});
+
+/// Every device in the home (across rooms) — used by the Builder's pickers.
+final allDevicesProvider = FutureProvider<List<Device>>((ref) async {
+  final client = ref.watch(clientProvider);
+  final home = await client.home();
+  final devices = <Device>[];
+  for (final room in home.rooms) {
+    devices.addAll(await client.devicesInRoom(room.id));
+  }
+  return devices;
+});

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import 'automations_screen.dart';
 import 'energy_screen.dart';
 
 /// Homeowner dashboard (§11.3): a quick-scene row at the top, then favorites and
@@ -79,6 +80,18 @@ class DashboardScreen extends ConsumerWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const EnergyScreen()),
+              ),
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.account_tree_outlined,
+                  color: AureonGold.c400),
+              title: const Text('Automations'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                    builder: (_) => const AutomationsScreen()),
               ),
             ),
           ),

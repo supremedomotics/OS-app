@@ -134,6 +134,49 @@ class SupremeClient {
         .toList();
   }
 
+  // ── Automations (visual Builder, §10) ────────────────────────────────────────
+  Future<List<AutomationSummary>> automations() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/automations'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['automations'] as List<dynamic>)
+        .map((a) => AutomationSummary.fromJson(a as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> createAutomation(Map<String, dynamic> body) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/automations'),
+      headers: _authHeaders,
+      body: jsonEncode(body),
+    );
+    _ensureOk(res);
+  }
+
+  Future<void> setAutomationEnabled(String id, bool enabled) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/automations/$id/enabled'),
+      headers: _authHeaders,
+      body: jsonEncode({'enabled': enabled}),
+    );
+    _ensureOk(res);
+  }
+
+  Future<void> runAutomation(String id) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/automations/$id/run'),
+      headers: _authHeaders,
+    );
+    _ensureOk(res);
+  }
+
+  Future<void> deleteAutomation(String id) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/automations/$id'),
+        headers: _authHeaders);
+    _ensureOk(res);
+  }
+
   // ── Intelligence & scale (Phase 3) ───────────────────────────────────────────
 
   /// Ask the on-box assistant; returns the draft result map (kind + payload).
