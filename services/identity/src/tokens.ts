@@ -13,6 +13,10 @@ export interface SupremeClaims {
   userType: UserType;
   /** "access" | "refresh" | "mfa" — guards token reuse across flows. */
   kind: "access" | "refresh" | "mfa";
+  /** Session id — binds the token to a revocable session (rotation/logout). */
+  sid?: string;
+  /** Token id — for refresh tokens, the rotation chain position (reuse detection). */
+  jti?: string;
 }
 
 export interface TokenServiceOptions {
@@ -39,7 +43,11 @@ export class TokenService {
   }
 
   private async sign(claims: SupremeClaims, ttl: number): Promise<string> {
-    return new SignJWT({ ...claims })
+    const body: Record<string, unknown> = { ...claims };
+    // Drop undefined optional claims so they don't serialize as null.
+    if (body.sid === undefined) delete body.sid;
+    if (body.jti === undefined) delete body.jti;
+    return new SignJWT(body)
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setIssuer(this.issuer)
@@ -72,6 +80,8 @@ export class TokenService {
       homeId: payload.homeId as HomeId,
       userType: payload.userType as UserType,
       kind: payload.kind as SupremeClaims["kind"],
+      sid: payload.sid as string | undefined,
+      jti: payload.jti as string | undefined,
     };
   }
 }

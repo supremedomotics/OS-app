@@ -6,6 +6,9 @@ export { IdentityService, type IdentityServiceOptions } from "./identity-service
 export { TokenService, type SupremeClaims, type TokenServiceOptions } from "./tokens.js";
 export {
   InMemoryIdentityStore,
+  InMemorySessionStore,
   type IIdentityStore,
+  type ISessionStore,
+  type Session,
   type StoredCredential,
 } from "./store.js";

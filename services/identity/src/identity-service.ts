@@ -8,7 +8,12 @@ import {
   type UserType,
 } from "@supreme/domain-model";
 import { SupremeError, type LoginResponse, type TokenPair } from "@supreme/contracts";
-import { InMemoryIdentityStore, type IIdentityStore } from "./store.js";
+import {
+  InMemoryIdentityStore,
+  InMemorySessionStore,
+  type IIdentityStore,
+  type ISessionStore,
+} from "./store.js";
 import { TokenService } from "./tokens.js";
 
 /**
@@ -22,6 +27,7 @@ import { TokenService } from "./tokens.js";
 export interface IdentityServiceOptions {
   tokenSecret: string;
   store?: IIdentityStore;
+  sessionStore?: ISessionStore;
 }
 
 // OWASP-recommended Argon2id parameters.
@@ -29,10 +35,12 @@ const ARGON2 = { memoryCost: 19456, timeCost: 2, parallelism: 1 } as const;
 
 export class IdentityService {
   private readonly store: IIdentityStore;
+  private readonly sessions: ISessionStore;
   readonly tokens: TokenService;
 
   constructor(opts: IdentityServiceOptions) {
     this.store = opts.store ?? new InMemoryIdentityStore();
+    this.sessions = opts.sessionStore ?? new InMemorySessionStore();
     this.tokens = new TokenService({ secret: opts.tokenSecret });
   }
 
@@ -132,16 +140,54 @@ export class IdentityService {
     if (cred.mfaSecret) {
       return { status: "mfa_required", mfaToken: await this.tokens.issueMfa(base) };
     }
-    return { status: "ok", ...(await this.issueTokens(user)) };
+    // New login → new revocable session, with the first refresh jti in the chain.
+    const sid = newId("session") as string;
+    const jti = newId("session") as string;
+    await this.sessions.create({ id: sid, userId: user.id, currentJti: jti, revoked: false, createdAt: new Date().toISOString() });
+    return { status: "ok", ...(await this.issueTokens(user, sid, jti)) };
   }
 
+  /**
+   * Rotate the refresh token (§12). The presented refresh token must be the CURRENT
+   * one in its session's chain; presenting an older (already-rotated) token is reuse
+   * — we revoke the entire session so a stolen token can't be replayed.
+   */
   async refresh(refreshToken: string): Promise<TokenPair> {
     const claims = await this.tokens.verify(refreshToken, "refresh");
     const user = await this.store.getUser(claims.sub);
     if (!user || user.status !== "active") {
       throw new SupremeError("unauthorized", "session is no longer valid");
     }
-    return this.issueTokens(user);
+    if (!claims.sid || !claims.jti) {
+      throw new SupremeError("unauthorized", "refresh token is not session-bound");
+    }
+    const session = await this.sessions.get(claims.sid);
+    if (!session || session.revoked) {
+      throw new SupremeError("unauthorized", "session has been revoked");
+    }
+    if (session.currentJti !== claims.jti) {
+      // Reuse of a rotated token → assume compromise; revoke the session.
+      await this.sessions.revoke(claims.sid);
+      throw new SupremeError("unauthorized", "refresh token reuse detected; session revoked");
+    }
+    const nextJti = newId("session") as string;
+    await this.sessions.setCurrentJti(claims.sid, nextJti);
+    return this.issueTokens(user, claims.sid, nextJti);
+  }
+
+  /** Revoke a session from any of its tokens (logout / "sign out everywhere"). */
+  async logout(token: string): Promise<void> {
+    let sid: string | undefined;
+    try {
+      sid = (await this.tokens.verify(token, "access")).sid;
+    } catch {
+      try {
+        sid = (await this.tokens.verify(token, "refresh")).sid;
+      } catch {
+        sid = undefined;
+      }
+    }
+    if (sid) await this.sessions.revoke(sid);
   }
 
   /** Verify an access token and return the live user. Used by the gateway authn. */
@@ -150,6 +196,13 @@ export class IdentityService {
     const user = await this.store.getUser(claims.sub);
     if (!user || user.status !== "active") {
       throw new SupremeError("unauthorized", "session is no longer valid");
+    }
+    // Honor revocation: a session-bound access token from a revoked session is rejected.
+    if (claims.sid) {
+      const session = await this.sessions.get(claims.sid);
+      if (!session || session.revoked) {
+        throw new SupremeError("unauthorized", "session has been revoked");
+      }
     }
     return user;
   }
@@ -175,11 +228,11 @@ export class IdentityService {
     return next;
   }
 
-  private async issueTokens(user: User): Promise<TokenPair> {
+  private async issueTokens(user: User, sid: string, jti: string): Promise<TokenPair> {
     const base = { sub: user.id, homeId: user.homeId, userType: user.userType };
     return {
-      accessToken: await this.tokens.issueAccess(base),
-      refreshToken: await this.tokens.issueRefresh(base),
+      accessToken: await this.tokens.issueAccess({ ...base, sid }),
+      refreshToken: await this.tokens.issueRefresh({ ...base, sid, jti }),
       expiresIn: this.tokens.accessTtl,
       tokenType: "Bearer",
     };

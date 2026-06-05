@@ -44,6 +44,49 @@ describe("login + token lifecycle", () => {
     expect(pair.accessToken).toBeTruthy();
   });
 
+  it("rotates refresh tokens and detects reuse of a rotated token", async () => {
+    const s = svc();
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+    });
+    const login = await s.login("owner@example.com", "correct horse battery staple");
+    if (login.status !== "ok") throw new Error("expected tokens");
+
+    // First refresh works and returns a NEW refresh token.
+    const rotated = await s.refresh(login.refreshToken);
+    expect(rotated.refreshToken).not.toBe(login.refreshToken);
+
+    // The new refresh token still works once...
+    const rotated2 = await s.refresh(rotated.refreshToken);
+    expect(rotated2.accessToken).toBeTruthy();
+
+    // ...but replaying the ORIGINAL (already-rotated) token is reuse → rejected,
+    // and it revokes the whole session.
+    await expect(s.refresh(login.refreshToken)).rejects.toThrow(/reuse detected/);
+    await expect(s.refresh(rotated2.refreshToken)).rejects.toThrow(/revoked/);
+  });
+
+  it("revokes a session on logout so its access token stops working", async () => {
+    const s = svc();
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+    });
+    const login = await s.login("owner@example.com", "correct horse battery staple");
+    if (login.status !== "ok") throw new Error("expected tokens");
+
+    // Access token works, then logout revokes the session, then it fails.
+    expect((await s.authenticate(login.accessToken)).email).toBe("owner@example.com");
+    await s.logout(login.accessToken);
+    await expect(s.authenticate(login.accessToken)).rejects.toThrow(/revoked/);
+    await expect(s.refresh(login.refreshToken)).rejects.toThrow(/revoked/);
+  });
+
   it("rejects a bad password without leaking user existence", async () => {
     const s = svc();
     await s.commission({

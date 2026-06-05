@@ -33,7 +33,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] CORS allow-list (no wildcard in production)
 - [x] Rate limiting (global + strict on `/v1/auth/*`) to blunt brute force
 - [x] Request body size limits (1 MB JSON cap)
-- [ ] Refresh-token rotation + revocation (session store, `jti` deny-list)
+- [x] Refresh-token rotation + revocation (session-bound; reuse → session revoked; logout) — sessions in-memory, persist next
 - [ ] MFA enrollment + TOTP verify flow wired end-to-end
 - [ ] Sealed secret store (vault/age) instead of plain env
 - [ ] mTLS for the hub↔cloud tunnel

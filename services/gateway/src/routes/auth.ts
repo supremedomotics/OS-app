@@ -35,4 +35,16 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       sendError(reply, err);
     }
   });
+
+  // Revoke the current session (logout). Idempotent — always 204.
+  app.post("/v1/auth/logout", async (req, reply) => {
+    try {
+      const header = req.headers.authorization;
+      const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      if (token) await ctx.identity.logout(token);
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
 }

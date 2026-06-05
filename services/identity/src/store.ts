@@ -25,6 +25,44 @@ export interface IIdentityStore {
   putCredential(cred: StoredCredential): Promise<void>;
 }
 
+/**
+ * A login session — the unit of revocation. `currentJti` is the position in the
+ * refresh-token rotation chain; presenting any other (older) refresh jti is reuse
+ * and revokes the whole session (§12 hardening).
+ */
+export interface Session {
+  id: string;
+  userId: UserId;
+  currentJti: string;
+  revoked: boolean;
+  createdAt: string;
+}
+
+export interface ISessionStore {
+  create(session: Session): Promise<void>;
+  get(id: string): Promise<Session | null>;
+  setCurrentJti(id: string, jti: string): Promise<void>;
+  revoke(id: string): Promise<void>;
+}
+
+export class InMemorySessionStore implements ISessionStore {
+  private readonly sessions = new Map<string, Session>();
+  async create(session: Session): Promise<void> {
+    this.sessions.set(session.id, session);
+  }
+  async get(id: string): Promise<Session | null> {
+    return this.sessions.get(id) ?? null;
+  }
+  async setCurrentJti(id: string, jti: string): Promise<void> {
+    const s = this.sessions.get(id);
+    if (s) s.currentJti = jti;
+  }
+  async revoke(id: string): Promise<void> {
+    const s = this.sessions.get(id);
+    if (s) s.revoked = true;
+  }
+}
+
 export class InMemoryIdentityStore implements IIdentityStore {
   private home: Home | null = null;
   private readonly users = new Map<UserId, User>();
