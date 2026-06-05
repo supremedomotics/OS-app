@@ -14,6 +14,8 @@ import {
   type InstalledDriverList,
   type InstalledDriverResponse,
   type LicenseStatus,
+  type MigrateDomainResponse,
+  type MigrationStatus,
   type ProjectExport,
 } from "@supreme/contracts";
 import type {
@@ -146,6 +148,14 @@ export class SupremeClient {
   }
   activateLicense(token: License): Promise<LicenseStatus> {
     return this.request("POST", "/v1/license/activate", { token }) as Promise<LicenseStatus>;
+  }
+
+  // ── Native migration (§16 Phase 4) ───────────────────────────────────────────
+  migrationStatus(): Promise<MigrationStatus> {
+    return this.request("GET", "/v1/migration") as Promise<MigrationStatus>;
+  }
+  migrateDomain(domain: string, engine: "ha" | "native"): Promise<MigrateDomainResponse> {
+    return this.request("POST", `/v1/migration/${domain}`, { engine }) as Promise<MigrateDomainResponse>;
   }
 
   get accessToken(): string | null {

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import type { CatalogEntry, DiagnosticsReport, FleetHub, LicenseStatus } from "@supreme/contracts";
+import type {
+  CatalogEntry,
+  DiagnosticsReport,
+  FleetHub,
+  LicenseStatus,
+  MigrationStatus,
+} from "@supreme/contracts";
 import type { InstalledDriver } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { fleetConfigured, listFleetHubs } from "./fleet.js";
@@ -215,6 +221,84 @@ export function BackupRestore() {
         <button onClick={exportProject}>Export project</button>
       </div>
       {status && <p className="muted">{status}</p>}
+    </section>
+  );
+}
+
+/** Native migration: move backend domains from Home Assistant to the Supreme engine. */
+export function Migration() {
+  const [status, setStatus] = useState<MigrationStatus | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function refresh() {
+    setStatus(await client.migrationStatus());
+  }
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function migrate(domain: string, engine: "ha" | "native") {
+    setBusy(domain);
+    setError(null);
+    try {
+      await client.migrateDomain(domain, engine);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "migration failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section>
+      <h2>Native migration</h2>
+      <p className="muted">
+        Move each backend domain from Home Assistant to the Supreme-native engine. The
+        homeowner experience is unaffected — control continues over the same API.
+      </p>
+      {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
+      {!status?.enabled && (
+        <div className="card">
+          <p className="muted">Migration isn't available on this hub (no routing backend).</p>
+        </div>
+      )}
+      {status?.enabled && status.domains.length === 0 && (
+        <p className="muted">No backend domains mapped yet.</p>
+      )}
+      {status?.enabled &&
+        status.domains.map((d) => (
+          <div className="card row" key={d.domain}>
+            <div>
+              <strong>{d.domain}</strong>{" "}
+              <span
+                className="tag"
+                style={{
+                  color: d.engine === "native" ? "var(--aureon-color-status-good)" : undefined,
+                }}
+              >
+                {d.engine === "native" ? "Supreme-native" : "Home Assistant"}
+              </span>
+            </div>
+            {d.engine === "ha" ? (
+              <button className="primary" disabled={busy === d.domain} onClick={() => migrate(d.domain, "native")}>
+                {busy === d.domain ? "Migrating…" : "Migrate to native"}
+              </button>
+            ) : (
+              <button disabled={busy === d.domain} onClick={() => migrate(d.domain, "ha")}>
+                Revert to HA
+              </button>
+            )}
+          </div>
+        ))}
+      {status?.fullyMigrated && (
+        <div className="card">
+          <strong style={{ color: "var(--aureon-color-status-good)" }}>
+            Fully migrated — Home Assistant can be retired.
+          </strong>
+        </div>
+      )}
     </section>
   );
 }

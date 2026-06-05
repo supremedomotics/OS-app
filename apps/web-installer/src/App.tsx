@@ -1,8 +1,23 @@
 import { useState } from "react";
 import { client } from "./api.js";
-import { BackupRestore, Commissioning, Diagnostics, DriverStore, Fleet, Licensing } from "./pages.js";
+import {
+  BackupRestore,
+  Commissioning,
+  Diagnostics,
+  DriverStore,
+  Fleet,
+  Licensing,
+  Migration,
+} from "./pages.js";
 
-type Tab = "drivers" | "commission" | "diagnostics" | "backup" | "license" | "fleet";
+type Tab =
+  | "drivers"
+  | "commission"
+  | "diagnostics"
+  | "backup"
+  | "license"
+  | "migration"
+  | "fleet";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "drivers", label: "Driver Store" },
@@ -10,6 +25,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "diagnostics", label: "Diagnostics" },
   { id: "backup", label: "Backup / Restore" },
   { id: "license", label: "Licensing" },
+  { id: "migration", label: "Native Migration" },
   { id: "fleet", label: "Fleet" },
 ];
 
@@ -39,6 +55,7 @@ export function App() {
         {tab === "diagnostics" && <Diagnostics />}
         {tab === "backup" && <BackupRestore />}
         {tab === "license" && <Licensing />}
+        {tab === "migration" && <Migration />}
         {tab === "fleet" && <Fleet />}
       </main>
     </div>
