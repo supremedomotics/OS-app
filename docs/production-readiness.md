@@ -40,7 +40,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [ ] TLS termination + HSTS for the hub API (reverse proxy)
 - [ ] Per-command authorization re-check at services (defense in depth) — partially done at gateway
 - [x] Dependency & container image scanning in CI (pnpm audit + Trivy fs: vuln/secret/misconfig)
-- [ ] Third-party penetration test + authz matrix test suite
+- [x] Authz matrix test suite (every user-type × resource × action + escalation negatives)
+- [ ] Third-party penetration test
 - [ ] Secrets never logged; audit log shipped off-box (tamper-evident already ✓)
 
 ## 2. Real Home Assistant integration  ← CRITICAL PATH (next)
