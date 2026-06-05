@@ -1,6 +1,6 @@
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
-import { IdentityService, type IIdentityStore } from "@supreme/identity";
+import { IdentityService, type IIdentityStore, type ISessionStore } from "@supreme/identity";
 import { HomeService, seedDemoHome, type IHomeStore } from "@supreme/home";
 import { SceneService, type ISceneStore } from "@supreme/scenes";
 import { NotificationService, type INotificationStore } from "@supreme/notifications";
@@ -33,6 +33,7 @@ import { InstallerServices } from "./installer-context.js";
 export interface AppDeps {
   sil?: SupremeIntegrationLayer;
   identityStore?: IIdentityStore;
+  sessionStore?: ISessionStore;
   homeStore?: IHomeStore;
   sceneStore?: ISceneStore;
   grantStore?: IGrantStore;
@@ -83,6 +84,7 @@ export class AppContext {
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,
+      sessionStore: deps.sessionStore,
     });
     this.sil = deps.sil ?? buildSil(config);
     this.home = new HomeService(this.sil, deps.homeStore);

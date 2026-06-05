@@ -5,7 +5,7 @@
  * tested in-process against embedded Postgres (PGlite). The hub runs node-postgres
  * against the Compose Postgres; the same SQL and migrations serve both.
  */
-import type { IIdentityStore } from "@supreme/identity";
+import type { IIdentityStore, ISessionStore } from "@supreme/identity";
 import type { IHomeStore } from "@supreme/home";
 import type { ISceneStore } from "@supreme/scenes";
 import type { IGrantStore } from "@supreme/permissions";
@@ -21,6 +21,7 @@ import { GrantRepo } from "./repositories/grant-repo.js";
 import { NotificationRepo } from "./repositories/notification-repo.js";
 import { InstalledDriverRepo } from "./repositories/driver-repo.js";
 import { AutomationRepo } from "./repositories/automation-repo.js";
+import { SessionRepo } from "./repositories/session-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -31,11 +32,13 @@ export { GrantRepo } from "./repositories/grant-repo.js";
 export { NotificationRepo } from "./repositories/notification-repo.js";
 export { InstalledDriverRepo } from "./repositories/driver-repo.js";
 export { AutomationRepo } from "./repositories/automation-repo.js";
+export { SessionRepo } from "./repositories/session-repo.js";
 
 /** The full set of persisted stores, ready to inject into the domain services. */
 export interface PersistenceStores {
   db: SqlDb;
   identity: IIdentityStore;
+  sessions: ISessionStore;
   home: IHomeStore;
   scenes: ISceneStore;
   grants: IGrantStore;
@@ -48,6 +51,7 @@ export interface PersistenceStores {
 export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
   return {
     identity: new IdentityRepo(db),
+    sessions: new SessionRepo(db),
     home: new HomeRepo(db),
     scenes: new SceneRepo(db),
     grants: new GrantRepo(db),

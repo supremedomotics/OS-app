@@ -33,6 +33,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   if (config.databaseUrl) {
     const stores = await createPersistence({ connectionString: config.databaseUrl });
     deps.identityStore = stores.identity;
+    deps.sessionStore = stores.sessions;
     deps.homeStore = stores.home;
     deps.sceneStore = stores.scenes;
     deps.grantStore = stores.grants;

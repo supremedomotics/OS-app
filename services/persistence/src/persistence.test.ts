@@ -105,6 +105,25 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect(list[0]?.schedule?.[0]?.start).toBe("08:00");
   });
 
+  it("persists sessions so revocation survives across instances", async () => {
+    const userId = newId("user") as UserId;
+    const sid = newId("session") as string;
+    await stores.sessions.create({
+      id: sid,
+      userId,
+      currentJti: "jti-1",
+      revoked: false,
+      createdAt: new Date().toISOString(),
+    });
+    await stores.sessions.setCurrentJti(sid, "jti-2");
+    // A fresh repo over the same DB sees the rotated, non-revoked session.
+    const { SessionRepo } = await import("./index.js");
+    const fresh = new SessionRepo(stores.db);
+    expect((await fresh.get(sid))?.currentJti).toBe("jti-2");
+    await fresh.revoke(sid);
+    expect((await stores.sessions.get(sid))?.revoked).toBe(true);
+  });
+
   it("persists notifications with read receipts", async () => {
     const notifications = new NotificationService(stores.notifications);
     const userId = newId("user") as UserId;
