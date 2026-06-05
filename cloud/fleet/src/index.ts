@@ -95,3 +95,5 @@ export class FleetService {
     return this.now() - new Date(hub.lastSeenAt).getTime() <= this.offlineAfterMs ? "online" : "offline";
   }
 }
+
+export { buildFleetServer, type FleetServerOptions } from "./server.js";

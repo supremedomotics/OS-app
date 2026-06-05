@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import type { CatalogEntry, DiagnosticsReport, LicenseStatus } from "@supreme/contracts";
+import type { CatalogEntry, DiagnosticsReport, FleetHub, LicenseStatus } from "@supreme/contracts";
 import type { InstalledDriver } from "@supreme/domain-model";
 import { client } from "./api.js";
+import { fleetConfigured, listFleetHubs } from "./fleet.js";
 
 /** Driver Store: browse the signed catalog, install (license-gated), enable/disable. */
 export function DriverStore() {
@@ -214,6 +215,58 @@ export function BackupRestore() {
         <button onClick={exportProject}>Export project</button>
       </div>
       {status && <p className="muted">{status}</p>}
+    </section>
+  );
+}
+
+/** Fleet: oversee an installer org's hubs (optional cloud service). */
+export function Fleet() {
+  const [hubs, setHubs] = useState<FleetHub[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!fleetConfigured) return;
+    void listFleetHubs()
+      .then((r) => setHubs(r.hubs))
+      .catch((e) => setError(e instanceof Error ? e.message : "failed"));
+  }, []);
+
+  if (!fleetConfigured) {
+    return (
+      <section>
+        <h2>Fleet</h2>
+        <div className="card">
+          <p className="muted">
+            Cloud fleet management is optional and not configured. Set
+            <code> VITE_SUPREME_FLEET_URL</code> and <code>VITE_SUPREME_FLEET_KEY</code> to
+            oversee your org's hubs here. The hub works fully without it.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <h2>Fleet</h2>
+      {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
+      {hubs.length === 0 && !error && <p className="muted">No hubs registered.</p>}
+      {hubs.map((h) => (
+        <div className="card row" key={h.id}>
+          <div>
+            <strong>{h.name}</strong> <span className="tag">{h.version}</span>
+            <div className="muted">home {h.homeId} · last seen {new Date(h.lastSeenAt).toLocaleString()}</div>
+          </div>
+          <span
+            className="tag"
+            style={{
+              color: h.status === "online" ? "var(--aureon-color-status-good)" : "var(--aureon-color-status-critical)",
+            }}
+          >
+            {h.status}
+          </span>
+        </div>
+      ))}
     </section>
   );
 }
