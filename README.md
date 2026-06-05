@@ -15,13 +15,14 @@ Control4, Savant, Crestron and RTI.
 - **Architecture decisions:** [`docs/architecture/adr/`](docs/architecture/adr/)
 - **UX benchmark references:** [`docs/reference/`](docs/reference/)
 
-> Status: **Phase 3 (Intelligence & Scale) in progress.** On the Phase 0–2
-> foundations, Phase 3 adds: a native **automation engine** over an engine-agnostic
-> DSL (the visual Builder's source), an **AI assistant** (offline NL→DSL planner,
-> local-LLM-ready), **energy/analytics** time-series, a tamper-evident **audit
-> log**, **security** (arm/disarm) + cameras, and optional **multi-home/installer
-> fleet** management — wired through the gateway and the Flutter app, all verified
-> by automated tests (incl. PGlite-backed e2e and Ed25519/hash-chain checks).
+> Status: **Phases 0–4 implemented.** On the homeowner + installer + intelligence
+> stack, **Phase 4 (native migration)** lands the strangler-fig payoff: the SIL
+> routes each backend domain to Home Assistant *or* the Supreme-native engine, and
+> an operator migrates a domain to native at runtime with **zero change above the
+> SIL** (proven by e2e). The AI assistant runs a **real on-box LLM** (llama.cpp)
+> when a model is provisioned, with the deterministic planner as a correctness
+> floor. Everything is verified by automated tests (PGlite e2e, Ed25519/hash-chain,
+> a runtime native-migration e2e, and a real-inference test gated on a local model).
 
 ## Repository layout (monorepo)
 

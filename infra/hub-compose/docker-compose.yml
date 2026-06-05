@@ -59,11 +59,21 @@ services:
 
   # On-box AI assistant (local model host). The gateway delegates to it and falls
   # back to its built-in planner when unavailable — internal only.
+  #
+  # To enable the REAL local LLM: build with WITH_LLM=1 (compiles llama.cpp) and
+  # provide a GGUF model. Weights are never shipped in the repo/image — mount the
+  # model and point SUPREME_AI_MODEL_PATH at it. See scripts/dev/fetch-ai-model.sh.
   ai:
     build:
       context: ../..
       dockerfile: services/ai-py/Dockerfile
+      args:
+        WITH_LLM: ${SUPREME_AI_WITH_LLM:-0}
     restart: unless-stopped
+    environment:
+      SUPREME_AI_MODEL_PATH: ${SUPREME_AI_MODEL_PATH:-}
+    volumes:
+      - ${SUPREME_AI_MODEL_DIR:-./ai-models}:/models:ro
     networks:
       - supreme-core
 

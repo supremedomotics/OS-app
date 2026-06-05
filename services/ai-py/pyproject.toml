@@ -9,6 +9,12 @@ dependencies = [
   "pydantic>=2.9.0",
 ]
 
+[project.optional-dependencies]
+# The on-box LLM runtime. Optional so base install + tests need no model/weights;
+# enable on the appliance with `pip install '.[llm]'` and provision a GGUF via
+# SUPREME_AI_MODEL_PATH (see scripts/dev/fetch-ai-model.sh).
+llm = ["llama-cpp-python>=0.3.0"]
+
 [dependency-groups]
 dev = ["pytest>=8.3.0", "httpx>=0.27.0", "ruff>=0.7.0"]
 

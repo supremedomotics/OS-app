@@ -48,3 +48,9 @@ packages/supreme-sdk-dart/pubspec.lock
 
 # Environment-specific proxy CA certs (populated by enable-native-tools.sh)
 infra/hub-compose/ca-certs/*.crt
+
+# On-box AI model weights (provisioned to the appliance, never committed)
+services/ai-py/models/
+
+# On-box AI model mount (compose); weights provisioned at runtime
+infra/hub-compose/ai-models/
