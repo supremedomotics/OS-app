@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import 'energy_screen.dart';
 
 /// Homeowner dashboard (§11.3): a quick-scene row at the top, then favorites and
 /// an entry into rooms. Calm, room-first, gesture-driven.
@@ -69,6 +70,17 @@ class DashboardScreen extends ConsumerWidget {
                                 Text('${f.type}: ${f.refId.substring(0, 8)}…')),
                     ],
                   ),
+          ),
+          const SizedBox(height: AureonSpacing.xl),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.bolt_outlined, color: AureonGold.c400),
+              title: const Text('Energy'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const EnergyScreen()),
+              ),
+            ),
           ),
         ],
       ),

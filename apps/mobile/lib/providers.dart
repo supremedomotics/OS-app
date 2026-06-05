@@ -44,3 +44,13 @@ final notificationsProvider =
     FutureProvider<List<NotificationItem>>((ref) async {
   return ref.watch(clientProvider).notifications();
 });
+
+/// Security panel state (arm mode + triggered).
+final securityProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  return ref.watch(clientProvider).securityState();
+});
+
+/// Per-measure energy summary for the home.
+final energyProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  return ref.watch(clientProvider).energySummary();
+});

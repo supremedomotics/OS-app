@@ -134,6 +134,57 @@ class SupremeClient {
         .toList();
   }
 
+  // ── Intelligence & scale (Phase 3) ───────────────────────────────────────────
+
+  /// Ask the on-box assistant; returns the draft result map (kind + payload).
+  Future<Map<String, dynamic>> aiAssist(String utterance) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/ai/assistant'),
+      headers: _authHeaders,
+      body: jsonEncode({'utterance': utterance}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['result']
+        as Map<String, dynamic>;
+  }
+
+  /// Per-measure energy summary for the home.
+  Future<List<Map<String, dynamic>>> energySummary() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/energy/summary'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['summary'] as List<dynamic>).cast<Map<String, dynamic>>();
+  }
+
+  /// Current security panel state.
+  Future<Map<String, dynamic>> securityState() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/security'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> arm(String mode, {String? pin}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/security/arm'),
+      headers: _authHeaders,
+      body: jsonEncode({'mode': mode, if (pin != null) 'pin': pin}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> disarm({String? pin}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/security/disarm'),
+      headers: _authHeaders,
+      body: jsonEncode({if (pin != null) 'pin': pin}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   void _ensureOk(http.Response res) {
     if (res.statusCode >= 400) {
       throw SupremeApiException(res.statusCode, res.body);
