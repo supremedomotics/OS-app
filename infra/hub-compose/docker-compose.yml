@@ -28,7 +28,8 @@ services:
       SUPREME_TOKEN_SECRET: ${SUPREME_TOKEN_SECRET:?provide a 32+ char secret in .env}
       DATABASE_URL: postgres://supreme:${POSTGRES_PASSWORD:?provide a db password in .env}@postgres:5432/supreme
       SUPREME_COMMISSIONING_URL: http://commissioning:9100
-      SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.2.0}
+      SUPREME_AI_URL: http://ai:9200
+      SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:
       # The ONLY host-published port in the whole hub: the Supreme API.
@@ -52,6 +53,16 @@ services:
       # from infra/hub-compose/ca-certs for pip behind a TLS-intercepting proxy.
       context: ../..
       dockerfile: services/commissioning-py/Dockerfile
+    restart: unless-stopped
+    networks:
+      - supreme-core
+
+  # On-box AI assistant (local model host). The gateway delegates to it and falls
+  # back to its built-in planner when unavailable — internal only.
+  ai:
+    build:
+      context: ../..
+      dockerfile: services/ai-py/Dockerfile
     restart: unless-stopped
     networks:
       - supreme-core

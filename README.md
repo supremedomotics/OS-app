@@ -15,15 +15,13 @@ Control4, Savant, Crestron and RTI.
 - **Architecture decisions:** [`docs/architecture/adr/`](docs/architecture/adr/)
 - **UX benchmark references:** [`docs/reference/`](docs/reference/)
 
-> Status: **Phase 2 (Installer & Drivers) in progress.** On the Phase 0/1
-> foundations (monorepo, SIL, identity & permissions, gateway REST + WSS, device
-> control, scenes/favorites/notifications, real HA backend, Postgres persistence,
-> Flutter homeowner app), Phase 2 adds: a signed **Driver Store** with offline
-> license gating + Matter opt-in, the first-party KNX/Casambi/DALI/Zigbee/MQTT/
-> Modbus/Matter drivers, **device discovery + commissioning** (with a Python
-> KNX/DALI/Modbus tooling sidecar), **diagnostics**, signed **backup/restore**,
-> **project export**, **licensing**, and a **web Installer Portal**. All verified
-> by automated tests (incl. embedded-Postgres persistence and Ed25519 signing).
+> Status: **Phase 3 (Intelligence & Scale) in progress.** On the Phase 0–2
+> foundations, Phase 3 adds: a native **automation engine** over an engine-agnostic
+> DSL (the visual Builder's source), an **AI assistant** (offline NL→DSL planner,
+> local-LLM-ready), **energy/analytics** time-series, a tamper-evident **audit
+> log**, **security** (arm/disarm) + cameras, and optional **multi-home/installer
+> fleet** management — wired through the gateway and the Flutter app, all verified
+> by automated tests (incl. PGlite-backed e2e and Ed25519/hash-chain checks).
 
 ## Repository layout (monorepo)
 
@@ -33,7 +31,8 @@ packages/   domain-model · supreme-contracts · supreme-sdk-ts · supreme-sdk-d
 services/   gateway · identity · permissions · integration-layer (SIL)
             home · scenes · notifications · persistence
             drivers · commissioning · backup · commissioning-py (FastAPI)
-cloud/      licensing
+            automations · analytics · audit · ai · security · ai-py (FastAPI)
+cloud/      licensing · fleet
 drivers/    sdk (driver authoring + signing)
 apps/       mobile (Flutter homeowner) · web-installer (React Installer Portal)
 infra/      hub-compose (Docker Compose for the home hub, incl. hidden HA)
@@ -103,6 +102,11 @@ bash scripts/dev/compose-smoke.sh
   into a controllable Supreme device, diagnostics, project export, and signed
   backup/restore over the API. Signing/licensing primitives and the Driver Manager
   have their own unit suites; the Python tooling is covered by `pytest`.
+- **Intelligence & scale** (`services/gateway/src/phase3.e2e.test.ts`): an
+  automation drives a device end-to-end over WSS, energy telemetry aggregates, the
+  hash-chained audit log verifies, the AI assistant returns a draft, and the
+  security panel arms/disarms. The automation engine, AI planner, audit chain,
+  security panel, and cloud fleet each have their own unit/PGlite suites.
 
 Configuration: set `SUPREME_BACKEND=ha` + `SUPREME_HA_TOKEN` for the real backend,
 and `DATABASE_URL` to enable Postgres persistence (both wired in `hub-compose`).

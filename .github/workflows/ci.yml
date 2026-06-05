@@ -49,11 +49,14 @@ jobs:
         run: cd apps/mobile && flutter build web --no-tree-shake-icons
 
   python:
-    name: Python commissioning (ruff · pytest)
+    name: Python services (ruff · pytest)
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [commissioning-py, ai-py]
     defaults:
       run:
-        working-directory: services/commissioning-py
+        working-directory: services/${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
