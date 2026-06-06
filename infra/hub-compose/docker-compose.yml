@@ -34,6 +34,11 @@ services:
       SUPREME_REDIS_URL: ${SUPREME_REDIS_URL:-redis://redis:6379}
       # Distributed tracing (off unless an OTLP/HTTP collector endpoint is set).
       SUPREME_OTEL_ENDPOINT: ${SUPREME_OTEL_ENDPOINT:-}
+      # Native protocol stacks behind the Supreme-native engine (§3). MQTT points at
+      # the hub's Mosquitto (real Zigbee2MQTT/Tasmota devices); Modbus is set per-site.
+      SUPREME_MQTT_URL: ${SUPREME_MQTT_URL:-mqtt://mqtt:1883}
+      SUPREME_MODBUS_HOST: ${SUPREME_MODBUS_HOST:-}
+      SUPREME_MODBUS_PORT: ${SUPREME_MODBUS_PORT:-502}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}
@@ -55,6 +60,8 @@ services:
       nats:
         condition: service_started
       redis:
+        condition: service_started
+      mqtt:
         condition: service_started
 
   # Python protocol-commissioning tooling (KNX/DALI/Modbus). Internal only — the

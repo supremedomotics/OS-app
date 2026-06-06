@@ -8,7 +8,9 @@ import {
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type IBackendAdapter,
+  type INativeProtocolDriver,
 } from "@supreme/integration-layer";
+import { MqttProtocolDriver, ModbusProtocolDriver } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
 import { HttpProtocolScanner } from "@supreme/commissioning";
@@ -71,9 +73,18 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   } else {
     haSide = new MockAdapter();
   }
+  // Real native protocol stacks the Supreme-native engine fronts (§3, §7). Loaded
+  // only when configured; the in-process model serves everything else, so the hub
+  // boots identically with or without field-bus hardware present.
+  const nativeDrivers: INativeProtocolDriver[] = [];
+  if (config.mqttUrl) nativeDrivers.push(new MqttProtocolDriver({ url: config.mqttUrl }));
+  if (config.modbusHost) {
+    nativeDrivers.push(new ModbusProtocolDriver({ host: config.modbusHost, port: config.modbusPort }));
+  }
+
   const router = new RoutingBackendAdapter({
     ha: haSide,
-    native: new SupremeNativeAdapter(),
+    native: new SupremeNativeAdapter({ drivers: nativeDrivers }),
     registry,
     policy: new MigrationPolicy(),
   });

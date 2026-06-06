@@ -8,6 +8,7 @@
     { "path": "../../packages/domain-model" },
     { "path": "../../packages/supreme-contracts" },
     { "path": "../integration-layer" },
+    { "path": "../protocols" },
     { "path": "../identity" },
     { "path": "../permissions" },
     { "path": "../home" },

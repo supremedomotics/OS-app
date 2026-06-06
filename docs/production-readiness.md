@@ -17,8 +17,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~70% | unit/e2e/PGlite/fake-HA/real-LLM-gated; no load/soak/hardware |
 | Persistence | ~85% | identity/home/scenes/grants/drivers/automations/audit/sessions/security panel persisted; license + fleet have Postgres stores |
 | Real HA integration | ~40% | verified vs a fake HA only — see §2 |
-| Drivers & protocols | ~30% | manifests only; no real bus adapters |
-| Native migration engine | ~35% | routing proven; native adapter is in-process |
+| Drivers & protocols | ~50% | seam + real MQTT & Modbus drivers; KNX/DALI/Zigbee/Matter pending |
+| Native migration engine | ~50% | routing proven; native engine now fronts real MQTT/Modbus stacks |
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
 | Observability / ops | ~60% | Prometheus `/metrics`, `/readyz`, OTel tracing; dashboards/alerting/SLOs pending |
@@ -62,10 +62,17 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 ## 3. Drivers & protocols
 
 - [x] Driver SDK + signing + license gating + lifecycle
-- [ ] Real first-party adapter code (KNX/DALI/Casambi/Zigbee/MQTT/Modbus/Matter)
-- [ ] Real protocol commissioning (replace simulators in `commissioning-py`)
+- [x] Native protocol-driver seam (`INativeProtocolDriver`) — `SupremeNativeAdapter`
+      now fronts real bus stacks; bound devices route to a driver, unbound use the
+      in-process model (`@supreme/protocols`)
+- [~] Real first-party adapter code — **MQTT** (Zigbee2MQTT/Tasmota convention, tested
+      vs an embedded broker) and **Modbus TCP** (tested vs an in-process server) land
+      as real drivers; KNX/DALI/Casambi/Zigbee-native/Matter still pending
+- [ ] Real protocol commissioning (replace simulators in `commissioning-py`); persist
+      `ProtocolBinding`s and expose binding in the installer portal
 - [ ] Driver sandboxing + security scan in the certification pipeline
-- [ ] Native (non-HA) protocol stacks behind `SupremeNativeAdapter`
+- [x] Native (non-HA) protocol stacks behind `SupremeNativeAdapter` (MQTT + Modbus,
+      wired at the hub boot edge via `SUPREME_MQTT_URL` / `SUPREME_MODBUS_HOST`)
 
 ## 4. Persistence & data
 

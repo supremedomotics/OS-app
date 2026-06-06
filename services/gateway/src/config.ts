@@ -45,6 +45,12 @@ export interface GatewayConfig {
   redisUrl: string;
   /** OTLP/HTTP traces endpoint (e.g. http://collector:4318/v1/traces); empty = tracing off. */
   otelEndpoint: string;
+  /** MQTT broker URL for the native MQTT protocol driver; empty = driver not loaded. */
+  mqttUrl: string;
+  /** Modbus TCP host for the native Modbus driver; empty = driver not loaded. */
+  modbusHost: string;
+  /** Modbus TCP port (default 502). */
+  modbusPort: number;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -79,6 +85,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     redisUrl: env.SUPREME_REDIS_URL ?? "",
     otelEndpoint:
       env.SUPREME_OTEL_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? "",
+    mqttUrl: env.SUPREME_MQTT_URL ?? "",
+    modbusHost: env.SUPREME_MODBUS_HOST ?? "",
+    modbusPort: Number(env.SUPREME_MODBUS_PORT ?? 502),
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

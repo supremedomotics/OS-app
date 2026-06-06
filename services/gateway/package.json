@@ -25,6 +25,7 @@
     "@supreme/domain-model": "workspace:*",
     "@supreme/contracts": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
+    "@supreme/protocols": "workspace:*",
     "@supreme/identity": "workspace:*",
     "@supreme/permissions": "workspace:*",
     "@supreme/home": "workspace:*",

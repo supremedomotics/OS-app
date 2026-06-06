@@ -30,9 +30,10 @@ Control4, Savant, Crestron and RTI.
 packages/   domain-model · supreme-contracts · supreme-sdk-ts · supreme-sdk-dart
             aureon-web · aureon-flutter · crypto
 services/   gateway · identity · permissions · integration-layer (SIL)
-            home · scenes · notifications · persistence
-            drivers · commissioning · backup · commissioning-py (FastAPI)
-            automations · analytics · audit · ai · security · ai-py (FastAPI)
+            home · scenes · notifications · persistence · messaging
+            drivers · protocols (real MQTT/Modbus) · commissioning · backup
+            commissioning-py (FastAPI) · automations · analytics · audit
+            ai · security · ai-py (FastAPI)
 cloud/      licensing · fleet (HTTP API)
 drivers/    sdk (driver authoring + signing)
 apps/       mobile (Flutter homeowner: rooms, scenes, security, energy,

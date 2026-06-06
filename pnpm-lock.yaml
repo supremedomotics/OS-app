@@ -412,6 +412,9 @@ importers:
       '@supreme/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@supreme/protocols':
+        specifier: workspace:*
+        version: link:../protocols
       '@supreme/scenes':
         specifier: workspace:*
         version: link:../scenes
