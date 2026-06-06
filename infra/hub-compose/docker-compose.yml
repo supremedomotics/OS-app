@@ -35,9 +35,8 @@ services:
       SUPREME_CORS_ORIGINS: ${SUPREME_CORS_ORIGINS:-}
       SUPREME_RATE_MAX: ${SUPREME_RATE_MAX:-1000}
       SUPREME_AUTH_RATE_MAX: ${SUPREME_AUTH_RATE_MAX:-20}
-    ports:
-      # The ONLY host-published port in the whole hub: the Supreme API.
-      - "8080:8080"
+    # Not published to the host — the Caddy proxy terminates TLS and reverse-proxies
+    # the Supreme API. Only the proxy is reachable from the LAN.
     networks:
       - supreme-edge
       - supreme-core
@@ -81,17 +80,36 @@ services:
     networks:
       - supreme-core
 
-  # Installer Portal (web). Static bundle served to installers on the LAN. Talks to
+  # Installer Portal (web). Static bundle served behind the TLS proxy. Talks to
   # the Supreme API only (VITE_SUPREME_API_URL), never to any backend.
   installer-portal:
     build:
       context: ../..
       dockerfile: infra/hub-compose/web-installer.Dockerfile
     restart: unless-stopped
-    ports:
-      - "8090:80"
     networks:
       - supreme-edge
+
+  # Edge TLS terminator (production hardening §1). The ONLY host-published service.
+  # Terminates HTTPS and reverse-proxies the gateway (API + WSS) and the portal.
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SUPREME_DOMAIN: ${SUPREME_DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@supreme.local}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - supreme-edge
+    depends_on:
+      - gateway
+      - installer-portal
 
   # Headless Home Assistant Core — hidden backend. NO published ports; reachable
   # only on the internal supreme-core network by the SIL. Supervisor not used.
@@ -165,3 +183,5 @@ volumes:
   pg-data:
   nats-data:
   mqtt-data:
+  caddy-data:
+  caddy-config:

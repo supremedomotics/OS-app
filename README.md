@@ -60,6 +60,9 @@ SUPREME_BACKEND=mock pnpm --filter @supreme/gateway dev
 
 # Bring up the full home hub (headless hidden HA + Postgres data plane)
 cd infra/hub-compose && cp .env.example .env && docker compose up -d --build
+# → Supreme API + installer portal behind TLS at https://localhost (dev: Caddy
+#   internal CA / self-signed). Only the edge proxy (:80/:443) is host-published;
+#   the gateway, portal, HA, and data plane stay internal.
 ```
 
 ### Native toolchains (Flutter & Docker)

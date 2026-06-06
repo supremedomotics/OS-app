@@ -1,0 +1,31 @@
+# Supreme hub edge TLS terminator (production hardening §1).
+#
+# Terminates HTTPS for the hub and proxies to the internal gateway (Supreme API +
+# WSS) and the installer portal. Auto-HTTPS: a real domain gets an ACME cert; the
+# default `localhost` uses Caddy's internal CA (self-signed) for local/dev. The
+# gateway/portal are NOT published to the host — only this proxy is.
+
+{
+	# ACME contact for a real domain; ignored for localhost (internal CA).
+	email {$ACME_EMAIL:admin@supreme.local}
+}
+
+{$SUPREME_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Hardening headers (HSTS complements the gateway's helmet headers).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	# Supreme API + realtime stream → gateway (Caddy proxies WebSockets natively).
+	@api path /v1/* /healthz
+	reverse_proxy @api gateway:8080
+
+	# Everything else → the installer portal (the hub's web UI).
+	reverse_proxy installer-portal:80
+}

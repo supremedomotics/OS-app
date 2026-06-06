@@ -37,7 +37,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] MFA enrollment + TOTP verify flow wired end-to-end (RFC 6238, no external dep)
 - [~] Sealed secret store — `*_FILE` convention (Docker/K8s secrets) supported; full vault/age integration later
 - [ ] mTLS for the hub↔cloud tunnel
-- [ ] TLS termination + HSTS for the hub API (reverse proxy)
+- [x] TLS termination + HSTS for the hub API (Caddy edge proxy; auto-HTTPS; gateway/portal no longer host-published)
 - [ ] Per-command authorization re-check at services (defense in depth) — partially done at gateway
 - [x] Dependency & container image scanning in CI (pnpm audit + Trivy fs: vuln/secret/misconfig)
 - [x] Authz matrix test suite (every user-type × resource × action + escalation negatives)

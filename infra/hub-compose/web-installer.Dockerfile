@@ -14,6 +14,10 @@ COPY tools ./tools
 COPY cloud ./cloud
 COPY drivers ./drivers
 COPY apps/web-installer ./apps/web-installer
+# API base for the bundle. Default empty = SAME-ORIGIN (the portal is served behind
+# the same Caddy TLS host as the API at /v1). Override for split deployments.
+ARG VITE_SUPREME_API_URL=
+ENV VITE_SUPREME_API_URL=$VITE_SUPREME_API_URL
 RUN [ -s /usr/local/share/proxy-ca.pem ] && export NODE_EXTRA_CA_CERTS=/usr/local/share/proxy-ca.pem; \
     corepack enable && \
     pnpm install --frozen-lockfile=false && \
