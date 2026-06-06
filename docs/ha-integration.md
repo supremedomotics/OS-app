@@ -16,22 +16,30 @@ against a **real** HA before release.
 
 These run in CI with no HA present.
 
-## Validating against a real HA (gated)
+## Validating against a real HA (gated) — VERIFIED
 
-`ha-live.test.ts` runs only when a real HA is provided; it's skipped otherwise.
+`ha-live.test.ts` runs only when a real HA is provided; it's skipped otherwise. It
+has been run against a real HA instance (auth handshake + entity discovery pass).
 
 ```bash
 # 1. Launch a standalone HA (publishes localhost:8123 — test harness only)
 docker compose -f infra/hub-compose/docker-compose.ha-test.yml up -d
 
-# 2. Open http://127.0.0.1:8123, complete onboarding, then create a
-#    long-lived access token (Profile → Security → Long-lived access tokens).
+# 2. Headlessly onboard + mint a token (no manual clicks)
+TOKEN=$(HA_URL=http://127.0.0.1:8123 bash scripts/dev/ha-onboard.sh)
 
 # 3. Run the gated test against it
 SUPREME_HA_TEST_URL=ws://127.0.0.1:8123/api/websocket \
-SUPREME_HA_TEST_TOKEN=<token> \
+SUPREME_HA_TEST_TOKEN=$TOKEN \
   pnpm --filter @supreme/integration-layer test
 ```
+
+## HA-upgrade regression gate
+
+`.github/workflows/ha-regression.yml` runs the gated SIL suite against a **matrix of
+HA versions** (manual dispatch + weekly), each headlessly onboarded. Running the
+same suite across version N and N+1 IS the upgrade gate — bump the matrix as HA
+releases to catch a regression before it ships (the blueprint's top risk).
 
 To exercise the **full stack** against real HA, run the gateway with
 `SUPREME_BACKEND=ha`, `SUPREME_HA_URL`, and `SUPREME_HA_TOKEN`, then map Supreme

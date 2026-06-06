@@ -51,9 +51,10 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] Resilience tests: command buffering while disconnected → flush on reconnect
 - [x] Reconnect/backoff after socket drop (transport schedules reconnect; adapter re-buffers)
 - [~] Discovery mapping verified (against fake payloads; real-HA breadth pending)
-- [x] Gated live-HA integration test (`SUPREME_HA_TEST_URL` / token) — skipped without HA
-- [x] HA test harness compose (`docker-compose.ha-test.yml`) + bring-up doc
-- [ ] HA-upgrade regression suite (pinned version + tested upgrade gate) — top blueprint risk
+- [x] Gated live-HA integration test — VERIFIED against a real HA instance (auth + discovery)
+- [x] HA test harness compose + headless onboarding script (`ha-onboard.sh`) + bring-up doc
+- [x] HA-upgrade regression suite — automated CI matrix (`ha-regression.yml`) across HA versions, headlessly onboarded; the top blueprint risk now has a gate
+- [ ] Round-trip command/state regression against demo entities + real-device breadth
 - [ ] Headless HA hardening verified (no Lovelace/onboarding leak; loopback admin)
 - [ ] End-to-end against real devices (KNX/Zigbee/etc.) through HA
 
