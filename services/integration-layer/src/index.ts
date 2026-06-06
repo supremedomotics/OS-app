@@ -14,7 +14,15 @@ export type {
 export { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 export { SupremeIntegrationLayer, type SilOptions } from "./sil.js";
 export { MockAdapter } from "./mock-adapter.js";
-export { SupremeNativeAdapter } from "./native-adapter.js";
+export {
+  SupremeNativeAdapter,
+  type SupremeNativeAdapterOptions,
+} from "./native-adapter.js";
+export {
+  type INativeProtocolDriver,
+  type ProtocolBinding,
+  bindingKey,
+} from "./protocols/driver.js";
 export { RoutingBackendAdapter, type RoutingAdapterOptions } from "./routing-adapter.js";
 export { MigrationPolicy, type EngineKind } from "./migration.js";
 export { applyCommand } from "./apply.js";
