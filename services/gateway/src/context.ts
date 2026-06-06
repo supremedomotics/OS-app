@@ -16,6 +16,13 @@ import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
 import {
+  InMemoryPresenceStore,
+  InProcessEventBus,
+  subjects,
+  type IEventBus,
+  type IPresenceStore,
+} from "@supreme/messaging";
+import {
   AutomationEngine,
   AutomationService,
   type AutomationExecutors,
@@ -32,6 +39,10 @@ import { InstallerServices } from "./installer-context.js";
  * falls back to the in-memory default (used by dev and tests). */
 export interface AppDeps {
   sil?: SupremeIntegrationLayer;
+  /** Cross-process event bus (NATS in prod); defaults to in-process. */
+  bus?: IEventBus;
+  /** Shared presence store (Redis in prod); defaults to in-process. */
+  presence?: IPresenceStore;
   identityStore?: IIdentityStore;
   sessionStore?: ISessionStore;
   homeStore?: IHomeStore;
@@ -74,6 +85,10 @@ export class AppContext {
   readonly security: SecurityService;
   /** The underlying SQL database when persistence is enabled; null = in-memory. Used by the readiness probe. */
   readonly db: SqlDb | null;
+  /** Cross-process event bus: device state + notifications fan out over this (§5). */
+  readonly bus: IEventBus;
+  /** Shared presence store: who is connected right now (§5). */
+  readonly presence: IPresenceStore;
   homeId!: HomeId;
 
   private ready = false;
@@ -84,6 +99,8 @@ export class AppContext {
   private constructor(readonly config: GatewayConfig, deps: AppDeps = {}) {
     this.deps = deps;
     this.db = deps.db ?? null;
+    this.bus = deps.bus ?? new InProcessEventBus();
+    this.presence = deps.presence ?? new InMemoryPresenceStore();
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,
@@ -121,8 +138,23 @@ export class AppContext {
     this.sil.subscribe((event) => {
       void this.onBackendState(event);
     });
-    // Bridge created notifications to WSS subscribers.
+    // Bridge created notifications onto the event bus (cross-process fan-out).
     this.notifications.onNotification((n) => {
+      void this.bus.publish(subjects.notification(this.homeId), n);
+    });
+  }
+
+  /**
+   * Drive the local WSS fan-out from the event bus rather than from direct in-process
+   * calls. With the in-process bus this is observably identical to before; with NATS,
+   * a state delta produced by the SIL-owning process reaches WSS clients on EVERY
+   * gateway process. Wildcard subjects avoid needing the home id at subscribe time.
+   */
+  private async subscribeBus(): Promise<void> {
+    await this.bus.subscribe<BackendStateEvent>("supreme.home.*.device.state", (event) => {
+      for (const sub of this.stateSubs) sub(event);
+    });
+    await this.bus.subscribe<Notification>("supreme.home.*.notification", (n) => {
       for (const sub of this.notifySubs) sub(n);
     });
   }
@@ -138,6 +170,7 @@ export class AppContext {
    */
   static async create(config: GatewayConfig, deps: AppDeps = {}): Promise<AppContext> {
     const ctx = new AppContext(config, deps);
+    await ctx.subscribeBus();
     await ctx.sil.start();
 
     let home = await ctx.home.getHome();
@@ -214,7 +247,9 @@ export class AppContext {
   /** Handle a normalized backend state delta: cache, fan-out, automations, analytics. */
   private async onBackendState(event: BackendStateEvent): Promise<void> {
     await this.home.applyState(event.deviceId, event.state);
-    for (const sub of this.stateSubs) sub(event);
+    // Publish to the bus; the bus subscription (subscribeBus) drives WSS fan-out —
+    // in-process today, cross-process under NATS.
+    await this.bus.publish(subjects.deviceState(this.homeId), event);
     if (!this.ready) return;
     await this.automations.onDeviceState({
       deviceId: event.deviceId,
@@ -254,6 +289,8 @@ export class AppContext {
 
   async shutdown(): Promise<void> {
     await this.sil.stop();
+    await this.bus.close();
+    await this.presence.close();
   }
 }
 

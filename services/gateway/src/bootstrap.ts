@@ -10,6 +10,7 @@ import {
   type IBackendAdapter,
 } from "@supreme/integration-layer";
 import { createPersistence } from "@supreme/persistence";
+import { createEventBus, createPresenceStore } from "@supreme/messaging";
 import { HttpProtocolScanner } from "@supreme/commissioning";
 import type { ProtocolKind } from "@supreme/domain-model";
 import { assertSecureConfig, type GatewayConfig } from "./config.js";
@@ -42,6 +43,11 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.automationStore = stores.automations;
     deps.db = stores.db;
   }
+
+  // Cross-process messaging: NATS event bus + Redis presence when configured,
+  // otherwise the in-process defaults (dev/tests). Selected once here at the boot edge.
+  deps.bus = await createEventBus({ natsUrl: config.natsUrl, redisUrl: config.redisUrl });
+  deps.presence = await createPresenceStore({ natsUrl: config.natsUrl, redisUrl: config.redisUrl });
 
   // Register protocol scanners (KNX/DALI/Modbus) backed by the Python tooling.
   if (config.commissioningUrl) {

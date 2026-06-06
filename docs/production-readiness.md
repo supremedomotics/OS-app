@@ -19,7 +19,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Drivers & protocols | ~30% | manifests only; no real bus adapters |
 | Native migration engine | ~35% | routing proven; native adapter is in-process |
 | Security hardening | ~35% | see §1 |
-| Infra / deploy | ~40% | hub compose only; no cloud IaC/CD/OTA |
+| Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
 | Observability / ops | ~45% | Prometheus `/metrics` + dependency-aware `/readyz`; tracing/dashboards/alerting pending |
 | Mobile / web delivery | ~45% | compiles; no store pipeline/push |
 | Optional cloud (relay) | ~10% | remote-access relay not built |
@@ -77,7 +77,10 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 ## 5. Infra, deploy & scale
 
 - [x] Hub Docker Compose (hidden HA + data plane)
-- [ ] Wire Redis (sessions/presence) + NATS JetStream (event bus) — currently in-process
+- [x] Wire Redis (presence) + NATS (event bus) via the `@supreme/messaging` seam —
+      in-process by default, real backends behind `SUPREME_NATS_URL`/`SUPREME_REDIS_URL`;
+      device-state + notification fan-out now flows over the bus so it spans gateway
+      processes (durable JetStream streams + rate-limit store are a follow-on)
 - [ ] Cloud IaC (Terraform/Pulumi) for licensing/fleet/relay
 - [ ] CD with staged rollout + rollback; signed images
 - [ ] OTA hub update channel

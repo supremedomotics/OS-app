@@ -39,6 +39,10 @@ export interface GatewayConfig {
   commissioningUrl: string;
   /** Base URL of the on-box AI model service; empty = built-in planner only. */
   aiUrl: string;
+  /** NATS server URL for the cross-process event bus; empty = in-process bus. */
+  natsUrl: string;
+  /** Redis URL for shared presence/ephemeral state; empty = in-process. */
+  redisUrl: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -69,6 +73,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     licensingPublicKey: secret(env, "SUPREME_LICENSING_PUBLIC_KEY") ?? "",
     commissioningUrl: env.SUPREME_COMMISSIONING_URL ?? "",
     aiUrl: env.SUPREME_AI_URL ?? "",
+    natsUrl: env.SUPREME_NATS_URL ?? "",
+    redisUrl: env.SUPREME_REDIS_URL ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

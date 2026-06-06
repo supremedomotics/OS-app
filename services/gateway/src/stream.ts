@@ -34,6 +34,12 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
   const subscribedRooms = new Set<string>();
   const seqByDevice = new Map<string, number>();
 
+  // Presence: this user now has a live connection (shared across processes via Redis
+  // in prod). Refreshed on each connect; expires by TTL if a process dies.
+  const homeForPresence = await ctx.home.getHome();
+  const presenceHomeId = homeForPresence?.id ?? ctx.homeId;
+  void ctx.presence.markOnline(presenceHomeId, user.id);
+
   const unsubState = ctx.onState((event) => {
     void (async () => {
       const roomId = await ctx.roomOf(event.deviceId);
@@ -73,6 +79,8 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
   socket.on("close", () => {
     unsubState();
     unsubNotify();
+    // Best-effort presence drop; the TTL is the real safety net if this never runs.
+    void ctx.presence.markOffline(presenceHomeId, user.id);
   });
 }
 

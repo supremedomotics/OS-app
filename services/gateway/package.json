@@ -31,6 +31,7 @@
     "@supreme/scenes": "workspace:*",
     "@supreme/notifications": "workspace:*",
     "@supreme/persistence": "workspace:*",
+    "@supreme/messaging": "workspace:*",
     "@supreme/crypto": "workspace:*",
     "@supreme/drivers": "workspace:*",
     "@supreme/commissioning": "workspace:*",

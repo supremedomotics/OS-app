@@ -152,7 +152,19 @@ export function attachObservability(app: FastifyInstance, ctx: AppContext): Metr
   // Prometheus scraper on the hub network can always read it.
   app.get("/metrics", async (_req, reply) => {
     reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
-    return metrics.render();
+    // Live presence gauge (shared across processes via Redis in prod).
+    let online = 0;
+    try {
+      online = (await ctx.presence.online(ctx.homeId)).length;
+    } catch {
+      // Presence backend hiccup must not fail a scrape.
+    }
+    const presence = [
+      "# HELP supreme_presence_online_users Distinct users with a live connection.",
+      "# TYPE supreme_presence_online_users gauge",
+      `supreme_presence_online_users ${online}`,
+    ].join("\n");
+    return metrics.render() + presence + "\n";
   });
 
   // Readiness: dependency-aware. Backend must be healthy and, when persistence is
