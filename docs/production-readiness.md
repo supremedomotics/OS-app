@@ -20,7 +20,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Native migration engine | ~35% | routing proven; native adapter is in-process |
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
-| Observability / ops | ~45% | Prometheus `/metrics` + dependency-aware `/readyz`; tracing/dashboards/alerting pending |
+| Observability / ops | ~60% | Prometheus `/metrics`, `/readyz`, OTel tracing; dashboards/alerting/SLOs pending |
 | Mobile / web delivery | ~45% | compiles; no store pipeline/push |
 | Optional cloud (relay) | ~10% | remote-access relay not built |
 
@@ -92,7 +92,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       histograms (by route template) + process gauges; self-contained exposition,
       no external dep; internal-network-only (not at the public edge)
 - [ ] Dashboards (Grafana) wired to the `/metrics` scrape
-- [ ] Distributed tracing (OpenTelemetry) — follow-on pass
+- [x] Distributed tracing (OpenTelemetry) — manual HTTP server span per request,
+      exported over OTLP/HTTP when `SUPREME_OTEL_ENDPOINT` is set; no-op (zero cost)
+      otherwise. Cross-service context propagation to the Python sidecars is a follow-on
 - [ ] Alerting + on-call runbooks; SLOs
 - [ ] Structured request logging with correlation ids (partial: pino)
 - [x] Health/readiness probes beyond `/healthz` — `/readyz` is dependency-aware

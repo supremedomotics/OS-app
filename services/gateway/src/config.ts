@@ -43,6 +43,8 @@ export interface GatewayConfig {
   natsUrl: string;
   /** Redis URL for shared presence/ephemeral state; empty = in-process. */
   redisUrl: string;
+  /** OTLP/HTTP traces endpoint (e.g. http://collector:4318/v1/traces); empty = tracing off. */
+  otelEndpoint: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -75,6 +77,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     aiUrl: env.SUPREME_AI_URL ?? "",
     natsUrl: env.SUPREME_NATS_URL ?? "",
     redisUrl: env.SUPREME_REDIS_URL ?? "",
+    otelEndpoint:
+      env.SUPREME_OTEL_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

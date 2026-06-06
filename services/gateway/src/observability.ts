@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AppContext } from "./context.js";
+import { getTracer, SpanStatusCode, type Span } from "./tracing.js";
 
 /**
  * Observability (production-readiness §6). A self-contained Prometheus metrics
@@ -128,10 +129,17 @@ export class Metrics {
  */
 export function attachObservability(app: FastifyInstance, ctx: AppContext): Metrics {
   const metrics = new Metrics();
+  const tracer = getTracer();
   const startKey = Symbol("supreme.start");
+  const spanKey = Symbol("supreme.span");
 
   app.addHook("onRequest", async (req) => {
     (req as unknown as Record<symbol, number>)[startKey] = performance.now();
+    // One server span per request. Non-recording (zero-cost) unless tracing is on.
+    const span = tracer.startSpan(`${req.method} ${req.url.split("?")[0]}`, {
+      attributes: { "http.request.method": req.method, "url.path": req.url.split("?")[0] },
+    });
+    (req as unknown as Record<symbol, Span>)[spanKey] = span;
   });
 
   app.addHook("onResponse", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -145,6 +153,15 @@ export function attachObservability(app: FastifyInstance, ctx: AppContext): Metr
     const started = (req as unknown as Record<symbol, number>)[startKey];
     if (typeof started === "number") {
       metrics.httpDuration.observe({ method, route }, (performance.now() - started) / 1000);
+    }
+    // Close the span with the resolved route template + status.
+    const span = (req as unknown as Record<symbol, Span | undefined>)[spanKey];
+    if (span) {
+      span.updateName(`${method} ${route}`);
+      span.setAttribute("http.route", route);
+      span.setAttribute("http.response.status_code", reply.statusCode);
+      if (reply.statusCode >= 500) span.setStatus({ code: SpanStatusCode.ERROR });
+      span.end();
     }
   });
 

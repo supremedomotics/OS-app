@@ -32,6 +32,8 @@ services:
       # Cross-process scale: NATS event bus + Redis presence (both internal-only).
       SUPREME_NATS_URL: ${SUPREME_NATS_URL:-nats://nats:4222}
       SUPREME_REDIS_URL: ${SUPREME_REDIS_URL:-redis://redis:6379}
+      # Distributed tracing (off unless an OTLP/HTTP collector endpoint is set).
+      SUPREME_OTEL_ENDPOINT: ${SUPREME_OTEL_ENDPOINT:-}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}

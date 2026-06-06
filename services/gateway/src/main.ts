@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import { createHubContext } from "./bootstrap.js";
 import { buildServer } from "./server.js";
+import { initTracing } from "./tracing.js";
 
 /**
  * Hub entry point for the Supreme API Gateway. Boots the Supreme plane (identity,
@@ -9,6 +10,12 @@ import { buildServer } from "./server.js";
  */
 async function main(): Promise<void> {
   const config = loadConfig();
+  // Tracing first so the very first request is instrumented (no-op unless configured).
+  const stopTracing = initTracing({
+    endpoint: config.otelEndpoint,
+    serviceName: "supreme-gateway",
+    serviceVersion: config.hubVersion,
+  });
   const ctx = await createHubContext(config);
   const app = await buildServer(ctx);
 
@@ -16,6 +23,7 @@ async function main(): Promise<void> {
     app.log.info({ signal }, "shutting down");
     await app.close();
     await ctx.shutdown();
+    await stopTracing();
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
