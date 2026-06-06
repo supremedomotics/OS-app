@@ -31,7 +31,7 @@ import {
 import { AnalyticsService } from "@supreme/analytics";
 import { AuditService } from "@supreme/audit";
 import { AssistantService } from "@supreme/ai";
-import { SecurityService } from "@supreme/security";
+import { SecurityService, type ISecurityStore } from "@supreme/security";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
 
@@ -51,6 +51,7 @@ export interface AppDeps {
   notificationStore?: INotificationStore;
   driverStore?: IInstalledDriverStore;
   automationStore?: IAutomationStore;
+  securityStore?: ISecurityStore;
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
   db?: SqlDb;
   /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
@@ -113,6 +114,7 @@ export class AppContext {
     this.grants = deps.grantStore ?? new InMemoryGrantStore();
     this.ai = new AssistantService({ modelUrl: config.aiUrl || undefined });
     this.security = new SecurityService({
+      store: deps.securityStore,
       onChange: (state, actor) => {
         void this.audit?.record({
           homeId: this.homeId,
@@ -203,6 +205,10 @@ export class AppContext {
 
     ctx.homeId = home.id as HomeId;
 
+    // Restore the persisted security panel so an armed home stays armed across a
+    // restart (no-op when no DB is configured).
+    await ctx.security.hydrate(ctx.homeId);
+
     // Intelligence services. The automation engine's side effects flow through the
     // SIL, scenes, and notifications; analytics + audit require a database.
     const executors: AutomationExecutors = {
@@ -288,6 +294,7 @@ export class AppContext {
   }
 
   async shutdown(): Promise<void> {
+    await this.security.flush();
     await this.sil.stop();
     await this.bus.close();
     await this.presence.close();

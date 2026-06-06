@@ -12,7 +12,8 @@
     { "path": "../permissions" },
     { "path": "../notifications" },
     { "path": "../drivers" },
-    { "path": "../automations" }
+    { "path": "../automations" },
+    { "path": "../security" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

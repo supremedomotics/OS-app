@@ -13,6 +13,7 @@ const MIGRATIONS = [
   "0003_phase3.sql",
   "0004_automations.sql",
   "0005_sessions.sql",
+  "0006_security_panel.sql",
 ] as const;
 
 /**

@@ -76,6 +76,9 @@ importers:
         specifier: ^5.2.1
         version: 5.8.5
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.2.17
+        version: 0.2.17
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.19
@@ -578,6 +581,9 @@ importers:
       '@supreme/scenes':
         specifier: workspace:*
         version: link:../scenes
+      '@supreme/security':
+        specifier: workspace:*
+        version: link:../security
       pg:
         specifier: ^8.13.1
         version: 8.21.0

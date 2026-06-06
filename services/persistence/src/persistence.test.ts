@@ -11,6 +11,7 @@ import { SceneService } from "@supreme/scenes";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { buildGrant } from "@supreme/permissions";
 import { NotificationService } from "@supreme/notifications";
+import { SecurityService } from "@supreme/security";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPersistence, type PersistenceStores } from "./index.js";
 
@@ -122,6 +123,24 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect((await fresh.get(sid))?.currentJti).toBe("jti-2");
     await fresh.revoke(sid);
     expect((await stores.sessions.get(sid))?.revoked).toBe(true);
+  });
+
+  it("persists the security panel so an armed home stays armed across a restart", async () => {
+    const homeId = newId("home") as HomeId;
+    const actor = newId("user") as UserId;
+
+    // Arm via one service instance (write-through to Postgres).
+    const security = new SecurityService({ store: stores.security });
+    security.arm(homeId, "armed_away", actor);
+    await security.flush(); // ensure the write-through landed
+
+    // A fresh service (simulating a hub restart) hydrates from the store and is armed.
+    const afterRestart = new SecurityService({ store: stores.security });
+    expect(afterRestart.getState(homeId).mode).toBe("disarmed"); // before hydrate
+    await afterRestart.hydrate(homeId);
+    const restored = afterRestart.getState(homeId);
+    expect(restored.mode).toBe("armed_away");
+    expect(restored.lastChangedBy).toBe(actor);
   });
 
   it("persists notifications with read receipts", async () => {

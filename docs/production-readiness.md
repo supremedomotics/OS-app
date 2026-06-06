@@ -2,8 +2,9 @@
 
 > Living document. Tracks the work between "feature-complete (Phases 0–4)" and
 > "deployable in paying customers' homes." Update the status boxes as items land.
-> Rough overall readiness today: **~55%** (feature breadth high; hardening, real
-> hardware/protocol integration, deploy, and operability are the remaining bulk).
+> Rough overall readiness today: **~65%** (security, persistence, observability, and
+> multi-process messaging now hardened; real hardware/protocol integration, cloud
+> deploy/CD/OTA, and client delivery are the remaining bulk).
 
 Legend: `[x]` done · `[~]` partial · `[ ]` not started
 
@@ -14,7 +15,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Architecture & contracts | ~90% | SIL seam, domain model, contract-first, migration routing |
 | Feature breadth (P0–4) | ~85% | All phases + e2e; some MVP-depth surfaces |
 | Automated testing | ~70% | unit/e2e/PGlite/fake-HA/real-LLM-gated; no load/soak/hardware |
-| Persistence | ~70% | security panel, fleet, license cache still in-memory |
+| Persistence | ~85% | identity/home/scenes/grants/drivers/automations/audit/sessions/security panel persisted; license + fleet have Postgres stores |
 | Real HA integration | ~40% | verified vs a fake HA only — see §2 |
 | Drivers & protocols | ~30% | manifests only; no real bus adapters |
 | Native migration engine | ~35% | routing proven; native adapter is in-process |
@@ -69,7 +70,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 ## 4. Persistence & data
 
 - [x] Postgres system-of-record for identity/home/scenes/grants/drivers/automations/audit
-- [ ] Persist security panel, active license, and fleet
+- [x] Persist security panel (survives restart; hydrated on boot, write-through with
+      `flush()` on shutdown), active license (already persisted + validated on boot),
+      and fleet (Postgres-backed `SqlFleetStore` for the cloud registry)
 - [ ] TimescaleDB (or partitioning) for `energy_samples` at volume
 - [ ] Migration tooling for production upgrades (rollback-safe)
 - [ ] Backups: off-site, scheduled, rotation, restore drills
@@ -113,7 +116,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 
 - [ ] Remote-access relay (outbound mTLS tunnel, no inbound ports)
 - [ ] Off-site backup service + driver-store mirror/CDN
-- [ ] Multi-home fleet deploy (service exists; needs cloud deploy + portal wiring ✓ page)
+- [~] Multi-home fleet deploy (HTTP API + Postgres-backed `SqlFleetStore` + portal
+      ✓ page exist; still needs cloud IaC/CD to actually deploy + run migrations)
 
 ---
 

@@ -21,21 +21,49 @@ export interface SecurityState {
   lastChangedAt: string;
 }
 
+/**
+ * Persistence seam for the panel (§4). Default = none (in-memory only). A persisted
+ * store (Postgres) lets the armed/disarmed state survive a hub restart — important so
+ * a reboot never silently disarms the home.
+ */
+export interface ISecurityStore {
+  load(homeId: HomeId): Promise<SecurityState | null>;
+  save(state: SecurityState): Promise<void>;
+}
+
 export interface SecurityServiceOptions {
   /** Optional PIN; when set, arm/disarm require it. Stored only as a SHA-256 hash. */
   pin?: string;
   /** Called on every state change (the gateway wires this to audit + notifications). */
   onChange?: (state: SecurityState, actorUserId: UserId | null) => void;
+  /** Optional persistence; when set, state is written through and restored via {@link hydrate}. */
+  store?: ISecurityStore;
 }
 
 export class SecurityService {
   private readonly panels = new Map<HomeId, SecurityState>();
   private readonly pinHash: string | null;
   private readonly onChange?: SecurityServiceOptions["onChange"];
+  private readonly store?: ISecurityStore;
+  /** The most recent write-through, so callers (and shutdown) can await durability. */
+  private lastWrite: Promise<void> = Promise.resolve();
 
   constructor(opts: SecurityServiceOptions = {}) {
     this.pinHash = opts.pin ? sha256Hex(opts.pin) : null;
     this.onChange = opts.onChange;
+    this.store = opts.store;
+  }
+
+  /**
+   * Restore persisted panel state into the in-memory cache. Call on boot (when a DB
+   * is configured) so an armed home stays armed across a hub restart. Keeps the
+   * public API synchronous: the cache is authoritative at runtime, writes are
+   * write-through.
+   */
+  async hydrate(homeId: HomeId): Promise<void> {
+    if (!this.store) return;
+    const persisted = await this.store.load(homeId);
+    if (persisted) this.panels.set(homeId, persisted);
   }
 
   getState(homeId: HomeId): SecurityState {
@@ -79,8 +107,16 @@ export class SecurityService {
       lastChangedAt: new Date().toISOString(),
     };
     this.panels.set(homeId, state);
+    // Write-through so the armed/disarmed state survives a restart. The cache is
+    // authoritative at runtime; `flush()` awaits durability for tests/shutdown.
+    if (this.store) this.lastWrite = this.store.save(state).catch(() => {});
     this.onChange?.(state, userId);
     return state;
+  }
+
+  /** Await the most recent persisted write (graceful shutdown / test determinism). */
+  async flush(): Promise<void> {
+    await this.lastWrite;
   }
 
   private seed(homeId: HomeId): SecurityState {

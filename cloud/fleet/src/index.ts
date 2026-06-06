@@ -97,3 +97,8 @@ export class FleetService {
 }
 
 export { buildFleetServer, type FleetServerOptions } from "./server.js";
+export {
+  SqlFleetStore,
+  FLEET_SCHEMA_SQL,
+  type FleetSqlExecutor,
+} from "./sql-store.js";

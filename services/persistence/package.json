@@ -28,6 +28,7 @@
     "@supreme/notifications": "workspace:*",
     "@supreme/drivers": "workspace:*",
     "@supreme/automations": "workspace:*",
+    "@supreme/security": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {
