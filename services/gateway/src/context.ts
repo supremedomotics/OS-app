@@ -72,6 +72,8 @@ export class AppContext {
   audit: AuditService | null = null;
   readonly ai: AssistantService;
   readonly security: SecurityService;
+  /** The underlying SQL database when persistence is enabled; null = in-memory. Used by the readiness probe. */
+  readonly db: SqlDb | null;
   homeId!: HomeId;
 
   private ready = false;
@@ -81,6 +83,7 @@ export class AppContext {
 
   private constructor(readonly config: GatewayConfig, deps: AppDeps = {}) {
     this.deps = deps;
+    this.db = deps.db ?? null;
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,

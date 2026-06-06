@@ -23,6 +23,9 @@
 	}
 
 	# Supreme API + realtime stream → gateway (Caddy proxies WebSockets natively).
+	# NOTE: /metrics and /readyz are deliberately NOT routed here — they stay on the
+	# internal Docker network for the Prometheus scraper / orchestrator only, never
+	# exposed at the public edge.
 	@api path /v1/* /healthz
 	reverse_proxy @api gateway:8080
 

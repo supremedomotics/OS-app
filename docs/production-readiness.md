@@ -20,7 +20,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Native migration engine | ~35% | routing proven; native adapter is in-process |
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~40% | hub compose only; no cloud IaC/CD/OTA |
-| Observability / ops | ~20% | logs only; no metrics/tracing/alerting |
+| Observability / ops | ~45% | Prometheus `/metrics` + dependency-aware `/readyz`; tracing/dashboards/alerting pending |
 | Mobile / web delivery | ~45% | compiles; no store pipeline/push |
 | Optional cloud (relay) | ~10% | remote-access relay not built |
 
@@ -85,11 +85,15 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 
 ## 6. Observability & ops
 
-- [ ] Metrics (Prometheus) + dashboards
-- [ ] Distributed tracing (OpenTelemetry)
+- [x] Metrics (Prometheus) — gateway `/metrics` exposes request counts/latency
+      histograms (by route template) + process gauges; self-contained exposition,
+      no external dep; internal-network-only (not at the public edge)
+- [ ] Dashboards (Grafana) wired to the `/metrics` scrape
+- [ ] Distributed tracing (OpenTelemetry) — follow-on pass
 - [ ] Alerting + on-call runbooks; SLOs
 - [ ] Structured request logging with correlation ids (partial: pino)
-- [ ] Health/readiness probes beyond `/healthz`
+- [x] Health/readiness probes beyond `/healthz` — `/readyz` is dependency-aware
+      (backend health + DB reachability), returns 503 when not ready
 
 ## 7. Clients (mobile / web)
 

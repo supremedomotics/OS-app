@@ -14,6 +14,7 @@ import { registerInstallerRoutes } from "./routes/installer.js";
 import { registerPhase3Routes } from "./routes/phase3.js";
 import { registerSecurityRoutes } from "./routes/security.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
+import { attachObservability } from "./observability.js";
 import { attachStream } from "./stream.js";
 
 /**
@@ -64,6 +65,9 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   );
 
   await app.register(fastifyWebsocket);
+
+  // Metrics collection + /metrics scrape endpoint + dependency-aware /readyz (§6).
+  attachObservability(app, ctx);
 
   app.get("/healthz", async () => ({
     status: "ok",
