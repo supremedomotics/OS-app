@@ -58,7 +58,9 @@ class FakeBusDriver implements INativeProtocolDriver {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
   }
   async discover(): Promise<DiscoveredDevice[]> {
-    return [];
+    return [
+      { backendId: "bus/disc-lamp", suggestedName: "Discovered Lamp", capabilities: ["onoff"], raw: {} },
+    ];
   }
   onState(l: StateListener) {
     this.listeners.add(l);
@@ -160,5 +162,47 @@ describe("Native protocol binding e2e", () => {
     expect(cmd.status).toBe(200);
     expect(driver.writes).toHaveLength(1);
     expect(driver.writes[0]?.deviceId).toBe(deviceId);
+  });
+
+  it("discovers a bus device and auto-binds it on commission", async () => {
+    const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    const roomId = home.rooms[0]!.id;
+
+    // The fake driver surfaces a discovered device tagged with its protocol.
+    const disc = (await (
+      await fetch(`${baseUrl}/v1/commissioning/discover`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({}),
+      })
+    ).json()) as { discovered: { backendId: string; suggestedName: string; capabilities: string[]; protocol?: string }[] };
+    const lamp = disc.discovered.find((d) => d.backendId === "bus/disc-lamp")!;
+    expect(lamp.protocol).toBe("fake");
+
+    // Commission it — passing the protocol → it is bound to the bus in one step.
+    const res = await fetch(`${baseUrl}/v1/commissioning/commission`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({
+        backendId: lamp.backendId,
+        name: lamp.suggestedName,
+        roomId,
+        capabilities: lamp.capabilities,
+        protocol: lamp.protocol,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const newId = ((await res.json()) as { device: { id: string } }).device.id;
+
+    // No manual bind step — commanding it already routes to the driver.
+    const before = driver.writes.length;
+    const cmd = await fetch(`${baseUrl}/v1/devices/${newId}/command`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ command: { capability: "onoff", action: "on" } }),
+    });
+    expect(cmd.status).toBe(200);
+    expect(driver.writes.length).toBe(before + 1);
+    expect(driver.writes.at(-1)?.deviceId).toBe(newId);
   });
 });

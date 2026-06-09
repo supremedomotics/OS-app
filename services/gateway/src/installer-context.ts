@@ -5,6 +5,7 @@ import {
   type HomeId,
   type License,
   type ProtocolKind,
+  type RoomId,
 } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
 import { generateSigningKeyPair, type KeyPairPem } from "@supreme/crypto";
@@ -183,6 +184,34 @@ export class InstallerServices {
 
   listProtocolBindings(): Promise<StoredProtocolBinding[]> {
     return this.d.protocolBindingStore?.list() ?? Promise.resolve([]);
+  }
+
+  /**
+   * Commission a device and, when it was discovered on a native bus, immediately bind
+   * every capability to that bus (discover → commission → bind in one step). The bus
+   * address defaults to the discovered `backendId`.
+   */
+  async commissionDevice(input: {
+    backendId: string;
+    name: string;
+    roomId: RoomId;
+    capabilities: CapabilityKind[];
+    supremeType?: Parameters<CommissioningService["commission"]>[0]["supremeType"];
+    manufacturer?: string | null;
+    model?: string | null;
+    protocol?: string;
+    address?: string;
+    config?: Record<string, unknown>;
+  }): Promise<Awaited<ReturnType<CommissioningService["commission"]>>> {
+    const { protocol, address, config, ...commissionInput } = input;
+    const device = await this.commissioning.commission(commissionInput);
+    if (protocol) {
+      const busAddress = address ?? input.backendId;
+      for (const capability of input.capabilities) {
+        await this.bindProtocol({ deviceId: device.id, capability, protocol, address: busAddress, config });
+      }
+    }
+    return device;
   }
 
   // ── Licensing ──────────────────────────────────────────────────────────────

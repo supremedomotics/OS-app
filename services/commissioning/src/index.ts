@@ -30,6 +30,8 @@ export interface DiscoveredView {
   capabilities: CapabilityKind[];
   /** Where it came from: "backend" (SIL) or a protocol scan. */
   source: string;
+  /** Native bus protocol this device lives on (e.g. "mqtt"), enabling auto-bind. */
+  protocol?: string;
 }
 
 export class CommissioningService {
@@ -115,11 +117,14 @@ export class CommissioningService {
 export { HttpProtocolScanner, type HttpScannerOptions } from "./http-scanner.js";
 
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
+  const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
     capabilities: d.capabilities,
-    source,
+    // A native-bus device reports its protocol as the source (e.g. "mqtt"), not "backend".
+    source: protocol ?? source,
+    protocol,
   };
 }
 

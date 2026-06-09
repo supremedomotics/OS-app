@@ -136,7 +136,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
       const input = CommissionRequest.parse(req.body);
-      const device = await i().commissioning.commission({
+      const device = await i().commissionDevice({
         ...input,
         roomId: input.roomId as RoomId,
       });

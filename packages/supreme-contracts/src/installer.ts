@@ -52,6 +52,8 @@ export const DiscoveredDeviceView = z.object({
   suggestedName: z.string(),
   capabilities: z.array(CapabilityKind),
   source: z.string(),
+  /** Native bus protocol this device was discovered on (e.g. "mqtt"), if any. */
+  protocol: z.string().optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
@@ -69,6 +71,14 @@ export const CommissionRequest = z.object({
   supremeType: SupremeDeviceType.optional(),
   manufacturer: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
+  /**
+   * When set, the new device is immediately bound to this native bus on every
+   * capability (the discovered device's protocol + bus address) — discover → commission
+   * → bind in one step. The bus address defaults to `backendId`.
+   */
+  protocol: z.string().optional(),
+  address: z.string().optional(),
+  config: z.record(z.unknown()).optional(),
 });
 export type CommissionRequest = z.infer<typeof CommissionRequest>;
 

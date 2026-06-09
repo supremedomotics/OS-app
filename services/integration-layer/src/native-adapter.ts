@@ -125,9 +125,14 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    // Aggregate discovery across real protocol drivers (none → empty, as before).
+    // Aggregate discovery across real protocol drivers (none → empty, as before),
+    // tagging each with its owning protocol so commissioning can auto-bind it.
     const all: DiscoveredDevice[] = [];
-    for (const driver of this.drivers) all.push(...(await driver.discover()));
+    for (const driver of this.drivers) {
+      for (const d of await driver.discover()) {
+        all.push({ ...d, raw: { ...d.raw, protocol: driver.protocol } });
+      }
+    }
     return all;
   }
 

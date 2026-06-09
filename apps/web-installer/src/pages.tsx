@@ -80,7 +80,7 @@ export function DriverStore() {
 /** Commissioning: discover candidate devices and commission them into a room. */
 export function Commissioning() {
   const [discovered, setDiscovered] = useState<
-    { backendId: string; suggestedName: string; capabilities: string[]; source: string }[]
+    { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string }[]
   >([]);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [roomId, setRoomId] = useState<string>("");
@@ -96,12 +96,19 @@ export function Commissioning() {
     setDiscovered((await client.discover()).discovered);
   }
 
-  async function commission(d: { backendId: string; suggestedName: string; capabilities: string[] }) {
+  async function commission(d: {
+    backendId: string;
+    suggestedName: string;
+    capabilities: string[];
+    protocol?: string;
+  }) {
     await client.commission({
       backendId: d.backendId,
       name: d.suggestedName,
       roomId,
       capabilities: d.capabilities as never,
+      // A device discovered on a native bus is bound to it automatically on commission.
+      protocol: d.protocol,
     });
     await scan();
   }
@@ -123,9 +130,14 @@ export function Commissioning() {
         <div className="card row" key={d.backendId}>
           <div>
             <strong>{d.suggestedName}</strong> <span className="tag">{d.source}</span>
-            <div className="muted">{d.capabilities.join(", ")}</div>
+            <div className="muted">
+              {d.capabilities.join(", ")}
+              {d.protocol && ` · auto-binds to ${d.protocol.toUpperCase()}`}
+            </div>
           </div>
-          <button onClick={() => commission(d)}>Commission</button>
+          <button onClick={() => commission(d)}>
+            {d.protocol ? "Commission + bind" : "Commission"}
+          </button>
         </div>
       ))}
     </section>

@@ -71,8 +71,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
       re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/
-      Modbus/MQTT addresses. **Real MQTT discovery** lands (Zigbee2MQTT `bridge/devices`
-      → Supreme capabilities, surfaced through `discover()`); KNX/DALI native scans and
+      Modbus/MQTT addresses. **Real MQTT discovery** (Zigbee2MQTT `bridge/devices` →
+      Supreme capabilities) + **discover→commission→auto-bind in one step** (a device
+      discovered on a bus is bound to it on commission); KNX/DALI native scans and
       retiring the `commissioning-py` simulators still pending
 - [ ] Driver sandboxing + security scan in the certification pipeline
 - [x] Native (non-HA) protocol stacks behind `SupremeNativeAdapter` (MQTT + Modbus,
