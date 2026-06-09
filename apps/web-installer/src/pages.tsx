@@ -381,3 +381,134 @@ export function Licensing() {
     </section>
   );
 }
+
+/**
+ * Bus Binding (§3): wire a commissioned device's capability to a real field-bus
+ * address (KNX group address / Modbus register / MQTT base topic). After binding,
+ * the device is driven over that bus by the Supreme-native engine. Bindings persist
+ * and are re-bound on hub restart.
+ */
+const PROTOCOLS = ["knx", "modbus", "mqtt"] as const;
+const CONFIG_HINTS: Record<string, string> = {
+  knx: '{"statusAddress":"1/2/1","dpt":"DPT5.001"}',
+  modbus: '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
+  mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
+};
+
+type BindDevice = { id: string; name: string; capabilities: string[] };
+type Binding = { deviceId: string; capability: string; protocol: string; address: string };
+
+export function Bindings() {
+  const [devices, setDevices] = useState<BindDevice[]>([]);
+  const [bindings, setBindings] = useState<Binding[]>([]);
+  const [deviceId, setDeviceId] = useState("");
+  const [capability, setCapability] = useState("");
+  const [protocol, setProtocol] = useState<(typeof PROTOCOLS)[number]>("knx");
+  const [address, setAddress] = useState("");
+  const [configText, setConfigText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    const home = await client.home();
+    const lists = await Promise.all(home.rooms.map((r) => client.devicesInRoom(r.id as never)));
+    const all = lists.flatMap((l) =>
+      l.devices.map((d) => ({
+        id: d.id,
+        name: d.name,
+        capabilities: d.capabilities.map((c) => c.kind),
+      })),
+    );
+    setDevices(all);
+    setBindings((await client.protocolBindings()).bindings as Binding[]);
+  }
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const selected = devices.find((d) => d.id === deviceId);
+
+  async function submit() {
+    setError(null);
+    setBusy(true);
+    try {
+      let config: Record<string, unknown> | undefined;
+      if (configText.trim()) config = JSON.parse(configText) as Record<string, unknown>;
+      await client.bindProtocol({ deviceId, capability: capability as never, protocol, address, config });
+      setAddress("");
+      setConfigText("");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "binding failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <h2>Bus binding</h2>
+      <p className="muted">
+        Bind a commissioned device to a real field bus (KNX / Modbus / MQTT). The device
+        is then driven natively over that bus — no Home Assistant involved.
+      </p>
+      {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
+
+      <div className="card">
+        <div className="row">
+          <select value={deviceId} onChange={(e) => { setDeviceId(e.target.value); setCapability(""); }}>
+            <option value="">Select device…</option>
+            {devices.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+          <select value={capability} onChange={(e) => setCapability(e.target.value)} disabled={!selected}>
+            <option value="">Capability…</option>
+            {selected?.capabilities.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select value={protocol} onChange={(e) => setProtocol(e.target.value as (typeof PROTOCOLS)[number])}>
+            {PROTOCOLS.map((p) => (
+              <option key={p} value={p}>{p.toUpperCase()}</option>
+            ))}
+          </select>
+        </div>
+        <input
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder={protocol === "knx" ? "Group address e.g. 1/2/0" : protocol === "modbus" ? "Register e.g. 100" : "Base topic e.g. z2m/lamp"}
+          style={{ marginTop: 8 }}
+        />
+        <input
+          value={configText}
+          onChange={(e) => setConfigText(e.target.value)}
+          placeholder={`Config JSON (optional) — e.g. ${CONFIG_HINTS[protocol]}`}
+          style={{ marginTop: 8 }}
+        />
+        <button
+          className="primary"
+          style={{ marginTop: 8 }}
+          disabled={busy || !deviceId || !capability || !address}
+          onClick={submit}
+        >
+          {busy ? "Binding…" : "Bind to bus"}
+        </button>
+      </div>
+
+      <h3 style={{ marginTop: 16 }}>Active bindings</h3>
+      {bindings.length === 0 && <p className="muted">No devices are bound to a bus yet.</p>}
+      {bindings.map((b) => {
+        const name = devices.find((d) => d.id === b.deviceId)?.name ?? b.deviceId;
+        return (
+          <div className="card row" key={`${b.deviceId}:${b.capability}`}>
+            <div>
+              <strong>{name}</strong> <span className="tag">{b.capability}</span>
+              <div className="muted">{b.protocol.toUpperCase()} · {b.address}</div>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}

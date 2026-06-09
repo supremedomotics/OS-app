@@ -17,8 +17,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~70% | unit/e2e/PGlite/fake-HA/real-LLM-gated; no load/soak/hardware |
 | Persistence | ~85% | identity/home/scenes/grants/drivers/automations/audit/sessions/security panel persisted; license + fleet have Postgres stores |
 | Real HA integration | ~40% | verified vs a fake HA only — see §2 |
-| Drivers & protocols | ~50% | seam + real MQTT & Modbus drivers; KNX/DALI/Zigbee/Matter pending |
-| Native migration engine | ~50% | routing proven; native engine now fronts real MQTT/Modbus stacks |
+| Drivers & protocols | ~60% | KNX/MQTT/Modbus drivers + bind API + portal UI + persistence; DALI/Zigbee/Matter pending |
+| Native migration engine | ~55% | routing proven; native engine fronts real KNX/MQTT/Modbus, bound devices route native |
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
 | Observability / ops | ~60% | Prometheus `/metrics`, `/readyz`, OTel tracing; dashboards/alerting/SLOs pending |
@@ -70,8 +70,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       broker / in-process server); DALI/Casambi/Zigbee-native/Matter still pending
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
-      re-bound on boot. Installer-portal binding UI + retiring the `commissioning-py`
-      discovery simulators still pending
+      re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/
+      Modbus/MQTT addresses. Retiring the `commissioning-py` discovery simulators (real
+      bus scans) still pending
 - [ ] Driver sandboxing + security scan in the certification pipeline
 - [x] Native (non-HA) protocol stacks behind `SupremeNativeAdapter` (MQTT + Modbus,
       wired at the hub boot edge via `SUPREME_MQTT_URL` / `SUPREME_MODBUS_HOST`)

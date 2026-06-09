@@ -17,6 +17,9 @@ import {
   type MigrateDomainResponse,
   type MigrationStatus,
   type ProjectExport,
+  type BindProtocolRequest,
+  type ProtocolBindingList,
+  type ProtocolBindingView,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -127,6 +130,15 @@ export class SupremeClient {
     return this.request("POST", "/v1/commissioning/commission", input) as Promise<{
       device: { id: string; name: string };
     }>;
+  }
+  /** Bind a commissioned device's capability to a real bus address (KNX/Modbus/MQTT). */
+  bindProtocol(input: BindProtocolRequest): Promise<{ binding: ProtocolBindingView }> {
+    return this.request("POST", "/v1/commissioning/bind", input) as Promise<{
+      binding: ProtocolBindingView;
+    }>;
+  }
+  protocolBindings(): Promise<ProtocolBindingList> {
+    return this.request("GET", "/v1/commissioning/bindings") as Promise<ProtocolBindingList>;
   }
 
   diagnostics(): Promise<DiagnosticsReport> {

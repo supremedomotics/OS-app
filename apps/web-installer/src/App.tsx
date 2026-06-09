@@ -2,6 +2,7 @@ import { useState } from "react";
 import { client } from "./api.js";
 import {
   BackupRestore,
+  Bindings,
   Commissioning,
   Diagnostics,
   DriverStore,
@@ -13,6 +14,7 @@ import {
 type Tab =
   | "drivers"
   | "commission"
+  | "bindings"
   | "diagnostics"
   | "backup"
   | "license"
@@ -22,6 +24,7 @@ type Tab =
 const TABS: { id: Tab; label: string }[] = [
   { id: "drivers", label: "Driver Store" },
   { id: "commission", label: "Commissioning" },
+  { id: "bindings", label: "Bus Binding" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "backup", label: "Backup / Restore" },
   { id: "license", label: "Licensing" },
@@ -52,6 +55,7 @@ export function App() {
       <main>
         {tab === "drivers" && <DriverStore />}
         {tab === "commission" && <Commissioning />}
+        {tab === "bindings" && <Bindings />}
         {tab === "diagnostics" && <Diagnostics />}
         {tab === "backup" && <BackupRestore />}
         {tab === "license" && <Licensing />}
