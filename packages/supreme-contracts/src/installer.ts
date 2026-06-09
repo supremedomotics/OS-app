@@ -72,6 +72,23 @@ export const CommissionRequest = z.object({
 });
 export type CommissionRequest = z.infer<typeof CommissionRequest>;
 
+/** Bind a commissioned device's capability to a real bus address (KNX/Modbus/MQTT). */
+export const ProtocolBindingView = z.object({
+  deviceId: z.string(),
+  capability: CapabilityKind,
+  protocol: z.string(),
+  /** Protocol-native address (KNX group address, Modbus register, MQTT base topic). */
+  address: z.string().min(1),
+  config: z.record(z.unknown()).optional(),
+});
+export type ProtocolBindingView = z.infer<typeof ProtocolBindingView>;
+
+export const BindProtocolRequest = ProtocolBindingView;
+export type BindProtocolRequest = z.infer<typeof BindProtocolRequest>;
+
+export const ProtocolBindingList = z.object({ bindings: z.array(ProtocolBindingView) });
+export type ProtocolBindingList = z.infer<typeof ProtocolBindingList>;
+
 // ── Diagnostics ──────────────────────────────────────────────────────────────
 
 export const DiagnosticsReport = z.object({

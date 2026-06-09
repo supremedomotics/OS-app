@@ -1,5 +1,6 @@
 import {
   ActivateLicenseRequest,
+  BindProtocolRequest,
   CommissionRequest,
   DiscoverRequest,
   InstallDriverRequest,
@@ -14,8 +15,9 @@ import {
   type InstalledDriverResponse,
   type LicenseStatus,
   type ProjectExport,
+  type ProtocolBindingList,
 } from "@supreme/contracts";
-import type { DriverId, RoomId } from "@supreme/domain-model";
+import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -139,6 +141,36 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         roomId: input.roomId as RoomId,
       });
       reply.code(201).send({ device });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Native protocol bindings (§3) ────────────────────────────────────────────
+  app.post("/v1/commissioning/bind", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const input = BindProtocolRequest.parse(req.body);
+      const binding = await i().bindProtocol({
+        deviceId: input.deviceId as DeviceId,
+        capability: input.capability as CapabilityKind,
+        protocol: input.protocol,
+        address: input.address,
+        config: input.config,
+      });
+      reply.code(201).send({ binding });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get("/v1/commissioning/bindings", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const body: ProtocolBindingList = { bindings: await i().listProtocolBindings() };
+      reply.send(body);
     } catch (err) {
       sendError(reply, err);
     }

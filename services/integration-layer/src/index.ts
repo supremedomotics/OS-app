@@ -21,6 +21,9 @@ export {
 export {
   type INativeProtocolDriver,
   type ProtocolBinding,
+  type StoredProtocolBinding,
+  type IProtocolBindingStore,
+  InMemoryProtocolBindingStore,
   bindingKey,
 } from "./protocols/driver.js";
 export { RoutingBackendAdapter, type RoutingAdapterOptions } from "./routing-adapter.js";

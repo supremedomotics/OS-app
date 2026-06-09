@@ -55,6 +55,37 @@ export interface INativeProtocolDriver {
   onState(listener: StateListener): () => void;
 }
 
+/** A binding tagged with the owning protocol, as persisted + rebound on boot. */
+export interface StoredProtocolBinding extends ProtocolBinding {
+  /** Which driver owns this binding, e.g. "knx" | "modbus" | "mqtt". */
+  protocol: string;
+}
+
+/**
+ * Persistence seam for protocol bindings (§3, §4). Commissioned bus devices must
+ * survive a hub restart and be re-bound onto their drivers on boot. Default = none
+ * (in-memory only); the Postgres-backed store persists them.
+ */
+export interface IProtocolBindingStore {
+  list(): Promise<StoredProtocolBinding[]>;
+  put(binding: StoredProtocolBinding): Promise<void>;
+  remove(deviceId: DeviceId, capability: CapabilityKind): Promise<void>;
+}
+
+/** In-memory binding store (dev / non-persistent hubs). */
+export class InMemoryProtocolBindingStore implements IProtocolBindingStore {
+  private readonly bindings = new Map<string, StoredProtocolBinding>();
+  async list(): Promise<StoredProtocolBinding[]> {
+    return [...this.bindings.values()];
+  }
+  async put(binding: StoredProtocolBinding): Promise<void> {
+    this.bindings.set(bindingKey(binding.deviceId, binding.capability), binding);
+  }
+  async remove(deviceId: DeviceId, capability: CapabilityKind): Promise<void> {
+    this.bindings.delete(bindingKey(deviceId, capability));
+  }
+}
+
 /** Compose key for a device+capability binding. */
 export function bindingKey(deviceId: DeviceId, capability: CapabilityKind): string {
   return `${deviceId}:${capability}`;

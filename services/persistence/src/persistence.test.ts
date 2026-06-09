@@ -143,6 +143,28 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect(restored.lastChangedBy).toBe(actor);
   });
 
+  it("persists protocol bindings so bus devices re-bind across a restart", async () => {
+    const dev = newId("device") as DeviceId;
+    await stores.protocolBindings.put({
+      deviceId: dev,
+      capability: "position",
+      protocol: "knx",
+      address: "1/2/0",
+      config: { statusAddress: "1/2/1", dpt: "DPT5.001" },
+    });
+    // A fresh repo over the same DB (simulating a hub restart) sees the binding.
+    const { ProtocolBindingRepo } = await import("./index.js");
+    const fresh = new ProtocolBindingRepo(stores.db);
+    const all = await fresh.list();
+    const found = all.find((b) => b.deviceId === dev);
+    expect(found?.protocol).toBe("knx");
+    expect(found?.address).toBe("1/2/0");
+    expect(found?.config?.dpt).toBe("DPT5.001");
+
+    await fresh.remove(dev, "position");
+    expect((await fresh.list()).some((b) => b.deviceId === dev)).toBe(false);
+  });
+
   it("persists notifications with read receipts", async () => {
     const notifications = new NotificationService(stores.notifications);
     const userId = newId("user") as UserId;

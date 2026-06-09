@@ -29,11 +29,11 @@
     "@supreme/drivers": "workspace:*",
     "@supreme/automations": "workspace:*",
     "@supreme/security": "workspace:*",
+    "@supreme/integration-layer": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",
-    "@supreme/integration-layer": "workspace:*",
     "@types/pg": "^8.11.10",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

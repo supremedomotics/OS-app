@@ -1,4 +1,6 @@
 import {
+  type CapabilityKind,
+  type DeviceId,
   type DriverId,
   type HomeId,
   type License,
@@ -6,7 +8,11 @@ import {
 } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
 import { generateSigningKeyPair, type KeyPairPem } from "@supreme/crypto";
-import type { SupremeIntegrationLayer } from "@supreme/integration-layer";
+import type {
+  IProtocolBindingStore,
+  StoredProtocolBinding,
+  SupremeIntegrationLayer,
+} from "@supreme/integration-layer";
 import type { HomeService } from "@supreme/home";
 import type { SceneService } from "@supreme/scenes";
 import type { IdentityService } from "@supreme/identity";
@@ -41,6 +47,7 @@ export interface InstallerDeps {
   driverStore?: IInstalledDriverStore;
   db?: SqlDb;
   scanners?: IProtocolScanner[];
+  protocolBindingStore?: IProtocolBindingStore;
 }
 
 /**
@@ -91,8 +98,13 @@ export class InstallerServices {
       : generateSigningKeyPair();
   }
 
-  /** Load any persisted active license (call on boot when a DB is configured). */
+  /** Boot-time hydration: active license + re-bind persisted protocol bindings. */
   async init(): Promise<void> {
+    await this.loadLicense();
+    await this.rebindProtocols();
+  }
+
+  private async loadLicense(): Promise<void> {
     if (!this.d.db) return;
     const { rows } = await this.d.db.query<{
       id: string;
@@ -118,6 +130,59 @@ export class InstallerServices {
     };
     const res = validateLicense(candidate, this.licensingKeys.publicKey, { homeId: this.d.homeId });
     if (res.valid) this.license = res.license;
+  }
+
+  // ── Native protocol bindings (§3) ────────────────────────────────────────────
+
+  /** Re-bind every persisted protocol binding onto the native engine on boot. */
+  private async rebindProtocols(): Promise<void> {
+    const store = this.d.protocolBindingStore;
+    if (!store || !this.d.sil.migrationEnabled) return;
+    for (const b of await store.list()) {
+      try {
+        await this.d.sil.bindNative(
+          { deviceId: b.deviceId, capability: b.capability, address: b.address, config: b.config },
+          b.protocol,
+        );
+      } catch {
+        // A driver for this protocol may not be configured on this hub; skip it.
+      }
+    }
+  }
+
+  /**
+   * Bind a commissioned device's capability to a real bus address (KNX/Modbus/MQTT):
+   * persist it and place it under the native engine so commands/state flow over the
+   * bus. The protocol's driver must be configured on this hub (SUPREME_*_HOST/URL).
+   */
+  async bindProtocol(input: {
+    deviceId: DeviceId;
+    capability: CapabilityKind;
+    protocol: string;
+    address: string;
+    config?: Record<string, unknown>;
+  }): Promise<StoredProtocolBinding> {
+    if (!this.d.sil.migrationEnabled) {
+      throw new SupremeError("conflict", "native protocol binding is not enabled on this hub");
+    }
+    const binding: StoredProtocolBinding = {
+      deviceId: input.deviceId,
+      capability: input.capability,
+      protocol: input.protocol,
+      address: input.address,
+      config: input.config ?? {},
+    };
+    // Bind first so a bad protocol/driver fails before we persist.
+    await this.d.sil.bindNative(
+      { deviceId: binding.deviceId, capability: binding.capability, address: binding.address, config: binding.config },
+      binding.protocol,
+    );
+    await this.d.protocolBindingStore?.put(binding);
+    return binding;
+  }
+
+  listProtocolBindings(): Promise<StoredProtocolBinding[]> {
+    return this.d.protocolBindingStore?.list() ?? Promise.resolve([]);
   }
 
   // ── Licensing ──────────────────────────────────────────────────────────────

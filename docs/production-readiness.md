@@ -65,11 +65,13 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] Native protocol-driver seam (`INativeProtocolDriver`) — `SupremeNativeAdapter`
       now fronts real bus stacks; bound devices route to a driver, unbound use the
       in-process model (`@supreme/protocols`)
-- [~] Real first-party adapter code — **MQTT** (Zigbee2MQTT/Tasmota convention, tested
-      vs an embedded broker) and **Modbus TCP** (tested vs an in-process server) land
-      as real drivers; KNX/DALI/Casambi/Zigbee-native/Matter still pending
-- [ ] Real protocol commissioning (replace simulators in `commissioning-py`); persist
-      `ProtocolBinding`s and expose binding in the installer portal
+- [~] Real first-party adapter code — **KNXnet/IP**, **MQTT** (Zigbee2MQTT/Tasmota),
+      and **Modbus TCP** land as real drivers (each tested vs a fake bus / embedded
+      broker / in-process server); DALI/Casambi/Zigbee-native/Matter still pending
+- [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
+      commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
+      re-bound on boot. Installer-portal binding UI + retiring the `commissioning-py`
+      discovery simulators still pending
 - [ ] Driver sandboxing + security scan in the certification pipeline
 - [x] Native (non-HA) protocol stacks behind `SupremeNativeAdapter` (MQTT + Modbus,
       wired at the hub boot edge via `SUPREME_MQTT_URL` / `SUPREME_MODBUS_HOST`)

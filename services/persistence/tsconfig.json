@@ -13,7 +13,8 @@
     { "path": "../notifications" },
     { "path": "../drivers" },
     { "path": "../automations" },
-    { "path": "../security" }
+    { "path": "../security" },
+    { "path": "../integration-layer" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

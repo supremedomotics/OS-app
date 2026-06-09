@@ -10,6 +10,7 @@ import type { BackendStateEvent, IBackendAdapter } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { EngineKind } from "./migration.js";
+import type { ProtocolBinding } from "./protocols/driver.js";
 
 /**
  * Supreme Integration Layer — the facade the rest of the hub talks to.
@@ -77,6 +78,17 @@ export class SupremeIntegrationLayer {
 
   isHealthy(): boolean {
     return this.adapter.isConnected();
+  }
+
+  /**
+   * Bind a device/capability to a real native protocol stack (KNX/Modbus/MQTT). After
+   * this the device is owned by the Supreme-native engine and its commands/state flow
+   * over that bus. Available only when the SIL is backed by a routing adapter.
+   */
+  async bindNative(binding: ProtocolBinding, protocol: string): Promise<void> {
+    const router = this.router;
+    if (!router) throw new SupremeError("conflict", "native protocol binding is not enabled on this hub");
+    await router.native.bind(binding, protocol);
   }
 
   /** Register a Supreme device capability ↔ backend entity mapping. */

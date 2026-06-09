@@ -22,6 +22,7 @@ import {
   type IEventBus,
   type IPresenceStore,
 } from "@supreme/messaging";
+import type { IProtocolBindingStore } from "@supreme/integration-layer";
 import {
   AutomationEngine,
   AutomationService,
@@ -52,6 +53,7 @@ export interface AppDeps {
   driverStore?: IInstalledDriverStore;
   automationStore?: IAutomationStore;
   securityStore?: ISecurityStore;
+  protocolBindingStore?: IProtocolBindingStore;
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
   db?: SqlDb;
   /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
@@ -200,6 +202,7 @@ export class AppContext {
       driverStore: deps.driverStore,
       db: deps.db,
       scanners: deps.scanners,
+      protocolBindingStore: deps.protocolBindingStore,
     });
     await ctx.installer.init();
 

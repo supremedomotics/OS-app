@@ -96,6 +96,10 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   }
 
   private pick(deviceId: DeviceId, capability: CapabilityKind): IBackendAdapter {
+    // A device bound to a real native protocol stack (KNX/Modbus/MQTT) is owned by
+    // the native engine regardless of the per-domain migration flag — its commands
+    // and reads must always go to the bus it lives on.
+    if (this.native.manages(deviceId)) return this.native;
     const domain = this.registry.domainOf(deviceId, capability);
     if (domain) this.policy.register(domain);
     return domain && this.policy.isNative(domain) ? this.native : this.ha;
