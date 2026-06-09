@@ -10,7 +10,7 @@ import {
   type IBackendAdapter,
   type INativeProtocolDriver,
 } from "@supreme/integration-layer";
-import { MqttProtocolDriver, ModbusProtocolDriver } from "@supreme/protocols";
+import { MqttProtocolDriver, ModbusProtocolDriver, KnxProtocolDriver } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
 import { HttpProtocolScanner } from "@supreme/commissioning";
@@ -80,6 +80,9 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   if (config.mqttUrl) nativeDrivers.push(new MqttProtocolDriver({ url: config.mqttUrl }));
   if (config.modbusHost) {
     nativeDrivers.push(new ModbusProtocolDriver({ host: config.modbusHost, port: config.modbusPort }));
+  }
+  if (config.knxHost) {
+    nativeDrivers.push(new KnxProtocolDriver({ host: config.knxHost, port: config.knxPort }));
   }
 
   const router = new RoutingBackendAdapter({

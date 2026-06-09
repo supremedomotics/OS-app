@@ -20,6 +20,9 @@
     "mqtt": "^5.10.1",
     "modbus-serial": "^8.0.21"
   },
+  "optionalDependencies": {
+    "knx": "^2.6.0"
+  },
   "devDependencies": {
     "aedes": "^0.51.3",
     "typescript": "^5.7.3",

@@ -51,6 +51,10 @@ export interface GatewayConfig {
   modbusHost: string;
   /** Modbus TCP port (default 502). */
   modbusPort: number;
+  /** KNXnet/IP gateway host (tunnelling) for the native KNX driver; empty = not loaded. */
+  knxHost: string;
+  /** KNXnet/IP port (default 3671). */
+  knxPort: number;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -88,6 +92,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     mqttUrl: env.SUPREME_MQTT_URL ?? "",
     modbusHost: env.SUPREME_MODBUS_HOST ?? "",
     modbusPort: Number(env.SUPREME_MODBUS_PORT ?? 502),
+    knxHost: env.SUPREME_KNX_HOST ?? "",
+    knxPort: Number(env.SUPREME_KNX_PORT ?? 3671),
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),
