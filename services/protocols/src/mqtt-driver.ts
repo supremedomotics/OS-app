@@ -13,12 +13,15 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { payloadFromCommand, stateFromPayload } from "./mqtt-codec.js";
+import { discoveredFromZ2mBridge } from "./mqtt-discovery.js";
 
 export interface MqttDriverOptions {
   /** Broker URL, e.g. "mqtt://mqtt:1883". */
   url: string;
   /** Topic suffix a command is published to (Zigbee2MQTT: "/set"). */
   commandSuffix?: string;
+  /** Zigbee2MQTT base topic for discovery (default "zigbee2mqtt"); "" disables it. */
+  discoveryBaseTopic?: string;
   username?: string;
   password?: string;
   /** Injectable client factory (tests pass an embedded-broker connector). */
@@ -45,15 +48,21 @@ export class MqttProtocolDriver implements INativeProtocolDriver {
   private client: MqttClient | null = null;
   private readonly opts: MqttDriverOptions;
   private readonly commandSuffix: string;
+  private readonly discoveryBaseTopic: string;
+  private readonly discoveryTopic: string;
   /** base topic → the capabilities bound on it (one topic can carry on/off + brightness). */
   private readonly byTopic = new Map<string, BoundCapability[]>();
   private readonly devices = new Set<DeviceId>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly listeners = new Set<StateListener>();
+  /** Latest Zigbee2MQTT bridge device list, mapped to Supreme discovery hints. */
+  private discovered: DiscoveredDevice[] = [];
 
   constructor(opts: MqttDriverOptions) {
     this.opts = opts;
     this.commandSuffix = opts.commandSuffix ?? "/set";
+    this.discoveryBaseTopic = opts.discoveryBaseTopic ?? "zigbee2mqtt";
+    this.discoveryTopic = this.discoveryBaseTopic ? `${this.discoveryBaseTopic}/bridge/devices` : "";
   }
 
   async connect(): Promise<void> {
@@ -68,6 +77,8 @@ export class MqttProtocolDriver implements INativeProtocolDriver {
     );
     // Re-subscribe anything bound before connect (idempotent).
     for (const topic of this.byTopic.keys()) this.client.subscribe(topic);
+    // Subscribe to the Zigbee2MQTT bridge device list (retained → arrives at once).
+    if (this.discoveryTopic) this.client.subscribe(this.discoveryTopic);
   }
 
   async disconnect(): Promise<void> {
@@ -112,9 +123,8 @@ export class MqttProtocolDriver implements INativeProtocolDriver {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    // Active MQTT discovery (homeassistant/-style config topics) is a follow-on; for
-    // now devices are commissioned explicitly via bind().
-    return [];
+    // Populated from the retained Zigbee2MQTT bridge device list (see onMessage).
+    return this.discovered;
   }
 
   onState(listener: StateListener): () => void {
@@ -123,6 +133,15 @@ export class MqttProtocolDriver implements INativeProtocolDriver {
   }
 
   private onMessage(topic: string, payload: Buffer): void {
+    // The Zigbee2MQTT bridge device list → Supreme discovery hints.
+    if (topic === this.discoveryTopic) {
+      try {
+        this.discovered = discoveredFromZ2mBridge(JSON.parse(payload.toString()), this.discoveryBaseTopic);
+      } catch {
+        // Ignore a malformed bridge payload.
+      }
+      return;
+    }
     const bound = this.byTopic.get(topic);
     if (!bound) return;
     let json: Record<string, unknown>;
