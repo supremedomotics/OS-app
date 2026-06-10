@@ -63,6 +63,8 @@ export interface GatewayConfig {
   zigbeePort: string;
   /** zigbee-herdsman adapter type (zstack/deconz/ezsp). */
   zigbeeAdapter: string;
+  /** DALI (IEC 62386) interface serial port for the native DALI driver; empty = not loaded. */
+  daliPort: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -106,6 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     matterStoragePath: env.SUPREME_MATTER_STORAGE_PATH ?? "",
     zigbeePort: env.SUPREME_ZIGBEE_PORT ?? "",
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
+    daliPort: env.SUPREME_DALI_PORT ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

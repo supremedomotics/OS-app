@@ -37,3 +37,21 @@ export {
   commandToZcl,
   stateFromZclReport,
 } from "./zigbee-codec.js";
+export {
+  DaliProtocolDriver,
+  type DaliDriverOptions,
+  type DaliBus,
+  type DaliUnitInfo,
+} from "./dali-driver.js";
+export {
+  type DaliAddress,
+  type DaliOperation,
+  type DimmingCurve,
+  parseDaliAddress,
+  daliAddressByte,
+  arcPowerFromPercent,
+  percentFromArcPower,
+  commandToDali,
+  capabilitiesFromDeviceType,
+  DALI_CMD,
+} from "./dali-codec.js";

@@ -16,6 +16,7 @@ import {
   KnxProtocolDriver,
   MatterProtocolDriver,
   ZigbeeProtocolDriver,
+  DaliProtocolDriver,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
@@ -100,6 +101,10 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // Native Zigbee: talks ZCL straight to a coordinator radio (no MQTT/Zigbee2MQTT).
   if (config.zigbeePort) {
     nativeDrivers.push(new ZigbeeProtocolDriver({ port: config.zigbeePort, adapter: config.zigbeeAdapter }));
+  }
+  // DALI (IEC 62386): addressable architectural lighting over a USB DALI interface.
+  if (config.daliPort) {
+    nativeDrivers.push(new DaliProtocolDriver({ port: config.daliPort }));
   }
 
   const router = new RoutingBackendAdapter({
