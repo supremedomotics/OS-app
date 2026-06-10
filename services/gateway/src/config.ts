@@ -59,6 +59,10 @@ export interface GatewayConfig {
   matterEnabled: boolean;
   /** Filesystem path for the Matter controller's fabric/credential storage. */
   matterStoragePath: string;
+  /** Zigbee coordinator serial port for the native Zigbee driver; empty = not loaded. */
+  zigbeePort: string;
+  /** zigbee-herdsman adapter type (zstack/deconz/ezsp). */
+  zigbeeAdapter: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -100,6 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     knxPort: Number(env.SUPREME_KNX_PORT ?? 3671),
     matterEnabled: env.SUPREME_MATTER_ENABLED === "1" || env.SUPREME_MATTER_ENABLED === "true",
     matterStoragePath: env.SUPREME_MATTER_STORAGE_PATH ?? "",
+    zigbeePort: env.SUPREME_ZIGBEE_PORT ?? "",
+    zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

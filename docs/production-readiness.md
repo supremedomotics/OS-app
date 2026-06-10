@@ -17,7 +17,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~70% | unit/e2e/PGlite/fake-HA/real-LLM-gated; no load/soak/hardware |
 | Persistence | ~85% | identity/home/scenes/grants/drivers/automations/audit/sessions/security panel persisted; license + fleet have Postgres stores |
 | Real HA integration | ~40% | verified vs a fake HA only — see §2 |
-| Drivers & protocols | ~60% | KNX/MQTT/Modbus drivers + bind API + portal UI + persistence; DALI/Zigbee/Matter pending |
+| Drivers & protocols | ~70% | KNX/MQTT/Modbus/Matter/native-Zigbee drivers + bind API + portal UI + persistence; DALI/Casambi pending |
 | Native migration engine | ~55% | routing proven; native engine fronts real KNX/MQTT/Modbus, bound devices route native |
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
@@ -66,9 +66,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       now fronts real bus stacks; bound devices route to a driver, unbound use the
       in-process model (`@supreme/protocols`)
 - [~] Real first-party adapter code — **KNXnet/IP**, **MQTT** (Zigbee2MQTT/Tasmota),
-      **Modbus TCP**, and **Matter** (cluster codec + driver, opt-in controller seam)
-      land as real drivers (each tested vs a fake bus / embedded broker / in-process
-      server); DALI/Casambi/native-Zigbee still pending
+      **Modbus TCP**, **Matter** (cluster codec + driver), and **native Zigbee** (ZCL
+      via zigbee-herdsman, no MQTT broker) land as real drivers (each tested vs a fake
+      bus / embedded broker / in-process server); DALI/Casambi still pending
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
       re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/

@@ -15,6 +15,7 @@ import {
   ModbusProtocolDriver,
   KnxProtocolDriver,
   MatterProtocolDriver,
+  ZigbeeProtocolDriver,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
@@ -95,6 +96,10 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // boot is unaffected (the native engine tolerates a driver that can't connect).
   if (config.matterEnabled) {
     nativeDrivers.push(new MatterProtocolDriver({ storagePath: config.matterStoragePath || undefined }));
+  }
+  // Native Zigbee: talks ZCL straight to a coordinator radio (no MQTT/Zigbee2MQTT).
+  if (config.zigbeePort) {
+    nativeDrivers.push(new ZigbeeProtocolDriver({ port: config.zigbeePort, adapter: config.zigbeeAdapter }));
   }
 
   const router = new RoutingBackendAdapter({

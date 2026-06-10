@@ -44,6 +44,9 @@ services:
       # Matter: opt-in local controller (ships disabled per blueprint §9).
       SUPREME_MATTER_ENABLED: ${SUPREME_MATTER_ENABLED:-0}
       SUPREME_MATTER_STORAGE_PATH: ${SUPREME_MATTER_STORAGE_PATH:-/data/matter}
+      # Native Zigbee: coordinator radio on a serial port (no MQTT broker in the path).
+      SUPREME_ZIGBEE_PORT: ${SUPREME_ZIGBEE_PORT:-}
+      SUPREME_ZIGBEE_ADAPTER: ${SUPREME_ZIGBEE_ADAPTER:-zstack}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}

@@ -23,3 +23,17 @@ export {
   invocationFromCommand,
   stateFromAttribute as matterStateFromAttribute,
 } from "./matter-codec.js";
+export {
+  ZigbeeProtocolDriver,
+  type ZigbeeDriverOptions,
+  type ZigbeeController,
+  type ZigbeeAddress,
+  type ZigbeeReport,
+  type ZigbeeDeviceInfo,
+} from "./zigbee-driver.js";
+export {
+  capabilitiesFromZclClusters,
+  zclClusterForCapability,
+  commandToZcl,
+  stateFromZclReport,
+} from "./zigbee-codec.js";
