@@ -66,8 +66,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       now fronts real bus stacks; bound devices route to a driver, unbound use the
       in-process model (`@supreme/protocols`)
 - [~] Real first-party adapter code — **KNXnet/IP**, **MQTT** (Zigbee2MQTT/Tasmota),
-      and **Modbus TCP** land as real drivers (each tested vs a fake bus / embedded
-      broker / in-process server); DALI/Casambi/Zigbee-native/Matter still pending
+      **Modbus TCP**, and **Matter** (cluster codec + driver, opt-in controller seam)
+      land as real drivers (each tested vs a fake bus / embedded broker / in-process
+      server); DALI/Casambi/native-Zigbee still pending
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
       re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/

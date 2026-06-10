@@ -41,6 +41,9 @@ services:
       SUPREME_MODBUS_PORT: ${SUPREME_MODBUS_PORT:-502}
       SUPREME_KNX_HOST: ${SUPREME_KNX_HOST:-}
       SUPREME_KNX_PORT: ${SUPREME_KNX_PORT:-3671}
+      # Matter: opt-in local controller (ships disabled per blueprint §9).
+      SUPREME_MATTER_ENABLED: ${SUPREME_MATTER_ENABLED:-0}
+      SUPREME_MATTER_STORAGE_PATH: ${SUPREME_MATTER_STORAGE_PATH:-/data/matter}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}

@@ -10,7 +10,12 @@ import {
   type IBackendAdapter,
   type INativeProtocolDriver,
 } from "@supreme/integration-layer";
-import { MqttProtocolDriver, ModbusProtocolDriver, KnxProtocolDriver } from "@supreme/protocols";
+import {
+  MqttProtocolDriver,
+  ModbusProtocolDriver,
+  KnxProtocolDriver,
+  MatterProtocolDriver,
+} from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
 import { HttpProtocolScanner } from "@supreme/commissioning";
@@ -84,6 +89,12 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   }
   if (config.knxHost) {
     nativeDrivers.push(new KnxProtocolDriver({ host: config.knxHost, port: config.knxPort }));
+  }
+  // Matter is opt-in (blueprint §9: ships disabled). It needs the on-box Matter
+  // controller subsystem; until that's provisioned the driver stays disconnected and
+  // boot is unaffected (the native engine tolerates a driver that can't connect).
+  if (config.matterEnabled) {
+    nativeDrivers.push(new MatterProtocolDriver({ storagePath: config.matterStoragePath || undefined }));
   }
 
   const router = new RoutingBackendAdapter({

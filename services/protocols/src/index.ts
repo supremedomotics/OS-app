@@ -9,3 +9,17 @@ export { discoveredFromZ2mBridge } from "./mqtt-discovery.js";
 export { ModbusProtocolDriver, type ModbusDriverOptions } from "./modbus-driver.js";
 export { KnxProtocolDriver, type KnxDriverOptions, type KnxConnection } from "./knx-driver.js";
 export { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./knx-codec.js";
+export {
+  MatterProtocolDriver,
+  type MatterDriverOptions,
+  type MatterController,
+  type MatterAddress,
+  type MatterAttributeReport,
+  type MatterNodeInfo,
+} from "./matter-driver.js";
+export {
+  capabilitiesFromClusters,
+  clusterForCapability,
+  invocationFromCommand,
+  stateFromAttribute as matterStateFromAttribute,
+} from "./matter-codec.js";

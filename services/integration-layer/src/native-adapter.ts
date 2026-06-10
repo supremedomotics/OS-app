@@ -50,9 +50,17 @@ export class SupremeNativeAdapter implements IBackendAdapter {
 
   async connect(): Promise<void> {
     // Bring up every real protocol driver and re-emit its normalized state upward,
-    // so callers can't tell a native engine event from an in-process one.
+    // so callers can't tell a native engine event from an in-process one. A driver
+    // that can't reach its bus at boot (unreachable gateway, Matter controller not yet
+    // provisioned) must NOT crash the hub — it's skipped and stays disconnected; its
+    // devices' commands surface a clear error until the bus recovers.
     for (const driver of this.drivers) {
-      await driver.connect();
+      try {
+        await driver.connect();
+      } catch (err) {
+        this.connectErrors.push({ protocol: driver.protocol, error: err as Error });
+        continue;
+      }
       this.driverUnsubs.push(
         driver.onState((event) => {
           this.states.set(key(event.deviceId, event.capability), event.state);
@@ -62,6 +70,9 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     }
     this.connected = true;
   }
+
+  /** Drivers that failed to connect at boot (diagnostics). */
+  readonly connectErrors: Array<{ protocol: string; error: Error }> = [];
   async disconnect(): Promise<void> {
     for (const unsub of this.driverUnsubs.splice(0)) unsub();
     for (const driver of this.drivers) await driver.disconnect();
