@@ -285,6 +285,19 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  services/cameras:
+    dependencies:
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../../packages/domain-model
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   services/commissioning:
     dependencies:
       '@supreme/contracts':
@@ -373,6 +386,9 @@ importers:
       '@supreme/backup':
         specifier: workspace:*
         version: link:../backup
+      '@supreme/cameras':
+        specifier: workspace:*
+        version: link:../cameras
       '@supreme/commissioning':
         specifier: workspace:*
         version: link:../commissioning

@@ -25,7 +25,8 @@
     { "path": "../analytics" },
     { "path": "../audit" },
     { "path": "../ai" },
-    { "path": "../security" }
+    { "path": "../security" },
+    { "path": "../cameras" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

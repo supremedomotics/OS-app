@@ -33,7 +33,7 @@ services/   gateway · identity · permissions · integration-layer (SIL)
             home · scenes · notifications · persistence · messaging
             drivers · protocols (real MQTT/Modbus) · commissioning · backup
             commissioning-py (FastAPI) · automations · analytics · audit
-            ai · security · ai-py (FastAPI)
+            ai · security · cameras (RTSP→HLS/WebRTC) · ai-py (FastAPI)
 cloud/      licensing · fleet (HTTP API)
 drivers/    sdk (driver authoring + signing)
 apps/       mobile (Flutter homeowner: rooms, scenes, security, energy,

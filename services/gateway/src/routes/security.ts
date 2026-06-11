@@ -1,9 +1,14 @@
 import {
   ArmRequest,
   DisarmRequest,
+  RegisterCameraRequest,
+  SetCameraStreamRequest,
   type CameraList,
+  type CameraResponse,
+  type CameraStreamResponse,
   type SecurityStateResponse,
 } from "@supreme/contracts";
+import type { DeviceId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -54,15 +59,45 @@ export function registerSecurityRoutes(app: FastifyInstance, ctx: AppContext): v
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "camera", null, "view");
-      const cameras = (await ctx.home.listDevices())
-        .filter((d) => d.supremeType === "camera")
-        .map((d) => ({
-          id: d.id,
-          name: d.name,
-          roomId: d.roomId,
-          snapshotUrl: (d.metadata.snapshotUrl as string | undefined) ?? null,
-        }));
-      reply.send({ cameras } satisfies CameraList);
+      reply.send({ cameras: await ctx.cameras.list() } satisfies CameraList);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Register a view-only camera with its RTSP/snapshot sources (installer action).
+  app.post("/v1/cameras", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "camera", null, "create");
+      const input = RegisterCameraRequest.parse(req.body);
+      const camera = await ctx.cameras.register(input);
+      reply.code(201).send({ camera } satisfies CameraResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Update a camera's source URLs.
+  app.put<{ Params: { id: string } }>("/v1/cameras/:id/source", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "camera", null, "control");
+      const input = SetCameraStreamRequest.parse(req.body ?? {});
+      const camera = await ctx.cameras.setSource(req.params.id as DeviceId, input);
+      reply.send({ camera } satisfies CameraResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Resolve a camera's RTSP source into client-playable HLS/WebRTC streams.
+  app.get<{ Params: { id: string } }>("/v1/cameras/:id/stream", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "camera", null, "view");
+      const streams = await ctx.cameras.stream(req.params.id as DeviceId);
+      reply.send({ cameraId: req.params.id, streams } satisfies CameraStreamResponse);
     } catch (err) {
       sendError(reply, err);
     }

@@ -126,6 +126,42 @@ export const CameraView = z.object({
   name: z.string(),
   roomId: z.string().nullable(),
   snapshotUrl: z.string().nullable(),
+  /** The camera's RTSP source URI (installer/NVR use; not directly browser-playable). */
+  streamUrl: z.string().nullable(),
 });
 export const CameraList = z.object({ cameras: z.array(CameraView) });
 export type CameraList = z.infer<typeof CameraList>;
+
+/** A client-playable stream for a camera (HLS/WebRTC), or the raw RTSP source. */
+export const CameraStream = z.object({
+  kind: z.enum(["hls", "webrtc", "rtsp"]),
+  url: z.string(),
+});
+export type CameraStream = z.infer<typeof CameraStream>;
+
+/** The playable streams for one camera, resolved through the hub's stream engine. */
+export const CameraStreamResponse = z.object({
+  cameraId: z.string(),
+  streams: z.array(CameraStream),
+});
+export type CameraStreamResponse = z.infer<typeof CameraStreamResponse>;
+
+/** Register a (view-only) camera device with its source URLs. */
+export const RegisterCameraRequest = z.object({
+  name: z.string().min(1),
+  roomId: z.string().nullable().optional(),
+  /** RTSP source, e.g. "rtsp://10.0.0.5:554/h264". */
+  streamUrl: z.string().optional(),
+  snapshotUrl: z.string().optional(),
+});
+export type RegisterCameraRequest = z.infer<typeof RegisterCameraRequest>;
+
+/** Update an existing camera's source URLs. */
+export const SetCameraStreamRequest = z.object({
+  streamUrl: z.string().nullable().optional(),
+  snapshotUrl: z.string().nullable().optional(),
+});
+export type SetCameraStreamRequest = z.infer<typeof SetCameraStreamRequest>;
+
+export const CameraResponse = z.object({ camera: CameraView });
+export type CameraResponse = z.infer<typeof CameraResponse>;

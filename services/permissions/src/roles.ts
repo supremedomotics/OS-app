@@ -65,7 +65,7 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     scene: ALL,
     automation: ALL,
     integration: ALL,
-    camera: ["view"],
+    camera: ALL,
   },
 };
 

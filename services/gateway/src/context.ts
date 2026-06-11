@@ -33,6 +33,8 @@ import { AnalyticsService } from "@supreme/analytics";
 import { AuditService } from "@supreme/audit";
 import { AssistantService } from "@supreme/ai";
 import { SecurityService, type ISecurityStore } from "@supreme/security";
+import { StreamGateway, NullStreamGateway, type ICameraStreamGateway } from "@supreme/cameras";
+import { CameraService } from "./camera-service.js";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
 
@@ -86,6 +88,8 @@ export class AppContext {
   audit: AuditService | null = null;
   readonly ai: AssistantService;
   readonly security: SecurityService;
+  /** Camera registry + RTSP→HLS/WebRTC stream resolution (§11.1). */
+  cameras!: CameraService;
   /** The underlying SQL database when persistence is enabled; null = in-memory. Used by the readiness probe. */
   readonly db: SqlDb | null;
   /** Cross-process event bus: device state + notifications fan out over this (§5). */
@@ -207,6 +211,17 @@ export class AppContext {
     await ctx.installer.init();
 
     ctx.homeId = home.id as HomeId;
+
+    // Camera streaming: resolve RTSP sources into client-playable HLS/WebRTC via the
+    // hub's stream engine when one is configured; otherwise hand back the raw source.
+    const streamGateway: ICameraStreamGateway = config.streamBaseUrl
+      ? new StreamGateway({
+          engine: config.streamEngine === "mediamtx" ? "mediamtx" : "go2rtc",
+          baseUrl: config.streamBaseUrl,
+          apiUrl: config.streamApiUrl || undefined,
+        })
+      : new NullStreamGateway();
+    ctx.cameras = new CameraService(ctx.home, streamGateway, ctx.homeId);
 
     // Restore the persisted security panel so an armed home stays armed across a
     // restart (no-op when no DB is configured).

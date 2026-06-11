@@ -82,6 +82,15 @@ export class HomeService {
     return (await this.store.getDevice(deviceId))?.device.roomId ?? null;
   }
 
+  /** Merge a metadata patch onto a device (e.g. a camera's stream/snapshot URLs). */
+  async setDeviceMetadata(deviceId: DeviceId, patch: Record<string, unknown>): Promise<Device | null> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) return null;
+    const device = { ...stored.device, metadata: { ...stored.device.metadata, ...patch } };
+    await this.store.putDevice(device, stored.backendIds);
+    return device;
+  }
+
   // ── Favorites ──────────────────────────────────────────────────────────────
   listFavorites(userId: UserId): Promise<Favorite[]> {
     return this.store.listFavorites(userId);

@@ -71,6 +71,12 @@ export interface GatewayConfig {
   coolMasterHost: string;
   /** SIP registrar/server for the door-station driver; empty = not loaded. */
   sipServer: string;
+  /** Public base URL of the hub's camera stream engine (HLS/WebRTC); empty = no transcode. */
+  streamBaseUrl: string;
+  /** Stream engine the hub runs: "go2rtc" | "mediamtx". */
+  streamEngine: string;
+  /** Stream engine admin API for dynamic source registration; empty = config-driven. */
+  streamApiUrl: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -118,6 +124,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     avrEnabled: env.SUPREME_AVR_ENABLED === "1" || env.SUPREME_AVR_ENABLED === "true",
     coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",
     sipServer: env.SUPREME_SIP_SERVER ?? "",
+    streamBaseUrl: env.SUPREME_STREAM_BASE_URL ?? "",
+    streamEngine: env.SUPREME_STREAM_ENGINE ?? "go2rtc",
+    streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

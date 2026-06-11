@@ -20,6 +20,11 @@ import {
   type BindProtocolRequest,
   type ProtocolBindingList,
   type ProtocolBindingView,
+  type CameraList,
+  type CameraResponse,
+  type CameraStreamResponse,
+  type RegisterCameraRequest,
+  type SetCameraStreamRequest,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -139,6 +144,21 @@ export class SupremeClient {
   }
   protocolBindings(): Promise<ProtocolBindingList> {
     return this.request("GET", "/v1/commissioning/bindings") as Promise<ProtocolBindingList>;
+  }
+
+  // ── Cameras (§11.1) ──────────────────────────────────────────────────────────
+  cameras(): Promise<CameraList> {
+    return this.request("GET", "/v1/cameras") as Promise<CameraList>;
+  }
+  registerCamera(input: RegisterCameraRequest): Promise<CameraResponse> {
+    return this.request("POST", "/v1/cameras", input) as Promise<CameraResponse>;
+  }
+  setCameraSource(id: string, input: SetCameraStreamRequest): Promise<CameraResponse> {
+    return this.request("PUT", `/v1/cameras/${id}/source`, input) as Promise<CameraResponse>;
+  }
+  /** Resolve a camera's RTSP source into client-playable HLS/WebRTC streams. */
+  cameraStream(id: string): Promise<CameraStreamResponse> {
+    return this.request("GET", `/v1/cameras/${id}/stream`) as Promise<CameraStreamResponse>;
   }
 
   diagnostics(): Promise<DiagnosticsReport> {

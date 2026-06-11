@@ -90,7 +90,9 @@ export const Device = z.object({
   model: z.string().nullable(),
   driverId: DriverId.nullable(),
   status: DeviceStatus.default("online"),
-  capabilities: z.array(DeviceCapability).min(1),
+  /** Controllable capabilities. Cameras are the legitimate 0-capability case
+   * (view-only); commissioning still requires ≥1 for controllable devices. */
+  capabilities: z.array(DeviceCapability),
   /** Last known normalized state per capability, keyed by capability kind. */
   state: z.record(CapabilityState).default({}),
   metadata: z.record(z.unknown()).default({}),

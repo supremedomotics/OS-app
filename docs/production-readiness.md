@@ -22,7 +22,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
 | Observability / ops | ~60% | Prometheus `/metrics`, `/readyz`, OTel tracing; dashboards/alerting/SLOs pending |
-| Mobile / web delivery | ~45% | compiles; no store pipeline/push |
+| Mobile / web delivery | ~48% | compiles; camera RTSP→HLS/WebRTC backend; no store pipeline/push/player UI |
 | Optional cloud (relay) | ~10% | remote-access relay not built |
 
 ---
@@ -72,8 +72,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       drivers (each tested vs a fake bus / embedded broker / in-process TCP server);
       Casambi (proprietary BLE — needs official Cloud-API access) is the notable
       remaining bus. **SIP door stations** map door-release→lock + ring→sensor (UA is a
-      seam); RTSP camera streaming is a different shape (a stream source, not
-      capability-control) and belongs in a camera/media subsystem
+      seam). **RTSP camera streaming** is handled correctly as a *stream source* (not a
+      capability driver): `@supreme/cameras` resolves a camera's RTSP source into
+      client-playable HLS/WebRTC via the on-hub go2rtc engine — see §7
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
       re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/
@@ -123,6 +124,10 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 
 ## 7. Clients (mobile / web)
 
+- [x] Camera streaming done right — view-only `camera` devices carry an RTSP source;
+      `@supreme/cameras` resolves it to client-playable HLS/WebRTC through the bundled
+      go2rtc engine (`/v1/cameras` register/list, `/v1/cameras/:id/stream`); clients
+      never get a raw rtsp://. Player UI in the Flutter/portal apps is the remaining piece
 - [x] Flutter app compiles + analyzes; widget smoke test
 - [ ] App-store build/signing pipeline (iOS/Android) + internal installer track
 - [ ] Push notifications (with on-LAN degrade)
