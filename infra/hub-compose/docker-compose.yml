@@ -49,6 +49,10 @@ services:
       SUPREME_ZIGBEE_ADAPTER: ${SUPREME_ZIGBEE_ADAPTER:-zstack}
       # DALI (IEC 62386): USB DALI interface serial port for architectural lighting.
       SUPREME_DALI_PORT: ${SUPREME_DALI_PORT:-}
+      # AVR IP control (Denon/Marantz) — receivers added by IP at bind time.
+      SUPREME_AVR_ENABLED: ${SUPREME_AVR_ENABLED:-0}
+      # CoolMasterNet HVAC bridge host (VRF/VRV control).
+      SUPREME_COOLMASTER_HOST: ${SUPREME_COOLMASTER_HOST:-}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}

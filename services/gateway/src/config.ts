@@ -65,6 +65,10 @@ export interface GatewayConfig {
   zigbeeAdapter: string;
   /** DALI (IEC 62386) interface serial port for the native DALI driver; empty = not loaded. */
   daliPort: string;
+  /** Enable the AVR IP-control driver (Denon/Marantz); receivers are added by IP at bind time. */
+  avrEnabled: boolean;
+  /** CoolMasterNet HVAC bridge host for the native CoolMaster driver; empty = not loaded. */
+  coolMasterHost: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -109,6 +113,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     zigbeePort: env.SUPREME_ZIGBEE_PORT ?? "",
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     daliPort: env.SUPREME_DALI_PORT ?? "",
+    avrEnabled: env.SUPREME_AVR_ENABLED === "1" || env.SUPREME_AVR_ENABLED === "true",
+    coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

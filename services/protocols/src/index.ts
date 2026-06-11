@@ -55,3 +55,12 @@ export {
   capabilitiesFromDeviceType,
   DALI_CMD,
 } from "./dali-codec.js";
+export { AvrProtocolDriver, type AvrDriverOptions } from "./avr-driver.js";
+export { commandToAvr, parseAvrLine, type AvrUpdate } from "./avr-codec.js";
+export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
+export {
+  parseUnitLine,
+  commandToCoolMaster,
+  temperatureStateFromUnit,
+  type CoolMasterUnit,
+} from "./coolmaster-codec.js";

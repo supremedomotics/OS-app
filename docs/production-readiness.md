@@ -17,7 +17,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~70% | unit/e2e/PGlite/fake-HA/real-LLM-gated; no load/soak/hardware |
 | Persistence | ~85% | identity/home/scenes/grants/drivers/automations/audit/sessions/security panel persisted; license + fleet have Postgres stores |
 | Real HA integration | ~40% | verified vs a fake HA only — see §2 |
-| Drivers & protocols | ~75% | KNX/MQTT/Modbus/Matter/native-Zigbee/DALI drivers + bind API + portal UI + persistence; Casambi (closed BLE) pending |
+| Drivers & protocols | ~78% | KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster drivers + bind API + portal UI + persistence; Casambi (closed BLE) + intercom/camera subsystem pending |
 | Native migration engine | ~55% | routing proven; native engine fronts real KNX/MQTT/Modbus, bound devices route native |
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
@@ -66,11 +66,13 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       now fronts real bus stacks; bound devices route to a driver, unbound use the
       in-process model (`@supreme/protocols`)
 - [~] Real first-party adapter code — **KNXnet/IP**, **MQTT** (Zigbee2MQTT/Tasmota),
-      **Modbus TCP**, **Matter** (cluster codec + driver), **native Zigbee** (ZCL via
-      zigbee-herdsman), and **DALI** (IEC 62386: address-byte framing + logarithmic
-      dimming curve + DT8 colour temperature) land as real drivers (each tested vs a
-      fake bus / embedded broker / in-process server); Casambi (proprietary BLE mesh —
-      needs official Cloud-API access) is the notable remaining bus
+      **Modbus TCP**, **Matter**, **native Zigbee** (ZCL via zigbee-herdsman), **DALI**
+      (IEC 62386), **AVR** (Denon/Marantz IP — onoff + media over real TCP), and
+      **CoolMasterNet HVAC** (VRF/VRV — onoff + climate over real TCP) land as real
+      drivers (each tested vs a fake bus / embedded broker / in-process TCP server);
+      Casambi (proprietary BLE — needs official Cloud-API access) is the notable
+      remaining bus. SIP (intercom) + RTSP (camera streaming) are a different shape —
+      not capability-control — and belong in an intercom/camera subsystem
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
       re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/

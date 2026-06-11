@@ -17,6 +17,8 @@ import {
   MatterProtocolDriver,
   ZigbeeProtocolDriver,
   DaliProtocolDriver,
+  AvrProtocolDriver,
+  CoolMasterProtocolDriver,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
@@ -105,6 +107,14 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // DALI (IEC 62386): addressable architectural lighting over a USB DALI interface.
   if (config.daliPort) {
     nativeDrivers.push(new DaliProtocolDriver({ port: config.daliPort }));
+  }
+  // AVR (Denon/Marantz) IP control — receivers added by IP address at bind time.
+  if (config.avrEnabled) {
+    nativeDrivers.push(new AvrProtocolDriver());
+  }
+  // CoolMasterNet HVAC bridge — VRF/VRV indoor units over the CoolAutomation bridge.
+  if (config.coolMasterHost) {
+    nativeDrivers.push(new CoolMasterProtocolDriver({ host: config.coolMasterHost }));
   }
 
   const router = new RoutingBackendAdapter({
