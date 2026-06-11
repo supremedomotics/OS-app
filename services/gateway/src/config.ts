@@ -69,6 +69,8 @@ export interface GatewayConfig {
   avrEnabled: boolean;
   /** CoolMasterNet HVAC bridge host for the native CoolMaster driver; empty = not loaded. */
   coolMasterHost: string;
+  /** SIP registrar/server for the door-station driver; empty = not loaded. */
+  sipServer: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -115,6 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     daliPort: env.SUPREME_DALI_PORT ?? "",
     avrEnabled: env.SUPREME_AVR_ENABLED === "1" || env.SUPREME_AVR_ENABLED === "true",
     coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",
+    sipServer: env.SUPREME_SIP_SERVER ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

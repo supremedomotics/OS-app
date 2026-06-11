@@ -64,3 +64,9 @@ export {
   temperatureStateFromUnit,
   type CoolMasterUnit,
 } from "./coolmaster-codec.js";
+export {
+  SipProtocolDriver,
+  type SipDriverOptions,
+  type SipDoorStation,
+  type SipRingEvent,
+} from "./sip-driver.js";

@@ -53,6 +53,8 @@ services:
       SUPREME_AVR_ENABLED: ${SUPREME_AVR_ENABLED:-0}
       # CoolMasterNet HVAC bridge host (VRF/VRV control).
       SUPREME_COOLMASTER_HOST: ${SUPREME_COOLMASTER_HOST:-}
+      # SIP door stations — door release + ring (needs a SIP UA subsystem).
+      SUPREME_SIP_SERVER: ${SUPREME_SIP_SERVER:-}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}

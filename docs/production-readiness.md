@@ -71,8 +71,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       **CoolMasterNet HVAC** (VRF/VRV — onoff + climate over real TCP) land as real
       drivers (each tested vs a fake bus / embedded broker / in-process TCP server);
       Casambi (proprietary BLE — needs official Cloud-API access) is the notable
-      remaining bus. SIP (intercom) + RTSP (camera streaming) are a different shape —
-      not capability-control — and belong in an intercom/camera subsystem
+      remaining bus. **SIP door stations** map door-release→lock + ring→sensor (UA is a
+      seam); RTSP camera streaming is a different shape (a stream source, not
+      capability-control) and belongs in a camera/media subsystem
 - [~] Real protocol commissioning — bind API (`POST /v1/commissioning/bind`) places a
       commissioned device on a real bus; `ProtocolBinding`s persisted (Postgres) and
       re-bound on boot; installer-portal **Bus Binding** page wires devices to KNX/
