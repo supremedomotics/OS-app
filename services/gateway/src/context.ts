@@ -117,6 +117,8 @@ export class AppContext {
   private readonly deps: AppDeps;
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
+  /** Last value seen per event-sensor (deviceId:measure) for rising-edge detection. */
+  private readonly lastEventValue = new Map<string, number>();
 
   private constructor(readonly config: GatewayConfig, deps: AppDeps = {}) {
     this.deps = deps;
@@ -300,6 +302,7 @@ export class AppContext {
     // in-process today, cross-process under NATS.
     await this.bus.publish(subjects.deviceState(this.homeId), event);
     if (!this.ready) return;
+    await this.maybeNotifyEvent(event);
     await this.automations.onDeviceState({
       deviceId: event.deviceId,
       capability: event.capability,
@@ -312,6 +315,32 @@ export class AppContext {
         event.state,
       );
     }
+  }
+
+  /**
+   * Turn fundamental "event" sensors into notifications on their rising edge (§13).
+   * A SIP door station emits a `ring` sensor; leak/smoke detectors emit theirs. These
+   * fire a broadcast notification — which fans out over WSS and (when enabled) push —
+   * without the homeowner having to author an automation. Edge-triggered so a sensor
+   * that holds its value doesn't spam.
+   */
+  private async maybeNotifyEvent(event: BackendStateEvent): Promise<void> {
+    if (event.state.kind !== "sensor") return;
+    const spec = EVENT_NOTIFICATIONS[event.state.measure];
+    if (!spec) return;
+    const key = `${event.deviceId}:${event.state.measure}`;
+    const prev = this.lastEventValue.get(key) ?? 0;
+    this.lastEventValue.set(key, event.state.value);
+    if (!(event.state.value > 0 && prev <= 0)) return; // rising edge only
+    const device = await this.home.getDevice(event.deviceId);
+    await this.notifications.create({
+      homeId: this.homeId,
+      userId: null,
+      level: spec.level,
+      title: device?.name ?? spec.title,
+      body: spec.body,
+      context: { deviceId: event.deviceId, event: event.state.measure },
+    });
   }
 
   grantsFor(userId: UserId): Promise<Grant[]> {
@@ -343,6 +372,16 @@ export class AppContext {
     await this.presence.close();
   }
 }
+
+/** Event-sensor measures that auto-raise a notification on their rising edge (§13). */
+const EVENT_NOTIFICATIONS: Record<
+  string,
+  { level: Notification["level"]; title: string; body: string }
+> = {
+  ring: { level: "warning", title: "Door station", body: "Someone is at the door" },
+  leak: { level: "critical", title: "Leak detector", body: "Water leak detected" },
+  smoke: { level: "critical", title: "Smoke detector", body: "Smoke detected" },
+};
 
 function buildSil(config: GatewayConfig): SupremeIntegrationLayer {
   if (config.backend === "ha") {
