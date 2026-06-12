@@ -555,9 +555,66 @@ function HlsPlayer({ url }: { url: string }) {
   return <video ref={ref} controls autoPlay muted playsInline style={{ width: "100%", borderRadius: 8, background: "#000" }} />;
 }
 
+/**
+ * Low-latency WebRTC player via WHEP (WebRTC-HTTP Egress Protocol): create a
+ * recvonly peer connection, POST the SDP offer to the stream engine's WebRTC
+ * endpoint, apply the answer. Sub-second latency — ideal for door cameras. Calls
+ * onError so the caller can fall back to HLS.
+ */
+function WebRtcPlayer({ url, onError }: { url: string; onError: () => void }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    let cancelled = false;
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.ontrack = (e) => {
+      if (e.streams[0]) video.srcObject = e.streams[0];
+    };
+    (async () => {
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        // Non-trickle WHEP: wait for ICE gathering, then exchange SDP once.
+        await new Promise<void>((resolve) => {
+          if (pc.iceGatheringState === "complete") return resolve();
+          const check = () => {
+            if (pc.iceGatheringState === "complete") {
+              pc.removeEventListener("icegatheringstatechange", check);
+              resolve();
+            }
+          };
+          pc.addEventListener("icegatheringstatechange", check);
+          setTimeout(resolve, 2000); // fall through if gathering stalls
+        });
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/sdp" },
+          body: pc.localDescription?.sdp ?? "",
+        });
+        if (!res.ok) throw new Error(`WHEP ${res.status}`);
+        const answer = await res.text();
+        if (cancelled) return;
+        await pc.setRemoteDescription({ type: "answer", sdp: answer });
+      } catch {
+        if (!cancelled) onError();
+      }
+    })();
+    return () => {
+      cancelled = true;
+      pc.close();
+    };
+  }, [url, onError]);
+  return <video ref={ref} autoPlay muted playsInline controls style={{ width: "100%", borderRadius: 8, background: "#000" }} />;
+}
+
 export function Cameras() {
   const [cameras, setCameras] = useState<Camera[]>([]);
-  const [active, setActive] = useState<{ id: string; hls: string | null } | null>(null);
+  const [active, setActive] = useState<
+    { id: string; webrtc: string | null; hls: string | null; mode: "webrtc" | "hls" } | null
+  >(null);
   const [name, setName] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
   const [snapshotUrl, setSnapshotUrl] = useState("");
@@ -591,8 +648,10 @@ export function Cameras() {
     setError(null);
     try {
       const { streams } = await client.cameraStream(cam.id);
+      const webrtc = streams.find((s) => s.kind === "webrtc")?.url ?? null;
       const hls = streams.find((s) => s.kind === "hls")?.url ?? null;
-      setActive({ id: cam.id, hls });
+      // Prefer low-latency WebRTC; fall back to HLS automatically on failure.
+      setActive({ id: cam.id, webrtc, hls, mode: webrtc ? "webrtc" : "hls" });
     } catch (e) {
       setError(e instanceof Error ? e.message : "no stream available");
     }
@@ -626,11 +685,40 @@ export function Cameras() {
         </button>
       </div>
 
-      {active?.hls && (
+      {active && (active.webrtc || active.hls) && (
         <div className="card" style={{ marginTop: 16 }}>
-          <strong>{cameras.find((c) => c.id === active.id)?.name ?? "Live"}</strong>
+          <div className="row">
+            <strong>{cameras.find((c) => c.id === active.id)?.name ?? "Live"}</strong>
+            <span>
+              <span
+                className="tag"
+                style={{ color: active.mode === "webrtc" ? "var(--aureon-color-status-good)" : undefined }}
+              >
+                {active.mode === "webrtc" ? "WebRTC · low latency" : "HLS · compatible"}
+              </span>
+              {active.webrtc && active.hls && (
+                <button
+                  style={{ marginLeft: 8 }}
+                  onClick={() =>
+                    setActive((a) => (a ? { ...a, mode: a.mode === "webrtc" ? "hls" : "webrtc" } : a))
+                  }
+                >
+                  {active.mode === "webrtc" ? "Use HLS" : "Use WebRTC"}
+                </button>
+              )}
+            </span>
+          </div>
           <div style={{ marginTop: 8 }}>
-            <HlsPlayer url={active.hls} />
+            {active.mode === "webrtc" && active.webrtc ? (
+              <WebRtcPlayer
+                url={active.webrtc}
+                onError={() => setActive((a) => (a ? { ...a, mode: "hls" } : a))}
+              />
+            ) : active.hls ? (
+              <HlsPlayer url={active.hls} />
+            ) : (
+              <p className="muted">No playable stream.</p>
+            )}
           </div>
         </div>
       )}

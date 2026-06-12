@@ -12,6 +12,8 @@ dependencies:
     sdk: flutter
   flutter_riverpod: ^2.6.1
   video_player: ^2.9.2
+  flutter_webrtc: ^0.12.5
+  http: ^1.2.2
   aureon_flutter:
     path: ../../packages/aureon-flutter
   supreme_sdk:
