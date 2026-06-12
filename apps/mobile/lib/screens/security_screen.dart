@@ -1,8 +1,10 @@
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import 'camera_player.dart';
 
 /// Security panel (§11.1): mode chips + slide-to-confirm arm/disarm for sensitive
 /// transitions, with a prominent triggered state.
@@ -21,7 +23,8 @@ class SecurityScreen extends ConsumerWidget {
           data: (s) {
             final mode = s['mode'] as String;
             final triggered = s['triggered'] as bool? ?? false;
-            return Column(
+            return SingleChildScrollView(
+                child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Security', style: Theme.of(context).textTheme.titleLarge),
@@ -76,8 +79,10 @@ class SecurityScreen extends ConsumerWidget {
                       ref.invalidate(securityProvider);
                     },
                   ),
+                const SizedBox(height: AureonSpacing.xl),
+                const _CamerasSection(),
               ],
-            );
+            ));
           },
         ),
       ),
@@ -90,4 +95,91 @@ class SecurityScreen extends ConsumerWidget {
         'armed_night' => 'Armed · Night',
         _ => 'Disarmed',
       };
+}
+
+/// Camera strip on the security screen — snapshot tiles that open a live HLS view.
+class _CamerasSection extends ConsumerWidget {
+  const _CamerasSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cameras = ref.watch(camerasProvider);
+    return cameras.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (list) {
+        if (list.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Cameras', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: AureonSpacing.sm),
+            SizedBox(
+              height: 132,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: list.length,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(width: AureonSpacing.sm),
+                itemBuilder: (context, i) => _CameraTile(camera: list[i]),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CameraTile extends StatelessWidget {
+  const _CameraTile({required this.camera});
+
+  final Camera camera;
+
+  @override
+  Widget build(BuildContext context) {
+    final playable = camera.streamUrl != null;
+    return GestureDetector(
+      onTap: playable
+          ? () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => CameraPlayerScreen(camera: camera),
+                ),
+              )
+          : null,
+      child: SizedBox(
+        width: 200,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(AureonRadius.md),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Container(color: Colors.black),
+                    if (camera.snapshotUrl != null)
+                      Image.network(camera.snapshotUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const SizedBox()),
+                    if (playable)
+                      const Center(
+                        child: Icon(Icons.play_circle_fill,
+                            color: Colors.white70, size: 40),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: AureonSpacing.xs),
+            Text(camera.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge),
+          ],
+        ),
+      ),
+    );
+  }
 }

@@ -92,6 +92,42 @@ class Scene {
       );
 }
 
+class Camera {
+  Camera({
+    required this.id,
+    required this.name,
+    required this.roomId,
+    required this.snapshotUrl,
+    required this.streamUrl,
+  });
+  final String id;
+  final String name;
+  final String? roomId;
+  final String? snapshotUrl;
+  final String? streamUrl;
+
+  factory Camera.fromJson(Map<String, dynamic> json) => Camera(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        roomId: json['roomId'] as String?,
+        snapshotUrl: json['snapshotUrl'] as String?,
+        streamUrl: json['streamUrl'] as String?,
+      );
+}
+
+class CameraStream {
+  CameraStream({required this.kind, required this.url});
+
+  /// "hls" | "webrtc" | "rtsp".
+  final String kind;
+  final String url;
+
+  factory CameraStream.fromJson(Map<String, dynamic> json) => CameraStream(
+        kind: json['kind'] as String,
+        url: json['url'] as String,
+      );
+}
+
 class NotificationItem {
   NotificationItem({
     required this.id,

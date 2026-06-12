@@ -3,6 +3,7 @@ import { client } from "./api.js";
 import {
   BackupRestore,
   Bindings,
+  Cameras,
   Commissioning,
   Diagnostics,
   DriverStore,
@@ -15,6 +16,7 @@ type Tab =
   | "drivers"
   | "commission"
   | "bindings"
+  | "cameras"
   | "diagnostics"
   | "backup"
   | "license"
@@ -25,6 +27,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "drivers", label: "Driver Store" },
   { id: "commission", label: "Commissioning" },
   { id: "bindings", label: "Bus Binding" },
+  { id: "cameras", label: "Cameras" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "backup", label: "Backup / Restore" },
   { id: "license", label: "Licensing" },
@@ -56,6 +59,7 @@ export function App() {
         {tab === "drivers" && <DriverStore />}
         {tab === "commission" && <Commissioning />}
         {tab === "bindings" && <Bindings />}
+        {tab === "cameras" && <Cameras />}
         {tab === "diagnostics" && <Diagnostics />}
         {tab === "backup" && <BackupRestore />}
         {tab === "license" && <Licensing />}

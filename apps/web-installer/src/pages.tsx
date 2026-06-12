@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Hls from "hls.js";
 import type {
   CatalogEntry,
   DiagnosticsReport,
@@ -521,6 +522,142 @@ export function Bindings() {
           </div>
         );
       })}
+    </section>
+  );
+}
+
+/**
+ * Cameras (§11.1): register view-only cameras with their RTSP/snapshot sources, then
+ * play live video. RTSP isn't browser-playable, so the hub transcodes it; the portal
+ * plays the resolved HLS stream via hls.js (native HLS on Safari).
+ */
+type Camera = { id: string; name: string; roomId: string | null; snapshotUrl: string | null; streamUrl: string | null };
+
+function HlsPlayer({ url }: { url: string }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    // Safari plays HLS natively; elsewhere attach hls.js.
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = url;
+      return;
+    }
+    if (!Hls.isSupported()) {
+      video.src = url; // last resort
+      return;
+    }
+    const hls = new Hls({ lowLatencyMode: true });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    return () => hls.destroy();
+  }, [url]);
+  return <video ref={ref} controls autoPlay muted playsInline style={{ width: "100%", borderRadius: 8, background: "#000" }} />;
+}
+
+export function Cameras() {
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [active, setActive] = useState<{ id: string; hls: string | null } | null>(null);
+  const [name, setName] = useState("");
+  const [streamUrl, setStreamUrl] = useState("");
+  const [snapshotUrl, setSnapshotUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function refresh() {
+    setCameras((await client.cameras()).cameras as Camera[]);
+  }
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function register() {
+    setError(null);
+    try {
+      await client.registerCamera({
+        name,
+        streamUrl: streamUrl || undefined,
+        snapshotUrl: snapshotUrl || undefined,
+      });
+      setName("");
+      setStreamUrl("");
+      setSnapshotUrl("");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "registration failed");
+    }
+  }
+
+  async function play(cam: Camera) {
+    setError(null);
+    try {
+      const { streams } = await client.cameraStream(cam.id);
+      const hls = streams.find((s) => s.kind === "hls")?.url ?? null;
+      setActive({ id: cam.id, hls });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "no stream available");
+    }
+  }
+
+  return (
+    <section>
+      <h2>Cameras</h2>
+      <p className="muted">
+        Register a camera with its RTSP source; the hub republishes it as browser-playable
+        HLS/WebRTC. RTSP is never sent to the browser directly.
+      </p>
+      {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
+
+      <div className="card">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Camera name (e.g. Front Door)" />
+        <input
+          value={streamUrl}
+          onChange={(e) => setStreamUrl(e.target.value)}
+          placeholder="RTSP source e.g. rtsp://10.0.0.5:554/h264"
+          style={{ marginTop: 8 }}
+        />
+        <input
+          value={snapshotUrl}
+          onChange={(e) => setSnapshotUrl(e.target.value)}
+          placeholder="Snapshot URL (optional) e.g. http://10.0.0.5/snap.jpg"
+          style={{ marginTop: 8 }}
+        />
+        <button className="primary" style={{ marginTop: 8 }} disabled={!name} onClick={register}>
+          Register camera
+        </button>
+      </div>
+
+      {active?.hls && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <strong>{cameras.find((c) => c.id === active.id)?.name ?? "Live"}</strong>
+          <div style={{ marginTop: 8 }}>
+            <HlsPlayer url={active.hls} />
+          </div>
+        </div>
+      )}
+
+      {cameras.length === 0 && <p className="muted">No cameras registered yet.</p>}
+      {cameras.map((c) => (
+        <div className="card row" key={c.id}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            {c.snapshotUrl ? (
+              <img
+                src={c.snapshotUrl}
+                alt={c.name}
+                style={{ width: 96, height: 54, objectFit: "cover", borderRadius: 6, background: "#000" }}
+              />
+            ) : (
+              <div style={{ width: 96, height: 54, borderRadius: 6, background: "#000" }} />
+            )}
+            <div>
+              <strong>{c.name}</strong>
+              <div className="muted">{c.streamUrl ?? "no source configured"}</div>
+            </div>
+          </div>
+          <button onClick={() => play(c)} disabled={!c.streamUrl}>
+            Live view
+          </button>
+        </div>
+      ))}
     </section>
   );
 }

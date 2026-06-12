@@ -50,6 +50,11 @@ final securityProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   return ref.watch(clientProvider).securityState();
 });
 
+/// Cameras registered on the home (§11.1).
+final camerasProvider = FutureProvider<List<Camera>>((ref) async {
+  return ref.watch(clientProvider).cameras();
+});
+
 /// Per-measure energy summary for the home.
 final energyProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   return ref.watch(clientProvider).energySummary();

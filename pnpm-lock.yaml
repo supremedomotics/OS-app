@@ -38,6 +38,9 @@ importers:
       '@supreme/sdk':
         specifier: workspace:*
         version: link:../../packages/supreme-sdk-ts
+      hls.js:
+        specifier: ^1.5.20
+        version: 1.6.16
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -2116,6 +2119,9 @@ packages:
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
 
+  hls.js@1.6.16:
+    resolution: {integrity: sha512-VSIRpLfRwlAAdGL4wiTucx2ScRipo0ed1FBatWkyt832jC4CReKstga6yIhYVwGu9LOBjuX9wzmRMeQdBJtzEA==}
+
   hyperid@3.3.0:
     resolution: {integrity: sha512-7qhCVT4MJIoEsNcbhglhdmBKb09QtcmJNiIQGq7js/Khf5FtQQ9bzcAuloeqBeee7XD7JqDeve9KNlQya5tSGQ==}
 
@@ -3960,6 +3966,8 @@ snapshots:
   helmet@8.2.0: {}
 
   help-me@5.0.0: {}
+
+  hls.js@1.6.16: {}
 
   hyperid@3.3.0:
     dependencies:

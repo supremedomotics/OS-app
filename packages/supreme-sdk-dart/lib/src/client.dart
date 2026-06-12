@@ -228,6 +228,28 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  // ── Cameras (§11.1) ──────────────────────────────────────────────────────────
+  Future<List<Camera>> cameras() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/cameras'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['cameras'] as List<dynamic>)
+        .map((c) => Camera.fromJson(c as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Resolve a camera's RTSP source into client-playable HLS/WebRTC streams.
+  Future<List<CameraStream>> cameraStream(String id) async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/cameras/$id/stream'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['streams'] as List<dynamic>)
+        .map((s) => CameraStream.fromJson(s as Map<String, dynamic>))
+        .toList();
+  }
+
   void _ensureOk(http.Response res) {
     if (res.statusCode >= 400) {
       throw SupremeApiException(res.statusCode, res.body);

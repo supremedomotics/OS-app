@@ -127,7 +127,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] Camera streaming done right — view-only `camera` devices carry an RTSP source;
       `@supreme/cameras` resolves it to client-playable HLS/WebRTC through the bundled
       go2rtc engine (`/v1/cameras` register/list, `/v1/cameras/:id/stream`); clients
-      never get a raw rtsp://. Player UI in the Flutter/portal apps is the remaining piece
+      never get a raw rtsp://. **Player UI shipped**: Flutter homeowner (snapshot tiles
+      on the security screen → live HLS via `video_player`) + installer portal (Cameras
+      tab: register + snapshot + HLS via hls.js)
 - [x] Flutter app compiles + analyzes; widget smoke test
 - [ ] App-store build/signing pipeline (iOS/Android) + internal installer track
 - [ ] Push notifications (with on-LAN degrade)
