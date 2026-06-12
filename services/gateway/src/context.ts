@@ -3,7 +3,15 @@ import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer
 import { IdentityService, type IIdentityStore, type ISessionStore } from "@supreme/identity";
 import { HomeService, seedDemoHome, type IHomeStore } from "@supreme/home";
 import { SceneService, type ISceneStore } from "@supreme/scenes";
-import { NotificationService, type INotificationStore } from "@supreme/notifications";
+import {
+  NotificationService,
+  PushService,
+  RelayPushProvider,
+  InMemoryPushTokenStore,
+  type INotificationStore,
+  type IPushProvider,
+  type IPushTokenStore,
+} from "@supreme/notifications";
 import {
   InMemoryGrantStore,
   PolicyEngine,
@@ -56,6 +64,9 @@ export interface AppDeps {
   automationStore?: IAutomationStore;
   securityStore?: ISecurityStore;
   protocolBindingStore?: IProtocolBindingStore;
+  pushTokenStore?: IPushTokenStore;
+  /** Override push providers (tests); otherwise selected from config. */
+  pushProviders?: IPushProvider[];
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
   db?: SqlDb;
   /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
@@ -80,6 +91,10 @@ export class AppContext {
   readonly home: HomeService;
   readonly scenes: SceneService;
   readonly notifications: NotificationService;
+  /** Push delivery (§13): forwards notifications to registered device tokens. */
+  readonly push: PushService;
+  /** Registered device push tokens (persisted when a DB is configured). */
+  readonly pushTokens: IPushTokenStore;
   /** Installer/admin surfaces (drivers, commissioning, diagnostics, backup, licensing). */
   installer!: InstallerServices;
   /** Intelligence & scale (§16): automations, energy analytics, audit, AI assistant. */
@@ -117,6 +132,14 @@ export class AppContext {
     this.home = new HomeService(this.sil, deps.homeStore);
     this.scenes = new SceneService(this.sil, deps.sceneStore);
     this.notifications = new NotificationService(deps.notificationStore);
+    // Push delivery (§13): cloud relay when configured, otherwise WSS-only (no provider).
+    this.pushTokens = deps.pushTokenStore ?? new InMemoryPushTokenStore();
+    const pushProviders: IPushProvider[] =
+      deps.pushProviders ??
+      (config.pushRelayUrl
+        ? [new RelayPushProvider({ url: config.pushRelayUrl, authToken: config.pushRelayToken || undefined })]
+        : []);
+    this.push = new PushService(this.pushTokens, pushProviders);
     this.grants = deps.grantStore ?? new InMemoryGrantStore();
     this.ai = new AssistantService({ modelUrl: config.aiUrl || undefined });
     this.security = new SecurityService({
@@ -146,9 +169,11 @@ export class AppContext {
     this.sil.subscribe((event) => {
       void this.onBackendState(event);
     });
-    // Bridge created notifications onto the event bus (cross-process fan-out).
+    // Bridge created notifications onto the event bus (cross-process WSS fan-out) and,
+    // additionally, to push for backgrounded/offline devices (no-op without a provider).
     this.notifications.onNotification((n) => {
       void this.bus.publish(subjects.notification(this.homeId), n);
+      void this.push.deliver(n);
     });
   }
 

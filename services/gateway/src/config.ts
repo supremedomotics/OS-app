@@ -77,6 +77,10 @@ export interface GatewayConfig {
   streamEngine: string;
   /** Stream engine admin API for dynamic source registration; empty = config-driven. */
   streamApiUrl: string;
+  /** Cloud push-relay URL; empty = push disabled (WSS-only delivery). */
+  pushRelayUrl: string;
+  /** Bearer token the cloud push relay authenticates the hub with. */
+  pushRelayToken: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -127,6 +131,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     streamBaseUrl: env.SUPREME_STREAM_BASE_URL ?? "",
     streamEngine: env.SUPREME_STREAM_ENGINE ?? "go2rtc",
     streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",
+    pushRelayUrl: secret(env, "SUPREME_PUSH_RELAY_URL") ?? "",
+    pushRelayToken: secret(env, "SUPREME_PUSH_RELAY_TOKEN") ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

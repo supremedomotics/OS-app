@@ -165,3 +165,13 @@ export type SetCameraStreamRequest = z.infer<typeof SetCameraStreamRequest>;
 
 export const CameraResponse = z.object({ camera: CameraView });
 export type CameraResponse = z.infer<typeof CameraResponse>;
+
+/** Register this client's push token so it can receive notifications while backgrounded. */
+export const RegisterPushTokenRequest = z.object({
+  platform: z.enum(["fcm", "apns", "webpush"]),
+  token: z.string().min(1),
+});
+export type RegisterPushTokenRequest = z.infer<typeof RegisterPushTokenRequest>;
+
+export const PushTokenResponse = z.object({ registered: z.boolean(), pushEnabled: z.boolean() });
+export type PushTokenResponse = z.infer<typeof PushTokenResponse>;

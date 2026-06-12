@@ -250,6 +250,29 @@ class SupremeClient {
         .toList();
   }
 
+  // ── Push notifications (§13) ─────────────────────────────────────────────────
+  /// Register this device's push token (platform: "fcm" | "apns" | "webpush") so
+  /// notifications reach it while the app is backgrounded. Returns whether the hub has
+  /// push delivery enabled (false = on-LAN WSS only).
+  Future<bool> registerPushToken(String platform, String token) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/push/tokens'),
+      headers: _authHeaders,
+      body: jsonEncode({'platform': platform, 'token': token}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['pushEnabled'] as bool? ??
+        false;
+  }
+
+  Future<void> unregisterPushToken(String token) async {
+    final res = await _http.delete(
+      Uri.parse('$baseUrl/v1/push/tokens/${Uri.encodeComponent(token)}'),
+      headers: _authHeaders,
+    );
+    _ensureOk(res);
+  }
+
   void _ensureOk(http.Response res) {
     if (res.statusCode >= 400) {
       throw SupremeApiException(res.statusCode, res.body);

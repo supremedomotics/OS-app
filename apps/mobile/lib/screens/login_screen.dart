@@ -29,6 +29,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final client = ref.read(clientProvider);
       final ok = await client.login(_email.text, _password.text);
       if (ok) {
+        await registerPushIfAvailable(ref);
         await widget.onAuthenticated();
       } else {
         setState(() => _error = 'Two-factor authentication required');

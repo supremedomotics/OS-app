@@ -134,7 +134,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       `RTCPeerConnection`, falling back to hls.js)
 - [x] Flutter app compiles + analyzes; widget smoke test
 - [ ] App-store build/signing pipeline (iOS/Android) + internal installer track
-- [ ] Push notifications (with on-LAN degrade)
+- [x] Push notifications (with on-LAN degrade) — token registration (`/v1/push/tokens`,
+      persisted), a `PushService` that delivers each notification to registered device
+      tokens through a provider seam (cloud relay holds FCM/APNs creds), and WSS stays
+      the degrade path when no provider is configured. Client token source
+      (firebase_messaging/APNs/service worker) is the remaining platform wiring
 - [ ] Offline/error UX depth; reconnect/backoff on WSS
 - [ ] Golden tests for Aureon widgets; accessibility + i18n
 - [ ] Web homeowner app (only installer portal exists today)

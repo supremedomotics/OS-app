@@ -25,6 +25,8 @@ import {
   type CameraStreamResponse,
   type RegisterCameraRequest,
   type SetCameraStreamRequest,
+  type RegisterPushTokenRequest,
+  type PushTokenResponse,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -159,6 +161,15 @@ export class SupremeClient {
   /** Resolve a camera's RTSP source into client-playable HLS/WebRTC streams. */
   cameraStream(id: string): Promise<CameraStreamResponse> {
     return this.request("GET", `/v1/cameras/${id}/stream`) as Promise<CameraStreamResponse>;
+  }
+
+  // ── Push notifications (§13) ─────────────────────────────────────────────────
+  /** Register this device's push token so notifications reach it while backgrounded. */
+  registerPushToken(input: RegisterPushTokenRequest): Promise<PushTokenResponse> {
+    return this.request("POST", "/v1/push/tokens", input) as Promise<PushTokenResponse>;
+  }
+  unregisterPushToken(token: string): Promise<void> {
+    return this.request("DELETE", `/v1/push/tokens/${encodeURIComponent(token)}`) as Promise<void>;
   }
 
   diagnostics(): Promise<DiagnosticsReport> {

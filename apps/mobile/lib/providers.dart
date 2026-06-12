@@ -55,6 +55,24 @@ final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();
 });
 
+/// The device's push token + platform, supplied by the platform push SDK
+/// (firebase_messaging on iOS/Android, the service-worker subscription on web). Null
+/// until that SDK is wired — the hub-side pipeline + registration are already in place.
+final pushTokenProvider =
+    Provider<({String platform, String token})?>((ref) => null);
+
+/// Register this device's push token with the hub after login, when one is available
+/// (§13). Push is optional and degrades to on-LAN WSS delivery; failures never block.
+Future<void> registerPushIfAvailable(WidgetRef ref) async {
+  final t = ref.read(pushTokenProvider);
+  if (t == null) return;
+  try {
+    await ref.read(clientProvider).registerPushToken(t.platform, t.token);
+  } catch (_) {
+    // Push delivery is best-effort; a registration failure must not block sign-in.
+  }
+}
+
 /// Per-measure energy summary for the home.
 final energyProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   return ref.watch(clientProvider).energySummary();

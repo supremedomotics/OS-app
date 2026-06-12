@@ -60,6 +60,10 @@ services:
       SUPREME_STREAM_BASE_URL: ${SUPREME_STREAM_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}/stream}
       SUPREME_STREAM_ENGINE: ${SUPREME_STREAM_ENGINE:-go2rtc}
       SUPREME_STREAM_API_URL: ${SUPREME_STREAM_API_URL:-http://streamer:1984}
+      # Push notifications (§13) — OPTIONAL. The cloud relay holds the FCM/APNs creds;
+      # empty = push off, notifications still deliver over WSS (on-LAN degrade).
+      SUPREME_PUSH_RELAY_URL: ${SUPREME_PUSH_RELAY_URL:-}
+      SUPREME_PUSH_RELAY_TOKEN: ${SUPREME_PUSH_RELAY_TOKEN:-}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}
