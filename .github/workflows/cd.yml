@@ -1,0 +1,84 @@
+name: CD — build, sign & publish
+
+# Release pipeline (§14): on a version tag, build + test the affected graph, build and
+# push the hub/cloud images, and publish a SIGNED OTA manifest. Image push + OTA signing
+# require repository secrets (registry creds + the OTA Ed25519 private key) and are
+# guarded so forks/dry-runs don't attempt them.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.4.0)"
+        required: true
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm build
+      - run: pnpm test
+
+  images:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    strategy:
+      matrix:
+        include:
+          - { name: gateway, dockerfile: infra/hub-compose/gateway.Dockerfile }
+          - { name: relay, dockerfile: infra/cloud-compose/relay.Dockerfile }
+          - { name: fleet, dockerfile: infra/cloud-compose/fleet.Dockerfile }
+          - { name: web-homeowner, dockerfile: infra/hub-compose/web-homeowner.Dockerfile }
+          - { name: web-installer, dockerfile: infra/hub-compose/web-installer.Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ github.ref_name }}
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:latest
+
+  ota-manifest:
+    needs: images
+    runs-on: ubuntu-latest
+    if: ${{ secrets.OTA_SIGNING_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile=false
+      # Sign a release manifest with the OTA Ed25519 key and upload it as an artifact;
+      # publishing it to the OTA channel/CDN is environment-specific (staged rollout).
+      - env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+          VERSION: ${{ github.ref_name }}
+        run: pnpm --silent --filter @supreme/tools-ota run sign > release-manifest.json
+      - uses: actions/upload-artifact@v4
+        with: { name: ota-manifest, path: release-manifest.json }

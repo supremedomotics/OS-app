@@ -3,6 +3,7 @@ import { createHubContext } from "./bootstrap.js";
 import { buildServer } from "./server.js";
 import { initTracing } from "./tracing.js";
 import { RelayTunnelClient } from "./relay-tunnel.js";
+import { OtaChecker } from "./ota.js";
 
 /**
  * Hub entry point for the Supreme API Gateway. Boots the Supreme plane (identity,
@@ -51,6 +52,26 @@ async function main(): Promise<void> {
     });
     tunnel.start();
     app.log.info({ relay: config.relayUrl }, "remote-access tunnel started");
+  }
+
+  // OTA (§14): periodically check the signed release channel and log when an update is
+  // available. Detection only — the OS updater applies it (staged + rollback-safe).
+  if (config.otaUrl && config.otaPublicKey) {
+    const ota = new OtaChecker({
+      url: config.otaUrl,
+      publicKeyPem: config.otaPublicKey,
+      currentVersion: config.hubVersion,
+    });
+    const checkOta = () =>
+      void ota
+        .check()
+        .then((r) => {
+          if (r.updateAvailable) app.log.info({ latest: r.latest?.version }, "hub update available");
+        })
+        .catch((err) => app.log.warn({ err: (err as Error).message }, "ota check failed"));
+    checkOta();
+    const otaTimer = setInterval(checkOta, 6 * 60 * 60 * 1000);
+    otaTimer.unref();
   }
 }
 

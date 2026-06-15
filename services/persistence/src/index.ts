@@ -15,6 +15,7 @@ import type { IAutomationStore } from "@supreme/automations";
 import type { ISecurityStore } from "@supreme/security";
 import type { IProtocolBindingStore } from "@supreme/integration-layer";
 import type { IPushTokenStore } from "@supreme/notifications";
+import type { IMigrationPolicyStore } from "@supreme/integration-layer";
 import { migrate } from "./migrate.js";
 import { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
 import { IdentityRepo } from "./repositories/identity-repo.js";
@@ -28,6 +29,7 @@ import { SessionRepo } from "./repositories/session-repo.js";
 import { SecurityRepo } from "./repositories/security-repo.js";
 import { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 import { PushTokenRepo } from "./repositories/push-token-repo.js";
+import { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -42,6 +44,7 @@ export { SessionRepo } from "./repositories/session-repo.js";
 export { SecurityRepo } from "./repositories/security-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
+export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 
 /** The full set of persisted stores, ready to inject into the domain services. */
 export interface PersistenceStores {
@@ -57,6 +60,7 @@ export interface PersistenceStores {
   security: ISecurityStore;
   protocolBindings: IProtocolBindingStore;
   pushTokens: IPushTokenStore;
+  migrationPolicy: IMigrationPolicyStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -73,6 +77,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     security: new SecurityRepo(db),
     protocolBindings: new ProtocolBindingRepo(db),
     pushTokens: new PushTokenRepo(db),
+    migrationPolicy: new MigrationPolicyRepo(db),
   };
 }
 

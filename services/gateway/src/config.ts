@@ -85,6 +85,10 @@ export interface GatewayConfig {
   relayUrl: string;
   /** Bearer token the hub presents to the relay's tunnel. */
   relayToken: string;
+  /** Signed OTA channel manifest URL; empty = no update checks. */
+  otaUrl: string;
+  /** Embedded OTA signing public key (PEM) to verify release manifests. */
+  otaPublicKey: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -139,6 +143,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     pushRelayToken: secret(env, "SUPREME_PUSH_RELAY_TOKEN") ?? "",
     relayUrl: env.SUPREME_RELAY_URL ?? "",
     relayToken: secret(env, "SUPREME_RELAY_TOKEN") ?? "",
+    otaUrl: env.SUPREME_OTA_URL ?? "",
+    otaPublicKey: secret(env, "SUPREME_OTA_PUBLIC_KEY") ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

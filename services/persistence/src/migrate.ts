@@ -16,6 +16,7 @@ const MIGRATIONS = [
   "0006_security_panel.sql",
   "0007_protocol_bindings.sql",
   "0008_device_clients.sql",
+  "0009_migration_policy.sql",
 ] as const;
 
 /**

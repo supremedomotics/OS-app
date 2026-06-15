@@ -9,6 +9,7 @@ import {
   SupremeNativeAdapter,
   type IBackendAdapter,
   type INativeProtocolDriver,
+  type IMigrationPolicyStore,
 } from "@supreme/integration-layer";
 import {
   MqttProtocolDriver,
@@ -42,6 +43,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // Fail closed: never boot a production hub with insecure defaults.
   assertSecureConfig(config);
   const deps: AppDeps = {};
+  let migrationStore: IMigrationPolicyStore | undefined;
 
   if (config.databaseUrl) {
     const stores = await createPersistence({ connectionString: config.databaseUrl });
@@ -56,6 +58,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.securityStore = stores.security;
     deps.protocolBindingStore = stores.protocolBindings;
     deps.pushTokenStore = stores.pushTokens;
+    migrationStore = stores.migrationPolicy;
     deps.db = stores.db;
   }
 
@@ -124,11 +127,14 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     nativeDrivers.push(new SipProtocolDriver({ server: config.sipServer }));
   }
 
+  // Restore persisted native-migration routing so migrated domains stay native on reboot.
+  const policy = new MigrationPolicy([], migrationStore);
+  await policy.hydrate();
   const router = new RoutingBackendAdapter({
     ha: haSide,
     native: new SupremeNativeAdapter({ drivers: nativeDrivers }),
     registry,
-    policy: new MigrationPolicy(),
+    policy,
   });
   deps.sil = new SupremeIntegrationLayer({ adapter: router, registry });
 

@@ -1,0 +1,19 @@
+# Supreme homeowner app delivery (§7). Store upload runs in CI only when signing
+# secrets are present (PLAY_SERVICE_ACCOUNT_JSON / APP_STORE_CONNECT_KEY).
+default_platform(:android)
+
+platform :android do
+  desc "Build + upload the Android app to the Play internal track"
+  lane :deploy do
+    sh("flutter", "build", "appbundle", "--release")
+    upload_to_play_store(track: "internal", aab: "../build/app/outputs/bundle/release/app-release.aab")
+  end
+end
+
+platform :ios do
+  desc "Build + upload the iOS app to TestFlight"
+  lane :deploy do
+    sh("flutter", "build", "ipa", "--release")
+    upload_to_testflight(ipa: "../build/ios/ipa/supreme_mobile.ipa")
+  end
+end

@@ -165,6 +165,21 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect((await fresh.list()).some((b) => b.deviceId === dev)).toBe(false);
   });
 
+  it("persists native-migration routing so a migrated domain stays native across a restart", async () => {
+    const { MigrationPolicy } = await import("@supreme/integration-layer");
+    // Migrate "light" to native through a policy backed by the store.
+    const policy = new MigrationPolicy([], stores.migrationPolicy);
+    policy.setEngine("light", "native");
+    policy.setEngine("climate", "ha");
+    await policy.flush();
+
+    // A fresh policy (simulating a reboot) hydrates and keeps light on native.
+    const afterReboot = new MigrationPolicy([], stores.migrationPolicy);
+    await afterReboot.hydrate();
+    expect(afterReboot.isNative("light")).toBe(true);
+    expect(afterReboot.isNative("climate")).toBe(false);
+  });
+
   it("persists notifications with read receipts", async () => {
     const notifications = new NotificationService(stores.notifications);
     const userId = newId("user") as UserId;

@@ -27,7 +27,7 @@ export {
   bindingKey,
 } from "./protocols/driver.js";
 export { RoutingBackendAdapter, type RoutingAdapterOptions } from "./routing-adapter.js";
-export { MigrationPolicy, type EngineKind } from "./migration.js";
+export { MigrationPolicy, type EngineKind, type IMigrationPolicyStore } from "./migration.js";
 export { applyCommand } from "./apply.js";
 export { HaAdapter, type HaTransport, type HaAdapterOptions } from "./ha/ha-adapter.js";
 export { HaWsTransport, type HaWsTransportOptions } from "./ha/ha-ws-transport.js";

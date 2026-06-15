@@ -1,0 +1,49 @@
+name: Clients — mobile & web build
+
+# Client delivery pipeline (§7, §14). Builds the Flutter homeowner app for Android/iOS
+# and the web apps. Store upload (Play/TestFlight) is via Fastlane and runs only when
+# the signing secrets are present (so forks/PRs just verify the build).
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch: {}
+
+jobs:
+  flutter:
+    runs-on: macos-14
+    defaults: { run: { working-directory: apps/mobile } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { flutter-version: "3.27.x", channel: stable }
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --release
+      - run: flutter build ios --release --no-codesign
+      # Store upload (signed) only when secrets are configured — see apps/mobile/fastlane.
+      - name: Deploy to stores (Fastlane)
+        if: ${{ env.HAS_STORE_SECRETS == 'true' }}
+        env:
+          HAS_STORE_SECRETS: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+        run: bundle exec fastlane deploy
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --filter @supreme/web-homeowner... run build
+      - run: pnpm --filter @supreme/web-installer... run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-bundles
+          path: |
+            apps/web-homeowner/dist
+            apps/web-installer/dist

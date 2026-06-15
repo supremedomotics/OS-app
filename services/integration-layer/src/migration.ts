@@ -9,12 +9,35 @@
  */
 export type EngineKind = "ha" | "native";
 
+/**
+ * Persistence seam (§4) so a domain migrated to native STAYS native across a hub
+ * restart — otherwise a reboot would silently route a migrated domain back to HA.
+ */
+export interface IMigrationPolicyStore {
+  loadNativeDomains(): Promise<string[]>;
+  setEngine(domain: string, engine: EngineKind): Promise<void>;
+}
+
 export class MigrationPolicy {
   /** domain → engine. Absent = default ("ha"). */
   private readonly engines = new Map<string, EngineKind>();
+  private readonly store?: IMigrationPolicyStore;
+  private lastWrite: Promise<void> = Promise.resolve();
 
-  constructor(initialNativeDomains: string[] = []) {
+  constructor(initialNativeDomains: string[] = [], store?: IMigrationPolicyStore) {
     for (const d of initialNativeDomains) this.engines.set(d, "native");
+    this.store = store;
+  }
+
+  /** Restore persisted native domains on boot (no-op without a store). */
+  async hydrate(): Promise<void> {
+    if (!this.store) return;
+    for (const domain of await this.store.loadNativeDomains()) this.engines.set(domain, "native");
+  }
+
+  /** Await the last persisted write (graceful shutdown / test determinism). */
+  async flush(): Promise<void> {
+    await this.lastWrite;
   }
 
   /** Note that a domain exists (so it appears in status even while on HA). */
@@ -32,6 +55,7 @@ export class MigrationPolicy {
 
   setEngine(domain: string, engine: EngineKind): void {
     this.engines.set(domain, engine);
+    if (this.store) this.lastWrite = this.store.setEngine(domain, engine).catch(() => {});
   }
 
   /** Current routing for all known domains. */
