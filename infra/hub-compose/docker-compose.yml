@@ -132,12 +132,24 @@ services:
     networks:
       - supreme-core
 
-  # Installer Portal (web). Static bundle served behind the TLS proxy. Talks to
-  # the Supreme API only (VITE_SUPREME_API_URL), never to any backend.
+  # Homeowner web app. The PRIMARY web UI, served at the edge root. Static bundle;
+  # talks to the Supreme API only (same-origin /v1), never to any backend.
+  homeowner:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/web-homeowner.Dockerfile
+    restart: unless-stopped
+    networks:
+      - supreme-edge
+
+  # Installer Portal (web). Static bundle served behind the TLS proxy under /installer/.
+  # Talks to the Supreme API only (VITE_SUPREME_API_URL), never to any backend.
   installer-portal:
     build:
       context: ../..
       dockerfile: infra/hub-compose/web-installer.Dockerfile
+      args:
+        VITE_BASE: /installer/
     restart: unless-stopped
     networks:
       - supreme-edge
@@ -161,6 +173,7 @@ services:
       - supreme-edge
     depends_on:
       - gateway
+      - homeowner
       - installer-portal
       - streamer
 

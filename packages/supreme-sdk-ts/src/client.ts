@@ -27,11 +27,17 @@ import {
   type SetCameraStreamRequest,
   type RegisterPushTokenRequest,
   type PushTokenResponse,
+  type SceneList,
+  type FavoriteList,
+  type NotificationList,
+  type SecurityStateResponse,
+  type EnergySummaryResponse,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
   DeviceId,
   DriverId,
+  FavoriteRef,
   License,
   ProtocolKind,
   RoomId,
@@ -111,6 +117,38 @@ export class SupremeClient {
   /** The core control verb — tap a light, set a level, etc. */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<CommandResponse> {
     return this.request("POST", `/v1/devices/${deviceId}/command`, { command }) as Promise<CommandResponse>;
+  }
+
+  // ── Homeowner surface (§11) ──────────────────────────────────────────────────
+  scenes(): Promise<SceneList> {
+    return this.request("GET", "/v1/scenes") as Promise<SceneList>;
+  }
+  activateScene(id: string): Promise<void> {
+    return this.request("POST", `/v1/scenes/${id}/activate`) as Promise<void>;
+  }
+  favorites(): Promise<FavoriteList> {
+    return this.request("GET", "/v1/favorites") as Promise<FavoriteList>;
+  }
+  setFavorite(ref: FavoriteRef, favorite: boolean): Promise<void> {
+    return this.request("PUT", "/v1/favorites", { ref, favorite }) as Promise<void>;
+  }
+  notifications(): Promise<NotificationList> {
+    return this.request("GET", "/v1/notifications") as Promise<NotificationList>;
+  }
+  markNotificationsRead(ids: string[]): Promise<void> {
+    return this.request("POST", "/v1/notifications/read", { ids }) as Promise<void>;
+  }
+  securityState(): Promise<SecurityStateResponse> {
+    return this.request("GET", "/v1/security") as Promise<SecurityStateResponse>;
+  }
+  arm(mode: "armed_home" | "armed_away" | "armed_night", pin?: string): Promise<SecurityStateResponse> {
+    return this.request("POST", "/v1/security/arm", { mode, pin }) as Promise<SecurityStateResponse>;
+  }
+  disarm(pin?: string): Promise<SecurityStateResponse> {
+    return this.request("POST", "/v1/security/disarm", { pin }) as Promise<SecurityStateResponse>;
+  }
+  energySummary(): Promise<EnergySummaryResponse> {
+    return this.request("GET", "/v1/energy/summary") as Promise<EnergySummaryResponse>;
   }
 
   // ── Installer surface (§9, §14) ──────────────────────────────────────────────

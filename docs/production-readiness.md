@@ -22,7 +22,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Security hardening | ~35% | see §1 |
 | Infra / deploy | ~50% | hub compose + NATS/Redis wired via seam; no cloud IaC/CD/OTA |
 | Observability / ops | ~60% | Prometheus `/metrics`, `/readyz`, OTel tracing; dashboards/alerting/SLOs pending |
-| Mobile / web delivery | ~48% | compiles; camera RTSP→HLS/WebRTC backend; no store pipeline/push/player UI |
+| Mobile / web delivery | ~58% | Flutter + web homeowner apps; camera players; push pipeline; no app-store pipeline yet |
 | Optional cloud (relay) | ~10% | remote-access relay not built |
 
 ---
@@ -143,7 +143,10 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       source (firebase_messaging/APNs/service worker) is the remaining platform wiring
 - [ ] Offline/error UX depth; reconnect/backoff on WSS
 - [ ] Golden tests for Aureon widgets; accessibility + i18n
-- [ ] Web homeowner app (only installer portal exists today)
+- [x] Web homeowner app — room-first React app (login, dashboard + quick scenes, room
+      device tiles with live WSS + optimistic control, scenes, security with HLS/WebRTC
+      camera players, energy). Served at the hub edge root; installer moved to
+      `/installer/`. Verified against a live gateway
 
 ## 8. Optional cloud
 

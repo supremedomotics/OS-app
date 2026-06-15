@@ -36,6 +36,11 @@
 		reverse_proxy streamer:1984
 	}
 
-	# Everything else → the installer portal (the hub's web UI).
-	reverse_proxy installer-portal:80
+	# Installer Portal under /installer/* (built with base=/installer/; strip the prefix).
+	handle_path /installer/* {
+		reverse_proxy installer-portal:80
+	}
+
+	# Everything else → the homeowner app (the primary web UI).
+	reverse_proxy homeowner:80
 }
