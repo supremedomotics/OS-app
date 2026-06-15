@@ -1,0 +1,41 @@
+name: Load / soak / chaos
+
+# §5/§15 resilience gate. Runs the fast CI harness on every push and a heavier load +
+# chaos run on demand / nightly. The harness boots the REAL gateway (mock backend, no
+# hardware) and drives it concurrently, asserting throughput, error rate, and recovery
+# from a backend outage. A true multi-hour soak is run manually with DURATION_MS.
+on:
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: "Virtual users"
+        default: "100"
+      duration_ms:
+        description: "Run duration (ms)"
+        default: "60000"
+  schedule:
+    - cron: "0 3 * * *" # nightly 03:00 UTC
+  push:
+    branches: ["**"]
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm build
+      # Fast CI gate: short load + connection storm + chaos recovery (asserts thresholds).
+      - run: pnpm --filter @supreme/tools-loadtest test
+      # Heavier manual/nightly run for headline numbers (informational).
+      - if: ${{ github.event_name != 'push' }}
+        env:
+          VUS: ${{ github.event.inputs.vus || '100' }}
+          DURATION_MS: ${{ github.event.inputs.duration_ms || '60000' }}
+        run: pnpm --filter @supreme/tools-loadtest run -- load
+      - if: ${{ github.event_name != 'push' }}
+        run: pnpm --filter @supreme/tools-loadtest run -- chaos

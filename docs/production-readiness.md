@@ -16,7 +16,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 |------|--------|-------|
 | Architecture & contracts | ~92% | SIL seam, domain model, contract-first, migration routing |
 | Feature breadth (P0–4) | ~88% | All phases + e2e; cameras/intercom/cloud now real |
-| Automated testing | ~75% | unit/e2e/PGlite/fake-HA/real-LLM-gated; no load/soak/hardware |
+| Automated testing | ~80% | unit/e2e/PGlite/fake-HA/real-LLM-gated + load/chaos harness; no real-hardware/multi-hour soak |
 | Persistence | ~88% | identity/home/scenes/grants/drivers/automations/audit/sessions/security/bindings/push tokens/migration policy persisted |
 | Real HA integration | ~70% | verified against a REAL HA (auth+discovery) + CI upgrade gate — see §2 |
 | Drivers & protocols | ~80% | KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP drivers + bind/discovery + portal UI + persistence; Casambi (closed BLE) pending |
@@ -112,7 +112,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       rollback are deploy-target wiring)
 - [x] OTA hub update channel — signed (Ed25519) release manifest; the hub verifies +
       detects, the OS updater applies (`services/gateway/src/ota.ts`, `tools/ota` signer)
-- [ ] Load / soak / chaos testing (HA restarts, network loss, event storms)
+- [x] Load / soak / chaos harness (`@supreme/tools-loadtest`) — boots the real gateway
+      and drives it with concurrent VUs (measures rps/p50/p95/p99/errors/RSS), a WSS
+      connection storm, and a chaos cycle (fault the backend → assert clean 5xx → recover).
+      Fast CI gate + `loadtest.yml` (nightly/manual at scale). Real multi-hour soak on
+      real hardware is the remaining real-world step
 
 ## 6. Observability & ops
 
