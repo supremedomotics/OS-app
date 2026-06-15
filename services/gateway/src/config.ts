@@ -81,6 +81,10 @@ export interface GatewayConfig {
   pushRelayUrl: string;
   /** Bearer token the cloud push relay authenticates the hub with. */
   pushRelayToken: string;
+  /** Cloud relay base URL for the remote-access tunnel; empty = no remote access. */
+  relayUrl: string;
+  /** Bearer token the hub presents to the relay's tunnel. */
+  relayToken: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -133,6 +137,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",
     pushRelayUrl: secret(env, "SUPREME_PUSH_RELAY_URL") ?? "",
     pushRelayToken: secret(env, "SUPREME_PUSH_RELAY_TOKEN") ?? "",
+    relayUrl: env.SUPREME_RELAY_URL ?? "",
+    relayToken: secret(env, "SUPREME_RELAY_TOKEN") ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),

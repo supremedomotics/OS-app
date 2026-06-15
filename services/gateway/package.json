@@ -58,6 +58,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@supreme/relay": "workspace:*",
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",

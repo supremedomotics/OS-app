@@ -2,6 +2,7 @@ import { loadConfig } from "./config.js";
 import { createHubContext } from "./bootstrap.js";
 import { buildServer } from "./server.js";
 import { initTracing } from "./tracing.js";
+import { RelayTunnelClient } from "./relay-tunnel.js";
 
 /**
  * Hub entry point for the Supreme API Gateway. Boots the Supreme plane (identity,
@@ -38,6 +39,19 @@ async function main(): Promise<void> {
     { backend: config.backend, port: config.port },
     "Supreme API Gateway listening",
   );
+
+  // Remote access (§8): dial out to the cloud relay and hold the tunnel open. Outbound
+  // only — no inbound ports. Off-LAN clients reach this hub through the relay.
+  if (config.relayUrl && config.relayToken) {
+    const tunnel = new RelayTunnelClient({
+      relayUrl: config.relayUrl,
+      homeId: ctx.homeId,
+      token: config.relayToken,
+      localBaseUrl: `http://127.0.0.1:${config.port}`,
+    });
+    tunnel.start();
+    app.log.info({ relay: config.relayUrl }, "remote-access tunnel started");
+  }
 }
 
 main().catch((err) => {
