@@ -1,0 +1,48 @@
+# Supreme OS alerting rules (§6). Wired to the SLOs in slo.md and the runbooks in
+# runbooks.md (the runbook URL is on each alert). Tuned conservatively for a luxury
+# home appliance where a false page at 3am is worse than a 5-minute detection delay.
+groups:
+  - name: supreme-hub
+    rules:
+      - alert: HubDown
+        expr: up{service="gateway"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Hub gateway unreachable"
+          description: "The Supreme gateway has not been scrapable for 2m. Runbook: runbooks.md#hubdown"
+
+      - alert: HubNotReady
+        # /readyz is reflected by the readiness probe; a 0 backend-health gauge proxies it.
+        expr: supreme_process_uptime_seconds > 0 and on() (sum(rate(supreme_http_requests_total{route="/readyz",status="503"}[5m])) > 0)
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hub failing readiness checks"
+          description: "Backend or DB dependency is unhealthy (/readyz 503). Runbook: runbooks.md#hubnotready"
+
+      - alert: HighApiLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(supreme_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "API p95 latency above 1s"
+          description: "Gateway p95 request latency > 1s for 10m. Runbook: runbooks.md#highlatency"
+
+      - alert: ElevatedServerErrors
+        expr: |
+          sum(rate(supreme_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(supreme_http_requests_total[5m])) > 0.02
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "5xx error rate above 2%"
+          description: "More than 2% of requests are 5xx for 10m. Runbook: runbooks.md#errors"
+
+      - alert: AuthBruteForceSpike
+        expr: sum(rate(supreme_http_requests_total{route="/v1/auth/login",status="429"}[5m])) > 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Sustained auth rate-limiting"
+          description: "Login rate-limit (429) sustained — possible brute force. Runbook: runbooks.md#bruteforce"

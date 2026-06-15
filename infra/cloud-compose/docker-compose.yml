@@ -1,0 +1,51 @@
+# Supreme Cloud — OPTIONAL control plane (§8, §13). None of this is on the critical
+# path for in-home use; the hub is fully functional offline. Runs the relay (push +
+# remote-access tunnel), the installer fleet API, an OTel collector that hub traces
+# ship to, and Prometheus. Front it with a real TLS proxy + managed Postgres in
+# production — see infra/cloud-iac. Fleet persists via SqlFleetStore when a DB is wired.
+name: supreme-cloud
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/relay.Dockerfile
+    restart: unless-stopped
+    environment:
+      # The shared secret hubs present to register their tunnel + forward push.
+      SUPREME_RELAY_TOKEN: ${SUPREME_RELAY_TOKEN:?set a strong relay token}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+      PORT: "8090"
+    ports:
+      - "8090:8090"
+
+  fleet:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/fleet.Dockerfile
+    restart: unless-stopped
+    environment:
+      FLEET_API_KEYS: ${SUPREME_FLEET_API_KEYS:-dev-fleet-key:org_demo}
+      FLEET_PORT: "8091"
+      FLEET_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8091:8091"
+
+  # Receives OTLP traces from hubs/cloud services and exports them onward.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ../observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4318:4318" # OTLP/HTTP
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"

@@ -64,6 +64,10 @@ services:
       # empty = push off, notifications still deliver over WSS (on-LAN degrade).
       SUPREME_PUSH_RELAY_URL: ${SUPREME_PUSH_RELAY_URL:-}
       SUPREME_PUSH_RELAY_TOKEN: ${SUPREME_PUSH_RELAY_TOKEN:-}
+      # Remote access (§8): the hub dials this relay outbound; off-LAN clients reach it
+      # through the tunnel. Empty = LAN-only (no remote access).
+      SUPREME_RELAY_URL: ${SUPREME_RELAY_URL:-}
+      SUPREME_RELAY_TOKEN: ${SUPREME_RELAY_TOKEN:-}
       SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.3.0}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
       NODE_ENV: ${NODE_ENV:-production}
