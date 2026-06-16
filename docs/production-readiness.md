@@ -112,11 +112,12 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       rollback are deploy-target wiring)
 - [x] OTA hub update channel — signed (Ed25519) release manifest; the hub verifies +
       detects, the OS updater applies (`services/gateway/src/ota.ts`, `tools/ota` signer)
-- [x] Load / soak / chaos harness (`@supreme/tools-loadtest`) — boots the real gateway
-      and drives it with concurrent VUs (measures rps/p50/p95/p99/errors/RSS), a WSS
-      connection storm, and a chaos cycle (fault the backend → assert clean 5xx → recover).
-      Fast CI gate + `loadtest.yml` (nightly/manual at scale). Real multi-hour soak on
-      real hardware is the remaining real-world step
+- [x] Load / soak / chaos harness (`@supreme/tools-loadtest`) — drives the gateway with
+      concurrent VUs (rps/p50/p95/p99/errors/RSS), a WSS connection storm, and a chaos
+      cycle (fault the backend → assert clean 5xx → recover). Runs in-process OR against
+      a **real deployed hub via `--url`** (windowed soak + operator-in-the-loop chaos).
+      Fast CI gate + `loadtest.yml`. A multi-hour soak on real hub hardware is the
+      remaining real-world step
 
 ## 6. Observability & ops
 

@@ -13,6 +13,9 @@ on:
       duration_ms:
         description: "Run duration (ms)"
         default: "60000"
+      target_url:
+        description: "Drive a real deployed hub (blank = in-process)"
+        required: false
   schedule:
     - cron: "0 3 * * *" # nightly 03:00 UTC
   push:
@@ -31,11 +34,13 @@ jobs:
       - run: pnpm build
       # Fast CI gate: short load + connection storm + chaos recovery (asserts thresholds).
       - run: pnpm --filter @supreme/tools-loadtest test
-      # Heavier manual/nightly run for headline numbers (informational).
+      # Heavier manual/nightly run for headline numbers (informational). When a
+      # target_url is supplied it drives that REAL hub; otherwise it runs in-process.
       - if: ${{ github.event_name != 'push' }}
         env:
           VUS: ${{ github.event.inputs.vus || '100' }}
           DURATION_MS: ${{ github.event.inputs.duration_ms || '60000' }}
+          TARGET_URL: ${{ github.event.inputs.target_url || '' }}
         run: pnpm --filter @supreme/tools-loadtest run -- load
-      - if: ${{ github.event_name != 'push' }}
+      - if: ${{ github.event_name != 'push' && github.event.inputs.target_url == '' }}
         run: pnpm --filter @supreme/tools-loadtest run -- chaos

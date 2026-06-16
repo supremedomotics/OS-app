@@ -3,8 +3,10 @@ import {
   connectionStorm,
   faultBackend,
   runLoad,
+  runLoadWindows,
   seedSession,
   startHub,
+  wsBaseFrom,
   type Hub,
   type Session,
 } from "./harness.js";
@@ -32,6 +34,18 @@ describe("load / chaos harness", () => {
     expect(r.count).toBeGreaterThan(100); // it actually did work
     expect(r.errorRate).toBe(0);
     expect(r.p95).toBeLessThan(2000); // generous for CI
+  });
+
+  it("runs windowed load (soak / external-chaos view) returning per-window metrics", async () => {
+    expect(wsBaseFrom("https://hub.local:8080")).toBe("wss://hub.local:8080");
+    const seen: number[] = [];
+    const windows = await runLoadWindows(
+      { baseUrl: hub.baseUrl, session, vus: 8, durationMs: 400, windows: 3 },
+      (i) => seen.push(i),
+    );
+    expect(windows).toHaveLength(3);
+    expect(seen).toEqual([0, 1, 2]);
+    expect(windows.every((w) => w.count > 0 && w.errorRate === 0)).toBe(true);
   });
 
   it("handles a WSS connection storm", async () => {

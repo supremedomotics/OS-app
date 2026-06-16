@@ -172,7 +172,8 @@ export async function connectionStorm(opts: {
 /**
  * Chaos: fault the backend (the SIL drops its connection). Returns a `restore()` that
  * brings it back. While faulted, commands surface a clean error (503), not a crash;
- * after restore, control resumes — the recovery the harness asserts.
+ * after restore, control resumes — the recovery the harness asserts. (In-process only;
+ * an EXTERNAL hub is faulted by the operator, e.g. `docker compose stop homeassistant`.)
  */
 export async function faultBackend(ctx: AppContext): Promise<() => Promise<void>> {
   await ctx.sil.stop();
@@ -180,3 +181,32 @@ export async function faultBackend(ctx: AppContext): Promise<() => Promise<void>
     await ctx.sil.start();
   };
 }
+
+/** Derive the WSS base from an HTTP base URL (for an external --url target). */
+export function wsBaseFrom(baseUrl: string): string {
+  return baseUrl.replace(/^http/, "ws");
+}
+
+/**
+ * Run load in sequential time WINDOWS, reporting each window's summary as it completes.
+ * This is the soak / operator-in-the-loop chaos view against a real hub: the caller
+ * watches the per-window error rate spike when a fault is induced and recover after.
+ */
+export async function runLoadWindows(
+  opts: LoadOptions & { windows: number },
+  onWindow: (i: number, r: LoadResult) => void,
+): Promise<LoadResult[]> {
+  const results: LoadResult[] = [];
+  for (let i = 0; i < opts.windows; i++) {
+    const r = await runLoad({
+      baseUrl: opts.baseUrl,
+      session: opts.session,
+      vus: opts.vus,
+      durationMs: opts.durationMs,
+    });
+    results.push(r);
+    onWindow(i, r);
+  }
+  return results;
+}
+
