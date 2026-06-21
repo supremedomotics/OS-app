@@ -82,6 +82,12 @@ export {
   type SonosConnect,
 } from "./sonos-driver.js";
 export {
+  createSonosConnect,
+  wrapSonosDevice,
+  mapSonosPlayback,
+  type SonosDevice,
+} from "./sonos-transport.js";
+export {
   AjaxProtocolDriver,
   type AjaxDriverOptions,
   type AjaxClient,

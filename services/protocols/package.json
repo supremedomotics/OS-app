@@ -4,10 +4,17 @@
   "private": true,
   "description": "Real native protocol drivers (MQTT, Modbus, KNX, Matter, Zigbee, DALI, AVR, CoolMaster, SIP, WiiM, Devialet, Sonos, Ajax) behind the SupremeNativeAdapter seam (§3, §7).",
   "type": "module",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -17,11 +24,12 @@
   "dependencies": {
     "@supreme/domain-model": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
-    "mqtt": "^5.10.1",
-    "modbus-serial": "^8.0.21"
+    "modbus-serial": "^8.0.21",
+    "mqtt": "^5.10.1"
   },
   "optionalDependencies": {
-    "knx": "^2.6.0"
+    "knx": "^2.6.0",
+    "sonos": "^1.15.0"
   },
   "devDependencies": {
     "aedes": "^0.51.3",

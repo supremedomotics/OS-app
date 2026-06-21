@@ -25,6 +25,7 @@ import {
   DevialetProtocolDriver,
   SonosProtocolDriver,
   AjaxProtocolDriver,
+  createSonosConnect,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
@@ -135,7 +136,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // a transport/client provisioned, and the native engine tolerates an unconnected one.
   if (config.wiimEnabled) nativeDrivers.push(new WiimProtocolDriver());
   if (config.devialetEnabled) nativeDrivers.push(new DevialetProtocolDriver());
-  if (config.sonosEnabled) nativeDrivers.push(new SonosProtocolDriver());
+  if (config.sonosEnabled) nativeDrivers.push(new SonosProtocolDriver({ connect: createSonosConnect() }));
   if (config.ajaxEnabled) nativeDrivers.push(new AjaxProtocolDriver());
 
   // Restore persisted native-migration routing so migrated domains stay native on reboot.
