@@ -11,6 +11,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
+import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 
 /**
  * Sonos transport seam. Sonos local control is UPnP/SOAP on the player (port 1400);
@@ -40,6 +41,8 @@ export type SonosConnect = (address: string) => Promise<SonosPlayer>;
 export interface SonosDriverOptions {
   pollMs?: number;
   connect?: SonosConnect;
+  /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
+  ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
 }
 
 interface SonosBinding {
@@ -116,7 +119,17 @@ export class SonosProtocolDriver implements INativeProtocolDriver {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    return []; // SSDP discovery of Sonos players is a follow-on
+    // Real SSDP discovery: Sonos players answer the ZonePlayer search target.
+    const search = this.opts.ssdp ?? ssdpSearch;
+    const responses = await search({ st: "urn:schemas-upnp-org:device:ZonePlayer:1" });
+    return responses
+      .filter((r) => /sonos/i.test(`${r.server ?? ""} ${r.usn ?? ""}`) || /ZonePlayer/i.test(r.st ?? ""))
+      .map((r) => ({
+        backendId: r.address,
+        suggestedName: `Sonos ${r.address}`,
+        capabilities: ["media"] as DiscoveredDevice["capabilities"],
+        raw: { server: r.server ?? null, location: r.location ?? null },
+      }));
   }
 
   onState(listener: StateListener): () => void {

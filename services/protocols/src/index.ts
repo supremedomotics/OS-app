@@ -88,6 +88,13 @@ export {
   type SonosDevice,
 } from "./sonos-transport.js";
 export {
+  ssdpSearch,
+  parseSsdpResponse,
+  type SsdpResponse,
+  type SsdpSocket,
+  type SsdpSearchOptions,
+} from "./ssdp.js";
+export {
   AjaxProtocolDriver,
   type AjaxDriverOptions,
   type AjaxClient,

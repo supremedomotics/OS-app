@@ -11,6 +11,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
+import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { commandToLinkPlay, stateFromLinkPlay } from "./wiim-codec.js";
 
 export interface WiimDriverOptions {
@@ -18,6 +19,8 @@ export interface WiimDriverOptions {
   pollMs?: number;
   /** Injectable fetch (tests point at an in-process LinkPlay server). */
   fetchImpl?: typeof fetch;
+  /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
+  ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
 }
 
 interface WiimBinding {
@@ -85,7 +88,18 @@ export class WiimProtocolDriver implements INativeProtocolDriver {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    return []; // WiiM units are added by IP (UPnP/SSDP discovery is a follow-on)
+    // Real SSDP discovery: WiiM/LinkPlay announce as UPnP MediaRenderers; identify them
+    // by "LinkPlay" / "WiiM" in the SERVER header. backendId is the device IP (= bind addr).
+    const search = this.opts.ssdp ?? ssdpSearch;
+    const responses = await search({ st: "urn:schemas-upnp-org:device:MediaRenderer:1" });
+    return responses
+      .filter((r) => /linkplay|wiim/i.test(`${r.server ?? ""} ${r.usn ?? ""}`))
+      .map((r) => ({
+        backendId: r.address,
+        suggestedName: /wiim/i.test(r.server ?? "") ? `WiiM ${r.address}` : `LinkPlay ${r.address}`,
+        capabilities: ["media"] as DiscoveredDevice["capabilities"],
+        raw: { server: r.server ?? null, location: r.location ?? null },
+      }));
   }
 
   onState(listener: StateListener): () => void {
