@@ -70,3 +70,21 @@ export {
   type SipDoorStation,
   type SipRingEvent,
 } from "./sip-driver.js";
+export { WiimProtocolDriver, type WiimDriverOptions } from "./wiim-driver.js";
+export { commandToLinkPlay, stateFromLinkPlay, decodeHex } from "./wiim-codec.js";
+export { DevialetProtocolDriver, type DevialetDriverOptions } from "./devialet-driver.js";
+export { commandToDevialet, stateFromDevialet, DEVIALET_STATE_PATHS } from "./devialet-codec.js";
+export {
+  SonosProtocolDriver,
+  type SonosDriverOptions,
+  type SonosPlayer,
+  type SonosPlayerState,
+  type SonosConnect,
+} from "./sonos-driver.js";
+export {
+  AjaxProtocolDriver,
+  type AjaxDriverOptions,
+  type AjaxClient,
+  type AjaxEvent,
+  type AjaxConnect,
+} from "./ajax-driver.js";

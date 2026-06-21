@@ -55,6 +55,12 @@ services:
       SUPREME_COOLMASTER_HOST: ${SUPREME_COOLMASTER_HOST:-}
       # SIP door stations — door release + ring (needs a SIP UA subsystem).
       SUPREME_SIP_SERVER: ${SUPREME_SIP_SERVER:-}
+      # Media + security drivers (added by IP/account at bind time). WiiM/Devialet speak
+      # real local HTTP APIs; Sonos (UPnP) + Ajax (cloud) need a transport/client wired.
+      SUPREME_WIIM_ENABLED: ${SUPREME_WIIM_ENABLED:-0}
+      SUPREME_DEVIALET_ENABLED: ${SUPREME_DEVIALET_ENABLED:-0}
+      SUPREME_SONOS_ENABLED: ${SUPREME_SONOS_ENABLED:-0}
+      SUPREME_AJAX_ENABLED: ${SUPREME_AJAX_ENABLED:-0}
       # Camera streaming: clients reach go2rtc (HLS/WebRTC) at /stream behind the edge.
       # The gateway registers RTSP sources via go2rtc's admin API on the core network.
       SUPREME_STREAM_BASE_URL: ${SUPREME_STREAM_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}/stream}

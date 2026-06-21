@@ -71,6 +71,11 @@ export interface GatewayConfig {
   coolMasterHost: string;
   /** SIP registrar/server for the door-station driver; empty = not loaded. */
   sipServer: string;
+  /** Enable media/security drivers added by IP/account at bind time. */
+  wiimEnabled: boolean;
+  devialetEnabled: boolean;
+  sonosEnabled: boolean;
+  ajaxEnabled: boolean;
   /** Public base URL of the hub's camera stream engine (HLS/WebRTC); empty = no transcode. */
   streamBaseUrl: string;
   /** Stream engine the hub runs: "go2rtc" | "mediamtx". */
@@ -136,6 +141,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     avrEnabled: env.SUPREME_AVR_ENABLED === "1" || env.SUPREME_AVR_ENABLED === "true",
     coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",
     sipServer: env.SUPREME_SIP_SERVER ?? "",
+    wiimEnabled: env.SUPREME_WIIM_ENABLED === "1" || env.SUPREME_WIIM_ENABLED === "true",
+    devialetEnabled: env.SUPREME_DEVIALET_ENABLED === "1" || env.SUPREME_DEVIALET_ENABLED === "true",
+    sonosEnabled: env.SUPREME_SONOS_ENABLED === "1" || env.SUPREME_SONOS_ENABLED === "true",
+    ajaxEnabled: env.SUPREME_AJAX_ENABLED === "1" || env.SUPREME_AJAX_ENABLED === "true",
     streamBaseUrl: env.SUPREME_STREAM_BASE_URL ?? "",
     streamEngine: env.SUPREME_STREAM_ENGINE ?? "go2rtc",
     streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",

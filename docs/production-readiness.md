@@ -19,7 +19,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~80% | unit/e2e/PGlite/fake-HA/real-LLM-gated + load/chaos harness; no real-hardware/multi-hour soak |
 | Persistence | ~88% | identity/home/scenes/grants/drivers/automations/audit/sessions/security/bindings/push tokens/migration policy persisted |
 | Real HA integration | ~70% | verified against a REAL HA (auth+discovery) + CI upgrade gate — see §2 |
-| Drivers & protocols | ~80% | KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP drivers + bind/discovery + portal UI + persistence; Casambi (closed BLE) pending |
+| Drivers & protocols | ~82% | KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP + WiiM/Devialet (real HTTP) + Sonos (UPnP seam) + Ajax (cloud seam); bind/discovery + portal UI + persistence; Casambi pending |
 | Native migration engine | ~70% | routing proven; native engine fronts real bus stacks; migration policy persisted across restart |
 | Security hardening | ~80% | fail-closed config, helmet/CORS/rate-limit, Argon2id/TOTP, token rotation, TLS/HSTS, authz matrix, scanning — see §1 |
 | Infra / deploy | ~78% | hub + cloud compose, Terraform IaC skeleton, CD pipeline, OTA channel (signed) |
@@ -70,10 +70,13 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [~] Real first-party adapter code — **KNXnet/IP**, **MQTT** (Zigbee2MQTT/Tasmota),
       **Modbus TCP**, **Matter**, **native Zigbee** (ZCL via zigbee-herdsman), **DALI**
       (IEC 62386), **AVR** (Denon/Marantz IP — onoff + media over real TCP), and
-      **CoolMasterNet HVAC** (VRF/VRV — onoff + climate over real TCP) land as real
-      drivers (each tested vs a fake bus / embedded broker / in-process TCP server);
-      Casambi (proprietary BLE — needs official Cloud-API access) is the notable
-      remaining bus. **SIP door stations** map door-release→lock + ring→sensor (UA is a
+      **CoolMasterNet HVAC** (VRF/VRV — onoff + climate over real TCP), **WiiM**
+      (LinkPlay HTTP) + **Devialet** (local IP-control HTTP) as media drivers, **Sonos**
+      (UPnP/SOAP transport seam), and **Ajax security sensors** (proprietary cloud-client
+      seam → sensor events) land as real drivers (each tested vs a fake bus / embedded
+      broker / in-process HTTP-TCP server); Casambi (proprietary BLE — needs official
+      Cloud-API access) is the notable remaining bus. **SIP door stations** map
+      door-release→lock + ring→sensor (UA is a
       seam). **RTSP camera streaming** is handled correctly as a *stream source* (not a
       capability driver): `@supreme/cameras` resolves a camera's RTSP source into
       client-playable HLS/WebRTC via the on-hub go2rtc engine — see §7

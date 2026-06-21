@@ -21,6 +21,10 @@ import {
   AvrProtocolDriver,
   CoolMasterProtocolDriver,
   SipProtocolDriver,
+  WiimProtocolDriver,
+  DevialetProtocolDriver,
+  SonosProtocolDriver,
+  AjaxProtocolDriver,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
@@ -126,6 +130,13 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   if (config.sipServer) {
     nativeDrivers.push(new SipProtocolDriver({ server: config.sipServer }));
   }
+  // Streamers / multi-room audio (media) + Ajax security sensors — added by IP/account
+  // at bind time. WiiM/Devialet speak real HTTP APIs; Sonos (UPnP) + Ajax (cloud) need
+  // a transport/client provisioned, and the native engine tolerates an unconnected one.
+  if (config.wiimEnabled) nativeDrivers.push(new WiimProtocolDriver());
+  if (config.devialetEnabled) nativeDrivers.push(new DevialetProtocolDriver());
+  if (config.sonosEnabled) nativeDrivers.push(new SonosProtocolDriver());
+  if (config.ajaxEnabled) nativeDrivers.push(new AjaxProtocolDriver());
 
   // Restore persisted native-migration routing so migrated domains stay native on reboot.
   const policy = new MigrationPolicy([], migrationStore);
