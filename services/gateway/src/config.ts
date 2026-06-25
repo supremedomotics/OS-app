@@ -76,6 +76,8 @@ export interface GatewayConfig {
   devialetEnabled: boolean;
   sonosEnabled: boolean;
   ajaxEnabled: boolean;
+  shellyEnabled: boolean;
+  airplayEnabled: boolean;
   /** Public base URL of the hub's camera stream engine (HLS/WebRTC); empty = no transcode. */
   streamBaseUrl: string;
   /** Stream engine the hub runs: "go2rtc" | "mediamtx". */
@@ -145,6 +147,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     devialetEnabled: env.SUPREME_DEVIALET_ENABLED === "1" || env.SUPREME_DEVIALET_ENABLED === "true",
     sonosEnabled: env.SUPREME_SONOS_ENABLED === "1" || env.SUPREME_SONOS_ENABLED === "true",
     ajaxEnabled: env.SUPREME_AJAX_ENABLED === "1" || env.SUPREME_AJAX_ENABLED === "true",
+    shellyEnabled: env.SUPREME_SHELLY_ENABLED === "1" || env.SUPREME_SHELLY_ENABLED === "true",
+    airplayEnabled: env.SUPREME_AIRPLAY_ENABLED === "1" || env.SUPREME_AIRPLAY_ENABLED === "true",
     streamBaseUrl: env.SUPREME_STREAM_BASE_URL ?? "",
     streamEngine: env.SUPREME_STREAM_ENGINE ?? "go2rtc",
     streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",

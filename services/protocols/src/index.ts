@@ -111,3 +111,17 @@ export {
   type AjaxEvent,
   type AjaxConnect,
 } from "./ajax-driver.js";
+export { ShellyProtocolDriver, type ShellyDriverOptions } from "./shelly-driver.js";
+export {
+  commandToShellyRpc,
+  stateFromShellyStatus,
+  capabilitiesFromShellyStatus,
+  type ShellyRpcCall,
+} from "./shelly-codec.js";
+export {
+  AirPlayProtocolDriver,
+  type AirPlayDriverOptions,
+  type AirPlaySender,
+  type AirPlaySenderState,
+  type AirPlayConnect,
+} from "./airplay-driver.js";

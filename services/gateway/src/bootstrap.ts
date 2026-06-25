@@ -25,6 +25,8 @@ import {
   DevialetProtocolDriver,
   SonosProtocolDriver,
   AjaxProtocolDriver,
+  ShellyProtocolDriver,
+  AirPlayProtocolDriver,
   createSonosConnect,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
@@ -138,6 +140,9 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   if (config.devialetEnabled) nativeDrivers.push(new DevialetProtocolDriver());
   if (config.sonosEnabled) nativeDrivers.push(new SonosProtocolDriver({ connect: createSonosConnect() }));
   if (config.ajaxEnabled) nativeDrivers.push(new AjaxProtocolDriver());
+  // Shelly Gen2 (real local RPC + mDNS discovery); AirPlay (mDNS discovery + sender seam).
+  if (config.shellyEnabled) nativeDrivers.push(new ShellyProtocolDriver());
+  if (config.airplayEnabled) nativeDrivers.push(new AirPlayProtocolDriver());
 
   // Restore persisted native-migration routing so migrated domains stay native on reboot.
   const policy = new MigrationPolicy([], migrationStore);

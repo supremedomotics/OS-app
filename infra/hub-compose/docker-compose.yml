@@ -61,6 +61,9 @@ services:
       SUPREME_DEVIALET_ENABLED: ${SUPREME_DEVIALET_ENABLED:-0}
       SUPREME_SONOS_ENABLED: ${SUPREME_SONOS_ENABLED:-0}
       SUPREME_AJAX_ENABLED: ${SUPREME_AJAX_ENABLED:-0}
+      # Shelly Gen2 (local JSON-RPC + mDNS) + AirPlay (mDNS discovery; sender needs a stack).
+      SUPREME_SHELLY_ENABLED: ${SUPREME_SHELLY_ENABLED:-0}
+      SUPREME_AIRPLAY_ENABLED: ${SUPREME_AIRPLAY_ENABLED:-0}
       # Camera streaming: clients reach go2rtc (HLS/WebRTC) at /stream behind the edge.
       # The gateway registers RTSP sources via go2rtc's admin API on the core network.
       SUPREME_STREAM_BASE_URL: ${SUPREME_STREAM_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}/stream}
