@@ -95,6 +95,16 @@ export {
   type SsdpSearchOptions,
 } from "./ssdp.js";
 export {
+  mdnsBrowse,
+  encodeQuery,
+  decodeMessage,
+  readName,
+  resolveServices,
+  type MdnsService,
+  type MdnsSocket,
+  type MdnsBrowseOptions,
+} from "./mdns.js";
+export {
   AjaxProtocolDriver,
   type AjaxDriverOptions,
   type AjaxClient,

@@ -12,10 +12,16 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { DEVIALET_STATE_PATHS, commandToDevialet, stateFromDevialet } from "./devialet-codec.js";
+import { mdnsBrowse, type MdnsService } from "./mdns.js";
+
+/** The Bonjour service type Devialet speakers advertise. */
+const DEVIALET_SERVICE = "_devialet-http._tcp.local";
 
 export interface DevialetDriverOptions {
   pollMs?: number;
   fetchImpl?: typeof fetch;
+  /** Injectable mDNS browser (tests); defaults to a real Bonjour browse. */
+  mdns?: (serviceType: string) => Promise<MdnsService[]>;
 }
 
 interface DevialetBinding {
@@ -87,7 +93,18 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    return [];
+    // Real mDNS/Bonjour discovery: Devialet speakers advertise _devialet-http._tcp.
+    // backendId is the resolved IP (= the bind address for HTTP control).
+    const browse = this.opts.mdns ?? mdnsBrowse;
+    const services = await browse(DEVIALET_SERVICE);
+    return services
+      .filter((s) => s.addresses.length > 0)
+      .map((s) => ({
+        backendId: s.addresses[0]!,
+        suggestedName: instanceName(s) ?? `Devialet ${s.addresses[0]}`,
+        capabilities: ["media"] as DiscoveredDevice["capabilities"],
+        raw: { host: s.host, port: s.port, txt: s.txt },
+      }));
   }
 
   onState(listener: StateListener): () => void {
@@ -129,4 +146,10 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
       l({ deviceId, capability, state, ts: new Date().toISOString() });
     }
   }
+}
+
+/** A friendly name from the Bonjour instance (the label before the service type). */
+function instanceName(s: MdnsService): string | null {
+  const label = s.name.split(`.${DEVIALET_SERVICE.replace(/^\./, "")}`)[0];
+  return label && label !== s.name ? label.replace(/\\032/g, " ") : null;
 }
