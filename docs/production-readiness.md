@@ -19,7 +19,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~80% | unit/e2e/PGlite/fake-HA/real-LLM-gated + load/chaos harness; no real-hardware/multi-hour soak |
 | Persistence | ~88% | identity/home/scenes/grants/drivers/automations/audit/sessions/security/bindings/push tokens/migration policy persisted |
 | Real HA integration | ~70% | verified against a REAL HA (auth+discovery) + CI upgrade gate — see §2 |
-| Drivers & protocols | ~84% | 15 drivers: KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP + WiiM/Devialet/Shelly (real HTTP/RPC) + Sonos (node-sonos) + Ajax/AirPlay (seams); MQTT/SSDP/mDNS discovery; bind + portal UI + persistence; Casambi pending |
+| Drivers & protocols | ~85% | 17 drivers incl. Lutron LIP (wired RA2/HWQS + wireless Caséta Pro) + Tuya; KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP/WiiM/Devialet/Shelly/Sonos/Ajax/AirPlay; MQTT/SSDP/mDNS discovery; bind + portal UI + persistence; Casambi pending |
 | Native migration engine | ~70% | routing proven; native engine fronts real bus stacks; migration policy persisted across restart |
 | Security hardening | ~80% | fail-closed config, helmet/CORS/rate-limit, Argon2id/TOTP, token rotation, TLS/HSTS, authz matrix, scanning — see §1 |
 | Infra / deploy | ~78% | hub + cloud compose, Terraform IaC skeleton, CD pipeline, OTA channel (signed) |

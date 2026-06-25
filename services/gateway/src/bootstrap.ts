@@ -27,6 +27,8 @@ import {
   AjaxProtocolDriver,
   ShellyProtocolDriver,
   AirPlayProtocolDriver,
+  LutronProtocolDriver,
+  TuyaProtocolDriver,
   createSonosConnect,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
@@ -143,6 +145,14 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // Shelly Gen2 (real local RPC + mDNS discovery); AirPlay (mDNS discovery + sender seam).
   if (config.shellyEnabled) nativeDrivers.push(new ShellyProtocolDriver());
   if (config.airplayEnabled) nativeDrivers.push(new AirPlayProtocolDriver());
+  // Lutron LIP — wired (RA2/HomeWorks QS) + wireless (Caséta Smart Bridge Pro), one bridge.
+  if (config.lutronHost) {
+    nativeDrivers.push(
+      new LutronProtocolDriver({ host: config.lutronHost, username: config.lutronUsername, password: config.lutronPassword }),
+    );
+  }
+  // Tuya — proprietary; needs a device client (tuyapi local key / cloud SDK) provisioned.
+  if (config.tuyaEnabled) nativeDrivers.push(new TuyaProtocolDriver());
 
   // Restore persisted native-migration routing so migrated domains stay native on reboot.
   const policy = new MigrationPolicy([], migrationStore);

@@ -64,6 +64,12 @@ services:
       # Shelly Gen2 (local JSON-RPC + mDNS) + AirPlay (mDNS discovery; sender needs a stack).
       SUPREME_SHELLY_ENABLED: ${SUPREME_SHELLY_ENABLED:-0}
       SUPREME_AIRPLAY_ENABLED: ${SUPREME_AIRPLAY_ENABLED:-0}
+      # Lutron LIP bridge (RA2/HomeWorks QS wired or Caséta Smart Bridge Pro wireless).
+      SUPREME_LUTRON_HOST: ${SUPREME_LUTRON_HOST:-}
+      SUPREME_LUTRON_USERNAME: ${SUPREME_LUTRON_USERNAME:-lutron}
+      SUPREME_LUTRON_PASSWORD: ${SUPREME_LUTRON_PASSWORD:-integration}
+      # Tuya (proprietary; needs a device client / local keys provisioned).
+      SUPREME_TUYA_ENABLED: ${SUPREME_TUYA_ENABLED:-0}
       # Camera streaming: clients reach go2rtc (HLS/WebRTC) at /stream behind the edge.
       # The gateway registers RTSP sources via go2rtc's admin API on the core network.
       SUPREME_STREAM_BASE_URL: ${SUPREME_STREAM_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}/stream}

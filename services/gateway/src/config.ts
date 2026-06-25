@@ -78,6 +78,11 @@ export interface GatewayConfig {
   ajaxEnabled: boolean;
   shellyEnabled: boolean;
   airplayEnabled: boolean;
+  /** Lutron bridge host (RA2/HWQS wired or Caséta Pro wireless) over LIP; empty = off. */
+  lutronHost: string;
+  lutronUsername: string;
+  lutronPassword: string;
+  tuyaEnabled: boolean;
   /** Public base URL of the hub's camera stream engine (HLS/WebRTC); empty = no transcode. */
   streamBaseUrl: string;
   /** Stream engine the hub runs: "go2rtc" | "mediamtx". */
@@ -149,6 +154,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     ajaxEnabled: env.SUPREME_AJAX_ENABLED === "1" || env.SUPREME_AJAX_ENABLED === "true",
     shellyEnabled: env.SUPREME_SHELLY_ENABLED === "1" || env.SUPREME_SHELLY_ENABLED === "true",
     airplayEnabled: env.SUPREME_AIRPLAY_ENABLED === "1" || env.SUPREME_AIRPLAY_ENABLED === "true",
+    lutronHost: env.SUPREME_LUTRON_HOST ?? "",
+    lutronUsername: env.SUPREME_LUTRON_USERNAME ?? "lutron",
+    lutronPassword: secret(env, "SUPREME_LUTRON_PASSWORD") ?? "integration",
+    tuyaEnabled: env.SUPREME_TUYA_ENABLED === "1" || env.SUPREME_TUYA_ENABLED === "true",
     streamBaseUrl: env.SUPREME_STREAM_BASE_URL ?? "",
     streamEngine: env.SUPREME_STREAM_ENGINE ?? "go2rtc",
     streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",
