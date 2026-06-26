@@ -9,6 +9,7 @@ export type {
   BackendStateEvent,
   DiscoveredDevice,
   IBackendAdapter,
+  MediaArtwork,
   StateListener,
 } from "./adapter.js";
 export { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";

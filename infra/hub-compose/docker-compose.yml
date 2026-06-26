@@ -68,6 +68,8 @@ services:
       SUPREME_APPLETV_ENABLED: ${SUPREME_APPLETV_ENABLED:-0}
       # The pyatv bridge that holds Apple TV pairing credentials + drives control.
       SUPREME_APPLETV_URL: ${SUPREME_APPLETV_URL:-http://appletv:9300}
+      # Public hub URL — used to build client-reachable media artwork (cover-art) URLs.
+      SUPREME_PUBLIC_BASE_URL: ${SUPREME_PUBLIC_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}}
       # Lutron LIP bridge (RA2/HomeWorks QS wired or Caséta Smart Bridge Pro wireless).
       SUPREME_LUTRON_HOST: ${SUPREME_LUTRON_HOST:-}
       SUPREME_LUTRON_USERNAME: ${SUPREME_LUTRON_USERNAME:-lutron}

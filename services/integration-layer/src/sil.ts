@@ -6,7 +6,7 @@ import type {
 } from "@supreme/domain-model";
 import { READONLY_CAPABILITIES } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
-import type { BackendStateEvent, IBackendAdapter } from "./adapter.js";
+import type { BackendStateEvent, IBackendAdapter, MediaArtwork } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { EngineKind } from "./migration.js";
@@ -112,6 +112,12 @@ export class SupremeIntegrationLayer {
 
   async getState(deviceId: DeviceId, capability: CapabilityKind): Promise<CapabilityState | null> {
     return this.adapter.getState(deviceId, capability);
+  }
+
+  /** Fetch a device's current media artwork bytes (null if none/unsupported). Served
+   * out-of-band by the gateway so cover art never rides on every state delta. */
+  async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
+    return this.adapter.getArtwork ? this.adapter.getArtwork(deviceId) : null;
   }
 
   /** Subscribe to normalized state changes for all mapped devices. */

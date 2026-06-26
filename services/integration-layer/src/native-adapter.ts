@@ -8,6 +8,7 @@ import type {
   BackendStateEvent,
   DiscoveredDevice,
   IBackendAdapter,
+  MediaArtwork,
   StateListener,
 } from "./adapter.js";
 import { applyCommand } from "./apply.js";
@@ -150,6 +151,13 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   onState(listener: StateListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Fetch artwork from the owning driver, if it's a media driver that supports it. */
+  async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getArtwork) return owner.getArtwork(deviceId);
+    return null;
   }
 }
 

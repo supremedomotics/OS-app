@@ -18,7 +18,7 @@ Surface:
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 
 from .backend import AppleTvBackend, AppleTvError, make_backend
 from .models import (
@@ -87,6 +87,16 @@ async def command(
 async def now_playing(address: str, backend: AppleTvBackend = Depends(get_backend)) -> dict:
     np = await _guard(backend.now_playing(address))
     return np.to_dict()
+
+
+@app.get("/devices/{address}/artwork")
+async def artwork(address: str, backend: AppleTvBackend = Depends(get_backend)) -> Response:
+    art = await _guard(backend.artwork(address))
+    if not art:
+        raise HTTPException(status_code=404, detail="no artwork")
+    data, content_type = art
+    # Cover art changes with the track; let the gateway/clients cache briefly.
+    return Response(content=data, media_type=content_type, headers={"cache-control": "max-age=60"})
 
 
 async def _guard(awaitable):

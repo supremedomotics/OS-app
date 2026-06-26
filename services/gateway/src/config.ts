@@ -82,6 +82,9 @@ export interface GatewayConfig {
   appleTvEnabled: boolean;
   /** Base URL of the Python Apple TV bridge (pyatv); empty = discovery only, no control. */
   appleTvBridgeUrl: string;
+  /** Public base URL of the hub API (e.g. https://home.example) used to build absolute
+   * client-reachable media artwork URLs; empty = artwork URLs are omitted from state. */
+  publicBaseUrl: string;
   /** Lutron bridge host (RA2/HWQS wired or Caséta Pro wireless) over LIP; empty = off. */
   lutronHost: string;
   lutronUsername: string;
@@ -160,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     airplayEnabled: env.SUPREME_AIRPLAY_ENABLED === "1" || env.SUPREME_AIRPLAY_ENABLED === "true",
     appleTvEnabled: env.SUPREME_APPLETV_ENABLED === "1" || env.SUPREME_APPLETV_ENABLED === "true",
     appleTvBridgeUrl: env.SUPREME_APPLETV_URL ?? "",
+    publicBaseUrl: (env.SUPREME_PUBLIC_BASE_URL ?? "").replace(/\/$/, ""),
     lutronHost: env.SUPREME_LUTRON_HOST ?? "",
     lutronUsername: env.SUPREME_LUTRON_USERNAME ?? "lutron",
     lutronPassword: secret(env, "SUPREME_LUTRON_PASSWORD") ?? "integration",

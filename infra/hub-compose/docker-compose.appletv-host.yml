@@ -1,0 +1,26 @@
+# Apple TV — reliable mDNS discovery overlay.
+#
+# Multicast mDNS (used to discover Apple TVs, `_mediaremotetv._tcp`) does NOT cross
+# Docker bridge networks. Run the pyatv bridge on the HOST network so it sees the LAN
+# multicast directly, and point the gateway at it via the host gateway address.
+#
+# Usage (Linux host):
+#   docker compose -f docker-compose.yml -f docker-compose.appletv-host.yml up -d
+#
+# Requires Docker Compose v2.24+ for the `!reset` tag (clears the bridge-network
+# attachment so it can be combined with host networking). Linux only — host networking
+# is a no-op on Docker Desktop for macOS/Windows.
+services:
+  appletv:
+    # Join the host's network namespace: LAN multicast (mDNS) now reaches the bridge.
+    network_mode: host
+    # Can't combine host mode with explicit networks — drop the bridge attachment.
+    networks: !reset null
+
+  gateway:
+    # The bridge is no longer at the `appletv` service name (it's on the host), so reach
+    # it through the host gateway. `host-gateway` resolves to the host from inside Docker.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SUPREME_APPLETV_URL: "http://host.docker.internal:9300"

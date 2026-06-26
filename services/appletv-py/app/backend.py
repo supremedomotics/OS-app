@@ -20,10 +20,16 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import base64
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+# A 1×1 PNG, used by the fake backend so the artwork endpoint returns real image bytes.
+_FAKE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 # Pairing typically needs both AirPlay and Companion on modern tvOS; we store
 # whatever protocols the operator pairs and replay them all on connect.
@@ -54,6 +60,7 @@ class NowPlaying:
     artist: str | None = None
     album: str | None = None
     artwork_url: str | None = None
+    has_artwork: bool = False
     volume: int = 0
     muted: bool = False
 
@@ -65,6 +72,7 @@ class NowPlaying:
             "artist": self.artist,
             "album": self.album,
             "artwork_url": self.artwork_url,
+            "has_artwork": self.has_artwork,
             "volume": self.volume,
             "muted": self.muted,
         }
@@ -97,6 +105,10 @@ class AppleTvBackend(abc.ABC):
 
     @abc.abstractmethod
     async def now_playing(self, address: str) -> NowPlaying: ...
+
+    @abc.abstractmethod
+    async def artwork(self, address: str) -> tuple[bytes, str] | None:
+        """Current cover-art (bytes, content_type), or None when there's none."""
 
     @abc.abstractmethod
     def paired_addresses(self) -> list[str]: ...
@@ -170,6 +182,7 @@ class FakeBackend(AppleTvBackend):
                     artist="S5 · E3",
                     album=None,
                     artwork_url=None,
+                    has_artwork=True,
                     volume=40,
                     muted=False,
                 ),
@@ -236,6 +249,10 @@ class FakeBackend(AppleTvBackend):
 
     async def now_playing(self, address: str) -> NowPlaying:
         return self._require_connected(address).now
+
+    async def artwork(self, address: str) -> tuple[bytes, str] | None:
+        dev = self._require_connected(address)
+        return (_FAKE_PNG, "image/png") if dev.now.has_artwork else None
 
     def paired_addresses(self) -> list[str]:
         return [a for a, d in self._devices.items() if d.paired]
@@ -424,10 +441,21 @@ class PyatvBackend(AppleTvBackend):
             title=getattr(playing, "title", None),
             artist=getattr(playing, "artist", None) or getattr(playing, "series_name", None),
             album=getattr(playing, "album", None),
-            artwork_url=None,  # artwork is bytes via pyatv; proxying it is a follow-up
+            artwork_url=None,  # bytes are fetched out-of-band via /artwork
+            has_artwork=bool(getattr(playing, "artwork_id", None) or getattr(playing, "hash", None)),
             volume=max(0, min(100, vol)),
             muted=vol == 0,
         )
+
+    async def artwork(self, address: str) -> tuple[bytes, str] | None:
+        conn = self._conns.get(address)
+        if not conn:
+            await self.connect(address)
+            conn = self._conns[address]
+        art = await conn.atv.metadata.artwork()  # type: ignore[attr-defined]
+        if not art or not getattr(art, "bytes", None):
+            return None
+        return (art.bytes, getattr(art, "mimetype", None) or "image/jpeg")
 
     def paired_addresses(self) -> list[str]:
         return self._store.addresses()

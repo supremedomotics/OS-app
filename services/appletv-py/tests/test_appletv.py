@@ -57,6 +57,13 @@ def test_pairing_flow_then_control_and_now_playing():
     assert np["title"] == "The Crown"
     assert np["volume"] == 70
     assert np["muted"] is True
+    assert np["has_artwork"] is True
+
+    # 6. Cover art is served as real image bytes.
+    art = client.get("/devices/10.0.0.42/artwork")
+    assert art.status_code == 200
+    assert art.headers["content-type"] == "image/png"
+    assert len(art.content) > 0
 
 
 def test_bad_pin_is_rejected():

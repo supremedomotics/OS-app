@@ -4,7 +4,7 @@ import type {
   CapabilityState,
   DeviceId,
 } from "@supreme/domain-model";
-import type { DiscoveredDevice, StateListener } from "../adapter.js";
+import type { DiscoveredDevice, MediaArtwork, StateListener } from "../adapter.js";
 
 /**
  * Native protocol driver contract (blueprint §7, §9, §16).
@@ -53,6 +53,9 @@ export interface INativeProtocolDriver {
 
   /** Subscribe to normalized (already Supreme) state changes from the bus. */
   onState(listener: StateListener): () => void;
+
+  /** Optional: fetch the device's current media artwork bytes (media drivers only). */
+  getArtwork?(deviceId: DeviceId): Promise<MediaArtwork | null>;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

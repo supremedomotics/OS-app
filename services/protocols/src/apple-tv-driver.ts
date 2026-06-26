@@ -8,6 +8,7 @@ import {
   bindingKey,
   type DiscoveredDevice,
   type INativeProtocolDriver,
+  type MediaArtwork,
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
@@ -52,6 +53,8 @@ export interface AppleTvNowPlaying {
   volume: number;
   /** Whether output is muted. */
   muted: boolean;
+  /** True when the device has cover art available (fetched out-of-band via getArtwork). */
+  hasArtwork?: boolean;
 }
 
 /** Control + state seam for one Apple TV. The real impl wraps pyatv (with credentials). */
@@ -67,6 +70,8 @@ export interface AppleTvClient {
   setMuted(muted: boolean): Promise<void>;
   /** Current foreground app + content + transport. */
   nowPlaying(): Promise<AppleTvNowPlaying>;
+  /** Optional: current cover-art bytes (null if none). */
+  getArtwork?(): Promise<MediaArtwork | null>;
 }
 
 /** Resolve a client for an Apple TV address (IP / host), using stored MRP credentials. */
@@ -79,6 +84,9 @@ export interface AppleTvDriverOptions {
   connect?: AppleTvConnect;
   /** Injectable mDNS browser (tests); defaults to a real multicast browse. */
   mdns?: (serviceType: string) => Promise<MdnsService[]>;
+  /** Build the client-reachable artwork URL for a device (the gateway proxy path).
+   * When set and the device has art, it's emitted as the media state's artworkUrl. */
+  artworkUrlFor?: (deviceId: DeviceId) => string;
 }
 
 interface AppleTvBinding {
@@ -91,7 +99,10 @@ interface AppleTvBinding {
  * Map an Apple TV now-playing snapshot onto the Supreme `media` capability state. App →
  * `source` (with an "Apple TV" fallback so the source is never empty for a live device).
  */
-export function mediaStateFromNowPlaying(np: AppleTvNowPlaying): CapabilityState {
+export function mediaStateFromNowPlaying(
+  np: AppleTvNowPlaying,
+  artworkUrl: string | null = np.artworkUrl ?? null,
+): CapabilityState {
   return {
     kind: "media",
     playback: np.state,
@@ -100,7 +111,7 @@ export function mediaStateFromNowPlaying(np: AppleTvNowPlaying): CapabilityState
     title: np.title,
     artist: np.artist,
     source: np.app ?? "Apple TV",
-    artworkUrl: np.artworkUrl,
+    artworkUrl,
   };
 }
 
@@ -214,7 +225,18 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
 
   private async refresh(b: AppleTvBinding): Promise<void> {
     const np = await b.client.nowPlaying();
-    this.record(b.deviceId, "media", mediaStateFromNowPlaying(np));
+    // Cover art is fetched out-of-band (getArtwork); advertise the gateway proxy URL
+    // only when art exists and a URL builder is configured, else null.
+    const artworkUrl =
+      np.hasArtwork && this.opts.artworkUrlFor ? this.opts.artworkUrlFor(b.deviceId) : np.artworkUrl ?? null;
+    this.record(b.deviceId, "media", mediaStateFromNowPlaying(np, artworkUrl));
+  }
+
+  /** Fetch the bound device's current cover art (delegates to the client/bridge). */
+  async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !b.client.getArtwork) return null;
+    return b.client.getArtwork();
   }
 
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {

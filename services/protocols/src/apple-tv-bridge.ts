@@ -1,3 +1,4 @@
+import type { MediaArtwork } from "@supreme/integration-layer";
 import type { AppleTvClient, AppleTvConnect, AppleTvNowPlaying } from "./apple-tv-driver.js";
 
 /**
@@ -27,6 +28,7 @@ interface BridgeNowPlaying {
   artist?: string | null;
   album?: string | null;
   artwork_url?: string | null;
+  has_artwork?: boolean;
   volume?: number;
   muted?: boolean;
 }
@@ -36,6 +38,12 @@ const VALID_STATES = new Set(["playing", "paused", "stopped", "idle"]);
 export function createAppleTvConnect(opts: AppleTvBridgeOptions): AppleTvConnect {
   const base = opts.baseUrl.replace(/\/$/, "");
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+
+  async function raw(path: string): Promise<Response> {
+    const res = await fetchImpl(`${base}${path}`, { method: "GET" });
+    if (!res.ok) throw new Error(`appletv-bridge: ${res.status}`);
+    return res;
+  }
 
   async function call(path: string, body?: unknown): Promise<unknown> {
     const res = await fetchImpl(`${base}${path}`, {
@@ -80,7 +88,18 @@ export function createAppleTvConnect(opts: AppleTvBridgeOptions): AppleTvConnect
           artworkUrl: np.artwork_url ?? null,
           volume: typeof np.volume === "number" ? np.volume : 0,
           muted: Boolean(np.muted),
+          hasArtwork: Boolean(np.has_artwork),
         };
+      },
+      getArtwork: async (): Promise<MediaArtwork | null> => {
+        try {
+          const res = await raw(`/devices/${enc}/artwork`);
+          const buf = new Uint8Array(await res.arrayBuffer());
+          if (buf.byteLength === 0) return null;
+          return { contentType: res.headers.get("content-type") ?? "image/jpeg", data: buf };
+        } catch {
+          return null; // no art / device offline — the card just shows no cover
+        }
       },
     };
   };

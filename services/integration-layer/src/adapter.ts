@@ -36,6 +36,13 @@ export interface DiscoveredDevice {
 
 export type StateListener = (event: BackendStateEvent) => void;
 
+/** Raw media artwork bytes for a device (e.g. an Apple TV now-playing cover), fetched
+ * out-of-band of state so the (large) image never rides on every state delta. */
+export interface MediaArtwork {
+  contentType: string;
+  data: Uint8Array;
+}
+
 export interface IBackendAdapter {
   /** Stable identifier for the adapter implementation (e.g. "ha", "supreme-native"). */
   readonly kind: string;
@@ -60,4 +67,7 @@ export interface IBackendAdapter {
 
   /** Subscribe to normalized state changes. Returns an unsubscribe fn. */
   onState(listener: StateListener): () => void;
+
+  /** Optional: fetch a device's current media artwork bytes (null if none/unsupported). */
+  getArtwork?(deviceId: DeviceId): Promise<MediaArtwork | null>;
 }

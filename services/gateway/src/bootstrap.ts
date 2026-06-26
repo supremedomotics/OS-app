@@ -154,11 +154,16 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // client (boot is unaffected either way).
   if (config.appleTvEnabled) {
     nativeDrivers.push(
-      new AppleTvProtocolDriver(
-        config.appleTvBridgeUrl
+      new AppleTvProtocolDriver({
+        ...(config.appleTvBridgeUrl
           ? { connect: createAppleTvConnect({ baseUrl: config.appleTvBridgeUrl }) }
-          : {},
-      ),
+          : {}),
+        // Advertise client-reachable cover-art URLs (served by the gateway proxy)
+        // when a public base URL is configured.
+        ...(config.publicBaseUrl
+          ? { artworkUrlFor: (id) => `${config.publicBaseUrl}/v1/devices/${id}/media/artwork` }
+          : {}),
+      }),
     );
   }
   // Lutron LIP — wired (RA2/HomeWorks QS) + wireless (Caséta Smart Bridge Pro), one bridge.

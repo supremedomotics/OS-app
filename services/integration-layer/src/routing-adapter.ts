@@ -8,6 +8,7 @@ import type {
   BackendStateEvent,
   DiscoveredDevice,
   IBackendAdapter,
+  MediaArtwork,
   StateListener,
 } from "./adapter.js";
 import type { EntityRegistryMirror } from "./registry.js";
@@ -74,6 +75,13 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   onState(listener: StateListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Artwork is a native-engine feature (the protocol drivers expose it); a device
+   * bound to the native bus resolves there, otherwise we try whichever side has it. */
+  async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
+    if (this.native.manages(deviceId)) return this.native.getArtwork(deviceId);
+    return this.ha.getArtwork ? this.ha.getArtwork(deviceId) : null;
   }
 
   /**
