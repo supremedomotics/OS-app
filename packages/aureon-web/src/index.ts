@@ -11,6 +11,19 @@ import tokens from "../tokens/aureon.tokens.json" with { type: "json" };
 export type AureonTokens = typeof tokens;
 export const aureon: AureonTokens = tokens;
 
+export {
+  AUREON_MODES,
+  AUREON_ACCENTS,
+  resolveMode,
+  applyAureonTheme,
+  loadAureonTheme,
+  saveAureonTheme,
+  initAureonTheme,
+  type AureonMode,
+  type AureonAccent,
+  type AureonThemeChoice,
+} from "./theme.js";
+
 /** Flatten the token tree into CSS-variable name/value pairs. */
 function flatten(obj: Record<string, unknown>, prefix: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];

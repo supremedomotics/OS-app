@@ -14,6 +14,24 @@
   --aureon-color-status-critical: #cf6b5a;
 }
 
+/* Luxury White (light mode) — overrides the dark base; accents untouched. */
+:root[data-theme="light"] {
+  --aureon-color-base-void: #f4f3ef;
+  --aureon-color-base-surface: #ffffff;
+  --aureon-color-base-surface-raised: #faf9f5;
+  --aureon-color-base-hairline: #e5e2d9;
+  --aureon-color-text-primary: #1a1b1e;
+  --aureon-color-text-secondary: #5c5a53;
+}
+/* Silver accent — swaps the gold accent ramp for a cool platinum. */
+:root[data-accent="silver"] {
+  --aureon-color-gold-400: #c8cdd6;
+  --aureon-color-gold-500: #aeb4be;
+}
+:root[data-theme="light"] body {
+  background: radial-gradient(1200px 600px at 50% -10%, #ffffff 0%, var(--aureon-color-base-void) 65%);
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
@@ -128,3 +146,20 @@ button.link {
   transition: background 200ms ease;
 }
 .onboarding .steps li.on { background: var(--aureon-color-gold-400); }
+
+/* Settings / theme picker */
+.settings .section-title { font-size: 13px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--aureon-color-text-secondary); margin: 18px 0 10px; }
+.settings .opt-label { font-size: 14px; color: var(--aureon-color-text-secondary); margin: 16px 0 8px; }
+.card-section {
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  border-radius: 16px; padding: 14px 16px;
+}
+.seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg button {
+  flex: 1; min-width: 96px; padding: 12px 10px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface);
+  color: var(--aureon-color-text-primary); font-size: 14px; transition: border-color 160ms ease, background 160ms ease;
+}
+.seg button.on { border-color: var(--aureon-color-gold-400); background: color-mix(in srgb, var(--aureon-color-gold-400) 14%, transparent); }
+.seg.accents button { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.seg .swatch { width: 14px; height: 14px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,0.2); }

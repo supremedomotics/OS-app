@@ -1,8 +1,15 @@
+import 'package:aureon_flutter/aureon_flutter.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 /// Riverpod wiring over the generated Supreme SDK (§11.3). Optimistic updates are
 /// reconciled by the WSS state stream. State is held in Supreme terms only.
+
+/// Appearance (§11.2 Themes): base palette mode (Luxury Black / White / Automatic) and
+/// the accent ramp (Gold / Silver). Held in app state; the MaterialApp rebuilds on change.
+final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.dark);
+final accentProvider = StateProvider<AureonAccent>((ref) => AureonAccent.gold);
 
 /// Hub base URL. In production this is resolved automatically (mDNS LAN-direct or
 /// cloud relay); for Phase-0 dev it points at the local gateway.

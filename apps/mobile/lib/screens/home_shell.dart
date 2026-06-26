@@ -7,6 +7,7 @@ import 'dashboard.dart';
 import 'room_view.dart';
 import 'scenes_screen.dart';
 import 'security_screen.dart';
+import 'settings_screen.dart';
 
 /// Post-login shell with the homeowner's primary destinations. Room-first, with a
 /// dashboard, scenes, security, and alerts a tap away, plus a one-tap AI assistant
@@ -27,6 +28,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     ScenesScreen(),
     SecurityScreen(),
     AlertsScreen(),
+    SettingsScreen(),
   ];
 
   @override
@@ -53,6 +55,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               icon: Icon(Icons.shield_outlined), label: 'Security'),
           NavigationDestination(
               icon: Icon(Icons.notifications_outlined), label: 'Alerts'),
+          NavigationDestination(
+              icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
       ),
     );

@@ -13,6 +13,20 @@
   --aureon-color-status-critical: #cf6b5a;
 }
 
+/* Luxury White (light mode) + Silver accent — see aureon-web theming. */
+:root[data-theme="light"] {
+  --aureon-color-base-void: #f4f3ef;
+  --aureon-color-base-surface: #ffffff;
+  --aureon-color-base-surface-raised: #faf9f5;
+  --aureon-color-base-hairline: #e5e2d9;
+  --aureon-color-text-primary: #1a1b1e;
+  --aureon-color-text-secondary: #5c5a53;
+}
+:root[data-accent="silver"] {
+  --aureon-color-gold-400: #c8cdd6;
+  --aureon-color-gold-500: #aeb4be;
+}
+
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -20,6 +34,10 @@ body {
   background: var(--aureon-color-base-void);
   color: var(--aureon-color-text-primary);
 }
+.theme-bar { margin-top: auto; padding: 12px 4px 4px; border-top: 1px solid var(--aureon-color-base-hairline); }
+.theme-bar-label { font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; color: var(--aureon-color-text-secondary); }
+.theme-bar-row { display: flex; gap: 6px; margin-top: 8px; }
+.theme-bar-row button { flex: 1; padding: 7px 4px; font-size: 12px; }
 .app { display: flex; min-height: 100vh; }
 nav {
   width: 220px;

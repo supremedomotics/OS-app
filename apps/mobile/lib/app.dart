@@ -12,10 +12,14 @@ class SupremeApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final accent = ref.watch(accentProvider);
+    final mode = ref.watch(themeModeProvider);
     return MaterialApp(
       title: 'Supreme OS',
       debugShowCheckedModeBanner: false,
-      theme: AureonTheme.dark(),
+      theme: AureonTheme.light(accent: accent),
+      darkTheme: AureonTheme.dark(accent: accent),
+      themeMode: mode,
       home: const _Root(),
     );
   }

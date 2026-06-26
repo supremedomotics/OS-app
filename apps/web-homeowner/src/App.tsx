@@ -4,8 +4,9 @@ import { client, fetchSetupStatus, openStream, type SetupStatus } from "./api.js
 import { LiveContext, type LiveStates } from "./live.js";
 import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
+import { ThemeSettings } from "./settings.js";
 
-type Tab = "home" | "rooms" | "scenes" | "security" | "energy";
+type Tab = "home" | "rooms" | "scenes" | "security" | "energy" | "settings";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "⌂" },
@@ -13,6 +14,7 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "scenes", label: "Scenes", icon: "✦" },
   { id: "security", label: "Security", icon: "🛡" },
   { id: "energy", label: "Energy", icon: "⚡" },
+  { id: "settings", label: "Settings", icon: "⚙" },
 ];
 
 export function App() {
@@ -64,6 +66,7 @@ export function App() {
           {tab === "scenes" && <Scenes />}
           {tab === "security" && <Security />}
           {tab === "energy" && <Energy />}
+          {tab === "settings" && <ThemeSettings />}
         </div>
         <nav className="tabbar">
           {TABS.map((t) => (

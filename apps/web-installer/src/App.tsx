@@ -1,4 +1,11 @@
 import { useState } from "react";
+import {
+  AUREON_ACCENTS,
+  AUREON_MODES,
+  applyAureonTheme,
+  loadAureonTheme,
+  saveAureonTheme,
+} from "@supreme/aureon-web";
 import { client } from "./api.js";
 import {
   BackupRestore,
@@ -54,6 +61,7 @@ export function App() {
             {t.label}
           </button>
         ))}
+        <ThemeBar />
       </nav>
       <main>
         {tab === "drivers" && <DriverStore />}
@@ -66,6 +74,36 @@ export function App() {
         {tab === "migration" && <Migration />}
         {tab === "fleet" && <Fleet />}
       </main>
+    </div>
+  );
+}
+
+/** Compact appearance control in the installer sidebar (§11.2 Themes). */
+function ThemeBar() {
+  const [choice, setChoice] = useState(loadAureonTheme());
+  const set = (next: Partial<typeof choice>) => {
+    const merged = { ...choice, ...next };
+    setChoice(merged);
+    applyAureonTheme(merged);
+    saveAureonTheme(merged);
+  };
+  return (
+    <div className="theme-bar">
+      <span className="theme-bar-label">Appearance</span>
+      <div className="theme-bar-row">
+        {AUREON_MODES.map((m) => (
+          <button key={m.key} className={choice.mode === m.key ? "active" : ""} onClick={() => set({ mode: m.key })}>
+            {m.label.replace("Luxury ", "")}
+          </button>
+        ))}
+      </div>
+      <div className="theme-bar-row">
+        {AUREON_ACCENTS.map((a) => (
+          <button key={a.key} className={choice.accent === a.key ? "active" : ""} onClick={() => set({ accent: a.key })}>
+            {a.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
