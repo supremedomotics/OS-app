@@ -88,6 +88,14 @@ export class RelayTunnelClient {
   }
 
   private async proxyLocal(frame: ReqFrame): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+    // Only the PUBLIC API contract is reachable over the relay — mirror the edge proxy.
+    // The tunnel bypasses Caddy, so without this allow-list a remote client could reach
+    // internal-only endpoints (/metrics, /readyz) that are intentionally unauthenticated
+    // and never exposed at the public edge.
+    const pathname = frame.path.split("?")[0] ?? "";
+    if (pathname !== "/healthz" && !pathname.startsWith("/v1/")) {
+      return { status: 404, headers: {}, body: JSON.stringify({ code: "not_found" }) };
+    }
     try {
       const res = await this.fetchImpl(`${this.opts.localBaseUrl.replace(/\/$/, "")}${frame.path}`, {
         method: frame.method,

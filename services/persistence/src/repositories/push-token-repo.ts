@@ -36,8 +36,12 @@ export class PushTokenRepo implements IPushTokenStore {
     );
   }
 
-  async remove(token: string): Promise<void> {
-    await this.db.query("DELETE FROM device_clients WHERE push_token=$1", [token]);
+  async remove(userId: UserId, token: string): Promise<void> {
+    // Scope the delete to the owner so one user can't unregister another's device.
+    await this.db.query("DELETE FROM device_clients WHERE push_token=$1 AND user_id=$2", [
+      token,
+      userId,
+    ]);
   }
 
   async listForUser(userId: UserId): Promise<PushToken[]> {

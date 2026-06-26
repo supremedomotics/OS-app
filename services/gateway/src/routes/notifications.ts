@@ -56,8 +56,8 @@ export function registerNotificationRoutes(app: FastifyInstance, ctx: AppContext
 
   app.delete<{ Params: { token: string } }>("/v1/push/tokens/:token", async (req, reply) => {
     try {
-      await authenticate(ctx, req);
-      await ctx.pushTokens.remove(decodeURIComponent(req.params.token));
+      const user = await authenticate(ctx, req);
+      await ctx.pushTokens.remove(user.id, decodeURIComponent(req.params.token));
       reply.code(204).send();
     } catch (err) {
       sendError(reply, err);

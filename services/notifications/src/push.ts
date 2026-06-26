@@ -21,7 +21,8 @@ export interface PushToken {
 export interface IPushTokenStore {
   /** Upsert a device's push token (keyed by the token string). */
   register(token: PushToken): Promise<void>;
-  remove(token: string): Promise<void>;
+  /** Remove a token — scoped to its owner so one user can't unregister another's device. */
+  remove(userId: UserId, token: string): Promise<void>;
   listForUser(userId: UserId): Promise<PushToken[]>;
   listAll(): Promise<PushToken[]>;
 }
@@ -31,8 +32,8 @@ export class InMemoryPushTokenStore implements IPushTokenStore {
   async register(token: PushToken) {
     this.byToken.set(token.token, token);
   }
-  async remove(token: string) {
-    this.byToken.delete(token);
+  async remove(userId: UserId, token: string) {
+    if (this.byToken.get(token)?.userId === userId) this.byToken.delete(token);
   }
   async listForUser(userId: UserId) {
     return [...this.byToken.values()].filter((t) => t.userId === userId);

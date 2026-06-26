@@ -75,9 +75,16 @@ export function buildRelayServer(opts: RelayServerOptions): FastifyInstance {
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === "string" && k !== "host" && k !== "connection") headers[k] = v;
     }
+    const wildcard = req.params["*"];
+    // Only forward the PUBLIC API contract (/v1/*, /healthz). The hub also enforces this,
+    // but rejecting here avoids exposing internal endpoints (/metrics, /readyz) and saves
+    // a tunnel round trip.
+    if (wildcard !== "healthz" && !wildcard.startsWith("v1/")) {
+      return reply.code(404).send({ code: "not_found" });
+    }
     const tunnelReq: TunnelRequest = {
       method: req.method,
-      path: `/${req.params["*"]}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`,
+      path: `/${wildcard}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`,
       headers,
       body: typeof req.body === "string" ? req.body : undefined,
     };
