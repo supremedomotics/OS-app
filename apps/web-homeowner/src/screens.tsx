@@ -15,7 +15,19 @@ import type {
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
+import { TabletRoom } from "./tablet-room.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
+
+/** True on tablet/desktop widths — switches the room to the Ovio bento layout. */
+function useWide(): boolean {
+  const [wide, setWide] = useState(typeof window !== "undefined" && window.innerWidth >= 900);
+  useEffect(() => {
+    const on = () => setWide(window.innerWidth >= 900);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return wide;
+}
 
 function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []): [T | null, () => void] {
   const [value, setValue] = useState<T | null>(null);
@@ -124,9 +136,11 @@ export function RoomsScreen({
   onSelect: (roomId: string | null) => void;
 }) {
   const [home] = useAsync<HomeView>(() => client.home());
+  const wide = useWide();
 
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
+    if (wide) return <TabletRoom roomId={selected} name={room?.name ?? "Room"} onBack={() => onSelect(null)} />;
     return (
       <RoomDevices
         roomId={selected}

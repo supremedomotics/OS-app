@@ -172,6 +172,26 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
     }),
     { media: "media_player.living_room" },
   );
+  // A set of colour lights so the room's lighting disc shows multiple draggable nodes
+  // (the Ovio multi-light colour-field pattern, §11.1).
+  for (const [lname, hue, on] of [
+    ["Ceiling", 8, true],
+    ["Standing", 210, true],
+    ["Spot LC", 280, true],
+    ["Spot LL", 150, false],
+  ] as const) {
+    await home.addDevice(
+      device(hid, living.id, lname, "light", [
+        { kind: "onoff", config: {} },
+        { kind: "brightness", config: {} },
+        { kind: "color", config: {} },
+      ], {
+        brightness: { kind: "brightness", on, level: on ? 70 : 0 },
+        color: { kind: "color", on, level: on ? 70 : 0, hue, saturation: 85, kelvin: 2700 },
+      }),
+      { onoff: `light.${lname.toLowerCase().replace(/ /g, "_")}`, color: `light.${lname.toLowerCase().replace(/ /g, "_")}` },
+    );
+  }
   await home.addDevice(
     device(hid, kitchen.id, "Kitchen Lights", "light", [{ kind: "onoff", config: {} }], {
       onoff: { kind: "onoff", on: false },
