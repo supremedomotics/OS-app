@@ -50,6 +50,27 @@ create conflicting accounts.
 The whole flow is confined below the SIL boundary (the `ha/` folder). Nothing above the
 SIL learns that onboarding happened.
 
+## Setup Wizard (first-run administrator)
+
+In production (`SUPREME_SETUP_WIZARD=1`, the compose default) the hub does **not** seed a
+demo owner on first boot. Instead it comes up in a "setup required" state serving only
+`/healthz` and the wizard endpoints, until the installer creates the Supreme OS
+administrator:
+
+- `GET /v1/setup/status` → `{ setupRequired, systemName }` — drives the client onboarding.
+- `POST /v1/setup` `{ username, password, confirmPassword, systemName, location?, timeZone? }`
+  → creates the administrator + home, brings the rest of the stack online, and returns an
+  authenticated session so the wizard lands logged in. Replays return `409`.
+
+The administrator is a **Supreme OS** account only — no matching Home Assistant user is
+ever created; the gateway keeps using HA's hidden internal service account. The wizard
+mirrors the flow: Welcome → Create Administrator → Username → Password → Confirm → System
+Name → Location → Time Zone → Finish. (Backend is complete; the Flutter/web wizard screen
+binds to these two endpoints.)
+
+Dev and tests leave `SUPREME_SETUP_WIZARD` unset, so they keep auto-seeding the demo owner
+(`owner@supreme.local`) and the e2e suites are unaffected.
+
 ## Secrets manager
 
 `services/gateway/src/secrets.ts` persists runtime-generated secrets (the HA token) as

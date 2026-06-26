@@ -33,6 +33,9 @@ export interface GatewayConfig {
   secretsDir: string;
   /** Developer Mode (§dev): when true, HA may be published on 8123 for debugging. Off by default. */
   devMode: boolean;
+  /** Setup Wizard mode: on production first boot, wait for the wizard to create the admin
+   * instead of auto-seeding a demo owner. Off by default (dev/tests keep the demo home). */
+  setupWizard: boolean;
   /** Friendly system/home name used during onboarding + shown in the UI. */
   systemName: string;
   /** IANA time zone + optional coordinates seeded into HA's core config. */
@@ -153,6 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     haAdminPassword: secret(env, "SUPREME_HA_ADMIN_PASSWORD") ?? "admin@supremeos",
     secretsDir: env.SUPREME_SECRETS_DIR ?? "",
     devMode: env.SUPREME_DEV_MODE === "1" || env.SUPREME_DEV_MODE === "true",
+    setupWizard: env.SUPREME_SETUP_WIZARD === "1" || env.SUPREME_SETUP_WIZARD === "true",
     systemName: env.SUPREME_SYSTEM_NAME ?? "Supreme Residence",
     timeZone: env.SUPREME_TZ ?? "UTC",
     latitude: env.SUPREME_LATITUDE ? Number(env.SUPREME_LATITUDE) : null,

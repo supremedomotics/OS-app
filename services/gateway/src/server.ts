@@ -5,6 +5,7 @@ import fastifyRateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { AppContext } from "./context.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerSetupRoutes } from "./routes/setup.js";
 import { registerHomeRoutes } from "./routes/home.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerSceneRoutes } from "./routes/scenes.js";
@@ -75,6 +76,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     backendHealthy: ctx.sil.isHealthy(),
   }));
 
+  registerSetupRoutes(app, ctx);
   registerAuthRoutes(app, ctx);
   registerHomeRoutes(app, ctx);
   registerDeviceRoutes(app, ctx);

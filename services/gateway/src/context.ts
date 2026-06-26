@@ -1,6 +1,7 @@
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { IdentityService, type IIdentityStore, type ISessionStore } from "@supreme/identity";
+import { SupremeError, type LoginResponse } from "@supreme/contracts";
 import { HomeService, seedDemoHome, type IHomeStore } from "@supreme/home";
 import { SceneService, type ISceneStore } from "@supreme/scenes";
 import {
@@ -19,7 +20,7 @@ import {
   type CreateGrantInput,
   type IGrantStore,
 } from "@supreme/permissions";
-import type { DeviceId, Grant, HomeId, Notification, UserId } from "@supreme/domain-model";
+import type { DeviceId, Grant, Home, HomeId, Notification, UserId } from "@supreme/domain-model";
 import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
@@ -112,6 +113,9 @@ export class AppContext {
   /** Shared presence store: who is connected right now (§5). */
   readonly presence: IPresenceStore;
   homeId!: HomeId;
+  /** True on production first boot until the Setup Wizard creates the administrator.
+   * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
+  setupRequired = false;
 
   private ready = false;
   private readonly deps: AppDeps;
@@ -209,9 +213,17 @@ export class AppContext {
     await ctx.sil.start();
 
     let home = await ctx.home.getHome();
+    if (!home && config.setupWizard) {
+      // Production first boot: NO demo owner is created. The hub serves only /healthz and
+      // /v1/setup until the Supreme Setup Wizard creates the administrator. Home Assistant
+      // is still provisioned/connected (above) — only the Supreme admin is pending.
+      ctx.setupRequired = true;
+      return ctx;
+    }
     if (home) {
       await ctx.home.rebindRegistry();
     } else {
+      // Dev/test default: auto-commission a demo owner + seed a demo home.
       const commissioned = await ctx.identity.commission({
         homeName: "Supreme Residence",
         email: "owner@supreme.local",
@@ -221,26 +233,33 @@ export class AppContext {
       home = commissioned.home;
       await seedDemoHome(ctx.home, home);
     }
+    await ctx.initWithHome(home);
+    return ctx;
+  }
 
-    // The installer services need the commissioned home id and the persisted stores.
-    ctx.installer = new InstallerServices({
+  /**
+   * Initialize everything that requires a commissioned home — installer surfaces, camera
+   * streaming, the security panel, automations, analytics/audit. Shared by normal boot
+   * and by the Setup Wizard ({@link completeSetup}) so the post-home wiring lives once.
+   */
+  private async initWithHome(home: Home): Promise<void> {
+    const { config, deps } = this;
+    this.installer = new InstallerServices({
       config,
-      sil: ctx.sil,
-      home: ctx.home,
-      scenes: ctx.scenes,
-      identity: ctx.identity,
+      sil: this.sil,
+      home: this.home,
+      scenes: this.scenes,
+      identity: this.identity,
       homeId: home.id as HomeId,
       driverStore: deps.driverStore,
       db: deps.db,
       scanners: deps.scanners,
       protocolBindingStore: deps.protocolBindingStore,
     });
-    await ctx.installer.init();
+    await this.installer.init();
 
-    ctx.homeId = home.id as HomeId;
+    this.homeId = home.id as HomeId;
 
-    // Camera streaming: resolve RTSP sources into client-playable HLS/WebRTC via the
-    // hub's stream engine when one is configured; otherwise hand back the raw source.
     const streamGateway: ICameraStreamGateway = config.streamBaseUrl
       ? new StreamGateway({
           engine: config.streamEngine === "mediamtx" ? "mediamtx" : "go2rtc",
@@ -248,51 +267,78 @@ export class AppContext {
           apiUrl: config.streamApiUrl || undefined,
         })
       : new NullStreamGateway();
-    ctx.cameras = new CameraService(ctx.home, streamGateway, ctx.homeId);
+    this.cameras = new CameraService(this.home, streamGateway, this.homeId);
 
-    // Restore the persisted security panel so an armed home stays armed across a
-    // restart (no-op when no DB is configured).
-    await ctx.security.hydrate(ctx.homeId);
+    await this.security.hydrate(this.homeId);
 
-    // Intelligence services. The automation engine's side effects flow through the
-    // SIL, scenes, and notifications; analytics + audit require a database.
     const executors: AutomationExecutors = {
-      command: (deviceId, command) => ctx.sil.command(deviceId, command),
+      command: (deviceId, command) => this.sil.command(deviceId, command),
       activateScene: async (sceneId) => {
-        await ctx.scenes.activate(sceneId);
+        await this.scenes.activate(sceneId);
       },
       notify: async (input) => {
-        await ctx.notifications.create({
-          homeId: ctx.homeId,
+        await this.notifications.create({
+          homeId: this.homeId,
           userId: input.userId,
           level: input.level,
           title: input.title,
           body: input.body,
         });
       },
-      getState: (deviceId, capability) => ctx.sil.getState(deviceId, capability),
+      getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
     };
     const engine = new AutomationEngine({
       executors,
       onRun: (id, ok) => {
-        void ctx.audit?.record({
-          homeId: ctx.homeId,
+        void this.audit?.record({
+          homeId: this.homeId,
           action: ok ? "automation.run" : "automation.error",
           resourceType: "automation",
           resourceId: id,
         });
       },
     });
-    ctx.automations = new AutomationService(engine, deps.automationStore);
-    await ctx.automations.start();
+    this.automations = new AutomationService(engine, deps.automationStore);
+    await this.automations.start();
 
     if (deps.db) {
-      ctx.analytics = new AnalyticsService(deps.db);
-      ctx.audit = new AuditService(deps.db);
+      this.analytics = new AnalyticsService(deps.db);
+      this.audit = new AuditService(deps.db);
     }
 
-    ctx.ready = true;
-    return ctx;
+    this.ready = true;
+  }
+
+  /**
+   * Complete the Setup Wizard: create the Supreme OS administrator (and the home) from
+   * the installer's input, finish initialization, and return an authenticated session so
+   * the wizard lands logged in. Supreme-only — no Home Assistant user is ever created.
+   */
+  async completeSetup(input: {
+    username: string;
+    password: string;
+    displayName?: string;
+    systemName: string;
+    location?: string | null;
+    timeZone?: string | null;
+  }): Promise<{ login: LoginResponse; loginEmail: string }> {
+    if (!this.setupRequired) {
+      throw new SupremeError("conflict", "Supreme OS is already set up");
+    }
+    // Accept a username or an email; store an email-shaped identifier for login.
+    const loginEmail = input.username.includes("@")
+      ? input.username
+      : `${input.username}@supreme.local`;
+    const { home } = await this.identity.commission({
+      homeName: input.systemName || "Supreme Residence",
+      email: loginEmail,
+      password: input.password,
+      displayName: input.displayName?.trim() || input.username,
+    });
+    await this.initWithHome(home);
+    this.setupRequired = false;
+    const login = await this.identity.login(loginEmail, input.password);
+    return { login, loginEmail };
   }
 
   /** Handle a normalized backend state delta: cache, fan-out, automations, analytics. */
