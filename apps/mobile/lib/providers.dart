@@ -11,6 +11,10 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.dark);
 final accentProvider = StateProvider<AureonAccent>((ref) => AureonAccent.gold);
 
+/// The homeowner's custom scene order (ids), set in the Scenes "Edit" mode. In-memory
+/// for now (persisting it is a small follow-up).
+final sceneOrderProvider = StateProvider<List<String>>((ref) => const []);
+
 /// Hub base URL. In production this is resolved automatically (mDNS LAN-direct or
 /// cloud relay); for Phase-0 dev it points at the local gateway.
 final hubBaseUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8080');

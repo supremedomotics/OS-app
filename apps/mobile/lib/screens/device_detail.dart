@@ -4,10 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import 'lighting_detail.dart';
 
-/// Rich, capability-routed device detail (§11.1): climate setpoints, media
-/// transport, cover position, or a lock slide-to-confirm — chosen by the device's
-/// Supreme capabilities, never by any backend type.
+/// Rich, capability-routed device detail (§11.1): a purpose-built lighting screen
+/// (brightness + colour wheel + temperature), climate setpoints, media transport, cover
+/// position, or a lock slide-to-confirm — chosen by the device's Supreme capabilities,
+/// never by any backend type.
 class DeviceDetailScreen extends ConsumerWidget {
   const DeviceDetailScreen({super.key, required this.device});
 
@@ -19,6 +21,10 @@ class DeviceDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Lights get the dedicated lighting experience.
+    if (device.capabilities.contains('brightness') || device.capabilities.contains('color')) {
+      return LightingDetail(device: device);
+    }
     return Scaffold(
       appBar: AppBar(title: Text(device.name)),
       body: Padding(
