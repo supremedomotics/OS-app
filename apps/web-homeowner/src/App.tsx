@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { SupremeStream } from "@supreme/sdk";
-import { client, openStream } from "./api.js";
+import { client, fetchSetupStatus, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
 import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
+import { ForgotPassword, SetupWizard } from "./onboarding.js";
 
 type Tab = "home" | "rooms" | "scenes" | "security" | "energy";
 
@@ -16,10 +17,16 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 
 export function App() {
   const [authed, setAuthed] = useState(false);
+  const [setup, setSetup] = useState<SetupStatus | null>(null);
   const [tab, setTab] = useState<Tab>("home");
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [states, setStates] = useState<LiveStates>({});
   const streamRef = useRef<SupremeStream | null>(null);
+
+  // First paint: discover whether the hub still needs first-run setup.
+  useEffect(() => {
+    void fetchSetupStatus().then(setSetup);
+  }, []);
 
   const apply = (deviceId: string, capability: string, state: unknown) =>
     setStates((s) => ({ ...s, [deviceId]: { ...s[deviceId], [capability]: state } }));
@@ -36,6 +43,9 @@ export function App() {
     return () => stream.close();
   }, [authed]);
 
+  if (!authed && setup?.setupRequired) {
+    return <SetupWizard status={setup} onDone={() => { setSetup({ ...setup, setupRequired: false }); setAuthed(true); }} />;
+  }
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
   const openRoom = (roomId: string) => {
@@ -80,6 +90,7 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
   const [password, setPassword] = useState("supreme-owner-demo-pass");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -95,6 +106,8 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
       setBusy(false);
     }
   }
+
+  if (forgot) return <ForgotPassword onBack={() => setForgot(false)} />;
 
   return (
     <div className="login">
@@ -113,6 +126,17 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      <div className="login-actions">
+        <button className="link" onClick={() => setForgot(true)}>
+          Forgot password?
+        </button>
+        <button
+          className="link"
+          onClick={() => setError("New accounts are created by your home administrator in Settings → People.")}
+        >
+          Create new user
+        </button>
+      </div>
     </div>
   );
 }

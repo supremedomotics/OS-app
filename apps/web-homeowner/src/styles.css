@@ -114,3 +114,17 @@ video.player { width: 100%; border-radius: 14px; background: #000; }
 }
 .login button { width: 100%; margin-top: 16px; }
 .err { color: var(--aureon-color-status-critical); font-size: 13px; margin-top: 8px; }
+.login h2 { font-weight: 600; font-size: 19px; margin: 8px 0 2px; }
+.login .row { display: flex; gap: 10px; }
+.login .row button { flex: 1; }
+.login-actions { display: flex; justify-content: space-between; margin-top: 18px; }
+button.link {
+  width: auto; background: none; border: none; padding: 6px 2px; margin: 0;
+  color: var(--aureon-color-gold-400); font-size: 13px; cursor: pointer;
+}
+.onboarding .steps { display: flex; gap: 8px; justify-content: center; list-style: none; padding: 0; margin: 24px 0 0; }
+.onboarding .steps li {
+  width: 28px; height: 4px; border-radius: 2px; background: var(--aureon-color-base-hairline);
+  transition: background 200ms ease;
+}
+.onboarding .steps li.on { background: var(--aureon-color-gold-400); }

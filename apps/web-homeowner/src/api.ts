@@ -5,10 +5,69 @@ import { MemoryTokenStore, SupremeClient, SupremeStream } from "@supreme/sdk";
  * Supreme contract only — it has no concept of Home Assistant. The hub base URL is
  * resolved from the environment (LAN-direct in the home; cloud relay when remote).
  */
-const baseUrl = import.meta.env.VITE_SUPREME_API_URL ?? "http://127.0.0.1:8080";
+export const baseUrl = import.meta.env.VITE_SUPREME_API_URL ?? "http://127.0.0.1:8080";
 const wsBaseUrl = baseUrl.replace(/^http/, "ws");
 
 export const client = new SupremeClient({ baseUrl, tokenStore: new MemoryTokenStore() });
+
+// ── Unauthenticated onboarding + account-recovery endpoints ─────────────────────
+// These are first-run / pre-login flows the SDK doesn't model; small fetch helpers
+// keep the app bound to the Supreme contract (still zero Home Assistant awareness).
+async function postJson(path: string, body: unknown): Promise<Response> {
+  return fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const j = (await res.json()) as { message?: string };
+    return j.message ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export interface SetupStatus {
+  setupRequired: boolean;
+  systemName: string;
+}
+
+export async function fetchSetupStatus(): Promise<SetupStatus> {
+  try {
+    const res = await fetch(`${baseUrl}/v1/setup/status`);
+    if (!res.ok) return { setupRequired: false, systemName: "" };
+    return (await res.json()) as SetupStatus;
+  } catch {
+    return { setupRequired: false, systemName: "" };
+  }
+}
+
+export interface SetupInput {
+  username: string;
+  password: string;
+  confirmPassword: string;
+  systemName: string;
+  location?: string;
+  timeZone?: string;
+}
+
+export async function completeSetup(input: SetupInput): Promise<void> {
+  const res = await postJson("/v1/setup", input);
+  if (!res.ok) throw new Error(await errorMessage(res, "Setup could not be completed."));
+}
+
+export async function forgotPassword(email: string): Promise<{ resetToken?: string }> {
+  const res = await postJson("/v1/auth/forgot-password", { email });
+  return res.ok ? ((await res.json()) as { resetToken?: string }) : {};
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  const res = await postJson("/v1/auth/reset-password", { token, newPassword });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not reset the password."));
+}
 
 /** Open the realtime WSS stream once authenticated (live device state + notifications). */
 export function openStream(): SupremeStream | null {
