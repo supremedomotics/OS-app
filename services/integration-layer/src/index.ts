@@ -32,4 +32,5 @@ export { MigrationPolicy, type EngineKind, type IMigrationPolicyStore } from "./
 export { applyCommand } from "./apply.js";
 export { HaAdapter, type HaTransport, type HaAdapterOptions } from "./ha/ha-adapter.js";
 export { HaWsTransport, type HaWsTransportOptions } from "./ha/ha-ws-transport.js";
+export { provisionHaToken, haHttpFromWsUrl, type HaProvisionerOptions } from "./ha/ha-provisioner.js";
 export { commandToHaService, haStateToCapability, type HaServiceCall } from "./ha/capability-mapper.js";

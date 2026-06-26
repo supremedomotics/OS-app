@@ -21,7 +21,24 @@ export interface GatewayConfig {
   /** "mock" runs the offline vertical slice; "ha" uses the real HA backend. */
   backend: "mock" | "ha";
   haUrl: string;
+  /** HA long-lived token. Optional: when empty and backend=ha, the hub provisions HA
+   * headlessly on first boot and stores the generated token in the secrets manager. */
   haToken: string;
+  /** HA HTTP base (for onboarding); derived from haUrl when not set. */
+  haHttpUrl: string;
+  /** Hidden internal HA account the gateway provisions + uses. Never shown in any UI. */
+  haAdminUser: string;
+  haAdminPassword: string;
+  /** Directory for runtime-generated secrets (the provisioned HA token); empty = in-memory. */
+  secretsDir: string;
+  /** Developer Mode (§dev): when true, HA may be published on 8123 for debugging. Off by default. */
+  devMode: boolean;
+  /** Friendly system/home name used during onboarding + shown in the UI. */
+  systemName: string;
+  /** IANA time zone + optional coordinates seeded into HA's core config. */
+  timeZone: string;
+  latitude: number | null;
+  longitude: number | null;
   /** Postgres connection string; empty = use in-memory stores (dev/tests). */
   databaseUrl: string;
   /** Hub software version reported by diagnostics / project export. */
@@ -131,6 +148,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     backend,
     haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
     haToken: secret(env, "SUPREME_HA_TOKEN") ?? "",
+    haHttpUrl: env.SUPREME_HA_HTTP_URL ?? "",
+    haAdminUser: env.SUPREME_HA_ADMIN_USER ?? "admin",
+    haAdminPassword: secret(env, "SUPREME_HA_ADMIN_PASSWORD") ?? "admin@supremeos",
+    secretsDir: env.SUPREME_SECRETS_DIR ?? "",
+    devMode: env.SUPREME_DEV_MODE === "1" || env.SUPREME_DEV_MODE === "true",
+    systemName: env.SUPREME_SYSTEM_NAME ?? "Supreme Residence",
+    timeZone: env.SUPREME_TZ ?? "UTC",
+    latitude: env.SUPREME_LATITUDE ? Number(env.SUPREME_LATITUDE) : null,
+    longitude: env.SUPREME_LONGITUDE ? Number(env.SUPREME_LONGITUDE) : null,
     databaseUrl: secret(env, "DATABASE_URL") ?? "",
     hubVersion: env.SUPREME_HUB_VERSION ?? "0.2.0",
     driverStorePublicKey: secret(env, "SUPREME_DRIVER_STORE_PUBLIC_KEY") ?? "",

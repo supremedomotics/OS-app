@@ -7,6 +7,8 @@ import {
   RoutingBackendAdapter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
+  provisionHaToken,
+  haHttpFromWsUrl,
   type IBackendAdapter,
   type INativeProtocolDriver,
   type IMigrationPolicyStore,
@@ -39,6 +41,42 @@ import { HttpProtocolScanner } from "@supreme/commissioning";
 import type { ProtocolKind } from "@supreme/domain-model";
 import { assertSecureConfig, type GatewayConfig } from "./config.js";
 import { AppContext, type AppDeps } from "./context.js";
+import { createSecretStore } from "./secrets.js";
+
+const HA_TOKEN_SECRET = "ha_token";
+
+/**
+ * Resolve the HA long-lived token without ever asking the installer for one (§7, §8):
+ *   1. an explicitly supplied SUPREME_HA_TOKEN (env / *_FILE), else
+ *   2. a token minted on a previous boot and kept in the secrets manager, else
+ *   3. headless first-boot provisioning — create HA's hidden internal account and mint
+ *      a token, then persist it. HA stays completely invisible throughout.
+ * Throws only if HA is already onboarded by someone else and no token is available.
+ */
+async function resolveHaToken(config: GatewayConfig): Promise<string> {
+  if (config.haToken) return config.haToken;
+  const secrets = createSecretStore(config.secretsDir || undefined);
+  const stored = secrets.get(HA_TOKEN_SECRET);
+  if (stored) return stored;
+
+  const provisioned = await provisionHaToken({
+    httpUrl: config.haHttpUrl || haHttpFromWsUrl(config.haUrl),
+    wsUrl: config.haUrl,
+    adminUsername: config.haAdminUser,
+    adminPassword: config.haAdminPassword,
+    systemName: config.systemName,
+    timeZone: config.timeZone,
+    latitude: config.latitude ?? undefined,
+    longitude: config.longitude ?? undefined,
+  });
+  if (!provisioned) {
+    throw new Error(
+      "Home Assistant is already initialized but no token is available — provide SUPREME_HA_TOKEN once, or reset HA to let Supreme OS provision it headlessly.",
+    );
+  }
+  secrets.set(HA_TOKEN_SECRET, provisioned.token);
+  return provisioned.token;
+}
 
 /**
  * Hub boot edge. This is where the concrete, HA-specific WebSocket transport is
@@ -93,8 +131,8 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   const registry = new EntityRegistryMirror();
   let haSide: IBackendAdapter;
   if (config.backend === "ha") {
-    if (!config.haToken) throw new Error("SUPREME_BACKEND=ha requires SUPREME_HA_TOKEN");
-    const transport = new HaWsTransport({ url: config.haUrl, token: config.haToken });
+    const token = await resolveHaToken(config);
+    const transport = new HaWsTransport({ url: config.haUrl, token });
     haSide = new HaAdapter({ transport, registry });
   } else {
     haSide = new MockAdapter();
