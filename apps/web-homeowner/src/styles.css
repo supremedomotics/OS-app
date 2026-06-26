@@ -187,6 +187,22 @@ button.link {
   flex: 1; display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 18px;
   background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px;
 }
+.greet { font-size: 30px; font-weight: 600; margin: 6px 0 18px; }
+/* Ovio quick-scene tiles: square cards with a play glyph; active = gold. */
+.scene-tiles { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 18px; -webkit-overflow-scrolling: touch; }
+.scene-tile {
+  flex: 0 0 auto; width: 116px; height: 124px; border-radius: 20px; cursor: pointer;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+  padding: 16px; color: var(--aureon-color-text-primary); transition: background 160ms ease, border-color 160ms ease;
+}
+.scene-tile .play { font-size: 20px; color: var(--aureon-color-text-secondary); }
+.scene-tile .nm { font-weight: 600; font-size: 15px; }
+.scene-tile.on { background: var(--aureon-color-gold-500); border-color: transparent; color: #15161b; }
+.scene-tile.on .play {
+  color: #15161b; width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.12);
+}
 .cat-tile .ic { color: var(--aureon-color-gold-400); font-size: 16px; }
 .cat-tile .lbl { font-weight: 600; }
 .cat-tile .v { margin-left: auto; font-weight: 600; }

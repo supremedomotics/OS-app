@@ -48,17 +48,43 @@ function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []): [T | null, (
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
+function greetingFor(d: Date): string {
+  const h = d.getHours();
+  if (h < 5) return "Good night";
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  if (h < 21) return "Good evening";
+  return "Good night";
+}
+
 export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void }) {
   const [home] = useAsync<HomeView>(() => client.home());
   const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
+  const [activeScene, setActiveScene] = useState<string | null>(null);
 
   const rooms = home?.rooms ?? [];
   const heroImage = rooms.find((r) => r.heroImageUrl)?.heroImageUrl ?? null;
 
   return (
     <div>
-      <p className="sub">Welcome home</p>
-      <h1 className="title">{home?.home.name ?? "Home"}</h1>
+      <h1 className="greet">{greetingFor(new Date())}</h1>
+
+      {scenes && scenes.length > 0 && (
+        <div className="scene-tiles">
+          {scenes.map((s) => (
+            <button
+              key={s.id}
+              className={`scene-tile${activeScene === s.id ? " on" : ""}`}
+              onClick={() => { void client.activateScene(s.id); setActiveScene(s.id); }}
+            >
+              <span className="play">{activeScene === s.id ? (s.icon ?? "◆") : "▷"}</span>
+              <span className="nm">{s.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <h2 className="section">{home?.home.name ?? "Home"}</h2>
 
       {/* Ovio-style home hero: photographic backdrop → accent gradient fallback. */}
       <div
@@ -91,20 +117,6 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
           <span className="v">{scenes?.length ?? 0}</span>
         </div>
       </div>
-
-      {scenes && scenes.length > 0 && (
-        <>
-          <h2 className="section">Scenes</h2>
-          <div className="scene-row">
-            {scenes.map((s) => (
-              <button key={s.id} className="scene-btn" onClick={() => void client.activateScene(s.id)}>
-                {s.icon ? `${s.icon} ` : ""}
-                {s.name}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
 
       <h2 className="section">Rooms</h2>
       <div className="grid">
