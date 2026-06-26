@@ -144,8 +144,12 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
     device(hid, living.id, "Living Room Lights", "dimmer", [
       { kind: "onoff", config: {} },
       { kind: "brightness", config: {} },
-    ], { brightness: { kind: "brightness", on: false, level: 0 } }),
-    { onoff: "light.living_room", brightness: "light.living_room" },
+      { kind: "color", config: {} },
+    ], {
+      brightness: { kind: "brightness", on: false, level: 0 },
+      color: { kind: "color", on: false, level: 0, hue: 40, saturation: 60, kelvin: 2700 },
+    }),
+    { onoff: "light.living_room", brightness: "light.living_room", color: "light.living_room" },
   );
   await home.addDevice(
     device(hid, living.id, "Living Room Blinds", "cover", [{ kind: "position", config: {} }], {
