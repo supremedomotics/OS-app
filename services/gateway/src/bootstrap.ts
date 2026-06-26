@@ -27,6 +27,7 @@ import {
   AjaxProtocolDriver,
   ShellyProtocolDriver,
   AirPlayProtocolDriver,
+  AppleTvProtocolDriver,
   LutronProtocolDriver,
   TuyaProtocolDriver,
   createSonosConnect,
@@ -145,6 +146,11 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // Shelly Gen2 (real local RPC + mDNS discovery); AirPlay (mDNS discovery + sender seam).
   if (config.shellyEnabled) nativeDrivers.push(new ShellyProtocolDriver());
   if (config.airplayEnabled) nativeDrivers.push(new AirPlayProtocolDriver());
+  // Apple TV — real mDNS discovery (_mediaremotetv._tcp); full media control + rich
+  // now-playing (foreground app + content) via a pyatv-backed MRP client seam. The
+  // client needs per-device pairing credentials, so until provisioned the driver
+  // discovers but a bind awaits a configured connect() (boot is unaffected).
+  if (config.appleTvEnabled) nativeDrivers.push(new AppleTvProtocolDriver());
   // Lutron LIP — wired (RA2/HomeWorks QS) + wireless (Caséta Smart Bridge Pro), one bridge.
   if (config.lutronHost) {
     nativeDrivers.push(

@@ -64,6 +64,8 @@ services:
       # Shelly Gen2 (local JSON-RPC + mDNS) + AirPlay (mDNS discovery; sender needs a stack).
       SUPREME_SHELLY_ENABLED: ${SUPREME_SHELLY_ENABLED:-0}
       SUPREME_AIRPLAY_ENABLED: ${SUPREME_AIRPLAY_ENABLED:-0}
+      # Apple TV media control + now-playing (mDNS discovery; pyatv MRP client seam).
+      SUPREME_APPLETV_ENABLED: ${SUPREME_APPLETV_ENABLED:-0}
       # Lutron LIP bridge (RA2/HomeWorks QS wired or Caséta Smart Bridge Pro wireless).
       SUPREME_LUTRON_HOST: ${SUPREME_LUTRON_HOST:-}
       SUPREME_LUTRON_USERNAME: ${SUPREME_LUTRON_USERNAME:-lutron}

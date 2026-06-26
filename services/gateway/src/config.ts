@@ -78,6 +78,8 @@ export interface GatewayConfig {
   ajaxEnabled: boolean;
   shellyEnabled: boolean;
   airplayEnabled: boolean;
+  /** Enable the Apple TV driver (mDNS discovery + pyatv-backed MRP control client). */
+  appleTvEnabled: boolean;
   /** Lutron bridge host (RA2/HWQS wired or Caséta Pro wireless) over LIP; empty = off. */
   lutronHost: string;
   lutronUsername: string;
@@ -154,6 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     ajaxEnabled: env.SUPREME_AJAX_ENABLED === "1" || env.SUPREME_AJAX_ENABLED === "true",
     shellyEnabled: env.SUPREME_SHELLY_ENABLED === "1" || env.SUPREME_SHELLY_ENABLED === "true",
     airplayEnabled: env.SUPREME_AIRPLAY_ENABLED === "1" || env.SUPREME_AIRPLAY_ENABLED === "true",
+    appleTvEnabled: env.SUPREME_APPLETV_ENABLED === "1" || env.SUPREME_APPLETV_ENABLED === "true",
     lutronHost: env.SUPREME_LUTRON_HOST ?? "",
     lutronUsername: env.SUPREME_LUTRON_USERNAME ?? "lutron",
     lutronPassword: secret(env, "SUPREME_LUTRON_PASSWORD") ?? "integration",

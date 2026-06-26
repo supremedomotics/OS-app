@@ -1,6 +1,6 @@
 # Supreme OS — Native Protocol Driver Matrix
 
-> The 17 first-party native drivers in `@supreme/protocols`. Each fronts the
+> The 18 first-party native drivers in `@supreme/protocols`. Each fronts the
 > `INativeProtocolDriver` seam and is surfaced to the SIL through
 > `SupremeNativeAdapter` (§3, §7), so the same Supreme capability commands drive
 > every ecosystem without HA in the path. Drivers are **gated at the boot edge** —
@@ -37,6 +37,7 @@
 | **Sonos** | media | `node-sonos` real transport (wired) behind seam | SSDP | `SUPREME_SONOS_ENABLED` | fake device |
 | **Ajax** | sensor | cloud/proprietary seam | — (cloud account) | `SUPREME_AJAX_ENABLED` | unit tests |
 | **AirPlay** | media | sender seam (AirPlay is a streaming, not control, protocol) | **real** mDNS (`_airplay._tcp`) | `SUPREME_AIRPLAY_ENABLED` | discovery test |
+| **Apple TV** | media (full transport + volume/mute; now-playing: foreground **app** + content) | MRP client seam (pyatv-backed, encrypted+paired) | **real** mDNS (`_mediaremotetv._tcp`) | `SUPREME_APPLETV_ENABLED` | mapping + discovery + fake-client test |
 | **Shelly** | onoff, brightness, position, sensor | **real** Gen2 JSON-RPC over HTTP (`POST /rpc`) | mDNS (`_shelly._tcp`), enriched via `Shelly.GetStatus` | `SUPREME_SHELLY_ENABLED` | in-process RPC + enriched discovery |
 | **Lutron** | onoff, brightness, position | **real** Lutron Integration Protocol (LIP) over Telnet — one driver covers **wired** RadioRA 2 / HomeWorks QS **and wireless** Caséta Smart Bridge Pro | — (integration ids by config) | `SUPREME_LUTRON_HOST` | in-process LIP bridge (auth + set + report) |
 | **Tuya** | onoff, brightness, position | cloud/proprietary seam (`tuyapi` / Tuya Cloud); DPS mapping both ways | — (per-device keys) | `SUPREME_TUYA_ENABLED` | fake DPS device |
@@ -46,8 +47,9 @@
 - **SSDP** — raw UDP datagram `M-SEARCH` + response parsing (`ssdp.ts`). Used by
   WiiM and Sonos.
 - **mDNS / DNS-SD** — hand-rolled DNS codec over raw datagram (`mdns.ts`), no native
-  dependency. Used by Devialet, AirPlay, and Shelly (Shelly then enriches each hit
-  with a `Shelly.GetStatus` call to learn the device's real capability set).
+  dependency. Used by Devialet, AirPlay, Apple TV (`_mediaremotetv._tcp`), and Shelly
+  (Shelly then enriches each hit with a `Shelly.GetStatus` call to learn the device's
+  real capability set).
 - **MQTT bridge** — Zigbee2MQTT `bridge/devices` topic discovery (`mqtt-discovery.ts`).
 
 ## Authenticity at a glance
@@ -56,7 +58,7 @@
   KNX (DPT), MQTT, Modbus, DALI (IEC 62386), AVR, CoolMaster, WiiM (LinkPlay),
   Devialet, Shelly (Gen2 RPC), Lutron (LIP).
 - **Library seam (heavy/native client wired at edge, faked in tests):** Matter,
-  Zigbee, Sonos, SIP, AirPlay.
+  Zigbee, Sonos, SIP, AirPlay, Apple TV (pyatv-backed MRP).
 - **Cloud/proprietary seam (closed ecosystem, per-device keys or vendor cloud):**
   Ajax, Tuya.
 
