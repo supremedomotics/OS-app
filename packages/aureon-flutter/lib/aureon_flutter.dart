@@ -8,6 +8,8 @@ library;
 export 'src/tokens.g.dart';
 export 'src/theme.dart';
 export 'src/widgets/fill_tile.dart';
+export 'src/widgets/category_tile.dart';
+export 'src/widgets/room_hero.dart';
 export 'src/widgets/slide_to_confirm.dart';
 export 'src/widgets/scene_button.dart';
 export 'src/widgets/climate_card.dart';

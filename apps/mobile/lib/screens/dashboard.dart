@@ -6,8 +6,9 @@ import '../providers.dart';
 import 'automations_screen.dart';
 import 'energy_screen.dart';
 
-/// Homeowner dashboard (§11.3): a quick-scene row at the top, then favorites and
-/// an entry into rooms. Calm, room-first, gesture-driven.
+/// Homeowner dashboard (§11.1/§11.3) — the Ovio-grade "Welcome home": a calm header, a
+/// full-bleed home hero, a quick-scene row, and proportional category tiles that drill
+/// into the home. Room-first, gesture-driven, no long entity lists.
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
 
@@ -16,84 +17,100 @@ class DashboardScreen extends ConsumerWidget {
     final home = ref.watch(homeProvider);
     final scenes = ref.watch(scenesProvider);
     final favorites = ref.watch(favoritesProvider);
+    final text = Theme.of(context).textTheme;
+    final homeName = home.maybeWhen(data: (h) => h.homeName, orElse: () => 'Supreme');
+    final roomCount = home.maybeWhen(data: (h) => h.rooms.length, orElse: () => 0);
 
     return SafeArea(
       child: ListView(
-        padding: const EdgeInsets.all(AureonSpacing.lg),
+        padding: const EdgeInsets.fromLTRB(
+            AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.xxl),
         children: [
-          Text(
-            home.maybeWhen(
-              data: (h) => h.homeName,
-              orElse: () => 'Supreme',
-            ),
-            style: Theme.of(context).textTheme.displayLarge,
+          Text('Welcome home', style: text.labelMedium),
+          const SizedBox(height: 2),
+          Text(homeName, style: text.titleLarge),
+          const SizedBox(height: AureonSpacing.lg),
+
+          // Home hero — photographic backdrop falls back to an accent gradient.
+          RoomHero(
+            title: homeName,
+            subtitle: roomCount > 0 ? '$roomCount rooms' : null,
+            statusValue: 'All calm',
+            statusLabel: 'Home',
+            metricValue: scenes.maybeWhen(data: (s) => '${s.length}', orElse: () => null),
+            metricLabel: 'Scenes',
           ),
-          Text('Welcome home', style: Theme.of(context).textTheme.labelMedium),
           const SizedBox(height: AureonSpacing.lg),
 
           // Quick-scene row.
-          SizedBox(
-            height: 44,
-            child: scenes.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => const SizedBox.shrink(),
-              data: (list) => ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: list.length,
-                separatorBuilder: (_, __) =>
-                    const SizedBox(width: AureonSpacing.sm),
-                itemBuilder: (context, i) => SceneButton(
-                  label: list[i].name,
-                  onTap: () async {
-                    await ref.read(clientProvider).activateScene(list[i].id);
-                  },
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: AureonSpacing.xl),
-
-          Text('Favorites', style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: AureonSpacing.md),
-          favorites.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) => Text('Could not load favorites: $e'),
+          scenes.maybeWhen(
             data: (list) => list.isEmpty
-                ? Text('No favorites yet',
-                    style: Theme.of(context).textTheme.labelMedium)
-                : Wrap(
-                    spacing: AureonSpacing.sm,
-                    runSpacing: AureonSpacing.sm,
-                    children: [
-                      for (final f in list)
-                        Chip(
-                            label:
-                                Text('${f.type}: ${f.refId.substring(0, 8)}…')),
-                    ],
+                ? const SizedBox.shrink()
+                : SizedBox(
+                    height: 44,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: list.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: AureonSpacing.sm),
+                      itemBuilder: (context, i) => SceneButton(
+                        label: list[i].name,
+                        onTap: () async => ref.read(clientProvider).activateScene(list[i].id),
+                      ),
+                    ),
                   ),
+            orElse: () => const SizedBox.shrink(),
           ),
-          const SizedBox(height: AureonSpacing.xl),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.bolt_outlined, color: AureonGold.c400),
-              title: const Text('Energy'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const EnergyScreen()),
-              ),
+          const SizedBox(height: AureonSpacing.lg),
+
+          // Category tiles — calm aggregates that drill in (no long entity lists).
+          CategoryTile(
+            icon: Icons.meeting_room_outlined,
+            label: 'Rooms',
+            value: roomCount > 0 ? '$roomCount' : null,
+            trailing: const Icon(Icons.chevron_right, size: 20),
+          ),
+          const SizedBox(height: AureonSpacing.sm),
+          CategoryTile(
+            icon: Icons.bolt_outlined,
+            label: 'Energy',
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const EnergyScreen()),
             ),
           ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.account_tree_outlined,
-                  color: AureonGold.c400),
-              title: const Text('Automations'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                    builder: (_) => const AutomationsScreen()),
-              ),
+          const SizedBox(height: AureonSpacing.sm),
+          CategoryTile(
+            icon: Icons.account_tree_outlined,
+            label: 'Automations',
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AutomationsScreen()),
             ),
+          ),
+
+          // Favorites, when present.
+          favorites.maybeWhen(
+            data: (list) => list.isEmpty
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: AureonSpacing.xl),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Favorites', style: text.headlineSmall),
+                        const SizedBox(height: AureonSpacing.md),
+                        Wrap(
+                          spacing: AureonSpacing.sm,
+                          runSpacing: AureonSpacing.sm,
+                          children: [
+                            for (final f in list)
+                              Chip(label: Text('${f.type}: ${f.refId.substring(0, 8)}…')),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+            orElse: () => const SizedBox.shrink(),
           ),
         ],
       ),
