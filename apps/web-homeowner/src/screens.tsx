@@ -39,10 +39,45 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
   const [home] = useAsync<HomeView>(() => client.home());
   const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
 
+  const rooms = home?.rooms ?? [];
+  const heroImage = rooms.find((r) => r.heroImageUrl)?.heroImageUrl ?? null;
+
   return (
     <div>
+      <p className="sub">Welcome home</p>
       <h1 className="title">{home?.home.name ?? "Home"}</h1>
-      <p className="sub">Welcome home.</p>
+
+      {/* Ovio-style home hero: photographic backdrop → accent gradient fallback. */}
+      <div
+        className="hero"
+        style={heroImage ? { backgroundImage: `linear-gradient(transparent 40%, rgba(0,0,0,0.62)), url(${heroImage})` } : undefined}
+      >
+        <div className="hero-top">{home?.home.name ?? "Home"}</div>
+        <div className="hero-stats">
+          <div>
+            <strong>All calm</strong>
+            <span>Home</span>
+          </div>
+          <div className="right">
+            <strong>{rooms.length}</strong>
+            <span>Rooms</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Calm category aggregates (no long entity lists). */}
+      <div className="cat-tiles">
+        <div className="cat-tile">
+          <span className="ic">▦</span>
+          <span className="lbl">Rooms</span>
+          <span className="v">{rooms.length}</span>
+        </div>
+        <div className="cat-tile">
+          <span className="ic">✦</span>
+          <span className="lbl">Scenes</span>
+          <span className="v">{scenes?.length ?? 0}</span>
+        </div>
+      </div>
 
       {scenes && scenes.length > 0 && (
         <>

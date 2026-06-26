@@ -163,3 +163,25 @@ button.link {
 .seg button.on { border-color: var(--aureon-color-gold-400); background: color-mix(in srgb, var(--aureon-color-gold-400) 14%, transparent); }
 .seg.accents button { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .seg .swatch { width: 14px; height: 14px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,0.2); }
+
+/* Ovio-style home hero + category tiles */
+.hero {
+  position: relative; height: 240px; border-radius: 24px; margin: 14px 0 16px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--aureon-color-gold-400) 34%, var(--aureon-color-base-surface)) 0%, var(--aureon-color-base-surface) 70%);
+  background-size: cover; background-position: center;
+  display: flex; flex-direction: column; justify-content: space-between; padding: 18px 20px; overflow: hidden;
+}
+.hero-top { font-size: 20px; font-weight: 600; color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,0.4); }
+.hero-stats { display: flex; align-items: flex-end; justify-content: space-between; }
+.hero-stats strong { display: block; font-size: 22px; color: #fff; }
+.hero-stats span { font-size: 14px; color: rgba(255,255,255,0.75); }
+.hero-stats .right { text-align: right; }
+.cat-tiles { display: flex; gap: 10px; margin-bottom: 8px; }
+.cat-tile {
+  flex: 1; display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 18px;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px;
+}
+.cat-tile .ic { color: var(--aureon-color-gold-400); font-size: 16px; }
+.cat-tile .lbl { font-weight: 600; }
+.cat-tile .v { margin-left: auto; font-weight: 600; }
