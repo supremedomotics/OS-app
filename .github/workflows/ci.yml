@@ -99,7 +99,9 @@ jobs:
         run: pnpm audit --audit-level high || true   # report; tighten to hard-fail when triaged
       # Filesystem scan: known-vuln deps, leaked secrets, and IaC/Dockerfile misconfig.
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
+        # Pin to the verified-signed v0.36.0 tag (the repo moved to v-prefixed,
+        # signed tags after a 2025 supply-chain incident; un-prefixed 0.28.0 was removed).
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
