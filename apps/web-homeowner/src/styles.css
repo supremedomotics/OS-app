@@ -93,10 +93,13 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .room-card {
   position: relative; border-radius: 18px; overflow: hidden; cursor: pointer;
   border: 1px solid var(--aureon-color-base-hairline); min-height: 120px;
-  background: linear-gradient(135deg, #1d2029, #14161b);
+  background: linear-gradient(135deg, var(--aureon-color-base-surface-raised), var(--aureon-color-base-surface));
+  background-size: cover; background-position: center;
   padding: 16px; display: flex; align-items: flex-end;
 }
-.room-card .name { font-size: 18px; font-weight: 600; }
+.room-card .name { font-size: 18px; font-weight: 600; color: var(--aureon-color-text-primary); }
+/* Cards with a room photo carry a dark scrim (set inline) — text reads white over it. */
+.room-card.has-image .name { color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,0.5); }
 
 .scene-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
 .scene-btn {
@@ -167,8 +170,10 @@ button.link {
 /* Ovio-style home hero + category tiles */
 .hero {
   position: relative; height: 240px; border-radius: 24px; margin: 14px 0 16px;
+  /* Accent-tinted at the top, always dark toward the bottom (independent of theme) so the
+     white overlay text stays legible in Luxury White and Luxury Black alike. */
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--aureon-color-gold-400) 34%, var(--aureon-color-base-surface)) 0%, var(--aureon-color-base-surface) 70%);
+    linear-gradient(150deg, color-mix(in srgb, var(--aureon-color-gold-400) 55%, #15161b) 0%, #15161b 72%);
   background-size: cover; background-position: center;
   display: flex; flex-direction: column; justify-content: space-between; padding: 18px 20px; overflow: hidden;
 }

@@ -98,10 +98,10 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
         {(home?.rooms ?? []).map((r) => (
           <div
             key={r.id}
-            className="room-card"
+            className={`room-card${r.heroImageUrl ? " has-image" : ""}`}
             style={
               r.heroImageUrl
-                ? { backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${r.heroImageUrl})`, backgroundSize: "cover" }
+                ? { backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${r.heroImageUrl})` }
                 : undefined
             }
             onClick={() => onOpenRoom(r.id)}
