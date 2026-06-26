@@ -53,7 +53,7 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0;
   display: flex; justify-content: space-around;
-  background: rgba(18, 19, 23, 0.92); backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--aureon-color-base-surface) 90%, transparent); backdrop-filter: blur(12px);
   border-top: 1px solid var(--aureon-color-base-hairline);
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
 }
@@ -190,3 +190,50 @@ button.link {
 .cat-tile .ic { color: var(--aureon-color-gold-400); font-size: 16px; }
 .cat-tile .lbl { font-weight: 600; }
 .cat-tile .v { margin-left: auto; font-weight: 600; }
+.hero.room { height: 200px; }
+
+/* Room device tiles — Ovio tile-as-control (horizontal, proportional fill) */
+.dlist { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.dtile {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px;
+  height: 76px; padding: 0 18px; border-radius: 18px; cursor: pointer; user-select: none;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  touch-action: none;
+}
+.dtile .fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+  background: color-mix(in srgb, var(--aureon-color-gold-400) 22%, transparent);
+  transition: width 120ms ease;
+}
+.dtile.on { border-color: color-mix(in srgb, var(--aureon-color-gold-500) 60%, var(--aureon-color-base-hairline)); }
+.dtile .dic, .dtile .nm, .dtile .rv { position: relative; z-index: 1; }
+.dtile .dic { color: var(--aureon-color-text-secondary); flex: none; }
+.dtile .dic.on { color: var(--aureon-color-gold-400); }
+.dtile .nm { font-weight: 600; }
+.dtile .rv { margin-left: auto; color: var(--aureon-color-text-secondary); font-variant-numeric: tabular-nums; }
+
+/* Screen header with an edit action */
+.screen-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
+.edit-btn {
+  background: var(--aureon-color-base-surface-raised); color: var(--aureon-color-text-primary);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 999px; padding: 8px 18px;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.edit-btn.on { background: var(--aureon-color-gold-500); color: #15161b; border-color: transparent; }
+
+/* Scenes — interactive cards, drag-to-reorder in edit mode */
+.scene-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.scene-card {
+  display: flex; flex-direction: column; gap: 28px; min-height: 120px; padding: 18px;
+  border-radius: 20px; cursor: pointer; user-select: none;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+.scene-card .play {
+  width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+  background: var(--aureon-color-base-surface); color: var(--aureon-color-gold-400); font-size: 18px;
+}
+.scene-card .nm { font-size: 18px; font-weight: 600; }
+.scene-card.editing { cursor: grab; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
+.scene-card.editing .play { color: var(--aureon-color-text-secondary); }
+.scene-card.dragging { opacity: 0.55; transform: scale(0.97); }

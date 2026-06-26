@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   CameraStreamResponse,
   EnergySummaryResponse,
@@ -126,7 +126,14 @@ export function RoomsScreen({
 
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
-    return <RoomDevices roomId={selected} name={room?.name ?? "Room"} onBack={() => onSelect(null)} />;
+    return (
+      <RoomDevices
+        roomId={selected}
+        name={room?.name ?? "Room"}
+        heroImageUrl={room?.heroImageUrl ?? null}
+        onBack={() => onSelect(null)}
+      />
+    );
   }
 
   return (
@@ -144,38 +151,56 @@ export function RoomsScreen({
   );
 }
 
-function RoomDevices({ roomId, name, onBack }: { roomId: string; name: string; onBack: () => void }) {
+function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; name: string; heroImageUrl: string | null; onBack: () => void }) {
   const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
+  const list = devices ?? [];
   return (
     <div>
       <button className="back" onClick={onBack}>
         ‹ Rooms
       </button>
-      <h1 className="title">{name}</h1>
-      <div className="grid" style={{ marginTop: 12 }}>
-        {(devices ?? []).map((d) => (
+      {/* Room hero — entering a room should feel like entering the space. */}
+      <div
+        className="hero room"
+        style={heroImageUrl ? { backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,0.66)), url(${heroImageUrl})` } : undefined}
+      >
+        <div className="hero-top">{name}</div>
+        <div className="hero-stats">
+          <div>
+            <strong>{list.length}</strong>
+            <span>{list.length === 1 ? "device" : "devices"}</span>
+          </div>
+        </div>
+      </div>
+      <div className="dlist">
+        {list.map((d) => (
           <DeviceTile key={d.id} device={d} />
         ))}
       </div>
-      {devices && devices.length === 0 && <p className="muted">No devices in this room yet.</p>}
+      {devices && list.length === 0 && <p className="muted">No devices in this room yet.</p>}
     </div>
   );
 }
 
-// ── Device tile (tap-as-control; fill = level) ─────────────────────────────────
+// ── Device tile — Ovio "tile-as-control": horizontal, fill = value, drag to set ──
 function DeviceTile({ device }: { device: Device }) {
   const { states, apply } = useLive();
+  const ref = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
   const live = states[device.id] ?? {};
   const caps = device.capabilities.map((c) => c.kind);
-  const merged = { ...device.state, ...live } as Record<string, { on?: boolean; level?: number; value?: number; unit?: string }>;
+  const merged = { ...device.state, ...live } as Record<string, { on?: boolean; level?: number; value?: number; unit?: string; position?: number }>;
   const isDimmer = caps.includes("brightness");
-  const isSwitch = !isDimmer && caps.includes("onoff");
-  const isSensor = !isDimmer && !isSwitch && caps.includes("sensor");
+  const isCover = !isDimmer && caps.includes("position");
+  const isSwitch = !isDimmer && !isCover && caps.includes("onoff");
+  const isSensor = !isDimmer && !isSwitch && !isCover && caps.includes("sensor");
+  const slidable = isDimmer || isCover;
 
   const bright = merged.brightness;
   const onoff = merged.onoff;
-  const on = bright?.on ?? onoff?.on ?? false;
-  const level = bright?.level ?? (on ? 100 : 0);
+  const cover = merged.position;
+  const on = bright?.on ?? onoff?.on ?? (cover?.position ?? 0) > 0;
+  const level = isDimmer ? bright?.level ?? (on ? 100 : 0) : isCover ? cover?.position ?? 0 : on ? 100 : 0;
 
   async function toggle() {
     const next = !on;
@@ -183,67 +208,137 @@ function DeviceTile({ device }: { device: Device }) {
     await client.command(device.id as DeviceId, { capability: "onoff", action: "toggle" } as CapabilityCommand);
   }
   async function setLevel(v: number) {
-    apply(device.id, "brightness", { kind: "brightness", on: v > 0, level: v });
-    await client.command(device.id as DeviceId, { capability: "brightness", action: "set", level: v } as CapabilityCommand);
+    const val = Math.max(0, Math.min(100, Math.round(v)));
+    if (isDimmer) {
+      apply(device.id, "brightness", { kind: "brightness", on: val > 0, level: val });
+      await client.command(device.id as DeviceId, { capability: "brightness", action: "set", level: val } as CapabilityCommand);
+    } else {
+      apply(device.id, "position", { kind: "position", position: val, moving: false });
+      await client.command(device.id as DeviceId, { capability: "position", action: "set", position: val } as CapabilityCommand);
+    }
+  }
+  function fromClientX(clientX: number) {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    void setLevel(((clientX - r.left) / r.width) * 100);
   }
 
   if (isSensor) {
     const s = merged.sensor;
     return (
-      <div className="tile">
-        <div className="label">{device.name}</div>
-        <div className="val">
-          {s?.value ?? "—"} {s?.unit ?? ""}
-        </div>
+      <div className="dtile sensor">
+        <DeviceIcon kind="sensor" on={false} />
+        <span className="nm">{device.name}</span>
+        <span className="rv">{s?.value ?? "—"} {s?.unit ?? ""}</span>
       </div>
     );
   }
 
   return (
-    <div className={`tile${on ? " on" : ""}`} onClick={isDimmer ? undefined : toggle}>
-      <div className="fill" style={{ width: `${isDimmer ? level : on ? 100 : 0}%` }} />
-      <div className="label">{device.name}</div>
-      {isDimmer ? (
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={level}
-          onChange={(e) => void setLevel(Number(e.target.value))}
-        />
-      ) : (
-        <div className="val">{on ? "On" : "Off"}</div>
-      )}
+    <div
+      ref={ref}
+      className={`dtile${on ? " on" : ""}`}
+      onClick={slidable ? undefined : toggle}
+      onPointerDown={slidable ? (e) => { dragging.current = true; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); fromClientX(e.clientX); } : undefined}
+      onPointerMove={slidable ? (e) => { if (dragging.current) fromClientX(e.clientX); } : undefined}
+      onPointerUp={slidable ? () => { dragging.current = false; } : undefined}
+    >
+      <div className="fill" style={{ width: `${level}%` }} />
+      <DeviceIcon kind={isDimmer ? "light" : isCover ? "cover" : "switch"} on={on} />
+      <span className="nm">{device.name}</span>
+      <span className="rv">{slidable ? `${Math.round(level)}%` : on ? "On" : "Off"}</span>
     </div>
   );
 }
 
-// ── Scenes ───────────────────────────────────────────────────────────────────
+/** Minimal Aureon line icons (monochrome, theme-aware via currentColor). */
+function DeviceIcon({ kind, on }: { kind: "light" | "cover" | "switch" | "sensor"; on: boolean }) {
+  const paths: Record<string, string> = {
+    light: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.6 1 1 1 2v.5h6V15c0-1 .3-1.4 1-2A6 6 0 0 0 12 3Z",
+    cover: "M4 4h16M5 4v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4M9 19v2M15 19v2",
+    switch: "M8 6h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 6Zm0 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    sensor: "M12 3v18M3 12h18",
+  };
+  return (
+    <svg className={`dic${on ? " on" : ""}`} width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d={paths[kind]} />
+    </svg>
+  );
+}
+
+// ── Scenes — Ovio interactive cards with drag-to-reorder edit mode ─────────────
+const SCENE_ORDER_KEY = "supreme.sceneOrder";
+
 export function Scenes() {
   const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
+  const [order, setOrder] = useState<string[]>([]);
+  const [edit, setEdit] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // Establish/merge the persisted custom order whenever the scene set changes.
+  useEffect(() => {
+    if (!scenes) return;
+    const saved: string[] = JSON.parse(localStorage.getItem(SCENE_ORDER_KEY) ?? "[]");
+    const ids = scenes.map((s) => s.id as string);
+    setOrder([...saved.filter((id) => ids.includes(id)), ...ids.filter((id) => !saved.includes(id))]);
+  }, [scenes]);
+
+  const ordered = order
+    .map((id) => scenes?.find((s) => s.id === id))
+    .filter((s): s is Scene => Boolean(s));
+
+  function move(from: string, to: string) {
+    setOrder((cur) => {
+      const next = [...cur];
+      const fi = next.indexOf(from);
+      const ti = next.indexOf(to);
+      if (fi < 0 || ti < 0) return cur;
+      next.splice(ti, 0, next.splice(fi, 1)[0]!);
+      return next;
+    });
+  }
+  function save() {
+    localStorage.setItem(SCENE_ORDER_KEY, JSON.stringify(order));
+    setEdit(false);
+    setMsg("Order saved");
+  }
+
   return (
     <div>
-      <h1 className="title">Scenes</h1>
-      <p className="sub">One tap to set the mood.</p>
-      {(scenes ?? []).map((s) => (
-        <div className="card row" key={s.id}>
-          <strong>
-            {s.icon ? `${s.icon} ` : ""}
-            {s.name}
-          </strong>
-          <button
-            className="primary"
-            onClick={async () => {
-              await client.activateScene(s.id);
+      <div className="screen-head">
+        <div>
+          <p className="sub" style={{ margin: 0 }}>One tap to set the mood</p>
+          <h1 className="title">Scenes</h1>
+        </div>
+        <button className={`edit-btn${edit ? " on" : ""}`} onClick={() => (edit ? save() : setEdit(true))}>
+          {edit ? "Save" : "Edit"}
+        </button>
+      </div>
+
+      <div className="scene-grid">
+        {ordered.map((s) => (
+          <div
+            key={s.id}
+            className={`scene-card${edit ? " editing" : ""}${dragId === s.id ? " dragging" : ""}`}
+            draggable={edit}
+            onDragStart={() => setDragId(s.id)}
+            onDragEnd={() => setDragId(null)}
+            onDragOver={(e) => { if (edit && dragId && dragId !== s.id) { e.preventDefault(); move(dragId, s.id); } }}
+            onClick={() => {
+              if (edit) return;
+              void client.activateScene(s.id);
               setMsg(`${s.name} activated`);
             }}
           >
-            Activate
-          </button>
-        </div>
-      ))}
-      {msg && <p className="muted">{msg}</p>}
+            <span className="play">{edit ? "⠿" : s.icon ? s.icon : "▷"}</span>
+            <span className="nm">{s.name}</span>
+          </div>
+        ))}
+      </div>
+      {edit && <p className="muted">Drag the cards to reorder, then Save.</p>}
+      {!edit && msg && <p className="muted">{msg}</p>}
     </div>
   );
 }
