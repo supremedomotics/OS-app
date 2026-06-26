@@ -237,3 +237,37 @@ button.link {
 .scene-card.editing { cursor: grab; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
 .scene-card.editing .play { color: var(--aureon-color-text-secondary); }
 .scene-card.dragging { opacity: 0.55; transform: scale(0.97); }
+
+/* Lighting detail — brightness dial + HSV colour wheel + temperature */
+.light-detail .back { background: none; border: 0; color: var(--aureon-color-gold-400); font-size: 15px; cursor: pointer; padding: 0; }
+.light-cols { display: flex; gap: 22px; align-items: center; margin: 8px 0 24px; }
+.light-right { flex: 1; }
+.readout { font-size: 40px; font-weight: 600; }
+.bright-bar {
+  width: 110px; height: 260px; border-radius: 26px; overflow: hidden; cursor: ns-resize; touch-action: none;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  display: flex; align-items: flex-end;
+}
+.bright-fill { width: 100%; min-height: 0; display: flex; justify-content: center; align-items: flex-start; transition: height 90ms ease; }
+.bright-ic { color: rgba(0,0,0,0.45); font-size: 22px; padding-top: 12px; }
+.wheel-wrap { display: flex; justify-content: center; margin-top: 8px; }
+.wheel {
+  position: relative; width: 240px; height: 240px; border-radius: 50%; cursor: crosshair; touch-action: none;
+  background:
+    radial-gradient(circle at center, #fff 0%, rgba(255,255,255,0) 70%),
+    conic-gradient(from 0deg, hsl(0 100% 50%), hsl(60 100% 50%), hsl(120 100% 50%), hsl(180 100% 50%), hsl(240 100% 50%), hsl(300 100% 50%), hsl(360 100% 50%));
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
+}
+.wheel-thumb {
+  position: absolute; width: 26px; height: 26px; border-radius: 50%; transform: translate(-50%, -50%);
+  border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.3), 0 2px 6px rgba(0,0,0,0.4);
+}
+.temp-wrap { margin-top: 18px; }
+.temp-bar {
+  position: relative; height: 56px; border-radius: 999px; cursor: ew-resize; touch-action: none;
+  background: linear-gradient(90deg, #FFB867, #FFF1D6, #CFE5FF);
+}
+.temp-thumb {
+  position: absolute; top: 50%; width: 28px; height: 28px; border-radius: 50%; transform: translateY(-50%);
+  background: #fff; border: 1px solid rgba(0,0,0,0.15); box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}

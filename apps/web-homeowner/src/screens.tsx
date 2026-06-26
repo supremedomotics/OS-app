@@ -14,6 +14,7 @@ import type {
 } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
+import { LightingDetail } from "./lighting.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
 
 function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []): [T | null, () => void] {
@@ -153,7 +154,9 @@ export function RoomsScreen({
 
 function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; name: string; heroImageUrl: string | null; onBack: () => void }) {
   const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
+  const [detail, setDetail] = useState<Device | null>(null);
   const list = devices ?? [];
+  if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
   return (
     <div>
       <button className="back" onClick={onBack}>
@@ -174,7 +177,7 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
       </div>
       <div className="dlist">
         {list.map((d) => (
-          <DeviceTile key={d.id} device={d} />
+          <DeviceTile key={d.id} device={d} onOpen={() => { if (d.capabilities.some((c) => c.kind === "brightness" || c.kind === "color")) setDetail(d); }} />
         ))}
       </div>
       {devices && list.length === 0 && <p className="muted">No devices in this room yet.</p>}
@@ -183,10 +186,11 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
 }
 
 // ── Device tile — Ovio "tile-as-control": horizontal, fill = value, drag to set ──
-function DeviceTile({ device }: { device: Device }) {
+function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => void }) {
   const { states, apply } = useLive();
   const ref = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const moved = useRef(false);
   const live = states[device.id] ?? {};
   const caps = device.capabilities.map((c) => c.kind);
   const merged = { ...device.state, ...live } as Record<string, { on?: boolean; level?: number; value?: number; unit?: string; position?: number }>;
@@ -240,9 +244,9 @@ function DeviceTile({ device }: { device: Device }) {
       ref={ref}
       className={`dtile${on ? " on" : ""}`}
       onClick={slidable ? undefined : toggle}
-      onPointerDown={slidable ? (e) => { dragging.current = true; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); fromClientX(e.clientX); } : undefined}
-      onPointerMove={slidable ? (e) => { if (dragging.current) fromClientX(e.clientX); } : undefined}
-      onPointerUp={slidable ? () => { dragging.current = false; } : undefined}
+      onPointerDown={slidable ? (e) => { dragging.current = true; moved.current = false; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); } : undefined}
+      onPointerMove={slidable ? (e) => { if (dragging.current) { moved.current = true; fromClientX(e.clientX); } } : undefined}
+      onPointerUp={slidable ? () => { dragging.current = false; if (!moved.current) onOpen?.(); } : undefined}
     >
       <div className="fill" style={{ width: `${level}%` }} />
       <DeviceIcon kind={isDimmer ? "light" : isCover ? "cover" : "switch"} on={on} />
