@@ -1,0 +1,35 @@
+[project]
+name = "supreme-appletv"
+version = "0.0.1"
+description = "Supreme Apple TV bridge — pyatv-backed MRP control + pairing behind the Node driver seam (§3)."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "pydantic>=2.9.0",
+]
+
+[project.optional-dependencies]
+# The real Apple TV / Media Remote Protocol stack. Optional so the base install +
+# tests need no heavy dep (tests drive the fake backend); the appletv-py image
+# installs it. Enable locally with `pip install '.[atv]'`.
+atv = ["pyatv>=0.14.5"]
+
+[dependency-groups]
+dev = ["pytest>=8.3.0", "httpx>=0.27.0", "ruff>=0.7.0"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+# Run pytest from the service root without an editable install: put the root on
+# sys.path so `import app` resolves (CI does `pytest -q` here, no `pip install -e`).
+pythonpath = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

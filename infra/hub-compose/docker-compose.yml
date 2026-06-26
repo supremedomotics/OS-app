@@ -66,6 +66,8 @@ services:
       SUPREME_AIRPLAY_ENABLED: ${SUPREME_AIRPLAY_ENABLED:-0}
       # Apple TV media control + now-playing (mDNS discovery; pyatv MRP client seam).
       SUPREME_APPLETV_ENABLED: ${SUPREME_APPLETV_ENABLED:-0}
+      # The pyatv bridge that holds Apple TV pairing credentials + drives control.
+      SUPREME_APPLETV_URL: ${SUPREME_APPLETV_URL:-http://appletv:9300}
       # Lutron LIP bridge (RA2/HomeWorks QS wired or Caséta Smart Bridge Pro wireless).
       SUPREME_LUTRON_HOST: ${SUPREME_LUTRON_HOST:-}
       SUPREME_LUTRON_USERNAME: ${SUPREME_LUTRON_USERNAME:-lutron}
@@ -152,6 +154,25 @@ services:
       - ${SUPREME_AI_MODEL_DIR:-./ai-models}:/models:ro
     networks:
       - supreme-core
+
+  # Apple TV bridge (pyatv). Holds per-device pairing credentials and drives MRP
+  # control + now-playing for the Node Apple TV driver. On BOTH planes: the gateway
+  # reaches its API over supreme-core, and it reaches Apple TVs over supreme-edge
+  # (the LAN-routable plane). NOTE: reliable mDNS discovery from inside Docker may
+  # need host networking — see services/appletv-py/README.md. Only loaded when the
+  # Apple TV driver is enabled; harmless to leave running otherwise.
+  appletv:
+    build:
+      context: ../..
+      dockerfile: services/appletv-py/Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPREME_APPLETV_DATA: /data/appletv-creds.json
+    volumes:
+      - appletv-data:/data
+    networks:
+      - supreme-core
+      - supreme-edge
 
   # Homeowner web app. The PRIMARY web UI, served at the edge root. Static bundle;
   # talks to the Supreme API only (same-origin /v1), never to any backend.
@@ -272,3 +293,4 @@ volumes:
   mqtt-data:
   caddy-data:
   caddy-config:
+  appletv-data:

@@ -37,7 +37,7 @@
 | **Sonos** | media | `node-sonos` real transport (wired) behind seam | SSDP | `SUPREME_SONOS_ENABLED` | fake device |
 | **Ajax** | sensor | cloud/proprietary seam | — (cloud account) | `SUPREME_AJAX_ENABLED` | unit tests |
 | **AirPlay** | media | sender seam (AirPlay is a streaming, not control, protocol) | **real** mDNS (`_airplay._tcp`) | `SUPREME_AIRPLAY_ENABLED` | discovery test |
-| **Apple TV** | media (full transport + volume/mute; now-playing: foreground **app** + content) | MRP client seam (pyatv-backed, encrypted+paired) | **real** mDNS (`_mediaremotetv._tcp`) | `SUPREME_APPLETV_ENABLED` | mapping + discovery + fake-client test |
+| **Apple TV** | media (full transport + volume/mute; now-playing: foreground **app** + content) | MRP via the bundled pyatv bridge (`services/appletv-py`); encrypted + PIN-paired | **real** mDNS (`_mediaremotetv._tcp`) | `SUPREME_APPLETV_ENABLED` + `SUPREME_APPLETV_URL` | mapping + discovery + fake-client + bridge-HTTP + Python-bridge tests |
 | **Shelly** | onoff, brightness, position, sensor | **real** Gen2 JSON-RPC over HTTP (`POST /rpc`) | mDNS (`_shelly._tcp`), enriched via `Shelly.GetStatus` | `SUPREME_SHELLY_ENABLED` | in-process RPC + enriched discovery |
 | **Lutron** | onoff, brightness, position | **real** Lutron Integration Protocol (LIP) over Telnet — one driver covers **wired** RadioRA 2 / HomeWorks QS **and wireless** Caséta Smart Bridge Pro | — (integration ids by config) | `SUPREME_LUTRON_HOST` | in-process LIP bridge (auth + set + report) |
 | **Tuya** | onoff, brightness, position | cloud/proprietary seam (`tuyapi` / Tuya Cloud); DPS mapping both ways | — (per-device keys) | `SUPREME_TUYA_ENABLED` | fake DPS device |

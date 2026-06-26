@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [commissioning-py, ai-py]
+        service: [commissioning-py, ai-py, appletv-py]
     defaults:
       run:
         working-directory: services/${{ matrix.service }}

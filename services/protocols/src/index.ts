@@ -133,6 +133,7 @@ export {
   type AppleTvNowPlaying,
   type AppleTvConnect,
 } from "./apple-tv-driver.js";
+export { createAppleTvConnect, type AppleTvBridgeOptions } from "./apple-tv-bridge.js";
 export { LutronProtocolDriver, type LutronDriverOptions } from "./lutron-driver.js";
 export { commandToLutron, parseLutronLine, stateFromLutronLevel, type LutronLine } from "./lutron-codec.js";
 export {

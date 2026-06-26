@@ -31,6 +31,7 @@ import {
   LutronProtocolDriver,
   TuyaProtocolDriver,
   createSonosConnect,
+  createAppleTvConnect,
 } from "@supreme/protocols";
 import { createPersistence } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
@@ -147,10 +148,19 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   if (config.shellyEnabled) nativeDrivers.push(new ShellyProtocolDriver());
   if (config.airplayEnabled) nativeDrivers.push(new AirPlayProtocolDriver());
   // Apple TV — real mDNS discovery (_mediaremotetv._tcp); full media control + rich
-  // now-playing (foreground app + content) via a pyatv-backed MRP client seam. The
-  // client needs per-device pairing credentials, so until provisioned the driver
-  // discovers but a bind awaits a configured connect() (boot is unaffected).
-  if (config.appleTvEnabled) nativeDrivers.push(new AppleTvProtocolDriver());
+  // now-playing (foreground app + content). Control is fulfilled by the pyatv-backed
+  // bridge (services/appletv-py), which holds the per-device pairing credentials; when
+  // no bridge URL is set the driver still discovers, and a bind awaits a configured
+  // client (boot is unaffected either way).
+  if (config.appleTvEnabled) {
+    nativeDrivers.push(
+      new AppleTvProtocolDriver(
+        config.appleTvBridgeUrl
+          ? { connect: createAppleTvConnect({ baseUrl: config.appleTvBridgeUrl }) }
+          : {},
+      ),
+    );
+  }
   // Lutron LIP — wired (RA2/HomeWorks QS) + wireless (Caséta Smart Bridge Pro), one bridge.
   if (config.lutronHost) {
     nativeDrivers.push(
