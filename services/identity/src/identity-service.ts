@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { hash, verify } from "@node-rs/argon2";
 import {
   newId,
@@ -230,6 +231,47 @@ export class IdentityService {
     return Boolean((await this.store.getCredential(userId))?.mfaSecret);
   }
 
+  // ── Password reset (§ forgot-password) — Supreme-only, never touches HA ─────────
+  /** One-time reset tokens keyed by their SHA-256 (we never store the raw token). */
+  private readonly resetTokens = new Map<string, { userId: UserId; expiresAt: number }>();
+  private static readonly RESET_TTL_MS = 30 * 60 * 1000;
+
+  /**
+   * Begin a password reset. Returns a one-time token for the caller to deliver
+   * (out-of-band in production; surfaced on the local hub for LAN self-service).
+   * Anti-enumeration: returns null silently when the email is unknown.
+   */
+  async requestPasswordReset(email: string): Promise<{ token: string; userId: UserId } | null> {
+    const user = await this.store.findUserByEmail(email);
+    if (!user) return null;
+    const token = randomBytes(24).toString("base64url");
+    this.resetTokens.set(sha256(token), {
+      userId: user.id,
+      expiresAt: Date.now() + IdentityService.RESET_TTL_MS,
+    });
+    return { token, userId: user.id };
+  }
+
+  /** Complete a reset with a valid, unexpired token. Sets only the Supreme password. */
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    if (newPassword.length < 8) {
+      throw new SupremeError("validation_failed", "password must be at least 8 characters");
+    }
+    const key = sha256(token);
+    const rec = this.resetTokens.get(key);
+    if (!rec || rec.expiresAt < Date.now()) {
+      this.resetTokens.delete(key);
+      throw new SupremeError("unauthorized", "invalid or expired reset token");
+    }
+    this.resetTokens.delete(key);
+    const cred = await this.store.getCredential(rec.userId);
+    await this.store.putCredential({
+      userId: rec.userId,
+      passwordHash: await hash(newPassword, ARGON2),
+      mfaSecret: cred?.mfaSecret ?? null,
+    });
+  }
+
   /** Revoke a session from any of its tokens (logout / "sign out everywhere"). */
   async logout(token: string): Promise<void> {
     let sid: string | undefined;
@@ -310,4 +352,9 @@ async function dummyVerify(password: string): Promise<boolean> {
     /* expected */
   }
   return false;
+}
+
+/** Hash a reset token so the raw value is never held in memory or compared directly. */
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

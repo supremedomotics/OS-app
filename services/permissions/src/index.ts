@@ -3,7 +3,7 @@
  * RBAC baseline (roles.ts) + ABAC overlay with time-based grants (policy.ts).
  */
 export { PolicyEngine, type AccessRequest, type Decision } from "./policy.js";
-export { BASELINE_ROLES, baselineAllows, type RolePolicy } from "./roles.js";
+export { BASELINE_ROLES, baselineAllows, ASSIGNABLE_ROLES, type RolePolicy } from "./roles.js";
 export {
   InMemoryGrantStore,
   buildGrant,

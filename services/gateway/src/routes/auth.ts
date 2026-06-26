@@ -84,6 +84,31 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // ── Forgot / reset password (§ user management) — Supreme-only, never touches HA ─
+  // Always 200 (anti-enumeration). On a local hub with no email transport, the reset
+  // token is returned in non-production so LAN self-service works; production omits it
+  // and delivers out-of-band (email/SMS integration point).
+  app.post("/v1/auth/forgot-password", authLimit, async (req, reply) => {
+    try {
+      const email = String((req.body as { email?: unknown })?.email ?? "").trim();
+      const reset = email ? await ctx.identity.requestPasswordReset(email) : null;
+      const expose = ctx.config.nodeEnv !== "production" && reset ? { resetToken: reset.token } : {};
+      reply.send({ ok: true, ...expose });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/auth/reset-password", authLimit, async (req, reply) => {
+    try {
+      const b = (req.body ?? {}) as { token?: unknown; newPassword?: unknown };
+      await ctx.identity.resetPassword(String(b.token ?? ""), String(b.newPassword ?? ""));
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Revoke the current session (logout). Idempotent — always 204.
   app.post("/v1/auth/logout", async (req, reply) => {
     try {

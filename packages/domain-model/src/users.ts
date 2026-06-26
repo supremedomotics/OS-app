@@ -11,13 +11,15 @@ import { GrantId, HomeId, UserId } from "./ids.js";
  */
 
 export const UserType = z.enum([
-  "master", // first commissioning user — full control
-  "family",
+  "master", // first commissioning user / Super Administrator — full control
+  "admin", // Administrator
+  "homeowner", // primary resident — full day-to-day control of the home
+  "family", // Family Member
   "child",
-  "guest",
+  "guest", // Guest (often time-bound)
   "staff",
-  "installer",
-  "admin",
+  "installer", // Installer — commissioning, no user administration
+  "service_engineer", // Service Engineer — diagnostics / maintenance
 ]);
 export type UserType = z.infer<typeof UserType>;
 

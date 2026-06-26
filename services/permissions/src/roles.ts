@@ -35,6 +35,17 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     integration: ALL,
     user: ["view", "create", "update"],
   },
+  homeowner: {
+    // The primary resident: full day-to-day control of the home, can see users, but is
+    // not a system administrator (no integration admin, no destructive home actions).
+    home: ["view", "update"],
+    room: VIEW_CONTROL,
+    device: VIEW_CONTROL,
+    scene: ["view", "control", "create", "update", "delete"],
+    automation: ["view", "control", "create", "update"],
+    camera: VIEW_CONTROL,
+    user: ["view"],
+  },
   family: {
     home: ["view"],
     room: VIEW_CONTROL,
@@ -67,7 +78,31 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     integration: ALL,
     camera: ALL,
   },
+  service_engineer: {
+    // Diagnostics + maintenance: can view/control to test devices and inspect
+    // integrations, but no user administration and no destructive actions.
+    room: VIEW_CONTROL,
+    device: VIEW_CONTROL,
+    scene: ["view", "control"],
+    automation: ["view"],
+    integration: ["view"],
+    camera: ["view"],
+  },
 };
+
+/**
+ * The roles offered in the "Create New User" UI (spec's 7), in presentation order, with
+ * display labels mapped onto the internal {@link UserType} keys. Drives GET /v1/roles.
+ */
+export const ASSIGNABLE_ROLES = [
+  { key: "master", label: "Super Administrator", description: "Full control of the entire system." },
+  { key: "admin", label: "Administrator", description: "Manage the home, devices, scenes and users." },
+  { key: "homeowner", label: "Homeowner", description: "Primary resident — full day-to-day control of the home." },
+  { key: "family", label: "Family Member", description: "Control rooms and devices; create scenes." },
+  { key: "guest", label: "Guest", description: "Limited, often time-bound access to shared spaces." },
+  { key: "installer", label: "Installer", description: "Commission devices and integrations; no user administration." },
+  { key: "service_engineer", label: "Service Engineer", description: "Diagnostics and maintenance access." },
+] as const satisfies ReadonlyArray<{ key: UserType; label: string; description: string }>;
 
 export function baselineAllows(
   userType: UserType,
