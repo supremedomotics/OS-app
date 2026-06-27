@@ -6,6 +6,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 import '../providers.dart';
 import 'device_detail.dart';
 import 'device_sheet.dart';
+import 'tablet_room.dart';
 
 /// Room-first horizontal pager (§11.1): swipe between rooms, the current room
 /// name centered at the bottom. Each page is a [RoomView].
@@ -19,14 +20,20 @@ class HomePager extends ConsumerWidget {
       body: home.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Could not load home\n$e')),
-        data: (view) => SafeArea(
-          child: PageView(
-            children: [
-              for (final room in view.rooms)
-                RoomView(roomId: room.id, roomName: room.name),
-            ],
-          ),
-        ),
+        data: (view) {
+          // Tablet/desktop widths get the Ovio bento + multi-light disc layout.
+          final wide = MediaQuery.of(context).size.width >= 900;
+          return SafeArea(
+            child: PageView(
+              children: [
+                for (final room in view.rooms)
+                  wide
+                      ? TabletRoomView(roomId: room.id, roomName: room.name)
+                      : RoomView(roomId: room.id, roomName: room.name),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
