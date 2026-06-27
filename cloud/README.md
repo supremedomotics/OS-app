@@ -26,11 +26,11 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 | Voice | `cloud/voice` | ✅ C3 | Alexa/Google/Siri linking + capability→discovery + directive routing + state reporting |
 | Matter Cloud | `cloud/matter` | ✅ C3 | Fabric/credential brokering + multi-admin + node commissioning |
 | Firmware/OTA | `cloud/ota` | ✅ C3 | Signed manifests, channels, deterministic staged rollout, minVersion gating |
-| Subscription/Licensing | `cloud/licensing` (evolve) | 🟡 | Plans, entitlements, signed offline license tokens |
-| Installer/Dealer | `cloud/fleet` (evolve) | 🟡 | Orgs, sites, hub assignment, remote service |
-| Admin Console | `cloud/admin` | ⬜ | Internal ops, audited impersonation, flags |
-| Telemetry/Analytics | `cloud/telemetry` | ⬜ | Opt-in metrics ingest + reporting |
-| Audit | `cloud/audit` | ⬜ | Append-only, hash-chained security log |
+| Subscription/Licensing | `cloud/subscription` | ✅ C4 | Plans, entitlements, signed offline license tokens |
+| Installer/Dealer | `cloud/dealer` (+ legacy `cloud/fleet`) | ✅ C4 | Orgs, technicians, sites, hub assignment, time-boxed remote service |
+| Admin Console | `cloud/admin` | ✅ C4 | Feature flags (deterministic rollout) + audited, time-boxed impersonation |
+| Telemetry/Analytics | `cloud/telemetry` | ✅ C4 | Opt-in, anonymized (pseudonymized) ingest + aggregation, retention-bounded |
+| Audit | `cloud/audit` | ✅ C4 | Append-only, hash-chained, tamper-evident security log |
 
 Shared building blocks live in `packages/`: **`@supreme/hub-identity`** (the enrollment
 protocol + crypto, used by `hub-registry` and the hub agent), `@supreme/crypto`,
@@ -107,5 +107,19 @@ identity + ownership graph; the hub stays authoritative for device/automation st
     **deterministic staged rollout** (a hub's eligibility is a stable hash of its id, so 0%→none,
     100%→all, partial→a stable proportional cohort), and `minVersion` skip-protection. 8 tests.
 
-Next: C4 commercial — Subscription/Licensing, Installer/Dealer, Admin, Telemetry, hash-chained
-Audit. Then the Flutter multi-home + transparent local(mDNS)/cloud switching app.
+## C4 commercial plane (complete)
+
+14. **Subscription/Licensing** — `@supreme/subscription`: plans → entitlements (local control is
+    NEVER gated), and signed **offline-validatable license tokens** bound to a home/hub so an
+    air-gapped install stays licensed. 7 tests.
+15. **Installer/Dealer** — `@supreme/dealer`: orgs, technicians, customer sites, hub assignment,
+    and **owner-granted, time-boxed, revocable remote service** (no standing tech access). 6 tests.
+16. **Admin** — `@supreme/admin`: feature flags with deterministic percentage rollout, and
+    **audited, time-boxed impersonation** (justification-required, emits an audit record). 6 tests.
+17. **Telemetry** — `@supreme/telemetry`: strictly **opt-in**, pseudonymized ingest + aggregation,
+    retention-bounded; a home that hasn't opted in contributes nothing. 4 tests.
+18. **Audit** — `@supreme/cloud-audit`: append-only, **hash-chained, tamper-evident** log
+    (any insert/delete/modify breaks the chain and is detected by `verify`). 4 tests.
+
+Next: the Flutter multi-home + transparent local(mDNS)/cloud switching app (consumes all of the
+above through the generated SDK).

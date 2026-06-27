@@ -110,6 +110,41 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  cloud/admin:
+    dependencies:
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@supreme/hub-identity':
+        specifier: workspace:*
+        version: link:../../packages/hub-identity
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  cloud/audit:
+    dependencies:
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   cloud/authn:
     dependencies:
       jose:
@@ -127,6 +162,22 @@ importers:
         version: 2.1.9(@types/node@22.19.19)
 
   cloud/authz:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  cloud/dealer:
+    dependencies:
+      '@supreme/hub-identity':
+        specifier: workspace:*
+        version: link:../../packages/hub-identity
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -325,6 +376,38 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.21.0
+
+  cloud/subscription:
+    dependencies:
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  cloud/telemetry:
+    dependencies:
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
 
   cloud/tunnel-broker:
     dependencies:
