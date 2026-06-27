@@ -82,6 +82,9 @@ export function commandToHaService(
         unmute: "volume_mute",
         volume: "volume_set",
       };
+      if (command.action === "source") {
+        return { domain: "media_player", service: "select_source", data: { entity_id: entityId, source: command.source } };
+      }
       const data: Record<string, unknown> = { entity_id: entityId };
       if (command.action === "volume" && command.volume !== undefined) {
         data.volume_level = command.volume / 100;
@@ -96,6 +99,19 @@ export function commandToHaService(
         service: command.action === "lock" ? "lock" : "unlock",
         data: { entity_id: entityId },
       };
+    case "fan": {
+      if (command.action === "off") return { domain: "fan", service: "turn_off", data: { entity_id: entityId } };
+      if (command.action === "direction") return { domain: "fan", service: "set_direction", data: { entity_id: entityId, direction: command.direction } };
+      if (command.action === "preset") return { domain: "fan", service: "set_preset_mode", data: { entity_id: entityId, preset_mode: command.preset } };
+      return { domain: "fan", service: "turn_on", data: { entity_id: entityId } };
+    }
+    case "vacuum": {
+      const service =
+        command.action === "start" ? "start" : command.action === "pause" ? "pause" : command.action === "stop" ? "stop" : command.action === "return" ? "return_to_base" : "set_fan_speed";
+      const data: Record<string, unknown> = { entity_id: entityId };
+      if (command.action === "fan") data.fan_speed = command.fanSpeed;
+      return { domain: "vacuum", service, data };
+    }
   }
 }
 
@@ -147,6 +163,19 @@ export function haStateToCapability(
       };
     case "lock":
       return { kind: "lock", locked: ha.state === "locked", jammed: ha.state === "jammed" };
+    case "fan":
+      return {
+        kind: "fan",
+        on,
+        preset: oneOf(attrs.preset_mode, ["auto", "sleep", "turbo"] as const, "auto"),
+        direction: oneOf(attrs.direction, ["forward", "reverse"] as const, "forward"),
+      };
+    case "vacuum":
+      return {
+        kind: "vacuum",
+        status: oneOf(ha.state, ["idle", "cleaning", "paused", "returning", "docked"] as const, "idle"),
+        fanSpeed: oneOf(attrs.fan_speed, ["quiet", "normal", "turbo"] as const, "normal"),
+      };
     case "sensor":
       return {
         kind: "sensor",
@@ -171,6 +200,10 @@ function numOrNull(v: unknown): number | null {
 }
 function strOrNull(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
+}
+/** Coerce a loose HA string into one of an allowed set, with a fallback. */
+function oneOf<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof v === "string" && (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
 }
 function pct(v: number | undefined, max: number): number {
   if (v === undefined) return 0;

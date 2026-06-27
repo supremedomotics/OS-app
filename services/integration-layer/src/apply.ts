@@ -77,9 +77,32 @@ export function applyCommand(
         muted: command.action === "mute" ? true : command.action === "unmute" ? false : base?.muted ?? false,
         title: base?.title ?? null,
         artist: base?.artist ?? null,
-        source: base?.source ?? null,
+        source: command.action === "source" ? command.source ?? base?.source ?? null : base?.source ?? null,
         artworkUrl: base?.artworkUrl ?? null,
       };
+    }
+    case "fan": {
+      const base = prev?.kind === "fan" ? prev : null;
+      return {
+        kind: "fan",
+        on: command.action === "on" ? true : command.action === "off" ? false : base?.on ?? true,
+        preset: command.preset ?? base?.preset ?? "auto",
+        direction: command.direction ?? base?.direction ?? "forward",
+      };
+    }
+    case "vacuum": {
+      const base = prev?.kind === "vacuum" ? prev : null;
+      const status =
+        command.action === "start"
+          ? "cleaning"
+          : command.action === "pause"
+            ? "paused"
+            : command.action === "stop"
+              ? "idle"
+              : command.action === "return"
+                ? "returning"
+                : base?.status ?? "idle";
+      return { kind: "vacuum", status, fanSpeed: command.fanSpeed ?? base?.fanSpeed ?? "normal" };
     }
   }
 }

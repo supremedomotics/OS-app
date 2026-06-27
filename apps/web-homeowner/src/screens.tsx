@@ -187,7 +187,7 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
   const open = (d: Device) => {
     const caps = d.capabilities.map((c) => c.kind);
     if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
-    else if (["temperature", "position", "lock", "onoff", "media"].some((k) => caps.includes(k as never))) setSheet(d);
+    else if (["temperature", "position", "lock", "fan", "vacuum", "onoff", "media"].some((k) => caps.includes(k as never))) setSheet(d);
   };
   if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
   return (

@@ -205,6 +205,18 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
     { onoff: "switch.charging_station" },
   );
   await home.addDevice(
+    device(hid, living.id, "Ceiling Fan", "fan", [{ kind: "fan", config: {} }], {
+      fan: { kind: "fan", on: true, preset: "auto", direction: "forward" },
+    }),
+    { fan: "fan.living_room" },
+  );
+  await home.addDevice(
+    device(hid, living.id, "Fred", "vacuum", [{ kind: "vacuum", config: {} }], {
+      vacuum: { kind: "vacuum", status: "cleaning", fanSpeed: "normal" },
+    }),
+    { vacuum: "vacuum.fred" },
+  );
+  await home.addDevice(
     device(hid, kitchen.id, "Kitchen Lights", "light", [{ kind: "onoff", config: {} }], {
       onoff: { kind: "onoff", on: false },
     }),

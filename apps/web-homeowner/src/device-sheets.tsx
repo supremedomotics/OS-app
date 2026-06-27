@@ -20,6 +20,10 @@ export function DeviceSheet({ device, onClose }: { device: Device; onClose: () =
           <CoverSheet device={device} />
         ) : caps.includes("lock") ? (
           <LockSheet device={device} />
+        ) : caps.includes("fan") ? (
+          <FanSheet device={device} />
+        ) : caps.includes("vacuum") ? (
+          <VacuumSheet device={device} />
         ) : caps.includes("media") ? (
           <MediaSheet device={device} />
         ) : (
@@ -159,15 +163,87 @@ function SwitchSheet({ device }: { device: Device }) {
   );
 }
 
+// ── Fan ─────────────────────────────────────────────────────────────────────────
+function FanSheet({ device }: { device: Device }) {
+  const f = (device.state as Record<string, { on?: boolean; preset?: string; direction?: string }>).fan ?? {};
+  const [on, setOn] = useState<boolean>(f.on ?? true);
+  const [preset, setPreset] = useState<string>(f.preset ?? "auto");
+  const [dir, setDir] = useState<string>(f.direction ?? "forward");
+  return (
+    <>
+      <Title name={device.name} status={on ? "On" : "Off"} />
+      <div className="preset-row">
+        {["auto", "sleep", "turbo"].map((p) => (
+          <button key={p} className={`preset${preset === p ? " on" : ""}`} onClick={() => { setPreset(p); void cmd(device.id, { capability: "fan", action: "preset", preset: p as "auto" } as CapabilityCommand); }}>
+            {p[0]!.toUpperCase() + p.slice(1)}
+          </button>
+        ))}
+      </div>
+      <div className="icon-row">
+        <button onClick={() => { const d = dir === "forward" ? "reverse" : "forward"; setDir(d); void cmd(device.id, { capability: "fan", action: "direction", direction: d as "forward" } as CapabilityCommand); }}>{dir === "forward" ? "↻" : "↺"}</button>
+        <button className={`pwr${on ? " on" : ""}`} onClick={() => { const n = !on; setOn(n); void cmd(device.id, { capability: "fan", action: n ? "on" : "off" } as CapabilityCommand); }}>⏻</button>
+      </div>
+    </>
+  );
+}
+
+// ── Vacuum ──────────────────────────────────────────────────────────────────────
+function VacuumSheet({ device }: { device: Device }) {
+  const v = (device.state as Record<string, { status?: string; fanSpeed?: string }>).vacuum ?? {};
+  const [status, setStatus] = useState<string>(v.status ?? "idle");
+  const [speed, setSpeed] = useState<string>(v.fanSpeed ?? "normal");
+  const act = (action: "start" | "pause" | "stop", s: string) => { setStatus(s); void cmd(device.id, { capability: "vacuum", action } as CapabilityCommand); };
+  return (
+    <>
+      <Title name={device.name} status={status[0]!.toUpperCase() + status.slice(1)} />
+      <div className="preset-row">
+        {["quiet", "normal", "turbo"].map((s) => (
+          <button key={s} className={`preset${speed === s ? " on" : ""}`} onClick={() => { setSpeed(s); void cmd(device.id, { capability: "vacuum", action: "fan", fanSpeed: s as "quiet" } as CapabilityCommand); }}>
+            {s[0]!.toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+      <div className="icon-row">
+        <button onClick={() => act("pause", "paused")}>⏸</button>
+        <button className="stop" onClick={() => act("stop", "idle")}>⏹</button>
+      </div>
+    </>
+  );
+}
+
 // ── Media ───────────────────────────────────────────────────────────────────────
+const MEDIA_SOURCES = ["Arc", "One Left", "One Right", "Sub", "Era 300", "Sonance Left", "Sonance Right"];
 function MediaSheet({ device }: { device: Device }) {
   const m = (device.state as Record<string, { playback?: string; title?: string; artist?: string; source?: string; volume?: number }>).media ?? {};
   const [playing, setPlaying] = useState<boolean>(m.playback === "playing");
   const [vol, setVol] = useState<number>(m.volume ?? 30);
+  const [source, setSource] = useState<string | null>(m.source ?? null);
+  const [picker, setPicker] = useState(false);
   const a = (action: string, extra?: Record<string, unknown>) => cmd(device.id, { capability: "media", action, ...extra } as CapabilityCommand);
+
+  if (picker) {
+    return (
+      <>
+        <Title name="Home" status="Choose outputs" />
+        <div className="source-list">
+          {MEDIA_SOURCES.map((s) => (
+            <button key={s} className="source-row" onClick={() => { setSource(s); void a("source", { source: s }); setPicker(false); }}>
+              <span className="thumb" />
+              <span className="nm">{s}</span>
+              <span className={`radio${source === s ? " on" : ""}`} />
+            </button>
+          ))}
+        </div>
+      </>
+    );
+  }
   return (
     <>
-      <Title name={device.name} status={m.title ? `${m.title}${m.artist ? ` · ${m.artist}` : ""}` : m.source ?? "Idle"} />
+      <div className="sheet-title with-badge">
+        <button className="src-badge" onClick={() => setPicker(true)}>{source ?? "Speakers"} ⌄</button>
+        <h2>{device.name}</h2>
+        <p>{m.title ? `${m.title}${m.artist ? ` · ${m.artist}` : ""}` : "Idle"}</p>
+      </div>
       <div className="media-transport">
         <button onClick={() => void a("previous")}>⏮</button>
         <button className="pp" onClick={() => { setPlaying((p) => !p); void a(playing ? "pause" : "play"); }}>{playing ? "⏸" : "▶"}</button>

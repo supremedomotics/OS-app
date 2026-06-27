@@ -22,6 +22,8 @@ export const CapabilityKind = z.enum([
   "position", // covers / blinds / awnings 0..100
   "media", // media player transport + volume
   "lock", // door lock / latch
+  "fan", // fan: speed preset + direction
+  "vacuum", // robot vacuum: status + suction
   "sensor", // read-only measured value
 ]);
 export type CapabilityKind = z.infer<typeof CapabilityKind>;
@@ -79,6 +81,17 @@ export const LockState = z.object({
   jammed: z.boolean().default(false),
 });
 
+export const FanState = z.object({
+  on: z.boolean(),
+  preset: z.enum(["auto", "sleep", "turbo"]),
+  direction: z.enum(["forward", "reverse"]),
+});
+
+export const VacuumState = z.object({
+  status: z.enum(["idle", "cleaning", "paused", "returning", "docked"]),
+  fanSpeed: z.enum(["quiet", "normal", "turbo"]),
+});
+
 export const SensorState = z.object({
   value: z.number(),
   unit: z.string(),
@@ -95,6 +108,8 @@ export const CapabilityState = z.discriminatedUnion("kind", [
   PositionState.extend({ kind: z.literal("position") }),
   MediaState.extend({ kind: z.literal("media") }),
   LockState.extend({ kind: z.literal("lock") }),
+  FanState.extend({ kind: z.literal("fan") }),
+  VacuumState.extend({ kind: z.literal("vacuum") }),
   SensorState.extend({ kind: z.literal("sensor") }),
 ]);
 export type CapabilityState = z.infer<typeof CapabilityState>;
@@ -129,10 +144,22 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
   }),
   z.object({
     capability: z.literal("media"),
-    action: z.enum(["play", "pause", "stop", "next", "previous", "volume", "mute", "unmute"]),
+    action: z.enum(["play", "pause", "stop", "next", "previous", "volume", "mute", "unmute", "source"]),
     volume: Percent.optional(),
+    source: z.string().optional(),
   }),
   z.object({ capability: z.literal("lock"), action: z.enum(["lock", "unlock"]) }),
+  z.object({
+    capability: z.literal("fan"),
+    action: z.enum(["on", "off", "preset", "direction"]),
+    preset: z.enum(["auto", "sleep", "turbo"]).optional(),
+    direction: z.enum(["forward", "reverse"]).optional(),
+  }),
+  z.object({
+    capability: z.literal("vacuum"),
+    action: z.enum(["start", "pause", "stop", "return", "fan"]),
+    fanSpeed: z.enum(["quiet", "normal", "turbo"]).optional(),
+  }),
 ]);
 export type CapabilityCommand = z.infer<typeof CapabilityCommand>;
 

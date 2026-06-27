@@ -65,6 +65,8 @@ export const SupremeDeviceType = z.enum([
   "media_player",
   "lock",
   "switch",
+  "fan",
+  "vacuum",
   "sensor",
   "camera",
 ]);
