@@ -23,7 +23,7 @@
 
 | Driver | Capabilities | Transport / authenticity | Discovery | Boot gate (env) | Tested |
 |--------|--------------|--------------------------|-----------|-----------------|--------|
-| **KNX** | onoff, brightness, position, sensor | KNXnet/IP; **real** DPT codec in-repo, bus via `knx` lib seam | — (bound by group address) | `SUPREME_KNX_HOST` | DPT codec + fake bus |
+| **KNX** | onoff, brightness, position, sensor | KNXnet/IP; **real** DPT codec in-repo, bus via `knx` lib seam | ETS group-address import (CSV/XML → cards) | `SUPREME_KNX_HOST` | DPT codec + fake bus |
 | **MQTT** | onoff, brightness, sensor | **real** MQTT (`mqtt`) | Zigbee2MQTT bridge topics | `SUPREME_MQTT_URL` | end-to-end vs `aedes` broker |
 | **Modbus** | onoff, sensor | **real** Modbus TCP (`modbus-serial`) | — (register map by config) | `SUPREME_MODBUS_HOST` | in-process `ServerTCP` |
 | **Matter** | onoff, brightness, color, lock, position, sensor | `@matter/main` controller seam (opt-in, off by default) | fabric/commissioned nodes | `SUPREME_MATTER_ENABLED` | fake fabric |

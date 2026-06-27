@@ -8,7 +8,7 @@ import type {
   MigrationStatus,
 } from "@supreme/contracts";
 import type { InstalledDriver } from "@supreme/domain-model";
-import { client } from "./api.js";
+import { client, importKnx } from "./api.js";
 import { fleetConfigured, listFleetHubs } from "./fleet.js";
 
 /** Driver Store: browse the signed catalog, install (license-gated), enable/disable. */
@@ -114,9 +114,46 @@ export function Commissioning() {
     await scan();
   }
 
+  const [knx, setKnx] = useState("");
+  const [knxResult, setKnxResult] = useState<string | null>(null);
+  async function doImportKnx() {
+    setKnxResult("Importing…");
+    try {
+      const out = await importKnx(knx);
+      setKnxResult(`Imported ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
+      setKnx("");
+      void client.home().then((h) => setRooms(h.rooms));
+    } catch (e) {
+      setKnxResult(e instanceof Error ? e.message : "Import failed");
+    }
+  }
+
   return (
     <section>
       <h2>Commissioning</h2>
+
+      {/* KNX has no live discovery — import the ETS group-address export to auto-create cards. */}
+      <div className="card">
+        <strong>Import KNX project (ETS group-address export)</strong>
+        <p className="muted">Export group addresses from ETS (CSV or XML) and paste here — device cards are created with capabilities inferred from each datapoint type and placed into their rooms.</p>
+        <textarea
+          value={knx}
+          onChange={(e) => setKnx(e.target.value)}
+          placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
+          rows={5}
+          style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+        />
+        <div className="row" style={{ marginTop: 8 }}>
+          <input
+            type="file"
+            accept=".csv,.xml,text/plain"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void f.text().then(setKnx); }}
+          />
+          <button className="primary" disabled={!knx.trim()} onClick={doImportKnx}>Import</button>
+        </div>
+        {knxResult && <p className="muted">{knxResult}</p>}
+      </div>
+
       <div className="card row">
         <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
           {rooms.map((r) => (

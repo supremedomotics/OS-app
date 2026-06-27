@@ -115,6 +115,15 @@ export class CommissioningService {
 }
 
 export { HttpProtocolScanner, type HttpScannerOptions } from "./http-scanner.js";
+export {
+  parseKnxGroupExport,
+  inferCapability,
+  groupIntoDevices,
+  normalizeDpt,
+  type KnxGroupAddress,
+  type ImportedDevice,
+  type ImportedBinding,
+} from "./knx-import.js";
 
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;

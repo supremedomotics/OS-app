@@ -1,10 +1,12 @@
 import {
+  newId,
   type CapabilityKind,
   type DeviceId,
   type DriverId,
   type HomeId,
   type License,
   type ProtocolKind,
+  type Room,
   type RoomId,
 } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
@@ -23,7 +25,12 @@ import {
   seedFirstPartyCatalog,
   type IInstalledDriverStore,
 } from "@supreme/drivers";
-import { CommissioningService, type IProtocolScanner } from "@supreme/commissioning";
+import {
+  CommissioningService,
+  groupIntoDevices,
+  parseKnxGroupExport,
+  type IProtocolScanner,
+} from "@supreme/commissioning";
 import { issueLicense, validateLicense } from "@supreme/licensing";
 import {
   createBackup,
@@ -212,6 +219,61 @@ export class InstallerServices {
       }
     }
     return device;
+  }
+
+  /**
+   * Import an ETS group-address export (§4): parse it, group the addresses into devices
+   * (capabilities inferred from the DPTs), resolve/create each device's room, then
+   * commission the device and bind every capability to its KNX group address. Turns a
+   * KNX project into ready-to-use device cards — no per-device manual entry.
+   */
+  async importKnx(content: string): Promise<{
+    devices: number;
+    roomsCreated: number;
+    created: { name: string; room: string | null; capabilities: string[] }[];
+  }> {
+    const addresses = parseKnxGroupExport(content);
+    if (addresses.length === 0) {
+      throw new SupremeError("validation_failed", "no group addresses found in the import");
+    }
+    const existing = await this.d.home.listRooms();
+    const imported = groupIntoDevices(addresses, existing.map((r) => r.name));
+    const roomByName = new Map(existing.map((r) => [r.name.toLowerCase(), r] as const));
+    let roomsCreated = 0;
+    const created: { name: string; room: string | null; capabilities: string[] }[] = [];
+
+    for (const dev of imported) {
+      const roomName = dev.room ?? "Unassigned";
+      let room = roomByName.get(roomName.toLowerCase());
+      if (!room) {
+        const newRoom: Room = {
+          id: newId("room") as RoomId,
+          homeId: this.d.homeId,
+          name: roomName,
+          floor: 0,
+          areaType: "other",
+          sortOrder: existing.length + roomsCreated,
+          icon: "home",
+          heroImageUrl: null,
+          parentRoomId: null,
+        };
+        await this.d.home.addRoom(newRoom);
+        roomByName.set(roomName.toLowerCase(), newRoom);
+        room = newRoom;
+        roomsCreated++;
+      }
+      const device = await this.commissioning.commission({
+        backendId: dev.bindings[0]!.address,
+        name: dev.name,
+        roomId: room.id,
+        capabilities: dev.bindings.map((b) => b.capability),
+      });
+      for (const b of dev.bindings) {
+        await this.bindProtocol({ deviceId: device.id, capability: b.capability, protocol: "knx", address: b.address });
+      }
+      created.push({ name: dev.name, room: dev.room, capabilities: dev.bindings.map((b) => b.capability) });
+    }
+    return { devices: created.length, roomsCreated, created };
   }
 
   // ── Licensing ──────────────────────────────────────────────────────────────

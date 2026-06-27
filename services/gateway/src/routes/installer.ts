@@ -146,6 +146,20 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // ── ETS group-address import (§4): KNX project → device cards ─────────────────
+  app.post("/v1/commissioning/import/knx", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { content?: unknown };
+      const content = typeof body?.content === "string" ? body.content : typeof req.body === "string" ? req.body : "";
+      if (!content) throw new SupremeError("validation_failed", "provide the ETS group-address export as `content`");
+      reply.code(201).send(await i().importKnx(content));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Native protocol bindings (§3) ────────────────────────────────────────────
   app.post("/v1/commissioning/bind", async (req, reply) => {
     try {
