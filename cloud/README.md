@@ -22,10 +22,10 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 | AuthZ | `cloud/authz` | ✅ C1 | RBAC role matrix + ABAC grant overlay policy decision point |
 | Device Registry | `cloud/device-registry` | ✅ C1 | Client devices, push tokens, remote logout, approval, phone replacement |
 | Tunnel Broker | `cloud/tunnel-broker` (supersedes `cloud/relay` tunnel) | ✅ C2 | Cert-authenticated, hub-initiated channels + off-LAN client routing (HTTP/WS; QUIC-ready) |
-| Notification | `cloud/notification` (from `cloud/relay`) | ⬜ | APNs/FCM/WebPush/Wear/Watch fan-out |
-| Voice | `cloud/voice` | ⬜ | Alexa/Google/Siri/Shortcuts linking + state reporting |
-| Matter Cloud | `cloud/matter` | ⬜ | Fabric/credential brokering, Matter-cloud APIs |
-| Firmware/OTA | `cloud/ota` | ⬜ | Signed manifests, staged rollout |
+| Notification | `cloud/notification` | ✅ C3 | Targeted push fan-out (APNs/FCM/WebPush/Wear/Watch) + quiet hours + dedup + receipts |
+| Voice | `cloud/voice` | ✅ C3 | Alexa/Google/Siri linking + capability→discovery + directive routing + state reporting |
+| Matter Cloud | `cloud/matter` | ✅ C3 | Fabric/credential brokering + multi-admin + node commissioning |
+| Firmware/OTA | `cloud/ota` | ✅ C3 | Signed manifests, channels, deterministic staged rollout, minVersion gating |
 | Subscription/Licensing | `cloud/licensing` (evolve) | 🟡 | Plans, entitlements, signed offline license tokens |
 | Installer/Dealer | `cloud/fleet` (evolve) | 🟡 | Orgs, sites, hub assignment, remote service |
 | Admin Console | `cloud/admin` | ⬜ | Internal ops, audited impersonation, flags |
@@ -92,6 +92,20 @@ identity + ownership graph; the hub stays authoritative for device/automation st
    out → off-LAN client routes a real login through the broker to the hub and back; fail-closed
    deny + hub-offline paths. 4 tests.
 
-Next: C3 ecosystem — split Notification out of the relay; Voice (Alexa/Google/Siri/Shortcuts) +
-Matter Cloud; firmware/OTA fleet rollout. Then transparent local(mDNS)/cloud switching in the
-Flutter app + the multi-home restructure.
+## C3 ecosystem plane (complete)
+
+10. **Notification** — `@supreme/notification`: targeted push fan-out to an account's devices
+    across platforms, per-account **quiet hours** (critical bypasses), **dedup/suppression**, and
+    per-device **delivery receipts** (one provider failing never blocks the rest). 6 tests.
+11. **Voice** — `@supreme/voice`: assistant **account-linking**, one Supreme capability model
+    projected into **Alexa/Google/HomeKit** discovery vocabularies, **directive → Supreme command**
+    normalization (the Tunnel Broker forwards to the hub), and **state reporting**. 10 tests.
+12. **Matter Cloud** — `@supreme/matter-cloud`: fabric creation, **multi-admin** (share a home's
+    fabric with Apple Home / Google), and node commissioning with operational-credential records.
+    4 tests.
+13. **Firmware/OTA** — `@supreme/ota`: signed release manifests per **channel** (stable/beta),
+    **deterministic staged rollout** (a hub's eligibility is a stable hash of its id, so 0%→none,
+    100%→all, partial→a stable proportional cohort), and `minVersion` skip-protection. 8 tests.
+
+Next: C4 commercial — Subscription/Licensing, Installer/Dealer, Admin, Telemetry, hash-chained
+Audit. Then the Flutter multi-home + transparent local(mDNS)/cloud switching app.
