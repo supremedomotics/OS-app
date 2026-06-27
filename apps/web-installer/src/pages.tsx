@@ -116,29 +116,45 @@ export function Commissioning() {
 
   const [knx, setKnx] = useState("");
   const [knxResult, setKnxResult] = useState<string | null>(null);
+  // For a password-protected .knxproj we hold the picked file's base64 so the installer can
+  // type the ETS password and retry without re-selecting the file.
+  const [knxproj, setKnxproj] = useState<string | null>(null);
+  const [knxPassword, setKnxPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
   function report(out: KnxImportResult) {
     setKnxResult(`Imported ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
     setKnx("");
+    setKnxproj(null);
+    setKnxPassword("");
+    setNeedsPassword(false);
     void client.home().then((h) => setRooms(h.rooms));
+  }
+  async function importProject(base64: string, password?: string) {
+    setKnxResult("Importing…");
+    try {
+      report(await importKnxProject(base64, password));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Import failed";
+      // The gateway returns 401 with a "password" hint for encrypted/locked projects.
+      if (/password/i.test(msg)) { setKnxproj(base64); setNeedsPassword(true); }
+      setKnxResult(msg);
+    }
   }
   async function doImportKnx() {
     setKnxResult("Importing…");
     try { report(await importKnx(knx)); } catch (e) { setKnxResult(e instanceof Error ? e.message : "Import failed"); }
   }
   async function onKnxFile(file: File) {
-    setKnxResult("Importing…");
-    try {
-      if (file.name.toLowerCase().endsWith(".knxproj")) {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        let bin = "";
-        for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
-        report(await importKnxProject(btoa(bin)));
-      } else {
-        setKnx(await file.text());
-        setKnxResult(null);
-      }
-    } catch (e) {
-      setKnxResult(e instanceof Error ? e.message : "Import failed");
+    setNeedsPassword(false);
+    setKnxPassword("");
+    if (file.name.toLowerCase().endsWith(".knxproj")) {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
+      await importProject(btoa(bin));
+    } else {
+      setKnx(await file.text());
+      setKnxResult(null);
     }
   }
 
@@ -165,6 +181,19 @@ export function Commissioning() {
           />
           <button className="primary" disabled={!knx.trim()} onClick={doImportKnx}>Import pasted text</button>
         </div>
+        {needsPassword && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <input
+              type="password"
+              value={knxPassword}
+              placeholder="ETS project password"
+              onChange={(e) => setKnxPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && knxPassword && knxproj) void importProject(knxproj, knxPassword); }}
+              style={{ flex: 1 }}
+            />
+            <button className="primary" disabled={!knxPassword || !knxproj} onClick={() => knxproj && importProject(knxproj, knxPassword)}>Unlock & import</button>
+          </div>
+        )}
         {knxResult && <p className="muted">{knxResult}</p>}
       </div>
 

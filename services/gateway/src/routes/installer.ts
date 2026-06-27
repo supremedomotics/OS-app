@@ -151,9 +151,10 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const body = req.body as { content?: unknown; knxproj?: unknown };
+      const body = req.body as { content?: unknown; knxproj?: unknown; password?: unknown };
       if (typeof body?.knxproj === "string" && body.knxproj.length > 0) {
-        reply.code(201).send(await i().importKnxProject(body.knxproj));
+        const password = typeof body.password === "string" ? body.password : undefined;
+        reply.code(201).send(await i().importKnxProject(body.knxproj, password));
         return;
       }
       const content = typeof body?.content === "string" ? body.content : typeof req.body === "string" ? req.body : "";

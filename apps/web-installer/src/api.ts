@@ -31,5 +31,9 @@ async function postImport(body: Record<string, string>): Promise<KnxImportResult
 /** Import an ETS group-address export (CSV/XML text) → auto-created device cards (§4). */
 export const importKnx = (content: string): Promise<KnxImportResult> => postImport({ content });
 
-/** Import a `.knxproj` file (base64) → device cards placed in their ETS rooms (§4). */
-export const importKnxProject = (base64: string): Promise<KnxImportResult> => postImport({ knxproj: base64 });
+/**
+ * Import a `.knxproj` file (base64) → device cards placed in their ETS rooms (§4).
+ * `password` is required only for ETS6 password-protected projects (WinZip-AES).
+ */
+export const importKnxProject = (base64: string, password?: string): Promise<KnxImportResult> =>
+  postImport(password ? { knxproj: base64, password } : { knxproj: base64 });

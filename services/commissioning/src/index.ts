@@ -125,6 +125,7 @@ export {
   type ImportedBinding,
 } from "./knx-import.js";
 export { unzipKnxproj, parseKnxProject, addressFromInt } from "./knx-project.js";
+export { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto.js";
 
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;

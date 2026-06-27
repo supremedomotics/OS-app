@@ -28,6 +28,7 @@ import {
 import {
   CommissioningService,
   groupIntoDevices,
+  KnxDecryptError,
   parseKnxGroupExport,
   parseKnxProject,
   unzipKnxproj,
@@ -251,12 +252,19 @@ export class InstallerServices {
    * building → room → function → group-address structure, so device cards land in their
    * real ETS rooms. Falls back to name-based grouping when the project has no functions.
    */
-  async importKnxProject(base64: string): Promise<KnxImportResult> {
+  async importKnxProject(base64: string, password?: string): Promise<KnxImportResult> {
     let devices: ImportedDevice[];
     try {
-      const { devices: parsed } = parseKnxProject(unzipKnxproj(Buffer.from(base64, "base64")));
+      const { devices: parsed } = parseKnxProject(unzipKnxproj(Buffer.from(base64, "base64"), password));
       devices = parsed;
     } catch (err) {
+      // A wrong/missing password on an encrypted project is a 401 so the UI can re-prompt.
+      if (err instanceof KnxDecryptError) {
+        const needsPassword = /password/i.test(err.message);
+        throw new SupremeError("unauthorized", needsPassword
+          ? "this .knxproj is password-protected — provide the ETS project password"
+          : `could not decrypt .knxproj: ${err.message}`);
+      }
       throw new SupremeError("validation_failed", `could not read .knxproj: ${(err as Error).message}`);
     }
     if (devices.length === 0) {
