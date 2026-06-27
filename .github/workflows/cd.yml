@@ -65,10 +65,22 @@ jobs:
             ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ inputs.version || github.ref_name }}
             ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:latest
 
-  ota-manifest:
+  # Whether an OTA signing key is configured. The `secrets` context is NOT allowed in a
+  # job-level `if:`, so resolve it to a job output here (secrets ARE allowed inside a step)
+  # and gate the signing job on that output.
+  ota-gate:
     needs: images
     runs-on: ubuntu-latest
-    if: ${{ secrets.OTA_SIGNING_KEY != '' }}
+    outputs:
+      sign: ${{ steps.check.outputs.sign }}
+    steps:
+      - id: check
+        run: echo "sign=${{ secrets.OTA_SIGNING_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+  ota-manifest:
+    needs: ota-gate
+    runs-on: ubuntu-latest
+    if: ${{ needs.ota-gate.outputs.sign == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -80,7 +92,7 @@ jobs:
       # publishing it to the OTA channel/CDN is environment-specific (staged rollout).
       - env:
           OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: pnpm --silent --filter @supreme/tools-ota run sign > release-manifest.json
       - uses: actions/upload-artifact@v4
         with: { name: ota-manifest, path: release-manifest.json }
