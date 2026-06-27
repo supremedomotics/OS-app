@@ -25,113 +25,113 @@ function setup() {
 }
 
 describe("HubRegistry — enrollment", () => {
-  it("enrolls a hub zero-touch and issues a verifiable credential", () => {
+  it("enrolls a hub zero-touch and issues a verifiable credential", async () => {
     const { registry, ca } = setup();
     const id = generateHubIdentity(T0);
     const req = buildEnrollmentRequest(id, META, ATTEST, T0);
 
-    const res = registry.enroll(req);
+    const res = await registry.enroll(req);
     expect(verifyDeviceCredential(res.credential, ca.caPublicKey, T0).valid).toBe(true);
     expect(res.brokerEndpoint).toContain("broker");
 
-    const hub = registry.getHub(id.hubUuid);
+    const hub = await registry.getHub(id.hubUuid);
     expect(hub?.status).toBe("provisioned");
     expect(hub?.claimedByAccountId).toBeNull();
   });
 
-  it("rejects a replayed enrollment request (single-use nonce)", () => {
+  it("rejects a replayed enrollment request (single-use nonce)", async () => {
     const { registry } = setup();
     const id = generateHubIdentity(T0);
     const req = buildEnrollmentRequest(id, META, ATTEST, T0);
-    registry.enroll(req);
-    expect(() => registry.enroll(req)).toThrow(RegistryError);
+    await registry.enroll(req);
+    await expect(registry.enroll(req)).rejects.toThrow(RegistryError);
   });
 
-  it("refuses to bind a known hub uuid to a different device key (anti-hijack)", () => {
+  it("refuses to bind a known hub uuid to a different device key (anti-hijack)", async () => {
     const { registry } = setup();
     const id = generateHubIdentity(T0);
-    registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
 
     const attacker = { ...generateHubIdentity(T0), hubUuid: id.hubUuid };
     const forged = buildEnrollmentRequest(attacker, META, ATTEST, T0);
-    expect(() => registry.enroll(forged)).toThrow(/different key/);
+    await expect(registry.enroll(forged)).rejects.toThrow(/different key/);
   });
 
-  it("renews a credential for an enrolled hub proving key possession", () => {
+  it("renews a credential for an enrolled hub proving key possession", async () => {
     const { registry, clock, ca } = setup();
     const id = generateHubIdentity(T0);
-    registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
     clock.advance(60_000);
-    const renewed = registry.renew(buildEnrollmentRequest(id, META, ATTEST, clock.now()));
+    const renewed = await registry.renew(buildEnrollmentRequest(id, META, ATTEST, clock.now()));
     expect(verifyDeviceCredential(renewed.credential, ca.caPublicKey, clock.now()).valid).toBe(true);
   });
 });
 
 describe("HubRegistry — claiming", () => {
-  it("claims a hub to an owner and creates home + owner membership", () => {
+  it("claims a hub to an owner and creates home + owner membership", async () => {
     const { registry } = setup();
     const id = generateHubIdentity(T0);
-    registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
 
-    const code = registry.issueClaimCode(id.hubUuid);
-    const { home, membership } = registry.claim(id.hubUuid, "acct-1", code.code, "Mumbai Villa");
+    const code = await registry.issueClaimCode(id.hubUuid);
+    const { home, membership } = await registry.claim(id.hubUuid, "acct-1", code.code, "Mumbai Villa");
 
     expect(home.name).toBe("Mumbai Villa");
     expect(home.ownerAccountId).toBe("acct-1");
     expect(membership.role).toBe("owner");
-    expect(registry.getHub(id.hubUuid)?.status).toBe("claimed");
-    expect(registry.listHubsForAccount("acct-1").map((h) => h.hubUuid)).toContain(id.hubUuid);
+    expect((await registry.getHub(id.hubUuid))?.status).toBe("claimed");
+    expect((await registry.listHubsForAccount("acct-1")).map((h) => h.hubUuid)).toContain(id.hubUuid);
   });
 
-  it("rejects a claim with a wrong code", () => {
+  it("rejects a claim with a wrong code", async () => {
     const { registry } = setup();
     const id = generateHubIdentity(T0);
-    registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
-    registry.issueClaimCode(id.hubUuid);
-    expect(() => registry.claim(id.hubUuid, "acct-1", "WRONGXXX")).toThrow(/invalid or expired/);
+    await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    await registry.issueClaimCode(id.hubUuid);
+    await expect(registry.claim(id.hubUuid, "acct-1", "WRONGXXX")).rejects.toThrow(/invalid or expired/);
   });
 
-  it("rejects a claim with an expired code", () => {
+  it("rejects a claim with an expired code", async () => {
     const { registry, clock } = setup();
     const id = generateHubIdentity(T0);
-    registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
-    const code = registry.issueClaimCode(id.hubUuid);
+    await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    const code = await registry.issueClaimCode(id.hubUuid);
     clock.advance(11 * 60_000); // codes live 10 min
-    expect(() => registry.claim(id.hubUuid, "acct-1", code.code)).toThrow(RegistryError);
+    await expect(registry.claim(id.hubUuid, "acct-1", code.code)).rejects.toThrow(RegistryError);
   });
 
-  it("won't double-claim a hub", () => {
+  it("won't double-claim a hub", async () => {
     const { registry } = setup();
     const id = generateHubIdentity(T0);
-    registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
-    const code = registry.issueClaimCode(id.hubUuid);
-    registry.claim(id.hubUuid, "acct-1", code.code);
-    expect(() => registry.issueClaimCode(id.hubUuid)).toThrow(/already claimed/);
+    await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    const code = await registry.issueClaimCode(id.hubUuid);
+    await registry.claim(id.hubUuid, "acct-1", code.code);
+    await expect(registry.issueClaimCode(id.hubUuid)).rejects.toThrow(/already claimed/);
   });
 
-  it("supports one account claiming multiple hubs (multi-home)", () => {
+  it("supports one account claiming multiple hubs (multi-home)", async () => {
     const { registry } = setup();
     for (const name of ["Villa", "Apartment", "Farmhouse"]) {
       const id = generateHubIdentity(T0);
-      registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
-      const code = registry.issueClaimCode(id.hubUuid);
-      registry.claim(id.hubUuid, "acct-1", code.code, name);
+      await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+      const code = await registry.issueClaimCode(id.hubUuid);
+      await registry.claim(id.hubUuid, "acct-1", code.code, name);
     }
-    expect(registry.listHubsForAccount("acct-1")).toHaveLength(3);
+    expect(await registry.listHubsForAccount("acct-1")).toHaveLength(3);
   });
 });
 
 describe("HubRegistry — lifecycle", () => {
-  it("tracks heartbeat presence and revocation", () => {
+  it("tracks heartbeat presence and revocation", async () => {
     const { registry, clock } = setup();
     const id = generateHubIdentity(T0);
-    const res = registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
+    const res = await registry.enroll(buildEnrollmentRequest(id, META, ATTEST, T0));
     clock.advance(5000);
-    registry.heartbeat(id.hubUuid);
-    expect(registry.getHub(id.hubUuid)?.lastSeenAt).toBe(T0 + 5000);
+    await registry.heartbeat(id.hubUuid);
+    expect((await registry.getHub(id.hubUuid))?.lastSeenAt).toBe(T0 + 5000);
 
-    expect(registry.isRevoked(res.credential.serial)).toBe(false);
-    registry.revoke(res.credential.serial);
-    expect(registry.isRevoked(res.credential.serial)).toBe(true);
+    expect(await registry.isRevoked(res.credential.serial)).toBe(false);
+    await registry.revoke(res.credential.serial);
+    expect(await registry.isRevoked(res.credential.serial)).toBe(true);
   });
 });

@@ -59,20 +59,23 @@ export interface MembershipRecord {
   createdAt: number;
 }
 
-/** Persistence seam — Postgres in production; in-memory for tests/dev. */
+/**
+ * Persistence seam — Postgres in production (`@supreme/cloud-persistence`); in-memory for
+ * tests/dev. Async throughout so a real database (or a Redis-backed nonce check) sits behind it.
+ */
 export interface IHubRegistryStore {
-  getHub(hubUuid: string): HubRecord | undefined;
-  putHub(hub: HubRecord): void;
-  listHubsForAccount(accountId: string): HubRecord[];
+  getHub(hubUuid: string): Promise<HubRecord | undefined>;
+  putHub(hub: HubRecord): Promise<void>;
+  listHubsForAccount(accountId: string): Promise<HubRecord[]>;
   /** Returns false if the nonce was already seen (replay) — enforces single-use enrollment. */
-  recordNonce(nonce: string, expiresAt: number): boolean;
-  revoked(serial: string): boolean;
-  revoke(serial: string): void;
-  putClaimCode(code: ClaimCode): void;
-  getClaimCode(hubUuid: string): ClaimCode | undefined;
-  putHome(home: HomeRecord): void;
-  putMembership(m: MembershipRecord): void;
-  membershipsForHub(hubUuid: string): MembershipRecord[];
+  recordNonce(nonce: string, expiresAt: number): Promise<boolean>;
+  revoked(serial: string): Promise<boolean>;
+  revoke(serial: string): Promise<void>;
+  putClaimCode(code: ClaimCode): Promise<void>;
+  getClaimCode(hubUuid: string): Promise<ClaimCode | undefined>;
+  putHome(home: HomeRecord): Promise<void>;
+  putMembership(m: MembershipRecord): Promise<void>;
+  membershipsForHub(hubUuid: string): Promise<MembershipRecord[]>;
 }
 
 export class InMemoryHubRegistryStore implements IHubRegistryStore {
@@ -83,39 +86,39 @@ export class InMemoryHubRegistryStore implements IHubRegistryStore {
   private homes = new Map<string, HomeRecord>();
   private memberships: MembershipRecord[] = [];
 
-  getHub(hubUuid: string) {
+  async getHub(hubUuid: string) {
     return this.hubs.get(hubUuid);
   }
-  putHub(hub: HubRecord) {
+  async putHub(hub: HubRecord) {
     this.hubs.set(hub.hubUuid, hub);
   }
-  listHubsForAccount(accountId: string) {
+  async listHubsForAccount(accountId: string) {
     return [...this.hubs.values()].filter((h) => h.claimedByAccountId === accountId);
   }
-  recordNonce(nonce: string, expiresAt: number) {
+  async recordNonce(nonce: string, expiresAt: number) {
     if (this.nonces.has(nonce)) return false;
     this.nonces.set(nonce, expiresAt);
     return true;
   }
-  revoked(serial: string) {
+  async revoked(serial: string) {
     return this.revokedSerials.has(serial);
   }
-  revoke(serial: string) {
+  async revoke(serial: string) {
     this.revokedSerials.add(serial);
   }
-  putClaimCode(code: ClaimCode) {
+  async putClaimCode(code: ClaimCode) {
     this.claimCodes.set(code.hubUuid, code);
   }
-  getClaimCode(hubUuid: string) {
+  async getClaimCode(hubUuid: string) {
     return this.claimCodes.get(hubUuid);
   }
-  putHome(home: HomeRecord) {
+  async putHome(home: HomeRecord) {
     this.homes.set(home.id, home);
   }
-  putMembership(m: MembershipRecord) {
+  async putMembership(m: MembershipRecord) {
     this.memberships.push(m);
   }
-  membershipsForHub(hubUuid: string) {
+  async membershipsForHub(hubUuid: string) {
     const homeIds = new Set([...this.homes.values()].filter((h) => h.hubUuid === hubUuid).map((h) => h.id));
     return this.memberships.filter((m) => homeIds.has(m.homeId));
   }
@@ -172,17 +175,17 @@ export class HubRegistry {
   }
 
   /** Zero-touch enrollment: verify → persist (provisioned, unclaimed) → issue credential. */
-  enroll(req: EnrollmentRequest): EnrollResult {
+  async enroll(req: EnrollmentRequest): Promise<EnrollResult> {
     const nowMs = this.now();
     const check = validateEnrollmentRequest(req, { nowMs, verifyAttestation: this.verifyAttestation });
     if (!check.ok) throw new RegistryError("validation_failed", check.reason ?? "invalid enrollment");
 
     // Single-use nonce — reject replays of a captured request.
-    if (!this.store.recordNonce(req.nonce, nowMs + 10 * 60_000)) {
+    if (!(await this.store.recordNonce(req.nonce, nowMs + 10 * 60_000))) {
       throw new RegistryError("conflict", "enrollment nonce already used");
     }
 
-    const existing = this.store.getHub(req.hubUuid);
+    const existing = await this.store.getHub(req.hubUuid);
     // Re-enrollment of a known hub must come from the SAME device key (no hijack).
     if (existing && existing.publicKey !== req.publicKey) {
       throw new RegistryError("unauthorized", "hub uuid already bound to a different key");
@@ -203,7 +206,7 @@ export class HubRegistry {
           createdAt: nowMs,
           lastSeenAt: nowMs,
         };
-    this.store.putHub(hub);
+    await this.store.putHub(hub);
 
     return {
       credential,
@@ -214,35 +217,35 @@ export class HubRegistry {
   }
 
   /** Renew a credential — proves possession of the device key (same validation path). */
-  renew(req: EnrollmentRequest): EnrollResult {
-    const hub = this.store.getHub(req.hubUuid);
+  async renew(req: EnrollmentRequest): Promise<EnrollResult> {
+    const hub = await this.store.getHub(req.hubUuid);
     if (!hub) throw new RegistryError("not_found", "hub is not enrolled");
     if (hub.publicKey !== req.publicKey) throw new RegistryError("unauthorized", "key mismatch");
     return this.enroll(req);
   }
 
   /** Issue a single-use, time-boxed claim code (shown on the hub / signed mDNS). */
-  issueClaimCode(hubUuid: string): ClaimCode {
-    const hub = this.store.getHub(hubUuid);
+  async issueClaimCode(hubUuid: string): Promise<ClaimCode> {
+    const hub = await this.store.getHub(hubUuid);
     if (!hub) throw new RegistryError("not_found", "hub is not enrolled");
     if (hub.status === "claimed") throw new RegistryError("conflict", "hub already claimed");
     const code = generateClaimCode(hubUuid, this.now());
-    this.store.putClaimCode(code);
+    await this.store.putClaimCode(code);
     return code;
   }
 
   /** Bind a provisioned hub to an owner account; creates the home + owner membership. */
-  claim(hubUuid: string, accountId: string, presentedCode: string, homeName = "My Home"): ClaimResult {
-    const hub = this.store.getHub(hubUuid);
+  async claim(hubUuid: string, accountId: string, presentedCode: string, homeName = "My Home"): Promise<ClaimResult> {
+    const hub = await this.store.getHub(hubUuid);
     if (!hub) throw new RegistryError("not_found", "hub is not enrolled");
     if (hub.status === "claimed") throw new RegistryError("conflict", "hub already claimed");
-    const expected = this.store.getClaimCode(hubUuid);
+    const expected = await this.store.getClaimCode(hubUuid);
     if (!expected || !verifyClaimCode(expected, presentedCode, this.now())) {
       throw new RegistryError("unauthorized", "invalid or expired claim code");
     }
 
     const nowMs = this.now();
-    this.store.putHub({ ...hub, status: "claimed", claimedByAccountId: accountId });
+    await this.store.putHub({ ...hub, status: "claimed", claimedByAccountId: accountId });
     const home: HomeRecord = {
       id: this.newId("home"),
       name: homeName,
@@ -257,37 +260,37 @@ export class HubRegistry {
       role: "owner",
       createdAt: nowMs,
     };
-    this.store.putHome(home);
-    this.store.putMembership(membership);
+    await this.store.putHome(home);
+    await this.store.putMembership(membership);
     return { home, membership };
   }
 
   /** Transfer ownership (dealer → customer). Owner-authorized; audit-logged by the caller. */
-  transfer(hubUuid: string, toAccountId: string): void {
-    const hub = this.store.getHub(hubUuid);
+  async transfer(hubUuid: string, toAccountId: string): Promise<void> {
+    const hub = await this.store.getHub(hubUuid);
     if (!hub) throw new RegistryError("not_found", "hub is not enrolled");
-    this.store.putHub({ ...hub, claimedByAccountId: toAccountId });
+    await this.store.putHub({ ...hub, claimedByAccountId: toAccountId });
   }
 
-  heartbeat(hubUuid: string): void {
-    const hub = this.store.getHub(hubUuid);
+  async heartbeat(hubUuid: string): Promise<void> {
+    const hub = await this.store.getHub(hubUuid);
     if (!hub) throw new RegistryError("not_found", "hub is not enrolled");
-    this.store.putHub({ ...hub, lastSeenAt: this.now() });
+    await this.store.putHub({ ...hub, lastSeenAt: this.now() });
   }
 
-  revoke(serial: string): void {
-    this.store.revoke(serial);
+  async revoke(serial: string): Promise<void> {
+    await this.store.revoke(serial);
   }
 
-  isRevoked(serial: string): boolean {
+  async isRevoked(serial: string): Promise<boolean> {
     return this.store.revoked(serial);
   }
 
-  getHub(hubUuid: string): HubRecord | undefined {
+  async getHub(hubUuid: string): Promise<HubRecord | undefined> {
     return this.store.getHub(hubUuid);
   }
 
-  listHubsForAccount(accountId: string): HubRecord[] {
+  async listHubsForAccount(accountId: string): Promise<HubRecord[]> {
     return this.store.listHubsForAccount(accountId);
   }
 }

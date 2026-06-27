@@ -36,6 +36,16 @@ Shared building blocks live in `packages/`: **`@supreme/hub-identity`** (the enr
 protocol + crypto, used by `hub-registry` and the hub agent), `@supreme/crypto`,
 `@supreme/contracts`, `@supreme/domain-model`.
 
+### Production persistence
+
+Every service core takes its store via an interface (in-memory for dev/tests). **`cloud/persistence`
+(`@supreme/cloud-persistence`)** is the durable backing: a thin `SqlDb` seam (production Postgres
+via `pg`, or embedded PGlite), idempotent migrations, and Postgres repositories that implement the
+service store seams. The **Hub Registry** is wired to it end-to-end (`PgHubRegistryStore`): the
+store seam was made async and a PGlite test proves the hub↔account ownership graph, single-use
+enrollment nonces, and cert revocation all survive a process "restart" (a fresh registry over the
+same DB). The remaining services' stores follow the identical pattern.
+
 ## Data model
 
 `cloud/schema/` holds the cloud Postgres schema (`0001_cloud_core.sql`). The cloud stores the

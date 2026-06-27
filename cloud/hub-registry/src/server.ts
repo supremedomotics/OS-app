@@ -54,40 +54,40 @@ export function buildHubRegistryServer(opts: HubRegistryServerOptions = {}): Fas
   app.get("/healthz", async () => ({ status: "ok", service: "hub-registry" }));
 
   app.post("/v1/hubs/enroll", async (req, reply) => {
-    reply.code(201).send(registry.enroll(req.body as EnrollmentRequest));
+    reply.code(201).send(await registry.enroll(req.body as EnrollmentRequest));
   });
 
   app.post("/v1/hubs/renew", async (req, reply) => {
-    reply.code(200).send(registry.renew(req.body as EnrollmentRequest));
+    reply.code(200).send(await registry.renew(req.body as EnrollmentRequest));
   });
 
   app.post<{ Params: { id: string } }>("/v1/hubs/:id/claim-code", async (req, reply) => {
-    reply.code(201).send(registry.issueClaimCode(req.params.id));
+    reply.code(201).send(await registry.issueClaimCode(req.params.id));
   });
 
   app.post<{ Params: { id: string } }>("/v1/hubs/:id/claim", async (req, reply) => {
     const accountId = accountOf(req.headers as Record<string, unknown>);
     const body = (req.body ?? {}) as { code?: string; homeName?: string };
     if (typeof body.code !== "string") throw new RegistryError("validation_failed", "claim code required");
-    reply.code(201).send(registry.claim(req.params.id, accountId, body.code, body.homeName));
+    reply.code(201).send(await registry.claim(req.params.id, accountId, body.code, body.homeName));
   });
 
   app.post<{ Params: { id: string } }>("/v1/hubs/:id/transfer", async (req, reply) => {
     accountOf(req.headers as Record<string, unknown>); // must be authenticated (owner/dealer)
     const body = (req.body ?? {}) as { toAccountId?: string };
     if (typeof body.toAccountId !== "string") throw new RegistryError("validation_failed", "toAccountId required");
-    registry.transfer(req.params.id, body.toAccountId);
+    await registry.transfer(req.params.id, body.toAccountId);
     reply.code(204).send();
   });
 
   app.post<{ Params: { id: string } }>("/v1/hubs/:id/heartbeat", async (req, reply) => {
-    registry.heartbeat(req.params.id);
+    await registry.heartbeat(req.params.id);
     reply.code(204).send();
   });
 
   app.get("/v1/hubs", async (req, reply) => {
     const accountId = accountOf(req.headers as Record<string, unknown>);
-    reply.send({ hubs: registry.listHubsForAccount(accountId) });
+    reply.send({ hubs: await registry.listHubsForAccount(accountId) });
   });
 
   return app;
