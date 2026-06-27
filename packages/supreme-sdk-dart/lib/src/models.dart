@@ -163,22 +163,31 @@ class AutomationSummary {
     required this.id,
     required this.name,
     required this.enabled,
-    required this.triggerCount,
-    required this.actionCount,
+    required this.triggers,
+    required this.conditions,
+    required this.actions,
   });
   final String id;
   final String name;
   final bool enabled;
-  final int triggerCount;
-  final int actionCount;
+  final List<Map<String, dynamic>> triggers;
+  final List<Map<String, dynamic>> conditions;
+  final List<Map<String, dynamic>> actions;
+
+  int get triggerCount => triggers.length;
+  int get actionCount => actions.length;
+
+  static List<Map<String, dynamic>> _nodes(dynamic v) =>
+      (v as List<dynamic>?)?.map((e) => Map<String, dynamic>.from(e as Map)).toList() ?? [];
 
   factory AutomationSummary.fromJson(Map<String, dynamic> json) =>
       AutomationSummary(
         id: json['id'] as String,
         name: json['name'] as String,
         enabled: json['enabled'] as bool? ?? true,
-        triggerCount: (json['triggers'] as List<dynamic>?)?.length ?? 0,
-        actionCount: (json['actions'] as List<dynamic>?)?.length ?? 0,
+        triggers: _nodes(json['triggers']),
+        conditions: _nodes(json['conditions']),
+        actions: _nodes(json['actions']),
       );
 }
 

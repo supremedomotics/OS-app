@@ -205,15 +205,39 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
   }
 
   // ── Media ──
+  static const _sources = ['Arc', 'One Left', 'One Right', 'Sub', 'Era 300', 'Sonance Left', 'Sonance Right'];
+
   List<Widget> _media() {
     final m = _s('media');
     bool playing = (m['playback'] as String?) == 'playing';
     double vol = ((m['volume'] as num?) ?? 30).toDouble();
     final title = m['title'] as String?;
+    String? source = m['source'] as String?;
+    bool picker = false;
+    final scheme = Theme.of(context).colorScheme;
     return [
       StatefulBuilder(builder: (context, set) {
+        if (picker) {
+          return Column(mainAxisSize: MainAxisSize.min, children: [
+            _title('Home', 'Choose outputs'),
+            for (final src in _sources)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Container(width: 48, height: 48, decoration: BoxDecoration(color: scheme.surfaceContainerHighest.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(12))),
+                title: Text(src, style: const TextStyle(fontWeight: FontWeight.w600)),
+                trailing: Icon(source == src ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+                onTap: () { set(() { source = src; picker = false; }); _cmd({'capability': 'media', 'action': 'source', 'source': src}); },
+              ),
+          ]);
+        }
         return Column(children: [
-          _title(widget.device.name, title ?? (m['source'] as String?) ?? 'Idle'),
+          Row(children: [
+            Expanded(child: _title(widget.device.name, title ?? source ?? 'Idle')),
+          ]),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(onPressed: () => set(() => picker = true), icon: const Icon(Icons.speaker_outlined, size: 18), label: Text(source ?? 'Speakers')),
+          ),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             IconButton(iconSize: 34, onPressed: () => _cmd({'capability': 'media', 'action': 'previous'}), icon: const Icon(Icons.skip_previous)),
             const SizedBox(width: 16),

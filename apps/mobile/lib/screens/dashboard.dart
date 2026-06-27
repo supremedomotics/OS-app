@@ -1,6 +1,7 @@
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import 'automations_screen.dart';
@@ -9,6 +10,56 @@ import 'energy_screen.dart';
 /// Homeowner dashboard (§11.1/§11.3) — the Ovio-grade "Welcome home": a calm header, a
 /// full-bleed home hero, a quick-scene row, and proportional category tiles that drill
 /// into the home. Room-first, gesture-driven, no long entity lists.
+/// Ovio quick-scene tiles — square cards with a play glyph; the active scene fills gold.
+class SceneTiles extends ConsumerStatefulWidget {
+  const SceneTiles({super.key, required this.scenes});
+  final List<Scene> scenes;
+
+  @override
+  ConsumerState<SceneTiles> createState() => _SceneTilesState();
+}
+
+class _SceneTilesState extends ConsumerState<SceneTiles> {
+  String? _active;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 124,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: widget.scenes.length,
+        separatorBuilder: (_, __) => const SizedBox(width: AureonSpacing.sm),
+        itemBuilder: (context, i) {
+          final s = widget.scenes[i];
+          final on = _active == s.id;
+          return GestureDetector(
+            onTap: () { setState(() => _active = s.id); ref.read(clientProvider).activateScene(s.id); },
+            child: Container(
+              width: 116,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: on ? AureonGold.c500 : (Theme.of(context).cardTheme.color ?? scheme.surface),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: on ? Colors.transparent : scheme.outlineVariant.withValues(alpha: 0.4)),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Container(
+                  width: 40, height: 40, alignment: Alignment.center,
+                  decoration: BoxDecoration(color: on ? Colors.black.withValues(alpha: 0.12) : Colors.transparent, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(Icons.play_arrow_rounded, color: on ? const Color(0xFF15161B) : scheme.onSurface.withValues(alpha: 0.7)),
+                ),
+                Text(s.name, style: TextStyle(fontWeight: FontWeight.w600, color: on ? const Color(0xFF15161B) : scheme.onSurface)),
+              ]),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 String _greeting() {
   final h = DateTime.now().hour;
   if (h < 5) return 'Good night';
@@ -50,22 +101,9 @@ class DashboardScreen extends ConsumerWidget {
           ),
           const SizedBox(height: AureonSpacing.lg),
 
-          // Quick-scene row.
+          // Ovio quick-scene tiles.
           scenes.maybeWhen(
-            data: (list) => list.isEmpty
-                ? const SizedBox.shrink()
-                : SizedBox(
-                    height: 44,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: list.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: AureonSpacing.sm),
-                      itemBuilder: (context, i) => SceneButton(
-                        label: list[i].name,
-                        onTap: () async => ref.read(clientProvider).activateScene(list[i].id),
-                      ),
-                    ),
-                  ),
+            data: (list) => list.isEmpty ? const SizedBox.shrink() : SceneTiles(scenes: list),
             orElse: () => const SizedBox.shrink(),
           ),
           const SizedBox(height: AureonSpacing.lg),
