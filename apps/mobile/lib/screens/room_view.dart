@@ -5,6 +5,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import 'device_detail.dart';
+import 'device_sheet.dart';
 
 /// Room-first horizontal pager (§11.1): swipe between rooms, the current room
 /// name centered at the bottom. Each page is a [RoomView].
@@ -44,6 +45,14 @@ class HomePager extends ConsumerWidget {
     final m = d.state['media'] as Map<String, dynamic>?;
     final playing = (m?['playback'] as String?) == 'playing';
     return (icon: Icons.music_note_outlined, slidable: false, fill: 0, on: playing, value: playing ? 'Playing' : 'Idle');
+  }
+  if (caps.contains('fan')) {
+    final on = (d.state['fan'] as Map<String, dynamic>?)?['on'] as bool? ?? false;
+    return (icon: Icons.mode_fan_off_outlined, slidable: false, fill: 0, on: on, value: on ? 'On' : 'Off');
+  }
+  if (caps.contains('vacuum')) {
+    final st = (d.state['vacuum'] as Map<String, dynamic>?)?['status'] as String? ?? 'idle';
+    return (icon: Icons.cleaning_services_outlined, slidable: false, fill: 0, on: st == 'cleaning', value: st[0].toUpperCase() + st.substring(1));
   }
   if (caps.contains('lock')) {
     final locked = (d.state['lock'] as Map<String, dynamic>?)?['locked'] as bool? ?? true;
@@ -121,20 +130,16 @@ class _RoomViewState extends ConsumerState<RoomView> {
   }
 
   Future<void> _tap(Device device) async {
-    final spec = _tileSpec(device);
-    // Slidable + togglable devices open the detail; a plain switch toggles in place.
-    if (device.capabilities.contains('brightness') ||
-        device.capabilities.contains('color') ||
-        device.capabilities.contains('position') ||
-        device.capabilities.contains('media') ||
-        device.capabilities.contains('temperature') ||
-        device.capabilities.contains('lock')) {
+    final caps = device.capabilities;
+    // Lights get the full-screen lighting detail; everything else opens an Ovio sheet.
+    if (caps.contains('brightness') || caps.contains('color')) {
       await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => DeviceDetailScreen(device: device)));
       _load();
       return;
     }
-    if (device.capabilities.contains('onoff')) {
-      await ref.read(clientProvider).command(device.id, {'capability': 'onoff', 'action': spec.on ? 'off' : 'on'});
+    if (['temperature', 'position', 'lock', 'fan', 'vacuum', 'media', 'onoff'].any(caps.contains)) {
+      await showDeviceSheet(context, device);
+      _load();
     }
   }
 

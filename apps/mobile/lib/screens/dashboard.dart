@@ -9,6 +9,15 @@ import 'energy_screen.dart';
 /// Homeowner dashboard (§11.1/§11.3) — the Ovio-grade "Welcome home": a calm header, a
 /// full-bleed home hero, a quick-scene row, and proportional category tiles that drill
 /// into the home. Room-first, gesture-driven, no long entity lists.
+String _greeting() {
+  final h = DateTime.now().hour;
+  if (h < 5) return 'Good night';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  if (h < 21) return 'Good evening';
+  return 'Good night';
+}
+
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
 
@@ -26,9 +35,8 @@ class DashboardScreen extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(
             AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.xxl),
         children: [
-          Text('Welcome home', style: text.labelMedium),
-          const SizedBox(height: 2),
-          Text(homeName, style: text.titleLarge),
+          Text(_greeting(), style: text.titleLarge),
+          Text(homeName, style: text.labelMedium),
           const SizedBox(height: AureonSpacing.lg),
 
           // Home hero — photographic backdrop falls back to an accent gradient.
