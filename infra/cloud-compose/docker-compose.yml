@@ -47,6 +47,21 @@ services:
     ports:
       - "8092:8092"
 
+  # Identity plane — accounts, authentication (EdDSA JWT + rotating refresh), device registry.
+  # The AuthN signing key is provided via secrets in production; dev generates a throwaway key.
+  identity:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/identity.Dockerfile
+    restart: unless-stopped
+    environment:
+      IDENTITY_PORT: "8093"
+      SUPREME_AUTHN_KEY_FILE: ${SUPREME_AUTHN_KEY_FILE:-}
+      SUPREME_AUTHN_ISSUER: ${SUPREME_AUTHN_ISSUER:-https://id.supreme.example}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8093:8093"
+
   # Receives OTLP traces from hubs/cloud services and exports them onward.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1

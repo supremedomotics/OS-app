@@ -126,6 +126,18 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  cloud/authz:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   cloud/device-registry:
     dependencies:
       '@supreme/hub-identity':
@@ -175,6 +187,37 @@ importers:
       '@supreme/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@supreme/hub-identity':
+        specifier: workspace:*
+        version: link:../../packages/hub-identity
+      fastify:
+        specifier: ^5.2.1
+        version: 5.8.5
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  cloud/identity:
+    dependencies:
+      '@node-rs/argon2':
+        specifier: ^2.0.2
+        version: 2.0.2
+      '@supreme/cloud-authn':
+        specifier: workspace:*
+        version: link:../authn
+      '@supreme/device-registry':
+        specifier: workspace:*
+        version: link:../device-registry
       '@supreme/hub-identity':
         specifier: workspace:*
         version: link:../../packages/hub-identity

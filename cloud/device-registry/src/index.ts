@@ -139,6 +139,14 @@ export class DeviceRegistry {
     return updated;
   }
 
+  /** Bind the auth session created at login to the device (enables remote logout). */
+  attachSession(accountId: string, deviceId: string, sessionId: string): ClientDevice {
+    const d = this.require(accountId, deviceId);
+    const updated = { ...d, sessionId };
+    this.store.put(updated);
+    return updated;
+  }
+
   /** Approve a pending device (e.g. confirmed from an already-trusted device). */
   approve(accountId: string, deviceId: string): ClientDevice {
     const d = this.require(accountId, deviceId);

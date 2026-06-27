@@ -1,0 +1,32 @@
+{
+  "name": "@supreme/cloud-identity",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloud Identity — accounts, identities (email/phone/username), passkeys, federated login (ADR 0007).",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/hub-identity": "workspace:*",
+    "@supreme/cloud-authn": "workspace:*",
+    "@supreme/device-registry": "workspace:*",
+    "@node-rs/argon2": "^2.0.2",
+    "fastify": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

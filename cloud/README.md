@@ -17,10 +17,10 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 | Service | Dir | Status | Responsibility |
 |---|---|---|---|
 | Hub Registry | `cloud/hub-registry` | ✅ C0 | Zero-touch enrollment, device-cert issuance, claim/transfer, presence (HTTP + hub agent, end-to-end) |
-| Identity | `cloud/identity` | ⬜ | Accounts, identities, passkeys, federated login records |
-| AuthN | `cloud/authn` | 🟡 core | EdDSA JWT mint, rotating refresh + reuse-detection, sessions, JWKS |
-| AuthZ | `cloud/authz` | ⬜ | RBAC/ABAC policy decision point for cloud APIs |
-| Device Registry | `cloud/device-registry` | 🟡 core | Client devices, push tokens, remote logout, approval, phone replacement |
+| Identity | `cloud/identity` | ✅ C1 | Accounts, identities (email/phone/username), passkeys, federated login + identity-plane HTTP API |
+| AuthN | `cloud/authn` | ✅ C1 | EdDSA JWT mint, rotating refresh + reuse-detection, sessions, JWKS |
+| AuthZ | `cloud/authz` | ✅ C1 | RBAC role matrix + ABAC grant overlay policy decision point |
+| Device Registry | `cloud/device-registry` | ✅ C1 | Client devices, push tokens, remote logout, approval, phone replacement |
 | Tunnel Broker | `cloud/tunnel-broker` (from `cloud/relay`) | ⬜ | QUIC/mTLS hub channels + off-LAN client routing |
 | Notification | `cloud/notification` (from `cloud/relay`) | ⬜ | APNs/FCM/WebPush/Wear/Watch fan-out |
 | Voice | `cloud/voice` | ⬜ | Alexa/Google/Siri/Shortcuts linking + state reporting |
@@ -58,15 +58,23 @@ identity + ownership graph; the hub stays authoritative for device/automation st
    (`hub-enrollment.e2e.test.ts`) proves identity → enroll → claim → home+owner, plus the
    cloud-unreachable path. C0 is end-to-end runnable.
 
-## C1 identity plane (in progress)
+## C1 identity plane (complete)
 
-3. **AuthN** — `@supreme/cloud-authn`: EdDSA-signed access JWTs (audience-scoped to cloud or a
+4. **AuthN** — `@supreme/cloud-authn`: EdDSA-signed access JWTs (audience-scoped to cloud or a
    specific hub) verified via published JWKS; opaque, device-bound, **rotating** refresh tokens
-   with **reuse-detection family revocation**; remote-logout session revocation. Store-seam,
-   clock-injectable. 8 tests.
-4. **Device Registry** — `@supreme/device-registry`: client-device lifecycle (register/list/
+   with **reuse-detection family revocation**; remote-logout session revocation. 8 tests.
+5. **Device Registry** — `@supreme/device-registry`: client-device lifecycle (register/list/
    rename/approve/delete), push tokens, last-seen/IP/geo, **remote logout** (wired to AuthN
    session revocation), and the **phone-replacement** flow. 7 tests.
+6. **Identity** — `@supreme/cloud-identity`: accounts + identities (email/phone/username,
+   case-insensitive, anti-enumeration), Argon2id credentials, **passkeys**, **federated login**
+   (Apple/Google/Microsoft, account-linking by verified email). Ships the composed identity-plane
+   HTTP API (`cloud/identity/src/server.ts`, `main.ts`, Dockerfile, compose `:8093`):
+   register → login (issues tokens + registers the device) → refresh → logout → device
+   management. 14 tests (incl. the full end-to-end server flow).
+7. **AuthZ** — `@supreme/cloud-authz`: the policy decision point — per-home **RBAC role matrix**
+   (blueprint §11) + **ABAC grant overlay** (deny-wins, resource-scoped, time-boxed). Pure logic,
+   mirrors the hub's local enforcement so cloud + hub agree. 10 tests.
 
-Next: cloud Identity (accounts/passkeys/federated) + AuthZ PDP to complete C1; then C2
-connectivity (QUIC/mTLS Tunnel Broker + hub agent + transparent local/cloud switching).
+Next: C2 connectivity — QUIC/mTLS **Tunnel Broker** (replaces the relay) + hub agent control
+channel + transparent local(mDNS)/cloud switching in the app.
