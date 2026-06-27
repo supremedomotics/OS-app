@@ -427,3 +427,24 @@ button.link {
 .node.action { background: #1b1d24; border: 1px solid var(--aureon-color-base-hairline); }
 .node-add { align-self: flex-start; background: rgba(128,128,128,0.14); border: 0; border-radius: 14px; padding: 12px 18px; color: var(--aureon-color-text-secondary); font-size: 14px; cursor: pointer; }
 .canvas-run { margin-top: 18px; }
+.node-x { margin-left: auto; cursor: pointer; opacity: 0.7; font-size: 20px; padding: 0 4px; }
+.node.sel { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 1px; }
+.auto-fab {
+  position: fixed; right: 22px; bottom: 92px; width: 56px; height: 56px; border-radius: 50%; border: 0;
+  background: var(--aureon-color-gold-500); color: #15161b; font-size: 28px; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 20;
+}
+/* Editor */
+.drop-zone { display: flex; flex-direction: column; gap: 10px; padding: 10px; border-radius: 14px; border: 1.5px dashed transparent; min-height: 40px; }
+.drop-zone.hot { border-color: var(--aureon-color-gold-400); background: color-mix(in srgb, var(--aureon-color-gold-400) 10%, transparent); }
+.drop-zone .drop-hint { color: var(--aureon-color-text-secondary); font-size: 13px; }
+.drop-zone .node + .drop-hint, .drop-zone .node ~ .drop-hint { display: none; }
+.palette-hint { color: var(--aureon-color-text-secondary); font-size: 13px; margin: 16px 0 8px; }
+.palette { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
+.palette-chip {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 14px; cursor: grab;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); font-weight: 600; font-size: 14px; user-select: none;
+}
+.node-config { background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px; padding: 16px; margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.node-config input, .node-config select { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); }
+.node-config .onoff { display: flex; align-items: center; gap: 8px; }
+.node-config .onoff input { width: auto; }

@@ -107,6 +107,16 @@ export async function runAutomation(id: string): Promise<void> {
   await authed(`/v1/automations/${id}/run`, { method: "POST", body: "{}" });
 }
 
+export async function createAutomation(body: {
+  name: string;
+  triggers: unknown[];
+  conditions: unknown[];
+  actions: unknown[];
+}): Promise<boolean> {
+  const res = await authed("/v1/automations", { method: "POST", body: JSON.stringify(body) });
+  return res.ok;
+}
+
 /** Open the realtime WSS stream once authenticated (live device state + notifications). */
 export function openStream(): SupremeStream | null {
   const token = client.accessToken;
