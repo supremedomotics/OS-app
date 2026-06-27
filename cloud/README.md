@@ -121,5 +121,22 @@ identity + ownership graph; the hub stays authoritative for device/automation st
 18. **Audit** — `@supreme/cloud-audit`: append-only, **hash-chained, tamper-evident** log
     (any insert/delete/modify breaks the chain and is detected by `verify`). 4 tests.
 
-Next: the Flutter multi-home + transparent local(mDNS)/cloud switching app (consumes all of the
-above through the generated SDK).
+## Flutter multi-home + transparent connection switching (complete)
+
+The app (`apps/mobile`) now models the account→multi-home world (blueprint §16):
+- `lib/cloud/multi_home.dart` — `CloudSession`, `HomeRef` (hubId/name/role/cloudRoute/localUrl/
+  fingerprint), `HomeConnection`, a `LocalDiscovery` mDNS seam, a `CloudClient` (login + list
+  homes), and Riverpod providers (`cloudSession`, `homes`, `activeHomeId`, `activeHome`,
+  `homeConnection`, `connectionMode`). `homeConnectionProvider` prefers a verified LAN path and
+  falls back to the cloud Tunnel Broker route.
+- `providers.dart` — `hubBaseUrl`/`hubWsUrl` now DERIVE from the active home's connection, so
+  every screen transparently follows home switches and local↔cloud transport changes; the SDK
+  client reuses the cloud session token across homes (no re-login on switch).
+- `screens/home_switcher.dart` — instant home switcher sheet + an app-bar button showing the
+  active home and how it's reached (Local/Remote/Offline), wired into the dashboard header.
+- Login hydrates the session + homes from the cloud edge when configured (`SUPREME_CLOUD_URL`),
+  and is a no-op for local single-hub dev (local-first preserved).
+
+Verified with `flutter analyze` (app + SDK): no issues.
+
+All five planes (C0–C4) plus the multi-home client are now built, tested, and documented.

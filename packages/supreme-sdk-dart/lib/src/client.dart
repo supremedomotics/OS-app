@@ -18,6 +18,11 @@ class SupremeClient {
 
   String? get accessToken => _accessToken;
 
+  /// Apply an externally-obtained access token (e.g. a cloud identity-plane session reused
+  /// across homes), so a client targeting a freshly-resolved hub base URL is authenticated
+  /// without re-running [login]. The hub validates the token locally on each request.
+  set accessToken(String? token) => _accessToken = token;
+
   Map<String, String> get _authHeaders => {
         'content-type': 'application/json',
         if (_accessToken != null) 'authorization': 'Bearer $_accessToken',

@@ -2,6 +2,7 @@ import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../cloud/multi_home.dart';
 import '../providers.dart';
 
 /// Supreme-branded sign in (§12). A Supreme account — never a backend login page.
@@ -29,6 +30,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final client = ref.read(clientProvider);
       final ok = await client.login(_email.text, _password.text);
       if (ok) {
+        // Cloud-anchored multi-home (no-op when no cloud URL is configured — local-first).
+        await hydrateMultiHome(ref, _email.text, _password.text);
         await registerPushIfAvailable(ref);
         await widget.onAuthenticated();
       } else {

@@ -6,6 +6,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 import '../providers.dart';
 import 'automations_screen.dart';
 import 'energy_screen.dart';
+import 'home_switcher.dart';
 
 /// Homeowner dashboard (§11.1/§11.3) — the Ovio-grade "Welcome home": a calm header, a
 /// full-bleed home hero, a quick-scene row, and proportional category tiles that drill
@@ -86,8 +87,23 @@ class DashboardScreen extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(
             AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.xxl),
         children: [
-          Text(_greeting(), style: text.titleLarge),
-          Text(homeName, style: text.labelMedium),
+          // Greeting + the multi-home switcher (shows the active home + local/cloud status;
+          // tap to switch homes instantly). The switcher self-hides when there's one home.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_greeting(), style: text.titleLarge),
+                    Text(homeName, style: text.labelMedium),
+                  ],
+                ),
+              ),
+              const HomeSwitcherButton(),
+            ],
+          ),
           const SizedBox(height: AureonSpacing.lg),
 
           // Home hero — photographic backdrop falls back to an accent gradient.

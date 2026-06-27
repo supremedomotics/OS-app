@@ -3,6 +3,8 @@ import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import 'cloud/multi_home.dart';
+
 /// Riverpod wiring over the generated Supreme SDK (§11.3). Optimistic updates are
 /// reconciled by the WSS state stream. State is held in Supreme terms only.
 
@@ -15,13 +17,32 @@ final accentProvider = StateProvider<AureonAccent>((ref) => AureonAccent.gold);
 /// for now (persisting it is a small follow-up).
 final sceneOrderProvider = StateProvider<List<String>>((ref) => const []);
 
-/// Hub base URL. In production this is resolved automatically (mDNS LAN-direct or
-/// cloud relay); for Phase-0 dev it points at the local gateway.
-final hubBaseUrlProvider = Provider<String>((ref) => 'http://127.0.0.1:8080');
-final hubWsUrlProvider = Provider<String>((ref) => 'ws://127.0.0.1:8080');
+/// Hub base URL — resolved automatically from the ACTIVE home's connection (verified mDNS
+/// LAN-direct when on the home's network, else the cloud Tunnel Broker route; blueprint §8,
+/// §16). Falls back to the local gateway for Phase-0 dev / before any home is selected. Every
+/// screen reads this, so switching homes or transports is transparent.
+final hubBaseUrlProvider = Provider<String>((ref) {
+  final conn = ref.watch(homeConnectionProvider);
+  return conn?.baseUrl ?? 'http://127.0.0.1:8080';
+});
+final hubWsUrlProvider = Provider<String>((ref) {
+  final conn = ref.watch(homeConnectionProvider);
+  return conn?.wsUrl ?? 'ws://127.0.0.1:8080';
+});
+
+/// How the active home is currently reached (local / cloud / offline) — surfaced in the UI as
+/// a small status affordance.
+final connectionModeProvider = Provider<ConnectionMode>((ref) {
+  return ref.watch(homeConnectionProvider)?.mode ?? ConnectionMode.offline;
+});
 
 final clientProvider = Provider<SupremeClient>((ref) {
-  return SupremeClient(baseUrl: ref.watch(hubBaseUrlProvider));
+  final client = SupremeClient(baseUrl: ref.watch(hubBaseUrlProvider));
+  // Reuse the cloud session token across homes: when present, a client pointed at a newly
+  // resolved hub (local or cloud) is already authenticated — no re-login on a home switch.
+  final session = ref.watch(cloudSessionProvider);
+  if (session != null) client.accessToken = session.accessToken;
+  return client;
 });
 
 /// Holds the live WSS stream once authenticated.
