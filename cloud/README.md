@@ -18,9 +18,9 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 |---|---|---|---|
 | Hub Registry | `cloud/hub-registry` | 🟡 core | Zero-touch enrollment, device-cert issuance, claim/transfer, presence |
 | Identity | `cloud/identity` | ⬜ | Accounts, identities, passkeys, federated login records |
-| AuthN | `cloud/authn` | ⬜ | Login flows, MFA, OAuth/OIDC, token mint + rotation |
+| AuthN | `cloud/authn` | 🟡 core | EdDSA JWT mint, rotating refresh + reuse-detection, sessions, JWKS |
 | AuthZ | `cloud/authz` | ⬜ | RBAC/ABAC policy decision point for cloud APIs |
-| Device Registry | `cloud/device-registry` | ⬜ | Client devices, push tokens, remote logout, approval |
+| Device Registry | `cloud/device-registry` | 🟡 core | Client devices, push tokens, remote logout, approval, phone replacement |
 | Tunnel Broker | `cloud/tunnel-broker` (from `cloud/relay`) | ⬜ | QUIC/mTLS hub channels + off-LAN client routing |
 | Notification | `cloud/notification` (from `cloud/relay`) | ⬜ | APNs/FCM/WebPush/Wear/Watch fan-out |
 | Voice | `cloud/voice` | ⬜ | Alexa/Google/Siri/Shortcuts linking + state reporting |
@@ -51,4 +51,15 @@ identity + ownership graph; the hub stays authoritative for device/automation st
    heartbeat → revoke, with a Postgres-swappable store seam. Anti-replay (single-use nonce)
    and anti-hijack (uuid bound to one device key) enforced.
 
-Next: C1 identity plane (Identity/AuthN/Device Registry) and C2 connectivity (Tunnel Broker).
+## C1 identity plane (in progress)
+
+3. **AuthN** — `@supreme/cloud-authn`: EdDSA-signed access JWTs (audience-scoped to cloud or a
+   specific hub) verified via published JWKS; opaque, device-bound, **rotating** refresh tokens
+   with **reuse-detection family revocation**; remote-logout session revocation. Store-seam,
+   clock-injectable. 8 tests.
+4. **Device Registry** — `@supreme/device-registry`: client-device lifecycle (register/list/
+   rename/approve/delete), push tokens, last-seen/IP/geo, **remote logout** (wired to AuthN
+   session revocation), and the **phone-replacement** flow. 7 tests.
+
+Next: cloud Identity (accounts/passkeys/federated) + AuthZ PDP to complete C1; then C2
+connectivity (QUIC/mTLS Tunnel Broker + hub agent + transparent local/cloud switching).
