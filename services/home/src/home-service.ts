@@ -193,6 +193,18 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
     );
   }
   await home.addDevice(
+    device(hid, living.id, "Front Door", "lock", [{ kind: "lock", config: {} }], {
+      lock: { kind: "lock", locked: true, jammed: false },
+    }),
+    { lock: "lock.front_door" },
+  );
+  await home.addDevice(
+    device(hid, living.id, "Charging Station", "switch", [{ kind: "onoff", config: {} }], {
+      onoff: { kind: "onoff", on: true },
+    }),
+    { onoff: "switch.charging_station" },
+  );
+  await home.addDevice(
     device(hid, kitchen.id, "Kitchen Lights", "light", [{ kind: "onoff", config: {} }], {
       onoff: { kind: "onoff", on: false },
     }),

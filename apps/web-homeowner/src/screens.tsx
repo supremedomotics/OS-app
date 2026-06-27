@@ -15,6 +15,7 @@ import type {
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
+import { DeviceSheet } from "./device-sheets.js";
 import { TabletRoom } from "./tablet-room.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
 
@@ -181,7 +182,13 @@ export function RoomsScreen({
 function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; name: string; heroImageUrl: string | null; onBack: () => void }) {
   const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
   const [detail, setDetail] = useState<Device | null>(null);
+  const [sheet, setSheet] = useState<Device | null>(null);
   const list = devices ?? [];
+  const open = (d: Device) => {
+    const caps = d.capabilities.map((c) => c.kind);
+    if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
+    else if (["temperature", "position", "lock", "onoff", "media"].some((k) => caps.includes(k as never))) setSheet(d);
+  };
   if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
   return (
     <div>
@@ -203,10 +210,11 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
       </div>
       <div className="dlist">
         {list.map((d) => (
-          <DeviceTile key={d.id} device={d} onOpen={() => { if (d.capabilities.some((c) => c.kind === "brightness" || c.kind === "color")) setDetail(d); }} />
+          <DeviceTile key={d.id} device={d} onOpen={() => open(d)} />
         ))}
       </div>
       {devices && list.length === 0 && <p className="muted">No devices in this room yet.</p>}
+      {sheet && <DeviceSheet device={sheet} onClose={() => setSheet(null)} />}
     </div>
   );
 }
@@ -269,7 +277,7 @@ function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => void })
     <div
       ref={ref}
       className={`dtile${on ? " on" : ""}`}
-      onClick={slidable ? undefined : toggle}
+      onClick={slidable ? undefined : (onOpen ? () => onOpen() : toggle)}
       onPointerDown={slidable ? (e) => { dragging.current = true; moved.current = false; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); } : undefined}
       onPointerMove={slidable ? (e) => { if (dragging.current) { moved.current = true; fromClientX(e.clientX); } } : undefined}
       onPointerUp={slidable ? () => { dragging.current = false; if (!moved.current) onOpen?.(); } : undefined}
