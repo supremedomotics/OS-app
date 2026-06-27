@@ -282,6 +282,37 @@ importers:
         specifier: ^8.18.0
         version: 8.21.0
 
+  cloud/tunnel-broker:
+    dependencies:
+      '@fastify/websocket':
+        specifier: ^11.0.2
+        version: 11.2.0
+      '@supreme/hub-identity':
+        specifier: workspace:*
+        version: link:../../packages/hub-identity
+      fastify:
+        specifier: ^5.2.1
+        version: 5.8.5
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      '@types/ws':
+        specifier: ^8.5.13
+        version: 8.18.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   drivers/sdk:
     dependencies:
       '@supreme/crypto':
@@ -646,6 +677,9 @@ importers:
       '@supreme/relay':
         specifier: workspace:*
         version: link:../../cloud/relay
+      '@supreme/tunnel-broker':
+        specifier: workspace:*
+        version: link:../../cloud/tunnel-broker
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.19

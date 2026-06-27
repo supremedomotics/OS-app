@@ -62,6 +62,21 @@ services:
     ports:
       - "8093:8093"
 
+  # Tunnel Broker — zero-trust, cert-authenticated, hub-initiated remote access (replaces the
+  # Phase-1 relay's tunnel). Trusts the Hub CA public key to verify hub device credentials.
+  tunnel-broker:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/tunnel-broker.Dockerfile
+    restart: unless-stopped
+    environment:
+      BROKER_PORT: "8094"
+      SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
+      SUPREME_BROKER_DEV_ALLOW_ALL: ${SUPREME_BROKER_DEV_ALLOW_ALL:-0}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8094:8094"
+
   # Receives OTLP traces from hubs/cloud services and exports them onward.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1

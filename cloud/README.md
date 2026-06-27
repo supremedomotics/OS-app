@@ -21,7 +21,7 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 | AuthN | `cloud/authn` | ✅ C1 | EdDSA JWT mint, rotating refresh + reuse-detection, sessions, JWKS |
 | AuthZ | `cloud/authz` | ✅ C1 | RBAC role matrix + ABAC grant overlay policy decision point |
 | Device Registry | `cloud/device-registry` | ✅ C1 | Client devices, push tokens, remote logout, approval, phone replacement |
-| Tunnel Broker | `cloud/tunnel-broker` (from `cloud/relay`) | ⬜ | QUIC/mTLS hub channels + off-LAN client routing |
+| Tunnel Broker | `cloud/tunnel-broker` (supersedes `cloud/relay` tunnel) | ✅ C2 | Cert-authenticated, hub-initiated channels + off-LAN client routing (HTTP/WS; QUIC-ready) |
 | Notification | `cloud/notification` (from `cloud/relay`) | ⬜ | APNs/FCM/WebPush/Wear/Watch fan-out |
 | Voice | `cloud/voice` | ⬜ | Alexa/Google/Siri/Shortcuts linking + state reporting |
 | Matter Cloud | `cloud/matter` | ⬜ | Fabric/credential brokering, Matter-cloud APIs |
@@ -76,5 +76,22 @@ identity + ownership graph; the hub stays authoritative for device/automation st
    (blueprint §11) + **ABAC grant overlay** (deny-wins, resource-scoped, time-boxed). Pure logic,
    mirrors the hub's local enforcement so cloud + hub agree. 10 tests.
 
-Next: C2 connectivity — QUIC/mTLS **Tunnel Broker** (replaces the relay) + hub agent control
-channel + transparent local(mDNS)/cloud switching in the app.
+## C2 connectivity plane (complete)
+
+8. **Tunnel Broker** — `@supreme/tunnel-broker`: the zero-trust, cert-authenticated evolution of
+   the relay (ADR 0009). Hubs are keyed by `hubId` from a VERIFIED device credential and prove
+   possession of their device key via a **challenge-response handshake** before the connection
+   attaches; the broker is a transport (forwards request/response frames, the hub re-validates
+   locally). Per-hub isolation, fail-closed client authorization seam, reconnect-supersede.
+   HTTP/WS surface (`server.ts`, `main.ts`, Dockerfile, compose `:8094`); QUIC-ready framing.
+   9 core tests.
+9. **Hub tunnel client** — `services/gateway/src/tunnel-client.ts`: dials OUT to the broker,
+   authenticates with the device credential, and proxies forwarded requests to the LOCAL
+   gateway (identity + RBAC enforced locally, exactly as on the LAN). Auto-reconnects; wired
+   into gateway boot once enrolled. End-to-end test (`broker-tunnel.e2e.test.ts`): hub dials
+   out → off-LAN client routes a real login through the broker to the hub and back; fail-closed
+   deny + hub-offline paths. 4 tests.
+
+Next: C3 ecosystem — split Notification out of the relay; Voice (Alexa/Google/Siri/Shortcuts) +
+Matter Cloud; firmware/OTA fleet rollout. Then transparent local(mDNS)/cloud switching in the
+Flutter app + the multi-home restructure.

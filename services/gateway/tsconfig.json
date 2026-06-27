@@ -19,6 +19,7 @@
     { "path": "../../packages/crypto" },
     { "path": "../../packages/hub-identity" },
     { "path": "../../cloud/hub-registry" },
+    { "path": "../../cloud/tunnel-broker" },
     { "path": "../drivers" },
     { "path": "../commissioning" },
     { "path": "../../cloud/licensing" },

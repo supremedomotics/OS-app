@@ -5,6 +5,7 @@ import { initTracing } from "./tracing.js";
 import { RelayTunnelClient } from "./relay-tunnel.js";
 import { OtaChecker } from "./ota.js";
 import { HubAgent } from "./hub-agent.js";
+import { BrokerTunnelClient } from "./tunnel-client.js";
 import { createSecretStore } from "./secrets.js";
 
 /**
@@ -68,11 +69,24 @@ async function main(): Promise<void> {
       fwVersion: config.hubVersion,
       log: (msg, meta) => app.log.info(meta ?? {}, msg),
     });
+    let tunnel: BrokerTunnelClient | null = null;
     const provision = async () => {
       const state = await agent.ensureEnrolled();
-      if (state.enrolled) {
-        const claim = await agent.requestClaimCode();
-        if (claim) app.log.info({ hubUuid: agent.hubUuid, claimCode: claim.code }, "hub awaiting owner claim");
+      if (!state.enrolled) return;
+      const claim = await agent.requestClaimCode();
+      if (claim) app.log.info({ hubUuid: agent.hubUuid, claimCode: claim.code }, "hub awaiting owner claim");
+      // Remote access (ADR 0009): once enrolled, dial OUT to the zero-trust Tunnel Broker and
+      // hold the cert-authenticated socket open. Outbound only — no inbound ports. Off-LAN
+      // clients reach this hub through the broker; the hub re-validates identity locally.
+      if (!tunnel && state.credential && state.brokerEndpoint) {
+        tunnel = new BrokerTunnelClient({
+          brokerUrl: state.brokerEndpoint,
+          identity: state.identity,
+          credential: state.credential,
+          localBaseUrl: `http://127.0.0.1:${config.port}`,
+          onReady: () => app.log.info({ broker: state.brokerEndpoint }, "remote-access tunnel established"),
+        });
+        tunnel.start();
       }
     };
     void provision();
