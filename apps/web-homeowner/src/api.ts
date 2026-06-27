@@ -69,6 +69,44 @@ export async function resetPassword(token: string, newPassword: string): Promise
   if (!res.ok) throw new Error(await errorMessage(res, "Could not reset the password."));
 }
 
+// ── Automations (authenticated) ─────────────────────────────────────────────────
+async function authed(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${baseUrl}${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${client.accessToken ?? ""}`,
+      ...(init?.body ? { "content-type": "application/json" } : {}),
+      ...init?.headers,
+    },
+  });
+}
+
+export interface AutomationView {
+  id: string;
+  name: string;
+  enabled: boolean;
+  triggers: { type: string; capability?: string; field?: string; at?: string; everyMinutes?: number }[];
+  conditions: { type: string }[];
+  actions: { type: string }[];
+}
+
+export async function fetchAutomations(): Promise<AutomationView[]> {
+  try {
+    const res = await authed("/v1/automations");
+    return res.ok ? ((await res.json()) as { automations: AutomationView[] }).automations : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function setAutomationEnabled(id: string, enabled: boolean): Promise<void> {
+  await authed(`/v1/automations/${id}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) });
+}
+
+export async function runAutomation(id: string): Promise<void> {
+  await authed(`/v1/automations/${id}/run`, { method: "POST", body: "{}" });
+}
+
 /** Open the realtime WSS stream once authenticated (live device state + notifications). */
 export function openStream(): SupremeStream | null {
   const token = client.accessToken;

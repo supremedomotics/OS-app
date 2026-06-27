@@ -5,13 +5,15 @@ import { LiveContext, type LiveStates } from "./live.js";
 import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
 import { ThemeSettings } from "./settings.js";
+import { Automations } from "./automations.js";
 
-type Tab = "home" | "rooms" | "scenes" | "security" | "energy" | "settings";
+type Tab = "home" | "rooms" | "scenes" | "automations" | "security" | "energy" | "settings";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "⌂" },
   { id: "rooms", label: "Rooms", icon: "▦" },
   { id: "scenes", label: "Scenes", icon: "✦" },
+  { id: "automations", label: "Automations", icon: "⟲" },
   { id: "security", label: "Security", icon: "🛡" },
   { id: "energy", label: "Energy", icon: "⚡" },
   { id: "settings", label: "Settings", icon: "⚙" },
@@ -64,6 +66,7 @@ export function App() {
             <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />
           )}
           {tab === "scenes" && <Scenes />}
+          {tab === "automations" && <Automations />}
           {tab === "security" && <Security />}
           {tab === "energy" && <Energy />}
           {tab === "settings" && <ThemeSettings />}
