@@ -20,17 +20,19 @@ COPY cloud ./cloud
 COPY drivers ./drivers
 COPY tools ./tools
 # Use the proxy CA only if one was provided; then install + build the gateway
-# subgraph via Turborepo's affected graph.
+# subgraph via Turborepo's affected graph, and `pnpm deploy` it into a self-contained
+# bundle (only the gateway's prod dependency closure — workspace packages flattened in,
+# dev deps and the rest of the monorepo dropped) so the runtime image stays small.
 RUN [ -s /usr/local/share/proxy-ca.pem ] && export NODE_EXTRA_CA_CERTS=/usr/local/share/proxy-ca.pem; \
     corepack enable && \
     pnpm install --frozen-lockfile=false && \
-    pnpm --filter @supreme/gateway... run build
+    pnpm --filter @supreme/gateway... run build && \
+    pnpm --filter @supreme/gateway deploy --prod --legacy /deploy
 
 FROM base AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-# Bring the built workspace (node_modules symlinks + dist) from the build stage.
-COPY --from=build /app /app
-WORKDIR /app/services/gateway
+# Bring ONLY the pruned, self-contained gateway bundle (dist + prod node_modules).
+COPY --from=build /deploy /app
 EXPOSE 8080
 CMD ["node", "dist/main.js"]
