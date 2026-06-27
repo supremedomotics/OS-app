@@ -59,8 +59,10 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          # On a tag push `ref_name` is the tag (v0.4.0); on a manual run it would be the
+          # branch (which may contain "/", an invalid Docker tag) so the version input wins.
           tags: |
-            ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ github.ref_name }}
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ inputs.version || github.ref_name }}
             ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:latest
 
   ota-manifest:
