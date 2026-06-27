@@ -8,7 +8,7 @@ import type {
   MigrationStatus,
 } from "@supreme/contracts";
 import type { InstalledDriver } from "@supreme/domain-model";
-import { client, importKnx } from "./api.js";
+import { client, importKnx, importKnxProject, type KnxImportResult } from "./api.js";
 import { fleetConfigured, listFleetHubs } from "./fleet.js";
 
 /** Driver Store: browse the signed catalog, install (license-gated), enable/disable. */
@@ -116,13 +116,27 @@ export function Commissioning() {
 
   const [knx, setKnx] = useState("");
   const [knxResult, setKnxResult] = useState<string | null>(null);
+  function report(out: KnxImportResult) {
+    setKnxResult(`Imported ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
+    setKnx("");
+    void client.home().then((h) => setRooms(h.rooms));
+  }
   async function doImportKnx() {
     setKnxResult("Importing…");
+    try { report(await importKnx(knx)); } catch (e) { setKnxResult(e instanceof Error ? e.message : "Import failed"); }
+  }
+  async function onKnxFile(file: File) {
+    setKnxResult("Importing…");
     try {
-      const out = await importKnx(knx);
-      setKnxResult(`Imported ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
-      setKnx("");
-      void client.home().then((h) => setRooms(h.rooms));
+      if (file.name.toLowerCase().endsWith(".knxproj")) {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let bin = "";
+        for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
+        report(await importKnxProject(btoa(bin)));
+      } else {
+        setKnx(await file.text());
+        setKnxResult(null);
+      }
     } catch (e) {
       setKnxResult(e instanceof Error ? e.message : "Import failed");
     }
@@ -134,8 +148,8 @@ export function Commissioning() {
 
       {/* KNX has no live discovery — import the ETS group-address export to auto-create cards. */}
       <div className="card">
-        <strong>Import KNX project (ETS group-address export)</strong>
-        <p className="muted">Export group addresses from ETS (CSV or XML) and paste here — device cards are created with capabilities inferred from each datapoint type and placed into their rooms.</p>
+        <strong>Import KNX project</strong>
+        <p className="muted">Upload a <code>.knxproj</code> (device cards placed in their ETS rooms), or paste an ETS group-address export (CSV/XML). Capabilities are inferred from each datapoint type.</p>
         <textarea
           value={knx}
           onChange={(e) => setKnx(e.target.value)}
@@ -146,10 +160,10 @@ export function Commissioning() {
         <div className="row" style={{ marginTop: 8 }}>
           <input
             type="file"
-            accept=".csv,.xml,text/plain"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void f.text().then(setKnx); }}
+            accept=".knxproj,.csv,.xml,text/plain"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onKnxFile(f); }}
           />
-          <button className="primary" disabled={!knx.trim()} onClick={doImportKnx}>Import</button>
+          <button className="primary" disabled={!knx.trim()} onClick={doImportKnx}>Import pasted text</button>
         </div>
         {knxResult && <p className="muted">{knxResult}</p>}
       </div>

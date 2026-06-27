@@ -151,9 +151,13 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const body = req.body as { content?: unknown };
+      const body = req.body as { content?: unknown; knxproj?: unknown };
+      if (typeof body?.knxproj === "string" && body.knxproj.length > 0) {
+        reply.code(201).send(await i().importKnxProject(body.knxproj));
+        return;
+      }
       const content = typeof body?.content === "string" ? body.content : typeof req.body === "string" ? req.body : "";
-      if (!content) throw new SupremeError("validation_failed", "provide the ETS group-address export as `content`");
+      if (!content) throw new SupremeError("validation_failed", "provide the ETS export as `content`, or a .knxproj as base64 `knxproj`");
       reply.code(201).send(await i().importKnx(content));
     } catch (err) {
       sendError(reply, err);

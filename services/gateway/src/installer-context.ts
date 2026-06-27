@@ -29,6 +29,9 @@ import {
   CommissioningService,
   groupIntoDevices,
   parseKnxGroupExport,
+  parseKnxProject,
+  unzipKnxproj,
+  type ImportedDevice,
   type IProtocolScanner,
 } from "@supreme/commissioning";
 import { issueLicense, validateLicense } from "@supreme/licensing";
@@ -44,6 +47,13 @@ import type { GatewayConfig } from "./config.js";
 
 /** SKU tiers, lowest → highest. A higher tier entitles all lower SKUs. */
 const SKU_TIERS = ["essential", "pro", "estate"] as const;
+
+/** Result of a KNX import (group-address export or .knxproj). */
+export interface KnxImportResult {
+  devices: number;
+  roomsCreated: number;
+  created: { name: string; room: string | null; capabilities: string[] }[];
+}
 
 export interface InstallerDeps {
   config: GatewayConfig;
@@ -227,17 +237,37 @@ export class InstallerServices {
    * commission the device and bind every capability to its KNX group address. Turns a
    * KNX project into ready-to-use device cards — no per-device manual entry.
    */
-  async importKnx(content: string): Promise<{
-    devices: number;
-    roomsCreated: number;
-    created: { name: string; room: string | null; capabilities: string[] }[];
-  }> {
+  async importKnx(content: string): Promise<KnxImportResult> {
+    const existing = await this.d.home.listRooms();
     const addresses = parseKnxGroupExport(content);
     if (addresses.length === 0) {
       throw new SupremeError("validation_failed", "no group addresses found in the import");
     }
+    return this.commissionImported(groupIntoDevices(addresses, existing.map((r) => r.name)));
+  }
+
+  /**
+   * Import a `.knxproj` file directly (base64-encoded). Reads the ETS project's
+   * building → room → function → group-address structure, so device cards land in their
+   * real ETS rooms. Falls back to name-based grouping when the project has no functions.
+   */
+  async importKnxProject(base64: string): Promise<KnxImportResult> {
+    let devices: ImportedDevice[];
+    try {
+      const { devices: parsed } = parseKnxProject(unzipKnxproj(Buffer.from(base64, "base64")));
+      devices = parsed;
+    } catch (err) {
+      throw new SupremeError("validation_failed", `could not read .knxproj: ${(err as Error).message}`);
+    }
+    if (devices.length === 0) {
+      throw new SupremeError("validation_failed", "no devices found in the project (is it password-protected?)");
+    }
+    return this.commissionImported(devices);
+  }
+
+  /** Commission a parsed device list into rooms (creating rooms as needed) + bind GAs. */
+  private async commissionImported(imported: ImportedDevice[]): Promise<KnxImportResult> {
     const existing = await this.d.home.listRooms();
-    const imported = groupIntoDevices(addresses, existing.map((r) => r.name));
     const roomByName = new Map(existing.map((r) => [r.name.toLowerCase(), r] as const));
     let roomsCreated = 0;
     const created: { name: string; room: string | null; capabilities: string[] }[] = [];
