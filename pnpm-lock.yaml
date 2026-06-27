@@ -138,6 +138,22 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  cloud/hub-registry:
+    dependencies:
+      '@supreme/hub-identity':
+        specifier: workspace:*
+        version: link:../../packages/hub-identity
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
   cloud/licensing:
     dependencies:
       '@supreme/crypto':
@@ -225,6 +241,22 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/hub-identity:
+    dependencies:
+      '@supreme/crypto':
+        specifier: workspace:*
+        version: link:../crypto
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
