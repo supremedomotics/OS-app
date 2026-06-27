@@ -12,13 +12,18 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@supreme/hub-identity": "workspace:*"
+    "@supreme/crypto": "workspace:*",
+    "@supreme/hub-identity": "workspace:*",
+    "fastify": "^5.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

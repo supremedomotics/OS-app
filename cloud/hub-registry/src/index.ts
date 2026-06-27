@@ -25,6 +25,8 @@ import {
  * It owns NO device state — only the hub↔account ownership graph (invariant I2).
  */
 
+export { buildHubRegistryServer, type HubRegistryServerOptions } from "./server.js";
+
 export type HubStatus = "provisioned" | "claimed" | "suspended" | "decommissioned";
 
 export interface HubRecord {

@@ -4,6 +4,8 @@ import { buildServer } from "./server.js";
 import { initTracing } from "./tracing.js";
 import { RelayTunnelClient } from "./relay-tunnel.js";
 import { OtaChecker } from "./ota.js";
+import { HubAgent } from "./hub-agent.js";
+import { createSecretStore } from "./secrets.js";
 
 /**
  * Hub entry point for the Supreme API Gateway. Boots the Supreme plane (identity,
@@ -52,6 +54,31 @@ async function main(): Promise<void> {
     });
     tunnel.start();
     app.log.info({ relay: config.relayUrl }, "remote-access tunnel started");
+  }
+
+  // Zero-touch cloud provisioning (ADR 0008): on boot, generate the hub's cryptographic
+  // identity (once) and enroll with the cloud Hub Registry. Non-fatal and outbound-only —
+  // the hub runs fully locally if the cloud is unreachable (invariant I1). Until the owner
+  // claims the hub, we surface a claim code in the logs (the Setup Wizard renders it in-app).
+  if (config.hubRegistryUrl) {
+    const agent = new HubAgent({
+      store: createSecretStore(config.secretsDir || undefined),
+      registryUrl: config.hubRegistryUrl,
+      model: config.hubModel,
+      fwVersion: config.hubVersion,
+      log: (msg, meta) => app.log.info(meta ?? {}, msg),
+    });
+    const provision = async () => {
+      const state = await agent.ensureEnrolled();
+      if (state.enrolled) {
+        const claim = await agent.requestClaimCode();
+        if (claim) app.log.info({ hubUuid: agent.hubUuid, claimCode: claim.code }, "hub awaiting owner claim");
+      }
+    };
+    void provision();
+    // Re-check periodically to renew the credential before expiry and keep presence fresh.
+    const enrollTimer = setInterval(() => void provision(), 6 * 60 * 60 * 1000);
+    enrollTimer.unref();
   }
 
   // OTA (§14): periodically check the signed release channel and log when an update is

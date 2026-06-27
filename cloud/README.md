@@ -16,7 +16,7 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 
 | Service | Dir | Status | Responsibility |
 |---|---|---|---|
-| Hub Registry | `cloud/hub-registry` | 🟡 core | Zero-touch enrollment, device-cert issuance, claim/transfer, presence |
+| Hub Registry | `cloud/hub-registry` | ✅ C0 | Zero-touch enrollment, device-cert issuance, claim/transfer, presence (HTTP + hub agent, end-to-end) |
 | Identity | `cloud/identity` | ⬜ | Accounts, identities, passkeys, federated login records |
 | AuthN | `cloud/authn` | 🟡 core | EdDSA JWT mint, rotating refresh + reuse-detection, sessions, JWKS |
 | AuthZ | `cloud/authz` | ⬜ | RBAC/ABAC policy decision point for cloud APIs |
@@ -47,9 +47,16 @@ identity + ownership graph; the hub stays authoritative for device/automation st
 1. **Hub identity** — `@supreme/hub-identity`: UUIDv7 + Ed25519 device keypair, signed
    enrollment request (CSR-equivalent), Hub CA issuance (`DeviceCredential`, the dev stand-in
    for X.509), per-connection challenge auth, proximity-gated claim codes.
-2. **Hub Registry core** — `@supreme/hub-registry`: enroll → issue → claim → transfer →
-   heartbeat → revoke, with a Postgres-swappable store seam. Anti-replay (single-use nonce)
-   and anti-hijack (uuid bound to one device key) enforced.
+2. **Hub Registry** — `@supreme/hub-registry`: enroll → issue → claim → transfer → heartbeat →
+   revoke, with a Postgres-swappable store seam. Anti-replay (single-use nonce) and anti-hijack
+   (uuid bound to one device key) enforced. Exposed over HTTP (`cloud/hub-registry/src/server.ts`,
+   `main.ts`, Dockerfile, compose `:8092`). 15 tests.
+3. **Hub Agent** — `services/gateway/src/hub-agent.ts`: on boot the hub loads-or-generates its
+   identity (sealed in the secrets store), enrolls with the registry, stores the credential, and
+   surfaces a claim code — all **non-fatal** so the hub runs fully locally if the cloud is down.
+   Wired into the gateway boot (`SUPREME_HUB_REGISTRY_URL`). End-to-end test
+   (`hub-enrollment.e2e.test.ts`) proves identity → enroll → claim → home+owner, plus the
+   cloud-unreachable path. C0 is end-to-end runnable.
 
 ## C1 identity plane (in progress)
 

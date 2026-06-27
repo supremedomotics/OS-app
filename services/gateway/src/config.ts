@@ -124,6 +124,10 @@ export interface GatewayConfig {
   relayUrl: string;
   /** Bearer token the hub presents to the relay's tunnel. */
   relayToken: string;
+  /** Cloud Hub Registry base URL for zero-touch enrollment; empty = no cloud enrollment. */
+  hubRegistryUrl: string;
+  /** This hub's hardware model, reported at enrollment. */
+  hubModel: string;
   /** Signed OTA channel manifest URL; empty = no update checks. */
   otaUrl: string;
   /** Embedded OTA signing public key (PEM) to verify release manifests. */
@@ -205,6 +209,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     pushRelayToken: secret(env, "SUPREME_PUSH_RELAY_TOKEN") ?? "",
     relayUrl: env.SUPREME_RELAY_URL ?? "",
     relayToken: secret(env, "SUPREME_RELAY_TOKEN") ?? "",
+    hubRegistryUrl: env.SUPREME_HUB_REGISTRY_URL ?? "",
+    hubModel: env.SUPREME_HUB_MODEL ?? "Supreme Hub",
     otaUrl: env.SUPREME_OTA_URL ?? "",
     otaPublicKey: secret(env, "SUPREME_OTA_PUBLIC_KEY") ?? "",
     nodeEnv: env.NODE_ENV ?? "development",

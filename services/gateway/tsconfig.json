@@ -17,6 +17,8 @@
     { "path": "../persistence" },
     { "path": "../messaging" },
     { "path": "../../packages/crypto" },
+    { "path": "../../packages/hub-identity" },
+    { "path": "../../cloud/hub-registry" },
     { "path": "../drivers" },
     { "path": "../commissioning" },
     { "path": "../../cloud/licensing" },
