@@ -50,9 +50,115 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
           else if (caps.contains('vacuum')) ..._vacuum()
           else if (caps.contains('media')) ..._media()
           else ..._switch(),
+          ..._manage(),
         ],
       ),
     );
+  }
+
+  // ── Manage: move to any room · rename · remove (§4) ──────────────────────────────
+  List<Widget> _manage() {
+    final scheme = Theme.of(context).colorScheme;
+    final rooms = ref.watch(homeProvider).maybeWhen(data: (h) => h.rooms, orElse: () => const <Room>[]);
+    return [
+      const Divider(height: 30),
+      Align(alignment: Alignment.centerLeft, child: Text('Manage', style: Theme.of(context).textTheme.labelLarge)),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _renameDialog,
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Rename'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: rooms.length < 2 ? null : () => _moveDialog(rooms),
+            icon: const Icon(Icons.meeting_room_outlined, size: 18),
+            label: const Text('Move'),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      SizedBox(
+        width: double.infinity,
+        child: TextButton.icon(
+          onPressed: _removeConfirm,
+          icon: Icon(Icons.delete_outline, size: 18, color: scheme.error),
+          label: Text('Remove device', style: TextStyle(color: scheme.error)),
+        ),
+      ),
+    ];
+  }
+
+  /// Run a management op, refresh room/home state, close the sheet; surface a friendly
+  /// message if the backend denies it (control-only roles get 403).
+  Future<void> _apply(Future<void> Function() op) async {
+    try {
+      await op();
+      ref.invalidate(homeProvider);
+      ref.invalidate(roomDevicesProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't update the device — you may not have permission.")),
+        );
+      }
+    }
+  }
+
+  Future<void> _renameDialog() async {
+    final ctrl = TextEditingController(text: widget.device.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename device'),
+        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (name != null && name.isNotEmpty && name != widget.device.name) {
+      await _apply(() => ref.read(clientProvider).updateDevice(widget.device.id, name: name));
+    }
+  }
+
+  Future<void> _moveDialog(List<Room> rooms) async {
+    final target = await showDialog<Room>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Move to room'),
+        children: [
+          for (final r in rooms.where((r) => r.id != widget.device.roomId))
+            SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop(r), child: Text(r.name)),
+        ],
+      ),
+    );
+    if (target != null) {
+      await _apply(() => ref.read(clientProvider).updateDevice(widget.device.id, roomId: target.id));
+    }
+  }
+
+  Future<void> _removeConfirm() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove device?'),
+        content: Text('"${widget.device.name}" will be removed. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _apply(() => ref.read(clientProvider).deleteDevice(widget.device.id));
+    }
   }
 
   Widget _title(String name, String status) => Padding(
