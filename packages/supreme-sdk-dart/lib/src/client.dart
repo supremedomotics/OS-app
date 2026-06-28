@@ -140,6 +140,26 @@ class SupremeClient {
     return (body['applied'] as List<dynamic>).cast<String>();
   }
 
+  /// The home's scene schedules (time / sunrise / sunset triggers).
+  Future<List<Map<String, dynamic>>> sceneSchedules() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/scenes/schedules'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return ((jsonDecode(res.body) as Map<String, dynamic>)['schedules']
+            as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Replace the home's scene schedules.
+  Future<void> setSceneSchedules(List<Map<String, dynamic>> schedules) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/scenes/schedules'),
+      headers: _authHeaders,
+      body: jsonEncode({'schedules': schedules}),
+    );
+    _ensureOk(res);
+  }
+
   // ── Favorites ────────────────────────────────────────────────────────────────
   Future<List<Favorite>> favorites() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/favorites'),

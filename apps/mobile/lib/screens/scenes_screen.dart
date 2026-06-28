@@ -63,6 +63,20 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                   },
                 ),
                 const SizedBox(width: AureonSpacing.sm),
+                // Scene schedules (time / sunrise / sunset).
+                IconButton.filledTonal(
+                  tooltip: 'Schedules',
+                  icon: const Icon(Icons.schedule_outlined),
+                  onPressed: scenes.maybeWhen(
+                    data: (list) => () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (_) => _SchedulesSheet(scenes: list),
+                        ),
+                    orElse: () => null,
+                  ),
+                ),
+                const SizedBox(width: AureonSpacing.sm),
                 scenes.maybeWhen(
                   data: (list) => list.isEmpty
                       ? const SizedBox.shrink()
@@ -182,5 +196,160 @@ class _ReorderList extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+/// Manage scene schedules: list existing ones, add a time/sunrise/sunset trigger, delete.
+class _SchedulesSheet extends ConsumerWidget {
+  const _SchedulesSheet({required this.scenes});
+
+  final List<Scene> scenes;
+
+  String _sceneName(String id) =>
+      scenes.firstWhere((s) => s.id == id, orElse: () => scenes.first).name;
+
+  String _describe(Map<String, dynamic> s) {
+    final t = s['trigger'] as Map<String, dynamic>;
+    if (t['type'] == 'solar') {
+      final off = (t['offsetMinutes'] as num?)?.toInt() ?? 0;
+      final tail = off == 0 ? '' : (off > 0 ? ' +${off}m' : ' ${off}m');
+      return 'At ${t['event']}$tail';
+    }
+    final m = (t['atMinutes'] as num).toInt();
+    return 'At ${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final schedules = ref.watch(sceneSchedulesProvider);
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(AureonSpacing.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Scene schedules',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: AureonSpacing.md),
+            schedules.when(
+              loading: () => const Padding(
+                  padding: EdgeInsets.all(AureonSpacing.lg),
+                  child: Center(child: CircularProgressIndicator())),
+              error: (e, _) => Text('Could not load schedules\n$e'),
+              data: (list) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (list.isEmpty)
+                    const Padding(
+                        padding: EdgeInsets.symmetric(vertical: AureonSpacing.md),
+                        child: Text('No schedules yet')),
+                  for (final s in list)
+                    ListTile(
+                      leading: const Icon(Icons.event_outlined),
+                      title: Text(_sceneName(s['sceneId'] as String)),
+                      subtitle: Text(_describe(s)),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () async {
+                          final next = [...list]..remove(s);
+                          await ref.read(clientProvider).setSceneSchedules(
+                              next.cast<Map<String, dynamic>>());
+                          ref.invalidate(sceneSchedulesProvider);
+                        },
+                      ),
+                    ),
+                  const SizedBox(height: AureonSpacing.sm),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add schedule'),
+                    onPressed: () => _add(context, ref, list),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _add(BuildContext context, WidgetRef ref,
+      List<Map<String, dynamic>> existing) async {
+    var sceneId = scenes.first.id;
+    Map<String, dynamic>? trigger;
+    final created = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) => AlertDialog(
+          title: const Text('New schedule'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButton<String>(
+                isExpanded: true,
+                value: sceneId,
+                items: [
+                  for (final s in scenes)
+                    DropdownMenuItem(value: s.id, child: Text(s.name)),
+                ],
+                onChanged: (v) => setState(() => sceneId = v ?? sceneId),
+              ),
+              const SizedBox(height: AureonSpacing.sm),
+              Wrap(
+                spacing: AureonSpacing.sm,
+                children: [
+                  ChoiceChip(
+                    label: const Text('At sunrise'),
+                    selected: trigger?['event'] == 'sunrise',
+                    onSelected: (_) => setState(
+                        () => trigger = {'type': 'solar', 'event': 'sunrise'}),
+                  ),
+                  ChoiceChip(
+                    label: const Text('At sunset'),
+                    selected: trigger?['event'] == 'sunset',
+                    onSelected: (_) => setState(
+                        () => trigger = {'type': 'solar', 'event': 'sunset'}),
+                  ),
+                  ActionChip(
+                    avatar: const Icon(Icons.access_time, size: 18),
+                    label: Text(trigger?['type'] == 'time'
+                        ? '${((trigger!['atMinutes'] as int) ~/ 60).toString().padLeft(2, '0')}:${((trigger!['atMinutes'] as int) % 60).toString().padLeft(2, '0')}'
+                        : 'Pick time'),
+                    onPressed: () async {
+                      final picked = await showTimePicker(
+                          context: dialogContext,
+                          initialTime: const TimeOfDay(hour: 18, minute: 0));
+                      if (picked != null) {
+                        setState(() => trigger = {
+                              'type': 'time',
+                              'atMinutes': picked.hour * 60 + picked.minute,
+                            });
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: trigger == null
+                  ? null
+                  : () => Navigator.pop(
+                      dialogContext, {'sceneId': sceneId, 'trigger': trigger}),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (created != null) {
+      await ref.read(clientProvider).setSceneSchedules([...existing, created]);
+      ref.invalidate(sceneSchedulesProvider);
+    }
   }
 }
