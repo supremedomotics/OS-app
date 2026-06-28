@@ -225,6 +225,28 @@ class SupremeClient {
     return (body['summary'] as List<dynamic>).cast<Map<String, dynamic>>();
   }
 
+  /// Tariff-aware energy cost for the home: pass the homeowner's [tariff] (and an
+  /// optional [budget] / date range) and get a cost breakdown + budget projection.
+  Future<Map<String, dynamic>> energyCost(
+    Map<String, dynamic> tariff, {
+    Map<String, dynamic>? budget,
+    String? from,
+    String? to,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/energy/cost'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'tariff': tariff,
+        if (budget != null) 'budget': budget,
+        if (from != null) 'from': from,
+        if (to != null) 'to': to,
+      }),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Current security panel state.
   Future<Map<String, dynamic>> securityState() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/security'),

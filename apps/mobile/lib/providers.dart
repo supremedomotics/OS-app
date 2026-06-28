@@ -110,6 +110,32 @@ final energyProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   return ref.watch(clientProvider).energySummary();
 });
 
+/// A sensible default time-of-use tariff until the homeowner configures their own
+/// rate plan (peak 16:00–21:00, off-peak otherwise + a daily standing charge).
+const defaultTariff = <String, dynamic>{
+  'currency': 'USD',
+  'standingChargePerDay': 0.5,
+  'periods': [
+    {'name': 'peak', 'ratePerKwh': 0.40, 'hours': [16, 17, 18, 19, 20]},
+    {
+      'name': 'off-peak',
+      'ratePerKwh': 0.15,
+      'hours': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 21, 22, 23],
+    },
+  ],
+};
+
+/// Tariff-aware cost of the home's energy under [defaultTariff]. Null when the hub
+/// has no energy data yet (the cost card hides).
+final energyCostProvider =
+    FutureProvider<Map<String, dynamic>?>((ref) async {
+  try {
+    return await ref.watch(clientProvider).energyCost(defaultTariff);
+  } catch (_) {
+    return null;
+  }
+});
+
 /// Automations for the visual Builder (§10).
 final automationsProvider =
     FutureProvider<List<AutomationSummary>>((ref) async {
