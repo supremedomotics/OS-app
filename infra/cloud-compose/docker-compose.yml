@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
     environment:
       HUB_REGISTRY_PORT: "8092"
-      SUPREME_BROKER_ENDPOINT: ${SUPREME_BROKER_ENDPOINT:-https://broker.supreme.example}
+      SUPREME_BROKER_ENDPOINT: ${SUPREME_BROKER_ENDPOINT:-https://broker.supremedomotics.in}
       SUPREME_HUB_CA_KEY_FILE: ${SUPREME_HUB_CA_KEY_FILE:-}
       SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
@@ -57,7 +57,7 @@ services:
     environment:
       IDENTITY_PORT: "8093"
       SUPREME_AUTHN_KEY_FILE: ${SUPREME_AUTHN_KEY_FILE:-}
-      SUPREME_AUTHN_ISSUER: ${SUPREME_AUTHN_ISSUER:-https://id.supreme.example}
+      SUPREME_AUTHN_ISSUER: ${SUPREME_AUTHN_ISSUER:-https://id.supremedomotics.in}
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:
       - "8093:8093"

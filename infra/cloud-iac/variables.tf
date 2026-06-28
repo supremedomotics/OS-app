@@ -2,7 +2,7 @@
 variable "domain" {
   description = "Apex domain for the cloud plane (relay.<domain>, fleet.<domain>)."
   type        = string
-  default     = "cloud.supreme.example"
+  default     = "supremedomotics.in"
 }
 
 variable "region" {

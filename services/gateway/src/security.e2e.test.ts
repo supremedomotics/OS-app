@@ -56,7 +56,7 @@ describe("Gateway security hardening", () => {
         ...loadConfig({}),
         nodeEnv: "production",
         tokenSecret: "x".repeat(40),
-        corsOrigins: ["https://app.supreme.example"],
+        corsOrigins: ["https://app.supremedomotics.in"],
       }),
     ).not.toThrow();
   });

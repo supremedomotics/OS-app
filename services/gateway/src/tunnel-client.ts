@@ -16,7 +16,7 @@ export interface BrokerWebSocket {
 export type BrokerWebSocketCtor = new (url: string) => BrokerWebSocket;
 
 export interface BrokerTunnelOptions {
-  /** Broker base URL, e.g. "https://broker.supreme.example". */
+  /** Broker base URL, e.g. "https://broker.supremedomotics.in". */
   brokerUrl: string;
   /** The hub's identity (device private key signs the challenge). */
   identity: HubIdentity;

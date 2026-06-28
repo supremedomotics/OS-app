@@ -135,7 +135,7 @@ export class AuthnService {
     this.privateKey = opts.privateKey;
     this.publicKey = opts.publicKey;
     this.keyId = opts.keyId ?? "authn-1";
-    this.issuer = opts.issuer ?? "https://id.supreme.example";
+    this.issuer = opts.issuer ?? "https://id.supremedomotics.in";
     this.store = opts.store ?? new InMemoryAuthnStore();
     this.accessTtl = opts.accessTtlSeconds ?? 600; // 10 min
     this.refreshTtl = opts.refreshTtlSeconds ?? 60 * 60 * 24 * 30; // 30 days

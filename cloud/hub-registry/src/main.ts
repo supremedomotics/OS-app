@@ -28,7 +28,7 @@ function loadCa(): DevHubCA {
 async function main(): Promise<void> {
   const app = buildHubRegistryServer({
     ca: loadCa(),
-    brokerEndpoint: process.env.SUPREME_BROKER_ENDPOINT ?? "https://broker.supreme.example",
+    brokerEndpoint: process.env.SUPREME_BROKER_ENDPOINT ?? "https://broker.supremedomotics.in",
     logLevel: process.env.SUPREME_LOG_LEVEL ?? "info",
   });
   const port = Number(process.env.HUB_REGISTRY_PORT ?? 8092);

@@ -16,7 +16,7 @@ export interface RelayWebSocket {
 export type RelayWebSocketCtor = new (url: string) => RelayWebSocket;
 
 export interface RelayTunnelOptions {
-  /** Relay base URL, e.g. "https://cloud.supreme.example". */
+  /** Relay base URL, e.g. "https://cloud.supremedomotics.in". */
   relayUrl: string;
   homeId: string;
   token: string;

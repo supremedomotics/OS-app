@@ -182,7 +182,7 @@ export class HubRegistry {
   constructor(opts: HubRegistryOptions = {}) {
     this.store = opts.store ?? new InMemoryHubRegistryStore();
     this.ca = opts.ca ?? DevHubCA.generate();
-    this.brokerEndpoint = opts.brokerEndpoint ?? "https://broker.supreme.example";
+    this.brokerEndpoint = opts.brokerEndpoint ?? "https://broker.supremedomotics.in";
     this.verifyAttestation = opts.verifyAttestation;
     this.pkiCa = opts.pkiCa;
     this.mtlsEndpoint = opts.mtlsEndpoint;
