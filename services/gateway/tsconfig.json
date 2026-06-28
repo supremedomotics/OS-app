@@ -30,7 +30,8 @@
     { "path": "../audit" },
     { "path": "../ai" },
     { "path": "../security" },
-    { "path": "../cameras" }
+    { "path": "../cameras" },
+    { "path": "../homekit" }
   ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]

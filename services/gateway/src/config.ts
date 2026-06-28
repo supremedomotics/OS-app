@@ -89,6 +89,8 @@ export interface GatewayConfig {
   voiceCloudUrl: string;
   /** Per-hub key the cloud Voice service maps to this home. */
   voiceHubKey: string;
+  /** Enable the local HomeKit (HAP) bridge for Apple Home / Siri (opt-in; needs the HAP transport). */
+  homekitEnabled: boolean;
   /** Zigbee coordinator serial port for the native Zigbee driver; empty = not loaded. */
   zigbeePort: string;
   /** zigbee-herdsman adapter type (zstack/deconz/ezsp). */
@@ -198,6 +200,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     homeId: env.SUPREME_HOME_ID ?? "primary",
     voiceCloudUrl: env.SUPREME_VOICE_CLOUD_URL ?? "",
     voiceHubKey: secret(env, "VOICE_HUB_KEY") ?? "",
+    homekitEnabled: env.SUPREME_HOMEKIT_ENABLED === "1" || env.SUPREME_HOMEKIT_ENABLED === "true",
     zigbeePort: env.SUPREME_ZIGBEE_PORT ?? "",
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     daliPort: env.SUPREME_DALI_PORT ?? "",

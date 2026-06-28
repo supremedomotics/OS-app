@@ -845,6 +845,9 @@ importers:
       '@supreme/home':
         specifier: workspace:*
         version: link:../home
+      '@supreme/homekit':
+        specifier: workspace:*
+        version: link:../homekit
       '@supreme/hub-identity':
         specifier: workspace:*
         version: link:../../packages/hub-identity
@@ -930,6 +933,19 @@ importers:
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+
+  services/homekit:
+    dependencies:
+      '@supreme/domain-model':
+        specifier: workspace:*
+        version: link:../../packages/domain-model
     devDependencies:
       typescript:
         specifier: ^5.7.3

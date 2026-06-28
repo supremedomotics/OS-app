@@ -40,6 +40,18 @@ export function registerMatterRoutes(app: FastifyInstance, ctx: AppContext): voi
     }
   });
 
+  // HomeKit (Apple Home / Siri) bridge status. The bridge is local-only; pairing happens in the
+  // Home app via the HAP setup code surfaced by the hub's HAP transport.
+  app.get("/v1/homekit/status", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send({ enabled: ctx.homekit !== null, accessoryCount: ctx.homekit?.accessoryCount() ?? 0 });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Commission a new Matter device from its setup code (installer-gated).
   app.post("/v1/matter/commission", async (req, reply) => {
     try {

@@ -48,6 +48,8 @@ import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
 import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protocols";
 import type { VoiceStatePublisher } from "./voice-publisher.js";
+import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit";
+import type { CapabilityCommand } from "@supreme/domain-model";
 
 /** The hub's optional Matter controller handle, present only when Matter is enabled AND its
  * controller subsystem is available. Lets the Matter routes pair devices by setup code and report
@@ -65,6 +67,8 @@ export interface AppDeps {
   matter?: MatterHandle;
   /** Publisher for proactive voice state reporting (set by bootstrap when the Voice cloud is wired). */
   voicePublisher?: VoiceStatePublisher;
+  /** HomeKit HAP transport (hap-nodejs-backed). Present → the local HomeKit bridge is enabled. */
+  homekitTransport?: HapTransport;
   /** Cross-process event bus (NATS in prod); defaults to in-process. */
   bus?: IEventBus;
   /** Shared presence store (Redis in prod); defaults to in-process. */
@@ -130,6 +134,8 @@ export class AppContext {
   readonly matter: MatterHandle | null;
   /** Proactive voice state publisher when the Voice cloud is wired; null otherwise. */
   readonly voicePublisher: VoiceStatePublisher | null;
+  /** Local HomeKit (HAP) bridge when a transport is configured; null otherwise. */
+  homekit: HapBridge | null = null;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -326,6 +332,21 @@ export class AppContext {
       this.audit = new AuditService(deps.db);
     }
 
+    // Local HomeKit (Apple Home / Siri) bridge — opt-in, runs entirely on the hub. Present only when
+    // a HAP transport is injected; we publish every device as an accessory and route HomeKit writes
+    // back through the SIL (identity/RBAC enforced as for any command).
+    if (deps.homekitTransport) {
+      const bridge = new HapBridge({
+        transport: deps.homekitTransport,
+        onCommand: (deviceId, command) => this.sil.command(deviceId as DeviceId, hapToCapabilityCommand(command)),
+      });
+      for (const device of await this.home.listDevices()) {
+        bridge.addDevice({ id: device.id, name: device.name, capabilities: device.capabilities.map((c) => c.kind) });
+      }
+      await bridge.start();
+      this.homekit = bridge;
+    }
+
     this.ready = true;
   }
 
@@ -370,6 +391,8 @@ export class AppContext {
     if (!this.ready) return;
     // Proactive voice reporting: tell the cloud (debounced) so Alexa/Google stay in sync (ADR 0010).
     this.voicePublisher?.publish(event);
+    // Local HomeKit: push the change to the bridge so Apple Home reflects it.
+    this.homekit?.pushState(event.deviceId, event.capability, event.state as unknown as Record<string, unknown>);
     await this.maybeNotifyEvent(event);
     await this.automations.onDeviceState({
       deviceId: event.deviceId,
@@ -435,10 +458,29 @@ export class AppContext {
 
   async shutdown(): Promise<void> {
     this.voicePublisher?.stop();
+    await this.homekit?.stop();
     await this.security.flush();
     await this.sil.stop();
     await this.bus.close();
     await this.presence.close();
+  }
+}
+
+/** Map a HomeKit-derived command to the Supreme CapabilityCommand the SIL validates. */
+function hapToCapabilityCommand(c: HapCommand): CapabilityCommand {
+  switch (c.capability) {
+    case "onoff":
+      return { capability: "onoff", action: c.action };
+    case "brightness":
+      return { capability: "brightness", action: "set", level: c.level };
+    case "color":
+      return { capability: "color", ...(c.hue !== undefined ? { hue: c.hue } : {}), ...(c.saturation !== undefined ? { saturation: c.saturation } : {}), ...(c.kelvin !== undefined ? { kelvin: c.kelvin } : {}) };
+    case "lock":
+      return { capability: "lock", action: c.action };
+    case "position":
+      return { capability: "position", action: "set", position: c.position };
+    case "temperature":
+      return { capability: "temperature", targetC: c.targetC };
   }
 }
 
