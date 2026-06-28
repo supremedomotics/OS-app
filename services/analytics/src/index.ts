@@ -7,6 +7,19 @@ import {
 } from "@supreme/domain-model";
 import type { SqlDb } from "@supreme/persistence";
 
+// Tariff-aware energy cost engine (pure; turns consumption into money + budget projection).
+export {
+  computeEnergyCost,
+  budgetStatus,
+  TariffError,
+  type Tariff,
+  type TariffPeriod,
+  type ConsumptionSample,
+  type CostBreakdown,
+  type BudgetStatus,
+  type DayType,
+} from "./tariff.js";
+
 /**
  * Energy & telemetry analytics (§16). Ingests numeric measures from normalized
  * device state (sensors, climate) into a time-series table and answers aggregate
