@@ -131,3 +131,11 @@ export class SecurityService {
     return state;
   }
 }
+
+export {
+  planOccupancy,
+  occupancyEventsAt,
+  OccupancyError,
+  type OccupancyConfig,
+  type OccupancyEvent,
+} from "./occupancy.js";

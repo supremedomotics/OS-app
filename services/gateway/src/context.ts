@@ -50,6 +50,7 @@ import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protoco
 import type { VoiceStatePublisher } from "./voice-publisher.js";
 import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit";
 import type { CapabilityCommand } from "@supreme/domain-model";
+import { OccupancyRunner } from "./occupancy-runner.js";
 
 /** The hub's optional Matter controller handle, present only when Matter is enabled AND its
  * controller subsystem is available. Lets the Matter routes pair devices by setup code and report
@@ -136,6 +137,8 @@ export class AppContext {
   readonly voicePublisher: VoiceStatePublisher | null;
   /** Local HomeKit (HAP) bridge when a transport is configured; null otherwise. */
   homekit: HapBridge | null = null;
+  /** Occupancy (vacation) simulation runner — toggles lights to look lived-in while away. */
+  readonly occupancy: OccupancyRunner;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -155,6 +158,9 @@ export class AppContext {
     this.presence = deps.presence ?? new InMemoryPresenceStore();
     this.matter = deps.matter ?? null;
     this.voicePublisher = deps.voicePublisher ?? null;
+    this.occupancy = new OccupancyRunner({
+      command: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
+    });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,
@@ -457,6 +463,7 @@ export class AppContext {
   }
 
   async shutdown(): Promise<void> {
+    this.occupancy.stop();
     this.voicePublisher?.stop();
     await this.homekit?.stop();
     await this.security.flush();
