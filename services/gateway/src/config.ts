@@ -85,6 +85,10 @@ export interface GatewayConfig {
   matterCloudApiKey: string;
   /** Informational home id passed to the Matter fabric manager (cloud derives home from the key). */
   homeId: string;
+  /** Optional cloud Voice service base URL for proactive state reporting; empty = off. */
+  voiceCloudUrl: string;
+  /** Per-hub key the cloud Voice service maps to this home. */
+  voiceHubKey: string;
   /** Zigbee coordinator serial port for the native Zigbee driver; empty = not loaded. */
   zigbeePort: string;
   /** zigbee-herdsman adapter type (zstack/deconz/ezsp). */
@@ -192,6 +196,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     matterCloudUrl: env.SUPREME_MATTER_CLOUD_URL ?? "",
     matterCloudApiKey: env.SUPREME_MATTER_CLOUD_API_KEY ?? "",
     homeId: env.SUPREME_HOME_ID ?? "primary",
+    voiceCloudUrl: env.SUPREME_VOICE_CLOUD_URL ?? "",
+    voiceHubKey: secret(env, "VOICE_HUB_KEY") ?? "",
     zigbeePort: env.SUPREME_ZIGBEE_PORT ?? "",
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     daliPort: env.SUPREME_DALI_PORT ?? "",

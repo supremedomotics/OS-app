@@ -47,6 +47,7 @@ import { CameraService } from "./camera-service.js";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
 import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protocols";
+import type { VoiceStatePublisher } from "./voice-publisher.js";
 
 /** The hub's optional Matter controller handle, present only when Matter is enabled AND its
  * controller subsystem is available. Lets the Matter routes pair devices by setup code and report
@@ -62,6 +63,8 @@ export interface AppDeps {
   sil?: SupremeIntegrationLayer;
   /** Matter controller handle (set by bootstrap when Matter is enabled). */
   matter?: MatterHandle;
+  /** Publisher for proactive voice state reporting (set by bootstrap when the Voice cloud is wired). */
+  voicePublisher?: VoiceStatePublisher;
   /** Cross-process event bus (NATS in prod); defaults to in-process. */
   bus?: IEventBus;
   /** Shared presence store (Redis in prod); defaults to in-process. */
@@ -125,6 +128,8 @@ export class AppContext {
   readonly presence: IPresenceStore;
   /** Matter controller handle when Matter is enabled + its controller is running; null otherwise. */
   readonly matter: MatterHandle | null;
+  /** Proactive voice state publisher when the Voice cloud is wired; null otherwise. */
+  readonly voicePublisher: VoiceStatePublisher | null;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -143,6 +148,7 @@ export class AppContext {
     this.bus = deps.bus ?? new InProcessEventBus();
     this.presence = deps.presence ?? new InMemoryPresenceStore();
     this.matter = deps.matter ?? null;
+    this.voicePublisher = deps.voicePublisher ?? null;
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,
@@ -362,6 +368,8 @@ export class AppContext {
     // in-process today, cross-process under NATS.
     await this.bus.publish(subjects.deviceState(this.homeId), event);
     if (!this.ready) return;
+    // Proactive voice reporting: tell the cloud (debounced) so Alexa/Google stay in sync (ADR 0010).
+    this.voicePublisher?.publish(event);
     await this.maybeNotifyEvent(event);
     await this.automations.onDeviceState({
       deviceId: event.deviceId,
@@ -426,6 +434,7 @@ export class AppContext {
   }
 
   async shutdown(): Promise<void> {
+    this.voicePublisher?.stop();
     await this.security.flush();
     await this.sil.stop();
     await this.bus.close();

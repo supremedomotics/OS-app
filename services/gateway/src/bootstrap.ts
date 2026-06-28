@@ -44,6 +44,7 @@ import type { ProtocolKind } from "@supreme/domain-model";
 import { assertSecureConfig, type GatewayConfig } from "./config.js";
 import { AppContext, type AppDeps } from "./context.js";
 import { createSecretStore } from "./secrets.js";
+import { VoiceStatePublisher } from "./voice-publisher.js";
 
 const HA_TOKEN_SECRET = "ha_token";
 
@@ -235,6 +236,12 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     policy,
   });
   deps.sil = new SupremeIntegrationLayer({ adapter: router, registry });
+
+  // Proactive voice reporting (ADR 0010): when configured, publish local state changes to the
+  // cloud Voice service so Alexa/Google stay in sync. Outbound-only and non-fatal.
+  if (config.voiceCloudUrl && config.voiceHubKey) {
+    deps.voicePublisher = new VoiceStatePublisher({ baseUrl: config.voiceCloudUrl, hubKey: config.voiceHubKey });
+  }
 
   return AppContext.create(config, deps);
 }
