@@ -127,6 +127,23 @@ services:
     ports:
       - "8096:8096"
 
+  # Off-site backup vault — OPTIONAL, zero-knowledge. Stores the hub's already-encrypted backup
+  # blobs (never a decryption key), per-hub-key scoped to a home, with retention. The hub backs up
+  # and restores locally without it. Production injects an S3-compatible blob store.
+  backups:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/backups.Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKUPS_PORT: "8097"
+      # `key1:home1,key2:home2` — issued per hub at enrollment.
+      BACKUPS_API_KEYS: ${SUPREME_BACKUPS_API_KEYS:-}
+      BACKUPS_RETENTION: ${SUPREME_BACKUPS_RETENTION:-30}
+      BACKUPS_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8097:8097"
+
   # Receives OTLP traces from hubs/cloud services and exports them onward.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1

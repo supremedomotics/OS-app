@@ -171,7 +171,10 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       real FCM/APNs creds are deployment wiring)
 - [x] Cloud plane deploy — `infra/cloud-compose` + Terraform IaC + CD images (the relay
       and fleet now have Dockerfiles + a compose to run them)
-- [ ] Off-site backup service + driver-store mirror/CDN
+- [~] Off-site backup service (`@supreme/backups-cloud`) — zero-knowledge vault: stores the hub's
+      already-encrypted backup blobs (never a decryption key), per-hub-key scoped to a home, content-
+      digest integrity + retention; upload/list/download/delete API + compose service. Driver-store
+      mirror/CDN + an S3-backed blob store are the remaining pieces.
 - [~] Multi-home fleet deploy (HTTP API + Postgres-backed `SqlFleetStore` + portal
       ✓ page + cloud-compose service; needs managed DB wiring + migrations in prod)
 
