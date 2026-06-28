@@ -12,6 +12,19 @@ import { createMtlsTunnelServer, MtlsTunnelClient, type MtlsTunnelServer } from 
  * hub-initiated outbound socket).
  */
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Poll a predicate until it holds or the deadline passes. CI runners are far slower than a laptop
+ * (node-forge RSA-2048 keygen + the TLS handshake are CPU-heavy), so we wait on the actual condition
+ * instead of a fixed sleep that can race the handshake under load.
+ */
+async function waitFor(pred: () => boolean, timeoutMs = 5000, stepMs = 10): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pred()) return true;
+    await sleep(stepMs);
+  }
+  return pred();
+}
 
 describe("mTLS tunnel transport", () => {
   const ca = generateHubCa();
@@ -50,9 +63,7 @@ describe("mTLS tunnel transport", () => {
     const broker = new TunnelBroker({ caPublicKey: "" });
     const port = await startServer(broker);
     client = await startHub(port, "hub-1", async (req) => ({ status: 200, headers: {}, body: `pong:${req.path}` }));
-    await sleep(50);
-
-    expect(broker.isOnline("hub-1")).toBe(true); // presence
+    expect(await waitFor(() => broker.isOnline("hub-1"))).toBe(true); // presence
     const res = await broker.forward("hub-1", { method: "GET", path: "/v1/ping", headers: {} });
     expect(res.status).toBe(200);
     expect(res.body).toBe("pong:/v1/ping");
@@ -104,7 +115,7 @@ describe("mTLS tunnel transport", () => {
       sawRequest = true;
       return { status: 201, headers: { "x-served": "hub" }, body: `local:${req.method} ${req.path}` };
     });
-    await sleep(50);
+    expect(await waitFor(() => broker.isOnline("hub-nat"))).toBe(true);
 
     const res = await broker.forward("hub-nat", { method: "POST", path: "/v1/devices/x/command", headers: {}, body: "{}" });
     expect(sawRequest).toBe(true);
@@ -125,19 +136,16 @@ describe("mTLS tunnel transport", () => {
       onReady: () => (ready += 1),
     });
     client.start();
-    await sleep(60);
-    expect(broker.isOnline("hub-rc")).toBe(true);
+    expect(await waitFor(() => broker.isOnline("hub-rc"))).toBe(true);
     expect(ready).toBe(1);
 
     // Drop the connection (broker restarts). The hub's socket closes → backoff reconnect kicks in.
     await server.close();
-    await sleep(30);
-    expect(broker.isOnline("hub-rc")).toBe(false); // presence cleared on drop
+    expect(await waitFor(() => !broker.isOnline("hub-rc"))).toBe(true); // presence cleared on drop
     // Bring the broker back on the SAME port; the hub reconnects on its own and presence returns.
     server = createMtlsTunnelServer({ cert: serverCert.certPem, key: serverCert.keyPem, caCert: ca.caCertPem, broker, heartbeatMs: 200 });
     await server.listen(port, "127.0.0.1");
-    await sleep(400);
-    expect(ready).toBeGreaterThanOrEqual(2); // reconnected
-    expect(broker.isOnline("hub-rc")).toBe(true);
+    expect(await waitFor(() => broker.isOnline("hub-rc"))).toBe(true); // reconnected
+    expect(await waitFor(() => ready >= 2)).toBe(true);
   });
 });
