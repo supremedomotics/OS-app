@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, "../migrations");
 
 /** Ordered migration files. Append new ones; never edit a shipped migration. */
-const MIGRATIONS = ["0001_hub_registry.sql"] as const;
+const MIGRATIONS = ["0001_hub_registry.sql", "0002_identity_plane.sql"] as const;
 
 /** Apply pending migrations idempotently (a `schema_migrations` table records what ran). */
 export async function migrateCloud(db: SqlDb): Promise<void> {

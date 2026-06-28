@@ -92,7 +92,7 @@ export function buildIdentityServer(opts: IdentityServerOptions = {}): FastifyIn
     if (!b.kind || !b.value || !b.password) throw new HttpError(422, "validation_failed", "credentials required");
     const accountId = await identity.verifyPassword(b.kind, b.value, b.password);
 
-    const device = devices.register({
+    const device = await devices.register({
       accountId,
       name: b.device?.name ?? "New device",
       platform: b.device?.platform ?? "web",
@@ -106,7 +106,7 @@ export function buildIdentityServer(opts: IdentityServerOptions = {}): FastifyIn
       deviceId: device.id,
       amr: ["pwd"],
     });
-    devices.attachSession(accountId, device.id, tokens.sessionId);
+    await devices.attachSession(accountId, device.id, tokens.sessionId);
     reply.code(201).send({ ...tokens, device });
   });
 
@@ -118,31 +118,31 @@ export function buildIdentityServer(opts: IdentityServerOptions = {}): FastifyIn
 
   app.post("/v1/auth/logout", async (req, reply) => {
     const { sessionId } = await auth(req);
-    authn!.revokeSession(sessionId);
+    await authn!.revokeSession(sessionId);
     reply.code(204).send();
   });
 
   app.get("/v1/devices", async (req, reply) => {
     const { accountId } = await auth(req);
-    reply.send({ devices: devices.list(accountId) });
+    reply.send({ devices: await devices.list(accountId) });
   });
 
   app.patch<{ Params: { id: string } }>("/v1/devices/:id", async (req, reply) => {
     const { accountId } = await auth(req);
     const b = (req.body ?? {}) as { name?: string };
     if (!b.name) throw new HttpError(422, "validation_failed", "name required");
-    reply.send(devices.rename(accountId, req.params.id, b.name));
+    reply.send(await devices.rename(accountId, req.params.id, b.name));
   });
 
   app.delete<{ Params: { id: string } }>("/v1/devices/:id", async (req, reply) => {
     const { accountId } = await auth(req);
-    devices.remove(accountId, req.params.id);
+    await devices.remove(accountId, req.params.id);
     reply.code(204).send();
   });
 
   app.post<{ Params: { id: string } }>("/v1/devices/:id/logout", async (req, reply) => {
     const { accountId } = await auth(req);
-    reply.send(devices.remoteLogout(accountId, req.params.id));
+    reply.send(await devices.remoteLogout(accountId, req.params.id));
   });
 
   return app;

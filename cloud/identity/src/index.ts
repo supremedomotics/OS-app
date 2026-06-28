@@ -49,16 +49,16 @@ export interface FederatedLink {
 }
 
 export interface IIdentityStore {
-  putAccount(a: Account): void;
-  getAccount(id: string): Account | undefined;
-  putIdentity(i: Identity): void;
-  getIdentity(kind: IdentityKind, value: string): Identity | undefined;
-  setCredential(accountId: string, passwordHash: string): void;
-  getCredential(accountId: string): string | undefined;
-  putPasskey(p: PasskeyRecord): void;
-  listPasskeys(accountId: string): PasskeyRecord[];
-  putFederated(link: FederatedLink): void;
-  getFederated(provider: FederatedProvider, subject: string): FederatedLink | undefined;
+  putAccount(a: Account): Promise<void>;
+  getAccount(id: string): Promise<Account | undefined>;
+  putIdentity(i: Identity): Promise<void>;
+  getIdentity(kind: IdentityKind, value: string): Promise<Identity | undefined>;
+  setCredential(accountId: string, passwordHash: string): Promise<void>;
+  getCredential(accountId: string): Promise<string | undefined>;
+  putPasskey(p: PasskeyRecord): Promise<void>;
+  listPasskeys(accountId: string): Promise<PasskeyRecord[]>;
+  putFederated(link: FederatedLink): Promise<void>;
+  getFederated(provider: FederatedProvider, subject: string): Promise<FederatedLink | undefined>;
 }
 
 export class InMemoryIdentityStore implements IIdentityStore {
@@ -68,34 +68,34 @@ export class InMemoryIdentityStore implements IIdentityStore {
   private passkeys: PasskeyRecord[] = [];
   private federated = new Map<string, FederatedLink>(); // key: provider|subject
 
-  putAccount(a: Account) {
+  async putAccount(a: Account) {
     this.accounts.set(a.id, a);
   }
-  getAccount(id: string) {
+  async getAccount(id: string) {
     return this.accounts.get(id);
   }
-  putIdentity(i: Identity) {
+  async putIdentity(i: Identity) {
     this.identities.set(`${i.kind}|${i.value.toLowerCase()}`, i);
   }
-  getIdentity(kind: IdentityKind, value: string) {
+  async getIdentity(kind: IdentityKind, value: string) {
     return this.identities.get(`${kind}|${value.toLowerCase()}`);
   }
-  setCredential(accountId: string, passwordHash: string) {
+  async setCredential(accountId: string, passwordHash: string) {
     this.credentials.set(accountId, passwordHash);
   }
-  getCredential(accountId: string) {
+  async getCredential(accountId: string) {
     return this.credentials.get(accountId);
   }
-  putPasskey(p: PasskeyRecord) {
+  async putPasskey(p: PasskeyRecord) {
     this.passkeys.push(p);
   }
-  listPasskeys(accountId: string) {
+  async listPasskeys(accountId: string) {
     return this.passkeys.filter((p) => p.accountId === accountId);
   }
-  putFederated(link: FederatedLink) {
+  async putFederated(link: FederatedLink) {
     this.federated.set(`${link.provider}|${link.subject}`, link);
   }
-  getFederated(provider: FederatedProvider, subject: string) {
+  async getFederated(provider: FederatedProvider, subject: string) {
     return this.federated.get(`${provider}|${subject}`);
   }
 }
@@ -134,11 +134,11 @@ export class IdentityService {
     value: string;
     password?: string;
   }): Promise<{ account: Account; identity: Identity }> {
-    if (this.store.getIdentity(input.kind, input.value)) {
+    if (await this.store.getIdentity(input.kind, input.value)) {
       throw new IdentityError("conflict", `${input.kind} already registered`);
     }
     const account: Account = { id: uuidv7(this.now()), status: "active", createdAt: this.now() };
-    this.store.putAccount(account);
+    await this.store.putAccount(account);
     const identity: Identity = {
       id: uuidv7(this.now()),
       accountId: account.id,
@@ -146,23 +146,23 @@ export class IdentityService {
       value: input.value,
       verifiedAt: null,
     };
-    this.store.putIdentity(identity);
+    await this.store.putIdentity(identity);
     if (input.password) await this.setPassword(account.id, input.password);
     return { account, identity };
   }
 
   /** Add another login handle to an existing account (e.g. add a phone to an email account). */
-  addIdentity(accountId: string, kind: IdentityKind, value: string): Identity {
-    if (!this.store.getAccount(accountId)) throw new IdentityError("not_found", "account not found");
-    if (this.store.getIdentity(kind, value)) throw new IdentityError("conflict", `${kind} already registered`);
+  async addIdentity(accountId: string, kind: IdentityKind, value: string): Promise<Identity> {
+    if (!(await this.store.getAccount(accountId))) throw new IdentityError("not_found", "account not found");
+    if (await this.store.getIdentity(kind, value)) throw new IdentityError("conflict", `${kind} already registered`);
     const identity: Identity = { id: uuidv7(this.now()), accountId, kind, value, verifiedAt: null };
-    this.store.putIdentity(identity);
+    await this.store.putIdentity(identity);
     return identity;
   }
 
   async setPassword(accountId: string, password: string): Promise<void> {
-    if (!this.store.getAccount(accountId)) throw new IdentityError("not_found", "account not found");
-    this.store.setCredential(accountId, await hash(password));
+    if (!(await this.store.getAccount(accountId))) throw new IdentityError("not_found", "account not found");
+    await this.store.setCredential(accountId, await hash(password));
   }
 
   /**
@@ -170,18 +170,18 @@ export class IdentityService {
    * or credential is missing, so response time can't be used to enumerate accounts.
    */
   async verifyPassword(kind: IdentityKind, value: string, password: string): Promise<string> {
-    const identity = this.store.getIdentity(kind, value);
-    const stored = identity ? this.store.getCredential(identity.accountId) : undefined;
+    const identity = await this.store.getIdentity(kind, value);
+    const stored = identity ? await this.store.getCredential(identity.accountId) : undefined;
     const ok = await verify(stored ?? DUMMY_HASH, password).catch(() => false);
     if (!identity || !stored || !ok) throw new IdentityError("invalid_credentials", "invalid credentials");
     return identity.accountId;
   }
 
-  getAccount(id: string): Account | undefined {
+  getAccount(id: string): Promise<Account | undefined> {
     return this.store.getAccount(id);
   }
 
-  resolveIdentity(kind: IdentityKind, value: string): Identity | undefined {
+  resolveIdentity(kind: IdentityKind, value: string): Promise<Identity | undefined> {
     return this.store.getIdentity(kind, value);
   }
 
@@ -192,33 +192,33 @@ export class IdentityService {
     subject: string;
     email?: string;
   }): Promise<{ account: Account; created: boolean }> {
-    const existing = this.store.getFederated(input.provider, input.subject);
+    const existing = await this.store.getFederated(input.provider, input.subject);
     if (existing) {
-      const account = this.store.getAccount(existing.accountId);
+      const account = await this.store.getAccount(existing.accountId);
       if (account) return { account, created: false };
     }
     // Link to an existing account by verified email, else create a fresh account.
     let account: Account | undefined;
     if (input.email) {
-      const byEmail = this.store.getIdentity("email", input.email);
-      if (byEmail) account = this.store.getAccount(byEmail.accountId);
+      const byEmail = await this.store.getIdentity("email", input.email);
+      if (byEmail) account = await this.store.getAccount(byEmail.accountId);
     }
     let created = false;
     if (!account) {
       account = { id: uuidv7(this.now()), status: "active", createdAt: this.now() };
-      this.store.putAccount(account);
+      await this.store.putAccount(account);
       if (input.email) {
-        this.store.putIdentity({ id: uuidv7(this.now()), accountId: account.id, kind: "email", value: input.email, verifiedAt: this.now() });
+        await this.store.putIdentity({ id: uuidv7(this.now()), accountId: account.id, kind: "email", value: input.email, verifiedAt: this.now() });
       }
       created = true;
     }
-    this.store.putFederated({ accountId: account.id, provider: input.provider, subject: input.subject, email: input.email ?? null });
+    await this.store.putFederated({ accountId: account.id, provider: input.provider, subject: input.subject, email: input.email ?? null });
     return { account, created };
   }
 
   // ── Passkeys (WebAuthn) ────────────────────────────────────────────────────────────────
-  registerPasskey(accountId: string, input: { credentialId: string; publicKey: string; name?: string }): PasskeyRecord {
-    if (!this.store.getAccount(accountId)) throw new IdentityError("not_found", "account not found");
+  async registerPasskey(accountId: string, input: { credentialId: string; publicKey: string; name?: string }): Promise<PasskeyRecord> {
+    if (!(await this.store.getAccount(accountId))) throw new IdentityError("not_found", "account not found");
     const rec: PasskeyRecord = {
       id: uuidv7(this.now()),
       accountId,
@@ -228,11 +228,11 @@ export class IdentityService {
       name: input.name ?? null,
       createdAt: this.now(),
     };
-    this.store.putPasskey(rec);
+    await this.store.putPasskey(rec);
     return rec;
   }
 
-  listPasskeys(accountId: string): PasskeyRecord[] {
+  listPasskeys(accountId: string): Promise<PasskeyRecord[]> {
     return this.store.listPasskeys(accountId);
   }
 }

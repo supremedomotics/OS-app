@@ -351,6 +351,15 @@ importers:
 
   cloud/persistence:
     dependencies:
+      '@supreme/cloud-authn':
+        specifier: workspace:*
+        version: link:../authn
+      '@supreme/cloud-identity':
+        specifier: workspace:*
+        version: link:../identity
+      '@supreme/device-registry':
+        specifier: workspace:*
+        version: link:../device-registry
       '@supreme/hub-identity':
         specifier: workspace:*
         version: link:../../packages/hub-identity

@@ -30,10 +30,10 @@ describe("IdentityService — accounts & passwords", () => {
   it("supports multiple identities (email + phone + username) on one account", async () => {
     const s = svc();
     const { account } = await s.register({ kind: "email", value: "a@b.com", password: "p" });
-    s.addIdentity(account.id, "phone", "+971500000000");
-    s.addIdentity(account.id, "username", "mujeeb");
-    expect(s.resolveIdentity("phone", "+971500000000")?.accountId).toBe(account.id);
-    expect(s.resolveIdentity("username", "mujeeb")?.accountId).toBe(account.id);
+    await s.addIdentity(account.id, "phone", "+971500000000");
+    await s.addIdentity(account.id, "username", "mujeeb");
+    expect((await s.resolveIdentity("phone", "+971500000000"))?.accountId).toBe(account.id);
+    expect((await s.resolveIdentity("username", "mujeeb"))?.accountId).toBe(account.id);
   });
 });
 
@@ -60,8 +60,8 @@ describe("IdentityService — passkeys", () => {
   it("registers and lists passkeys for an account", async () => {
     const s = svc();
     const { account } = await s.register({ kind: "email", value: "a@b.com", password: "p" });
-    s.registerPasskey(account.id, { credentialId: "cred-1", publicKey: "pk", name: "iPhone Face ID" });
-    expect(s.listPasskeys(account.id)).toHaveLength(1);
-    expect(s.listPasskeys(account.id)[0]!.name).toBe("iPhone Face ID");
+    await s.registerPasskey(account.id, { credentialId: "cred-1", publicKey: "pk", name: "iPhone Face ID" });
+    expect(await s.listPasskeys(account.id)).toHaveLength(1);
+    expect((await s.listPasskeys(account.id))[0]!.name).toBe("iPhone Face ID");
   });
 });

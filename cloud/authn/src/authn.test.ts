@@ -105,7 +105,7 @@ describe("AuthnService — remote logout", () => {
     const svc = makeService(clock.now);
     const a = await svc.startSession({ accountId: "acct-1", deviceId: "dev-1", amr: ["pwd"] });
 
-    svc.revokeSession(a.sessionId);
+    await svc.revokeSession(a.sessionId);
     // Access token verification fails (session revoked) and refresh is dead.
     await expect(svc.verifyAccess(a.accessToken)).rejects.toMatchObject({ code: "revoked" });
     await expect(svc.refresh({ refreshToken: a.refreshToken })).rejects.toMatchObject({ code: "revoked" });

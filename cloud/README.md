@@ -41,10 +41,12 @@ protocol + crypto, used by `hub-registry` and the hub agent), `@supreme/crypto`,
 Every service core takes its store via an interface (in-memory for dev/tests). **`cloud/persistence`
 (`@supreme/cloud-persistence`)** is the durable backing: a thin `SqlDb` seam (production Postgres
 via `pg`, or embedded PGlite), idempotent migrations, and Postgres repositories that implement the
-service store seams. The **Hub Registry** is wired to it end-to-end (`PgHubRegistryStore`): the
-store seam was made async and a PGlite test proves the hub↔account ownership graph, single-use
-enrollment nonces, and cert revocation all survive a process "restart" (a fresh registry over the
-same DB). The remaining services' stores follow the identical pattern.
+service store seams. **The whole identity plane is durable:** the store seams for Hub Registry,
+**Identity, AuthN, and Device Registry** are all async, with Postgres repos (`PgHubRegistryStore`,
+`PgIdentityStore`, `PgAuthnStore`, `PgDeviceStore`) and PGlite tests proving that accounts +
+passwords, refresh-token rotation + reuse-detection, revoked sessions (remote logout), client
+devices, and the hub↔account ownership graph all survive a process "restart" (a fresh service over
+the same DB). So a cloud redeploy no longer logs everyone out or forgets their devices.
 
 ## Data model
 

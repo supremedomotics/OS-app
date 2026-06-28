@@ -17,6 +17,9 @@
   "dependencies": {
     "@supreme/hub-identity": "workspace:*",
     "@supreme/hub-registry": "workspace:*",
+    "@supreme/cloud-authn": "workspace:*",
+    "@supreme/device-registry": "workspace:*",
+    "@supreme/cloud-identity": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {

@@ -34,24 +34,24 @@ export interface ClientDevice {
 }
 
 export interface IDeviceStore {
-  get(id: string): ClientDevice | undefined;
-  put(device: ClientDevice): void;
-  delete(id: string): void;
-  listForAccount(accountId: string): ClientDevice[];
+  get(id: string): Promise<ClientDevice | undefined>;
+  put(device: ClientDevice): Promise<void>;
+  delete(id: string): Promise<void>;
+  listForAccount(accountId: string): Promise<ClientDevice[]>;
 }
 
 export class InMemoryDeviceStore implements IDeviceStore {
   private devices = new Map<string, ClientDevice>();
-  get(id: string) {
+  async get(id: string) {
     return this.devices.get(id);
   }
-  put(device: ClientDevice) {
+  async put(device: ClientDevice) {
     this.devices.set(device.id, device);
   }
-  delete(id: string) {
+  async delete(id: string) {
     this.devices.delete(id);
   }
-  listForAccount(accountId: string) {
+  async listForAccount(accountId: string) {
     return [...this.devices.values()]
       .filter((d) => d.accountId === accountId)
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -70,7 +70,7 @@ export class DeviceError extends Error {
 export interface DeviceRegistryOptions {
   store?: IDeviceStore;
   /** Revoke the device's auth session on delete/remote-logout (wires to AuthnService). */
-  revokeSession?: (sessionId: string) => void;
+  revokeSession?: (sessionId: string) => void | Promise<void>;
   /** Require explicit approval for a brand-new device on an account (default false). */
   approveNewDevices?: boolean;
   now?: () => number;
@@ -91,7 +91,7 @@ export interface RegisterInput {
 
 export class DeviceRegistry {
   private readonly store: IDeviceStore;
-  private readonly revokeSession?: (sessionId: string) => void;
+  private readonly revokeSession?: (sessionId: string) => void | Promise<void>;
   private readonly approveNewDevices: boolean;
   private readonly now: () => number;
 
@@ -103,9 +103,9 @@ export class DeviceRegistry {
   }
 
   /** Register a device on first login. Trust is `pending` if approval is required. */
-  register(input: RegisterInput): ClientDevice {
+  async register(input: RegisterInput): Promise<ClientDevice> {
     const now = this.now();
-    const isFirst = this.store.listForAccount(input.accountId).length === 0;
+    const isFirst = (await this.store.listForAccount(input.accountId)).length === 0;
     const device: ClientDevice = {
       id: uuidv7(now),
       accountId: input.accountId,
@@ -124,62 +124,62 @@ export class DeviceRegistry {
       createdAt: now,
       sessionId: input.sessionId ?? null,
     };
-    this.store.put(device);
+    await this.store.put(device);
     return device;
   }
 
-  list(accountId: string): ClientDevice[] {
+  list(accountId: string): Promise<ClientDevice[]> {
     return this.store.listForAccount(accountId);
   }
 
-  rename(accountId: string, deviceId: string, name: string): ClientDevice {
-    const d = this.require(accountId, deviceId);
+  async rename(accountId: string, deviceId: string, name: string): Promise<ClientDevice> {
+    const d = await this.require(accountId, deviceId);
     const updated = { ...d, name };
-    this.store.put(updated);
+    await this.store.put(updated);
     return updated;
   }
 
   /** Bind the auth session created at login to the device (enables remote logout). */
-  attachSession(accountId: string, deviceId: string, sessionId: string): ClientDevice {
-    const d = this.require(accountId, deviceId);
+  async attachSession(accountId: string, deviceId: string, sessionId: string): Promise<ClientDevice> {
+    const d = await this.require(accountId, deviceId);
     const updated = { ...d, sessionId };
-    this.store.put(updated);
+    await this.store.put(updated);
     return updated;
   }
 
   /** Approve a pending device (e.g. confirmed from an already-trusted device). */
-  approve(accountId: string, deviceId: string): ClientDevice {
-    const d = this.require(accountId, deviceId);
+  async approve(accountId: string, deviceId: string): Promise<ClientDevice> {
+    const d = await this.require(accountId, deviceId);
     const updated = { ...d, trust: "approved" as const };
-    this.store.put(updated);
+    await this.store.put(updated);
     return updated;
   }
 
   /** Record liveness + last-seen metadata (called on each authenticated request). */
-  touch(deviceId: string, meta: { ip?: string; geo?: string } = {}): void {
-    const d = this.store.get(deviceId);
+  async touch(deviceId: string, meta: { ip?: string; geo?: string } = {}): Promise<void> {
+    const d = await this.store.get(deviceId);
     if (!d) return;
-    this.store.put({ ...d, lastSeenAt: this.now(), lastIp: meta.ip ?? d.lastIp, lastGeo: meta.geo ?? d.lastGeo });
+    await this.store.put({ ...d, lastSeenAt: this.now(), lastIp: meta.ip ?? d.lastIp, lastGeo: meta.geo ?? d.lastGeo });
   }
 
   /** Remote logout: revoke the device's session without deleting its record. */
-  remoteLogout(accountId: string, deviceId: string): ClientDevice {
-    const d = this.require(accountId, deviceId);
+  async remoteLogout(accountId: string, deviceId: string): Promise<ClientDevice> {
+    const d = await this.require(accountId, deviceId);
     const updated = { ...d, trust: "revoked" as const, sessionId: null };
-    if (d.sessionId) this.revokeSession?.(d.sessionId);
-    this.store.put(updated);
+    if (d.sessionId) await this.revokeSession?.(d.sessionId);
+    await this.store.put(updated);
     return updated;
   }
 
   /** Delete a device entirely (also revokes its session). */
-  remove(accountId: string, deviceId: string): void {
-    const d = this.require(accountId, deviceId);
-    if (d.sessionId) this.revokeSession?.(d.sessionId);
-    this.store.delete(deviceId);
+  async remove(accountId: string, deviceId: string): Promise<void> {
+    const d = await this.require(accountId, deviceId);
+    if (d.sessionId) await this.revokeSession?.(d.sessionId);
+    await this.store.delete(deviceId);
   }
 
-  private require(accountId: string, deviceId: string): ClientDevice {
-    const d = this.store.get(deviceId);
+  private async require(accountId: string, deviceId: string): Promise<ClientDevice> {
+    const d = await this.store.get(deviceId);
     if (!d) throw new DeviceError("not_found", "device not found");
     // An account may only manage its own devices.
     if (d.accountId !== accountId) throw new DeviceError("forbidden", "device belongs to another account");

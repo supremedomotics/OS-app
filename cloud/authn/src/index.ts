@@ -47,14 +47,14 @@ export interface RefreshRecord {
 
 /** Persistence seam — Postgres (`refresh_tokens`/`auth_sessions`) in prod; in-memory for tests. */
 export interface IAuthnStore {
-  getRefresh(hash: string): RefreshRecord | undefined;
-  putRefresh(rec: RefreshRecord): void;
+  getRefresh(hash: string): Promise<RefreshRecord | undefined>;
+  putRefresh(rec: RefreshRecord): Promise<void>;
   /** Revoke every token in a family (reuse-detection / remote logout). */
-  revokeFamily(familyId: string, at: number): void;
-  isFamilyRevoked(familyId: string): boolean;
+  revokeFamily(familyId: string, at: number): Promise<void>;
+  isFamilyRevoked(familyId: string): Promise<boolean>;
   /** Revoke a whole session (all its families). */
-  revokeSession(sessionId: string, at: number): void;
-  isSessionRevoked(sessionId: string): boolean;
+  revokeSession(sessionId: string, at: number): Promise<void>;
+  isSessionRevoked(sessionId: string): Promise<boolean>;
 }
 
 export class InMemoryAuthnStore implements IAuthnStore {
@@ -62,24 +62,24 @@ export class InMemoryAuthnStore implements IAuthnStore {
   private revokedFamilies = new Set<string>();
   private revokedSessions = new Set<string>();
 
-  getRefresh(hash: string) {
+  async getRefresh(hash: string) {
     return this.refresh.get(hash);
   }
-  putRefresh(rec: RefreshRecord) {
+  async putRefresh(rec: RefreshRecord) {
     this.refresh.set(rec.hash, rec);
   }
-  revokeFamily(familyId: string, at: number) {
+  async revokeFamily(familyId: string, at: number) {
     this.revokedFamilies.add(familyId);
     for (const r of this.refresh.values()) if (r.familyId === familyId && !r.revokedAt) r.revokedAt = at;
   }
-  isFamilyRevoked(familyId: string) {
+  async isFamilyRevoked(familyId: string) {
     return this.revokedFamilies.has(familyId);
   }
-  revokeSession(sessionId: string, at: number) {
+  async revokeSession(sessionId: string, at: number) {
     this.revokedSessions.add(sessionId);
     for (const r of this.refresh.values()) if (r.sessionId === sessionId && !r.revokedAt) r.revokedAt = at;
   }
-  isSessionRevoked(sessionId: string) {
+  async isSessionRevoked(sessionId: string) {
     return this.revokedSessions.has(sessionId);
   }
 }
@@ -174,15 +174,15 @@ export class AuthnService {
     cnf?: string;
   }): Promise<IssuedTokens> {
     const now = this.now();
-    const rec = this.store.getRefresh(sha256(input.refreshToken));
+    const rec = await this.store.getRefresh(sha256(input.refreshToken));
     if (!rec) throw new AuthnError("invalid_grant", "unknown refresh token");
-    if (this.store.isFamilyRevoked(rec.familyId) || this.store.isSessionRevoked(rec.sessionId) || rec.revokedAt) {
+    if ((await this.store.isFamilyRevoked(rec.familyId)) || (await this.store.isSessionRevoked(rec.sessionId)) || rec.revokedAt) {
       throw new AuthnError("revoked", "token family or session revoked");
     }
     if (now >= rec.expiresAt) throw new AuthnError("expired", "refresh token expired");
     if (rec.usedAt !== null) {
       // This token was already rotated once — a second use means it was captured. Burn it all.
-      this.store.revokeFamily(rec.familyId, now);
+      await this.store.revokeFamily(rec.familyId, now);
       throw new AuthnError("reuse_detected", "refresh token reuse detected; family revoked");
     }
 
@@ -197,13 +197,13 @@ export class AuthnService {
       familyId: rec.familyId,
     });
     // Mark the old token consumed and link the chain (audit / reuse-detection).
-    this.store.putRefresh({ ...rec, usedAt: now, rotatedTo: sha256(next.refreshToken) });
+    await this.store.putRefresh({ ...rec, usedAt: now, rotatedTo: sha256(next.refreshToken) });
     return next;
   }
 
   /** Remote logout: revoke a device's session (its refresh families stop working at once). */
-  revokeSession(sessionId: string): void {
-    this.store.revokeSession(sessionId, this.now());
+  async revokeSession(sessionId: string): Promise<void> {
+    await this.store.revokeSession(sessionId, this.now());
   }
 
   /** Verify an access token (what an edge/hub does on every request). */
@@ -214,7 +214,7 @@ export class AuthnService {
       // Verify against the service clock so behavior is deterministic under an injected clock.
       currentDate: new Date(this.now()),
     });
-    if (this.store.isSessionRevoked(payload.sid as string)) {
+    if (await this.store.isSessionRevoked(payload.sid as string)) {
       throw new AuthnError("revoked", "session revoked");
     }
     return payload as unknown as AccessClaims;
@@ -250,7 +250,7 @@ export class AuthnService {
 
     const refreshSecret = randomBytes(32).toString("base64url");
     const refreshExpiresAt = now + this.refreshTtl * 1000;
-    this.store.putRefresh({
+    await this.store.putRefresh({
       hash: sha256(refreshSecret),
       sessionId: input.sessionId,
       familyId: input.familyId,
