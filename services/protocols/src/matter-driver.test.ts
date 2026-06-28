@@ -9,6 +9,7 @@ import {
   type MatterNodeInfo,
 } from "./matter-driver.js";
 import { invocationFromCommand, capabilitiesFromClusters } from "./matter-codec.js";
+import type { MatterOnboardingPayload } from "./matter-pairing.js";
 
 /** A fake Matter fabric: records invokes, replays attribute reports, lists nodes. */
 class FakeFabric implements MatterController {
@@ -32,6 +33,11 @@ class FakeFabric implements MatterController {
       { nodeId: "5", endpoint: 1, clusters: ["OnOff", "LevelControl"], vendor: "Acme", product: "Dimmable Bulb" },
       { nodeId: "6", endpoint: 1, clusters: ["Descriptor"] }, // no Supreme capability → filtered
     ];
+  }
+  commissioned: MatterOnboardingPayload[] = [];
+  async commission(payload: MatterOnboardingPayload): Promise<MatterNodeInfo> {
+    this.commissioned.push(payload);
+    return { nodeId: "9", endpoint: 1, clusters: ["OnOff"], vendor: "Acme", product: "Smart Plug" };
   }
   report(addr: string, report: MatterAttributeReport) {
     this.subs.get(addr)?.(report);
@@ -93,5 +99,26 @@ describe("MatterProtocolDriver (fake fabric)", () => {
     expect(found).toHaveLength(1);
     expect(found[0]?.backendId).toBe("5/1");
     expect(found[0]?.capabilities).toEqual(["onoff", "brightness"]);
+  });
+
+  it("commissions a node from a setup code and emits the onCommissioned event", async () => {
+    const fabric = new FakeFabric();
+    const driver = new MatterProtocolDriver({ createController: async () => fabric });
+    await driver.connect();
+
+    const commissioned: MatterNodeInfo[] = [];
+    driver.onCommissioned((n) => commissioned.push(n));
+
+    const device = await driver.commission("3497-011-2332"); // canonical manual code
+    expect(fabric.commissioned[0]?.passcode).toBe(20202021);
+    expect(device.backendId).toBe("9/1");
+    expect(device.capabilities).toEqual(["onoff"]);
+    expect(commissioned).toHaveLength(1);
+    expect(commissioned[0]?.product).toBe("Smart Plug");
+  });
+
+  it("refuses to commission when not connected", async () => {
+    const driver = new MatterProtocolDriver({ createController: async () => new FakeFabric() });
+    await expect(driver.commission("3497-011-2332")).rejects.toThrow(/not connected/);
   });
 });

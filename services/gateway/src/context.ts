@@ -46,11 +46,22 @@ import { StreamGateway, NullStreamGateway, type ICameraStreamGateway } from "@su
 import { CameraService } from "./camera-service.js";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices } from "./installer-context.js";
+import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protocols";
+
+/** The hub's optional Matter controller handle, present only when Matter is enabled AND its
+ * controller subsystem is available. Lets the Matter routes pair devices by setup code and report
+ * status without reaching into the SIL's driver internals. */
+export interface MatterHandle {
+  driver: MatterProtocolDriver;
+  fabric: MatterFabricManager | null;
+}
 
 /** Injected dependencies — the SIL and the persisted stores. Anything omitted
  * falls back to the in-memory default (used by dev and tests). */
 export interface AppDeps {
   sil?: SupremeIntegrationLayer;
+  /** Matter controller handle (set by bootstrap when Matter is enabled). */
+  matter?: MatterHandle;
   /** Cross-process event bus (NATS in prod); defaults to in-process. */
   bus?: IEventBus;
   /** Shared presence store (Redis in prod); defaults to in-process. */
@@ -112,6 +123,8 @@ export class AppContext {
   readonly bus: IEventBus;
   /** Shared presence store: who is connected right now (§5). */
   readonly presence: IPresenceStore;
+  /** Matter controller handle when Matter is enabled + its controller is running; null otherwise. */
+  readonly matter: MatterHandle | null;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -129,6 +142,7 @@ export class AppContext {
     this.db = deps.db ?? null;
     this.bus = deps.bus ?? new InProcessEventBus();
     this.presence = deps.presence ?? new InMemoryPresenceStore();
+    this.matter = deps.matter ?? null;
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,

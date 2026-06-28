@@ -17,6 +17,7 @@ import {
   invocationFromCommand,
   stateFromAttribute,
 } from "./matter-codec.js";
+import { parseMatterSetupCode, type MatterOnboardingPayload } from "./matter-pairing.js";
 
 /** A node/endpoint address on the Matter fabric. */
 export interface MatterAddress {
@@ -53,6 +54,12 @@ export interface MatterController {
   subscribe(addr: MatterAddress, handler: (report: MatterAttributeReport) => void): void;
   /** Commissioned nodes on the fabric (for discovery). */
   nodes(): Promise<MatterNodeInfo[]>;
+  /**
+   * Onboard a NEW node onto the fabric from a parsed setup code: opens a PASE session with the
+   * discriminator + passcode, runs CASE, installs the operational cert, and returns the joined
+   * node. The real (hardware) controller performs PASE/CASE; tests fake it.
+   */
+  commission(payload: MatterOnboardingPayload): Promise<MatterNodeInfo>;
 }
 
 export interface MatterDriverOptions {
@@ -84,6 +91,7 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
   private readonly devices = new Set<DeviceId>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly listeners = new Set<StateListener>();
+  private readonly commissionListeners = new Set<(node: MatterNodeInfo) => void>();
 
   constructor(opts: MatterDriverOptions = {}) {
     this.opts = opts;
@@ -157,6 +165,32 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
     return () => this.listeners.delete(listener);
   }
 
+  /** Notified when a new node joins the fabric (the fabric manager mirrors it to the cloud). */
+  onCommissioned(listener: (node: MatterNodeInfo) => void): () => void {
+    this.commissionListeners.add(listener);
+    return () => this.commissionListeners.delete(listener);
+  }
+
+  /**
+   * Commission a device from its setup code (manual pairing code or `MT:` QR). Validates the code,
+   * onboards the node onto the fabric, and returns it as a Supreme DiscoveredDevice the SIL can
+   * register. Throws a clear error if Matter isn't connected or the code is invalid.
+   */
+  async commission(setupCode: string): Promise<DiscoveredDevice> {
+    if (!this.controller) throw new Error("matter: not connected");
+    const payload = parseMatterSetupCode(setupCode);
+    const node = await this.controller.commission(payload);
+    for (const l of this.commissionListeners) l(node);
+    const caps = capabilitiesFromClusters(node.clusters);
+    if (caps.length === 0) throw new Error(`matter: node ${node.nodeId} exposes no controllable capability`);
+    return {
+      backendId: `${node.nodeId}/${node.endpoint}`,
+      suggestedName: node.product ?? `Matter ${node.nodeId}/${node.endpoint}`,
+      capabilities: caps,
+      raw: { vendor: node.vendor ?? null, product: node.product ?? null, nodeId: node.nodeId },
+    };
+  }
+
   private observe(b: MatterBinding): void {
     if (!this.controller) return;
     this.controller.subscribe(b.addr, (report) => {
@@ -191,6 +225,7 @@ function parseAddress(address: string): MatterAddress {
 async function defaultMatterController(_opts: { storagePath?: string }): Promise<MatterController> {
   throw new Error(
     "matter: no controller configured — provide createController (a fabric-initialized " +
-      "@matter/main controller) or run the Matter controller subsystem on the hub",
+      "@matter/main controller that performs PASE/CASE commissioning) or run the Matter " +
+      "controller subsystem on the hub",
   );
 }

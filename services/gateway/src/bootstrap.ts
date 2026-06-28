@@ -32,6 +32,8 @@ import {
   AppleTvProtocolDriver,
   LutronProtocolDriver,
   TuyaProtocolDriver,
+  MatterFabricManager,
+  HttpMatterFabricSync,
   createSonosConnect,
   createAppleTvConnect,
 } from "@supreme/protocols";
@@ -150,9 +152,19 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   }
   // Matter is opt-in (blueprint §9: ships disabled). It needs the on-box Matter
   // controller subsystem; until that's provisioned the driver stays disconnected and
-  // boot is unaffected (the native engine tolerates a driver that can't connect).
+  // boot is unaffected (the native engine tolerates a driver that can't connect). When
+  // enabled we keep a handle so the Matter routes can pair devices by setup code and
+  // mirror the fabric to the OPTIONAL cloud Matter service (non-fatal if unreachable).
   if (config.matterEnabled) {
-    nativeDrivers.push(new MatterProtocolDriver({ storagePath: config.matterStoragePath || undefined }));
+    const matterDriver = new MatterProtocolDriver({ storagePath: config.matterStoragePath || undefined });
+    nativeDrivers.push(matterDriver);
+    const sync =
+      config.matterCloudUrl && config.matterCloudApiKey
+        ? new HttpMatterFabricSync({ baseUrl: config.matterCloudUrl, apiKey: config.matterCloudApiKey })
+        : undefined;
+    const fabric = new MatterFabricManager({ driver: matterDriver, homeId: config.homeId, ...(sync ? { sync } : {}) });
+    void fabric.start();
+    deps.matter = { driver: matterDriver, fabric };
   }
   // Native Zigbee: talks ZCL straight to a coordinator radio (no MQTT/Zigbee2MQTT).
   if (config.zigbeePort) {

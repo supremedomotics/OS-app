@@ -24,6 +24,19 @@ export {
   stateFromAttribute as matterStateFromAttribute,
 } from "./matter-codec.js";
 export {
+  parseMatterSetupCode,
+  parseManualPairingCode,
+  parseQrPayload,
+  MatterPairingError,
+  type MatterOnboardingPayload,
+} from "./matter-pairing.js";
+export {
+  MatterFabricManager,
+  HttpMatterFabricSync,
+  type MatterFabricSync,
+  type MatterFabricManagerOptions,
+} from "./matter-fabric.js";
+export {
   ZigbeeProtocolDriver,
   type ZigbeeDriverOptions,
   type ZigbeeController,

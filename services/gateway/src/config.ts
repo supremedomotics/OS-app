@@ -79,6 +79,12 @@ export interface GatewayConfig {
   matterEnabled: boolean;
   /** Filesystem path for the Matter controller's fabric/credential storage. */
   matterStoragePath: string;
+  /** Optional cloud Matter service base URL (fabric/multi-admin sync); empty = local-only. */
+  matterCloudUrl: string;
+  /** Per-hub API key for the cloud Matter service (maps to this home). */
+  matterCloudApiKey: string;
+  /** Informational home id passed to the Matter fabric manager (cloud derives home from the key). */
+  homeId: string;
   /** Zigbee coordinator serial port for the native Zigbee driver; empty = not loaded. */
   zigbeePort: string;
   /** zigbee-herdsman adapter type (zstack/deconz/ezsp). */
@@ -183,6 +189,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     knxPort: Number(env.SUPREME_KNX_PORT ?? 3671),
     matterEnabled: env.SUPREME_MATTER_ENABLED === "1" || env.SUPREME_MATTER_ENABLED === "true",
     matterStoragePath: env.SUPREME_MATTER_STORAGE_PATH ?? "",
+    matterCloudUrl: env.SUPREME_MATTER_CLOUD_URL ?? "",
+    matterCloudApiKey: env.SUPREME_MATTER_CLOUD_API_KEY ?? "",
+    homeId: env.SUPREME_HOME_ID ?? "primary",
     zigbeePort: env.SUPREME_ZIGBEE_PORT ?? "",
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     daliPort: env.SUPREME_DALI_PORT ?? "",

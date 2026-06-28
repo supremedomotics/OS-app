@@ -104,6 +104,22 @@ services:
     ports:
       - "8095:8095"
 
+  # Matter service — OPTIONAL. Brokers a home's Matter fabric/multi-admin metadata so it can be
+  # shared with Apple Home / Google. The hub commissions + controls Matter devices locally and
+  # syncs node metadata here; never on the critical path. Per-hub API keys map to a homeId.
+  matter:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/matter.Dockerfile
+    restart: unless-stopped
+    environment:
+      MATTER_PORT: "8096"
+      # `key1:home1,key2:home2` — issued per hub at enrollment.
+      MATTER_API_KEYS: ${SUPREME_MATTER_API_KEYS:-}
+      MATTER_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8096:8096"
+
   # Receives OTLP traces from hubs/cloud services and exports them onward.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1

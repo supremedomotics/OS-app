@@ -89,6 +89,15 @@ export class MatterCloudService {
     this.now = opts.now ?? (() => Date.now());
   }
 
+  /**
+   * Get the home's fabric, creating it (with the Supreme hub as founding admin) on first call.
+   * Idempotent so a hub re-enabling Matter or re-syncing doesn't fork a second fabric.
+   */
+  ensureFabric(homeId: string, supremeAdminNodeId = "0x1"): Fabric {
+    const existing = this.store.fabricsForHome(homeId)[0];
+    return existing ?? this.createFabric(homeId, supremeAdminNodeId);
+  }
+
   /** Create a home's Matter fabric with the Supreme hub as the founding admin. */
   createFabric(homeId: string, supremeAdminNodeId = "0x1"): Fabric {
     const fabric: Fabric = {
@@ -136,3 +145,6 @@ export class MatterCloudService {
     return this.store.fabricsForHome(homeId);
   }
 }
+
+// HTTP surface (the hub syncs fabric/node metadata here for multi-admin coordination).
+export { buildMatterServer, type MatterServerOptions } from "./server.js";
