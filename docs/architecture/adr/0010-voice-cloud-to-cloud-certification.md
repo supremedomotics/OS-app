@@ -53,8 +53,13 @@ Ship **cloud-to-cloud first** for Alexa and Google, built on the existing planes
   Alexa `AcceptGrant` is handled to enroll proactive reporting. Payload construction + fan-out are
   unit-tested; the actual dispatch to the assistant clouds — the Alexa event gateway (LWA token from
   the AcceptGrant code) and Google HomeGraph (service-account JWT) — lives behind the
-  `AssistantNotifier` seam (a logging no-op until those credentials are provisioned). The hub-side
-  publisher (debounced state-delta POST off the SIL state stream) is the remaining wiring step.
+  `AssistantNotifier` seam. **Both the dispatch and the hub-side publisher are now implemented:**
+  `HttpAssistantNotifier` exchanges the Alexa AcceptGrant code for an event-gateway token (LWA) and
+  POSTs the ChangeReport, and mints a HomeGraph service-account JWT to POST Google ReportState (no
+  native deps; tested via a fetch stub); the hub's `VoiceStatePublisher` debounces SIL state changes
+  off `onBackendState` and posts them to `/v1/state`. What remains is purely operational: the real
+  LWA client + HomeGraph service-account credentials and the developer-console skill/action
+  registration.
 - **Deferred to a follow-up:** (a) **HomeKit / Siri**, which is fundamentally *local* — it needs
   a HAP accessory bridge advertised on the LAN from the hub (mDNS + the HomeKit Accessory
   Protocol), not a cloud webhook; the cloud `VoiceService` already carries the HomeKit vocabulary

@@ -227,5 +227,11 @@ export {
   type AssistantReport,
   type StateDelta,
 } from "./reporting.js";
+export {
+  HttpAssistantNotifier,
+  type HttpAssistantNotifierOptions,
+  type AlexaNotifierConfig,
+  type GoogleNotifierConfig,
+} from "./notifier.js";
 export * as alexa from "./alexa.js";
 export * as google from "./google.js";

@@ -1,6 +1,8 @@
 import { TunnelBroker } from "@supreme/tunnel-broker";
 import { BrokerHubRouter } from "./hub-router.js";
+import { HttpAssistantNotifier } from "./notifier.js";
 import { OAuthProvider, type OAuthClient } from "./oauth.js";
+import type { AssistantNotifier } from "./reporting.js";
 import { buildVoiceServer } from "./server.js";
 
 /**
@@ -50,14 +52,25 @@ async function main(): Promise<void> {
     if (i > 0) hubKeys.set(pair.slice(0, i), pair.slice(i + 1));
   }
 
+  // Real proactive-report dispatch when assistant credentials are configured; else the server's
+  // default LoggingNotifier (logs + drops). Alexa: LWA client creds. Google: a HomeGraph service
+  // account (email + PEM private key, e.g. from VOICE_GOOGLE_SA_KEY_FILE).
+  let notifier: AssistantNotifier | undefined;
+  const alexa = process.env.VOICE_ALEXA_CLIENT_ID && process.env.VOICE_ALEXA_CLIENT_SECRET
+    ? { clientId: process.env.VOICE_ALEXA_CLIENT_ID, clientSecret: process.env.VOICE_ALEXA_CLIENT_SECRET }
+    : undefined;
+  const google = process.env.VOICE_GOOGLE_SA_EMAIL && process.env.VOICE_GOOGLE_SA_KEY
+    ? { serviceAccountEmail: process.env.VOICE_GOOGLE_SA_EMAIL, privateKey: process.env.VOICE_GOOGLE_SA_KEY }
+    : undefined;
+  if (alexa || google) notifier = new HttpAssistantNotifier({ ...(alexa ? { alexa } : {}), ...(google ? { google } : {}) });
+
   const app = buildVoiceServer({
     oauth,
     hub,
     hubKeys,
+    ...(notifier ? { notifier } : {}),
     // Placeholder: production injects the Identity plane. Refuse all logins so a misconfigured
-    // deploy can't silently link accounts. The default notifier logs and drops — wire a real
-    // AssistantNotifier (Alexa event gateway via LWA + Google HomeGraph via a service account)
-    // before proactive reports actually reach the assistants.
+    // deploy can't silently link accounts.
     authenticateUser: async () => null,
     logLevel: process.env.VOICE_LOG_LEVEL ?? "info",
   });

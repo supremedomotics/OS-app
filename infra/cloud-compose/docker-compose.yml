@@ -101,6 +101,11 @@ services:
       VOICE_CLIENTS: ${VOICE_CLIENTS:-}
       # Per-hub keys for proactive state-report ingest: "key1:home1,key2:home2".
       VOICE_HUB_KEYS: ${VOICE_HUB_KEYS:-}
+      # Real proactive-report dispatch (optional; absent → reports are logged + dropped).
+      VOICE_ALEXA_CLIENT_ID: ${VOICE_ALEXA_CLIENT_ID:-}
+      VOICE_ALEXA_CLIENT_SECRET: ${VOICE_ALEXA_CLIENT_SECRET:-}
+      VOICE_GOOGLE_SA_EMAIL: ${VOICE_GOOGLE_SA_EMAIL:-}
+      VOICE_GOOGLE_SA_KEY: ${VOICE_GOOGLE_SA_KEY:-}
       SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
       VOICE_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:
