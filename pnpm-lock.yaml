@@ -241,6 +241,9 @@ importers:
       '@supreme/hub-identity':
         specifier: workspace:*
         version: link:../../packages/hub-identity
+      '@supreme/hub-pki':
+        specifier: workspace:*
+        version: link:../../packages/hub-pki
       fastify:
         specifier: ^5.2.1
         version: 5.8.5
@@ -859,6 +862,9 @@ importers:
       '@supreme/security':
         specifier: workspace:*
         version: link:../security
+      '@supreme/tunnel-broker':
+        specifier: workspace:*
+        version: link:../../cloud/tunnel-broker
       fastify:
         specifier: ^5.2.1
         version: 5.8.5
@@ -869,15 +875,15 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@supreme/hub-pki':
+        specifier: workspace:*
+        version: link:../../packages/hub-pki
       '@supreme/hub-registry':
         specifier: workspace:*
         version: link:../../cloud/hub-registry
       '@supreme/relay':
         specifier: workspace:*
         version: link:../../cloud/relay
-      '@supreme/tunnel-broker':
-        specifier: workspace:*
-        version: link:../../cloud/tunnel-broker
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.19

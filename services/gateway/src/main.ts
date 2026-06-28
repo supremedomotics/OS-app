@@ -4,9 +4,35 @@ import { buildServer } from "./server.js";
 import { initTracing } from "./tracing.js";
 import { RelayTunnelClient } from "./relay-tunnel.js";
 import { OtaChecker } from "./ota.js";
+import { MtlsTunnelClient, type TunnelRequest, type TunnelResponse } from "@supreme/tunnel-broker";
 import { HubAgent } from "./hub-agent.js";
 import { BrokerTunnelClient } from "./tunnel-client.js";
 import { createSecretStore } from "./secrets.js";
+
+/**
+ * Proxy a request forwarded over the tunnel to this hub's OWN local gateway, so identity + RBAC
+ * are enforced locally exactly as on the LAN. Only the public contract is reachable (the broker
+ * also allow-lists, but the hub never trusts that alone).
+ */
+async function proxyLocal(localBaseUrl: string, req: TunnelRequest): Promise<TunnelResponse> {
+  const pathname = req.path.split("?")[0] ?? "";
+  if (pathname !== "/healthz" && !pathname.startsWith("/v1/")) {
+    return { status: 404, headers: {}, body: JSON.stringify({ code: "not_found" }) };
+  }
+  try {
+    const res = await fetch(`${localBaseUrl}${req.path}`, {
+      method: req.method,
+      headers: req.headers,
+      body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+    });
+    const headers: Record<string, string> = {};
+    const ct = res.headers.get("content-type");
+    if (ct) headers["content-type"] = ct;
+    return { status: res.status, headers, body: await res.text() };
+  } catch (err) {
+    return { status: 502, headers: {}, body: JSON.stringify({ code: "hub_error", message: (err as Error).message }) };
+  }
+}
 
 /**
  * Hub entry point for the Supreme API Gateway. Boots the Supreme plane (identity,
@@ -69,24 +95,43 @@ async function main(): Promise<void> {
       fwVersion: config.hubVersion,
       log: (msg, meta) => app.log.info(meta ?? {}, msg),
     });
-    let tunnel: BrokerTunnelClient | null = null;
+    const localBaseUrl = `http://127.0.0.1:${config.port}`;
+    let tunnel: { stop(): void } | null = null;
     const provision = async () => {
       const state = await agent.ensureEnrolled();
       if (!state.enrolled) return;
       const claim = await agent.requestClaimCode();
       if (claim) app.log.info({ hubUuid: agent.hubUuid, claimCode: claim.code }, "hub awaiting owner claim");
+      if (tunnel) return;
       // Remote access (ADR 0009): once enrolled, dial OUT to the zero-trust Tunnel Broker and
-      // hold the cert-authenticated socket open. Outbound only — no inbound ports. Off-LAN
-      // clients reach this hub through the broker; the hub re-validates identity locally.
-      if (!tunnel && state.credential && state.brokerEndpoint) {
-        tunnel = new BrokerTunnelClient({
+      // hold the connection open. Outbound only — no inbound ports. Prefer the real device-cert
+      // mTLS transport when the registry issued X.509 material; fall back to the WS client where
+      // mTLS isn't available. Off-LAN clients reach this hub through the broker; the hub
+      // re-validates identity locally for every request.
+      if (state.mtls) {
+        const [host, portStr] = state.mtls.endpoint.split(":");
+        const mtls = new MtlsTunnelClient({
+          host: host ?? "127.0.0.1",
+          port: Number(portStr ?? 8443),
+          servername: host ?? "127.0.0.1",
+          cert: state.mtls.deviceCert,
+          key: state.mtls.deviceKey,
+          caCert: state.mtls.caCert,
+          onRequest: (req) => proxyLocal(localBaseUrl, req),
+          onReady: () => app.log.info({ endpoint: state.mtls!.endpoint }, "remote-access tunnel established (mTLS)"),
+        });
+        mtls.start();
+        tunnel = mtls;
+      } else if (state.credential && state.brokerEndpoint) {
+        const ws = new BrokerTunnelClient({
           brokerUrl: state.brokerEndpoint,
           identity: state.identity,
           credential: state.credential,
-          localBaseUrl: `http://127.0.0.1:${config.port}`,
-          onReady: () => app.log.info({ broker: state.brokerEndpoint }, "remote-access tunnel established"),
+          localBaseUrl,
+          onReady: () => app.log.info({ broker: state.brokerEndpoint }, "remote-access tunnel established (ws)"),
         });
-        tunnel.start();
+        ws.start();
+        tunnel = ws;
       }
     };
     void provision();

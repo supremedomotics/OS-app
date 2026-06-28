@@ -9,6 +9,7 @@ import {
   type EnrollmentRequest,
   type IHubCertificateAuthority,
 } from "@supreme/hub-identity";
+import { issueDeviceCert, type CertAuthority } from "@supreme/hub-pki";
 
 /**
  * @supreme/hub-registry — the cloud Hub Registry (ADR 0008, blueprint §3, §4).
@@ -130,6 +131,13 @@ export interface EnrollResult {
   brokerEndpoint: string;
   /** Credential renewal lead time (ms before notAfter the hub should renew). */
   renewBeforeMs: number;
+  /** Real X.509 device cert + key (PEM) for the mutual-TLS tunnel — present when a PKI CA is
+   * configured. The hub presents these dialing the broker; `mtlsCaCert` verifies the broker's
+   * server cert; `mtlsEndpoint` is the host:port of the mTLS listener. */
+  deviceCert?: string;
+  deviceKey?: string;
+  mtlsCaCert?: string;
+  mtlsEndpoint?: string;
 }
 
 export interface ClaimResult {
@@ -151,6 +159,10 @@ export interface HubRegistryOptions {
   ca?: IHubCertificateAuthority & { caPublicKey: string };
   brokerEndpoint?: string;
   verifyAttestation?: AttestationVerifier;
+  /** X.509 Hub CA — when set, enrollment also issues a real device cert for the mTLS tunnel. */
+  pkiCa?: CertAuthority;
+  /** mTLS listener endpoint (host:port) handed to the hub when a PKI CA is configured. */
+  mtlsEndpoint?: string;
   /** Injectable id generators for deterministic tests. */
   newId?: (prefix: string) => string;
   now?: () => number;
@@ -161,6 +173,8 @@ export class HubRegistry {
   private readonly ca: IHubCertificateAuthority & { caPublicKey: string };
   private readonly brokerEndpoint: string;
   private readonly verifyAttestation?: AttestationVerifier;
+  private readonly pkiCa?: CertAuthority;
+  private readonly mtlsEndpoint?: string;
   private readonly newId: (prefix: string) => string;
   private readonly now: () => number;
   private seq = 0;
@@ -170,6 +184,8 @@ export class HubRegistry {
     this.ca = opts.ca ?? DevHubCA.generate();
     this.brokerEndpoint = opts.brokerEndpoint ?? "https://broker.supreme.example";
     this.verifyAttestation = opts.verifyAttestation;
+    this.pkiCa = opts.pkiCa;
+    this.mtlsEndpoint = opts.mtlsEndpoint;
     this.now = opts.now ?? (() => Date.now());
     this.newId = opts.newId ?? ((p) => `${p}-${(++this.seq).toString(36)}-${this.now().toString(36)}`);
   }
@@ -208,12 +224,21 @@ export class HubRegistry {
         };
     await this.store.putHub(hub);
 
-    return {
+    const result: EnrollResult = {
       credential,
       caPublicKey: this.ca.caPublicKey,
       brokerEndpoint: this.brokerEndpoint,
       renewBeforeMs: 7 * 24 * 60 * 60_000,
     };
+    // When a PKI CA is configured, also issue a real X.509 device cert for the mTLS tunnel.
+    if (this.pkiCa) {
+      const tls = issueDeviceCert(this.pkiCa, { hubUuid: req.hubUuid, serial: credential.serial, notBeforeMs: nowMs });
+      result.deviceCert = tls.certPem;
+      result.deviceKey = tls.keyPem;
+      result.mtlsCaCert = this.pkiCa.caCertPem;
+      result.mtlsEndpoint = this.mtlsEndpoint;
+    }
+    return result;
   }
 
   /** Renew a credential — proves possession of the device key (same validation path). */

@@ -18,6 +18,7 @@
     { "path": "../messaging" },
     { "path": "../../packages/crypto" },
     { "path": "../../packages/hub-identity" },
+    { "path": "../../packages/hub-pki" },
     { "path": "../../cloud/hub-registry" },
     { "path": "../../cloud/tunnel-broker" },
     { "path": "../drivers" },

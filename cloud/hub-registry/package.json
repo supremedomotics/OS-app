@@ -19,6 +19,7 @@
   "dependencies": {
     "@supreme/crypto": "workspace:*",
     "@supreme/hub-identity": "workspace:*",
+    "@supreme/hub-pki": "workspace:*",
     "fastify": "^5.2.1"
   },
   "devDependencies": {

@@ -26,6 +26,28 @@ interface StoredCredential {
   caPublicKey: string;
   brokerEndpoint: string;
   renewBeforeMs: number;
+  /** Real X.509 mTLS material issued by the registry (when a PKI CA is configured). */
+  deviceCert?: string;
+  deviceKey?: string;
+  mtlsCaCert?: string;
+  mtlsEndpoint?: string;
+}
+
+/** The X.509 material the hub uses to dial the broker's mTLS listener. */
+export interface MtlsMaterial {
+  deviceCert: string;
+  deviceKey: string;
+  /** CA cert (PEM) to verify the broker's server cert. */
+  caCert: string;
+  /** Broker mTLS listener as host:port. */
+  endpoint: string;
+}
+
+function mtlsOf(s: StoredCredential | null | undefined): MtlsMaterial | null {
+  if (s?.deviceCert && s.deviceKey && s.mtlsCaCert && s.mtlsEndpoint) {
+    return { deviceCert: s.deviceCert, deviceKey: s.deviceKey, caCert: s.mtlsCaCert, endpoint: s.mtlsEndpoint };
+  }
+  return null;
 }
 
 /** Load the hub identity from the sealed store, or generate + persist a new one (once). */
@@ -70,6 +92,8 @@ export interface EnrollmentState {
   credential: DeviceCredential | null;
   brokerEndpoint: string | null;
   enrolled: boolean;
+  /** X.509 material for the mTLS tunnel, when the registry issued it. */
+  mtls: MtlsMaterial | null;
 }
 
 export class HubAgent {
@@ -127,7 +151,7 @@ export class HubAgent {
     const needsRenew =
       existing !== null && existing.credential.notAfter - this.now() < existing.renewBeforeMs;
     if (existing && !needsRenew) {
-      return { identity: this.identity, credential: existing.credential, brokerEndpoint: existing.brokerEndpoint, enrolled: true };
+      return { identity: this.identity, credential: existing.credential, brokerEndpoint: existing.brokerEndpoint, enrolled: true, mtls: mtlsOf(existing) };
     }
     try {
       const path = existing ? "/v1/hubs/renew" : "/v1/hubs/enroll";
@@ -139,16 +163,16 @@ export class HubAgent {
       });
       if (!res.ok) {
         this.log("hub enrollment failed", { status: res.status });
-        return { identity: this.identity, credential: existing?.credential ?? null, brokerEndpoint: existing?.brokerEndpoint ?? null, enrolled: Boolean(existing) };
+        return { identity: this.identity, credential: existing?.credential ?? null, brokerEndpoint: existing?.brokerEndpoint ?? null, enrolled: Boolean(existing), mtls: mtlsOf(existing) };
       }
       const stored = (await res.json()) as StoredCredential;
       this.store.set(CREDENTIAL_SECRET, JSON.stringify(stored));
-      this.log("hub enrolled", { hubUuid: this.hubUuid, serial: stored.credential.serial });
-      return { identity: this.identity, credential: stored.credential, brokerEndpoint: stored.brokerEndpoint, enrolled: true };
+      this.log("hub enrolled", { hubUuid: this.hubUuid, serial: stored.credential.serial, mtls: Boolean(stored.deviceCert) });
+      return { identity: this.identity, credential: stored.credential, brokerEndpoint: stored.brokerEndpoint, enrolled: true, mtls: mtlsOf(stored) };
     } catch (err) {
       // Cloud unreachable — keep running locally and retry on the next boot/heartbeat.
       this.log("hub enrollment skipped (cloud unreachable)", { error: (err as Error).message });
-      return { identity: this.identity, credential: existing?.credential ?? null, brokerEndpoint: existing?.brokerEndpoint ?? null, enrolled: Boolean(existing) };
+      return { identity: this.identity, credential: existing?.credential ?? null, brokerEndpoint: existing?.brokerEndpoint ?? null, enrolled: Boolean(existing), mtls: mtlsOf(existing) };
     }
   }
 
