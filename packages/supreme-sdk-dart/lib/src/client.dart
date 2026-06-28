@@ -127,6 +127,19 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// Apply the current circadian (human-centric) lighting target to every tunable-white
+  /// light, optionally scoped to [roomId]. Returns the ids of the lights that were set.
+  Future<List<String>> applyCircadian({String? roomId}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/lighting/circadian/apply'),
+      headers: _authHeaders,
+      body: jsonEncode({if (roomId != null) 'roomId': roomId}),
+    );
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['applied'] as List<dynamic>).cast<String>();
+  }
+
   // ── Favorites ────────────────────────────────────────────────────────────────
   Future<List<Favorite>> favorites() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/favorites'),

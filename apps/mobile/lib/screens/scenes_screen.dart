@@ -47,6 +47,22 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                     ],
                   ),
                 ),
+                // Human-centric lighting: one tap aligns every tunable-white light to the
+                // time-of-day color temperature + brightness.
+                IconButton.filledTonal(
+                  tooltip: 'Circadian lighting',
+                  icon: const Icon(Icons.brightness_4_outlined),
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    try {
+                      final applied = await ref.read(clientProvider).applyCircadian();
+                      messenger.showSnackBar(SnackBar(content: Text('Circadian applied to ${applied.length} lights')));
+                    } catch (_) {
+                      messenger.showSnackBar(const SnackBar(content: Text('Could not apply circadian lighting')));
+                    }
+                  },
+                ),
+                const SizedBox(width: AureonSpacing.sm),
                 scenes.maybeWhen(
                   data: (list) => list.isEmpty
                       ? const SizedBox.shrink()
