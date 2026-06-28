@@ -268,6 +268,26 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Whether occupancy (vacation) simulation is currently running.
+  Future<bool> occupancyRunning() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/security/occupancy'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['running'] as bool? ??
+        false;
+  }
+
+  /// Turn occupancy (vacation) simulation on or off.
+  Future<void> setOccupancy(bool enabled) async {
+    final res = await _http.post(
+      Uri.parse(
+          '$baseUrl/v1/security/occupancy/${enabled ? 'enable' : 'disable'}'),
+      headers: _authHeaders,
+      body: jsonEncode({}),
+    );
+    _ensureOk(res);
+  }
+
   Future<Map<String, dynamic>> arm(String mode, {String? pin}) async {
     final res = await _http.post(
       Uri.parse('$baseUrl/v1/security/arm'),

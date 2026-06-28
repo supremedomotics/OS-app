@@ -80,6 +80,8 @@ class SecurityScreen extends ConsumerWidget {
                     },
                   ),
                 const SizedBox(height: AureonSpacing.xl),
+                const _VacationModeTile(),
+                const SizedBox(height: AureonSpacing.xl),
                 const _CamerasSection(),
               ],
             ));
@@ -95,6 +97,40 @@ class SecurityScreen extends ConsumerWidget {
         'armed_night' => 'Armed · Night',
         _ => 'Disarmed',
       };
+}
+
+/// Vacation mode: a toggle that runs occupancy simulation (lived-in lighting while away).
+class _VacationModeTile extends ConsumerWidget {
+  const _VacationModeTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final running = ref.watch(occupancyProvider);
+    return Container(
+      decoration: BoxDecoration(
+        color: AureonBase.surfaceRaised,
+        borderRadius: BorderRadius.circular(AureonRadius.lg),
+        border: Border.all(color: AureonBase.hairline),
+      ),
+      child: SwitchListTile(
+        secondary: const Icon(Icons.luggage_outlined),
+        title: const Text('Vacation mode'),
+        subtitle: const Text('Simulate occupancy with lived-in lighting while away'),
+        value: running.valueOrNull ?? false,
+        onChanged: running.isLoading
+            ? null
+            : (v) async {
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  await ref.read(clientProvider).setOccupancy(v);
+                  ref.invalidate(occupancyProvider);
+                } catch (_) {
+                  messenger.showSnackBar(const SnackBar(content: Text('Could not update vacation mode')));
+                }
+              },
+      ),
+    );
+  }
 }
 
 /// Camera strip on the security screen — snapshot tiles that open a live HLS view.

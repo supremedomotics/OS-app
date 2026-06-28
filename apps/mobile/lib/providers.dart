@@ -82,6 +82,11 @@ final securityProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   return ref.watch(clientProvider).securityState();
 });
 
+/// Whether occupancy (vacation) simulation is running.
+final occupancyProvider = FutureProvider<bool>((ref) async {
+  return ref.watch(clientProvider).occupancyRunning();
+});
+
 /// Cameras registered on the home (§11.1).
 final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();
