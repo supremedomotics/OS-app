@@ -903,6 +903,9 @@ importers:
       '@supreme/relay':
         specifier: workspace:*
         version: link:../../cloud/relay
+      '@supreme/voice':
+        specifier: workspace:*
+        version: link:../../cloud/voice
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.19
