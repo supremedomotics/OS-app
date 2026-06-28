@@ -26,6 +26,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Observability / ops | ~82% | metrics/`/readyz`/OTel + Prometheus alerts, Grafana dashboard, SLOs, runbooks |
 | Mobile / web delivery | ~72% | Flutter + web homeowner/installer apps, camera players, push pipeline, CD + Fastlane (no real store creds yet) |
 | Optional cloud (relay) | ~75% | relay built + tested: push fan-out (FCM/WebPush) + outbound remote-access tunnel (hub↔relay e2e) |
+| Ecosystem & voice (§9) | ~75% | Alexa + Google (cloud-to-cloud, OAuth2 IdP, proactive reporting), HomeKit (local HAP bridge), Matter (commissioning + fabric sync) — all behind seams + tested; real dispatch/transport/CHIP-controller credentials & hardware are the boundary |
 
 ---
 
@@ -173,6 +174,33 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [ ] Off-site backup service + driver-store mirror/CDN
 - [~] Multi-home fleet deploy (HTTP API + Postgres-backed `SqlFleetStore` + portal
       ✓ page + cloud-compose service; needs managed DB wiring + migrations in prod)
+
+---
+
+## 9. Ecosystem & voice integrations (ADR 0010–0012)
+
+All built behind seams + tested in CI; each has ONE documented boundary that needs an external
+credential or hardware to actually run end-to-end (the same discipline as the SIL/HA seam).
+
+- [x] **Alexa Smart Home** (cloud-to-cloud, `cloud/voice`) — OAuth2 account-linking IdP
+      (single-use codes, HMAC tokens, refresh rotation + reuse-revoke, redirect allow-list, CSRF
+      ticket, rate limit), Discovery + control directives, ReportState.
+- [x] **Google Smart Home** (`cloud/voice`) — SYNC / QUERY / EXECUTE / DISCONNECT.
+- [x] **One capability waist** — assistant directives normalize to a `CanonicalIntent`, then a
+      single `toHubCommand()` → the hub's real `CapabilityCommand`; every directive is forwarded
+      over the Tunnel Broker so the hub enforces identity/RBAC locally (HA never exposed).
+- [x] **Proactive state reporting** — hub debounced publisher → cloud `/v1/state` ingest → Alexa
+      ChangeReport / Google ReportState fan-out; Alexa AcceptGrant handled.
+- [x] **HomeKit / Siri** (`@supreme/homekit`, local HAP bridge) — capability↔HAP service mapping,
+      bridge orchestration (characteristic write → SIL command, state push back); gateway opt-in
+      (`SUPREME_HOMEKIT_ENABLED`) + `GET /v1/homekit/status`; e2e drives a device via a fake transport.
+- [x] **Matter** (`services/protocols` + `cloud/matter`) — Verhoeff/QR setup-code parser
+      (validated vs the canonical chip-tool vector), commissioning seam, fabric manager + cloud
+      multi-admin metadata sync; gateway `GET /v1/matter/status` + `POST /v1/matter/commission`.
+- [ ] **Credential/hardware boundaries (deployment wiring):** real `AssistantNotifier` dispatch
+      (Alexa event gateway via LWA + Google HomeGraph via a service account); HomeKit `HapTransport`
+      (hap-nodejs + mDNS pairing/SRP); Matter `@matter/main` CHIP controller + Thread border router;
+      real Alexa/Google developer-console skill/action registration.
 
 ---
 
