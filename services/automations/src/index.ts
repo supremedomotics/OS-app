@@ -11,3 +11,13 @@ export {
 export { AutomationService, type CreateAutomationInput } from "./service.js";
 export { InMemoryAutomationStore, type IAutomationStore } from "./store.js";
 export { compileToHa, type HaAutomationConfig } from "./compiler.js";
+export {
+  circadianAt,
+  circadianColorCommand,
+  circadianForLocalTime,
+  defaultCircadianProfile,
+  CircadianError,
+  type CircadianProfile,
+  type CircadianKeyframe,
+  type CircadianTarget,
+} from "./circadian.js";

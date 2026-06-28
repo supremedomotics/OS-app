@@ -11,8 +11,9 @@ import {
   type DeviceEnergyResponse,
   type EnergySummaryResponse,
 } from "@supreme/contracts";
-import type { AutomationId, DeviceId } from "@supreme/domain-model";
+import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
 import { budgetStatus, computeEnergyCost, TariffError } from "@supreme/analytics";
+import { circadianAt, circadianColorCommand, defaultCircadianProfile } from "@supreme/automations";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -150,6 +151,44 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       }
       const budget = body.budget ? budgetStatus(body.budget) : undefined;
       reply.send({ cost, ...(budget ? { budget } : {}) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Circadian (human-centric) lighting ───────────────────────────────────────
+  // Preview the circadian target (color temperature + brightness) for the hub's current local time.
+  app.get("/v1/lighting/circadian", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const now = new Date();
+      const target = circadianAt(defaultCircadianProfile, now.getHours() * 60 + now.getMinutes());
+      reply.send({ target, atLocalMinute: now.getHours() * 60 + now.getMinutes() });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Apply the current circadian target to every tunable-white (color-capable) light, optionally
+  // scoped to a room. Drives them through the SIL like any command.
+  app.post<{ Body: { roomId?: string } }>("/v1/lighting/circadian/apply", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "control");
+      const roomId = (req.body ?? {}).roomId;
+      const all = roomId ? await ctx.home.listDevicesInRoom(roomId as RoomId) : await ctx.home.listDevices();
+      const now = new Date();
+      const target = circadianAt(defaultCircadianProfile, now.getHours() * 60 + now.getMinutes());
+      const command = circadianColorCommand(target);
+      const applied: string[] = [];
+      for (const d of all) {
+        if (!d.capabilities.some((c) => c.kind === "color")) continue;
+        await ctx.sil.command(d.id, command);
+        applied.push(d.id);
+      }
+      await ctx.audit?.record({ homeId: ctx.homeId, actorUserId: user.id, action: "lighting.circadian", resourceType: "home", resourceId: ctx.homeId, metadata: { count: applied.length, ...target } });
+      reply.send({ target, applied });
     } catch (err) {
       sendError(reply, err);
     }
