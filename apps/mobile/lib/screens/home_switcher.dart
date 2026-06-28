@@ -32,7 +32,11 @@ class HomeSwitcherSheet extends ConsumerWidget {
           color: theme.colorScheme.surface,
           borderRadius: BorderRadius.circular(24),
         ),
-        child: Column(
+        clipBehavior: Clip.antiAlias,
+        // A Material ancestor so the ListTile rows can paint ink/splashes correctly.
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -55,6 +59,7 @@ class HomeSwitcherSheet extends ConsumerWidget {
                     },
                   )),
           ],
+          ),
         ),
       ),
     );
