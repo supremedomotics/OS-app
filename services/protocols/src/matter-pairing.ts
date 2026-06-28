@@ -59,6 +59,9 @@ export function parseManualPairingCode(input: string): MatterOnboardingPayload {
   const chunk1 = Number(digits.slice(0, 1));
   const chunk2 = Number(digits.slice(1, 6));
   const chunk3 = Number(digits.slice(6, 10));
+  // chunk3 carries the high 13 passcode bits; a valid code never exceeds 0x1FFF here. Reject rather
+  // than silently masking, so a crafted-but-Verhoeff-valid code can't decode to a wrong passcode.
+  if (chunk3 > 0x1fff) throw new MatterPairingError("manual pairing code passcode field out of range");
   const hasVidPid = (chunk1 & 0x04) !== 0;
   if (hasVidPid !== (digits.length === 21)) {
     throw new MatterPairingError("manual pairing code length disagrees with its VID/PID flag");
@@ -138,7 +141,8 @@ class BitReader {
 
 function assertPasscode(passcode: number): void {
   if (INVALID_PASSCODES.has(passcode)) throw new MatterPairingError("setup passcode is a forbidden trivial value");
-  if (passcode < 1 || passcode > 0x7fffffff) throw new MatterPairingError("setup passcode out of range");
+  // The setup passcode is a 27-bit field (1 .. 0x7FFFFFE per the spec; 0x7FFFFFF is reserved-ish).
+  if (passcode < 1 || passcode > 0x7ffffff) throw new MatterPairingError("setup passcode out of range");
 }
 
 // ── Verhoeff checksum (Matter manual code check digit) ─────────────────────────────────────────

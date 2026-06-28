@@ -9,14 +9,22 @@ import { buildMatterServer } from "./server.js";
 function parseApiKeys(raw: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const pair of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
-    const [key, home] = pair.split(":");
+    // Split on the first colon only — keys may themselves contain no colon, but be defensive.
+    const i = pair.indexOf(":");
+    if (i <= 0) continue;
+    const key = pair.slice(0, i);
+    const home = pair.slice(i + 1);
     if (key && home) map.set(key, home);
   }
   return map;
 }
 
 async function main(): Promise<void> {
-  const apiKeys = parseApiKeys(process.env.MATTER_API_KEYS ?? "dev-matter-key:home_demo");
+  // Fail closed: never boot with a known default key in production. Set MATTER_API_KEYS, or opt into
+  // the demo key explicitly with MATTER_DEV=1.
+  const raw = process.env.MATTER_API_KEYS ?? (process.env.MATTER_DEV === "1" ? "dev-matter-key:home_demo" : "");
+  const apiKeys = parseApiKeys(raw);
+  if (apiKeys.size === 0) throw new Error("MATTER_API_KEYS is required (or set MATTER_DEV=1 for the demo key)");
   const app = buildMatterServer({ apiKeys, logLevel: process.env.MATTER_LOG_LEVEL ?? "info" });
   const port = Number(process.env.MATTER_PORT ?? 8096);
   await app.listen({ host: "0.0.0.0", port });

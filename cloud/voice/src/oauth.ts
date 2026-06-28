@@ -25,6 +25,10 @@ export interface LinkIdentity {
 export interface LinkRecord extends LinkIdentity {
   linkId: string;
   assistant: Assistant;
+  /** The OAuth client this link was issued to — refresh is bound to it exactly (not by assistant). */
+  clientId: string;
+  /** Refresh-token generation; rotated on every refresh so a replayed older token is detected. */
+  refreshGen: number;
   scopes: string[];
   linkedAt: number;
 }
@@ -58,6 +62,8 @@ interface TokenPayload {
   lid: string;
   typ: "access" | "refresh";
   exp: number;
+  /** Refresh-token generation (refresh tokens only); compared to the link to detect replay. */
+  gen?: number;
 }
 
 export interface OAuthProviderOptions {
@@ -83,7 +89,10 @@ export class OAuthProvider {
 
   constructor(opts: OAuthProviderOptions) {
     this.secret = opts.signingSecret;
-    for (const c of opts.clients) this.clients.set(c.clientId, c);
+    for (const c of opts.clients) {
+      for (const uri of c.redirectUris) assertSafeRedirectUri(uri);
+      this.clients.set(c.clientId, c);
+    }
     this.now = opts.now ?? (() => Date.now());
     this.codeTtl = opts.codeTtlMs ?? 10 * 60 * 1000; // 10 min
     this.accessTtl = opts.accessTtlMs ?? 60 * 60 * 1000; // 1 h
@@ -116,6 +125,8 @@ export class OAuthProvider {
     const record: LinkRecord = {
       linkId,
       assistant: client.assistant,
+      clientId: client.clientId,
+      refreshGen: 0,
       accountId: params.identity.accountId,
       homeId: params.identity.homeId,
       hubToken: params.identity.hubToken,
@@ -165,6 +176,31 @@ export class OAuthProvider {
     return this.links.has(linkId);
   }
 
+  /**
+   * Issue a short-TTL, signed CSRF ticket bound to (clientId, redirectUri), embedded in the consent
+   * form. The decision POST must echo it back, so a blind cross-site POST (which never loaded our
+   * authorize page) is rejected — defense-in-depth for the credential-bearing linking form.
+   */
+  issueLinkingTicket(params: { clientId: string; redirectUri: string }): string {
+    const body = Buffer.from(JSON.stringify({ c: params.clientId, r: params.redirectUri, exp: this.now() + this.codeTtl })).toString("base64url");
+    return `${body}.${createHmac("sha256", this.secret).update(body).digest("base64url")}`;
+  }
+
+  verifyLinkingTicket(ticket: string | undefined, params: { clientId?: string; redirectUri?: string }): boolean {
+    if (!ticket) return false;
+    const dot = ticket.indexOf(".");
+    if (dot < 0) return false;
+    const body = ticket.slice(0, dot);
+    const expected = createHmac("sha256", this.secret).update(body).digest("base64url");
+    if (!constantTimeEqual(ticket.slice(dot + 1), expected)) return false;
+    try {
+      const p = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as { c: string; r: string; exp: number };
+      return p.exp >= this.now() && p.c === params.clientId && p.r === params.redirectUri;
+    } catch {
+      return false;
+    }
+  }
+
   // ── internals ──────────────────────────────────────────────────────────────────────────────
   private authenticateClient(clientId?: string, clientSecret?: string): OAuthClient {
     const client = clientId ? this.clients.get(clientId) : undefined;
@@ -182,7 +218,7 @@ export class OAuthProvider {
     if (entry.clientId !== client.clientId) throw new OAuthError("invalid_grant", "code was issued to a different client");
     if (entry.redirectUri !== redirectUri) throw new OAuthError("invalid_grant", "redirect_uri mismatch");
     this.links.set(entry.record.linkId, entry.record);
-    return this.mintTokens(entry.record.linkId);
+    return this.mintTokens(entry.record);
   }
 
   private exchangeRefresh(client: OAuthClient, refreshToken: string | undefined) {
@@ -190,13 +226,22 @@ export class OAuthProvider {
     if (!payload || payload.typ !== "refresh") throw new OAuthError("invalid_grant", "invalid refresh token");
     const record = this.links.get(payload.lid);
     if (!record) throw new OAuthError("invalid_grant", "link revoked");
-    if (record.assistant !== client.assistant) throw new OAuthError("invalid_grant", "refresh token does not belong to this client");
-    return this.mintTokens(record.linkId);
+    // Bind to the exact issuing client (not just the assistant type), so a second client of the
+    // same family can't refresh another client's links.
+    if (record.clientId !== client.clientId) throw new OAuthError("invalid_grant", "refresh token does not belong to this client");
+    // Rotation + reuse detection: a refresh token for an older generation means the token was
+    // replayed (it should have been rotated). Treat as theft → revoke the link entirely.
+    if (payload.gen !== record.refreshGen) {
+      this.links.delete(record.linkId);
+      throw new OAuthError("invalid_grant", "refresh token reuse detected — link revoked");
+    }
+    record.refreshGen += 1;
+    return this.mintTokens(record);
   }
 
-  private mintTokens(lid: string) {
-    const access = this.signToken({ lid, typ: "access", exp: this.now() + this.accessTtl });
-    const refresh = this.signToken({ lid, typ: "refresh", exp: this.now() + this.refreshTtl });
+  private mintTokens(record: LinkRecord) {
+    const access = this.signToken({ lid: record.linkId, typ: "access", exp: this.now() + this.accessTtl });
+    const refresh = this.signToken({ lid: record.linkId, typ: "refresh", exp: this.now() + this.refreshTtl, gen: record.refreshGen });
     return { access_token: access, refresh_token: refresh, token_type: "bearer" as const, expires_in: Math.floor(this.accessTtl / 1000) };
   }
 
@@ -223,6 +268,26 @@ export class OAuthProvider {
     if (typeof payload.exp !== "number" || payload.exp < this.now()) return undefined;
     return payload;
   }
+}
+
+/**
+ * Reject a registered redirect URI that could leak an authorization code: non-HTTPS (except
+ * localhost for dev), or one carrying a fragment or userinfo. Runs at client registration so a
+ * misconfiguration fails closed at boot rather than at an attacker's request.
+ */
+function assertSafeRedirectUri(uri: string): void {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    throw new OAuthError("invalid_client", `redirect_uri is not a valid URL: ${uri}`, 500);
+  }
+  const isLocalhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalhost)) {
+    throw new OAuthError("invalid_client", `redirect_uri must be https: ${uri}`, 500);
+  }
+  if (url.hash) throw new OAuthError("invalid_client", `redirect_uri must not contain a fragment: ${uri}`, 500);
+  if (url.username || url.password) throw new OAuthError("invalid_client", `redirect_uri must not contain userinfo: ${uri}`, 500);
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

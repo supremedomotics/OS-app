@@ -17,7 +17,13 @@ import { buildVoiceServer } from "./server.js";
 function parseClients(raw: string): OAuthClient[] {
   const clients: OAuthClient[] = [];
   for (const entry of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
-    const [clientId, clientSecret, assistant, redirectUri] = entry.split(":");
+    // Split on the FIRST three colons only — the redirect URI (which contains "://") is the rest,
+    // so a normal https URL survives intact.
+    const parts = entry.split(":");
+    const clientId = parts[0];
+    const clientSecret = parts[1];
+    const assistant = parts[2];
+    const redirectUri = parts.slice(3).join(":");
     if (clientId && clientSecret && (assistant === "alexa" || assistant === "google") && redirectUri) {
       const existing = clients.find((c) => c.clientId === clientId);
       if (existing) existing.redirectUris.push(redirectUri);

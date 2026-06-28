@@ -67,6 +67,41 @@ describe("OAuth2 account linking", () => {
     expect(p.resolve(t2.access_token)?.homeId).toBe("home-1");
   });
 
+  it("rotates refresh tokens and revokes the link on reuse of an old one", () => {
+    const p = makeProvider();
+    const code = p.issueCode({ clientId: "google-client", redirectUri: "https://oauth-redirect.googleusercontent.com/cb", identity });
+    const t1 = p.exchange({ grantType: "authorization_code", code, redirectUri: "https://oauth-redirect.googleusercontent.com/cb", clientId: "google-client", clientSecret: "google-secret" });
+    // Rotate: t1's refresh token is now stale.
+    p.exchange({ grantType: "refresh_token", refreshToken: t1.refresh_token, clientId: "google-client", clientSecret: "google-secret" });
+    // Replaying the OLD refresh token is detected as theft → link revoked.
+    expect(() => p.exchange({ grantType: "refresh_token", refreshToken: t1.refresh_token, clientId: "google-client", clientSecret: "google-secret" })).toThrow(/reuse detected/);
+  });
+
+  it("refuses to refresh one client's token with a different client of the same assistant", () => {
+    // Two Alexa clients (same assistant type, distinct client_id).
+    const p = new OAuthProvider({
+      signingSecret: "test-secret",
+      clients: [
+        { clientId: "alexa-a", clientSecret: "sa", assistant: "alexa", redirectUris: ["https://a.example/cb"] },
+        { clientId: "alexa-b", clientSecret: "sb", assistant: "alexa", redirectUris: ["https://b.example/cb"] },
+      ],
+    });
+    const code = p.issueCode({ clientId: "alexa-a", redirectUri: "https://a.example/cb", identity });
+    const t = p.exchange({ grantType: "authorization_code", code, redirectUri: "https://a.example/cb", clientId: "alexa-a", clientSecret: "sa" });
+    // Client B (same assistant) must NOT be able to refresh client A's token.
+    expect(() => p.exchange({ grantType: "refresh_token", refreshToken: t.refresh_token, clientId: "alexa-b", clientSecret: "sb" })).toThrow(/does not belong to this client/);
+  });
+
+  it("rejects a client registered with a non-https redirect URI (fail closed at boot)", () => {
+    expect(
+      () =>
+        new OAuthProvider({
+          signingSecret: "s",
+          clients: [{ clientId: "x", clientSecret: "y", assistant: "alexa", redirectUris: ["http://evil.example/cb"] }],
+        }),
+    ).toThrow(/must be https/);
+  });
+
   it("revokes a link so the access token stops resolving", () => {
     const p = makeProvider();
     const code = p.issueCode({ clientId: "alexa-client", redirectUri: "https://layla.amazon.com/cb", identity });

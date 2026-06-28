@@ -46,8 +46,14 @@ export function buildMatterServer(opts: MatterServerOptions): FastifyInstance {
     return homeId;
   };
 
-  app.setErrorHandler((err: Error, _req, reply) => {
+  app.setErrorHandler((err: Error, req, reply) => {
     const status = (err as Error & { statusCode?: number }).statusCode ?? (err instanceof MatterError ? 400 : 500);
+    // Don't reflect unexpected (500) exception messages to the caller — log them, return generic.
+    if (status >= 500) {
+      req.log.error({ err }, "matter cloud error");
+      reply.code(status).send({ code: "internal", message: "internal error" });
+      return;
+    }
     reply.code(status).send({ code: status === 401 ? "unauthorized" : status === 404 ? "not_found" : "error", message: err.message });
   });
 

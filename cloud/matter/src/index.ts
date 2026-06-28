@@ -123,8 +123,11 @@ export class MatterCloudService {
     return this.store.admins(fabricId);
   }
 
-  /** Commission a node into the fabric (records its operational credential reference). */
+  /** Commission a node into the fabric (records its operational credential reference). Idempotent
+   * per (fabricId, nodeId): re-syncing the same node returns the existing record instead of forking. */
   commissionNode(input: { fabricId: string; nodeId: string; vendorId: number; productId: number }): MatterNode {
+    const existing = this.store.nodes(input.fabricId).find((n) => n.nodeId === input.nodeId);
+    if (existing) return existing;
     const node: MatterNode = {
       fabricId: input.fabricId,
       nodeId: input.nodeId,

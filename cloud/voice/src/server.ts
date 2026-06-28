@@ -44,10 +44,16 @@ export interface VoiceServerOptions {
   now?: () => number;
 }
 
+/** Hard cap on device operations per Google EXECUTE request (anti-amplification). */
+const MAX_EXECUTE_OPS = 64;
+
 export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
-  const app = Fastify({ logger: { level: opts.logLevel ?? "info" } });
+  // Cap the body size so a giant payload can't exhaust memory before our op-count guard runs.
+  const app = Fastify({ logger: { level: opts.logLevel ?? "info" }, bodyLimit: 256 * 1024 });
   const now = opts.now ?? (() => Date.now());
   const nowIso = () => new Date(now()).toISOString();
+  // Per-IP fixed-window limiter for the credential-bearing consent endpoint.
+  const rateLimit = new FixedWindowLimiter({ now, windowMs: 60_000, max: 20 });
 
   // Alexa and Google post form-encoded bodies to the token endpoint; accept both.
   app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_req, body, done) => {
@@ -65,7 +71,8 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
     const q = req.query;
     try {
       const client = opts.oauth.validateAuthorization({ clientId: q.client_id, redirectUri: q.redirect_uri, responseType: q.response_type });
-      reply.type("text/html").send(consentPage(client.assistant, q));
+      const csrf = opts.oauth.issueLinkingTicket({ clientId: client.clientId, redirectUri: q.redirect_uri! });
+      reply.type("text/html").send(consentPage(client.assistant, { ...q, csrf }));
     } catch (err) {
       replyOAuthError(reply, err);
     }
@@ -75,10 +82,21 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
   app.post<{ Body: Record<string, string> }>("/oauth/authorize/decision", async (req, reply) => {
     const b = req.body ?? {};
     try {
+      // Brute-force / credential-stuffing guard on this unauthenticated, credential-bearing endpoint.
+      if (!rateLimit.allow(req.ip)) {
+        reply.code(429).send({ error: "rate_limited", error_description: "too many attempts" });
+        return;
+      }
       const client = opts.oauth.validateAuthorization({ clientId: b.client_id, redirectUri: b.redirect_uri, responseType: "code" });
+      // CSRF: the decision must echo a valid, unexpired ticket minted by our own authorize page.
+      if (!opts.oauth.verifyLinkingTicket(b.csrf, { clientId: b.client_id, redirectUri: b.redirect_uri })) {
+        reply.code(403).send({ error: "invalid_request", error_description: "missing or invalid CSRF token" });
+        return;
+      }
       const identity = await opts.authenticateUser({ email: b.email ?? "", password: b.password ?? "" });
       if (!identity) {
-        reply.code(401).type("text/html").send(consentPage(client.assistant, b, "Invalid Supreme credentials"));
+        const csrf = opts.oauth.issueLinkingTicket({ clientId: client.clientId, redirectUri: b.redirect_uri! });
+        reply.code(401).type("text/html").send(consentPage(client.assistant, { ...b, csrf }, "Invalid Supreme credentials"));
         return;
       }
       const code = opts.oauth.issueCode({ clientId: b.client_id ?? "", redirectUri: b.redirect_uri ?? "", identity });
@@ -149,7 +167,9 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
       }
       reply.send(buildControlResponse(directive, alexaOptimisticProperties(intent, nowIso())));
     } catch (err) {
-      reply.send(buildErrorResponse(directive, hubErrorType(err), (err as Error).message));
+      // Only surface the safe "hub offline" message; generic internal errors must not leak detail.
+      const isHub = err instanceof HubUnavailableError;
+      reply.send(buildErrorResponse(directive, hubErrorType(err), isHub ? (err as Error).message : "internal error"));
     }
   });
 
@@ -187,6 +207,12 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
       }
       case "action.devices.EXECUTE": {
         const commands = (input.payload?.commands as GoogleExecCommand[] | undefined) ?? [];
+        // Bound the fan-out: one request must not amplify into an unbounded number of hub calls.
+        const totalOps = commands.reduce((n, c) => n + (c.devices?.length ?? 0) * (c.execution?.length ?? 0), 0);
+        if (totalOps > MAX_EXECUTE_OPS) {
+          reply.code(413).send({ requestId: body.requestId, payload: { errorCode: "protocolError" } });
+          return;
+        }
         const results = await executeGoogle(opts.hub, link, commands);
         reply.send(buildExecuteResponse(body.requestId, results));
         return;
@@ -265,12 +291,14 @@ function replyOAuthError(reply: FastifyReply, err: unknown): void {
     reply.code(err.statusCode).send({ error: err.error, error_description: err.message });
     return;
   }
-  reply.code(500).send({ error: "server_error", error_description: (err as Error).message });
+  // Never reflect an unexpected exception message to the caller — log server-side, return generic.
+  reply.log?.error?.({ err }, "voice oauth error");
+  reply.code(500).send({ error: "server_error", error_description: "internal error" });
 }
 
 /** Minimal Supreme-branded consent form (production replaces with the full design-system login). */
 function consentPage(assistant: string, params: Record<string, string>, error?: string): string {
-  const hidden = ["client_id", "redirect_uri", "state", "response_type", "scope"]
+  const hidden = ["client_id", "redirect_uri", "state", "response_type", "scope", "csrf"]
     .map((k) => `<input type="hidden" name="${k}" value="${escapeHtml(params[k] ?? "")}">`)
     .join("");
   return `<!doctype html><html><head><meta charset="utf-8"><title>Link Supreme</title></head>
@@ -288,4 +316,20 @@ ${hidden}
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+}
+
+/** Tiny in-memory fixed-window rate limiter. (A multi-instance deploy would back this with Redis.) */
+class FixedWindowLimiter {
+  private readonly buckets = new Map<string, { count: number; windowStart: number }>();
+  constructor(private readonly opts: { now: () => number; windowMs: number; max: number }) {}
+  allow(key: string): boolean {
+    const t = this.opts.now();
+    const bucket = this.buckets.get(key);
+    if (!bucket || t - bucket.windowStart >= this.opts.windowMs) {
+      this.buckets.set(key, { count: 1, windowStart: t });
+      return true;
+    }
+    bucket.count += 1;
+    return bucket.count <= this.opts.max;
+  }
 }

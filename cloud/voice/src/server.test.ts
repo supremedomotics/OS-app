@@ -50,13 +50,8 @@ describe("Voice cloud HTTP surface", () => {
     });
     await app.ready();
 
-    // 1. Consent decision → redirect carrying an auth code.
-    const decision = await app.inject({
-      method: "POST",
-      url: "/oauth/authorize/decision",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      payload: new URLSearchParams({ client_id: "alexa-client", redirect_uri: redirectUri, response_type: "code", state: "xyz", email: "owner@supreme.local", password: "pw" }).toString(),
-    });
+    // 1. Consent decision → redirect carrying an auth code (CSRF ticket fetched from /authorize).
+    const decision = await decisionPost({ email: "owner@supreme.local", password: "pw", state: "xyz" });
     expect(decision.statusCode).toBe(302);
     const code = new URL(decision.headers.location as string).searchParams.get("code")!;
     expect(code).toBeTruthy();
@@ -77,14 +72,37 @@ describe("Voice cloud HTTP surface", () => {
     await app.close();
   });
 
-  it("rejects an unauthenticated consent decision (wrong password)", async () => {
-    const res = await app.inject({
+  /** Mimic a browser: GET /authorize to obtain the CSRF ticket, then POST the consent decision. */
+  async function decisionPost(fields: { email: string; password: string; state?: string; csrf?: string }) {
+    const authorize = await app.inject({
+      method: "GET",
+      url: `/oauth/authorize?client_id=alexa-client&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`,
+    });
+    const csrf = fields.csrf ?? /name="csrf" value="([^"]*)"/.exec(authorize.body)?.[1] ?? "";
+    return app.inject({
       method: "POST",
       url: "/oauth/authorize/decision",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      payload: new URLSearchParams({ client_id: "alexa-client", redirect_uri: redirectUri, response_type: "code", email: "owner@supreme.local", password: "nope" }).toString(),
+      payload: new URLSearchParams({
+        client_id: "alexa-client",
+        redirect_uri: redirectUri,
+        response_type: "code",
+        ...(fields.state ? { state: fields.state } : {}),
+        csrf,
+        email: fields.email,
+        password: fields.password,
+      }).toString(),
     });
+  }
+
+  it("rejects an unauthenticated consent decision (wrong password)", async () => {
+    const res = await decisionPost({ email: "owner@supreme.local", password: "nope" });
     expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects a consent decision with a missing/forged CSRF ticket", async () => {
+    const res = await decisionPost({ email: "owner@supreme.local", password: "pw", csrf: "forged" });
+    expect(res.statusCode).toBe(403);
   });
 
   it("serves Alexa Discovery with projected endpoints", async () => {
