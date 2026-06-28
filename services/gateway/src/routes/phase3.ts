@@ -129,18 +129,47 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
     },
   );
 
-  // Tariff-aware energy cost: compute the bill for a time range under the homeowner's tariff
-  // (passed in the request; the app stores the rate plan). Returns a cost breakdown + optional
-  // budget projection. The tariff/budget shapes mirror @supreme/analytics' cost engine.
+  // Read/write the home's durable energy tariff (the rate plan the cost engine bills against).
+  app.get("/v1/energy/tariff", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const tariff = await ctx.homeConfig.get(ctx.homeId, "tariff");
+      reply.send({ tariff: tariff ?? null });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/energy/tariff", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "admin");
+      const tariff = (req.body ?? {}) as { tariff?: Parameters<typeof computeEnergyCost>[0] };
+      const t = tariff.tariff;
+      if (!t || !Array.isArray(t.periods) || t.periods.length === 0 || typeof t.currency !== "string") {
+        throw new SupremeError("validation_failed", "a tariff with a currency and periods is required");
+      }
+      await ctx.homeConfig.set(ctx.homeId, "tariff", t);
+      reply.send({ tariff: t });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Tariff-aware energy cost: compute the bill for a time range. Uses the tariff in the request if
+  // given, else the home's stored tariff. Returns a cost breakdown + optional budget projection.
   app.post("/v1/energy/cost", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "home", null, "view");
       const analytics = requireAnalytics(ctx);
       const body = (req.body ?? {}) as { tariff?: Parameters<typeof computeEnergyCost>[0]; from?: string; to?: string; budget?: Parameters<typeof budgetStatus>[0] };
-      if (!body.tariff || !Array.isArray(body.tariff.periods)) {
-        throw new SupremeError("validation_failed", "a tariff with periods is required");
+      const tariff = body.tariff ?? ((await ctx.homeConfig.get(ctx.homeId, "tariff")) as Parameters<typeof computeEnergyCost>[0] | undefined);
+      if (!tariff || !Array.isArray(tariff.periods)) {
+        throw new SupremeError("validation_failed", "no tariff configured — set one via PUT /v1/energy/tariff or pass it in the body");
       }
+      body.tariff = tariff;
       const samples = await analytics.hourlyEnergy(ctx.homeId, body.from, body.to);
       let cost;
       try {

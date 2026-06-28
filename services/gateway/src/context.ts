@@ -2,7 +2,7 @@ import type { BackendStateEvent } from "@supreme/integration-layer";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { IdentityService, type IIdentityStore, type ISessionStore } from "@supreme/identity";
 import { SupremeError, type LoginResponse } from "@supreme/contracts";
-import { HomeService, seedDemoHome, type IHomeStore } from "@supreme/home";
+import { HomeService, InMemoryConfigStore, seedDemoHome, type IConfigStore, type IHomeStore } from "@supreme/home";
 import { SceneService, type ISceneStore } from "@supreme/scenes";
 import {
   NotificationService,
@@ -77,6 +77,7 @@ export interface AppDeps {
   identityStore?: IIdentityStore;
   sessionStore?: ISessionStore;
   homeStore?: IHomeStore;
+  configStore?: IConfigStore;
   sceneStore?: ISceneStore;
   grantStore?: IGrantStore;
   notificationStore?: INotificationStore;
@@ -139,6 +140,8 @@ export class AppContext {
   homekit: HapBridge | null = null;
   /** Occupancy (vacation) simulation runner — toggles lights to look lived-in while away. */
   readonly occupancy: OccupancyRunner;
+  /** Durable per-home settings (energy tariff, etc.). */
+  readonly homeConfig: IConfigStore;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -161,6 +164,7 @@ export class AppContext {
     this.occupancy = new OccupancyRunner({
       command: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
     });
+    this.homeConfig = deps.configStore ?? new InMemoryConfigStore();
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,

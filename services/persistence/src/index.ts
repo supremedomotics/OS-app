@@ -6,7 +6,7 @@
  * against the Compose Postgres; the same SQL and migrations serve both.
  */
 import type { IIdentityStore, ISessionStore } from "@supreme/identity";
-import type { IHomeStore } from "@supreme/home";
+import type { IHomeStore, IConfigStore } from "@supreme/home";
 import type { ISceneStore } from "@supreme/scenes";
 import type { IGrantStore } from "@supreme/permissions";
 import type { INotificationStore } from "@supreme/notifications";
@@ -27,6 +27,7 @@ import { InstalledDriverRepo } from "./repositories/driver-repo.js";
 import { AutomationRepo } from "./repositories/automation-repo.js";
 import { SessionRepo } from "./repositories/session-repo.js";
 import { SecurityRepo } from "./repositories/security-repo.js";
+import { ConfigRepo } from "./repositories/config-repo.js";
 import { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 import { PushTokenRepo } from "./repositories/push-token-repo.js";
 import { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
@@ -42,6 +43,7 @@ export { InstalledDriverRepo } from "./repositories/driver-repo.js";
 export { AutomationRepo } from "./repositories/automation-repo.js";
 export { SessionRepo } from "./repositories/session-repo.js";
 export { SecurityRepo } from "./repositories/security-repo.js";
+export { ConfigRepo } from "./repositories/config-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
@@ -61,6 +63,7 @@ export interface PersistenceStores {
   protocolBindings: IProtocolBindingStore;
   pushTokens: IPushTokenStore;
   migrationPolicy: IMigrationPolicyStore;
+  config: IConfigStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -78,6 +81,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     protocolBindings: new ProtocolBindingRepo(db),
     pushTokens: new PushTokenRepo(db),
     migrationPolicy: new MigrationPolicyRepo(db),
+    config: new ConfigRepo(db),
   };
 }
 

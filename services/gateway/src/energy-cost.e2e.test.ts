@@ -24,6 +24,7 @@ describe("Energy cost (tariff) route", () => {
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       identityStore: s.identity,
       homeStore: s.home,
+      configStore: s.config,
       sceneStore: s.scenes,
       grantStore: s.grants,
       notificationStore: s.notifications,
@@ -86,12 +87,38 @@ describe("Energy cost (tariff) route", () => {
     expect(res.status).toBe(422);
   });
 
-  it("requires a tariff", async () => {
+  it("requires a tariff when none is stored", async () => {
     const res = await fetch(`${baseUrl}/v1/energy/cost`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({}),
     });
+    expect(res.status).toBe(422);
+  });
+
+  it("persists the tariff and uses it when the cost request omits one", async () => {
+    // GET returns null before anything is set.
+    expect((await (await fetch(`${baseUrl}/v1/energy/tariff`, { headers: { authorization: `Bearer ${token}` } })).json()).tariff).toBeNull();
+
+    const put = await fetch(`${baseUrl}/v1/energy/tariff`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ tariff }),
+    });
+    expect(put.status).toBe(200);
+
+    // GET now returns the stored tariff.
+    const got = await (await fetch(`${baseUrl}/v1/energy/tariff`, { headers: { authorization: `Bearer ${token}` } })).json();
+    expect(got.tariff.currency).toBe("USD");
+
+    // Cost with NO body tariff now succeeds, using the stored one (same 2.00 total as before).
+    const cost = await fetch(`${baseUrl}/v1/energy/cost`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({}) });
+    expect(cost.status).toBe(200);
+    expect((await cost.json()).cost.totalCost).toBe(2.0);
+  });
+
+  it("rejects an invalid tariff on PUT (422)", async () => {
+    const res = await fetch(`${baseUrl}/v1/energy/tariff`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ tariff: { currency: "USD" } }) });
     expect(res.status).toBe(422);
   });
 });
