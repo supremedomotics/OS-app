@@ -207,6 +207,31 @@ credential or hardware to actually run end-to-end (the same discipline as the SI
 
 ---
 
+## 10. Luxury experience features (built this cycle)
+
+Distinctive Control4/Savant-class features, each a complete vertical (pure engine + routes + tests,
+most with SDK + app UI). All behind the SIL/contracts; no HA leakage.
+
+- [x] **Energy cost** (`@supreme/analytics` tariff engine) — time-of-use pricing, solar feed-in
+      credit, daily standing charge, month-end budget projection; home-wide hourly aggregation;
+      `GET/POST /v1/energy/cost`, durable owner tariff (`PUT /v1/energy/tariff`); Dart SDK + a
+      gold-accented cost card.
+- [x] **Circadian (human-centric) lighting** (`@supreme/automations`) — keyframe profile →
+      interpolated color temperature + brightness across the day (wraps midnight);
+      `GET /v1/lighting/circadian` + `POST .../apply`; SDK + one-tap Scenes control.
+- [x] **Solar schedule** (`@supreme/automations`) — NOAA sunrise/sunset/solar-noon (validated vs
+      the equinox/equator vector + daylight-length properties); `GET /v1/solar`.
+- [x] **Scene scheduling** — time + sunrise/sunset(±offset) triggers, day-of-week filter; durable
+      via the config store, fired on the hub minute tick; `GET/PUT /v1/scenes/schedules`,
+      `PUT /v1/home/location`; SDK + a schedule editor sheet.
+- [x] **Vacation (occupancy) simulation** — deterministic seeded planner of believable lived-in
+      lighting; minute runner toggles lights; `GET /v1/security/occupancy` + enable/disable; SDK +
+      a Vacation-mode toggle on the Security screen.
+- [x] **Durable per-home config store** (`home_config` table + `ConfigRepo`) — owner-set settings
+      (tariff, scene schedules, location) survive a restart.
+
+---
+
 ## Critical path (recommended order)
 
 1. **Security hardening (§1)** — fail-closed secrets, headers, CORS, rate limiting, token rotation.
