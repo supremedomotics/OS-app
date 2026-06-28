@@ -96,6 +96,11 @@ export class SupremeIntegrationLayer {
     this.registry.map(deviceId, capability, ref);
   }
 
+  /** Drop every backend mapping for a device (used when the device is deleted). */
+  unmapDevice(deviceId: DeviceId): void {
+    this.registry.unmapDevice(deviceId);
+  }
+
   /** Issue a Supreme capability command. Rejects read-only capabilities. */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
     if (READONLY_CAPABILITIES.includes(command.capability)) {

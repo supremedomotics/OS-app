@@ -82,6 +82,32 @@ export class HomeService {
     return (await this.store.getDevice(deviceId))?.device.roomId ?? null;
   }
 
+  /**
+   * Move and/or rename a device. Any device can go in any room — the only constraint is that
+   * the target room exists. Capability bindings are unaffected (the device keeps its backend
+   * mappings), so it stays controllable after the move.
+   */
+  async updateDevice(deviceId: DeviceId, patch: { name?: string; roomId?: RoomId }): Promise<Device> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) throw new SupremeError("not_found", "device not found");
+    if (patch.roomId !== undefined) await this.requireRoom(patch.roomId);
+    const device: Device = {
+      ...stored.device,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.roomId !== undefined ? { roomId: patch.roomId } : {}),
+    };
+    await this.store.putDevice(device, stored.backendIds);
+    return device;
+  }
+
+  /** Delete a device: drop its backend bindings from the SIL registry, then remove it. */
+  async removeDevice(deviceId: DeviceId): Promise<void> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) throw new SupremeError("not_found", "device not found");
+    this.sil.unmapDevice(deviceId);
+    await this.store.deleteDevice(deviceId);
+  }
+
   /** Merge a metadata patch onto a device (e.g. a camera's stream/snapshot URLs). */
   async setDeviceMetadata(deviceId: DeviceId, patch: Record<string, unknown>): Promise<Device | null> {
     const stored = await this.store.getDevice(deviceId);

@@ -88,6 +88,26 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// Move a device to any room and/or rename it (owner/admin/installer).
+  Future<Device> updateDevice(String deviceId, {String? name, String? roomId}) async {
+    final res = await _http.patch(
+      Uri.parse('$baseUrl/v1/devices/$deviceId'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        if (name != null) 'name': name,
+        if (roomId != null) 'roomId': roomId,
+      }),
+    );
+    _ensureOk(res);
+    return Device.fromJson((jsonDecode(res.body) as Map<String, dynamic>)['device'] as Map<String, dynamic>);
+  }
+
+  /// Delete a device (also drops its backend bindings).
+  Future<void> deleteDevice(String deviceId) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/devices/$deviceId'), headers: _authHeaders);
+    _ensureOk(res);
+  }
+
   // ── Scenes ─────────────────────────────────────────────────────────────────
   Future<List<Scene>> scenes() async {
     final res =

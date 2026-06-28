@@ -12,6 +12,7 @@ import {
   Bindings,
   Cameras,
   Commissioning,
+  Devices,
   Diagnostics,
   DriverStore,
   Fleet,
@@ -22,6 +23,7 @@ import {
 type Tab =
   | "drivers"
   | "commission"
+  | "devices"
   | "bindings"
   | "cameras"
   | "diagnostics"
@@ -33,6 +35,7 @@ type Tab =
 const TABS: { id: Tab; label: string }[] = [
   { id: "drivers", label: "Driver Store" },
   { id: "commission", label: "Commissioning" },
+  { id: "devices", label: "Devices" },
   { id: "bindings", label: "Bus Binding" },
   { id: "cameras", label: "Cameras" },
   { id: "diagnostics", label: "Diagnostics" },
@@ -66,6 +69,7 @@ export function App() {
       <main>
         {tab === "drivers" && <DriverStore />}
         {tab === "commission" && <Commissioning />}
+        {tab === "devices" && <Devices />}
         {tab === "bindings" && <Bindings />}
         {tab === "cameras" && <Cameras />}
         {tab === "diagnostics" && <Diagnostics />}

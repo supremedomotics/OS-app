@@ -80,6 +80,20 @@ export type HomeView = z.infer<typeof HomeView>;
 export const CommandRequest = z.object({ command: CapabilityCommand });
 export type CommandRequest = z.infer<typeof CommandRequest>;
 
+/** Move and/or rename a device: PATCH /v1/devices/{id}. At least one field is required. */
+export const UpdateDeviceRequest = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    roomId: z.string().min(1).optional(),
+  })
+  .refine((v) => v.name !== undefined || v.roomId !== undefined, {
+    message: "provide name and/or roomId",
+  });
+export type UpdateDeviceRequest = z.infer<typeof UpdateDeviceRequest>;
+
+export const DeviceResponse = z.object({ device: Device });
+export type DeviceResponse = z.infer<typeof DeviceResponse>;
+
 export const CommandResponse = z.object({
   /** Whether the command was accepted by the backend (optimistic clients reconcile via WSS). */
   accepted: z.boolean(),

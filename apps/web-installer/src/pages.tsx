@@ -225,6 +225,66 @@ export function Commissioning() {
   );
 }
 
+/** Devices: manage commissioned devices — move any device to any room, rename, or remove (§4). */
+export function Devices() {
+  const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
+  const [devices, setDevices] = useState<{ id: string; name: string; roomId: string | null; supremeType: string }[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function load() {
+    const h = await client.home();
+    setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name })));
+    const all = (
+      await Promise.all(h.rooms.map((r) => client.devicesInRoom(r.id as never).then((d) => d.devices)))
+    ).flat();
+    setDevices(all.map((d) => ({ id: d.id, name: d.name, roomId: d.roomId, supremeType: d.supremeType })));
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function move(id: string, roomId: string) {
+    setBusy(id);
+    try { await client.updateDevice(id as never, { roomId }); await load(); } finally { setBusy(null); }
+  }
+  async function rename(id: string, name: string) {
+    if (!name.trim()) return;
+    setBusy(id);
+    try { await client.updateDevice(id as never, { name: name.trim() }); await load(); } finally { setBusy(null); }
+  }
+  async function remove(id: string, name: string) {
+    if (!confirm(`Remove "${name}"? This cannot be undone.`)) return;
+    setBusy(id);
+    try { await client.deleteDevice(id as never); await load(); } finally { setBusy(null); }
+  }
+
+  return (
+    <section>
+      <h2>Devices</h2>
+      <p className="muted">Move any device to any room, rename it, or remove it. Bindings are preserved on a move.</p>
+      {devices.length === 0 && <p className="muted">No commissioned devices yet — import a KNX project or discover devices in Commissioning.</p>}
+      {devices.map((d) => (
+        <div className="card row" key={d.id} style={{ alignItems: "center", gap: 10, opacity: busy === d.id ? 0.5 : 1 }}>
+          <div style={{ flex: 1 }}>
+            <input
+              defaultValue={d.name}
+              onBlur={(e) => { if (e.target.value.trim() !== d.name) void rename(d.id, e.target.value); }}
+              style={{ width: "100%", fontWeight: 600 }}
+            />
+            <span className="muted" style={{ fontSize: 12 }}>{d.supremeType}</span>
+          </div>
+          <label className="muted" style={{ fontSize: 12 }}>Room</label>
+          <select value={d.roomId ?? ""} disabled={busy === d.id} onChange={(e) => void move(d.id, e.target.value)}>
+            {d.roomId === null && <option value="">Unassigned</option>}
+            {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+          <button onClick={() => void remove(d.id, d.name)} disabled={busy === d.id} style={{ color: "var(--aureon-color-status-critical)" }}>
+            Remove
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 /** Diagnostics: hub + backend health, counts, drivers, offline devices. */
 export function Diagnostics() {
   const [report, setReport] = useState<DiagnosticsReport | null>(null);

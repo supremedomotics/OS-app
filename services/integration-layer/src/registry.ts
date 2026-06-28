@@ -42,6 +42,16 @@ export class EntityRegistryMirror {
     return this.reverse.get(backendId);
   }
 
+  /** Drop all capability mappings for a device (used when a device is deleted). */
+  unmapDevice(deviceId: DeviceId): void {
+    for (const [k, ref] of [...this.forward]) {
+      if (k.startsWith(`${deviceId}:`)) {
+        this.forward.delete(k);
+        this.reverse.delete(ref.backendId);
+      }
+    }
+  }
+
   clear(): void {
     this.forward.clear();
     this.reverse.clear();

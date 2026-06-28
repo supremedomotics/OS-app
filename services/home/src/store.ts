@@ -33,6 +33,7 @@ export interface IHomeStore {
   getDevice(id: DeviceId): Promise<StoredDevice | null>;
   putDevice(device: Device, backendIds: Record<string, string>): Promise<void>;
   updateDeviceState(id: DeviceId, state: Device["state"]): Promise<void>;
+  deleteDevice(id: DeviceId): Promise<void>;
 
   listFavorites(userId: UserId): Promise<Favorite[]>;
   putFavorite(fav: Favorite): Promise<void>;
@@ -75,6 +76,9 @@ export class InMemoryHomeStore implements IHomeStore {
   async updateDeviceState(id: DeviceId, state: Device["state"]) {
     const existing = this.devices.get(id);
     if (existing) existing.device = { ...existing.device, state };
+  }
+  async deleteDevice(id: DeviceId) {
+    this.devices.delete(id);
   }
   async listFavorites(userId: UserId) {
     return [...(this.favorites.get(userId)?.values() ?? [])].sort(

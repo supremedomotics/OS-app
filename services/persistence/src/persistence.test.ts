@@ -79,6 +79,18 @@ describe("Postgres-backed persistence (PGlite)", () => {
     const userId = newId("user") as UserId;
     await home2.setFavorite(userId, { type: "device", deviceId: dimmer.id }, true);
     expect(await home2.listFavorites(userId)).toHaveLength(1);
+
+    // Move + rename persist across a restart.
+    const rooms = await home2.listRooms();
+    const target = rooms.find((r) => r.id !== dimmer.roomId)!;
+    await home2.updateDevice(dimmer.id, { roomId: target.id, name: "Moved Lamp" });
+    const afterMove = await new HomeService(sil, stores.home).getDevice(dimmer.id);
+    expect(afterMove?.roomId).toBe(target.id);
+    expect(afterMove?.name).toBe("Moved Lamp");
+
+    // Delete persists across a restart.
+    await home2.removeDevice(dimmer.id);
+    expect(await new HomeService(sil, stores.home).getDevice(dimmer.id)).toBeNull();
   });
 
   it("persists scenes and grants", async () => {

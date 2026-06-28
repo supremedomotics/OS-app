@@ -149,6 +149,9 @@ export class HomeRepo implements IHomeStore {
   async updateDeviceState(id: DeviceId, state: Device["state"]): Promise<void> {
     await this.db.query("UPDATE devices SET state=$2::jsonb WHERE id=$1", [id, J(state)]);
   }
+  async deleteDevice(id: DeviceId): Promise<void> {
+    await this.db.query("DELETE FROM devices WHERE id=$1", [id]);
+  }
 
   async listFavorites(userId: UserId): Promise<Favorite[]> {
     const { rows } = await this.db.query<FavRow>(

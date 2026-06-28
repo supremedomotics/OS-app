@@ -44,6 +44,53 @@ describe("HomeService", () => {
     expect(updated?.state.brightness).toEqual({ kind: "brightness", on: true, level: 50 });
   });
 
+  it("moves any device to any room and renames it, keeping its binding", async () => {
+    const { sil, home } = await setup();
+    const rooms = await home.listRooms();
+    const living = rooms.find((r) => r.name === "Living Room")!;
+    const bedroom = rooms.find((r) => r.name === "Bedroom")!;
+    const device = (await home.listDevicesInRoom(living.id))[0]!;
+
+    // Move it to a different room + rename it.
+    const moved = await home.updateDevice(device.id, { roomId: bedroom.id, name: "Reading Lamp" });
+    expect(moved.roomId).toBe(bedroom.id);
+    expect(moved.name).toBe("Reading Lamp");
+
+    // It now lists under the new room, not the old one.
+    expect((await home.listDevicesInRoom(bedroom.id)).some((d) => d.id === device.id)).toBe(true);
+    expect((await home.listDevicesInRoom(living.id)).some((d) => d.id === device.id)).toBe(false);
+
+    // And it's still controllable (binding survived the move).
+    if (device.capabilities.some((c) => c.kind === "brightness")) {
+      await sil.command(device.id, { capability: "brightness", action: "set", level: 30 });
+    }
+  });
+
+  it("rejects moving a device to a non-existent room", async () => {
+    const { home } = await setup();
+    const device = (await home.listDevices())[0]!;
+    await expect(home.updateDevice(device.id, { roomId: "room-nope" as never })).rejects.toThrow(/room not found/);
+  });
+
+  it("deletes a device and drops its SIL binding", async () => {
+    const { sil, home } = await setup();
+    const device = (await home.listDevices()).find((d) => d.capabilities.some((c) => c.kind === "brightness"))!;
+    const before = sil.registry.size;
+
+    await home.removeDevice(device.id);
+    expect(await home.getDevice(device.id)).toBeNull();
+    expect(await home.listDevices()).not.toContainEqual(expect.objectContaining({ id: device.id }));
+    // Its capability mappings are gone from the registry.
+    expect(sil.registry.size).toBeLessThan(before);
+    expect(sil.registry.resolve(device.id, "brightness")).toBeUndefined();
+  });
+
+  it("rejects updating/deleting an unknown device", async () => {
+    const { home } = await setup();
+    await expect(home.updateDevice("device-nope" as never, { name: "x" })).rejects.toThrow(/not found/);
+    await expect(home.removeDevice("device-nope" as never)).rejects.toThrow(/not found/);
+  });
+
   it("toggles favorites per user", async () => {
     const { home } = await setup();
     const userId = newId("user") as UserId;

@@ -1,5 +1,11 @@
-import { CommandRequest, SupremeError, type CommandResponse } from "@supreme/contracts";
-import type { DeviceId } from "@supreme/domain-model";
+import {
+  CommandRequest,
+  SupremeError,
+  UpdateDeviceRequest,
+  type CommandResponse,
+  type DeviceResponse,
+} from "@supreme/contracts";
+import type { DeviceId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -31,6 +37,57 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
         device: (await ctx.home.getDevice(deviceId)) ?? undefined,
       };
       reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Move and/or rename a device (§4): PATCH /v1/devices/:id. Any device can be reassigned to
+  // any existing room. Owner/admin/installer only (device:update).
+  app.patch<{ Params: { id: string } }>("/v1/devices/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      if (!(await ctx.home.getDevice(deviceId))) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "update");
+
+      const patch = UpdateDeviceRequest.parse(req.body);
+      const device = await ctx.home.updateDevice(deviceId, {
+        name: patch.name,
+        roomId: patch.roomId as RoomId | undefined,
+      });
+      await ctx.audit?.record({
+        homeId: ctx.homeId,
+        actorUserId: user.id,
+        action: "device.update",
+        resourceType: "device",
+        resourceId: deviceId,
+        metadata: { name: patch.name, roomId: patch.roomId },
+      });
+      reply.send({ device } satisfies DeviceResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Delete a device (§4): DELETE /v1/devices/:id. Drops its backend bindings too.
+  // Owner/admin/installer only (device:delete).
+  app.delete<{ Params: { id: string } }>("/v1/devices/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      if (!(await ctx.home.getDevice(deviceId))) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "delete");
+
+      await ctx.home.removeDevice(deviceId);
+      await ctx.audit?.record({
+        homeId: ctx.homeId,
+        actorUserId: user.id,
+        action: "device.delete",
+        resourceType: "device",
+        resourceId: deviceId,
+      });
+      reply.code(204).send();
     } catch (err) {
       sendError(reply, err);
     }

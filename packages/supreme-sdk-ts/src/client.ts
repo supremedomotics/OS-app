@@ -35,6 +35,7 @@ import {
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
+  Device,
   DeviceId,
   DriverId,
   FavoriteRef,
@@ -117,6 +118,16 @@ export class SupremeClient {
   /** The core control verb — tap a light, set a level, etc. */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<CommandResponse> {
     return this.request("POST", `/v1/devices/${deviceId}/command`, { command }) as Promise<CommandResponse>;
+  }
+
+  /** Move a device to any room and/or rename it (owner/admin/installer). */
+  async updateDevice(deviceId: DeviceId, patch: { name?: string; roomId?: string }): Promise<{ device: Device }> {
+    return this.request("PATCH", `/v1/devices/${deviceId}`, patch) as Promise<{ device: Device }>;
+  }
+
+  /** Delete a device (also drops its backend bindings). */
+  async deleteDevice(deviceId: DeviceId): Promise<void> {
+    await this.request("DELETE", `/v1/devices/${deviceId}`);
   }
 
   // ── Homeowner surface (§11) ──────────────────────────────────────────────────
