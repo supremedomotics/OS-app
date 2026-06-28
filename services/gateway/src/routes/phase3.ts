@@ -12,6 +12,7 @@ import {
   type EnergySummaryResponse,
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId } from "@supreme/domain-model";
+import { budgetStatus, computeEnergyCost, TariffError } from "@supreme/analytics";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -126,6 +127,33 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       }
     },
   );
+
+  // Tariff-aware energy cost: compute the bill for a time range under the homeowner's tariff
+  // (passed in the request; the app stores the rate plan). Returns a cost breakdown + optional
+  // budget projection. The tariff/budget shapes mirror @supreme/analytics' cost engine.
+  app.post("/v1/energy/cost", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const analytics = requireAnalytics(ctx);
+      const body = (req.body ?? {}) as { tariff?: Parameters<typeof computeEnergyCost>[0]; from?: string; to?: string; budget?: Parameters<typeof budgetStatus>[0] };
+      if (!body.tariff || !Array.isArray(body.tariff.periods)) {
+        throw new SupremeError("validation_failed", "a tariff with periods is required");
+      }
+      const samples = await analytics.hourlyEnergy(ctx.homeId, body.from, body.to);
+      let cost;
+      try {
+        cost = computeEnergyCost(body.tariff, samples);
+      } catch (err) {
+        if (err instanceof TariffError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      const budget = body.budget ? budgetStatus(body.budget) : undefined;
+      reply.send({ cost, ...(budget ? { budget } : {}) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
 
   // ── Advanced audit ───────────────────────────────────────────────────────────
   app.get("/v1/audit", async (req, reply) => {

@@ -6,6 +6,7 @@ import {
   type RoomId,
 } from "@supreme/domain-model";
 import type { SqlDb } from "@supreme/persistence";
+import type { ConsumptionSample } from "./tariff.js";
 
 // Tariff-aware energy cost engine (pure; turns consumption into money + budget projection).
 export {
@@ -138,5 +139,22 @@ export class AnalyticsService {
       [deviceId, measure, from ?? null, to ?? null],
     );
     return rows.map((r) => ({ hour: r.hour, total: Number(r.total), average: Number(r.average) }));
+  }
+
+  /**
+   * Home-wide hourly energy (kWh) as ConsumptionSamples the tariff cost engine consumes. The hour
+   * bucket is normalized to a parseable ISO instant (`…THH:00:00Z`). Timestamps are the home's local
+   * clock (as recorded), so tariff hours line up with the wall clock.
+   */
+  async hourlyEnergy(homeId: HomeId, from?: string, to?: string): Promise<ConsumptionSample[]> {
+    const { rows } = await this.db.query<{ ts: string; kwh: number }>(
+      `SELECT substr(ts, 1, 13) || ':00:00Z' AS ts, SUM(value) AS kwh
+         FROM energy_samples
+        WHERE home_id = $1 AND measure = 'energy'
+          AND ($2::text IS NULL OR ts >= $2) AND ($3::text IS NULL OR ts <= $3)
+        GROUP BY substr(ts, 1, 13) ORDER BY 1`,
+      [homeId, from ?? null, to ?? null],
+    );
+    return rows.map((r) => ({ ts: r.ts, kwh: Number(r.kwh) }));
   }
 }
