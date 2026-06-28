@@ -51,6 +51,9 @@ import type { VoiceStatePublisher } from "./voice-publisher.js";
 import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit";
 import type { CapabilityCommand } from "@supreme/domain-model";
 import { OccupancyRunner } from "./occupancy-runner.js";
+import { SceneScheduler } from "./scene-scheduler.js";
+import type { SceneSchedule } from "@supreme/scenes";
+import type { SceneId } from "@supreme/domain-model";
 
 /** The hub's optional Matter controller handle, present only when Matter is enabled AND its
  * controller subsystem is available. Lets the Matter routes pair devices by setup code and report
@@ -142,6 +145,8 @@ export class AppContext {
   readonly occupancy: OccupancyRunner;
   /** Durable per-home settings (energy tariff, etc.). */
   readonly homeConfig: IConfigStore;
+  /** Fires scheduled scenes (time / sunrise / sunset) on the minute tick. */
+  readonly sceneScheduler: SceneScheduler;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -165,6 +170,11 @@ export class AppContext {
       command: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
     });
     this.homeConfig = deps.configStore ?? new InMemoryConfigStore();
+    this.sceneScheduler = new SceneScheduler({
+      getSchedules: async () => ((await this.homeConfig.get(this.homeId, "scene_schedules")) as SceneSchedule[] | undefined) ?? [],
+      getLocation: async () => (await this.homeConfig.get(this.homeId, "location")) as { lat: number; lon: number } | undefined,
+      activate: (sceneId) => this.scenes.activate(sceneId as SceneId).then(() => undefined),
+    });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,

@@ -60,8 +60,11 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Drive time/interval automation triggers once a minute.
-  const tick = setInterval(() => void ctx.automations.tick(), 60_000);
+  // Drive time/interval automation triggers + scheduled scenes once a minute.
+  const tick = setInterval(() => {
+    void ctx.automations.tick();
+    void ctx.sceneScheduler.tick();
+  }, 60_000);
   tick.unref();
 
   await app.listen({ host: config.host, port: config.port });

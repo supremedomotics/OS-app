@@ -7,6 +7,7 @@ import {
   type SceneResponse,
 } from "@supreme/contracts";
 import type { SceneId } from "@supreme/domain-model";
+import { validateSchedule, ScheduleError } from "@supreme/scenes";
 import type { FastifyInstance } from "fastify";
 import { authenticate, can, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -78,6 +79,55 @@ export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void
       const steps = await ctx.scenes.activate(id);
       const body: ActivateSceneResponse = { activated: true, steps };
       reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Scene schedules (time / sunrise / sunset) ────────────────────────────────
+  app.get("/v1/scenes/schedules", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "scene", null, "view");
+      const schedules = (await ctx.homeConfig.get(ctx.homeId, "scene_schedules")) ?? [];
+      reply.send({ schedules });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Replace the home's scene schedules (each validated). Solar triggers use the home's location.
+  app.put("/v1/scenes/schedules", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "scene", null, "update");
+      const body = (req.body ?? {}) as { schedules?: unknown[] };
+      if (!Array.isArray(body.schedules)) throw new SupremeError("validation_failed", "schedules must be an array");
+      let validated;
+      try {
+        validated = body.schedules.map(validateSchedule);
+      } catch (err) {
+        if (err instanceof ScheduleError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "scene_schedules", validated);
+      reply.send({ schedules: validated });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // The home's geographic location — required for sunrise/sunset-anchored schedules.
+  app.put("/v1/home/location", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "admin");
+      const b = (req.body ?? {}) as { lat?: number; lon?: number };
+      if (!Number.isFinite(b.lat) || !Number.isFinite(b.lon) || Math.abs(b.lat!) > 90 || Math.abs(b.lon!) > 180) {
+        throw new SupremeError("validation_failed", "valid lat (-90..90) and lon (-180..180) are required");
+      }
+      await ctx.homeConfig.set(ctx.homeId, "location", { lat: b.lat, lon: b.lon });
+      reply.send({ location: { lat: b.lat, lon: b.lon } });
     } catch (err) {
       sendError(reply, err);
     }
