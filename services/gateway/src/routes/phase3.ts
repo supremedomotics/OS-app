@@ -13,7 +13,7 @@ import {
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
 import { budgetStatus, computeEnergyCost, TariffError } from "@supreme/analytics";
-import { circadianAt, circadianColorCommand, defaultCircadianProfile } from "@supreme/automations";
+import { circadianAt, circadianColorCommand, defaultCircadianProfile, sunTimes } from "@supreme/automations";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -151,6 +151,25 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       }
       const budget = body.budget ? budgetStatus(body.budget) : undefined;
       reply.send({ cost, ...(budget ? { budget } : {}) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Sun times (sunrise/sunset/solar-noon) for the home's location + a date — anchors "at sunset"
+  // automations and circadian. lat/lon are required query params (the app passes the home location).
+  app.get<{ Querystring: { lat?: string; lon?: string; date?: string } }>("/v1/solar", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const lat = Number(req.query.lat);
+      const lon = Number(req.query.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+        throw new SupremeError("validation_failed", "valid lat (-90..90) and lon (-180..180) query params are required");
+      }
+      const d = req.query.date ? new Date(`${req.query.date}T00:00:00Z`) : new Date();
+      if (Number.isNaN(d.getTime())) throw new SupremeError("validation_failed", "invalid date");
+      reply.send(sunTimes({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), latitude: lat, longitude: lon }));
     } catch (err) {
       sendError(reply, err);
     }

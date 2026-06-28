@@ -21,3 +21,4 @@ export {
   type CircadianKeyframe,
   type CircadianTarget,
 } from "./circadian.js";
+export { sunTimes, type SunTimes } from "./solar.js";
