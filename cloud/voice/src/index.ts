@@ -205,3 +205,18 @@ export class VoiceService {
 function clampPct(v: unknown): number {
   return Math.max(0, Math.min(100, Math.round(Number(v))));
 }
+
+// HTTP surface, OAuth2 IdP, assistant payload mappings, and hub routing (the certification layer).
+export { OAuthProvider, OAuthError, type LinkIdentity, type LinkRecord, type OAuthClient } from "./oauth.js";
+export {
+  toHubCommand,
+  BrokerHubRouter,
+  HubUnavailableError,
+  type HubRouter,
+  type HubDevice,
+  type HubCommand,
+  type CanonicalIntent,
+} from "./hub-router.js";
+export { buildVoiceServer, type VoiceServerOptions } from "./server.js";
+export * as alexa from "./alexa.js";
+export * as google from "./google.js";

@@ -2,7 +2,7 @@
   "name": "@supreme/voice",
   "version": "0.0.0",
   "private": true,
-  "description": "Cloud Voice service — assistant linking, capability→discovery mapping, directive routing, state reporting (blueprint §9).",
+  "description": "Cloud Voice service — assistant linking, OAuth2 account linking, Alexa/Google fulfillment, directive routing, state reporting (blueprint §9).",
   "type": "module",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "main": "./dist/index.js",
@@ -12,10 +12,17 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/tunnel-broker": "workspace:*",
+    "fastify": "^5.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

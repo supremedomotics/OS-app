@@ -84,6 +84,26 @@ services:
       - "8094:8094"
       - "8443:8443"
 
+  # Voice service — OPTIONAL. OAuth2 account-linking IdP + Alexa/Google Smart Home fulfillment.
+  # Forwards every directive to the owning hub over the Tunnel Broker, where RBAC is enforced
+  # locally. Not on the critical path — the hub controls devices without it. authenticateUser
+  # must be wired to the Identity plane before production (the image refuses logins by default).
+  voice:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/voice.Dockerfile
+    restart: unless-stopped
+    environment:
+      VOICE_PORT: "8095"
+      # HMAC secret for OAuth tokens — REQUIRED. Use a strong, rotated secret in production.
+      VOICE_SIGNING_SECRET: ${VOICE_SIGNING_SECRET:?set a strong voice signing secret}
+      # `clientId:secret:assistant:redirectUri` entries, comma-separated (assistant = alexa|google).
+      VOICE_CLIENTS: ${VOICE_CLIENTS:-}
+      SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
+      VOICE_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8095:8095"
+
   # Receives OTLP traces from hubs/cloud services and exports them onward.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1

@@ -26,6 +26,21 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // Flat, permission-filtered device list for the whole home (§6). Cloud Voice Discovery/SYNC
+  // enumerates the home in one call; clients that want room grouping use /v1/rooms/:id/devices.
+  app.get("/v1/devices", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const all = await ctx.home.listDevices();
+      const visible = [];
+      for (const d of all) if (await canViewDevice(ctx, user, d)) visible.push(d);
+      const body: DeviceList = { devices: visible };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.get<{ Params: { id: string } }>("/v1/rooms/:id/devices", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
