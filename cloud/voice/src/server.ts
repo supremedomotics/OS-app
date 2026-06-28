@@ -3,12 +3,14 @@ import {
   alexaBearerToken,
   alexaDirectiveToCanonical,
   alexaOptimisticProperties,
+  buildAcceptGrantResponse,
   buildControlResponse,
   buildDiscoveryResponse,
   buildErrorResponse,
   buildReportStateResponse,
   type AlexaDirective,
 } from "./alexa.js";
+import { dispatchStateDelta, LoggingNotifier, type AssistantNotifier, type StateDelta } from "./reporting.js";
 import {
   buildExecuteResponse,
   buildQueryResponse,
@@ -40,6 +42,10 @@ export interface VoiceServerOptions {
    * when forwarding directives to the hub.
    */
   authenticateUser: (credentials: { email: string; password: string }) => Promise<LinkIdentity | null>;
+  /** Per-hub API key → homeId, authenticating the hub's proactive state-report ingest (/v1/state). */
+  hubKeys?: Map<string, string>;
+  /** Dispatches proactive reports to the assistant clouds; defaults to a logging no-op. */
+  notifier?: AssistantNotifier;
   logLevel?: string;
   now?: () => number;
 }
@@ -54,6 +60,8 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
   const nowIso = () => new Date(now()).toISOString();
   // Per-IP fixed-window limiter for the credential-bearing consent endpoint.
   const rateLimit = new FixedWindowLimiter({ now, windowMs: 60_000, max: 20 });
+  const notifier = opts.notifier ?? new LoggingNotifier((m, meta) => app.log.info(meta ?? {}, m));
+  const hubKeys = opts.hubKeys ?? new Map<string, string>();
 
   // Alexa and Google post form-encoded bodies to the token endpoint; accept both.
   app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_req, body, done) => {
@@ -138,6 +146,14 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
       // Discovery never errors hard — an unlinked/again-linking account just sees no endpoints.
       const devices = link ? await safe(() => opts.hub.listDevices(link), []) : [];
       reply.send(buildDiscoveryResponse(devices));
+      return;
+    }
+    // Proactive-reporting enrollment: store the grant on the link (the grantee token is in the
+    // payload scope, not the endpoint scope, so resolve it explicitly here).
+    if (ns === "Alexa.Authorization" && directive.directive.header.name === "AcceptGrant") {
+      const payload = directive.directive.payload as { grant?: { code?: string }; grantee?: { token?: string } };
+      const ok = opts.oauth.recordAcceptGrant(payload.grantee?.token, payload.grant?.code ?? "");
+      reply.send(ok ? buildAcceptGrantResponse() : buildErrorResponse(directive, "INVALID_AUTHORIZATION_CREDENTIAL", "account not linked"));
       return;
     }
     if (!link) {
@@ -225,6 +241,25 @@ export function buildVoiceServer(opts: VoiceServerOptions): FastifyInstance {
       default:
         reply.send({ requestId: body.requestId, payload: { errorCode: "notSupported" } });
     }
+  });
+
+  // ── Proactive state reporting ──────────────────────────────────────────────────────────────
+  // The hub posts a local state change here (authenticated by its per-hub API key → homeId); we fan
+  // it out as a proactive report to every assistant linked for that home.
+  app.post<{ Body: { deviceId?: string; capability?: string; state?: Record<string, unknown> } }>("/v1/state", async (req, reply) => {
+    const homeId = hubKeys.get(bearerFromHeader(req.headers.authorization) ?? "");
+    if (!homeId) {
+      reply.code(401).send({ code: "unauthorized" });
+      return;
+    }
+    const b = req.body ?? {};
+    if (!b.deviceId || !b.capability || typeof b.state !== "object") {
+      reply.code(400).send({ code: "validation_failed", message: "deviceId, capability, state required" });
+      return;
+    }
+    const delta: StateDelta = { deviceId: b.deviceId, capability: b.capability, state: b.state ?? {} };
+    const delivered = await dispatchStateDelta({ links: opts.oauth.linksForHome(homeId), delta, notifier, nowIso: nowIso() });
+    reply.send({ delivered });
   });
 
   return app;

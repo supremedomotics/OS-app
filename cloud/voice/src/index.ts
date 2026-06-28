@@ -218,5 +218,14 @@ export {
   type CanonicalIntent,
 } from "./hub-router.js";
 export { buildVoiceServer, type VoiceServerOptions } from "./server.js";
+export {
+  dispatchStateDelta,
+  buildAlexaChangeReport,
+  buildGoogleReportState,
+  LoggingNotifier,
+  type AssistantNotifier,
+  type AssistantReport,
+  type StateDelta,
+} from "./reporting.js";
 export * as alexa from "./alexa.js";
 export * as google from "./google.js";

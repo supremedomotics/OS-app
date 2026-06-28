@@ -99,6 +99,8 @@ services:
       VOICE_SIGNING_SECRET: ${VOICE_SIGNING_SECRET:?set a strong voice signing secret}
       # `clientId:secret:assistant:redirectUri` entries, comma-separated (assistant = alexa|google).
       VOICE_CLIENTS: ${VOICE_CLIENTS:-}
+      # Per-hub keys for proactive state-report ingest: "key1:home1,key2:home2".
+      VOICE_HUB_KEYS: ${VOICE_HUB_KEYS:-}
       SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
       VOICE_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:

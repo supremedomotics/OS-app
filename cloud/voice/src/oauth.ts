@@ -31,6 +31,8 @@ export interface LinkRecord extends LinkIdentity {
   refreshGen: number;
   scopes: string[];
   linkedAt: number;
+  /** Alexa proactive-reporting grant (from AcceptGrant); the notifier exchanges code→event token. */
+  acceptGrant?: { code: string; granteeToken: string };
 }
 
 export interface OAuthClient {
@@ -174,6 +176,19 @@ export class OAuthProvider {
   /** Test/inspection helper: is this link still active? */
   hasLink(linkId: string): boolean {
     return this.links.has(linkId);
+  }
+
+  /** All live links for a home — used to fan proactive state reports out to every linked assistant. */
+  linksForHome(homeId: string): LinkRecord[] {
+    return [...this.links.values()].filter((l) => l.homeId === homeId);
+  }
+
+  /** Record an Alexa AcceptGrant on the link the grantee token resolves to (proactive enrollment). */
+  recordAcceptGrant(granteeToken: string | undefined, code: string): boolean {
+    const link = this.resolve(granteeToken);
+    if (!link) return false;
+    link.acceptGrant = { code, granteeToken: granteeToken! };
+    return true;
   }
 
   /**

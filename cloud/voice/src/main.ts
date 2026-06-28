@@ -43,11 +43,21 @@ async function main(): Promise<void> {
   // home→hub resolution is owned by the connectivity plane; until wired, hubId === homeId.
   const hub = new BrokerHubRouter({ broker, resolveHubId: (homeId) => homeId });
 
+  // Per-hub keys for proactive state-report ingest: "key1:home1,key2:home2".
+  const hubKeys = new Map<string, string>();
+  for (const pair of (process.env.VOICE_HUB_KEYS ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+    const i = pair.indexOf(":");
+    if (i > 0) hubKeys.set(pair.slice(0, i), pair.slice(i + 1));
+  }
+
   const app = buildVoiceServer({
     oauth,
     hub,
+    hubKeys,
     // Placeholder: production injects the Identity plane. Refuse all logins so a misconfigured
-    // deploy can't silently link accounts.
+    // deploy can't silently link accounts. The default notifier logs and drops — wire a real
+    // AssistantNotifier (Alexa event gateway via LWA + Google HomeGraph via a service account)
+    // before proactive reports actually reach the assistants.
     authenticateUser: async () => null,
     logLevel: process.env.VOICE_LOG_LEVEL ?? "info",
   });

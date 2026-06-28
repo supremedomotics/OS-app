@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { HubCommand, HubDevice, HubRouter } from "./hub-router.js";
 import { OAuthProvider, type LinkRecord } from "./oauth.js";
 import { buildVoiceServer } from "./server.js";
+import type { AssistantNotifier, AssistantReport } from "./reporting.js";
 
 /**
  * End-to-end certification surface: link an account over OAuth2, then drive Alexa Smart Home and
@@ -34,6 +35,8 @@ describe("Voice cloud HTTP surface", () => {
   let hub: FakeHub;
   let accessToken: string;
   const redirectUri = "https://layla.amazon.com/cb";
+  const reports: AssistantReport[] = [];
+  const notifier: AssistantNotifier = { notify: async (r) => void reports.push(r) };
 
   beforeAll(async () => {
     hub = new FakeHub();
@@ -44,6 +47,8 @@ describe("Voice cloud HTTP surface", () => {
     app = buildVoiceServer({
       oauth,
       hub,
+      hubKeys: new Map([["hub-key-1", "home-1"]]),
+      notifier,
       authenticateUser: async ({ email, password }) =>
         email === "owner@supreme.local" && password === "pw" ? { accountId: "acct-1", homeId: "home-1", hubToken: "hub-token-1" } : null,
       logLevel: "silent",
@@ -174,6 +179,39 @@ describe("Voice cloud HTTP surface", () => {
     const res = await app.inject({ method: "POST", url: "/voice/google", headers: { authorization: "Bearer nope" }, payload: { requestId: "r", inputs: [{ intent: "action.devices.SYNC" }] } });
     expect(res.statusCode).toBe(401);
     expect(res.json().payload.errorCode).toBe("authFailure");
+  });
+
+  it("accepts an Alexa AcceptGrant (proactive-reporting enrollment)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/voice/alexa",
+      payload: {
+        directive: {
+          header: { namespace: "Alexa.Authorization", name: "AcceptGrant", payloadVersion: "3", messageId: "m" },
+          payload: { grant: { type: "OAuth2.AuthorizationCode", code: "grant-code" }, grantee: { type: "BearerToken", token: accessToken } },
+        },
+      },
+    });
+    expect(res.json().event.header.name).toBe("AcceptGrant.Response");
+  });
+
+  it("ingests a hub state delta and fans a proactive ChangeReport to the linked assistant", async () => {
+    reports.length = 0;
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/state",
+      headers: { authorization: "Bearer hub-key-1", "content-type": "application/json" },
+      payload: { deviceId: "dev-light", capability: "onoff", state: { on: true } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().delivered).toBe(1);
+    expect(reports[0]?.assistant).toBe("alexa");
+    expect((reports[0]?.payload as any).event.header.name).toBe("ChangeReport");
+  });
+
+  it("rejects state ingest without a valid hub key", async () => {
+    const res = await app.inject({ method: "POST", url: "/v1/state", headers: { authorization: "Bearer nope" }, payload: { deviceId: "d", capability: "onoff", state: {} } });
+    expect(res.statusCode).toBe(401);
   });
 
   // ── helpers ──────────────────────────────────────────────────────────────────────────────

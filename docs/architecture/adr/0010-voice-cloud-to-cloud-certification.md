@@ -47,10 +47,17 @@ Ship **cloud-to-cloud first** for Alexa and Google, built on the existing planes
   plane (fail-closed).
 - The hub gains `GET /v1/devices` (flat, permission-filtered) so Discovery/SYNC enumerate a home
   in one tunnel round-trip.
+- **Proactive state reporting (now implemented, cloud side):** when a device changes locally the hub
+  posts a state delta to `/v1/state` (authenticated by a per-hub API key → homeId); the cloud fans it
+  out as an Alexa `ChangeReport` / Google `ReportState` to every assistant linked for that home.
+  Alexa `AcceptGrant` is handled to enroll proactive reporting. Payload construction + fan-out are
+  unit-tested; the actual dispatch to the assistant clouds — the Alexa event gateway (LWA token from
+  the AcceptGrant code) and Google HomeGraph (service-account JWT) — lives behind the
+  `AssistantNotifier` seam (a logging no-op until those credentials are provisioned). The hub-side
+  publisher (debounced state-delta POST off the SIL state stream) is the remaining wiring step.
 - **Deferred to a follow-up:** (a) **HomeKit / Siri**, which is fundamentally *local* — it needs
   a HAP accessory bridge advertised on the LAN from the hub (mDNS + the HomeKit Accessory
   Protocol), not a cloud webhook; the cloud `VoiceService` already carries the HomeKit vocabulary
   for when that bridge lands. (b) **Local fulfillment** for Alexa/Google to cut latency once the
-  cloud path is certified. (c) **Proactive state reporting** (Alexa `ChangeReport` / Google
-  `ReportState`) once the hub→cloud event channel publishes state deltas upstream.
+  cloud path is certified. (c) The real `AssistantNotifier` dispatch + the hub-side state publisher.
 - The Supreme API contract is unchanged; voice is additive and fully removable.

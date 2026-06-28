@@ -191,6 +191,33 @@ export function alexaOptimisticProperties(intent: CanonicalIntent, nowIso: strin
   }
 }
 
+/**
+ * Build the single Alexa property for one capability's current state (used by proactive
+ * ChangeReport when a device changes locally). `state` is the Supreme capability state object.
+ */
+export function alexaPropertyFor(capability: string, state: Record<string, unknown>, nowIso: string): unknown | null {
+  const p = (namespace: string, name: string, value: unknown) => ({ namespace, name, value, timeOfSample: nowIso, uncertaintyInMilliseconds: 500 });
+  switch (capability) {
+    case "onoff":
+      return p("Alexa.PowerController", "powerState", state.on ? "ON" : "OFF");
+    case "brightness":
+      return p("Alexa.BrightnessController", "brightness", Number(state.level ?? 0));
+    case "lock":
+      return p("Alexa.LockController", "lockState", state.locked ? "LOCKED" : "UNLOCKED");
+    case "position":
+      return p("Alexa.RangeController", "rangeValue", Number(state.position ?? 0));
+    case "temperature":
+      return p("Alexa.ThermostatController", "targetSetpoint", { value: Number(state.targetC ?? 0), scale: "CELSIUS" });
+    default:
+      return null;
+  }
+}
+
+/** Response to the Alexa.Authorization AcceptGrant directive (proactive-reporting enrollment). */
+export function buildAcceptGrantResponse(): unknown {
+  return { event: { header: header("Alexa.Authorization", "AcceptGrant.Response"), payload: {} } };
+}
+
 export function buildReportStateResponse(d: AlexaDirective, device: HubDevice, nowIso: string): unknown {
   return {
     context: { properties: alexaStateProperties(device, nowIso) },

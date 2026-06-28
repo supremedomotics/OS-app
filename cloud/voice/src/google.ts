@@ -82,6 +82,24 @@ export function buildQueryResponse(requestId: string, states: Record<string, Rec
   return { requestId, payload: { devices: states } };
 }
 
+/** The Google state fragment for one capability's current state (used by proactive ReportState). */
+export function googleStateFragment(capability: string, state: Record<string, unknown>): Record<string, unknown> | null {
+  switch (capability) {
+    case "onoff":
+      return { on: Boolean(state.on) };
+    case "brightness":
+      return { brightness: Number(state.level ?? 0) };
+    case "lock":
+      return { isLocked: Boolean(state.locked) };
+    case "position":
+      return { openPercent: Number(state.position ?? 0) };
+    case "temperature":
+      return { thermostatTemperatureSetpoint: Number(state.targetC ?? 0) };
+    default:
+      return null;
+  }
+}
+
 // ── EXECUTE ─────────────────────────────────────────────────────────────────────────────────────
 /** Map a Google execution (command id + params) to our canonical intent. */
 export function googleExecutionToCanonical(command: string, params: Record<string, unknown>): CanonicalIntent | null {
