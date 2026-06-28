@@ -12,3 +12,10 @@ export {
   type TunnelResponse,
 } from "./broker.js";
 export { buildTunnelBrokerServer, type TunnelBrokerServerOptions } from "./server.js";
+export {
+  createMtlsTunnelServer,
+  MtlsTunnelClient,
+  type MtlsServerOptions,
+  type MtlsClientOptions,
+  type MtlsTunnelServer,
+} from "./mtls.js";

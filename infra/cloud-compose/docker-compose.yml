@@ -73,9 +73,16 @@ services:
       BROKER_PORT: "8094"
       SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
       SUPREME_BROKER_DEV_ALLOW_ALL: ${SUPREME_BROKER_DEV_ALLOW_ALL:-0}
+      # Real device-cert mTLS listener (hubs dial out here). Provide the broker's server cert/key
+      # and the Hub CA cert (PEM) to enable it; absent → only the HTTP/WS surface runs.
+      SUPREME_BROKER_CERT_FILE: ${SUPREME_BROKER_CERT_FILE:-}
+      SUPREME_BROKER_KEY_FILE: ${SUPREME_BROKER_KEY_FILE:-}
+      SUPREME_HUB_CA_CERT_FILE: ${SUPREME_HUB_CA_CERT_FILE:-}
+      BROKER_MTLS_PORT: "8443"
       SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
     ports:
       - "8094:8094"
+      - "8443:8443"
 
   # Receives OTLP traces from hubs/cloud services and exports them onward.
   otel-collector:

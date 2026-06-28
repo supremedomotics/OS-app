@@ -1,8 +1,8 @@
 {
-  "name": "@supreme/tunnel-broker",
+  "name": "@supreme/hub-pki",
   "version": "0.0.0",
   "private": true,
-  "description": "Cloud Tunnel Broker — zero-trust, cert-authenticated, hub-initiated remote access (ADR 0009).",
+  "description": "X.509 Hub CA + device certificates for mutual-TLS hub↔broker auth (ADR 0008/0009).",
   "type": "module",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "main": "./dist/index.js",
@@ -12,21 +12,14 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@supreme/hub-identity": "workspace:*",
-    "@fastify/websocket": "^11.0.2",
-    "fastify": "^5.2.1",
-    "ws": "^8.18.0"
+    "node-forge": "^1.3.1"
   },
   "devDependencies": {
-    "@supreme/hub-pki": "workspace:*",
     "@types/node": "^22.10.5",
-    "@types/ws": "^8.5.13",
-    "tsx": "^4.19.2",
+    "@types/node-forge": "^1.3.11",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

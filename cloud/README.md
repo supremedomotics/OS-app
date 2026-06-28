@@ -21,7 +21,7 @@ rollout (§22): ✅ implemented · 🟡 in progress · ⬜ planned.
 | AuthN | `cloud/authn` | ✅ C1 | EdDSA JWT mint, rotating refresh + reuse-detection, sessions, JWKS |
 | AuthZ | `cloud/authz` | ✅ C1 | RBAC role matrix + ABAC grant overlay policy decision point |
 | Device Registry | `cloud/device-registry` | ✅ C1 | Client devices, push tokens, remote logout, approval, phone replacement |
-| Tunnel Broker | `cloud/tunnel-broker` (supersedes `cloud/relay` tunnel) | ✅ C2 | Cert-authenticated, hub-initiated channels + off-LAN client routing (HTTP/WS; QUIC-ready) |
+| Tunnel Broker | `cloud/tunnel-broker` (supersedes `cloud/relay` tunnel) | ✅ C2 | **Real device-cert mTLS** transport (X.509) + heartbeat presence + reconnect + off-LAN routing; QUIC-ready |
 | Notification | `cloud/notification` | ✅ C3 | Targeted push fan-out (APNs/FCM/WebPush/Wear/Watch) + quiet hours + dedup + receipts |
 | Voice | `cloud/voice` | ✅ C3 | Alexa/Google/Siri linking + capability→discovery + directive routing + state reporting |
 | Matter Cloud | `cloud/matter` | ✅ C3 | Fabric/credential brokering + multi-admin + node commissioning |
@@ -103,6 +103,17 @@ identity + ownership graph; the hub stays authoritative for device/automation st
    into gateway boot once enrolled. End-to-end test (`broker-tunnel.e2e.test.ts`): hub dials
    out → off-LAN client routes a real login through the broker to the hub and back; fail-closed
    deny + hub-offline paths. 4 tests.
+10. **Real mTLS transport** — `@supreme/hub-pki` issues real **X.509** (self-signed Hub CA →
+    short-lived device certs, node-forge), and `cloud/tunnel-broker/src/mtls.ts` runs a Node `tls`
+    server with `requestCert`+`rejectUnauthorized` so the client cert is verified to chain to the
+    Hub CA *before any app code runs* (hub id = cert CN). Length-prefixed JSON frames over the TLS
+    stream, **heartbeat presence** (stale eviction) + **backoff/jitter reconnect**. `mtls.test.ts`
+    (5) runs real loopback TLS proving: valid cert authenticates + routes; different-CA and no-cert
+    clients rejected; **works through NAT** (hub has no inbound listener — reached over its
+    outbound socket); auto-reconnect restores presence. QUIC/HTTP-3 is a drop-in for this transport
+    (edge-terminated or a future Node QUIC binding) — framing + routing unchanged. Remaining wiring:
+    Hub Registry issues the X.509 device cert at enrollment; the gateway dials out with
+    `MtlsTunnelClient` (the WS client stays as the fallback where UDP/mTLS is blocked).
 
 ## C3 ecosystem plane (complete)
 
