@@ -314,15 +314,32 @@ export class IdentityService {
     return user;
   }
 
-  /** Suspend or reactivate a user (master/admin flow, §8). */
-  async setUserStatus(id: UserId, status: "active" | "suspended"): Promise<User> {
+  /** Suspend, reactivate, or expire a user (master/admin flow, §8). */
+  async setUserStatus(id: UserId, status: "active" | "suspended" | "expired"): Promise<User> {
     const user = await this.getUser(id);
-    if (user.userType === "master" && status === "suspended") {
-      throw new SupremeError("conflict", "the master user cannot be suspended");
+    if (user.userType === "master" && status !== "active") {
+      throw new SupremeError("conflict", "the master user cannot be suspended or expired");
     }
     const next: User = { ...user, status };
     await this.store.putUser(next);
     return next;
+  }
+
+  /**
+   * Proactively expire time-limited users whose `expiresAt` has passed (§8). The policy engine
+   * already DENIES their actions, but until their status flips they can still authenticate and hold
+   * a session — so flipping `active → expired` moves enforcement to the auth layer (their tokens
+   * then fail `authenticate`). Returns the ids newly expired; the caller audits them.
+   */
+  async sweepExpired(nowMs: number = Date.now()): Promise<UserId[]> {
+    const expired: UserId[] = [];
+    for (const u of await this.store.listUsers()) {
+      if (u.status === "active" && u.userType !== "master" && u.expiresAt && new Date(u.expiresAt).getTime() <= nowMs) {
+        await this.store.putUser({ ...u, status: "expired" });
+        expired.push(u.id);
+      }
+    }
+    return expired;
   }
 
   private async issueTokens(user: User, sid: string, jti: string): Promise<TokenPair> {

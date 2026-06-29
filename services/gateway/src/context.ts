@@ -490,6 +490,14 @@ export class AppContext {
     return this.home.roomOf(deviceId);
   }
 
+  /** Proactively expire time-limited users whose window has passed; audit each (§8). */
+  async sweepExpiredAccess(): Promise<void> {
+    const expired = await this.identity.sweepExpired();
+    for (const userId of expired) {
+      await this.audit?.record({ homeId: this.homeId, action: "user.expired", resourceType: "user", resourceId: userId });
+    }
+  }
+
   async shutdown(): Promise<void> {
     this.occupancy.stop();
     this.voicePublisher?.stop();

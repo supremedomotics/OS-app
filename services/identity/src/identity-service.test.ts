@@ -126,3 +126,32 @@ describe("login + token lifecycle", () => {
     await expect(s.login("ghost@example.com", "wrong")).rejects.toThrow(/invalid email or password/);
   });
 });
+
+describe("expiring (guest/temporary) access", () => {
+  it("sweepExpired flips a past-expiry guest to 'expired' and their token stops authenticating", async () => {
+    const s = svc();
+    const { home } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "correct horse battery staple", displayName: "Owner" });
+    // A guest whose access already ended (expiresAt in the past).
+    const guest = await s.createUser({ homeId: home.id, email: "guest@example.com", password: "guest-temporary-pass", displayName: "Guest", userType: "guest", expiresAt: new Date(Date.now() - 60_000).toISOString() });
+    const login = await s.login("guest@example.com", "guest-temporary-pass");
+    if (login.status !== "ok") throw new Error("expected tokens");
+    // Before the sweep the token authenticates (only the policy denies actions).
+    expect((await s.authenticate(login.accessToken)).id).toBe(guest.id);
+
+    const expired = await s.sweepExpired();
+    expect(expired).toContain(guest.id);
+    expect((await s.getUser(guest.id)).status).toBe("expired");
+    // Now the auth layer itself rejects the token.
+    await expect(s.authenticate(login.accessToken)).rejects.toThrow(/no longer valid/);
+  });
+
+  it("leaves unexpired and master users untouched", async () => {
+    const s = svc();
+    const { home, master } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "correct horse battery staple", displayName: "Owner" });
+    const future = await s.createUser({ homeId: home.id, email: "future@example.com", password: "future-guest-pass", displayName: "Future", userType: "guest", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const expired = await s.sweepExpired();
+    expect(expired).toEqual([]);
+    expect((await s.getUser(future.id)).status).toBe("active");
+    expect((await s.getUser(master.id)).status).toBe("active");
+  });
+});

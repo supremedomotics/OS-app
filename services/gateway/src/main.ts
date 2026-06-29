@@ -60,11 +60,13 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Drive time/interval automation triggers + scheduled scenes + the climate program once a minute.
+  // Drive time/interval automation triggers + scheduled scenes + the climate program once a minute,
+  // and proactively expire time-limited (guest/temporary) users whose access window has closed.
   const tick = setInterval(() => {
     void ctx.automations.tick();
     void ctx.sceneScheduler.tick();
     void ctx.climateRunner.tick();
+    void ctx.sweepExpiredAccess();
   }, 60_000);
   tick.unref();
 
