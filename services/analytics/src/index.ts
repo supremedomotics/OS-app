@@ -34,6 +34,7 @@ export {
   type GroupConsumption,
   type GroupCost,
 } from "./cost-history.js";
+export { costHistoryToCsv, costBreakdownToCsv } from "./cost-export.js";
 export {
   computeEnergyCost,
   budgetStatus,

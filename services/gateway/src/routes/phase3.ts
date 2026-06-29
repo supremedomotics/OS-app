@@ -12,7 +12,7 @@ import {
   type EnergySummaryResponse,
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
-import { applyGroupCost, bucketCostHistory, budgetStatus, computeEnergyCost, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
+import { applyGroupCost, bucketCostHistory, budgetStatus, computeEnergyCost, costHistoryToCsv, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
 import { validateVentilationConfig, VentilationError } from "../ventilation-runner.js";
 import type { FastifyInstance } from "fastify";
@@ -217,6 +217,26 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       const bucket = (["day", "week", "month", "year"].includes(req.query.bucket ?? "") ? req.query.bucket : "day") as Parameters<typeof bucketCostHistory>[1];
       const days = await analytics.energyDailySeries(ctx.homeId, req.query.from, req.query.to, req.query.deviceId);
       reply.send({ currency: provider.currency, bucket, history: bucketCostHistory(days, bucket, provider.ratePerKwh) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Download the cost history as CSV (for the homeowner's records / their accountant).
+  app.get<{ Querystring: { bucket?: string; from?: string; to?: string; deviceId?: string } }>("/v1/energy/history.csv", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const analytics = requireAnalytics(ctx);
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined;
+      if (!provider) throw new SupremeError("conflict", "configure your electricity provider first (PUT /v1/energy/provider)");
+      const bucket = (["day", "week", "month", "year"].includes(req.query.bucket ?? "") ? req.query.bucket : "month") as Parameters<typeof bucketCostHistory>[1];
+      const days = await analytics.energyDailySeries(ctx.homeId, req.query.from, req.query.to, req.query.deviceId);
+      const csv = costHistoryToCsv(bucketCostHistory(days, bucket, provider.ratePerKwh), provider.currency);
+      reply
+        .header("content-type", "text/csv; charset=utf-8")
+        .header("content-disposition", `attachment; filename="energy-cost-${bucket}.csv"`)
+        .send(csv);
     } catch (err) {
       sendError(reply, err);
     }

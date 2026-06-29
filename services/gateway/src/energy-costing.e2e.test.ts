@@ -98,4 +98,14 @@ describe("Energy costing (provider rate, per-device/room, history)", () => {
     const body = (await res.json()) as { history: { period: string; kwh: number }[] };
     expect(body.history).toEqual([{ period: "2026", kwh: 2, cost: 16 }]);
   });
+
+  it("exports the cost history as a CSV download", async () => {
+    const res = await fetch(`${baseUrl}/v1/energy/history.csv?bucket=month`, { headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toContain("energy-cost-month.csv");
+    const csv = await res.text();
+    expect(csv.split("\r\n")[0]).toBe("period,kwh,cost,currency");
+    expect(csv).toContain("2026-01,10,80,INR");
+  });
 });

@@ -373,6 +373,22 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Cost history as CSV (period,kwh,cost,currency) — for export / sharing.
+  Future<String> energyHistoryCsv(String bucket,
+      {String? from, String? to, String? deviceId}) async {
+    final q = {
+      'bucket': bucket,
+      if (from != null) 'from': from,
+      if (to != null) 'to': to,
+      if (deviceId != null) 'deviceId': deviceId,
+    };
+    final res = await _http.get(
+        Uri.parse('$baseUrl/v1/energy/history.csv').replace(queryParameters: q),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return res.body;
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),
