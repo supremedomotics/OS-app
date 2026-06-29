@@ -13,7 +13,7 @@ import {
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
 import { budgetStatus, computeEnergyCost, TariffError } from "@supreme/analytics";
-import { circadianAt, circadianColorCommand, defaultCircadianProfile, sunTimes } from "@supreme/automations";
+import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -199,6 +199,37 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       const d = req.query.date ? new Date(`${req.query.date}T00:00:00Z`) : new Date();
       if (Number.isNaN(d.getTime())) throw new SupremeError("validation_failed", "invalid date");
       reply.send(sunTimes({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), latitude: lat, longitude: lon }));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Climate program (programmable thermostat) ────────────────────────────────
+  app.get("/v1/climate/program", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const program = await ctx.homeConfig.get(ctx.homeId, "climate_program");
+      reply.send({ program: program ?? null });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/climate/program", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "admin");
+      const body = (req.body ?? {}) as { program?: unknown };
+      let program;
+      try {
+        program = validateClimateProgram(body.program);
+      } catch (err) {
+        if (err instanceof ClimateProgramError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "climate_program", program);
+      reply.send({ program });
     } catch (err) {
       sendError(reply, err);
     }

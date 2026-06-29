@@ -52,6 +52,8 @@ import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit"
 import type { CapabilityCommand } from "@supreme/domain-model";
 import { OccupancyRunner } from "./occupancy-runner.js";
 import { SceneScheduler } from "./scene-scheduler.js";
+import { ClimateProgramRunner } from "./climate-runner.js";
+import type { ClimateProgram } from "@supreme/automations";
 import type { SceneSchedule } from "@supreme/scenes";
 import type { SceneId } from "@supreme/domain-model";
 
@@ -147,6 +149,8 @@ export class AppContext {
   readonly homeConfig: IConfigStore;
   /** Fires scheduled scenes (time / sunrise / sunset) on the minute tick. */
   readonly sceneScheduler: SceneScheduler;
+  /** Applies the climate program's setpoint to thermostats on the minute tick. */
+  readonly climateRunner: ClimateProgramRunner;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -174,6 +178,16 @@ export class AppContext {
       getSchedules: async () => ((await this.homeConfig.get(this.homeId, "scene_schedules")) as SceneSchedule[] | undefined) ?? [],
       getLocation: async () => (await this.homeConfig.get(this.homeId, "location")) as { lat: number; lon: number } | undefined,
       activate: (sceneId) => this.scenes.activate(sceneId as SceneId).then(() => undefined),
+    });
+    this.climateRunner = new ClimateProgramRunner({
+      getProgram: async () => (await this.homeConfig.get(this.homeId, "climate_program")) as ClimateProgram | undefined,
+      applySetpoint: async (targetC) => {
+        for (const d of await this.home.listDevices()) {
+          if (d.capabilities.some((c) => c.kind === "temperature")) {
+            await this.sil.command(d.id, { capability: "temperature", targetC });
+          }
+        }
+      },
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,

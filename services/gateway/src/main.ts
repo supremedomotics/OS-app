@@ -60,10 +60,11 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Drive time/interval automation triggers + scheduled scenes once a minute.
+  // Drive time/interval automation triggers + scheduled scenes + the climate program once a minute.
   const tick = setInterval(() => {
     void ctx.automations.tick();
     void ctx.sceneScheduler.tick();
+    void ctx.climateRunner.tick();
   }, 60_000);
   tick.unref();
 

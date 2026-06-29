@@ -22,3 +22,11 @@ export {
   type CircadianTarget,
 } from "./circadian.js";
 export { sunTimes, type SunTimes } from "./solar.js";
+export {
+  climateSetpointAt,
+  validateClimateProgram,
+  defaultClimateProgram,
+  ClimateProgramError,
+  type ClimateProgram,
+  type ClimateBlock,
+} from "./climate-program.js";
