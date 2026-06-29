@@ -280,6 +280,25 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// The home's climate program (programmable-thermostat setpoint schedule), or null.
+  Future<Map<String, dynamic>?> climateProgram() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['program']
+        as Map<String, dynamic>?;
+  }
+
+  /// Replace the home's climate program ({weekday:[{atMinutes,targetC}], weekend:[...]}).
+  Future<void> setClimateProgram(Map<String, dynamic> program) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/climate/program'),
+      headers: _authHeaders,
+      body: jsonEncode({'program': program}),
+    );
+    _ensureOk(res);
+  }
+
   /// Current security panel state.
   Future<Map<String, dynamic>> securityState() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/security'),

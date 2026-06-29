@@ -93,6 +93,12 @@ final sceneSchedulesProvider =
   return ref.watch(clientProvider).sceneSchedules();
 });
 
+/// The home's climate program (programmable-thermostat schedule), or null.
+final climateProgramProvider =
+    FutureProvider<Map<String, dynamic>?>((ref) async {
+  return ref.watch(clientProvider).climateProgram();
+});
+
 /// Cameras registered on the home (§11.1).
 final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();
