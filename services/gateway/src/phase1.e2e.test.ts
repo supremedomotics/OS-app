@@ -179,4 +179,30 @@ describe("Phase-1 homeowner MVP", () => {
     expect(history.notifications.some((n) => n.title === "Front Door")).toBe(true);
     ws.close();
   });
+
+  it("the owner can add, rename, and list rooms", async () => {
+    const token = await login();
+    const created = await fetch(`${baseUrl}/v1/rooms`, {
+      method: "POST",
+      headers: auth(token),
+      body: JSON.stringify({ name: "  Home Gym  ", areaType: "utility", floor: 1 }),
+    });
+    expect(created.status).toBe(201);
+    const room = ((await created.json()) as { room: { id: string; name: string; areaType: string; floor: number } }).room;
+    expect(room.name).toBe("Home Gym"); // trimmed
+    expect(room.areaType).toBe("utility");
+
+    // It now shows up in the home topology.
+    const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth(token) })).json()) as HomeView;
+    expect(home.rooms.some((r) => r.id === room.id && r.name === "Home Gym")).toBe(true);
+
+    // Rename it.
+    const renamed = await fetch(`${baseUrl}/v1/rooms/${room.id}`, { method: "PATCH", headers: auth(token), body: JSON.stringify({ name: "Gym" }) });
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as { room: { name: string } }).room.name).toBe("Gym");
+
+    // An empty name is rejected.
+    const bad = await fetch(`${baseUrl}/v1/rooms`, { method: "POST", headers: auth(token), body: JSON.stringify({ name: "   " }) });
+    expect(bad.status).toBe(422);
+  });
 });

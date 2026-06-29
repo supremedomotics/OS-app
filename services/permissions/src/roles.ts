@@ -36,14 +36,16 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     user: ["view", "create", "update"],
   },
   homeowner: {
-    // The primary resident: full day-to-day control of the home, can see users, but is
-    // not a system administrator (no integration admin, no destructive home actions).
+    // The primary resident of a self-managed home: full day-to-day control PLUS the ability to
+    // shape their own home — add/rename/remove rooms and add/configure integrations & drivers.
+    // Still not a system administrator (no integration `admin`, no destructive home actions).
     home: ["view", "update"],
-    room: VIEW_CONTROL,
+    room: ALL,
     device: VIEW_CONTROL,
     scene: ["view", "control", "create", "update", "delete"],
     automation: ["view", "control", "create", "update"],
     camera: VIEW_CONTROL,
+    integration: ["view", "control", "create", "update", "delete"],
     user: ["view"],
   },
   family: {
