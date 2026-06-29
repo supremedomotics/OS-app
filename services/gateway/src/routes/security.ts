@@ -110,7 +110,7 @@ export function registerSecurityRoutes(app: FastifyInstance, ctx: AppContext): v
   app.put("/v1/alerts/rules", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
-      await enforce(ctx, user, "home", null, "control");
+      await enforce(ctx, user, "home", null, "update");
       const body = (req.body ?? {}) as { rules?: unknown[] };
       if (!Array.isArray(body.rules)) throw new SupremeError("validation_failed", "rules must be an array");
       let validated;

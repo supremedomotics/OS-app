@@ -78,6 +78,17 @@ class SupremeClient {
         .toList();
   }
 
+  /// All devices in the home (flat, permission-filtered).
+  Future<List<Device>> devices() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/devices'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['devices'] as List<dynamic>)
+        .map((d) => Device.fromJson(d as Map<String, dynamic>))
+        .toList();
+  }
+
   /// The core control verb — tap a light, set a level.
   Future<void> command(String deviceId, Map<String, dynamic> command) async {
     final res = await _http.post(
@@ -156,6 +167,26 @@ class SupremeClient {
       Uri.parse('$baseUrl/v1/scenes/schedules'),
       headers: _authHeaders,
       body: jsonEncode({'schedules': schedules}),
+    );
+    _ensureOk(res);
+  }
+
+  /// The home's duration-based alert rules (door left open/unlocked, light left on).
+  Future<List<Map<String, dynamic>>> alertRules() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/alerts/rules'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return ((jsonDecode(res.body) as Map<String, dynamic>)['rules']
+            as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Replace the home's alert rules.
+  Future<void> setAlertRules(List<Map<String, dynamic>> rules) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/alerts/rules'),
+      headers: _authHeaders,
+      body: jsonEncode({'rules': rules}),
     );
     _ensureOk(res);
   }

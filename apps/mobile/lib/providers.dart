@@ -87,6 +87,12 @@ final occupancyProvider = FutureProvider<bool>((ref) async {
   return ref.watch(clientProvider).occupancyRunning();
 });
 
+/// The home's duration-based alert rules.
+final alertRulesProvider =
+    FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  return ref.watch(clientProvider).alertRules();
+});
+
 /// The home's scene schedules (time / sunrise / sunset).
 final sceneSchedulesProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {

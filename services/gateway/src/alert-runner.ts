@@ -81,6 +81,9 @@ export class AlertRuleRunner {
   async tick(): Promise<void> {
     const rules = await this.opts.getRules();
     const t = this.now();
+    // Drop episode state for rules that no longer exist (keeps the map bounded by current rules).
+    const live = new Set(rules.map((r) => r.id));
+    for (const id of this.episodes.keys()) if (!live.has(id)) this.episodes.delete(id);
     for (const rule of rules) {
       const device = await this.opts.getDevice(rule.deviceId);
       const met = alertConditionMet(rule.type, device?.state);

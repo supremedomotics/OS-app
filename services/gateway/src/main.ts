@@ -60,15 +60,18 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Drive time/interval automation triggers + scheduled scenes + the climate program once a minute,
-  // and proactively expire time-limited (guest/temporary) users whose access window has closed.
+  // Drive automation triggers + scheduled scenes + climate + alerts + load-shifting + occupancy once
+  // a minute, and proactively expire time-limited users. Each is guarded so a single failing tick
+  // (e.g. a transient DB read) can't become an unhandled rejection or stall the others.
+  const guard = (label: string, p: Promise<unknown>) => void p.catch((err) => app.log.warn({ err: (err as Error).message, tick: label }, "tick failed"));
   const tick = setInterval(() => {
-    void ctx.automations.tick();
-    void ctx.sceneScheduler.tick();
-    void ctx.climateRunner.tick();
-    void ctx.alertRunner.tick();
-    void ctx.loadShiftRunner.tick();
-    void ctx.sweepExpiredAccess();
+    guard("automations", ctx.automations.tick());
+    guard("scenes", ctx.sceneScheduler.tick());
+    guard("climate", ctx.climateRunner.tick());
+    guard("alerts", ctx.alertRunner.tick());
+    guard("loadShift", ctx.loadShiftRunner.tick());
+    guard("occupancy", ctx.occupancy.tickNow());
+    guard("expiry", ctx.sweepExpiredAccess());
   }, 60_000);
   tick.unref();
 

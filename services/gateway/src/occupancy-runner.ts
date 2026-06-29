@@ -1,14 +1,17 @@
 import { occupancyEventsAt, type OccupancyEvent } from "@supreme/security";
 
 /**
- * Drives an occupancy (vacation) simulation plan on the hub: once a minute it applies the on/off
- * events due at the current local minute, toggling lights so the home looks lived-in. The plan is
- * pure (see @supreme/security planOccupancy); this is the thin, in-memory scheduler around it. State
- * is intentionally transient — re-enable after a reboot.
+ * Drives an occupancy (vacation) simulation plan on the hub: the hub's once-a-minute tick calls
+ * {@link tickNow}, which applies the on/off events due at the current local minute (toggling lights
+ * so the home looks lived-in). The plan is pure (see @supreme/security planOccupancy); this is the
+ * thin, in-memory scheduler around it. State is transient — re-enable after a reboot. It does NOT
+ * own a timer: it rides the shared minute tick like the other runners, with per-minute de-dup so an
+ * event fires at most once even if ticked twice in the same minute.
  */
 export class OccupancyRunner {
   private plan: OccupancyEvent[] = [];
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private enabled = false;
+  private lastMinute = -1;
   private readonly command: (deviceId: string, on: boolean) => Promise<void>;
   private readonly now: () => Date;
 
@@ -17,31 +20,34 @@ export class OccupancyRunner {
     this.now = opts.now ?? (() => new Date());
   }
 
-  /** Start (or replace) the simulation with a plan; applies events once a minute. */
+  /** Enable (or replace) the simulation with a plan. */
   start(plan: OccupancyEvent[]): void {
     this.plan = plan;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = setInterval(() => void this.tickNow(), 60_000);
-    this.timer.unref?.();
+    this.enabled = true;
+    this.lastMinute = -1;
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.enabled = false;
     this.plan = [];
   }
 
   get running(): boolean {
-    return this.timer !== null;
+    return this.enabled;
   }
 
   preview(): OccupancyEvent[] {
     return this.plan;
   }
 
-  private async tickNow(): Promise<void> {
+  /** Called from the hub minute tick: applies the events due at the current local minute, once. */
+  async tickNow(): Promise<void> {
+    if (!this.enabled) return;
     const d = this.now();
-    await this.tick(d.getHours() * 60 + d.getMinutes());
+    const minute = d.getHours() * 60 + d.getMinutes();
+    if (minute === this.lastMinute) return; // already handled this minute
+    this.lastMinute = minute;
+    await this.tick(minute);
   }
 
   /** Apply the events due at a minute-of-day (exposed for deterministic testing). */

@@ -26,6 +26,15 @@ export class LoadShiftRunner {
   async tick(): Promise<void> {
     const tariff = await this.opts.getTariff();
     const devices = await this.opts.getDeferrableDeviceIds();
+    const deferrable = new Set(devices);
+    // Never strand a load we paused: if the tariff is gone or a device left the deferrable list,
+    // resume it now (don't wait for an off-peak transition that may not come).
+    for (const id of [...this.pausedByUs]) {
+      if (!tariff || !deferrable.has(id)) {
+        await this.apply(id, true);
+        this.pausedByUs.delete(id);
+      }
+    }
     if (!tariff || devices.length === 0) return;
     const d = this.now();
     const weekend = d.getDay() === 0 || d.getDay() === 6;

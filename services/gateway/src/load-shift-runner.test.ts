@@ -41,6 +41,41 @@ describe("LoadShiftRunner", () => {
     expect(runner.pausedDevices).toEqual([]);
   });
 
+  it("resumes a paused load if the tariff is cleared (never stranded off)", async () => {
+    const ops: { id: string; on: boolean }[] = [];
+    let active: Tariff | undefined = tariff;
+    const runner = new LoadShiftRunner({
+      getTariff: async () => active,
+      getDeferrableDeviceIds: async () => ["ev"],
+      getCeiling: async () => undefined,
+      setDeviceOn: async (id, on) => void ops.push({ id, on }),
+      now: () => monday(18), // peak
+    });
+    await runner.tick(); // peak → pause ev
+    expect(runner.pausedDevices).toEqual(["ev"]);
+    active = undefined; // tariff removed
+    await runner.tick(); // must resume ev rather than strand it
+    expect(ops.at(-1)).toEqual({ id: "ev", on: true });
+    expect(runner.pausedDevices).toEqual([]);
+  });
+
+  it("resumes a paused load that's removed from the deferrable list", async () => {
+    const ops: { id: string; on: boolean }[] = [];
+    let devices = ["ev"];
+    const runner = new LoadShiftRunner({
+      getTariff: async () => tariff,
+      getDeferrableDeviceIds: async () => devices,
+      getCeiling: async () => undefined,
+      setDeviceOn: async (id, on) => void ops.push({ id, on }),
+      now: () => monday(18),
+    });
+    await runner.tick(); // pause ev
+    devices = []; // owner removes ev from the list
+    await runner.tick();
+    expect(ops.at(-1)).toEqual({ id: "ev", on: true });
+    expect(runner.pausedDevices).toEqual([]);
+  });
+
   it("does nothing without a tariff or deferrable devices", async () => {
     const ops: unknown[] = [];
     const noDevices = new LoadShiftRunner({ getTariff: async () => tariff, getDeferrableDeviceIds: async () => [], getCeiling: async () => undefined, setDeviceOn: async () => void ops.push(1), now: () => monday(18) });

@@ -220,13 +220,16 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
   app.put("/v1/energy/deferrable-loads", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
-      await enforce(ctx, user, "home", null, "control");
+      await enforce(ctx, user, "home", null, "update");
       const body = (req.body ?? {}) as { deviceIds?: unknown; ceiling?: number };
       if (!Array.isArray(body.deviceIds) || body.deviceIds.some((d) => typeof d !== "string")) {
         throw new SupremeError("validation_failed", "deviceIds must be an array of device ids");
       }
+      if (body.ceiling !== undefined && (!Number.isFinite(body.ceiling) || body.ceiling < 0)) {
+        throw new SupremeError("validation_failed", "ceiling must be a non-negative number (per-kWh rate)");
+      }
       await ctx.homeConfig.set(ctx.homeId, "deferrable_loads", body.deviceIds);
-      if (typeof body.ceiling === "number") await ctx.homeConfig.set(ctx.homeId, "load_shift_ceiling", body.ceiling);
+      if (body.ceiling !== undefined) await ctx.homeConfig.set(ctx.homeId, "load_shift_ceiling", body.ceiling);
       reply.send({ deviceIds: body.deviceIds });
     } catch (err) {
       sendError(reply, err);
@@ -268,7 +271,7 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
   app.put("/v1/climate/program", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
-      await enforce(ctx, user, "home", null, "admin");
+      await enforce(ctx, user, "home", null, "update");
       const body = (req.body ?? {}) as { program?: unknown };
       let program;
       try {
