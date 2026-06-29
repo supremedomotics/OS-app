@@ -12,7 +12,7 @@ import {
   type EnergySummaryResponse,
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
-import { budgetStatus, computeEnergyCost, loadShiftDecision, TariffError } from "@supreme/analytics";
+import { applyGroupCost, bucketCostHistory, budgetStatus, computeEnergyCost, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
 import { validateVentilationConfig, VentilationError } from "../ventilation-runner.js";
 import type { FastifyInstance } from "fastify";
@@ -153,6 +153,70 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       }
       await ctx.homeConfig.set(ctx.homeId, "tariff", t);
       reply.send({ tariff: t });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Electricity provider + flat-rate costing (per-room / per-device / history) ─
+  // Set the home's country/city/provider; resolves a per-kWh rate (manual > live provider lookup >
+  // curated country default) and stores it for the cost views.
+  app.get("/v1/energy/provider", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      reply.send({ provider: (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) ?? null });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/energy/provider", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "update");
+      const b = (req.body ?? {}) as { country?: string; city?: string; provider?: string; ratePerKwh?: number; currency?: string };
+      let resolved;
+      try {
+        resolved = await resolveRateAsync({ country: b.country ?? "", city: b.city, provider: b.provider, ratePerKwh: b.ratePerKwh, currency: b.currency }, ctx.rateFetcher ?? undefined);
+      } catch (err) {
+        if (err instanceof RateError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "energy_provider", resolved);
+      reply.send({ provider: resolved });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Cost breakdown grouped per device or per room over a range.
+  app.get<{ Querystring: { groupBy?: string; from?: string; to?: string } }>("/v1/energy/breakdown", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const analytics = requireAnalytics(ctx);
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined;
+      if (!provider) throw new SupremeError("conflict", "configure your electricity provider first (PUT /v1/energy/provider)");
+      const groupBy = req.query.groupBy === "room" ? "room" : "device";
+      const groups = await analytics.energyByGroup(ctx.homeId, groupBy, req.query.from, req.query.to);
+      reply.send({ currency: provider.currency, groupBy, groups: applyGroupCost(groups, provider.ratePerKwh) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Cost history bucketed by day / week / month / year (optionally for a single device).
+  app.get<{ Querystring: { bucket?: string; from?: string; to?: string; deviceId?: string } }>("/v1/energy/history", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const analytics = requireAnalytics(ctx);
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined;
+      if (!provider) throw new SupremeError("conflict", "configure your electricity provider first (PUT /v1/energy/provider)");
+      const bucket = (["day", "week", "month", "year"].includes(req.query.bucket ?? "") ? req.query.bucket : "day") as Parameters<typeof bucketCostHistory>[1];
+      const days = await analytics.energyDailySeries(ctx.homeId, req.query.from, req.query.to, req.query.deviceId);
+      reply.send({ currency: provider.currency, bucket, history: bucketCostHistory(days, bucket, provider.ratePerKwh) });
     } catch (err) {
       sendError(reply, err);
     }

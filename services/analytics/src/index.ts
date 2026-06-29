@@ -16,6 +16,25 @@ export {
   type LoadShiftOptions,
 } from "./load-shift.js";
 export {
+  resolveRate,
+  resolveRateAsync,
+  COUNTRY_RATES,
+  RateError,
+  type ProviderQuery,
+  type ResolvedRate,
+  type ElectricityRate,
+  type RateFetcher,
+} from "./rates.js";
+export {
+  bucketCostHistory,
+  applyGroupCost,
+  type HistoryBucket,
+  type DailyEnergy,
+  type CostBucket,
+  type GroupConsumption,
+  type GroupCost,
+} from "./cost-history.js";
+export {
   computeEnergyCost,
   budgetStatus,
   TariffError,
@@ -162,5 +181,33 @@ export class AnalyticsService {
       [homeId, from ?? null, to ?? null],
     );
     return rows.map((r) => ({ ts: r.ts, kwh: Number(r.kwh) }));
+  }
+
+  /** Per-device or per-room energy (kWh) over a range — for the cost breakdown. */
+  async energyByGroup(homeId: HomeId, groupBy: "device" | "room", from?: string, to?: string): Promise<{ key: string; kwh: number }[]> {
+    const col = groupBy === "room" ? "COALESCE(room_id, 'unassigned')" : "device_id";
+    const { rows } = await this.db.query<{ key: string; kwh: number }>(
+      `SELECT ${col} AS key, SUM(value) AS kwh
+         FROM energy_samples
+        WHERE home_id = $1 AND measure = 'energy'
+          AND ($2::text IS NULL OR ts >= $2) AND ($3::text IS NULL OR ts <= $3)
+        GROUP BY ${col} ORDER BY kwh DESC`,
+      [homeId, from ?? null, to ?? null],
+    );
+    return rows.map((r) => ({ key: r.key, kwh: Number(r.kwh) }));
+  }
+
+  /** Per-day energy (kWh) for the home or a single device — rolled into history buckets by the caller. */
+  async energyDailySeries(homeId: HomeId, from?: string, to?: string, deviceId?: string): Promise<{ day: string; kwh: number }[]> {
+    const { rows } = await this.db.query<{ day: string; kwh: number }>(
+      `SELECT substr(ts, 1, 10) AS day, SUM(value) AS kwh
+         FROM energy_samples
+        WHERE home_id = $1 AND measure = 'energy'
+          AND ($2::text IS NULL OR device_id = $2)
+          AND ($3::text IS NULL OR ts >= $3) AND ($4::text IS NULL OR ts <= $4)
+        GROUP BY substr(ts, 1, 10) ORDER BY 1`,
+      [homeId, deviceId ?? null, from ?? null, to ?? null],
+    );
+    return rows.map((r) => ({ day: r.day, kwh: Number(r.kwh) }));
   }
 }

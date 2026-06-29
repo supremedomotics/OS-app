@@ -57,7 +57,7 @@ import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
 import { LoadShiftRunner } from "./load-shift-runner.js";
 import { VentilationRunner, type VentilationConfig } from "./ventilation-runner.js";
 import type { ClimateProgram } from "@supreme/automations";
-import type { Tariff } from "@supreme/analytics";
+import type { Tariff, RateFetcher } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
 import type { SceneId } from "@supreme/domain-model";
 
@@ -79,6 +79,8 @@ export interface AppDeps {
   voicePublisher?: VoiceStatePublisher;
   /** HomeKit HAP transport (hap-nodejs-backed). Present → the local HomeKit bridge is enabled. */
   homekitTransport?: HapTransport;
+  /** Optional live electricity-rate lookup (a provider/tariff API wired at the hub edge). */
+  rateFetcher?: RateFetcher;
   /** Cross-process event bus (NATS in prod); defaults to in-process. */
   bus?: IEventBus;
   /** Shared presence store (Redis in prod); defaults to in-process. */
@@ -161,6 +163,8 @@ export class AppContext {
   readonly loadShiftRunner: LoadShiftRunner;
   /** Adaptive ventilation: runs a fan from an air-quality sensor with hysteresis (§16). */
   readonly ventilationRunner: VentilationRunner;
+  /** Optional live electricity-rate lookup; null = use the curated table / manual rate. */
+  readonly rateFetcher: RateFetcher | null;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -180,6 +184,7 @@ export class AppContext {
     this.presence = deps.presence ?? new InMemoryPresenceStore();
     this.matter = deps.matter ?? null;
     this.voicePublisher = deps.voicePublisher ?? null;
+    this.rateFetcher = deps.rateFetcher ?? null;
     this.occupancy = new OccupancyRunner({
       command: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
     });
