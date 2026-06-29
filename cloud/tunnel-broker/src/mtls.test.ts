@@ -98,9 +98,13 @@ describe("mTLS tunnel transport", () => {
         s.destroy();
         resolve(v);
       };
+      // A server-side mTLS rejection of the client cert surfaces as error/close (it can arrive AFTER
+      // the client's own secureConnect, so we must NOT treat secureConnect as success). If neither
+      // fires within the window, the handshake was accepted. The window is generous so a slow
+      // rejection under CI load isn't misread as "connected" — the source of intermittent flakes.
       s.on("error", () => finish("rejected"));
       s.on("close", () => finish("rejected"));
-      const t = setTimeout(() => finish("connected"), 250);
+      const t = setTimeout(() => finish("connected"), 1500);
       t.unref?.();
     });
   }
