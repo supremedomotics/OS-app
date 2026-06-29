@@ -14,6 +14,7 @@ import {
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
 import { budgetStatus, computeEnergyCost, loadShiftDecision, TariffError } from "@supreme/analytics";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
+import { validateVentilationConfig, VentilationError } from "../ventilation-runner.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -251,6 +252,37 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       const ceiling = (await ctx.homeConfig.get(ctx.homeId, "load_shift_ceiling")) as number | undefined;
       const decision = loadShiftDecision(tariff, now.getHours() * 60 + now.getMinutes(), weekend, ceiling !== undefined ? { maxRunRatePerKwh: ceiling } : {});
       reply.send({ decision, pausedNow: ctx.loadShiftRunner.pausedDevices });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Adaptive ventilation (air-quality-driven fan) ────────────────────────────
+  app.get("/v1/ventilation/config", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const config = await ctx.homeConfig.get(ctx.homeId, "ventilation");
+      reply.send({ config: config ?? null, fanOn: ctx.ventilationRunner.currentFanState });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/ventilation/config", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "update");
+      const body = (req.body ?? {}) as { config?: unknown };
+      let config;
+      try {
+        config = validateVentilationConfig(body.config);
+      } catch (err) {
+        if (err instanceof VentilationError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "ventilation", config);
+      reply.send({ config });
     } catch (err) {
       sendError(reply, err);
     }

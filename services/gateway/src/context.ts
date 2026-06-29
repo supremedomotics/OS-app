@@ -55,6 +55,7 @@ import { SceneScheduler } from "./scene-scheduler.js";
 import { ClimateProgramRunner } from "./climate-runner.js";
 import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
 import { LoadShiftRunner } from "./load-shift-runner.js";
+import { VentilationRunner, type VentilationConfig } from "./ventilation-runner.js";
 import type { ClimateProgram } from "@supreme/automations";
 import type { Tariff } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
@@ -158,6 +159,8 @@ export class AppContext {
   readonly alertRunner: AlertRuleRunner;
   /** Pauses/resumes deferrable loads to avoid peak-rate hours (§16). */
   readonly loadShiftRunner: LoadShiftRunner;
+  /** Adaptive ventilation: runs a fan from an air-quality sensor with hysteresis (§16). */
+  readonly ventilationRunner: VentilationRunner;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -210,6 +213,15 @@ export class AppContext {
       getDeferrableDeviceIds: async () => ((await this.homeConfig.get(this.homeId, "deferrable_loads")) as string[] | undefined) ?? [],
       getCeiling: async () => (await this.homeConfig.get(this.homeId, "load_shift_ceiling")) as number | undefined,
       setDeviceOn: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
+    });
+    this.ventilationRunner = new VentilationRunner({
+      getConfig: async () => (await this.homeConfig.get(this.homeId, "ventilation")) as VentilationConfig | undefined,
+      readSensor: async (deviceId) => {
+        const d = await this.home.getDevice(deviceId as DeviceId);
+        const s = d?.state?.sensor as { value?: number } | undefined;
+        return typeof s?.value === "number" ? s.value : undefined;
+      },
+      setFan: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,

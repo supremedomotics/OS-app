@@ -70,6 +70,7 @@ async function main(): Promise<void> {
     guard("climate", ctx.climateRunner.tick());
     guard("alerts", ctx.alertRunner.tick());
     guard("loadShift", ctx.loadShiftRunner.tick());
+    guard("ventilation", ctx.ventilationRunner.tick());
     guard("occupancy", ctx.occupancy.tickNow());
     guard("expiry", ctx.sweepExpiredAccess());
   }, 60_000);
