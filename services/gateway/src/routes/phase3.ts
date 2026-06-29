@@ -12,7 +12,7 @@ import {
   type EnergySummaryResponse,
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
-import { applyGroupCost, bucketCostHistory, budgetStatus, computeEnergyCost, costHistoryToCsv, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
+import { applyGroupCost, bucketCostHistory, budgetStatus, compareGroupCost, computeEnergyCost, costHistoryToCsv, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
 import { BudgetError, validateBudget, type EnergyBudget } from "../budget-monitor.js";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
 import { validateVentilationConfig, VentilationError } from "../ventilation-runner.js";
@@ -202,6 +202,31 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       const groupBy = req.query.groupBy === "room" ? "room" : "device";
       const groups = await analytics.energyByGroup(ctx.homeId, groupBy, req.query.from, req.query.to);
       reply.send({ currency: provider.currency, groupBy, groups: applyGroupCost(groups, provider.ratePerKwh) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // This-month-vs-last-month per device/room, so the app can show what's trending up or down.
+  app.get<{ Querystring: { groupBy?: string } }>("/v1/energy/compare", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const analytics = requireAnalytics(ctx);
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined;
+      if (!provider) throw new SupremeError("conflict", "configure your electricity provider first (PUT /v1/energy/provider)");
+      const groupBy = req.query.groupBy === "room" ? "room" : "device";
+      const now = new Date();
+      const y = now.getUTCFullYear();
+      const m = now.getUTCMonth();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const thisMonth = `${y}-${pad(m + 1)}-01`;
+      const lastMonth = `${m === 0 ? y - 1 : y}-${pad(m === 0 ? 12 : m)}-01`;
+      const [current, previous] = await Promise.all([
+        analytics.energyByGroup(ctx.homeId, groupBy, thisMonth),
+        analytics.energyByGroup(ctx.homeId, groupBy, lastMonth, thisMonth),
+      ]);
+      reply.send({ currency: provider.currency, groupBy, groups: compareGroupCost(current, previous, provider.ratePerKwh) });
     } catch (err) {
       sendError(reply, err);
     }

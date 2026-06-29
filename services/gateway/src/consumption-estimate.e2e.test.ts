@@ -123,4 +123,18 @@ describe("consumption estimator → per-device cost", () => {
     expect(res.status!.overBudget).toBe(true);
     expect(res.status!.projectedMonthEnd).toBeGreaterThan(0.01);
   });
+
+  it("compares this month's per-device spend (no baseline last month → null delta)", async () => {
+    // Only the estimator-fed device consumed this month, so it's the sole compared group; with a
+    // fresh DB there's no previous-month baseline → prevCost 0 and a null delta.
+    const res = (await (
+      await fetch(`${baseUrl}/v1/energy/compare?groupBy=device`, { headers: auth() })
+    ).json()) as { currency: string; groups: { key: string; cost: number; prevCost: number; deltaPct: number | null }[] };
+    expect(res.currency).toBe("USD");
+    expect(res.groups.length).toBeGreaterThan(0);
+    const row = res.groups[0]!;
+    expect(row.cost).toBeGreaterThan(0);
+    expect(row.prevCost).toBe(0);
+    expect(row.deltaPct).toBeNull();
+  });
 });

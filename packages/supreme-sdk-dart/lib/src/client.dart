@@ -357,6 +357,16 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// This-month-vs-last-month cost per `device` or `room`; each group carries `prevCost`
+  /// and a `deltaPct` (null when there was no consumption last month).
+  Future<Map<String, dynamic>> energyCompare(String groupBy) async {
+    final res = await _http.get(
+        Uri.parse('$baseUrl/v1/energy/compare').replace(queryParameters: {'groupBy': groupBy}),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Cost history bucketed by `day` | `week` | `month` | `year`, optionally for one device.
   Future<Map<String, dynamic>> energyHistory(String bucket,
       {String? from, String? to, String? deviceId}) async {

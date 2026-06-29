@@ -280,8 +280,23 @@ class _RunningCostsCard extends ConsumerStatefulWidget {
 class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
   String _groupBy = 'device';
   String _bucket = 'month';
+  bool _compare = false;
 
   String _money(String currency, num v) => '$currency ${v.toStringAsFixed(2)}';
+
+  /// "▲12%" / "▼8%" chip for a month-over-month delta; null delta (no baseline) → nothing.
+  Widget _delta(TextTheme text, num? deltaPct) {
+    if (deltaPct == null) return const SizedBox.shrink();
+    final up = deltaPct > 0;
+    final flat = deltaPct == 0;
+    return Padding(
+      padding: const EdgeInsets.only(right: AureonSpacing.sm),
+      child: Text(
+        flat ? '–' : '${up ? '▲' : '▼'}${deltaPct.abs()}%',
+        style: text.labelSmall?.copyWith(color: up ? AureonGold.c400 : Colors.greenAccent),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -312,7 +327,7 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
 
   Widget _costs(BuildContext context, TextTheme text, Map<String, dynamic> p) {
     final currency = p['currency'] as String? ?? '';
-    final breakdown = ref.watch(energyBreakdownProvider(_groupBy));
+    final breakdown = _compare ? ref.watch(energyCompareProvider(_groupBy)) : ref.watch(energyBreakdownProvider(_groupBy));
     final history = ref.watch(energyHistoryProvider(_bucket));
     final names = ref.watch(allDevicesProvider);
     final home = ref.watch(homeProvider);
@@ -334,13 +349,25 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
           ],
         ),
         const SizedBox(height: AureonSpacing.sm),
-        SegmentedButton<String>(
-          segments: const [
-            ButtonSegment(value: 'device', label: Text('Device')),
-            ButtonSegment(value: 'room', label: Text('Room')),
+        Row(
+          children: [
+            Expanded(
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'device', label: Text('Device')),
+                  ButtonSegment(value: 'room', label: Text('Room')),
+                ],
+                selected: {_groupBy},
+                onSelectionChanged: (s) => setState(() => _groupBy = s.first),
+              ),
+            ),
+            const SizedBox(width: AureonSpacing.sm),
+            FilterChip(
+              label: const Text('vs last month'),
+              selected: _compare,
+              onSelected: (v) => setState(() => _compare = v),
+            ),
           ],
-          selected: {_groupBy},
-          onSelectionChanged: (s) => setState(() => _groupBy = s.first),
         ),
         const SizedBox(height: AureonSpacing.sm),
         breakdown.when(
@@ -357,8 +384,11 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
                     child: Row(
                       children: [
                         Expanded(child: Text(label(g['key'] as String), overflow: TextOverflow.ellipsis)),
-                        Text('${(g['kwh'] as num).toStringAsFixed(1)} kWh', style: text.labelMedium),
-                        const SizedBox(width: AureonSpacing.md),
+                        if (_compare) _delta(text, g['deltaPct'] as num?),
+                        if (!_compare) ...[
+                          Text('${(g['kwh'] as num).toStringAsFixed(1)} kWh', style: text.labelMedium),
+                          const SizedBox(width: AureonSpacing.md),
+                        ],
                         Text(_money(currency, g['cost'] as num), style: text.bodyMedium?.copyWith(color: AureonGold.c400)),
                       ],
                     ),

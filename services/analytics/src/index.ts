@@ -28,11 +28,13 @@ export {
 export {
   bucketCostHistory,
   applyGroupCost,
+  compareGroupCost,
   type HistoryBucket,
   type DailyEnergy,
   type CostBucket,
   type GroupConsumption,
   type GroupCost,
+  type GroupDelta,
 } from "./cost-history.js";
 export { costHistoryToCsv, costBreakdownToCsv } from "./cost-export.js";
 export {

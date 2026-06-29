@@ -74,3 +74,31 @@ export function applyGroupCost(groups: GroupConsumption[], ratePerKwh: number): 
     .map((g) => ({ key: g.key, kwh: round2(g.kwh), cost: round2(g.kwh * ratePerKwh) }))
     .sort((a, b) => b.cost - a.cost);
 }
+
+export interface GroupDelta extends GroupCost {
+  /** Cost in the previous comparison period (0 if the group had no consumption then). */
+  prevCost: number;
+  /** Percent change in kWh vs the previous period, rounded; null when there's no baseline. */
+  deltaPct: number | null;
+}
+
+/**
+ * Compare current-period per-group consumption against a previous period (e.g. this month vs last),
+ * so the app can show each device/room's cost and whether it's trending up or down. Groups present
+ * only in the previous period are omitted (we report on what's consuming now); highest cost first.
+ */
+export function compareGroupCost(current: GroupConsumption[], previous: GroupConsumption[], ratePerKwh: number): GroupDelta[] {
+  const prev = new Map(previous.map((g) => [g.key, g.kwh]));
+  return current
+    .map((g) => {
+      const prevKwh = prev.get(g.key) ?? 0;
+      return {
+        key: g.key,
+        kwh: round2(g.kwh),
+        cost: round2(g.kwh * ratePerKwh),
+        prevCost: round2(prevKwh * ratePerKwh),
+        deltaPct: prevKwh > 0 ? Math.round(((g.kwh - prevKwh) / prevKwh) * 100) : null,
+      };
+    })
+    .sort((a, b) => b.cost - a.cost);
+}

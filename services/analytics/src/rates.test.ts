@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyGroupCost, bucketCostHistory, RateError, resolveRate, resolveRateAsync } from "./index.js";
+import { applyGroupCost, bucketCostHistory, compareGroupCost, RateError, resolveRate, resolveRateAsync } from "./index.js";
 
 describe("resolveRate", () => {
   it("uses a manual rate when provided (most accurate)", () => {
@@ -78,5 +78,27 @@ describe("applyGroupCost", () => {
       { key: "kitchen", kwh: 12, cost: 2.4 },
       { key: "lr", kwh: 5, cost: 1 },
     ]);
+  });
+});
+
+describe("compareGroupCost", () => {
+  it("reports each current group's cost and percent change vs the previous period", () => {
+    const current = [{ key: "kitchen", kwh: 12 }, { key: "lr", kwh: 5 }];
+    const previous = [{ key: "kitchen", kwh: 10 }, { key: "lr", kwh: 10 }];
+    expect(compareGroupCost(current, previous, 0.2)).toEqual([
+      { key: "kitchen", kwh: 12, cost: 2.4, prevCost: 2, deltaPct: 20 }, // 10 → 12 = +20%
+      { key: "lr", kwh: 5, cost: 1, prevCost: 2, deltaPct: -50 }, //        10 → 5  = -50%
+    ]);
+  });
+
+  it("uses a null delta when the group had no baseline last period", () => {
+    expect(compareGroupCost([{ key: "new", kwh: 3 }], [], 1)).toEqual([
+      { key: "new", kwh: 3, cost: 3, prevCost: 0, deltaPct: null },
+    ]);
+  });
+
+  it("omits groups that only consumed in the previous period", () => {
+    const out = compareGroupCost([{ key: "a", kwh: 1 }], [{ key: "a", kwh: 1 }, { key: "gone", kwh: 9 }], 1);
+    expect(out.map((g) => g.key)).toEqual(["a"]);
   });
 });
