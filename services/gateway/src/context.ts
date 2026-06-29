@@ -56,6 +56,7 @@ import { ClimateProgramRunner } from "./climate-runner.js";
 import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
 import { LoadShiftRunner } from "./load-shift-runner.js";
 import { VentilationRunner, type VentilationConfig } from "./ventilation-runner.js";
+import { ConsumptionEstimator } from "./consumption-estimator.js";
 import type { ClimateProgram } from "@supreme/automations";
 import type { Tariff, RateFetcher } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
@@ -165,6 +166,8 @@ export class AppContext {
   readonly ventilationRunner: VentilationRunner;
   /** Optional live electricity-rate lookup; null = use the curated table / manual rate. */
   readonly rateFetcher: RateFetcher | null;
+  /** Estimates energy for non-metered devices from on-time × rated watts (§16). */
+  readonly consumptionEstimator: ConsumptionEstimator;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -227,6 +230,16 @@ export class AppContext {
         return typeof s?.value === "number" ? s.value : undefined;
       },
       setFan: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
+    });
+    this.consumptionEstimator = new ConsumptionEstimator({
+      getWatts: async () => ((await this.homeConfig.get(this.homeId, "device_watts")) as Record<string, number> | undefined) ?? {},
+      isOn: async (deviceId) => {
+        const d = await this.home.getDevice(deviceId as DeviceId);
+        return Boolean((d?.state?.onoff as { on?: boolean } | undefined)?.on);
+      },
+      roomOf: async (deviceId) => this.home.roomOf(deviceId as DeviceId),
+      record: (deviceId, roomId, kwh) =>
+        this.analytics?.record({ homeId: this.homeId, deviceId: deviceId as DeviceId, roomId: roomId as never, measure: "energy", value: kwh, unit: "kWh" }) ?? Promise.resolve(),
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,

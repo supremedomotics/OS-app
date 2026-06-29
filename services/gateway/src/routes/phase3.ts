@@ -222,6 +222,36 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
     }
   });
 
+  // Rated wattage per device, so the hub can estimate energy for non-metered devices.
+  app.get("/v1/energy/device-watts", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      reply.send({ watts: (await ctx.homeConfig.get(ctx.homeId, "device_watts")) ?? {} });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/energy/device-watts", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "update");
+      const body = (req.body ?? {}) as { watts?: unknown };
+      const w = body.watts;
+      if (!w || typeof w !== "object" || Array.isArray(w)) throw new SupremeError("validation_failed", "watts must be an object of deviceId → watts");
+      const cleaned: Record<string, number> = {};
+      for (const [id, val] of Object.entries(w as Record<string, unknown>)) {
+        if (typeof val !== "number" || !Number.isFinite(val) || val < 0 || val > 100000) throw new SupremeError("validation_failed", `watts for ${id} must be 0..100000`);
+        if (val > 0) cleaned[id] = val;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "device_watts", cleaned);
+      reply.send({ watts: cleaned });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Download the cost history as CSV (for the homeowner's records / their accountant).
   app.get<{ Querystring: { bucket?: string; from?: string; to?: string; deviceId?: string } }>("/v1/energy/history.csv", async (req, reply) => {
     try {
