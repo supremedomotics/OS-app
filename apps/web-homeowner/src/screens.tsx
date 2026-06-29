@@ -13,6 +13,7 @@ import type {
   Scene,
 } from "@supreme/domain-model";
 import { client } from "./api.js";
+import { roomImage } from "./room-image.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
@@ -124,12 +125,8 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
         {(home?.rooms ?? []).map((r) => (
           <div
             key={r.id}
-            className={`room-card${r.heroImageUrl ? " has-image" : ""}`}
-            style={
-              r.heroImageUrl
-                ? { backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${r.heroImageUrl})` }
-                : undefined
-            }
+            className="room-card has-image"
+            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r)})` }}
             onClick={() => onOpenRoom(r.id)}
           >
             <span className="name">{r.name}</span>
@@ -196,7 +193,12 @@ export function RoomsScreen({
       )}
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
-          <div key={r.id} className="room-card" onClick={() => onSelect(r.id)}>
+          <div
+            key={r.id}
+            className="room-card has-image"
+            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r)})` }}
+            onClick={() => onSelect(r.id)}
+          >
             <span className="name">{r.name}</span>
           </div>
         ))}
@@ -223,8 +225,8 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
       </button>
       {/* Room hero — entering a room should feel like entering the space. */}
       <div
-        className="hero room"
-        style={heroImageUrl ? { backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,0.66)), url(${heroImageUrl})` } : undefined}
+        className="hero room has-image"
+        style={{ backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,0.66)), url(${roomImage({ name, heroImageUrl })})` }}
       >
         <div className="hero-top">{name}</div>
         <div className="hero-stats">
@@ -335,11 +337,40 @@ function DeviceIcon({ kind, on }: { kind: "light" | "cover" | "switch" | "sensor
 const SCENE_ORDER_KEY = "supreme.sceneOrder";
 
 export function Scenes() {
-  const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
+  const [scenes, refresh] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
   const [order, setOrder] = useState<string[]>([]);
   const [edit, setEdit] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  // "Add scene" snapshots the CURRENT state of every device, so the new scene recreates the room
+  // exactly as it is now. The user names it; later they can refine it in the automation builder.
+  async function addScene() {
+    const name = newName.trim();
+    if (!name) return;
+    try {
+      const devs = (await client.devices()).devices;
+      const steps: { deviceId: string; capability: string; values: Record<string, unknown> }[] = [];
+      for (const d of devs) {
+        const state = d.state as Record<string, Record<string, unknown>>;
+        for (const cap of ["onoff", "brightness", "color"]) {
+          if (d.capabilities.some((c) => c.kind === cap) && state[cap]) {
+            const { kind: _kind, ...values } = state[cap]!;
+            steps.push({ deviceId: d.id, capability: cap, values });
+          }
+        }
+      }
+      await client.createScene({ name, scope: "home", steps });
+      setNewName("");
+      setAdding(false);
+      setMsg(`Scene "${name}" saved`);
+      refresh();
+    } catch {
+      setMsg("Could not create the scene.");
+    }
+  }
 
   // Establish/merge the persisted custom order whenever the scene set changes.
   useEffect(() => {
@@ -376,10 +407,21 @@ export function Scenes() {
           <p className="sub" style={{ margin: 0 }}>One tap to set the mood</p>
           <h1 className="title">Scenes</h1>
         </div>
-        <button className={`edit-btn${edit ? " on" : ""}`} onClick={() => (edit ? save() : setEdit(true))}>
-          {edit ? "Save" : "Edit"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="primary" onClick={() => setAdding((v) => !v)}>{adding ? "Cancel" : "+ Add scene"}</button>
+          <button className={`edit-btn${edit ? " on" : ""}`} onClick={() => (edit ? save() : setEdit(true))}>
+            {edit ? "Save" : "Edit"}
+          </button>
+        </div>
       </div>
+
+      {adding && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <p className="muted" style={{ marginTop: 0 }}>Captures the current state of every device as a one-tap scene.</p>
+          <input placeholder="Scene name (e.g. Movie Night)" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addScene()} autoFocus />
+          <button className="primary" disabled={!newName.trim()} onClick={addScene} style={{ marginTop: 8 }}>Save current setup as scene</button>
+        </div>
+      )}
 
       <div className="scene-grid">
         {ordered.map((s) => (

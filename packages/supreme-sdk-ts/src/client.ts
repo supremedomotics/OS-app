@@ -146,8 +146,16 @@ export class SupremeClient {
   }
 
   // ── Homeowner surface (§11) ──────────────────────────────────────────────────
+  /** Flat, permission-filtered list of every device in the home. */
+  async devices(): Promise<DeviceList> {
+    return DeviceList.parse(await this.request("GET", "/v1/devices"));
+  }
   scenes(): Promise<SceneList> {
     return this.request("GET", "/v1/scenes") as Promise<SceneList>;
+  }
+  /** Create a scene (e.g. a snapshot of the current device states). */
+  createScene(input: { name: string; scope?: "room" | "home"; roomId?: string | null; icon?: string | null; steps: unknown[] }): Promise<{ scene: unknown }> {
+    return this.request("POST", "/v1/scenes", input) as Promise<{ scene: unknown }>;
   }
   activateScene(id: string): Promise<void> {
     return this.request("POST", `/v1/scenes/${id}/activate`) as Promise<void>;

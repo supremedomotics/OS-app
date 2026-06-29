@@ -317,7 +317,12 @@ button.link {
     radial-gradient(circle at center, #fff 0%, rgba(255,255,255,0) 72%),
     conic-gradient(from 0deg, hsl(0 90% 55%), hsl(60 90% 55%), hsl(120 90% 55%), hsl(180 90% 55%), hsl(240 90% 55%), hsl(300 90% 55%), hsl(360 90% 55%));
 }
-.disc.white { background: radial-gradient(circle at 50% 42%, #fff6e2 0%, #ffe9bd 42%, #f4d79a 100%); }
+/* White/CCT disc: a true warm→cool colour-temperature spectrum (2700K → 6500K), not a flat fill. */
+.disc.white {
+  background:
+    radial-gradient(circle at center, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 70%),
+    linear-gradient(105deg, #ff9b3d 0%, #ffd9a8 28%, #fff4e8 50%, #dcebff 72%, #a9ceff 100%);
+}
 .disc .node {
   position: absolute; width: 30px; height: 30px; border-radius: 50%; transform: translate(-50%, -50%);
   border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 3px 8px rgba(0,0,0,0.35); cursor: grab; touch-action: none;
@@ -326,9 +331,19 @@ button.link {
 .disc .node.off { border-color: rgba(255,255,255,0.7); }
 .disc-mode { background: none; border: 0; cursor: pointer; padding: 0; }
 .disc-mode .ring {
-  display: block; width: 30px; height: 30px; border-radius: 50%;
-  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  display: block; width: 30px; height: 30px; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
+/* The mode toggle's icon mirrors the active mode. */
+.disc-mode .ring.rgb { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.disc-mode .ring.cct { background: linear-gradient(90deg, #ff9b3d, #fff4e8, #a9ceff); }
+.tr-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  width: min(440px, 38vw); aspect-ratio: 1; border-radius: 50%;
+  background: var(--aureon-color-base-surface-raised); border: 1px dashed var(--aureon-color-base-hairline);
+  color: var(--aureon-color-text-secondary); text-align: center; gap: 6px;
+}
+.tr-empty .big { font-size: 48px; font-weight: 700; color: var(--aureon-color-text-primary); }
+.tr-empty .lbl { font-size: 14px; padding: 0 16px; }
 .tr-mosaic { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: minmax(96px, 1fr); gap: 16px; }
 .ctx {
   position: fixed; z-index: 30; background: #1b1d24; color: #fff; border-radius: 16px; padding: 8px; min-width: 200px;

@@ -73,18 +73,29 @@ export function TabletRoom({ roomId, name, onBack }: { roomId: string; name: str
           </div>
         </div>
 
-        {/* Centre — the multi-light disc */}
+        {/* Centre — the multi-light disc. Only meaningful when the room HAS colour-capable lights;
+            a room with none (or only on/off + dimmers) shows no wheel. */}
         <div className="tr-centre">
-          <MultiLightDisc
-            lights={lights}
-            mode={mode}
-            selected={selected}
-            onSelect={setSelected}
-            onChange={setColour}
-          />
-          <button className="disc-mode" onClick={() => setMode((m) => (m === "colour" ? "white" : "colour"))} title="Toggle colour / white">
-            <span className="ring" />
-          </button>
+          {lights.length > 0 ? (
+            <>
+              <MultiLightDisc
+                lights={lights}
+                mode={mode}
+                selected={selected}
+                onSelect={setSelected}
+                onChange={setColour}
+              />
+              <button className="disc-mode" onClick={() => setMode((m) => (m === "colour" ? "white" : "colour"))} title="Toggle colour / white">
+                {/* Icon reflects the active mode: rainbow for colour, warm→cool for white. */}
+                <span className={`ring ${mode === "white" ? "cct" : "rgb"}`} />
+              </button>
+            </>
+          ) : (
+            <div className="tr-empty">
+              <span className="big">{others.length}</span>
+              <span className="lbl">{others.length === 1 ? "device" : "devices"} · no colour lights</span>
+            </div>
+          )}
         </div>
 
         {/* Right — the bento mosaic of individual lights */}
