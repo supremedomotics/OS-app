@@ -25,6 +25,7 @@ import {
   seedFirstPartyCatalog,
   type IInstalledDriverStore,
 } from "@supreme/drivers";
+import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
 import {
   CommissioningService,
   groupIntoDevices,
@@ -85,6 +86,8 @@ export class InstallerServices {
   /** Licensing private key is present only in dev (enables local issuance). */
   private readonly licensingKeys: { publicKey: string; privateKey: string | null };
   private license: License | null = null;
+  /** Single source of truth for SKUs/features/driver licensing (Developer Mode + offline license). */
+  readonly licenseService: LicenseService;
 
   constructor(deps: InstallerDeps) {
     this.d = deps;
@@ -109,6 +112,15 @@ export class InstallerServices {
     });
 
     this.commissioning = new CommissioningService(deps.sil, deps.home, deps.scanners ?? []);
+
+    // Licensing Service — the single source of truth. Developer Mode (SUPREME_DEV_MODE) unlocks every
+    // SKU + feature; otherwise the offline (signed) license, if any, supplies the grant. Drivers ask
+    // this, never embed licensing. Sync providers → the first refresh settles before any install call.
+    this.licenseService = new LicenseService([
+      new DeveloperProvider(() => deps.config.devMode),
+      new CallbackProvider("offline", () => this.grantFromLicense()),
+    ]);
+    void this.licenseService.refresh();
 
     // Licensing: use the configured public key in prod; generate a dev pair so the
     // installer can issue + activate a license locally.
@@ -148,7 +160,10 @@ export class InstallerServices {
       signature: r.signature,
     };
     const res = validateLicense(candidate, this.licensingKeys.publicKey, { homeId: this.d.homeId });
-    if (res.valid) this.license = res.license;
+    if (res.valid) {
+      this.license = res.license;
+      await this.licenseService.refresh();
+    }
   }
 
   // ── Native protocol bindings (§3) ────────────────────────────────────────────
@@ -316,12 +331,26 @@ export class InstallerServices {
 
   // ── Licensing ──────────────────────────────────────────────────────────────
 
-  /** The set of SKUs the home is entitled to (tier-expanded). */
+  /** The set of SKUs the home is entitled to — delegated to the Licensing Service (Dev Mode aware). */
   licensedSkus(): Set<string> {
-    if (!this.license) return new Set();
+    return this.licenseService.licensedSkuSet();
+  }
+
+  /** Translate a stored signed License into a LicenseService grant (tier-expanded SKUs). */
+  private grantFromLicense(): ProviderGrant | null {
+    if (!this.license) return null;
     const idx = SKU_TIERS.indexOf(this.license.sku as (typeof SKU_TIERS)[number]);
     const skus = idx >= 0 ? SKU_TIERS.slice(0, idx + 1) : [this.license.sku];
-    return new Set(skus);
+    const tier: LicenseTier = this.license.sku === "estate" ? "enterprise" : this.license.sku === "pro" ? "professional" : "home";
+    return makeGrant({
+      source: "offline",
+      licenseType: this.license.sku === "estate" ? "enterprise" : "professional",
+      tier,
+      skus: [...skus],
+      features: this.license.features ?? [],
+      expiresAt: this.license.expiresAt ?? null,
+      licenseId: this.license.id,
+    });
   }
 
   licenseStatus() {
@@ -330,6 +359,8 @@ export class InstallerServices {
       skus: [...this.licensedSkus()],
       features: this.license?.features ?? [],
       license: this.license,
+      // The richer Licensing Service view (type, tier, devMode, full feature set, sources).
+      service: this.licenseService.status(),
     };
   }
 
@@ -347,6 +378,7 @@ export class InstallerServices {
           JSON.stringify(res.license.features), res.license.issuedAt, res.license.expiresAt, res.license.signature],
       );
     }
+    await this.licenseService.refresh();
   }
 
   /** Dev-only: issue a license with the local licensing key (cloud does this in prod). */

@@ -42,6 +42,7 @@
     "@supreme/automations": "workspace:*",
     "@supreme/analytics": "workspace:*",
     "@supreme/intelligence": "workspace:*",
+    "@supreme/license-service": "workspace:*",
     "@supreme/audit": "workspace:*",
     "@supreme/ai": "workspace:*",
     "@supreme/security": "workspace:*",

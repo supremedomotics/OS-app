@@ -28,6 +28,7 @@
     { "path": "../automations" },
     { "path": "../analytics" },
     { "path": "../intelligence" },
+    { "path": "../license" },
     { "path": "../audit" },
     { "path": "../ai" },
     { "path": "../security" },
