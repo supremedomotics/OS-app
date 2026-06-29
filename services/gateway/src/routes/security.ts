@@ -11,6 +11,7 @@ import {
 } from "@supreme/contracts";
 import type { DeviceId, RoomId } from "@supreme/domain-model";
 import { planOccupancy } from "@supreme/security";
+import { validateAlertRule, AlertRuleError } from "../alert-runner.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -93,6 +94,38 @@ export function registerSecurityRoutes(app: FastifyInstance, ctx: AppContext): v
       }
     },
   );
+
+  // ── Duration-based alert rules ───────────────────────────────────────────────
+  app.get("/v1/alerts/rules", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const rules = (await ctx.homeConfig.get(ctx.homeId, "alert_rules")) ?? [];
+      reply.send({ rules });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/alerts/rules", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "control");
+      const body = (req.body ?? {}) as { rules?: unknown[] };
+      if (!Array.isArray(body.rules)) throw new SupremeError("validation_failed", "rules must be an array");
+      let validated;
+      try {
+        validated = body.rules.map(validateAlertRule);
+      } catch (err) {
+        if (err instanceof AlertRuleError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "alert_rules", validated);
+      reply.send({ rules: validated });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
 
   app.post("/v1/security/occupancy/disable", async (req, reply) => {
     try {

@@ -53,6 +53,7 @@ import type { CapabilityCommand } from "@supreme/domain-model";
 import { OccupancyRunner } from "./occupancy-runner.js";
 import { SceneScheduler } from "./scene-scheduler.js";
 import { ClimateProgramRunner } from "./climate-runner.js";
+import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
 import type { ClimateProgram } from "@supreme/automations";
 import type { SceneSchedule } from "@supreme/scenes";
 import type { SceneId } from "@supreme/domain-model";
@@ -151,6 +152,8 @@ export class AppContext {
   readonly sceneScheduler: SceneScheduler;
   /** Applies the climate program's setpoint to thermostats on the minute tick. */
   readonly climateRunner: ClimateProgramRunner;
+  /** Evaluates duration-based alert rules (door left open / unlocked, light left on). */
+  readonly alertRunner: AlertRuleRunner;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -188,6 +191,15 @@ export class AppContext {
           }
         }
       },
+    });
+    this.alertRunner = new AlertRuleRunner({
+      getRules: async () => ((await this.homeConfig.get(this.homeId, "alert_rules")) as AlertRule[] | undefined) ?? [],
+      getDevice: async (deviceId) => {
+        const d = await this.home.getDevice(deviceId as DeviceId);
+        return d ? { name: d.name, state: d.state as Record<string, unknown> } : null;
+      },
+      notify: (message) =>
+        this.notifications.create({ homeId: this.homeId, level: "warning", title: "Home alert", body: message }).then(() => undefined),
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,

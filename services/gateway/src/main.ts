@@ -66,6 +66,7 @@ async function main(): Promise<void> {
     void ctx.automations.tick();
     void ctx.sceneScheduler.tick();
     void ctx.climateRunner.tick();
+    void ctx.alertRunner.tick();
     void ctx.sweepExpiredAccess();
   }, 60_000);
   tick.unref();
