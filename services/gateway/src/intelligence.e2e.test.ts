@@ -90,6 +90,12 @@ describe("Supreme Intelligence Engine routes", () => {
 
     const history = (await get("/v1/intelligence/history")) as { history: unknown[] };
     expect(Array.isArray(history.history)).toBe(true);
+
+    const report = (await get("/v1/intelligence/reports?period=month")) as { report: { period: string; co2SavedKg: number; approvalRate: number } };
+    expect(report.report.period).toBe("month");
+    expect(report.report).toHaveProperty("co2SavedKg");
+    const csv = await (await fetch(`${baseUrl}/v1/intelligence/reports.csv?period=year`, { headers: auth() })).text();
+    expect(csv).toContain("metric,value");
   });
 
   it("requires authentication", async () => {

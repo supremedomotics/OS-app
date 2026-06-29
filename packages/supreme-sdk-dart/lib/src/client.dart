@@ -440,6 +440,72 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  // ── Supreme Intelligence Engine (ADR 0013) ─────────────────────────────────
+
+  /// Dashboard roll-up: today/month savings, top devices, occupancy, pending suggestions.
+  Future<Map<String, dynamic>> intelligenceDashboard() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/intelligence/dashboard'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Pending proactive suggestions (e.g. "device left on while away") with their action sets.
+  Future<List<Map<String, dynamic>>> intelligenceSuggestions() async {
+    final res = await _http.get(
+        Uri.parse('$baseUrl/v1/intelligence/suggestions'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final list = (jsonDecode(res.body) as Map<String, dynamic>)['suggestions']
+            as List<dynamic>? ??
+        [];
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  /// Respond to a suggestion: turn_off | keep_on | ignore_today | always_ignore | enable_auto_pilot.
+  Future<void> respondSuggestion(String key, String action) async {
+    final res = await _http.post(
+        Uri.parse('$baseUrl/v1/intelligence/suggestions/${Uri.encodeComponent(key)}/respond'),
+        headers: _authHeaders,
+        body: jsonEncode({'action': action}));
+    _ensureOk(res);
+  }
+
+  /// The live presence map + zone/house occupancy from the most recent engine tick.
+  Future<Map<String, dynamic>> intelligencePresence() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/intelligence/presence'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// The Auto Pilot settings ({mode, threshold?, reminderMinutes?}).
+  Future<Map<String, dynamic>> intelligenceSettings() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/intelligence/settings'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['settings']
+        as Map<String, dynamic>;
+  }
+
+  /// Set the Auto Pilot mode (notify_only | approval | auto_pilot | adaptive).
+  Future<void> setIntelligenceSettings(String mode, {double? threshold}) async {
+    final res = await _http.put(Uri.parse('$baseUrl/v1/intelligence/settings'),
+        headers: _authHeaders,
+        body: jsonEncode({'mode': mode, if (threshold != null) 'threshold': threshold}));
+    _ensureOk(res);
+  }
+
+  /// A savings report for a period (day | week | month | year | lifetime).
+  Future<Map<String, dynamic>> intelligenceReport(String period) async {
+    final res = await _http.get(
+        Uri.parse('$baseUrl/v1/intelligence/reports').replace(queryParameters: {'period': period}),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['report']
+        as Map<String, dynamic>;
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),

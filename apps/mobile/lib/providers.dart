@@ -140,6 +140,26 @@ final energyCompareProvider =
   return ref.watch(clientProvider).energyCompare(groupBy);
 });
 
+// ── Supreme Intelligence Engine (ADR 0013) ──────────────────────────────────
+
+/// Intelligence dashboard roll-up (today/month savings, occupancy, top devices).
+final intelligenceDashboardProvider =
+    FutureProvider<Map<String, dynamic>>((ref) async {
+  return ref.watch(clientProvider).intelligenceDashboard();
+});
+
+/// Pending proactive suggestions awaiting the user's response.
+final intelligenceSuggestionsProvider =
+    FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  return ref.watch(clientProvider).intelligenceSuggestions();
+});
+
+/// The Auto Pilot settings ({mode, threshold?}).
+final intelligenceSettingsProvider =
+    FutureProvider<Map<String, dynamic>>((ref) async {
+  return ref.watch(clientProvider).intelligenceSettings();
+});
+
 /// Cameras registered on the home (§11.1).
 final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();

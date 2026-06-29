@@ -1,5 +1,5 @@
 import { SupremeError } from "@supreme/contracts";
-import { AUTO_PILOT_MODES, type AutoPilotMode, type AutoPilotSettings, DeviceIntelError, type SuggestionAction, validateDeviceIntelMap, type Zone } from "@supreme/intelligence";
+import { AUTO_PILOT_MODES, type AutoPilotMode, type AutoPilotSettings, buildIntelligenceReport, DeviceIntelError, REPORT_PERIODS, type ReportPeriod, reportToCsv, type SuggestionAction, validateDeviceIntelMap, type Zone } from "@supreme/intelligence";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -143,6 +143,37 @@ export function registerIntelligenceRoutes(app: FastifyInstance, ctx: AppContext
     }
   });
 
+  // ── Reports (daily / weekly / monthly / yearly / lifetime) ─────────────────
+  app.get<{ Querystring: { period?: string } }>("/v1/intelligence/reports", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const repo = requireIntelligence(ctx);
+      const period = (REPORT_PERIODS.includes(req.query.period as ReportPeriod) ? req.query.period : "month") as ReportPeriod;
+      const from = periodStart(period);
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { currency: string } | undefined;
+      const agg = await repo.aggregate(ctx.homeId, from);
+      reply.send({ report: buildIntelligenceReport(period, agg, { currency: provider?.currency ?? null }) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get<{ Querystring: { period?: string } }>("/v1/intelligence/reports.csv", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const repo = requireIntelligence(ctx);
+      const period = (REPORT_PERIODS.includes(req.query.period as ReportPeriod) ? req.query.period : "month") as ReportPeriod;
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { currency: string } | undefined;
+      const agg = await repo.aggregate(ctx.homeId, periodStart(period));
+      const csv = reportToCsv(buildIntelligenceReport(period, agg, { currency: provider?.currency ?? null }));
+      reply.header("content-type", "text/csv; charset=utf-8").header("content-disposition", `attachment; filename="intelligence-report-${period}.csv"`).send(csv);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Dashboard roll-up ──────────────────────────────────────────────────────
   app.get("/v1/intelligence/dashboard", async (req, reply) => {
     try {
@@ -183,6 +214,25 @@ function validateZones(v: unknown): Zone[] {
     if (!Array.isArray(o.roomIds) || o.roomIds.some((r) => typeof r !== "string")) throw new SupremeError("validation_failed", `zone ${i} roomIds must be strings`);
     return { id: o.id, name: o.name, roomIds: o.roomIds as string[] };
   });
+}
+
+/** ISO start of the report window for a period (undefined = lifetime / all time). */
+function periodStart(period: ReportPeriod): string | undefined {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  switch (period) {
+    case "day":
+      return `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+    case "week":
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    case "month":
+      return new Date(Date.UTC(y, m, 1)).toISOString();
+    case "year":
+      return new Date(Date.UTC(y, 0, 1)).toISOString();
+    case "lifetime":
+      return undefined;
+  }
 }
 
 function requireIntelligence(ctx: AppContext) {

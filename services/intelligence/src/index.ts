@@ -82,3 +82,13 @@ export {
   type AutoPilotDecision,
   type SuggestionState,
 } from "./autopilot.js";
+
+export {
+  buildIntelligenceReport,
+  reportToCsv,
+  REPORT_PERIODS,
+  type ReportPeriod,
+  type ReportAggregate,
+  type ReportOptions,
+  type IntelligenceReport,
+} from "./reports.js";

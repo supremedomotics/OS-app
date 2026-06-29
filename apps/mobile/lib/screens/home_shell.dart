@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'alerts_screen.dart';
 import 'assistant_screen.dart';
 import 'dashboard.dart';
+import 'intelligence_screen.dart';
 import 'room_view.dart';
 import 'scenes_screen.dart';
 import 'security_screen.dart';
@@ -26,6 +27,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     DashboardScreen(),
     HomePager(),
     ScenesScreen(),
+    IntelligenceScreen(),
     SecurityScreen(),
     AlertsScreen(),
     SettingsScreen(),
@@ -51,6 +53,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               icon: Icon(Icons.meeting_room_outlined), label: 'Rooms'),
           NavigationDestination(
               icon: Icon(Icons.auto_awesome_outlined), label: 'Scenes'),
+          NavigationDestination(
+              icon: Icon(Icons.insights_outlined), label: 'Smart'),
           NavigationDestination(
               icon: Icon(Icons.shield_outlined), label: 'Security'),
           NavigationDestination(
