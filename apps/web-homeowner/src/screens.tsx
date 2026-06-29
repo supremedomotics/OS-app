@@ -148,8 +148,24 @@ export function RoomsScreen({
   selected: string | null;
   onSelect: (roomId: string | null) => void;
 }) {
-  const [home] = useAsync<HomeView>(() => client.home());
+  const [home, refresh] = useAsync<HomeView>(() => client.home());
   const wide = useWide();
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  async function createRoom() {
+    if (!newName.trim()) return;
+    try {
+      await client.createRoom({ name: newName.trim() });
+      setNewName("");
+      setAdding(false);
+      setErr(null);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not add the room.");
+    }
+  }
 
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
@@ -166,8 +182,18 @@ export function RoomsScreen({
 
   return (
     <div>
-      <h1 className="title">Rooms</h1>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <h1 className="title">Rooms</h1>
+        <button className="primary" onClick={() => setAdding((v) => !v)}>{adding ? "Cancel" : "+ Add room"}</button>
+      </div>
       <p className="sub">Choose a room to control.</p>
+      {adding && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <input placeholder="Room name (e.g. Home Gym)" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createRoom()} autoFocus />
+          {err && <p className="err">{err}</p>}
+          <button className="primary" disabled={!newName.trim()} onClick={createRoom} style={{ marginTop: 8 }}>Create room</button>
+        </div>
+      )}
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
           <div key={r.id} className="room-card" onClick={() => onSelect(r.id)}>

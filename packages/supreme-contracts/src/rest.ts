@@ -21,7 +21,10 @@ export const API_VERSION = "v1" as const;
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export const LoginRequest = z.object({
-  email: z.string().email(),
+  // Username OR email. Accounts set up with a bare username log in with that username; the gateway
+  // normalizes a username to its `<username>@supreme.local` identifier. So this is a plain non-empty
+  // string, not a strict email (which would reject valid usernames).
+  email: z.string().min(1),
   password: z.string().min(1),
 });
 export type LoginRequest = z.infer<typeof LoginRequest>;

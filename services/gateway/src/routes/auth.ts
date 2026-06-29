@@ -18,7 +18,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.post("/v1/auth/login", authLimit, async (req, reply) => {
     try {
       const body = LoginRequest.parse(req.body);
-      reply.send(await ctx.identity.login(body.email, body.password));
+      // Accept a username or an email; accounts created from a bare username log in as
+      // `<username>@supreme.local` (mirrors the Setup Wizard), so normalize the same way.
+      const identifier = body.email.includes("@") ? body.email : `${body.email.trim()}@supreme.local`;
+      reply.send(await ctx.identity.login(identifier, body.password));
     } catch (err) {
       sendError(reply, err);
     }

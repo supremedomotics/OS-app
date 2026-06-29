@@ -104,11 +104,20 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
     setError(null);
     setBusy(true);
     try {
-      const res = await client.login(email, password);
+      const res = await client.login(email.trim(), password);
       if (res.status === "ok") onAuthed();
       else setError("Two-factor authentication required");
-    } catch {
-      setError("Could not sign in. Check your details.");
+    } catch (e) {
+      // Surface the real reason (e.g. "invalid email or password") rather than a blanket message,
+      // and give a hint when the hub looks unreachable.
+      const msg = e instanceof Error ? e.message : "";
+      setError(
+        /failed to fetch|networkerror|load failed/i.test(msg)
+          ? "Can't reach the hub. Check it's running and reachable."
+          : msg && !/^\d+$/.test(msg)
+            ? msg
+            : "Could not sign in. Check your details.",
+      );
     } finally {
       setBusy(false);
     }
@@ -121,7 +130,7 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
       <h1>Supreme</h1>
       <p className="muted">Welcome home.</p>
       <form onSubmit={submit}>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email or username" />
         <PasswordInput value={password} onChange={setPassword} placeholder="Password" />
         {error && <p className="err">{error}</p>}
         <button className="primary" type="submit" disabled={busy}>

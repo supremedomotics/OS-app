@@ -111,6 +111,21 @@ export class SupremeClient {
     return HomeView.parse(await this.request("GET", "/v1/home"));
   }
 
+  /** Create a room (owner/admin/installer). */
+  async createRoom(input: { name: string; areaType?: string; floor?: number }): Promise<{ room: { id: string; name: string } }> {
+    return this.request("POST", "/v1/rooms", input) as Promise<{ room: { id: string; name: string } }>;
+  }
+
+  /** Rename / restyle a room. */
+  async updateRoom(roomId: RoomId, patch: { name?: string; areaType?: string; floor?: number }): Promise<{ room: { id: string; name: string } }> {
+    return this.request("PATCH", `/v1/rooms/${roomId}`, patch) as Promise<{ room: { id: string; name: string } }>;
+  }
+
+  /** Change the signed-in user's password (requires the current password). */
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    await this.request("POST", "/v1/me/password", { currentPassword, newPassword });
+  }
+
   async devicesInRoom(roomId: RoomId): Promise<DeviceList> {
     return DeviceList.parse(await this.request("GET", `/v1/rooms/${roomId}/devices`));
   }

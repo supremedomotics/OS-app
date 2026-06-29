@@ -31,6 +31,12 @@ describe("password change + reset", () => {
     return (await res.json()) as { status: string; accessToken?: string };
   }
 
+  it("accepts a bare username (not just an email) at login", async () => {
+    // The demo owner is owner@supreme.local; logging in with just "owner" must work.
+    expect((await login("owner", "supreme-owner-demo-pass")).status).toBe("ok");
+    expect((await login("owner@supreme.local", "supreme-owner-demo-pass")).status).toBe("ok");
+  });
+
   it("changes the password only with the correct current password, then logs in with the new one", async () => {
     const owner = "owner@supreme.local";
     const oldPw = "supreme-owner-demo-pass";
