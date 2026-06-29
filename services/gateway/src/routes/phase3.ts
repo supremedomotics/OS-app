@@ -12,7 +12,7 @@ import {
   type EnergySummaryResponse,
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
-import { budgetStatus, computeEnergyCost, TariffError } from "@supreme/analytics";
+import { budgetStatus, computeEnergyCost, loadShiftDecision, TariffError } from "@supreme/analytics";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
@@ -199,6 +199,55 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       const d = req.query.date ? new Date(`${req.query.date}T00:00:00Z`) : new Date();
       if (Number.isNaN(d.getTime())) throw new SupremeError("validation_failed", "invalid date");
       reply.send(sunTimes({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), latitude: lat, longitude: lon }));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Peak-aware load shifting ──────────────────────────────────────────────────
+  // The deferrable loads (device ids) the hub may pause during peak-rate hours.
+  app.get("/v1/energy/deferrable-loads", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const deviceIds = (await ctx.homeConfig.get(ctx.homeId, "deferrable_loads")) ?? [];
+      reply.send({ deviceIds, pausedNow: ctx.loadShiftRunner.pausedDevices });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/energy/deferrable-loads", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "control");
+      const body = (req.body ?? {}) as { deviceIds?: unknown; ceiling?: number };
+      if (!Array.isArray(body.deviceIds) || body.deviceIds.some((d) => typeof d !== "string")) {
+        throw new SupremeError("validation_failed", "deviceIds must be an array of device ids");
+      }
+      await ctx.homeConfig.set(ctx.homeId, "deferrable_loads", body.deviceIds);
+      if (typeof body.ceiling === "number") await ctx.homeConfig.set(ctx.homeId, "load_shift_ceiling", body.ceiling);
+      reply.send({ deviceIds: body.deviceIds });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Preview the current load-shift decision under the stored tariff.
+  app.get("/v1/energy/load-shift", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const tariff = (await ctx.homeConfig.get(ctx.homeId, "tariff")) as Parameters<typeof loadShiftDecision>[0] | undefined;
+      if (!tariff) {
+        reply.send({ decision: null });
+        return;
+      }
+      const now = new Date();
+      const weekend = now.getDay() === 0 || now.getDay() === 6;
+      const ceiling = (await ctx.homeConfig.get(ctx.homeId, "load_shift_ceiling")) as number | undefined;
+      const decision = loadShiftDecision(tariff, now.getHours() * 60 + now.getMinutes(), weekend, ceiling !== undefined ? { maxRunRatePerKwh: ceiling } : {});
+      reply.send({ decision, pausedNow: ctx.loadShiftRunner.pausedDevices });
     } catch (err) {
       sendError(reply, err);
     }

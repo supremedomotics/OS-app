@@ -54,7 +54,9 @@ import { OccupancyRunner } from "./occupancy-runner.js";
 import { SceneScheduler } from "./scene-scheduler.js";
 import { ClimateProgramRunner } from "./climate-runner.js";
 import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
+import { LoadShiftRunner } from "./load-shift-runner.js";
 import type { ClimateProgram } from "@supreme/automations";
+import type { Tariff } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
 import type { SceneId } from "@supreme/domain-model";
 
@@ -154,6 +156,8 @@ export class AppContext {
   readonly climateRunner: ClimateProgramRunner;
   /** Evaluates duration-based alert rules (door left open / unlocked, light left on). */
   readonly alertRunner: AlertRuleRunner;
+  /** Pauses/resumes deferrable loads to avoid peak-rate hours (§16). */
+  readonly loadShiftRunner: LoadShiftRunner;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -200,6 +204,12 @@ export class AppContext {
       },
       notify: (message) =>
         this.notifications.create({ homeId: this.homeId, level: "warning", title: "Home alert", body: message }).then(() => undefined),
+    });
+    this.loadShiftRunner = new LoadShiftRunner({
+      getTariff: async () => (await this.homeConfig.get(this.homeId, "tariff")) as Tariff | undefined,
+      getDeferrableDeviceIds: async () => ((await this.homeConfig.get(this.homeId, "deferrable_loads")) as string[] | undefined) ?? [],
+      getCeiling: async () => (await this.homeConfig.get(this.homeId, "load_shift_ceiling")) as number | undefined,
+      setDeviceOn: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,

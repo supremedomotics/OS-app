@@ -10,6 +10,12 @@ import type { ConsumptionSample } from "./tariff.js";
 
 // Tariff-aware energy cost engine (pure; turns consumption into money + budget projection).
 export {
+  loadShiftDecision,
+  peakRate,
+  type LoadShiftDecision,
+  type LoadShiftOptions,
+} from "./load-shift.js";
+export {
   computeEnergyCost,
   budgetStatus,
   TariffError,
