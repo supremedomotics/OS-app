@@ -7,6 +7,7 @@ import {
   saveAureonTheme,
 } from "@supreme/aureon-web";
 import { client } from "./api.js";
+import { PasswordInput } from "./password-input.js";
 import {
   BackupRestore,
   Bindings,
@@ -135,13 +136,7 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
       <form onSubmit={submit}>
         <div className="card">
           <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            style={{ marginTop: 8 }}
-          />
+          <PasswordInput value={password} onChange={setPassword} placeholder="Password" style={{ marginTop: 8 }} />
         </div>
         {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
         <button className="primary" type="submit">Sign in</button>

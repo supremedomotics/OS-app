@@ -127,6 +127,35 @@ describe("login + token lifecycle", () => {
   });
 });
 
+describe("password reset + change", () => {
+  it("resets a forgotten password with a one-time token, then logs in with the new one", async () => {
+    const s = svc();
+    await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "old-password-123", displayName: "Owner" });
+    const reset = await s.requestPasswordReset("owner@example.com");
+    expect(reset).not.toBeNull();
+    await s.resetPassword(reset!.token, "brand-new-password-456");
+    // Old password no longer works; new one does.
+    await expect(s.login("owner@example.com", "old-password-123")).rejects.toThrow(/invalid email or password/);
+    expect((await s.login("owner@example.com", "brand-new-password-456")).status).toBe("ok");
+    // The token is one-time.
+    await expect(s.resetPassword(reset!.token, "another-password-789")).rejects.toThrow(/invalid or expired/);
+  });
+
+  it("requestPasswordReset is silent for an unknown email (anti-enumeration)", async () => {
+    const s = svc();
+    expect(await s.requestPasswordReset("nobody@example.com")).toBeNull();
+  });
+
+  it("changes a password only when the current one is correct", async () => {
+    const s = svc();
+    const { master } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "current-password-123", displayName: "Owner" });
+    await expect(s.changePassword(master.id, "wrong-password", "new-password-456")).rejects.toThrow(/current password is incorrect/);
+    await expect(s.changePassword(master.id, "current-password-123", "short")).rejects.toThrow(/at least 8 characters/);
+    await s.changePassword(master.id, "current-password-123", "new-password-456");
+    expect((await s.login("owner@example.com", "new-password-456")).status).toBe("ok");
+  });
+});
+
 describe("expiring (guest/temporary) access", () => {
   it("sweepExpired flips a past-expiry guest to 'expired' and their token stops authenticating", async () => {
     const s = svc();

@@ -4,6 +4,7 @@ import { client, fetchSetupStatus, openStream, type SetupStatus } from "./api.js
 import { LiveContext, type LiveStates } from "./live.js";
 import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
+import { PasswordInput } from "./password-input.js";
 import { ThemeSettings } from "./settings.js";
 import { Automations } from "./automations.js";
 
@@ -121,12 +122,7 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
       <p className="muted">Welcome home.</p>
       <form onSubmit={submit}>
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
-        />
+        <PasswordInput value={password} onChange={setPassword} placeholder="Password" />
         {error && <p className="err">{error}</p>}
         <button className="primary" type="submit" disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}

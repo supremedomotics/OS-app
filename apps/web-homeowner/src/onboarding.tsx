@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { client, completeSetup, forgotPassword, resetPassword, type SetupStatus } from "./api.js";
+import { PasswordInput } from "./password-input.js";
 
 /**
  * First-run Setup Wizard — creates the Supreme OS administrator (Home Assistant is never
@@ -56,8 +57,8 @@ export function SetupWizard({ status, onDone }: { status: SetupStatus; onDone: (
           <h2>Create administrator</h2>
           <p className="muted">This is the owner account for your home.</p>
           <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
-          <input type="password" placeholder="Password (min 8 characters)" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <input type="password" placeholder="Confirm password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          <PasswordInput placeholder="Password (min 8 characters)" value={password} onChange={setPassword} />
+          <PasswordInput placeholder="Confirm password" value={confirm} onChange={setConfirm} />
           {confirm.length > 0 && password !== confirm && <p className="err">Passwords don't match.</p>}
           <div className="row">
             <button onClick={() => setStep(0)}>Back</button>
@@ -153,7 +154,7 @@ export function ForgotPassword({ onBack }: { onBack: () => void }) {
         <>
           {note && <p className="muted">{note}</p>}
           <input placeholder="Reset code" value={token} onChange={(e) => setToken(e.target.value)} />
-          <input type="password" placeholder="New password (min 8 characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+          <PasswordInput placeholder="New password (min 8 characters)" value={newPassword} onChange={setNewPassword} />
           {error && <p className="err">{error}</p>}
           <button className="primary" disabled={busy || !token.trim() || newPassword.length < 8} onClick={reset}>
             {busy ? "Resetting…" : "Set new password"}

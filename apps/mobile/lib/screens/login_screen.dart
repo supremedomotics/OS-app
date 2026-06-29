@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../cloud/multi_home.dart';
 import '../providers.dart';
+import '../widgets/password_field.dart';
+import 'reset_password_screen.dart';
 
 /// Supreme-branded sign in (§12). A Supreme account — never a backend login page.
 class LoginScreen extends ConsumerStatefulWidget {
@@ -68,12 +70,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   keyboardType: TextInputType.emailAddress,
                 ),
                 const SizedBox(height: AureonSpacing.md),
-                TextField(
+                PasswordField(
                   controller: _password,
-                  decoration: const InputDecoration(labelText: 'Password'),
-                  obscureText: true,
+                  textInputAction: TextInputAction.go,
+                  onSubmitted: (_) => _busy ? null : _submit(),
                 ),
-                const SizedBox(height: AureonSpacing.lg),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => ResetPasswordScreen(initialEmail: _email.text.trim()),
+                              ),
+                            ),
+                    child: const Text('Forgot password?'),
+                  ),
+                ),
+                const SizedBox(height: AureonSpacing.sm),
                 if (_error != null) ...[
                   Text(_error!,
                       style: const TextStyle(color: AureonStatus.critical)),

@@ -448,3 +448,11 @@ button.link {
 .node-config input, .node-config select { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); }
 .node-config .onoff { display: flex; align-items: center; gap: 8px; }
 .node-config .onoff input { width: auto; }
+/* Password field with show/hide toggle */
+.pw-field { position: relative; display: block; }
+.pw-field input { width: 100%; padding-right: 64px; box-sizing: border-box; }
+.pw-toggle {
+  position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
+  background: transparent; border: 0; color: var(--aureon-color-gold-400);
+  font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 6px;
+}

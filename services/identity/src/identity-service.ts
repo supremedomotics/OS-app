@@ -272,6 +272,27 @@ export class IdentityService {
     });
   }
 
+  /**
+   * Change the password of a signed-in user. Verifies the current password first (so a stolen
+   * session can't silently change it), then sets the new Supreme password. Supreme-only — HA is
+   * never touched.
+   */
+  async changePassword(userId: UserId, currentPassword: string, newPassword: string): Promise<void> {
+    if (newPassword.length < 8) {
+      throw new SupremeError("validation_failed", "password must be at least 8 characters");
+    }
+    const cred = await this.store.getCredential(userId);
+    const ok = cred ? await verify(cred.passwordHash, currentPassword).catch(() => false) : false;
+    if (!cred || !ok) {
+      throw new SupremeError("unauthorized", "current password is incorrect");
+    }
+    await this.store.putCredential({
+      userId,
+      passwordHash: await hash(newPassword, ARGON2),
+      mfaSecret: cred.mfaSecret ?? null,
+    });
+  }
+
   /** Revoke a session from any of its tokens (logout / "sign out everywhere"). */
   async logout(token: string): Promise<void> {
     let sid: string | undefined;

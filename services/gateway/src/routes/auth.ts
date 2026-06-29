@@ -109,6 +109,18 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // Change the password of the signed-in user (requires the current password).
+  app.post("/v1/me/password", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const b = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
+      await ctx.identity.changePassword(user.id, String(b.currentPassword ?? ""), String(b.newPassword ?? ""));
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Revoke the current session (logout). Idempotent — always 204.
   app.post("/v1/auth/logout", async (req, reply) => {
     try {

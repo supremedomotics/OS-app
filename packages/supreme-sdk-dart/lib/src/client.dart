@@ -45,6 +45,39 @@ class SupremeClient {
     return false; // mfa_required
   }
 
+  /// Begin a forgotten-password reset for [email]. Always succeeds (anti-enumeration). On a local
+  /// hub (non-production) the one-time reset token is returned so the user can reset on the spot;
+  /// in production it's delivered out-of-band and this returns null.
+  Future<String?> forgotPassword(String email) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/auth/forgot-password'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'email': email}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['resetToken'] as String?;
+  }
+
+  /// Complete a reset with the one-time [token] and a new password (min 8 chars).
+  Future<void> resetPassword(String token, String newPassword) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/auth/reset-password'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'token': token, 'newPassword': newPassword}),
+    );
+    _ensureOk(res);
+  }
+
+  /// Change the signed-in user's password (requires the current password).
+  Future<void> changePassword(String currentPassword, String newPassword) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/me/password'),
+      headers: _authHeaders,
+      body: jsonEncode({'currentPassword': currentPassword, 'newPassword': newPassword}),
+    );
+    _ensureOk(res);
+  }
+
   Future<HomeView> home() async {
     final res =
         await _http.get(Uri.parse('$baseUrl/v1/home'), headers: _authHeaders);
