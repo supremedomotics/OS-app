@@ -123,6 +123,12 @@ final energyHistoryProvider =
   return ref.watch(clientProvider).energyHistory(bucket);
 });
 
+/// Rated wattage per device (deviceId → watts) for non-metered cost estimation.
+final energyDeviceWattsProvider =
+    FutureProvider<Map<String, double>>((ref) async {
+  return ref.watch(clientProvider).energyDeviceWatts();
+});
+
 /// Cameras registered on the home (§11.1).
 final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();

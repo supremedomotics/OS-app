@@ -389,6 +389,30 @@ class SupremeClient {
     return res.body;
   }
 
+  /// Rated wattage per device (deviceId → watts) used to estimate energy for
+  /// non-metered devices, so they too get a per-device cost.
+  Future<Map<String, double>> energyDeviceWatts() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/energy/device-watts'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    final watts = (jsonDecode(res.body) as Map<String, dynamic>)['watts']
+            as Map<String, dynamic>? ??
+        {};
+    return watts.map((k, v) => MapEntry(k, (v as num).toDouble()));
+  }
+
+  /// Replace the rated-wattage map. Values must be 0..100000; zeros are dropped.
+  Future<Map<String, double>> setEnergyDeviceWatts(
+      Map<String, double> watts) async {
+    final res = await _http.put(Uri.parse('$baseUrl/v1/energy/device-watts'),
+        headers: _authHeaders, body: jsonEncode({'watts': watts}));
+    _ensureOk(res);
+    final out = (jsonDecode(res.body) as Map<String, dynamic>)['watts']
+            as Map<String, dynamic>? ??
+        {};
+    return out.map((k, v) => MapEntry(k, (v as num).toDouble()));
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),

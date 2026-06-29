@@ -1,6 +1,7 @@
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 
@@ -366,6 +367,15 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
             );
           },
         ),
+        if (_groupBy == 'device')
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () => _editWatts(context),
+              icon: const Icon(Icons.bolt_outlined, size: 16),
+              label: const Text('Rated wattage'),
+            ),
+          ),
         const SizedBox(height: AureonSpacing.lg),
         Row(
           children: [
@@ -470,4 +480,79 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
     providerCtl.dispose();
     rateCtl.dispose();
   }
+
+  /// Let the owner give non-metered devices a rated wattage so the hub can estimate
+  /// their energy (and therefore their cost) from on-time. One field per device.
+  Future<void> _editWatts(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final devices = ref.read(allDevicesProvider).valueOrNull ?? const <Device>[];
+    if (devices.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('No devices to configure yet')));
+      return;
+    }
+    final current = ref.read(energyDeviceWattsProvider).valueOrNull ?? const <String, double>{};
+    final controllers = {
+      for (final d in devices)
+        d.id: TextEditingController(text: (current[d.id] ?? 0) > 0 ? _trimWatts(current[d.id]!) : ''),
+    };
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rated wattage'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(bottom: AureonSpacing.sm),
+                child: Text('For devices with no power meter, enter their rated watts so their running cost can be estimated. Leave blank to skip.'),
+              ),
+              for (final d in devices)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text(d.name, overflow: TextOverflow.ellipsis)),
+                      SizedBox(
+                        width: 96,
+                        child: TextField(
+                          controller: controllers[d.id],
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.end,
+                          decoration: const InputDecoration(suffixText: 'W', isDense: true),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (saved == true) {
+      final watts = <String, double>{};
+      for (final e in controllers.entries) {
+        final v = double.tryParse(e.value.text.trim());
+        if (v != null && v > 0) watts[e.key] = v;
+      }
+      try {
+        await ref.read(clientProvider).setEnergyDeviceWatts(watts);
+        ref.invalidate(energyDeviceWattsProvider);
+        ref.invalidate(energyBreakdownProvider);
+        messenger.showSnackBar(const SnackBar(content: Text('Rated wattage saved')));
+      } catch (_) {
+        messenger.showSnackBar(const SnackBar(content: Text('Could not save wattage')));
+      }
+    }
+    for (final c in controllers.values) {
+      c.dispose();
+    }
+  }
+
+  static String _trimWatts(double w) => w == w.roundToDouble() ? w.toInt().toString() : w.toString();
 }
