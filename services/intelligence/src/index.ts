@@ -70,3 +70,15 @@ export {
 } from "./energy/decision.js";
 
 export { EnergyIntelligenceModule } from "./energy/module.js";
+
+export {
+  decideAutoPilot,
+  applyResponse,
+  resetEpisode,
+  startOfNextUtcDay,
+  AUTO_PILOT_MODES,
+  type AutoPilotMode,
+  type AutoPilotSettings,
+  type AutoPilotDecision,
+  type SuggestionState,
+} from "./autopilot.js";
