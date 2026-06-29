@@ -43,6 +43,7 @@ class EnergyScreen extends ConsumerWidget {
                           : _CostCard(cost: c['cost'] as Map<String, dynamic>),
                       orElse: () => const SizedBox.shrink(),
                     ),
+                    const _RunningCostsCard(),
                     for (final r in rows)
                       Card(
                         child: ListTile(
@@ -253,5 +254,220 @@ class _ClimateProgramSheetState extends ConsumerState<_ClimateProgramSheet> {
         },
       ),
     );
+  }
+}
+
+/// The curated countries the hub can resolve a default rate for (mirrors COUNTRY_RATES).
+const _supportedCountries = <String, String>{
+  'IN': 'India', 'US': 'United States', 'GB': 'United Kingdom', 'DE': 'Germany',
+  'FR': 'France', 'ES': 'Spain', 'IT': 'Italy', 'NL': 'Netherlands', 'IE': 'Ireland',
+  'AE': 'UAE', 'SA': 'Saudi Arabia', 'AU': 'Australia', 'NZ': 'New Zealand',
+  'CA': 'Canada', 'JP': 'Japan', 'SG': 'Singapore', 'ZA': 'South Africa',
+  'BR': 'Brazil', 'MX': 'Mexico', 'CN': 'China', 'KR': 'South Korea',
+  'CH': 'Switzerland', 'SE': 'Sweden', 'PL': 'Poland', 'PT': 'Portugal',
+  'BE': 'Belgium', 'AT': 'Austria',
+};
+
+/// Running-costs panel: provider setup, per-device/room breakdown, and history at each zoom.
+class _RunningCostsCard extends ConsumerStatefulWidget {
+  const _RunningCostsCard();
+
+  @override
+  ConsumerState<_RunningCostsCard> createState() => _RunningCostsCardState();
+}
+
+class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
+  String _groupBy = 'device';
+  String _bucket = 'month';
+
+  String _money(String currency, num v) => '$currency ${v.toStringAsFixed(2)}';
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = ref.watch(energyProviderProvider);
+    final text = Theme.of(context).textTheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AureonSpacing.lg),
+        child: provider.when(
+          loading: () => const Center(child: Padding(padding: EdgeInsets.all(AureonSpacing.md), child: CircularProgressIndicator())),
+          error: (e, _) => Text('Running costs unavailable\n$e', style: text.labelMedium),
+          data: (p) => p == null ? _setupPrompt(context, text) : _costs(context, text, p),
+        ),
+      ),
+    );
+  }
+
+  Widget _setupPrompt(BuildContext context, TextTheme text) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Running costs', style: text.titleMedium),
+          const SizedBox(height: AureonSpacing.xs),
+          Text('Set your electricity provider to price your consumption.', style: text.labelMedium),
+          const SizedBox(height: AureonSpacing.sm),
+          FilledButton.tonal(onPressed: () => _setup(context), child: const Text('Set up provider')),
+        ],
+      );
+
+  Widget _costs(BuildContext context, TextTheme text, Map<String, dynamic> p) {
+    final currency = p['currency'] as String? ?? '';
+    final breakdown = ref.watch(energyBreakdownProvider(_groupBy));
+    final history = ref.watch(energyHistoryProvider(_bucket));
+    final names = ref.watch(allDevicesProvider);
+    final home = ref.watch(homeProvider);
+    String label(String key) {
+      if (_groupBy == 'device') {
+        return names.maybeWhen(data: (list) => list.firstWhere((d) => d.id == key, orElse: () => list.first).name, orElse: () => key);
+      }
+      if (key == 'unassigned') return 'Unassigned';
+      return home.maybeWhen(data: (h) => h.rooms.firstWhere((r) => r.id == key, orElse: () => h.rooms.first).name, orElse: () => key);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('Running costs', style: text.titleMedium)),
+            TextButton(onPressed: () => _setup(context), child: Text('${_supportedCountries[p['country']] ?? p['country']} · ${_money(currency, p['ratePerKwh'] as num)}/kWh')),
+          ],
+        ),
+        const SizedBox(height: AureonSpacing.sm),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'device', label: Text('Device')),
+            ButtonSegment(value: 'room', label: Text('Room')),
+          ],
+          selected: {_groupBy},
+          onSelectionChanged: (s) => setState(() => _groupBy = s.first),
+        ),
+        const SizedBox(height: AureonSpacing.sm),
+        breakdown.when(
+          loading: () => const LinearProgressIndicator(),
+          error: (e, _) => Text('—', style: text.labelMedium),
+          data: (b) {
+            final groups = (b['groups'] as List<dynamic>).cast<Map<String, dynamic>>();
+            if (groups.isEmpty) return Text('No consumption recorded yet', style: text.labelMedium);
+            return Column(
+              children: [
+                for (final g in groups.take(6))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(label(g['key'] as String), overflow: TextOverflow.ellipsis)),
+                        Text('${(g['kwh'] as num).toStringAsFixed(1)} kWh', style: text.labelMedium),
+                        const SizedBox(width: AureonSpacing.md),
+                        Text(_money(currency, g['cost'] as num), style: text.bodyMedium?.copyWith(color: AureonGold.c400)),
+                      ],
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: AureonSpacing.lg),
+        Row(
+          children: [
+            Expanded(child: Text('History', style: text.titleSmall)),
+            DropdownButton<String>(
+              value: _bucket,
+              items: const [
+                DropdownMenuItem(value: 'day', child: Text('Daily')),
+                DropdownMenuItem(value: 'week', child: Text('Weekly')),
+                DropdownMenuItem(value: 'month', child: Text('Monthly')),
+                DropdownMenuItem(value: 'year', child: Text('Yearly')),
+              ],
+              onChanged: (v) => setState(() => _bucket = v ?? _bucket),
+            ),
+          ],
+        ),
+        history.when(
+          loading: () => const LinearProgressIndicator(),
+          error: (e, _) => Text('—', style: text.labelMedium),
+          data: (h) {
+            final rows = (h['history'] as List<dynamic>).cast<Map<String, dynamic>>();
+            if (rows.isEmpty) return Text('No history yet', style: text.labelMedium);
+            final maxCost = rows.map((r) => (r['cost'] as num).toDouble()).fold<double>(0.01, (m, v) => v > m ? v : m);
+            return Column(
+              children: [
+                for (final r in rows.reversed.take(8).toList().reversed)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      children: [
+                        SizedBox(width: 84, child: Text(r['period'] as String, style: text.labelMedium)),
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: ((r['cost'] as num).toDouble() / maxCost).clamp(0, 1),
+                            minHeight: 8,
+                            backgroundColor: AureonBase.surfaceRaised,
+                          ),
+                        ),
+                        const SizedBox(width: AureonSpacing.sm),
+                        Text(_money(currency, r['cost'] as num), style: text.labelMedium),
+                      ],
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Future<void> _setup(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    var country = ref.read(energyProviderProvider).valueOrNull?['country'] as String? ?? 'IN';
+    final cityCtl = TextEditingController(text: ref.read(energyProviderProvider).valueOrNull?['city'] as String? ?? '');
+    final providerCtl = TextEditingController(text: ref.read(energyProviderProvider).valueOrNull?['provider'] as String? ?? '');
+    final rateCtl = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) => AlertDialog(
+          title: const Text('Electricity provider'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButton<String>(
+                  isExpanded: true,
+                  value: country,
+                  items: [for (final e in _supportedCountries.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
+                  onChanged: (v) => setState(() => country = v ?? country),
+                ),
+                TextField(controller: cityCtl, decoration: const InputDecoration(labelText: 'City (optional)')),
+                TextField(controller: providerCtl, decoration: const InputDecoration(labelText: 'Provider (optional)')),
+                TextField(controller: rateCtl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Rate per kWh (from your bill, optional)')),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+    if (saved == true) {
+      try {
+        await ref.read(clientProvider).setEnergyProvider(
+              country: country,
+              city: cityCtl.text.isEmpty ? null : cityCtl.text,
+              provider: providerCtl.text.isEmpty ? null : providerCtl.text,
+              ratePerKwh: double.tryParse(rateCtl.text),
+            );
+        ref.invalidate(energyProviderProvider);
+        ref.invalidate(energyBreakdownProvider);
+        ref.invalidate(energyHistoryProvider);
+      } catch (_) {
+        messenger.showSnackBar(const SnackBar(content: Text('Could not save provider')));
+      }
+    }
+    cityCtl.dispose();
+    providerCtl.dispose();
+    rateCtl.dispose();
   }
 }

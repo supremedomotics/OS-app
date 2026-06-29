@@ -311,6 +311,68 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// The home's electricity-provider rate config, or null if not set up.
+  Future<Map<String, dynamic>?> energyProvider() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/energy/provider'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['provider']
+        as Map<String, dynamic>?;
+  }
+
+  /// Set the electricity provider (country/city/provider) → resolves the per-kWh rate.
+  Future<Map<String, dynamic>> setEnergyProvider({
+    required String country,
+    String? city,
+    String? provider,
+    double? ratePerKwh,
+  }) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/energy/provider'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'country': country,
+        if (city != null) 'city': city,
+        if (provider != null) 'provider': provider,
+        if (ratePerKwh != null) 'ratePerKwh': ratePerKwh,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['provider']
+        as Map<String, dynamic>;
+  }
+
+  /// Cost breakdown grouped per `device` or `room` over an optional range.
+  Future<Map<String, dynamic>> energyBreakdown(String groupBy,
+      {String? from, String? to}) async {
+    final q = {
+      'groupBy': groupBy,
+      if (from != null) 'from': from,
+      if (to != null) 'to': to,
+    };
+    final res = await _http.get(
+        Uri.parse('$baseUrl/v1/energy/breakdown').replace(queryParameters: q),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Cost history bucketed by `day` | `week` | `month` | `year`, optionally for one device.
+  Future<Map<String, dynamic>> energyHistory(String bucket,
+      {String? from, String? to, String? deviceId}) async {
+    final q = {
+      'bucket': bucket,
+      if (from != null) 'from': from,
+      if (to != null) 'to': to,
+      if (deviceId != null) 'deviceId': deviceId,
+    };
+    final res = await _http.get(
+        Uri.parse('$baseUrl/v1/energy/history').replace(queryParameters: q),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),

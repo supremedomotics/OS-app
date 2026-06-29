@@ -105,6 +105,24 @@ final climateProgramProvider =
   return ref.watch(clientProvider).climateProgram();
 });
 
+/// The home's electricity-provider rate config (null until set up).
+final energyProviderProvider =
+    FutureProvider<Map<String, dynamic>?>((ref) async {
+  return ref.watch(clientProvider).energyProvider();
+});
+
+/// Cost breakdown grouped by 'device' or 'room'.
+final energyBreakdownProvider =
+    FutureProvider.family<Map<String, dynamic>, String>((ref, groupBy) async {
+  return ref.watch(clientProvider).energyBreakdown(groupBy);
+});
+
+/// Cost history bucketed by 'day' | 'week' | 'month' | 'year'.
+final energyHistoryProvider =
+    FutureProvider.family<Map<String, dynamic>, String>((ref, bucket) async {
+  return ref.watch(clientProvider).energyHistory(bucket);
+});
+
 /// Cameras registered on the home (§11.1).
 final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();
