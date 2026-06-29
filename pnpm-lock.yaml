@@ -876,6 +876,9 @@ importers:
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+      '@supreme/intelligence':
+        specifier: workspace:*
+        version: link:../intelligence
       '@supreme/licensing':
         specifier: workspace:*
         version: link:../../cloud/licensing

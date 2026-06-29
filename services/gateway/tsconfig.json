@@ -27,6 +27,7 @@
     { "path": "../backup" },
     { "path": "../automations" },
     { "path": "../analytics" },
+    { "path": "../intelligence" },
     { "path": "../audit" },
     { "path": "../ai" },
     { "path": "../security" },

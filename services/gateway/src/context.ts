@@ -21,6 +21,7 @@ import {
   type IGrantStore,
 } from "@supreme/permissions";
 import type { DeviceId, Grant, Home, HomeId, Notification, UserId } from "@supreme/domain-model";
+import { newId } from "@supreme/domain-model";
 import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
@@ -58,6 +59,9 @@ import { LoadShiftRunner } from "./load-shift-runner.js";
 import { VentilationRunner, type VentilationConfig } from "./ventilation-runner.js";
 import { ConsumptionEstimator } from "./consumption-estimator.js";
 import { BudgetMonitor, type EnergyBudget } from "./budget-monitor.js";
+import { SieRunner } from "./sie-runner.js";
+import type { AutoPilotSettings, DeviceIntel, SuggestionState, Zone } from "@supreme/intelligence";
+import { IntelligenceRepo } from "@supreme/persistence";
 import type { ClimateProgram } from "@supreme/automations";
 import type { Tariff, RateFetcher } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
@@ -171,6 +175,10 @@ export class AppContext {
   readonly consumptionEstimator: ConsumptionEstimator;
   /** Warns once a month when projected energy spend tracks over the owner's budget (§16). */
   readonly budgetMonitor: BudgetMonitor;
+  /** Supreme Intelligence Engine runner — presence fusion + energy decisions under Auto Pilot (ADR 0013). */
+  readonly sie: SieRunner;
+  /** Local SIE learning/action history store (present only with the Postgres persistence layer). */
+  intelligence: IntelligenceRepo | null = null;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -254,6 +262,61 @@ export class AppContext {
       },
       notify: (message) =>
         this.notifications.create({ homeId: this.homeId, level: "warning", title: "Energy budget", body: message }).then(() => undefined),
+    });
+    // Supreme Intelligence Engine (ADR 0013): presence fusion + energy decisions under Auto Pilot,
+    // recording every action to the local learning/history store. All logic is in @supreme/intelligence.
+    this.sie = new SieRunner({
+      homeId: this.homeId, // closures below resolve homeId lazily at tick time
+      getZones: async () => ((await this.homeConfig.get(this.homeId, "sie_zones")) as Zone[] | undefined) ?? [],
+      onlineUserIds: () => this.presence.online(this.homeId),
+      listDevices: async () => {
+        const watts = ((await this.homeConfig.get(this.homeId, "device_watts")) as Record<string, number> | undefined) ?? {};
+        const intelMap = ((await this.homeConfig.get(this.homeId, "device_intel")) as Record<string, DeviceIntel> | undefined) ?? {};
+        const devices = await this.home.listDevices();
+        return devices.map((d) => ({
+          id: d.id,
+          name: d.name,
+          roomId: d.roomId,
+          on: Boolean((d.state?.onoff as { on?: boolean } | undefined)?.on),
+          watts: watts[d.id],
+          intel: intelMap[d.id],
+        }));
+      },
+      getSettings: async () => ((await this.homeConfig.get(this.homeId, "sie_autopilot")) as AutoPilotSettings | undefined) ?? { mode: "notify_only" },
+      setSettings: (s) => this.homeConfig.set(this.homeId, "sie_autopilot", s),
+      getRate: async () => (await this.homeConfig.get(this.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined,
+      getSuggestionStates: async () => ((await this.homeConfig.get(this.homeId, "sie_suggestion_states")) as Record<string, SuggestionState> | undefined) ?? {},
+      setSuggestionStates: (m) => this.homeConfig.set(this.homeId, "sie_suggestion_states", m),
+      command: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }).then(() => undefined),
+      notify: (input) => this.notifications.create({ homeId: this.homeId, level: input.level, title: input.title, body: input.body, context: input.context }).then(() => undefined),
+      recordHistory: async (h) => {
+        if (!this.intelligence) return;
+        const c = h.confidence;
+        await this.intelligence.record({
+          id: newId("sie"),
+          homeId: this.homeId,
+          ts: new Date().toISOString(),
+          module: h.module,
+          deviceId: h.deviceId ?? null,
+          roomId: h.roomId ?? null,
+          zoneId: h.zoneId ?? null,
+          ownerUserId: h.ownerUserId ?? null,
+          action: h.action,
+          reason: h.reason ?? null,
+          automatic: h.automatic,
+          userResponse: h.userResponse ?? null,
+          decisionConfidence: c?.decision ?? null,
+          presenceConfidence: c?.presence ?? null,
+          roomVacancyConfidence: c?.roomVacancy ?? null,
+          ownershipConfidence: c?.ownership ?? null,
+          energyConfidence: c?.energy ?? null,
+          estimatedWatts: h.estimatedWatts ?? null,
+          estimatedKwhSaved: h.estimatedKwhSaved ?? null,
+          estimatedCostSaved: h.estimatedCostSaved ?? null,
+          currency: h.currency ?? null,
+          metadata: h.metadata ?? {},
+        });
+      },
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
@@ -430,6 +493,7 @@ export class AppContext {
     if (deps.db) {
       this.analytics = new AnalyticsService(deps.db);
       this.audit = new AuditService(deps.db);
+      this.intelligence = new IntelligenceRepo(deps.db);
     }
 
     // Local HomeKit (Apple Home / Siri) bridge — opt-in, runs entirely on the hub. Present only when

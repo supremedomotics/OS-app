@@ -61,6 +61,7 @@ const PREFIXES = {
   backup: "bak",
   sample: "smp",
   audit: "aud",
+  sie: "sie",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

@@ -47,6 +47,7 @@ export { ConfigRepo } from "./repositories/config-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
+export { IntelligenceRepo, type SieHistoryRecord, type SieSavingsAggregate } from "./repositories/intelligence-repo.js";
 
 /** The full set of persisted stores, ready to inject into the domain services. */
 export interface PersistenceStores {

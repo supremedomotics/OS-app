@@ -73,6 +73,7 @@ async function main(): Promise<void> {
     guard("ventilation", ctx.ventilationRunner.tick());
     guard("estimate", ctx.consumptionEstimator.tick());
     guard("budget", ctx.budgetMonitor.tick());
+    guard("intelligence", ctx.sie.tick());
     guard("occupancy", ctx.occupancy.tickNow());
     guard("expiry", ctx.sweepExpiredAccess());
   }, 60_000);

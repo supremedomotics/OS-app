@@ -16,6 +16,7 @@ import { registerPhase3Routes } from "./routes/phase3.js";
 import { registerSecurityRoutes } from "./routes/security.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
 import { registerMatterRoutes } from "./routes/matter.js";
+import { registerIntelligenceRoutes } from "./routes/intelligence.js";
 import { attachObservability } from "./observability.js";
 import { attachStream } from "./stream.js";
 
@@ -89,6 +90,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerSecurityRoutes(app, ctx);
   registerMigrationRoutes(app, ctx);
   registerMatterRoutes(app, ctx);
+  registerIntelligenceRoutes(app, ctx);
   attachStream(app, ctx);
 
   return app;

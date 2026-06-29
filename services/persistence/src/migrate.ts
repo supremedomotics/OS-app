@@ -18,6 +18,7 @@ const MIGRATIONS = [
   "0008_device_clients.sql",
   "0009_migration_policy.sql",
   "0010_home_config.sql",
+  "0011_intelligence.sql",
 ] as const;
 
 /**

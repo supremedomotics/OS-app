@@ -41,6 +41,7 @@
     "@supreme/backup": "workspace:*",
     "@supreme/automations": "workspace:*",
     "@supreme/analytics": "workspace:*",
+    "@supreme/intelligence": "workspace:*",
     "@supreme/audit": "workspace:*",
     "@supreme/ai": "workspace:*",
     "@supreme/security": "workspace:*",
