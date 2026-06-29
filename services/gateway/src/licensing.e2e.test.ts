@@ -61,4 +61,12 @@ describe("Community hub blocks a pro driver", () => {
     const status = (await (await fetch(`${h.baseUrl}/v1/license`, { headers: h.auth })).json()) as { service: { devMode: boolean } };
     expect(status.service.devMode).toBe(false);
   });
+
+  it("can flip Developer Mode on at runtime, then KNX installs", async () => {
+    const toggle = await fetch(`${h.baseUrl}/v1/license/dev-mode`, { method: "POST", headers: h.auth, body: JSON.stringify({ enabled: true }) });
+    expect(toggle.status).toBe(200);
+    expect(((await toggle.json()) as { service: { devMode: boolean } }).service.devMode).toBe(true);
+    const install = await fetch(`${h.baseUrl}/v1/drivers/install`, { method: "POST", headers: h.auth, body: JSON.stringify({ key: "supreme-knx" }) });
+    expect(install.status).toBe(201);
+  });
 });

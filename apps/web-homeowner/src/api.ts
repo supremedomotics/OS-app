@@ -69,6 +69,40 @@ export async function resetPassword(token: string, newPassword: string): Promise
   if (!res.ok) throw new Error(await errorMessage(res, "Could not reset the password."));
 }
 
+// ── Licensing (authenticated) ────────────────────────────────────────────────────
+export interface LicenseService {
+  active: boolean;
+  devMode: boolean;
+  licenseType: string;
+  tier: string;
+  skus: string[] | "all";
+  features: string[] | "all";
+  expiresAt: string | null;
+  source: string;
+  sources: string[];
+}
+export interface LicenseInfo {
+  licensed: boolean;
+  skus: string[];
+  features: string[];
+  service?: LicenseService;
+}
+
+export async function fetchLicense(): Promise<LicenseInfo | null> {
+  try {
+    const res = await authed("/v1/license");
+    return res.ok ? ((await res.json()) as LicenseInfo) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setDevMode(enabled: boolean): Promise<LicenseInfo> {
+  const res = await authed("/v1/license/dev-mode", { method: "POST", body: JSON.stringify({ enabled }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not change Developer Mode."));
+  return (await res.json()) as LicenseInfo;
+}
+
 // ── Automations (authenticated) ─────────────────────────────────────────────────
 async function authed(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {

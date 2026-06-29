@@ -262,6 +262,20 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Toggle Developer Mode at runtime (unlocks every SKU + feature). Blocked in production builds —
+  // the developer license can never be used in production. Admin/installer/master only.
+  app.post<{ Body: { enabled?: boolean } }>("/v1/license/dev-mode", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "admin");
+      if (ctx.config.nodeEnv === "production") throw new SupremeError("forbidden", "Developer Mode is disabled in production builds");
+      await i().setDevMode(Boolean(req.body?.enabled));
+      reply.send(i().licenseStatus() satisfies LicenseStatus);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Dev-only license issuance (no cloud licensing key configured).
   app.post("/v1/license/dev-issue", async (req, reply) => {
     try {

@@ -88,6 +88,8 @@ export class InstallerServices {
   private license: License | null = null;
   /** Single source of truth for SKUs/features/driver licensing (Developer Mode + offline license). */
   readonly licenseService: LicenseService;
+  /** Runtime Developer-Mode override (UI toggle), OR-ed with the SUPREME_DEV_MODE env flag. */
+  private devModeOverride = false;
 
   constructor(deps: InstallerDeps) {
     this.d = deps;
@@ -117,7 +119,7 @@ export class InstallerServices {
     // SKU + feature; otherwise the offline (signed) license, if any, supplies the grant. Drivers ask
     // this, never embed licensing. Sync providers → the first refresh settles before any install call.
     this.licenseService = new LicenseService([
-      new DeveloperProvider(() => deps.config.devMode),
+      new DeveloperProvider(() => deps.config.devMode || this.devModeOverride),
       new CallbackProvider("offline", () => this.grantFromLicense()),
     ]);
     void this.licenseService.refresh();
@@ -334,6 +336,12 @@ export class InstallerServices {
   /** The set of SKUs the home is entitled to — delegated to the Licensing Service (Dev Mode aware). */
   licensedSkus(): Set<string> {
     return this.licenseService.licensedSkuSet();
+  }
+
+  /** Toggle the runtime Developer-Mode override and re-resolve the license. */
+  async setDevMode(enabled: boolean): Promise<void> {
+    this.devModeOverride = enabled;
+    await this.licenseService.refresh();
   }
 
   /** Translate a stored signed License into a LicenseService grant (tier-expanded SKUs). */

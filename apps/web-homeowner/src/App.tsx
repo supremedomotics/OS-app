@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SupremeStream } from "@supreme/sdk";
-import { client, fetchSetupStatus, openStream, type SetupStatus } from "./api.js";
+import { client, fetchLicense, fetchSetupStatus, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
 import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
@@ -72,6 +72,7 @@ export function App() {
           {tab === "energy" && <Energy />}
           {tab === "settings" && <ThemeSettings />}
         </div>
+        <DevWatermark />
         <nav className="tabbar">
           {TABS.map((t) => (
             <button
@@ -90,6 +91,16 @@ export function App() {
       </div>
     </LiveContext.Provider>
   );
+}
+
+/** A small persistent badge when the hub is in Developer Mode (every feature unlocked). */
+function DevWatermark() {
+  const [dev, setDev] = useState(false);
+  useEffect(() => {
+    void fetchLicense().then((l) => setDev(Boolean(l?.service?.devMode)));
+  }, []);
+  if (!dev) return null;
+  return <div className="dev-watermark">DEVELOPMENT BUILD · Developer License</div>;
 }
 
 function Login({ onAuthed }: { onAuthed: () => void }) {

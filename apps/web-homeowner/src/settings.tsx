@@ -8,7 +8,7 @@ import {
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
-import { client } from "./api.js";
+import { client, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
 import { PasswordInput } from "./password-input.js";
 
 /**
@@ -53,9 +53,57 @@ export function ThemeSettings() {
         </div>
       </section>
 
+      <LicensingSettings />
       <AccountSettings />
       <IntegrationsSettings />
     </div>
+  );
+}
+
+function LicensingSettings() {
+  const [info, setInfo] = useState<LicenseInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setInfo(await fetchLicense());
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function toggleDev(enabled: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      setInfo(await setDevMode(enabled));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not change Developer Mode.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const svc = info?.service;
+  const fmt = (v: string) => v.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Licensing</h2>
+      {svc?.devMode && <div className="dev-banner">⚙ DEVELOPMENT BUILD · Developer License — every feature unlocked</div>}
+      <div className="lic-grid">
+        <div><span className="k">License</span><span className="v">{svc ? fmt(svc.licenseType) : "—"}</span></div>
+        <div><span className="k">Tier</span><span className="v">{svc ? fmt(svc.tier) : "—"}</span></div>
+        <div><span className="k">Status</span><span className="v">{svc?.active ? "Active" : "Community (unlicensed)"}</span></div>
+        <div><span className="k">Expires</span><span className="v">{svc?.expiresAt ? new Date(svc.expiresAt).toLocaleDateString() : "Never"}</span></div>
+        <div><span className="k">Drivers (SKUs)</span><span className="v">{svc?.skus === "all" ? "All" : (svc?.skus.length ? svc.skus.join(", ") : "None")}</span></div>
+        <div><span className="k">Features</span><span className="v">{svc?.features === "all" ? "All" : (svc?.features.length ? svc.features.map(fmt).join(", ") : "Core")}</span></div>
+      </div>
+      <label className="dev-toggle">
+        <input type="checkbox" checked={Boolean(svc?.devMode)} disabled={busy} onChange={(e) => toggleDev(e.target.checked)} />
+        <span>Developer Mode — unlock every driver &amp; feature (development only)</span>
+      </label>
+      {error && <p className="err">{error}</p>}
+    </section>
   );
 }
 
