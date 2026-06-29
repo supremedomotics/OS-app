@@ -51,3 +51,22 @@ export {
   type ZoneOccupancy,
   type HouseOccupancy,
 } from "./zones.js";
+
+export {
+  validateDeviceIntel,
+  validateDeviceIntelMap,
+  DeviceIntelError,
+  type DeviceIntel,
+  type DevicePriority,
+} from "./device.js";
+
+export {
+  evaluateDevice,
+  evaluateEnergyIntelligence,
+  type EnergyDeviceInput,
+  type EnergyIntelInput,
+  type EnergyIntelOptions,
+  type DeviceEvaluation,
+} from "./energy/decision.js";
+
+export { EnergyIntelligenceModule } from "./energy/module.js";
