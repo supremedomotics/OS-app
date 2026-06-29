@@ -129,6 +129,11 @@ final energyDeviceWattsProvider =
   return ref.watch(clientProvider).energyDeviceWatts();
 });
 
+/// Monthly energy budget + live month-to-date projection.
+final energyBudgetProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  return ref.watch(clientProvider).energyBudget();
+});
+
 /// Cameras registered on the home (§11.1).
 final camerasProvider = FutureProvider<List<Camera>>((ref) async {
   return ref.watch(clientProvider).cameras();

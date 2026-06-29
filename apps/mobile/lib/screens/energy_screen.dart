@@ -376,6 +376,8 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
               label: const Text('Rated wattage'),
             ),
           ),
+        const SizedBox(height: AureonSpacing.md),
+        _budget(context, text, currency),
         const SizedBox(height: AureonSpacing.lg),
         Row(
           children: [
@@ -425,6 +427,88 @@ class _RunningCostsCardState extends ConsumerState<_RunningCostsCard> {
         ),
       ],
     );
+  }
+
+  Widget _budget(BuildContext context, TextTheme text, String currency) {
+    final budget = ref.watch(energyBudgetProvider);
+    return budget.when(
+      loading: () => const SizedBox.shrink(),
+      error: (e, _) => const SizedBox.shrink(),
+      data: (b) {
+        final status = b['status'] as Map<String, dynamic>?;
+        final cur = (b['currency'] as String?) ?? currency;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text('Monthly budget', style: text.titleSmall)),
+                TextButton(
+                  onPressed: () => _editBudget(context),
+                  child: Text(status == null ? 'Set' : _money(cur, status['budget'] as num)),
+                ),
+              ],
+            ),
+            if (status != null) ...[
+              Builder(builder: (_) {
+                final over = status['overBudget'] == true;
+                final util = (status['utilization'] as num?)?.toDouble() ?? 0;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LinearProgressIndicator(
+                      value: util.clamp(0, 1),
+                      minHeight: 8,
+                      backgroundColor: AureonBase.surfaceRaised,
+                      color: over ? AureonGold.c400 : null,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${over ? 'Over budget — ' : ''}projected ${_money(cur, status['projectedMonthEnd'] as num)} by month end',
+                      style: text.labelMedium?.copyWith(color: over ? AureonGold.c400 : null),
+                    ),
+                  ],
+                );
+              }),
+            ] else
+              Text('Set a budget to track your monthly energy spend', style: text.labelMedium),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _editBudget(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final current = ref.read(energyBudgetProvider).valueOrNull?['budget'] as Map<String, dynamic>?;
+    final ctl = TextEditingController(text: current?['monthlyBudget']?.toString() ?? '');
+    final action = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Monthly energy budget'),
+        content: TextField(
+          controller: ctl,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Budget per month (your currency)'),
+        ),
+        actions: [
+          if (current != null)
+            TextButton(onPressed: () => Navigator.pop(dialogContext, 'clear'), child: const Text('Clear')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, 'cancel'), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, 'save'), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (action == 'save' || action == 'clear') {
+      try {
+        await ref.read(clientProvider).setEnergyBudget(action == 'clear' ? null : double.tryParse(ctl.text.trim()));
+        ref.invalidate(energyBudgetProvider);
+      } catch (_) {
+        messenger.showSnackBar(const SnackBar(content: Text('Could not save budget')));
+      }
+    }
+    ctl.dispose();
   }
 
   Future<void> _setup(BuildContext context) async {

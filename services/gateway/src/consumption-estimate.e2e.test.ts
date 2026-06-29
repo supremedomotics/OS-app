@@ -103,4 +103,24 @@ describe("consumption estimator → per-device cost", () => {
     expect(row!.kwh).toBeCloseTo(0.1, 3);
     expect(row!.cost).toBeCloseTo(0.02, 3);
   });
+
+  it("projects month-end spend against a budget and flags over-budget", async () => {
+    // The previous test recorded ~0.1 kWh ($0.02) this month. A $0.01 monthly budget is already
+    // exceeded by the month-to-date spend, so the projection must flag over-budget.
+    const put = await fetch(`${baseUrl}/v1/energy/budget`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ monthlyBudget: 0.01 }),
+    });
+    expect(((await put.json()) as { budget: { monthlyBudget: number } }).budget.monthlyBudget).toBe(0.01);
+
+    const res = (await (
+      await fetch(`${baseUrl}/v1/energy/budget`, { headers: auth() })
+    ).json()) as { currency: string; status: { overBudget: boolean; projectedMonthEnd: number; budget: number } | null };
+    expect(res.currency).toBe("USD");
+    expect(res.status).toBeTruthy();
+    expect(res.status!.budget).toBe(0.01);
+    expect(res.status!.overBudget).toBe(true);
+    expect(res.status!.projectedMonthEnd).toBeGreaterThan(0.01);
+  });
 });

@@ -13,6 +13,7 @@ import {
 } from "@supreme/contracts";
 import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
 import { applyGroupCost, bucketCostHistory, budgetStatus, computeEnergyCost, costHistoryToCsv, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
+import { BudgetError, validateBudget, type EnergyBudget } from "../budget-monitor.js";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
 import { validateVentilationConfig, VentilationError } from "../ventilation-runner.js";
 import type { FastifyInstance } from "fastify";
@@ -247,6 +248,55 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       }
       await ctx.homeConfig.set(ctx.homeId, "device_watts", cleaned);
       reply.send({ watts: cleaned });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Monthly energy budget + live month-to-date projection. GET returns the set budget plus a
+  // projection (when a provider rate is configured) so the app can show "on track / over budget".
+  app.get("/v1/energy/budget", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "view");
+      const budget = (await ctx.homeConfig.get(ctx.homeId, "energy_budget")) as EnergyBudget | undefined;
+      const provider = (await ctx.homeConfig.get(ctx.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined;
+      let status: ReturnType<typeof budgetStatus> | undefined;
+      if (budget && provider) {
+        const now = new Date();
+        const y = now.getUTCFullYear();
+        const m = now.getUTCMonth();
+        const monthStart = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+        const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+        const days = await requireAnalytics(ctx).energyDailySeries(ctx.homeId, monthStart);
+        const kwh = days.reduce((s, d) => s + d.kwh, 0);
+        status = budgetStatus({ monthlyBudget: budget.monthlyBudget, spentSoFar: kwh * provider.ratePerKwh, dayOfMonth: now.getUTCDate(), daysInMonth });
+      }
+      reply.send({ budget: budget ?? null, currency: provider?.currency ?? null, status: status ?? null });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/energy/budget", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "update");
+      const body = (req.body ?? {}) as { monthlyBudget?: unknown };
+      if (body.monthlyBudget === null) {
+        await ctx.homeConfig.set(ctx.homeId, "energy_budget", null);
+        reply.send({ budget: null });
+        return;
+      }
+      let budget;
+      try {
+        budget = validateBudget(body);
+      } catch (err) {
+        if (err instanceof BudgetError) throw new SupremeError("validation_failed", err.message);
+        throw err;
+      }
+      await ctx.homeConfig.set(ctx.homeId, "energy_budget", budget);
+      reply.send({ budget });
     } catch (err) {
       sendError(reply, err);
     }

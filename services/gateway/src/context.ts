@@ -57,6 +57,7 @@ import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
 import { LoadShiftRunner } from "./load-shift-runner.js";
 import { VentilationRunner, type VentilationConfig } from "./ventilation-runner.js";
 import { ConsumptionEstimator } from "./consumption-estimator.js";
+import { BudgetMonitor, type EnergyBudget } from "./budget-monitor.js";
 import type { ClimateProgram } from "@supreme/automations";
 import type { Tariff, RateFetcher } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
@@ -168,6 +169,8 @@ export class AppContext {
   readonly rateFetcher: RateFetcher | null;
   /** Estimates energy for non-metered devices from on-time × rated watts (§16). */
   readonly consumptionEstimator: ConsumptionEstimator;
+  /** Warns once a month when projected energy spend tracks over the owner's budget (§16). */
+  readonly budgetMonitor: BudgetMonitor;
   homeId!: HomeId;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
@@ -240,6 +243,17 @@ export class AppContext {
       roomOf: async (deviceId) => this.home.roomOf(deviceId as DeviceId),
       record: (deviceId, roomId, kwh) =>
         this.analytics?.record({ homeId: this.homeId, deviceId: deviceId as DeviceId, roomId: roomId as never, measure: "energy", value: kwh, unit: "kWh" }) ?? Promise.resolve(),
+    });
+    this.budgetMonitor = new BudgetMonitor({
+      getBudget: async () => (await this.homeConfig.get(this.homeId, "energy_budget")) as EnergyBudget | undefined,
+      getRate: async () => (await this.homeConfig.get(this.homeId, "energy_provider")) as { ratePerKwh: number; currency: string } | undefined,
+      monthToDateKwh: async (fromIsoDay) => {
+        if (!this.analytics) return 0;
+        const days = await this.analytics.energyDailySeries(this.homeId, fromIsoDay);
+        return days.reduce((sum, d) => sum + d.kwh, 0);
+      },
+      notify: (message) =>
+        this.notifications.create({ homeId: this.homeId, level: "warning", title: "Energy budget", body: message }).then(() => undefined),
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,

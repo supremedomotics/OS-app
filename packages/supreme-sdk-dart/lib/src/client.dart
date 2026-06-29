@@ -413,6 +413,23 @@ class SupremeClient {
     return out.map((k, v) => MapEntry(k, (v as num).toDouble()));
   }
 
+  /// The monthly energy budget plus a live month-to-date projection (status is null
+  /// until both a budget and a provider rate are set).
+  Future<Map<String, dynamic>> energyBudget() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/energy/budget'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Set (or clear, with null) the monthly energy budget in the provider's currency.
+  Future<void> setEnergyBudget(double? monthlyBudget) async {
+    final res = await _http.put(Uri.parse('$baseUrl/v1/energy/budget'),
+        headers: _authHeaders,
+        body: jsonEncode({'monthlyBudget': monthlyBudget}));
+    _ensureOk(res);
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),
