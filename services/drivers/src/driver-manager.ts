@@ -1,11 +1,39 @@
 import {
+  DEFAULT_DRIVER_OPERATIONS,
   newId,
+  type DriverCategory,
+  type DriverChannel,
+  type DriverConfigField,
   type DriverId,
+  type DriverOperation,
   type HomeId,
   type InstalledDriver,
   type SignedDriverBundle,
 } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
+
+/** One row of the unified driver registry (catalog metadata + installed state). */
+export interface DriverRegistryEntry {
+  key: string;
+  name: string;
+  description: string;
+  category: DriverCategory;
+  channel: DriverChannel;
+  version: string;
+  publisher: string;
+  capabilities: string[];
+  protocols: string[];
+  requiresSku: string | null;
+  shipsDisabled: boolean;
+  configSchema: DriverConfigField[];
+  dependencies: string[];
+  operations: DriverOperation[];
+  installed: boolean;
+  enabled: boolean;
+  status: string;
+  installedId: string | null;
+  config: Record<string, unknown>;
+}
 import { verifyBundle } from "@supreme/driver-sdk";
 import type { ICatalog } from "./catalog.js";
 import { InMemoryInstalledDriverStore, type IInstalledDriverStore } from "./store.js";
@@ -49,6 +77,43 @@ export class DriverManager {
 
   listInstalled(): Promise<InstalledDriver[]> {
     return this.store.list();
+  }
+
+  /**
+   * The unified driver registry: every driver in the catalog merged with its installed state, config
+   * schema and supported operations. The Driver Manager UI populates entirely from this — so any
+   * current or future driver appears automatically with the right controls and a generated config page.
+   */
+  async registry(): Promise<DriverRegistryEntry[]> {
+    const [bundles, installed] = await Promise.all([this.catalog.list(), this.store.list()]);
+    const byKey = new Map(installed.map((d) => [d.key, d]));
+    return bundles
+      .map((b) => {
+        const m = b.bundle.manifest;
+        const inst = byKey.get(m.key);
+        return {
+          key: m.key,
+          name: m.name,
+          description: m.description,
+          category: m.category,
+          channel: m.channel,
+          version: m.version,
+          publisher: m.publisher,
+          capabilities: m.capabilities,
+          protocols: m.protocols,
+          requiresSku: m.compat.requiresSku,
+          shipsDisabled: m.shipsDisabled,
+          configSchema: m.configSchema,
+          dependencies: m.dependencies,
+          operations: m.operations.length > 0 ? m.operations : DEFAULT_DRIVER_OPERATIONS,
+          installed: Boolean(inst),
+          enabled: inst?.enabled ?? false,
+          status: inst?.status ?? "not_installed",
+          installedId: inst?.id ?? null,
+          config: inst?.config ?? {},
+        } satisfies DriverRegistryEntry;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Install (or change to) a specific driver version. Verifies signature + license. */

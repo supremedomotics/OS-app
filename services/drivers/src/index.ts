@@ -3,7 +3,7 @@
  * Verifies signatures and license entitlements before installing; supports
  * update/rollback/yank and the Matter opt-in toggle.
  */
-export { DriverManager, type DriverManagerOptions } from "./driver-manager.js";
+export { DriverManager, type DriverManagerOptions, type DriverRegistryEntry } from "./driver-manager.js";
 export {
   InMemoryCatalog,
   seedFirstPartyCatalog,

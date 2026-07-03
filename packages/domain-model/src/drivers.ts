@@ -35,8 +35,68 @@ export const ProtocolKind = z.enum([
   "matter",
   "mqtt",
   "modbus",
+  "lutron",
+  "coolmaster",
+  "bacnet",
+  "dmx",
+  "rti",
 ]);
 export type ProtocolKind = z.infer<typeof ProtocolKind>;
+
+/**
+ * A declarative field in a driver's configuration schema. The Driver Manager UI GENERATES a config
+ * form from these, so any driver — current or future — gets a config page for free; complex drivers
+ * can still ship a fully custom page. Kept intentionally small and UI-agnostic.
+ */
+export const DriverConfigField = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  type: z.enum(["text", "password", "number", "boolean", "select", "host", "port"]),
+  required: z.boolean().default(false),
+  /** Default applied when the driver is first configured. */
+  default: z.unknown().optional(),
+  placeholder: z.string().optional(),
+  help: z.string().optional(),
+  /** Options for `select`. */
+  options: z.array(z.object({ value: z.string(), label: z.string() })).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  /** Secret values are masked in the UI and never returned in plaintext by the API. */
+  secret: z.boolean().default(false),
+});
+export type DriverConfigField = z.infer<typeof DriverConfigField>;
+
+export const DriverConfigSchema = z.array(DriverConfigField);
+export type DriverConfigSchema = z.infer<typeof DriverConfigField>[];
+
+/** Lifecycle/management operations a driver supports. The UI shows only the declared ones. */
+export const DriverOperation = z.enum([
+  "install",
+  "uninstall",
+  "configure",
+  "enable",
+  "disable",
+  "connect",
+  "disconnect",
+  "diagnostics",
+  "health",
+  "logs",
+  "update",
+]);
+export type DriverOperation = z.infer<typeof DriverOperation>;
+
+/** The operations essentially every driver supports; protocol drivers add connect/disconnect. */
+export const DEFAULT_DRIVER_OPERATIONS: DriverOperation[] = [
+  "install",
+  "uninstall",
+  "configure",
+  "enable",
+  "disable",
+  "diagnostics",
+  "health",
+  "logs",
+  "update",
+];
 
 /**
  * The driver manifest — the heart of the bundle. It declares which Supreme
@@ -70,6 +130,12 @@ export const DriverManifest = z.object({
   }),
   /** Matter (and similar) ship disabled and are opt-in (§9). */
   shipsDisabled: z.boolean().default(false),
+  /** Declarative config schema → the Driver Manager auto-generates this driver's config page. */
+  configSchema: DriverConfigSchema.default([]),
+  /** Other driver keys this one depends on (installed first). */
+  dependencies: z.array(z.string()).default([]),
+  /** Operations this driver supports; empty → the default set is assumed. */
+  operations: z.array(DriverOperation).default([]),
 });
 export type DriverManifest = z.infer<typeof DriverManifest>;
 

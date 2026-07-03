@@ -50,6 +50,15 @@ import type { GatewayConfig } from "./config.js";
 /** SKU tiers, lowest → highest. A higher tier entitles all lower SKUs. */
 const SKU_TIERS = ["essential", "pro", "estate"] as const;
 
+/** Replace configured secret values with a masked placeholder so plaintext never leaves the hub. */
+function maskSecrets(config: Record<string, unknown>, schema: { key: string; secret?: boolean }[]): Record<string, unknown> {
+  const out = { ...config };
+  for (const field of schema) {
+    if (field.secret && out[field.key] !== undefined && out[field.key] !== "") out[field.key] = "••••••••";
+  }
+  return out;
+}
+
 /** Result of a KNX import (group-address export or .knxproj). */
 export interface KnxImportResult {
   devices: number;
@@ -336,6 +345,12 @@ export class InstallerServices {
   /** The set of SKUs the home is entitled to — delegated to the Licensing Service (Dev Mode aware). */
   licensedSkus(): Set<string> {
     return this.licenseService.licensedSkuSet();
+  }
+
+  /** The unified driver registry (catalog + installed state + config schema), secrets masked. */
+  async driverRegistry() {
+    const entries = await this.drivers.registry();
+    return entries.map((e) => ({ ...e, config: maskSecrets(e.config, e.configSchema) }));
   }
 
   /** Toggle the runtime Developer-Mode override and re-resolve the license. */

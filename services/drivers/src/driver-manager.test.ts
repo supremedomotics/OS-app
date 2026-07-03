@@ -26,6 +26,27 @@ describe("DriverManager", () => {
     expect(catalog.map((e) => e.bundle.manifest.key)).toContain("supreme-matter");
   });
 
+  it("exposes a unified registry with config schema, operations and installed state", async () => {
+    const m = manager({ licensed: ["pro"] });
+    let reg = await m.registry();
+    // Every catalog driver appears (auto-discovery), with a config schema + operations.
+    expect(reg.length).toBeGreaterThanOrEqual(10);
+    const knx = reg.find((r) => r.key === "supreme-knx")!;
+    expect(knx.installed).toBe(false);
+    expect(knx.status).toBe("not_installed");
+    expect(knx.operations).toContain("configure");
+    expect(knx.operations).toContain("connect"); // protocol driver
+    expect(knx.configSchema.find((f) => f.key === "host")).toBeTruthy();
+    expect(knx.requiresSku).toBe("pro");
+    // After install, the registry reflects the installed state.
+    await m.install("supreme-knx");
+    reg = await m.registry();
+    const knx2 = reg.find((r) => r.key === "supreme-knx")!;
+    expect(knx2.installed).toBe(true);
+    expect(knx2.status).toBe("active");
+    expect(knx2.installedId).toBeTruthy();
+  });
+
   it("installs a free driver and rejects an unlicensed paid driver", async () => {
     const m = manager({ licensed: [] });
     // Zigbee is free (requiresSku null).

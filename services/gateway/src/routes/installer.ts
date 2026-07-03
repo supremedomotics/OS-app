@@ -59,6 +59,19 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Unified driver registry: every driver merged with its installed state, config schema and
+  // supported operations. The Driver Manager UI populates entirely from this — any current/future
+  // driver appears automatically. Secrets are masked.
+  app.get("/v1/drivers/registry", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send({ drivers: await i().driverRegistry() });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post("/v1/drivers/install", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
