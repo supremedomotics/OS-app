@@ -203,6 +203,20 @@ export async function setDevMode(enabled: boolean): Promise<LicenseInfo> {
   return (await res.json()) as LicenseInfo;
 }
 
+/** Activate a signed license (pasted token or imported .slic file). */
+export async function activateLicense(token: unknown): Promise<LicenseInfo> {
+  const res = await authed("/v1/license/activate", { method: "POST", body: JSON.stringify({ token }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Activation failed — the license is invalid or for another hub."));
+  return (await res.json()) as LicenseInfo;
+}
+
+/** Issue a signed license locally (dev/test only) and return its token. */
+export async function devIssueLicense(sku: string): Promise<unknown> {
+  const res = await authed("/v1/license/dev-issue", { method: "POST", body: JSON.stringify({ sku }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not issue a test license."));
+  return ((await res.json()) as { token: unknown }).token;
+}
+
 // ── Automations (authenticated) ─────────────────────────────────────────────────
 async function authed(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${baseUrl}${path}`, {

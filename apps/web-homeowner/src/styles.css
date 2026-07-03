@@ -531,3 +531,6 @@ button.link {
 .dev-ws { white-space: pre; }
 .dev-status.ok { color: var(--aureon-color-status-good); }
 .dev-status.err { color: var(--aureon-color-status-critical); }
+/* License activation */
+.lic-activate { margin-top: 14px; border-top: 1px solid var(--aureon-color-base-hairline); padding-top: 12px; }
+.lic-activate textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }

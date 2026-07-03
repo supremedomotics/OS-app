@@ -8,7 +8,7 @@ import {
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
-import { client, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
+import { activateLicense, client, devIssueLicense, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
 import { PasswordInput } from "./password-input.js";
 import { DriverManager } from "./drivers.js";
 import { DeveloperTools } from "./developer.js";
@@ -106,7 +106,69 @@ function LicensingSettings() {
         <span>Developer Mode — unlock every driver &amp; feature (development only)</span>
       </label>
       {error && <p className="err">{error}</p>}
+      <ActivateLicense onActivated={load} devMode={Boolean(svc?.devMode)} />
     </section>
+  );
+}
+
+/** Activate a signed license (paste a token / import a .slic file); dev builds can issue a test one. */
+function ActivateLicense({ onActivated, devMode }: { onActivated: () => Promise<void>; devMode: boolean }) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function activate(raw?: string) {
+    const text = (raw ?? token).trim();
+    if (!text) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await activateLicense(JSON.parse(text));
+      setToken("");
+      setMsg({ ok: true, text: "License activated." });
+      await onActivated();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Activation failed." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importFile(file: File) {
+    const text = await file.text();
+    setToken(text);
+    await activate(text);
+  }
+
+  async function issueTest() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const t = await devIssueLicense("pro");
+      await activateLicense(t);
+      setMsg({ ok: true, text: "Test Pro license issued & activated." });
+      await onActivated();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not issue a test license." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="lic-activate">
+      <p className="opt-label">Activate a license</p>
+      <textarea value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste your Supreme license token (.slic contents)…" rows={3} />
+      <div className="dev-row2" style={{ marginTop: 8 }}>
+        <button className="primary" disabled={busy || !token.trim()} onClick={() => activate()}>Activate</button>
+        <label className="chip" style={{ cursor: "pointer" }}>
+          Import file…
+          <input type="file" accept=".slic,.json,application/json" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])} />
+        </label>
+        {devMode && <button disabled={busy} onClick={issueTest}>Issue &amp; activate test Pro license</button>}
+      </div>
+      {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
+    </div>
   );
 }
 

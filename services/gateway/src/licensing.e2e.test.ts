@@ -108,6 +108,22 @@ describe("Community hub blocks a pro driver", () => {
     expect(status.service.devMode).toBe(false);
   });
 
+  it("unlocks KNX via an ACTIVATED signed license (no Developer Mode)", async () => {
+    // Issue a signed Pro license offline, then activate it — the production licensing path.
+    const issue = await fetch(`${h.baseUrl}/v1/license/dev-issue`, { method: "POST", headers: h.auth, body: JSON.stringify({ sku: "pro", features: ["ai"] }) });
+    expect(issue.status).toBe(201);
+    const { token } = (await issue.json()) as { token: unknown };
+    const activate = await fetch(`${h.baseUrl}/v1/license/activate`, { method: "POST", headers: h.auth, body: JSON.stringify({ token }) });
+    expect(activate.status).toBe(200);
+    const status = (await activate.json()) as { licensed: boolean; service: { devMode: boolean; skus: string[] | "all" } };
+    expect(status.licensed).toBe(true);
+    expect(status.service.devMode).toBe(false); // licensed, NOT via dev mode
+    expect(status.service.skus).toContain("pro");
+    // KNX now installs with a real license.
+    const install = await fetch(`${h.baseUrl}/v1/drivers/install`, { method: "POST", headers: h.auth, body: JSON.stringify({ key: "supreme-knx" }) });
+    expect(install.status).toBe(201);
+  });
+
   it("can flip Developer Mode on at runtime, then KNX installs", async () => {
     const toggle = await fetch(`${h.baseUrl}/v1/license/dev-mode`, { method: "POST", headers: h.auth, body: JSON.stringify({ enabled: true }) });
     expect(toggle.status).toBe(200);
