@@ -70,3 +70,22 @@ describe("Community hub blocks a pro driver", () => {
     expect(install.status).toBe(201);
   });
 });
+
+describe("Developer Mode can be LOCKED for customer/OEM builds", () => {
+  let h: Awaited<ReturnType<typeof boot>>;
+  beforeAll(async () => {
+    // A normal hub runs NODE_ENV=production; that alone must NOT block the toggle. Only the explicit
+    // lock flag does.
+    h = await boot({ NODE_ENV: "production", SUPREME_DEV_MODE_LOCKED: "true" });
+  });
+  afterAll(async () => {
+    await h.app.close();
+    await h.ctx.shutdown();
+  });
+
+  it("refuses the runtime toggle when the lock flag is set", async () => {
+    const res = await fetch(`${h.baseUrl}/v1/license/dev-mode`, { method: "POST", headers: h.auth, body: JSON.stringify({ enabled: true }) });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { message: string }).message).toMatch(/locked/i);
+  });
+});

@@ -33,6 +33,13 @@ export interface GatewayConfig {
   secretsDir: string;
   /** Developer Mode (§dev): when true, HA may be published on 8123 for debugging. Off by default. */
   devMode: boolean;
+  /**
+   * When true, the runtime Developer-Mode toggle is LOCKED (customer/OEM builds set this). Default
+   * false so an owner running the hub can enable Developer Mode from the UI. Note: the hub image runs
+   * with NODE_ENV=production for perf/logging, which is NOT the same as "no dev mode allowed" — hence
+   * a dedicated lock rather than keying off NODE_ENV.
+   */
+  devModeLocked: boolean;
   /** Setup Wizard mode: on production first boot, wait for the wizard to create the admin
    * instead of auto-seeding a demo owner. Off by default (dev/tests keep the demo home). */
   setupWizard: boolean;
@@ -172,6 +179,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     haAdminPassword: secret(env, "SUPREME_HA_ADMIN_PASSWORD") ?? "admin@supremeos",
     secretsDir: env.SUPREME_SECRETS_DIR ?? "",
     devMode: env.SUPREME_DEV_MODE === "1" || env.SUPREME_DEV_MODE === "true",
+    devModeLocked: env.SUPREME_DEV_MODE_LOCKED === "1" || env.SUPREME_DEV_MODE_LOCKED === "true",
     setupWizard: env.SUPREME_SETUP_WIZARD === "1" || env.SUPREME_SETUP_WIZARD === "true",
     systemName: env.SUPREME_SYSTEM_NAME ?? "Supreme Residence",
     timeZone: env.SUPREME_TZ ?? "UTC",

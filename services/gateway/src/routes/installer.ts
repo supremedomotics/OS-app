@@ -268,7 +268,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "admin");
-      if (ctx.config.nodeEnv === "production") throw new SupremeError("forbidden", "Developer Mode is disabled in production builds");
+      if (ctx.config.devModeLocked) throw new SupremeError("forbidden", "Developer Mode is locked on this build (SUPREME_DEV_MODE_LOCKED)");
       await i().setDevMode(Boolean(req.body?.enabled));
       reply.send(i().licenseStatus() satisfies LicenseStatus);
     } catch (err) {
