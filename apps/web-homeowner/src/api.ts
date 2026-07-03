@@ -69,6 +69,88 @@ export async function resetPassword(token: string, newPassword: string): Promise
   if (!res.ok) throw new Error(await errorMessage(res, "Could not reset the password."));
 }
 
+// ── Driver Framework (authenticated) ──────────────────────────────────────────────
+export interface DriverConfigField {
+  key: string;
+  label: string;
+  type: "text" | "password" | "number" | "boolean" | "select" | "host" | "port";
+  required: boolean;
+  default?: unknown;
+  placeholder?: string;
+  help?: string;
+  options?: { value: string; label: string }[];
+  min?: number;
+  max?: number;
+  secret: boolean;
+}
+export interface DriverEntry {
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  channel: string;
+  version: string;
+  publisher: string;
+  capabilities: string[];
+  protocols: string[];
+  requiresSku: string | null;
+  configSchema: DriverConfigField[];
+  dependencies: string[];
+  operations: string[];
+  installed: boolean;
+  enabled: boolean;
+  status: string;
+  installedId: string | null;
+  config: Record<string, unknown>;
+}
+
+export async function fetchDriverRegistry(): Promise<DriverEntry[]> {
+  try {
+    const res = await authed("/v1/drivers/registry");
+    return res.ok ? ((await res.json()) as { drivers: DriverEntry[] }).drivers : [];
+  } catch {
+    return [];
+  }
+}
+export async function getDriverConfig(id: string): Promise<{ schema: DriverConfigField[]; config: Record<string, unknown> }> {
+  const res = await authed(`/v1/drivers/${id}/config`);
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not load config."));
+  return (await res.json()) as { schema: DriverConfigField[]; config: Record<string, unknown> };
+}
+export async function setDriverConfig(id: string, config: Record<string, unknown>): Promise<void> {
+  const res = await authed(`/v1/drivers/${id}/config`, { method: "PUT", body: JSON.stringify({ config }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not save config."));
+}
+export async function fetchDriverHealth(id: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await authed(`/v1/drivers/${id}/health`);
+    return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+export async function fetchDriverLogs(id: string): Promise<{ ts: string; level: string; message: string }[]> {
+  try {
+    const res = await authed(`/v1/drivers/${id}/logs`);
+    return res.ok ? ((await res.json()) as { entries: { ts: string; level: string; message: string }[] }).entries : [];
+  } catch {
+    return [];
+  }
+}
+export async function connectDriver(id: string, connect: boolean): Promise<void> {
+  await authed(`/v1/drivers/${id}/${connect ? "connect" : "disconnect"}`, { method: "POST", body: "{}" });
+}
+export async function installDriverByKey(key: string): Promise<void> {
+  const res = await authed("/v1/drivers/install", { method: "POST", body: JSON.stringify({ key }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Install failed."));
+}
+export async function setDriverEnabled(id: string, enabled: boolean): Promise<void> {
+  await authed(`/v1/drivers/${id}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) });
+}
+export async function uninstallDriver(id: string): Promise<void> {
+  await authed(`/v1/drivers/${id}`, { method: "DELETE" });
+}
+
 // ── Licensing (authenticated) ────────────────────────────────────────────────────
 export interface LicenseService {
   active: boolean;

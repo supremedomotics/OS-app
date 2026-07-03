@@ -10,6 +10,7 @@ import {
 } from "@supreme/aureon-web";
 import { client, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
 import { PasswordInput } from "./password-input.js";
+import { DriverManager } from "./drivers.js";
 
 /**
  * Settings (§11.2/§11.3): Appearance (theme + accent), Account (change password), and Integrations
@@ -55,7 +56,7 @@ export function ThemeSettings() {
 
       <LicensingSettings />
       <AccountSettings />
-      <IntegrationsSettings />
+      <DriverManager />
     </div>
   );
 }
@@ -145,72 +146,6 @@ function AccountSettings() {
       <button className="primary" disabled={busy || !current || !next} onClick={change} style={{ marginTop: 10 }}>
         {busy ? "Updating…" : "Update password"}
       </button>
-    </section>
-  );
-}
-
-interface CatalogEntry {
-  manifest: { key: string; name: string; category?: string };
-}
-
-function IntegrationsSettings() {
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [installedKeys, setInstalledKeys] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-
-  async function load() {
-    try {
-      const cat = (await client.driversCatalog()) as { catalog: CatalogEntry[] };
-      const inst = (await client.installedDrivers()) as { drivers: { key: string }[] };
-      setCatalog(cat.catalog);
-      setInstalledKeys(new Set(inst.drivers.map((d) => d.key)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load integrations.");
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function install(key: string) {
-    setBusyKey(key);
-    setError(null);
-    try {
-      await client.installDriver(key);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Install failed.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  return (
-    <section className="card-section">
-      <h2 className="section-title">Integrations &amp; drivers</h2>
-      <p className="sub">Add a protocol or device integration to your home.</p>
-      {error && <p className="err">{error}</p>}
-      {catalog.length === 0 && !error && <p className="muted">No integrations available.</p>}
-      {catalog.map((entry) => {
-        const m = entry.manifest;
-        const installed = installedKeys.has(m.key);
-        return (
-          <div key={m.key} className="row" style={{ justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}>
-            <span>
-              <strong>{m.name}</strong>
-              {m.category ? <span className="muted"> · {m.category}</span> : null}
-            </span>
-            {installed ? (
-              <span className="muted">Installed</span>
-            ) : (
-              <button className="primary" disabled={busyKey === m.key} onClick={() => install(m.key)}>
-                {busyKey === m.key ? "Installing…" : "Install"}
-              </button>
-            )}
-          </div>
-        );
-      })}
     </section>
   );
 }
