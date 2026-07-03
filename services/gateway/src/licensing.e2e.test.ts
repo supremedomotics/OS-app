@@ -42,6 +42,15 @@ describe("Developer Mode unlocks every SKU", () => {
     expect(res.status).toBe(201);
     expect(((await res.json()) as { driver: { key: string } }).driver.key).toBe("supreme-knx");
   });
+
+  it("seeds the default developer account (supreme / supreme@72) as a master", async () => {
+    const login = (await (
+      await fetch(`${h.baseUrl}/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "supreme", password: "supreme@72" }) })
+    ).json()) as { status: string; accessToken?: string };
+    expect(login.status).toBe("ok");
+    const me = (await (await fetch(`${h.baseUrl}/v1/me`, { headers: { authorization: `Bearer ${login.accessToken}` } })).json()) as { user: { userType: string } };
+    expect(me.user.userType).toBe("master");
+  });
 });
 
 describe("Community hub blocks a pro driver", () => {

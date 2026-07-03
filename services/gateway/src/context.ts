@@ -423,7 +423,25 @@ export class AppContext {
       await seedDemoHome(ctx.home, home);
     }
     await ctx.initWithHome(home);
+    // Default developer account (DEV BUILDS ONLY): logging in as `supreme` / `supreme@72` gives a
+    // full-access master with Developer Mode already on (SUPREME_DEV_MODE). NEVER seeded in
+    // production — guarded by config.devMode, which production builds never set.
+    if (config.devMode) await ctx.ensureDeveloperAccount();
     return ctx;
+  }
+
+  /** Seed the built-in Supreme developer account on dev builds (idempotent). */
+  private async ensureDeveloperAccount(): Promise<void> {
+    try {
+      await this.identity.createUser({
+        email: "supreme@supreme.local",
+        password: "supreme@72",
+        displayName: "Supreme Developer",
+        userType: "master",
+      });
+    } catch {
+      // Already exists (or home not commissioned) — fine; this is best-effort dev convenience.
+    }
   }
 
   /**
