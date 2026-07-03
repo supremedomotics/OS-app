@@ -69,6 +69,24 @@ export async function resetPassword(token: string, newPassword: string): Promise
   if (!res.ok) throw new Error(await errorMessage(res, "Could not reset the password."));
 }
 
+// ── Developer Edition tools (authenticated) ────────────────────────────────────────
+/** Generic authenticated request — powers the developer API Explorer. */
+export async function apiRequest(method: string, path: string, body?: string): Promise<{ status: number; body: unknown }> {
+  const res = await authed(path.startsWith("/") ? path : `/${path}`, { method, ...(body && method !== "GET" ? { body } : {}) });
+  let parsed: unknown = null;
+  const text = await res.text();
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text;
+  }
+  return { status: res.status, body: parsed };
+}
+/** The authenticated WebSocket stream URL (for the developer WS inspector). */
+export function streamUrl(): string | null {
+  return client.accessToken ? `${wsBaseUrl}/v1/stream?access_token=${client.accessToken}` : null;
+}
+
 // ── Driver Framework (authenticated) ──────────────────────────────────────────────
 export interface DriverConfigField {
   key: string;

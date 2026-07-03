@@ -11,6 +11,7 @@ import {
 import { client, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
 import { PasswordInput } from "./password-input.js";
 import { DriverManager } from "./drivers.js";
+import { DeveloperTools } from "./developer.js";
 
 /**
  * Settings (§11.2/§11.3): Appearance (theme + accent), Account (change password), and Integrations
@@ -57,6 +58,7 @@ export function ThemeSettings() {
       <LicensingSettings />
       <AccountSettings />
       <DriverManager />
+      <DeveloperTools />
     </div>
   );
 }
