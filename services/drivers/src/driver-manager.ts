@@ -35,6 +35,7 @@ export interface DriverRegistryEntry {
   config: Record<string, unknown>;
 }
 import { verifyBundle } from "@supreme/driver-sdk";
+import { defaultDriverConfig, validateDriverConfig } from "./config.js";
 import type { ICatalog } from "./catalog.js";
 import { InMemoryInstalledDriverStore, type IInstalledDriverStore } from "./store.js";
 
@@ -116,6 +117,31 @@ export class DriverManager {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /** The manifest config schema for an installed driver (empty if none / not found). */
+  private async schemaFor(key: string): Promise<import("@supreme/domain-model").DriverConfigField[]> {
+    const bundle = await this.catalog.find(key);
+    return bundle?.bundle.manifest.configSchema ?? [];
+  }
+
+  /** Read an installed driver's config. */
+  async getConfig(id: DriverId): Promise<Record<string, unknown>> {
+    const inst = await this.store.get(id);
+    if (!inst) throw new SupremeError("not_found", "driver not installed");
+    return inst.config;
+  }
+
+  /** Validate + persist an installed driver's config against its manifest schema. */
+  async setConfig(id: DriverId, input: Record<string, unknown>): Promise<InstalledDriver> {
+    const inst = await this.store.get(id);
+    if (!inst) throw new SupremeError("not_found", "driver not installed");
+    const schema = await this.schemaFor(inst.key);
+    const { config, errors } = validateDriverConfig(schema, input, inst.config);
+    if (errors.length > 0) throw new SupremeError("validation_failed", errors.join("; "));
+    const updated: InstalledDriver = { ...inst, config };
+    await this.store.put(updated);
+    return updated;
+  }
+
   /** Install (or change to) a specific driver version. Verifies signature + license. */
   async install(key: string, version?: string): Promise<InstalledDriver> {
     const entry = await this.catalog.find(key, version);
@@ -140,7 +166,8 @@ export class DriverManager {
       // Matter (and other shipsDisabled drivers) install disabled — opt-in to enable.
       enabled: existing?.enabled ?? !manifest.shipsDisabled,
       status: manifest.shipsDisabled && !existing?.enabled ? "disabled" : "active",
-      config: existing?.config ?? {},
+      // Preserve config on reinstall; on a fresh install seed the schema defaults.
+      config: existing?.config ?? defaultDriverConfig(manifest.configSchema),
     };
     await this.store.put(installed);
     return installed;

@@ -14,3 +14,4 @@ export {
   type IInstalledDriverStore,
 } from "./store.js";
 export { FIRST_PARTY_MANIFESTS } from "./manifests.js";
+export { validateDriverConfig, defaultDriverConfig, isConfigComplete, SECRET_MASK, type ConfigValidation } from "./config.js";

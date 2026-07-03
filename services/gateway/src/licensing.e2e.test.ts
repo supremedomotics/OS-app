@@ -43,6 +43,26 @@ describe("Developer Mode unlocks every SKU", () => {
     expect(((await res.json()) as { driver: { key: string } }).driver.key).toBe("supreme-knx");
   });
 
+  it("exposes the driver registry + a schema-validated config page", async () => {
+    // Registry lists every driver with its config schema (auto-discovery).
+    const reg = (await (await fetch(`${h.baseUrl}/v1/drivers/registry`, { headers: h.auth })).json()) as { drivers: { key: string; installedId: string | null; configSchema: { key: string }[] }[] };
+    const knx = reg.drivers.find((d) => d.key === "supreme-knx")!;
+    expect(knx.configSchema.some((f) => f.key === "host")).toBe(true);
+    expect(knx.installedId).toBeTruthy(); // installed by the earlier test
+
+    // Configure it (schema-validated), then read it back.
+    const put = await fetch(`${h.baseUrl}/v1/drivers/${knx.installedId}/config`, { method: "PUT", headers: h.auth, body: JSON.stringify({ config: { host: "192.168.1.50", port: 3671 } }) });
+    expect(put.status).toBe(200);
+    const cfg = (await (await fetch(`${h.baseUrl}/v1/drivers/${knx.installedId}/config`, { headers: h.auth })).json()) as { config: Record<string, unknown>; schema: unknown[] };
+    expect(cfg.config.host).toBe("192.168.1.50");
+    expect(cfg.config.port).toBe(3671);
+    expect(Array.isArray(cfg.schema)).toBe(true);
+
+    // Invalid config (bad port) is rejected.
+    const bad = await fetch(`${h.baseUrl}/v1/drivers/${knx.installedId}/config`, { method: "PUT", headers: h.auth, body: JSON.stringify({ config: { host: "x", port: 999999 } }) });
+    expect(bad.status).toBe(422);
+  });
+
   it("seeds the default developer account (supreme / supreme@72) as a master", async () => {
     const login = (await (
       await fetch(`${h.baseUrl}/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "supreme", password: "supreme@72" }) })

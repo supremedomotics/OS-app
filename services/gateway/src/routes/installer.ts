@@ -72,6 +72,27 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Per-driver configuration (schema + masked values), and a schema-validated update.
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/config", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send(await i().getDriverConfig(req.params.id as DriverId));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put<{ Params: { id: string }; Body: { config?: Record<string, unknown> } }>("/v1/drivers/:id/config", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      reply.send(await i().setDriverConfig(req.params.id as DriverId, req.body?.config ?? {}));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post("/v1/drivers/install", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);

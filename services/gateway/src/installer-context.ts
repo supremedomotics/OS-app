@@ -353,6 +353,19 @@ export class InstallerServices {
     return entries.map((e) => ({ ...e, config: maskSecrets(e.config, e.configSchema) }));
   }
 
+  /** An installed driver's config schema + current (masked) values, for its config page. */
+  async getDriverConfig(id: DriverId) {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    if (!entry) throw new SupremeError("not_found", "driver not installed");
+    return { key: entry.key, name: entry.name, schema: entry.configSchema, config: maskSecrets(entry.config, entry.configSchema) };
+  }
+
+  /** Validate + persist a driver's config, returning the masked result. */
+  async setDriverConfig(id: DriverId, input: Record<string, unknown>) {
+    await this.drivers.setConfig(id, input);
+    return this.getDriverConfig(id);
+  }
+
   /** Toggle the runtime Developer-Mode override and re-resolve the license. */
   async setDevMode(enabled: boolean): Promise<void> {
     this.devModeOverride = enabled;
