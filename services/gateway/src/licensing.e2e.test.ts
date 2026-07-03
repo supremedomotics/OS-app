@@ -63,6 +63,23 @@ describe("Developer Mode unlocks every SKU", () => {
     expect(bad.status).toBe(422);
   });
 
+  it("reports per-driver health, logs, and connect/disconnect", async () => {
+    const reg = (await (await fetch(`${h.baseUrl}/v1/drivers/registry`, { headers: h.auth })).json()) as { drivers: { key: string; installedId: string | null }[] };
+    const id = reg.drivers.find((d) => d.key === "supreme-knx")!.installedId!;
+
+    const health = (await (await fetch(`${h.baseUrl}/v1/drivers/${id}/health`, { headers: h.auth })).json()) as { verdict: string; configComplete: boolean; enabled: boolean };
+    expect(health.enabled).toBe(true);
+    expect(["healthy", "not_configured", "error", "disabled"]).toContain(health.verdict);
+    expect(typeof health.configComplete).toBe("boolean");
+
+    // Connect (no native KNX gateway in the test → connected:false, logged).
+    const conn = (await (await fetch(`${h.baseUrl}/v1/drivers/${id}/connect`, { method: "POST", headers: h.auth })).json()) as { connected: boolean };
+    expect(typeof conn.connected).toBe("boolean");
+
+    const logs = (await (await fetch(`${h.baseUrl}/v1/drivers/${id}/logs`, { headers: h.auth })).json()) as { entries: { message: string }[] };
+    expect(logs.entries.length).toBeGreaterThan(0); // config update + connect were logged
+  });
+
   it("seeds the default developer account (supreme / supreme@72) as a master", async () => {
     const login = (await (
       await fetch(`${h.baseUrl}/v1/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "supreme", password: "supreme@72" }) })

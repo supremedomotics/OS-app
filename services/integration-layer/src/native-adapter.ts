@@ -83,6 +83,31 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     return this.connected;
   }
 
+  /** Per-protocol runtime status (for driver health): connectivity + any boot connect error. */
+  protocolStatus(): Array<{ protocol: string; connected: boolean; error: string | null }> {
+    const errByProto = new Map<string, string>();
+    for (const e of this.connectErrors) errByProto.set(e.protocol, e.error.message);
+    return this.drivers.map((d) => ({ protocol: d.protocol, connected: d.isConnected(), error: errByProto.get(d.protocol) ?? null }));
+  }
+
+  /** (Re)connect a single protocol's native driver — the Driver Manager "Connect" action. */
+  async connectProtocol(protocol: string): Promise<boolean> {
+    const driver = this.drivers.find((d) => d.protocol === protocol);
+    if (!driver) return false;
+    await driver.connect();
+    // Drop any stale boot error for this protocol now that it reconnected.
+    for (let i = this.connectErrors.length - 1; i >= 0; i--) if (this.connectErrors[i]!.protocol === protocol) this.connectErrors.splice(i, 1);
+    return true;
+  }
+
+  /** Disconnect a single protocol's native driver — the "Disconnect" action. */
+  async disconnectProtocol(protocol: string): Promise<boolean> {
+    const driver = this.drivers.find((d) => d.protocol === protocol);
+    if (!driver) return false;
+    await driver.disconnect();
+    return true;
+  }
+
   /** Native commissioning: place a device (capability state) under native control. */
   provision(deviceId: DeviceId, capability: CapabilityKind, state?: CapabilityState): void {
     this.managed.add(deviceId);

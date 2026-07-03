@@ -22,6 +22,7 @@ import type { IdentityService } from "@supreme/identity";
 import {
   DriverManager,
   InMemoryCatalog,
+  isConfigComplete,
   seedFirstPartyCatalog,
   type IInstalledDriverStore,
 } from "@supreme/drivers";
@@ -362,8 +363,70 @@ export class InstallerServices {
 
   /** Validate + persist a driver's config, returning the masked result. */
   async setDriverConfig(id: DriverId, input: Record<string, unknown>) {
-    await this.drivers.setConfig(id, input);
+    const updated = await this.drivers.setConfig(id, input);
+    this.appendLog(updated.key, "info", "Configuration updated");
     return this.getDriverConfig(id);
+  }
+
+  /** In-memory per-driver log ring buffer (lifecycle + connection events). */
+  private readonly driverLogEntries = new Map<string, Array<{ ts: string; level: string; message: string }>>();
+  private appendLog(key: string, level: "info" | "warn" | "error", message: string): void {
+    const arr = this.driverLogEntries.get(key) ?? [];
+    arr.push({ ts: new Date().toISOString(), level, message });
+    if (arr.length > 200) arr.shift();
+    this.driverLogEntries.set(key, arr);
+  }
+
+  /** Recent log entries for an installed driver. */
+  async driverLogs(id: DriverId): Promise<{ key: string; entries: Array<{ ts: string; level: string; message: string }> }> {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    if (!entry) throw new SupremeError("not_found", "driver not installed");
+    return { key: entry.key, entries: this.driverLogEntries.get(entry.key) ?? [] };
+  }
+
+  /** Per-driver health: install/enable state, config completeness, and native connectivity. */
+  async driverHealth(id: DriverId) {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    if (!entry) throw new SupremeError("not_found", "driver not installed");
+    const { complete, missing } = isConfigComplete(entry.configSchema, entry.config);
+    const protoStatus = this.d.sil.nativeProtocolStatus();
+    const status = entry.protocols.map((p) => protoStatus.find((s) => s.protocol === p)).find(Boolean);
+    const connected = status ? status.connected : null;
+    const connectError = status?.error ?? null;
+    const verdict = !entry.enabled ? "disabled" : connectError ? "error" : !complete ? "not_configured" : "healthy";
+    return {
+      key: entry.key,
+      name: entry.name,
+      installed: entry.installed,
+      enabled: entry.enabled,
+      status: entry.status,
+      configComplete: complete,
+      missing,
+      connected,
+      connectError,
+      verdict,
+      logCount: (this.driverLogEntries.get(entry.key) ?? []).length,
+    };
+  }
+
+  /** Connect a driver's native protocol stack(s). */
+  async connectDriver(id: DriverId): Promise<{ connected: boolean }> {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    if (!entry) throw new SupremeError("not_found", "driver not installed");
+    let connected = false;
+    for (const p of entry.protocols) if (await this.d.sil.connectNativeProtocol(p)) connected = true;
+    this.appendLog(entry.key, connected ? "info" : "warn", connected ? "Connected" : "No native driver to connect (managed by backend)");
+    return { connected };
+  }
+
+  /** Disconnect a driver's native protocol stack(s). */
+  async disconnectDriver(id: DriverId): Promise<{ disconnected: boolean }> {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    if (!entry) throw new SupremeError("not_found", "driver not installed");
+    let disconnected = false;
+    for (const p of entry.protocols) if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+    this.appendLog(entry.key, "info", disconnected ? "Disconnected" : "No native driver to disconnect");
+    return { disconnected };
   }
 
   /** Toggle the runtime Developer-Mode override and re-resolve the license. */
@@ -511,8 +574,24 @@ export class InstallerServices {
 
   // ── driver helpers (thin pass-throughs used by routes) ───────────────────────
 
-  enableDriver(id: DriverId, enabled: boolean) {
-    return this.drivers.setEnabled(id, enabled);
+  async enableDriver(id: DriverId, enabled: boolean) {
+    const d = await this.drivers.setEnabled(id, enabled);
+    this.appendLog(d.key, "info", enabled ? "Enabled" : "Disabled");
+    return d;
+  }
+
+  /** Install a driver (logged). */
+  async installDriver(key: string, version?: string) {
+    const d = await this.drivers.install(key, version);
+    this.appendLog(d.key, "info", `Installed v${d.version}`);
+    return d;
+  }
+
+  /** Uninstall a driver (logged). */
+  async uninstallDriver(id: DriverId) {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    await this.drivers.uninstall(id);
+    if (entry) this.appendLog(entry.key, "info", "Uninstalled");
   }
 
   private requireDb(): SqlDb {

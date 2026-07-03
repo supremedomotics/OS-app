@@ -98,7 +98,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "create");
       const { key, version } = InstallDriverRequest.parse(req.body);
-      const driver = await i().drivers.install(key, version);
+      const driver = await i().installDriver(key, version);
       const body: InstalledDriverResponse = { driver };
       reply.code(201).send(body);
     } catch (err) {
@@ -145,8 +145,49 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "delete");
-      await i().drivers.uninstall(req.params.id as DriverId);
+      await i().uninstallDriver(req.params.id as DriverId);
       reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Per-driver health, logs, and connect/disconnect (Driver Manager operations).
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/health", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send(await i().driverHealth(req.params.id as DriverId));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/logs", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send(await i().driverLogs(req.params.id as DriverId));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/drivers/:id/connect", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      reply.send(await i().connectDriver(req.params.id as DriverId));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/drivers/:id/disconnect", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      reply.send(await i().disconnectDriver(req.params.id as DriverId));
     } catch (err) {
       sendError(reply, err);
     }

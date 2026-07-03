@@ -80,6 +80,21 @@ export class SupremeIntegrationLayer {
     return this.adapter.isConnected();
   }
 
+  /** Per-protocol native driver status (for driver health/diagnostics). Empty without a native router. */
+  nativeProtocolStatus(): Array<{ protocol: string; connected: boolean; error: string | null }> {
+    return this.router?.native.protocolStatus() ?? [];
+  }
+
+  /** (Re)connect a single native protocol driver — the Driver Manager "Connect" action. */
+  async connectNativeProtocol(protocol: string): Promise<boolean> {
+    return (await this.router?.native.connectProtocol(protocol)) ?? false;
+  }
+
+  /** Disconnect a single native protocol driver — the "Disconnect" action. */
+  async disconnectNativeProtocol(protocol: string): Promise<boolean> {
+    return (await this.router?.native.disconnectProtocol(protocol)) ?? false;
+  }
+
   /**
    * Bind a device/capability to a real native protocol stack (KNX/Modbus/MQTT). After
    * this the device is owned by the Supreme-native engine and its commands/state flow
