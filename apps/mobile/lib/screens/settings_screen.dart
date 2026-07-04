@@ -6,6 +6,7 @@ import '../cloud/multi_home.dart';
 import '../providers.dart';
 import '../widgets/password_field.dart';
 import 'add_home_screen.dart';
+import 'advanced_settings_screen.dart';
 import 'driver_manager_screen.dart';
 
 /// Appearance settings (§11.2 Themes): Light / Dark / Automatic base palettes
@@ -62,6 +63,16 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const DriverManagerScreen()),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.tune_outlined),
+            title: const Text('Advanced'),
+            subtitle: const Text('Circadian, climate, ventilation, energy'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AdvancedSettingsScreen()),
             ),
           ),
           const SizedBox(height: AureonSpacing.lg),

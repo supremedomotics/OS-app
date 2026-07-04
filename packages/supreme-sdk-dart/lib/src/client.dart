@@ -414,6 +414,7 @@ class SupremeClient {
     String? city,
     String? provider,
     double? ratePerKwh,
+    String? currency,
   }) async {
     final res = await _http.put(
       Uri.parse('$baseUrl/v1/energy/provider'),
@@ -423,6 +424,7 @@ class SupremeClient {
         if (city != null) 'city': city,
         if (provider != null) 'provider': provider,
         if (ratePerKwh != null) 'ratePerKwh': ratePerKwh,
+        if (currency != null && currency.isNotEmpty) 'currency': currency,
       }),
     );
     _ensureOk(res);
@@ -677,6 +679,64 @@ class SupremeClient {
       Uri.parse('$baseUrl/v1/climate/program'),
       headers: _authHeaders,
       body: jsonEncode({'program': program}),
+    );
+    _ensureOk(res);
+  }
+
+  /// The current circadian (human-centric) lighting target for the hub's local time
+  /// ({target:{kelvin,brightness}, atLocalMinute}).
+  Future<Map<String, dynamic>> circadianTarget() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/lighting/circadian'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Adaptive-ventilation config + live fan state ({config, fanOn}).
+  Future<Map<String, dynamic>> ventilation() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/ventilation/config'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Configure adaptive ventilation ({sensorDeviceId, fanDeviceId, highThreshold?, lowThreshold?}).
+  Future<void> setVentilation(Map<String, dynamic> config) async {
+    final res = await _http.put(Uri.parse('$baseUrl/v1/ventilation/config'),
+        headers: _authHeaders, body: jsonEncode({'config': config}));
+    _ensureOk(res);
+  }
+
+  /// The home's durable energy tariff (time-of-use rate plan), or null.
+  Future<Map<String, dynamic>?> tariff() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/energy/tariff'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['tariff']
+        as Map<String, dynamic>?;
+  }
+
+  /// Replace the home's energy tariff ({currency, standingChargePerDay?, periods:[{name,ratePerKwh,hours}]}).
+  Future<void> setTariff(Map<String, dynamic> tariff) async {
+    final res = await _http.put(Uri.parse('$baseUrl/v1/energy/tariff'),
+        headers: _authHeaders, body: jsonEncode({'tariff': tariff}));
+    _ensureOk(res);
+  }
+
+  /// Peak load-shifting: the deferrable device ids + the ones paused right now.
+  Future<Map<String, dynamic>> deferrableLoads() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/energy/deferrable-loads'),
+        headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Set the deferrable loads (device ids the hub may pause during peak) + an optional rate ceiling.
+  Future<void> setDeferrableLoads(List<String> deviceIds, {num? ceiling}) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/energy/deferrable-loads'),
+      headers: _authHeaders,
+      body: jsonEncode({'deviceIds': deviceIds, if (ceiling != null) 'ceiling': ceiling}),
     );
     _ensureOk(res);
   }
