@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show Color;
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 /// Room hero imagery (mobile/tablet parity with the web app, §11). A room's photo is, in order:
@@ -40,15 +41,6 @@ const List<List<String>> _nameKeywords = [
   [r'kitchen|pantry', 'kitchen'],
 ];
 
-int _lockFor(String s) {
-  var h = 2166136261;
-  for (var i = 0; i < s.length; i++) {
-    h ^= s.codeUnitAt(i);
-    h = (h * 16777619) & 0xffffffff;
-  }
-  return h.abs() % 100000;
-}
-
 String _keywordFor(String name, String? areaType) {
   for (final entry in _nameKeywords) {
     if (RegExp(entry[0], caseSensitive: false).hasMatch(name)) return entry[1];
@@ -56,18 +48,47 @@ String _keywordFor(String name, String? areaType) {
   return _areaKeywords[areaType ?? 'other'] ?? _areaKeywords['other']!;
 }
 
-String _stockPhoto(String name, String? areaType) {
-  final keyword = _keywordFor(name, areaType);
-  final lock = _lockFor(name + (areaType ?? ''));
-  return 'https://loremflickr.com/1200/800/${Uri.encodeComponent(keyword)}?lock=$lock';
+/// A designed, room-type background (deep two-tone + a motif emoji) shown when a room has no photo —
+/// so a card is never flat colour. Mirrors the web `roomGradient`.
+class RoomStyle {
+  const RoomStyle(this.from, this.to, this.emoji);
+  final Color from;
+  final Color to;
+  final String emoji;
 }
 
-/// The hero/card image URL for a room. Hub-stored photo when present (identical everywhere),
-/// else a deterministic stock fallback by name.
-String roomImageUrl(SupremeClient client, String name, String? areaType, String? heroImageUrl) {
-  final resolved = client.heroImageSrc(heroImageUrl);
-  if (resolved != null) return resolved;
-  return _stockPhoto(name, areaType);
+const Map<String, RoomStyle> _roomStyles = {
+  'living room': RoomStyle(Color(0xFF3A2A1C), Color(0xFF12100E), '🛋'),
+  'kitchen': RoomStyle(Color(0xFF3A3320), Color(0xFF121110), '🍽'),
+  'bedroom': RoomStyle(Color(0xFF2C2338), Color(0xFF100F14), '🛏'),
+  'luxury bedroom': RoomStyle(Color(0xFF332740), Color(0xFF110F16), '🛏'),
+  'bathroom': RoomStyle(Color(0xFF1E3336), Color(0xFF0E1314), '🛁'),
+  'office': RoomStyle(Color(0xFF22303A), Color(0xFF0E1114), '💼'),
+  'home library': RoomStyle(Color(0xFF2E2318), Color(0xFF12100C), '📚'),
+  'dining room': RoomStyle(Color(0xFF3A2226), Color(0xFF130F10), '🍷'),
+  'home theater': RoomStyle(Color(0xFF241F3A), Color(0xFF0D0C14), '🎬'),
+  'home gym': RoomStyle(Color(0xFF1F3336), Color(0xFF0D1213), '🏋'),
+  'swimming pool': RoomStyle(Color(0xFF153842), Color(0xFF0B1417), '🏊'),
+  'garden': RoomStyle(Color(0xFF1F3324), Color(0xFF0D130E), '🌿'),
+  'terrace': RoomStyle(Color(0xFF33301F), Color(0xFF12110C), '🌆'),
+  'garage interior': RoomStyle(Color(0xFF2A2E33), Color(0xFF101113), '🚗'),
+  'kids room': RoomStyle(Color(0xFF333A20), Color(0xFF12130C), '🧸'),
+  'hotel lobby': RoomStyle(Color(0xFF332A1C), Color(0xFF12100C), '🛎'),
+  'conference room': RoomStyle(Color(0xFF25303A), Color(0xFF0E1013), '📊'),
+  'showroom interior': RoomStyle(Color(0xFF2F2A33), Color(0xFF100F12), '✨'),
+  'laundry room': RoomStyle(Color(0xFF243033), Color(0xFF0F1213), '🧺'),
+  'hallway': RoomStyle(Color(0xFF2C2A26), Color(0xFF100F0E), '🚪'),
+  'modern interior': RoomStyle(Color(0xFF2A2A30), Color(0xFF0F0F12), '🏠'),
+};
+
+RoomStyle roomStyle(String name, String? areaType) =>
+    _roomStyles[_keywordFor(name, areaType)] ?? _roomStyles['modern interior']!;
+
+/// The hero/card PHOTO url for a room, or null when there's no stored photo (the caller then paints
+/// the [roomStyle] gradient). We no longer point at an external stock CDN directly — an unreachable
+/// URL rendered as flat colour; the hub fetches & stores the photo (see [ensureRoomHero]).
+String? roomImageUrl(SupremeClient client, String name, String? areaType, String? heroImageUrl) {
+  return client.heroImageSrc(heroImageUrl);
 }
 
 // Rooms we've already asked the hub to pin, so we don't re-POST on every rebuild.

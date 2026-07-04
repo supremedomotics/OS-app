@@ -82,14 +82,17 @@ class DashboardScreen extends ConsumerWidget {
     final text = Theme.of(context).textTheme;
     final homeName = home.maybeWhen(data: (h) => h.homeName, orElse: () => 'Supreme');
     final roomCount = home.maybeWhen(data: (h) => h.rooms.length, orElse: () => 0);
-    // Home hero photo — the hub-served image of a representative room (identical across apps).
-    final heroImage = home.maybeWhen(
+    // Home hero — a representative room's hub photo when one exists, else that room's designed style.
+    String? heroImage;
+    RoomStyle heroStyleValue = roomStyle(homeName, null);
+    home.maybeWhen(
       data: (h) {
-        if (h.rooms.isEmpty) return null;
+        if (h.rooms.isEmpty) return;
         final r = h.rooms.firstWhere((room) => room.heroImageUrl != null, orElse: () => h.rooms.first);
-        return roomImageUrl(ref.read(clientProvider), r.name, r.areaType, r.heroImageUrl);
+        heroImage = roomImageUrl(ref.read(clientProvider), r.name, r.areaType, r.heroImageUrl);
+        heroStyleValue = roomStyle(r.name, r.areaType);
       },
-      orElse: () => null,
+      orElse: () {},
     );
 
     return SafeArea(
@@ -121,6 +124,8 @@ class DashboardScreen extends ConsumerWidget {
             title: homeName,
             subtitle: roomCount > 0 ? '$roomCount rooms' : null,
             imageUrl: heroImage,
+            gradientColors: [heroStyleValue.from, heroStyleValue.to],
+            motif: heroStyleValue.emoji,
             statusValue: 'All calm',
             statusLabel: 'Home',
             metricValue: scenes.maybeWhen(data: (s) => '${s.length}', orElse: () => null),

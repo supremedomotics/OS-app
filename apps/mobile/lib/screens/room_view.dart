@@ -164,13 +164,18 @@ class _RoomViewState extends ConsumerState<RoomView> {
       padding: const EdgeInsets.all(AureonSpacing.lg),
       children: [
         const SizedBox(height: AureonSpacing.sm),
-        RoomHero(
-          title: widget.roomName,
-          imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
-          statusValue: '${_devices.length}',
-          statusLabel: _devices.length == 1 ? 'device' : 'devices',
-          height: 200,
-        ),
+        Builder(builder: (_) {
+          final st = roomStyle(widget.roomName, widget.areaType);
+          return RoomHero(
+            title: widget.roomName,
+            imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
+            gradientColors: [st.from, st.to],
+            motif: st.emoji,
+            statusValue: '${_devices.length}',
+            statusLabel: _devices.length == 1 ? 'device' : 'devices',
+            height: 200,
+          );
+        }),
         const SizedBox(height: AureonSpacing.lg),
         if (_loading)
           const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()))

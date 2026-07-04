@@ -104,11 +104,16 @@ class _TabletRoomViewState extends ConsumerState<TabletRoomView> {
           children: [
             // Same hub-served hero image as the phone room + web, so a room looks identical
             // across every surface.
-            RoomHero(
-              title: widget.roomName,
-              imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
-              height: 120,
-            ),
+            Builder(builder: (_) {
+              final st = roomStyle(widget.roomName, widget.areaType);
+              return RoomHero(
+                title: widget.roomName,
+                imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
+                gradientColors: [st.from, st.to],
+                motif: st.emoji,
+                height: 120,
+              );
+            }),
             const SizedBox(height: AureonSpacing.md),
             Expanded(
               child: Row(
