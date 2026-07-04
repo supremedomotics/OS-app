@@ -48,8 +48,12 @@ export const Room = z.object({
   areaType: AreaType.default("other"),
   sortOrder: z.number().int().default(0),
   icon: z.string().nullable(),
-  /** Photographic room hero used by the Aureon room-first UI (§11). */
-  heroImageUrl: z.string().url().nullable(),
+  /**
+   * Photographic room hero used by the Aureon room-first UI (§11). Either an absolute URL or a
+   * hub-relative path (e.g. `/v1/rooms/:id/hero-image`) when the hub has downloaded and stored the
+   * photo locally — clients resolve a relative value against the active hub base URL.
+   */
+  heroImageUrl: z.string().min(1).nullable(),
   parentRoomId: RoomId.nullable(),
 });
 export type Room = z.infer<typeof Room>;

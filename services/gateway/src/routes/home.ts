@@ -10,6 +10,14 @@ import type { FastifyInstance } from "fastify";
 import { authenticate, canViewDevice, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+import {
+  downloadHeroImage,
+  heroImageFromUpload,
+  heroImageKey,
+  heroImagePath,
+  HeroImageError,
+  type StoredHeroImage,
+} from "../room-hero.js";
 
 /** Validate a room create/update payload, filling nullable defaults and trimming the name. */
 function parseRoom(input: Record<string, unknown>): Room {
@@ -86,6 +94,88 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
       sendError(reply, err);
     }
   });
+
+  // ── Room hero imagery (§11) ──────────────────────────────────────────────────
+  // The hub downloads ONE stock photo per room (by name) and stores the bytes locally, so every
+  // client shows the identical image offline. Owners can replace it with a live photo (PUT).
+
+  // Serve the stored bytes. `<img>` can't send an Authorization header, so this also accepts the
+  // access token as a query param (?access_token=) — the same pattern the WSS upgrade uses.
+  app.get<{ Params: { id: string }; Querystring: { access_token?: string } }>(
+    "/v1/rooms/:id/hero-image",
+    async (req, reply) => {
+      try {
+        const header = req.headers.authorization;
+        const token = header?.startsWith("Bearer ") ? header.slice(7) : req.query.access_token;
+        if (!token) throw new SupremeError("unauthorized", "missing token");
+        const user = await ctx.identity.authenticate(token);
+        const roomId = req.params.id as RoomId;
+        await ctx.home.requireRoom(roomId);
+        await enforce(ctx, user, "room", roomId, "view");
+        const stored = (await ctx.homeConfig.get(ctx.homeId, heroImageKey(roomId))) as StoredHeroImage | undefined;
+        if (!stored) throw new SupremeError("not_found", "no hero image for room");
+        reply
+          .header("content-type", stored.contentType)
+          .header("cache-control", "private, max-age=86400")
+          .send(Buffer.from(stored.dataBase64, "base64"));
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
+
+  // Auto-pin: download a stock photo by room name and store it locally. Idempotent — skips if one is
+  // already stored unless `?force=1`. Best-effort: a fetch failure leaves the hero unset (200 with
+  // pinned:false) rather than erroring, so imagery never blocks the UI.
+  app.post<{ Params: { id: string }; Querystring: { force?: string } }>(
+    "/v1/rooms/:id/hero-image/auto",
+    async (req, reply) => {
+      try {
+        const user = await authenticate(ctx, req);
+        const roomId = req.params.id as RoomId;
+        const room = await ctx.home.requireRoom(roomId);
+        await enforce(ctx, user, "room", roomId, "update");
+        const existing = await ctx.homeConfig.get(ctx.homeId, heroImageKey(roomId));
+        if (existing && req.query.force !== "1") {
+          reply.send({ pinned: true, room });
+          return;
+        }
+        try {
+          const image = await downloadHeroImage(room);
+          await ctx.homeConfig.set(ctx.homeId, heroImageKey(roomId), image);
+          const updated = parseRoom({ ...room, heroImageUrl: heroImagePath(roomId) });
+          await ctx.home.addRoom(updated);
+          reply.send({ pinned: true, room: updated });
+        } catch (imgErr) {
+          if (!(imgErr instanceof HeroImageError)) throw imgErr;
+          reply.send({ pinned: false, reason: imgErr.message, room });
+        }
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
+
+  // Owner replaces the hero with a live photo (base64 body or a data: URL).
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    "/v1/rooms/:id/hero-image",
+    { bodyLimit: 8_000_000 }, // a 5 MB image is ~6.7 MB base64; default 1 MB is too small.
+    async (req, reply) => {
+      try {
+        const user = await authenticate(ctx, req);
+        const roomId = req.params.id as RoomId;
+        const room = await ctx.home.requireRoom(roomId);
+        await enforce(ctx, user, "room", roomId, "update");
+        const image = heroImageFromUpload((req.body ?? {}) as Record<string, unknown>);
+        await ctx.homeConfig.set(ctx.homeId, heroImageKey(roomId), image);
+        const updated = parseRoom({ ...room, heroImageUrl: heroImagePath(roomId) });
+        await ctx.home.addRoom(updated);
+        reply.send({ room: updated });
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
 
   app.get<{ Params: { id: string } }>("/v1/rooms/:id/devices", async (req, reply) => {
     try {

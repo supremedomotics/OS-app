@@ -292,6 +292,9 @@ button.link {
 @media (min-width: 900px) { .shell { max-width: 1180px; } .content { padding: 26px 26px 100px; } }
 .tablet-room { position: relative; }
 .tr-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.tr-head.has-image { padding: 22px 24px; border-radius: 18px; background-size: cover; background-position: center; box-shadow: inset 0 0 0 1px var(--aureon-color-base-hairline); }
+.tr-head.has-image .title { color: #fff; text-shadow: 0 1px 12px rgba(0,0,0,0.55); }
+.tr-head.has-image .back { color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,0.6); }
 .tr-head .back { background: none; border: 0; color: var(--aureon-color-gold-400); font-size: 15px; cursor: pointer; }
 .tr-grid { display: grid; grid-template-columns: 230px 1fr 300px; gap: 16px; align-items: stretch; min-height: 560px; }
 .tr-col { display: flex; flex-direction: column; gap: 16px; }

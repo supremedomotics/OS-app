@@ -126,6 +126,41 @@ export class SupremeClient {
     await this.request("POST", "/v1/me/password", { currentPassword, newPassword });
   }
 
+  /**
+   * Ask the hub to download & store a stock hero photo for a room (by its name) if it doesn't have
+   * one yet. Idempotent and best-effort — returns `{ pinned }`. Clients call this fire-and-forget
+   * the first time they render a room card with no hero.
+   */
+  async pinRoomHeroImage(roomId: RoomId, force = false): Promise<{ pinned: boolean; room?: unknown }> {
+    return this.request("POST", `/v1/rooms/${roomId}/hero-image/auto${force ? "?force=1" : ""}`) as Promise<{
+      pinned: boolean;
+      room?: unknown;
+    }>;
+  }
+
+  /** Replace a room's hero with an owner-provided live photo (base64 or a data: URL). */
+  async uploadRoomHeroImage(
+    roomId: RoomId,
+    image: { dataBase64?: string; dataUrl?: string; contentType?: string },
+  ): Promise<{ room: { id: string; heroImageUrl: string | null } }> {
+    return this.request("PUT", `/v1/rooms/${roomId}/hero-image`, image) as Promise<{
+      room: { id: string; heroImageUrl: string | null };
+    }>;
+  }
+
+  /**
+   * Resolve a room's `heroImageUrl` to a loadable `<img>` src. Absolute URLs pass through; a
+   * hub-relative path (the hub stored the photo locally) is resolved against the base URL with the
+   * access token as a query param (an `<img>` tag can't send an Authorization header).
+   */
+  heroImageSrc(heroImageUrl: string | null | undefined): string | null {
+    if (!heroImageUrl) return null;
+    if (/^https?:\/\//i.test(heroImageUrl)) return heroImageUrl;
+    const token = this.tokens.get()?.accessToken;
+    const sep = heroImageUrl.includes("?") ? "&" : "?";
+    return `${this.baseUrl}${heroImageUrl}${token ? `${sep}access_token=${encodeURIComponent(token)}` : ""}`;
+  }
+
   async devicesInRoom(roomId: RoomId): Promise<DeviceList> {
     return DeviceList.parse(await this.request("GET", `/v1/rooms/${roomId}/devices`));
   }

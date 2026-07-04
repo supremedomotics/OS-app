@@ -13,7 +13,7 @@ import type {
   Scene,
 } from "@supreme/domain-model";
 import { client } from "./api.js";
-import { roomImage } from "./room-image.js";
+import { roomImage, ensureRoomHeroes } from "./room-image.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
@@ -60,12 +60,21 @@ function greetingFor(d: Date): string {
 }
 
 export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void }) {
-  const [home] = useAsync<HomeView>(() => client.home());
+  const [home, refreshHome] = useAsync<HomeView>(() => client.home());
   const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
   const [activeScene, setActiveScene] = useState<string | null>(null);
 
   const rooms = home?.rooms ?? [];
-  const heroImage = rooms.find((r) => r.heroImageUrl)?.heroImageUrl ?? null;
+  // First time a room has no stored hero, ask the hub to download & save one locally, then refresh
+  // so the hub-served (identical-everywhere) image replaces the stock fallback.
+  useEffect(() => {
+    if (rooms.length === 0) return;
+    let live = true;
+    void ensureRoomHeroes(client, rooms).then((pinned) => { if (pinned && live) refreshHome(); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rooms.length]);
+  const heroImage = roomImage(rooms.find((r) => r.heroImageUrl) ?? rooms[0] ?? { name: home?.home.name ?? "Home" }, client);
 
   return (
     <div>
@@ -126,7 +135,7 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
           <div
             key={r.id}
             className="room-card has-image"
-            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r)})` }}
+            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r, client)})` }}
             onClick={() => onOpenRoom(r.id)}
           >
             <span className="name">{r.name}</span>
@@ -151,6 +160,15 @@ export function RoomsScreen({
   const [newName, setNewName] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
+  const roomsForHero = home?.rooms ?? [];
+  useEffect(() => {
+    if (roomsForHero.length === 0) return;
+    let live = true;
+    void ensureRoomHeroes(client, roomsForHero).then((pinned) => { if (pinned && live) refresh(); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomsForHero.length]);
+
   async function createRoom() {
     if (!newName.trim()) return;
     try {
@@ -166,7 +184,7 @@ export function RoomsScreen({
 
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
-    if (wide) return <TabletRoom roomId={selected} name={room?.name ?? "Room"} onBack={() => onSelect(null)} />;
+    if (wide) return <TabletRoom roomId={selected} name={room?.name ?? "Room"} heroImageUrl={room?.heroImageUrl ?? null} onBack={() => onSelect(null)} />;
     return (
       <RoomDevices
         roomId={selected}
@@ -196,7 +214,7 @@ export function RoomsScreen({
           <div
             key={r.id}
             className="room-card has-image"
-            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r)})` }}
+            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r, client)})` }}
             onClick={() => onSelect(r.id)}
           >
             <span className="name">{r.name}</span>
@@ -226,7 +244,7 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
       {/* Room hero — entering a room should feel like entering the space. */}
       <div
         className="hero room has-image"
-        style={{ backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,0.66)), url(${roomImage({ name, heroImageUrl })})` }}
+        style={{ backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,0.66)), url(${roomImage({ name, heroImageUrl }, client)})` }}
       >
         <div className="hero-top">{name}</div>
         <div className="hero-stats">
