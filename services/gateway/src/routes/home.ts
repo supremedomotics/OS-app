@@ -117,6 +117,10 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
         reply
           .header("content-type", stored.contentType)
           .header("cache-control", "private, max-age=86400")
+          // The homeowner web app / cloud may be a different origin than the hub; allow the image
+          // to be embedded cross-origin (an <img>/background load) — without this a strict CORP
+          // policy blocks it (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin).
+          .header("cross-origin-resource-policy", "cross-origin")
           .send(Buffer.from(stored.dataBase64, "base64"));
       } catch (err) {
         sendError(reply, err);
