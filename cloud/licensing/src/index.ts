@@ -74,3 +74,13 @@ export function validateLicense(
 export function hasFeature(license: License, feature: string): boolean {
   return license.features.includes(feature);
 }
+
+export {
+  DealerLicensingService,
+  DealerLicensingError,
+  InMemoryLicenseRecordStore,
+  type ILicenseRecordStore,
+  type LicenseRecord,
+  type LicenseRecordStatus,
+  type IssueForCustomerInput,
+} from "./dealer-licensing.js";
