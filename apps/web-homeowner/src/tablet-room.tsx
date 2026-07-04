@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId, RoomId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { LightingDetail } from "./lighting.js";
-import { roomImage } from "./room-image.js";
+import { roomCardStyle } from "./room-image.js";
 
 /**
  * Tablet room experience (§11.1, Ovio iPad layout): a bento mosaic of light tiles around
@@ -55,10 +55,7 @@ export function TabletRoom({ roomId, name, heroImageUrl, onBack }: { roomId: str
 
   return (
     <div className="tablet-room" onClick={() => setMenu(null)}>
-      <div
-        className="tr-head has-image"
-        style={{ backgroundImage: `linear-gradient(90deg, rgba(0,0,0,0.6), transparent), url(${roomImage({ name, heroImageUrl }, client)})` }}
-      >
+      <div className="tr-head has-image" style={(() => { const { emoji, ...s } = roomCardStyle({ name, heroImageUrl }, client, 0.55); return s; })()}>
         <button className="back" onClick={onBack}>‹ Rooms</button>
         <h1 className="title" style={{ margin: 0 }}>{name}</h1>
         <span />

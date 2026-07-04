@@ -13,7 +13,7 @@ import type {
   Scene,
 } from "@supreme/domain-model";
 import { client } from "./api.js";
-import { roomImage, ensureRoomHeroes } from "./room-image.js";
+import { roomImage, roomCardStyle, ensureRoomHeroes, type RoomLike } from "./room-image.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
@@ -59,6 +59,17 @@ function greetingFor(d: Date): string {
   return "Good night";
 }
 
+/** A room tile: a real hub photo when present, else a designed motif gradient (never flat colour). */
+function RoomCard({ room, onClick }: { room: RoomLike; onClick: () => void }) {
+  const { emoji, ...style } = roomCardStyle(room, client);
+  return (
+    <div className="room-card has-image" style={style} onClick={onClick}>
+      {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
+      <span className="name">{room.name}</span>
+    </div>
+  );
+}
+
 export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void }) {
   const [home, refreshHome] = useAsync<HomeView>(() => client.home());
   const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
@@ -74,7 +85,9 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms.length]);
-  const heroImage = roomImage(rooms.find((r) => r.heroImageUrl) ?? rooms[0] ?? { name: home?.home.name ?? "Home" }, client);
+  // Home hero: a representative room's photo when one exists, else the home's own designed gradient.
+  const heroRoom = rooms.find((r) => r.heroImageUrl) ?? rooms[0] ?? { name: home?.home.name ?? "Home" };
+  const heroStyle = roomCardStyle(heroRoom, client, 0.6);
 
   return (
     <div>
@@ -97,11 +110,9 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
 
       <h2 className="section">{home?.home.name ?? "Home"}</h2>
 
-      {/* Ovio-style home hero: photographic backdrop → accent gradient fallback. */}
-      <div
-        className="hero"
-        style={heroImage ? { backgroundImage: `linear-gradient(transparent 40%, rgba(0,0,0,0.62)), url(${heroImage})` } : undefined}
-      >
+      {/* Ovio-style home hero: photographic backdrop → designed motif gradient fallback. */}
+      <div className="hero" style={{ backgroundImage: heroStyle.backgroundImage, backgroundSize: heroStyle.backgroundSize }}>
+        {heroStyle.emoji && <span className="room-motif" aria-hidden>{heroStyle.emoji}</span>}
         <div className="hero-top">{home?.home.name ?? "Home"}</div>
         <div className="hero-stats">
           <div>
@@ -132,14 +143,7 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
       <h2 className="section">Rooms</h2>
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
-          <div
-            key={r.id}
-            className="room-card has-image"
-            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r, client)})` }}
-            onClick={() => onOpenRoom(r.id)}
-          >
-            <span className="name">{r.name}</span>
-          </div>
+          <RoomCard key={r.id} room={r} onClick={() => onOpenRoom(r.id)} />
         ))}
       </div>
     </div>
@@ -211,14 +215,7 @@ export function RoomsScreen({
       )}
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
-          <div
-            key={r.id}
-            className="room-card has-image"
-            style={{ backgroundImage: `linear-gradient(transparent, rgba(0,0,0,0.7)), url(${roomImage(r, client)})` }}
-            onClick={() => onSelect(r.id)}
-          >
-            <span className="name">{r.name}</span>
-          </div>
+          <RoomCard key={r.id} room={r} onClick={() => onSelect(r.id)} />
         ))}
       </div>
     </div>
@@ -242,18 +239,21 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
         ‹ Rooms
       </button>
       {/* Room hero — entering a room should feel like entering the space. */}
-      <div
-        className="hero room has-image"
-        style={{ backgroundImage: `linear-gradient(transparent 45%, rgba(0,0,0,0.66)), url(${roomImage({ name, heroImageUrl }, client)})` }}
-      >
-        <div className="hero-top">{name}</div>
-        <div className="hero-stats">
-          <div>
-            <strong>{list.length}</strong>
-            <span>{list.length === 1 ? "device" : "devices"}</span>
+      {(() => {
+        const { emoji, ...s } = roomCardStyle({ name, heroImageUrl }, client, 0.66);
+        return (
+          <div className="hero room has-image" style={s}>
+            {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
+            <div className="hero-top">{name}</div>
+            <div className="hero-stats">
+              <div>
+                <strong>{list.length}</strong>
+                <span>{list.length === 1 ? "device" : "devices"}</span>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        );
+      })()}
       <div className="dlist">
         {list.map((d) => (
           <DeviceTile key={d.id} device={d} onOpen={() => open(d)} />
