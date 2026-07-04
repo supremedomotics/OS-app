@@ -31,6 +31,25 @@ services:
     ports:
       - "8091:8091"
 
+  # Dealer-Licensing API — OPTIONAL (§9 commercial). Lets an installer/dealer org issue signed,
+  # hub-bound licenses for their customers' hubs and activate / revoke / transfer them, with a live
+  # seat count + issuance ledger. The hub validates its token OFFLINE and works without this. Provide
+  # LICENSING_PRIVATE_KEY (the Ed25519 signing key PEM) in production — absent → an ephemeral dev key.
+  licensing:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/licensing.Dockerfile
+    restart: unless-stopped
+    environment:
+      LICENSING_PORT: "8098"
+      # `key1:dealerOrg1,key2:dealerOrg2` — issued per dealer org.
+      LICENSING_API_KEYS: ${SUPREME_LICENSING_API_KEYS:-dev-dealer-key:org_demo}
+      # The Ed25519 signing key PEM. REQUIRED in production; dev mints an ephemeral key if unset.
+      LICENSING_PRIVATE_KEY: ${SUPREME_LICENSING_PRIVATE_KEY:-}
+      LICENSING_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8098:8098"
+
   # Hub Registry — zero-touch hub enrollment + device-cert issuance + claim/transfer.
   # The Hub CA keypair is provided via secrets in production; dev generates a throwaway CA.
   hub-registry:

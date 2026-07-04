@@ -13,6 +13,7 @@ import {
   Bindings,
   Cameras,
   Commissioning,
+  Dealer,
   Devices,
   Diagnostics,
   DriverStore,
@@ -30,6 +31,7 @@ type Tab =
   | "diagnostics"
   | "backup"
   | "license"
+  | "dealer"
   | "migration"
   | "fleet";
 
@@ -42,6 +44,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "diagnostics", label: "Diagnostics" },
   { id: "backup", label: "Backup / Restore" },
   { id: "license", label: "Licensing" },
+  { id: "dealer", label: "Dealer Portal" },
   { id: "migration", label: "Native Migration" },
   { id: "fleet", label: "Fleet" },
 ];
@@ -76,6 +79,7 @@ export function App() {
         {tab === "diagnostics" && <Diagnostics />}
         {tab === "backup" && <BackupRestore />}
         {tab === "license" && <Licensing />}
+        {tab === "dealer" && <Dealer />}
         {tab === "migration" && <Migration />}
         {tab === "fleet" && <Fleet />}
       </main>

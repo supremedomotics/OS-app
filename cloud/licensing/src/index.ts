@@ -84,3 +84,11 @@ export {
   type LicenseRecordStatus,
   type IssueForCustomerInput,
 } from "./dealer-licensing.js";
+export {
+  SqlLicenseRecordStore,
+  LICENSING_SCHEMA_SQL,
+  type LicensingSqlExecutor,
+} from "./sql-store.js";
+// NOTE: the Fastify server (buildLicensingServer) is intentionally NOT re-exported here — the hub
+// imports this package only for OFFLINE token verification and must not pull in fastify. Cloud
+// consumers import it directly from "@supreme/licensing/dist/server.js" (see main.ts).

@@ -10,6 +10,16 @@ import type {
 import type { InstalledDriver } from "@supreme/domain-model";
 import { client, importKnx, importKnxProject, type KnxImportResult } from "./api.js";
 import { fleetConfigured, listFleetHubs } from "./fleet.js";
+import {
+  activateDealerLicense,
+  dealerConfigured,
+  dealerSeatsInUse,
+  issueDealerLicense,
+  listDealerLicenses,
+  revokeDealerLicense,
+  transferDealerLicense,
+  type LicenseRecord,
+} from "./dealer.js";
 
 /** Driver Store: browse the signed catalog, install (license-gated), enable/disable. */
 export function DriverStore() {
@@ -531,6 +541,164 @@ export function Licensing() {
           <span>{status?.features.join(", ") || "—"}</span>
         </div>
       </div>
+    </section>
+  );
+}
+
+/**
+ * Dealer Portal (§9 commercial): a dealer/installer org issues signed, hub-bound licenses for their
+ * customers' hubs and manages them — activate, revoke, transfer to a replacement hub — with a live
+ * seat count and full issuance ledger. Talks to the OPTIONAL cloud Dealer-Licensing service; the hub
+ * validates its token offline and works without it.
+ */
+const DEALER_SKUS = ["essential", "pro", "estate", "commercial_building", "hotel"] as const;
+
+const STATUS_COLOR: Record<string, string> = {
+  activated: "var(--aureon-color-status-good)",
+  issued: "var(--aureon-color-status-warning)",
+  revoked: "var(--aureon-color-status-critical)",
+  transferred: "var(--aureon-color-text-muted)",
+};
+
+export function Dealer() {
+  const [records, setRecords] = useState<LicenseRecord[]>([]);
+  const [seats, setSeats] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // New-license form.
+  const [homeId, setHomeId] = useState("");
+  const [sku, setSku] = useState<(typeof DEALER_SKUS)[number]>("pro");
+  const [seatsInput, setSeatsInput] = useState("1");
+
+  async function refresh() {
+    setError(null);
+    try {
+      const [ls, si] = await Promise.all([listDealerLicenses(), dealerSeatsInUse()]);
+      setRecords(ls.records);
+      setSeats(si.seatsInUse);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed");
+    }
+  }
+  useEffect(() => {
+    if (dealerConfigured) void refresh();
+  }, []);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function issue(e: React.FormEvent) {
+    e.preventDefault();
+    if (!homeId.trim()) return setError("Customer hub ID (homeId) is required");
+    await run(async () => {
+      await issueDealerLicense({ homeId: homeId.trim(), sku, seats: Number(seatsInput) || 1 });
+      setHomeId("");
+      setSeatsInput("1");
+    });
+  }
+
+  if (!dealerConfigured) {
+    return (
+      <section>
+        <h2>Dealer Portal</h2>
+        <div className="card">
+          <p className="muted">
+            The cloud dealer-licensing service is optional and not configured. Set
+            <code> VITE_SUPREME_DEALER_URL</code> and <code>VITE_SUPREME_DEALER_KEY</code> to issue and
+            manage your customers' licenses here. Hubs validate their tokens offline and work without it.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <h2>Dealer Portal</h2>
+      {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
+
+      <div className="card">
+        <div className="row">
+          <strong>Seats in use</strong>
+          <span className="tag">{seats ?? "—"}</span>
+        </div>
+      </div>
+
+      <form className="card" onSubmit={issue}>
+        <h3 style={{ marginTop: 0 }}>Issue a license</h3>
+        <label className="muted">Customer hub ID (homeId)</label>
+        <input value={homeId} onChange={(e) => setHomeId(e.target.value)} placeholder="home_…" />
+        <div className="row" style={{ marginTop: 8, gap: 8 }}>
+          <select value={sku} onChange={(e) => setSku(e.target.value as (typeof DEALER_SKUS)[number])}>
+            {DEALER_SKUS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min={1}
+            value={seatsInput}
+            onChange={(e) => setSeatsInput(e.target.value)}
+            style={{ width: 90 }}
+            aria-label="Seats"
+          />
+          <button className="primary" type="submit" disabled={busy}>Issue</button>
+        </div>
+      </form>
+
+      {records.length === 0 && <p className="muted">No licenses issued yet.</p>}
+      {records.map((r) => (
+        <div className="card" key={r.id}>
+          <div className="row">
+            <div>
+              <strong>{r.sku}</strong> <span className="tag">{r.seats} seat{r.seats === 1 ? "" : "s"}</span>
+              <div className="muted">
+                home {r.homeId} · issued {new Date(r.issuedAt).toLocaleDateString()}
+                {r.supersedes ? " · transferred in" : ""}
+              </div>
+            </div>
+            <span className="tag" style={{ color: STATUS_COLOR[r.status] ?? "inherit" }}>{r.status}</span>
+          </div>
+          {r.status !== "revoked" && r.status !== "transferred" && (
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              {r.status === "issued" && (
+                <button disabled={busy} onClick={() => run(() => activateDealerLicense(r.id))}>Mark activated</button>
+              )}
+              <button
+                disabled={busy}
+                onClick={() => {
+                  const newHomeId = window.prompt("Transfer to replacement hub — new homeId:");
+                  if (newHomeId?.trim()) void run(() => transferDealerLicense(r.id, newHomeId.trim()));
+                }}
+              >
+                Transfer
+              </button>
+              <button
+                disabled={busy}
+                style={{ color: "var(--aureon-color-status-critical)" }}
+                onClick={() => {
+                  if (window.confirm("Revoke this license? Seats free up immediately.")) {
+                    void run(() => revokeDealerLicense(r.id));
+                  }
+                }}
+              >
+                Revoke
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
     </section>
   );
 }
