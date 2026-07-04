@@ -43,44 +43,81 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   private readonly drivers: INativeProtocolDriver[];
   /** deviceId → the protocol driver that owns it (when bound to a real bus). */
   private readonly ownerByDevice = new Map<DeviceId, INativeProtocolDriver>();
-  private readonly driverUnsubs: Array<() => void> = [];
+  /** protocol → its onState unsubscribe, so a driver can be added/removed at runtime. */
+  private readonly unsubByProtocol = new Map<string, () => void>();
 
   constructor(opts: SupremeNativeAdapterOptions = {}) {
     this.drivers = opts.drivers ?? [];
   }
 
-  async connect(): Promise<void> {
-    // Bring up every real protocol driver and re-emit its normalized state upward,
-    // so callers can't tell a native engine event from an in-process one. A driver
-    // that can't reach its bus at boot (unreachable gateway, Matter controller not yet
-    // provisioned) must NOT crash the hub — it's skipped and stays disconnected; its
-    // devices' commands surface a clear error until the bus recovers.
-    for (const driver of this.drivers) {
-      try {
-        await driver.connect();
-      } catch (err) {
-        this.connectErrors.push({ protocol: driver.protocol, error: err as Error });
-        continue;
-      }
-      this.driverUnsubs.push(
-        driver.onState((event) => {
-          this.states.set(key(event.deviceId, event.capability), event.state);
-          for (const l of this.listeners) l(event);
-        }),
-      );
+  /** Connect a single driver and wire its state upward; a connect failure is recorded, not fatal. */
+  private async wireDriver(driver: INativeProtocolDriver): Promise<void> {
+    try {
+      await driver.connect();
+    } catch (err) {
+      this.connectErrors.push({ protocol: driver.protocol, error: err as Error });
+      return;
     }
+    const unsub = driver.onState((event) => {
+      this.states.set(key(event.deviceId, event.capability), event.state);
+      for (const l of this.listeners) l(event);
+    });
+    this.unsubByProtocol.set(driver.protocol, unsub);
+  }
+
+  async connect(): Promise<void> {
+    // Bring up every real protocol driver and re-emit its normalized state upward, so callers can't
+    // tell a native engine event from an in-process one. A driver that can't reach its bus at boot
+    // must NOT crash the hub — it's skipped and stays disconnected until the bus recovers.
+    for (const driver of this.drivers) await this.wireDriver(driver);
     this.connected = true;
   }
 
-  /** Drivers that failed to connect at boot (diagnostics). */
+  /** Drivers that failed to connect (diagnostics). */
   readonly connectErrors: Array<{ protocol: string; error: Error }> = [];
   async disconnect(): Promise<void> {
-    for (const unsub of this.driverUnsubs.splice(0)) unsub();
+    for (const unsub of this.unsubByProtocol.values()) unsub();
+    this.unsubByProtocol.clear();
     for (const driver of this.drivers) await driver.disconnect();
     this.connected = false;
   }
   isConnected(): boolean {
     return this.connected;
+  }
+
+  /**
+   * Add (or replace) a native protocol driver at RUNTIME — the manifest↔runtime bridge. When a
+   * driver is installed + enabled + configured, the Driver runtime builds its INativeProtocolDriver
+   * from the stored config and registers it here; it connects immediately (failures recorded).
+   */
+  async registerDriver(driver: INativeProtocolDriver): Promise<void> {
+    await this.unregisterProtocol(driver.protocol); // replace any existing instance for this protocol
+    this.drivers.push(driver);
+    await this.wireDriver(driver);
+  }
+
+  /** Remove a protocol's native driver (driver disabled/uninstalled). Disconnects + cleans up. */
+  async unregisterProtocol(protocol: string): Promise<void> {
+    const idx = this.drivers.findIndex((d) => d.protocol === protocol);
+    if (idx === -1) return;
+    const [driver] = this.drivers.splice(idx, 1);
+    const unsub = this.unsubByProtocol.get(protocol);
+    if (unsub) {
+      unsub();
+      this.unsubByProtocol.delete(protocol);
+    }
+    try {
+      await driver!.disconnect();
+    } catch {
+      /* best-effort */
+    }
+    for (const [dev, owner] of this.ownerByDevice) if (owner === driver) this.ownerByDevice.delete(dev);
+    for (let i = this.connectErrors.length - 1; i >= 0; i--) if (this.connectErrors[i]!.protocol === protocol) this.connectErrors.splice(i, 1);
+  }
+
+  /** Protocols with a currently-registered native driver. */
+  registeredProtocols(): string[] {
+    return this.drivers.map((d) => d.protocol);
   }
 
   /** Per-protocol runtime status (for driver health): connectivity + any boot connect error. */

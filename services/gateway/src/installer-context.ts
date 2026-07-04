@@ -27,6 +27,7 @@ import {
   type IInstalledDriverStore,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
+import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
 import {
   CommissioningService,
   groupIntoDevices,
@@ -141,10 +142,12 @@ export class InstallerServices {
       : generateSigningKeyPair();
   }
 
-  /** Boot-time hydration: active license + re-bind persisted protocol bindings. */
+  /** Boot-time hydration: active license, re-bind persisted protocol bindings, and start the native
+   *  stacks of every installed+configured driver (the manifest↔runtime bridge). */
   async init(): Promise<void> {
     await this.loadLicense();
     await this.rebindProtocols();
+    await this.reconcileNativeDrivers();
   }
 
   private async loadLicense(): Promise<void> {
@@ -365,7 +368,58 @@ export class InstallerServices {
   async setDriverConfig(id: DriverId, input: Record<string, unknown>) {
     const updated = await this.drivers.setConfig(id, input);
     this.appendLog(updated.key, "info", "Configuration updated");
+    await this.reregisterDriver(updated.key); // apply the new config to the running native stack
     return this.getDriverConfig(id);
+  }
+
+  /** Protocols whose native driver was started FROM AN INSTALLED MANIFEST (vs env-wired at boot). We
+   *  only ever tear down protocols we started, so legacy env-configured drivers are never disturbed. */
+  private readonly manifestManaged = new Set<string>();
+
+  /**
+   * Reconcile installed+enabled+configured drivers with their runtime native protocol stacks — the
+   * manifest↔runtime bridge. Starts manifest drivers that should run and aren't; stops manifest
+   * drivers that shouldn't. Env-wired drivers (bootstrap.ts) are left untouched.
+   */
+  async reconcileNativeDrivers(): Promise<void> {
+    const reg = await this.drivers.registry();
+    const desired = new Map<string, { config: Record<string, unknown>; key: string }>();
+    for (const d of reg) {
+      if (!d.installed || !d.enabled) continue;
+      if (!isConfigComplete(d.configSchema, d.config).complete) continue;
+      for (const p of d.protocols) if (hasNativeFactory(p)) desired.set(p, { config: d.config, key: d.key });
+    }
+    for (const [protocol, { config, key }] of desired) {
+      if (this.manifestManaged.has(protocol)) continue; // already ours (config edits go via reregister)
+      const driver = buildNativeDriver(protocol, config);
+      if (driver && (await this.d.sil.registerNativeDriver(driver))) {
+        this.manifestManaged.add(protocol);
+        this.appendLog(key, "info", `Native ${protocol} driver started`);
+      }
+    }
+    for (const protocol of [...this.manifestManaged]) {
+      if (!desired.has(protocol)) {
+        await this.d.sil.unregisterNativeProtocol(protocol);
+        this.manifestManaged.delete(protocol);
+      }
+    }
+  }
+
+  /** Force one driver's native stack to match its current install/enable/config state. */
+  private async reregisterDriver(key: string): Promise<void> {
+    const entry = (await this.drivers.registry()).find((e) => e.key === key);
+    if (!entry) return;
+    for (const protocol of entry.protocols) {
+      if (!hasNativeFactory(protocol)) continue;
+      const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config).complete;
+      const driver = runnable ? buildNativeDriver(protocol, entry.config) : null;
+      if (driver) {
+        if (await this.d.sil.registerNativeDriver(driver)) this.manifestManaged.add(protocol);
+      } else if (this.manifestManaged.has(protocol)) {
+        await this.d.sil.unregisterNativeProtocol(protocol);
+        this.manifestManaged.delete(protocol);
+      }
+    }
   }
 
   /** In-memory per-driver log ring buffer (lifecycle + connection events). */
@@ -577,6 +631,7 @@ export class InstallerServices {
   async enableDriver(id: DriverId, enabled: boolean) {
     const d = await this.drivers.setEnabled(id, enabled);
     this.appendLog(d.key, "info", enabled ? "Enabled" : "Disabled");
+    await this.reregisterDriver(d.key); // start/stop its native stack
     return d;
   }
 
@@ -584,6 +639,7 @@ export class InstallerServices {
   async installDriver(key: string, version?: string) {
     const d = await this.drivers.install(key, version);
     this.appendLog(d.key, "info", `Installed v${d.version}`);
+    await this.reregisterDriver(d.key);
     return d;
   }
 
@@ -591,7 +647,15 @@ export class InstallerServices {
   async uninstallDriver(id: DriverId) {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     await this.drivers.uninstall(id);
-    if (entry) this.appendLog(entry.key, "info", "Uninstalled");
+    if (entry) {
+      this.appendLog(entry.key, "info", "Uninstalled");
+      for (const p of entry.protocols) {
+        if (this.manifestManaged.has(p)) {
+          await this.d.sil.unregisterNativeProtocol(p);
+          this.manifestManaged.delete(p);
+        }
+      }
+    }
   }
 
   private requireDb(): SqlDb {

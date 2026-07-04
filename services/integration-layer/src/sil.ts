@@ -10,7 +10,7 @@ import type { BackendStateEvent, IBackendAdapter, MediaArtwork } from "./adapter
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { EngineKind } from "./migration.js";
-import type { ProtocolBinding } from "./protocols/driver.js";
+import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.js";
 
 /**
  * Supreme Integration Layer — the facade the rest of the hub talks to.
@@ -93,6 +93,20 @@ export class SupremeIntegrationLayer {
   /** Disconnect a single native protocol driver — the "Disconnect" action. */
   async disconnectNativeProtocol(protocol: string): Promise<boolean> {
     return (await this.router?.native.disconnectProtocol(protocol)) ?? false;
+  }
+
+  /** Register (or replace) a native protocol driver at runtime — the manifest↔runtime bridge. */
+  async registerNativeDriver(driver: INativeProtocolDriver): Promise<boolean> {
+    if (!this.router) return false;
+    await this.router.native.registerDriver(driver);
+    return true;
+  }
+
+  /** Remove a protocol's native driver at runtime (driver disabled/uninstalled). */
+  async unregisterNativeProtocol(protocol: string): Promise<boolean> {
+    if (!this.router) return false;
+    await this.router.native.unregisterProtocol(protocol);
+    return true;
   }
 
   /**

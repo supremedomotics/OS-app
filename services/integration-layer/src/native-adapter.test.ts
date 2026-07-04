@@ -100,3 +100,45 @@ describe("SupremeNativeAdapter with protocol drivers", () => {
     expect(found.map((d) => d.backendId)).toContain("fake.1");
   });
 });
+
+describe("runtime driver registration (manifest↔runtime bridge)", () => {
+  it("registers, connects, surfaces state, then unregisters a driver at runtime", async () => {
+    const adapter = new SupremeNativeAdapter();
+    await adapter.connect();
+    expect(adapter.registeredProtocols()).toEqual([]);
+
+    const events: BackendStateEvent[] = [];
+    adapter.onState((e) => events.push(e));
+
+    const driver = new FakeDriver();
+    await adapter.registerDriver(driver);
+    expect(driver.isConnected()).toBe(true);
+    expect(adapter.registeredProtocols()).toEqual(["fake"]);
+    expect(adapter.protocolStatus()).toEqual([{ protocol: "fake", connected: true, error: null }]);
+
+    // State from the newly-registered driver flows upward.
+    const dev = "device-fake-1" as DeviceId;
+    driver.pushState(dev, "onoff", { kind: "onoff", on: true });
+    expect(events.some((e) => e.deviceId === dev)).toBe(true);
+
+    // Unregister disconnects it and stops state flow.
+    await adapter.unregisterProtocol("fake");
+    expect(driver.isConnected()).toBe(false);
+    expect(adapter.registeredProtocols()).toEqual([]);
+    const before = events.length;
+    driver.pushState(dev, "onoff", { kind: "onoff", on: false });
+    expect(events.length).toBe(before); // no longer wired
+  });
+
+  it("replaces an existing driver for the same protocol", async () => {
+    const adapter = new SupremeNativeAdapter();
+    await adapter.connect();
+    const d1 = new FakeDriver();
+    const d2 = new FakeDriver();
+    await adapter.registerDriver(d1);
+    await adapter.registerDriver(d2);
+    expect(d1.isConnected()).toBe(false); // replaced → disconnected
+    expect(d2.isConnected()).toBe(true);
+    expect(adapter.registeredProtocols()).toEqual(["fake"]);
+  });
+});
