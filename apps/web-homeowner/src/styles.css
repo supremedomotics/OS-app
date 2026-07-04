@@ -50,20 +50,26 @@ h1.title { font-size: 26px; font-weight: 600; margin: 8px 0 2px; }
 h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 22px 0 10px; color: var(--aureon-color-text-secondary); text-transform: uppercase; }
 
 /* Bottom nav */
+/* Ovio-style bottom bar: a floating, icon-only pill (no text labels), centred, with the active tab
+   as a filled circle. Content scrolls behind it. */
 .tabbar {
-  position: fixed; left: 0; right: 0; bottom: 0;
-  display: flex; justify-content: space-around;
-  background: color-mix(in srgb, var(--aureon-color-base-surface) 90%, transparent); backdrop-filter: blur(12px);
-  border-top: 1px solid var(--aureon-color-base-hairline);
-  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  position: fixed; left: 50%; transform: translateX(-50%); right: auto;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  display: flex; gap: 4px; padding: 7px;
+  background: color-mix(in srgb, var(--aureon-color-base-surface) 82%, transparent); backdrop-filter: blur(18px);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 999px;
+  box-shadow: 0 10px 34px rgba(0,0,0,0.45);
 }
 .tabbar button {
   background: none; border: 0; color: var(--aureon-color-text-secondary);
-  font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 4px;
-  flex: 1; padding: 6px 2px; cursor: pointer; border-radius: 12px;
+  font-size: 0; /* hide the text label (kept for screen readers) */
+  width: 48px; height: 48px; display: grid; place-items: center;
+  cursor: pointer; border-radius: 50%; transition: background .15s ease, color .15s ease;
 }
-.tabbar button .ic { font-size: 20px; line-height: 1; }
-.tabbar button.active { color: var(--aureon-color-gold-400); }
+.tabbar button .ic { font-size: 21px; line-height: 1; }
+.tabbar button:hover { color: var(--aureon-color-text-primary); }
+.tabbar button.active { background: var(--aureon-color-gold-400); color: #15161b; }
+.tabbar button.active .ic { color: #15161b; }
 
 /* Cards + tiles */
 .card {
