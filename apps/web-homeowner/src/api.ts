@@ -314,6 +314,36 @@ export const setEnergyProvider = (p: EnergyProvider) => putJson<{ provider: Ener
 export interface DeviceLite { id: string; name: string; roomId?: string | null; capabilities: { kind: string }[] }
 export const getAllDevices = () => getJson<{ devices: DeviceLite[] }>("/v1/devices", { devices: [] });
 
+// ── Audit log (admin, read-only) ────────────────────────────────────────────────────
+export interface AuditEntry {
+  id: string;
+  seq: number;
+  actorUserId: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  entryHash: string;
+}
+export async function fetchAudit(): Promise<{ entries: AuditEntry[]; error?: string }> {
+  try {
+    const res = await authed("/v1/audit");
+    if (res.ok) return (await res.json()) as { entries: AuditEntry[] };
+    return { entries: [], error: await errorMessage(res, `${res.status}`) };
+  } catch {
+    return { entries: [], error: "Could not load the audit log." };
+  }
+}
+export async function verifyAudit(): Promise<{ valid: boolean; brokenAt?: number } | null> {
+  try {
+    const res = await authed("/v1/audit/verify");
+    return res.ok ? ((await res.json()) as { valid: boolean; brokenAt?: number }) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const getDeferrableLoads = () => getJson<{ deviceIds: string[]; pausedNow: string[] }>("/v1/energy/deferrable-loads", { deviceIds: [], pausedNow: [] });
 export const setDeferrableLoads = (deviceIds: string[], ceiling?: number) => putJson<{ deviceIds: string[] }>("/v1/energy/deferrable-loads", ceiling !== undefined ? { deviceIds, ceiling } : { deviceIds });
 

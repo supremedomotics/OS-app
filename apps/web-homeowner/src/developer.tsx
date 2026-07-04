@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiRequest, fetchLicense, streamUrl } from "./api.js";
+import { apiRequest, fetchAudit, fetchLicense, streamUrl, verifyAudit, type AuditEntry } from "./api.js";
 
 /**
  * Developer Edition tools (§Developer Mode). This whole section is HIDDEN unless the hub is in
@@ -10,7 +10,7 @@ import { apiRequest, fetchLicense, streamUrl } from "./api.js";
  */
 export function DeveloperTools() {
   const [devMode, setDevMode] = useState(false);
-  const [tool, setTool] = useState<"api" | "ws" | "diag">("api");
+  const [tool, setTool] = useState<"api" | "ws" | "diag" | "audit">("api");
 
   useEffect(() => {
     void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode)));
@@ -26,11 +26,62 @@ export function DeveloperTools() {
         <button className={tool === "api" ? "on" : ""} onClick={() => setTool("api")}>API Explorer</button>
         <button className={tool === "ws" ? "on" : ""} onClick={() => setTool("ws")}>WebSocket</button>
         <button className={tool === "diag" ? "on" : ""} onClick={() => setTool("diag")}>Diagnostics</button>
+        <button className={tool === "audit" ? "on" : ""} onClick={() => setTool("audit")}>Audit log</button>
       </div>
       {tool === "api" && <ApiExplorer />}
       {tool === "ws" && <WsInspector />}
       {tool === "diag" && <Diagnostics />}
+      {tool === "audit" && <AuditLog />}
     </section>
+  );
+}
+
+/** Read-only tamper-evident audit log (admin). Shows the hash-chained activity trail + verify. */
+function AuditLog() {
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [verify, setVerify] = useState<{ valid: boolean; brokenAt?: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setBusy(true);
+    const r = await fetchAudit();
+    setEntries(r.entries);
+    setError(r.error ?? null);
+    setBusy(false);
+  }
+  useEffect(() => { void load(); }, []);
+
+  const fmt = (s: string) => s.replace(/[._]/g, " ");
+  return (
+    <div className="audit">
+      <div className="dev-row2" style={{ marginBottom: 8 }}>
+        <button disabled={busy} onClick={load}>{busy ? "Loading…" : "Refresh"}</button>
+        <button disabled={busy} onClick={async () => setVerify(await verifyAudit())}>Verify chain</button>
+        {verify && (
+          <span className={verify.valid ? "muted" : "err"}>
+            {verify.valid ? "✓ Chain intact" : `✕ Broken at #${verify.brokenAt ?? "?"}`}
+          </span>
+        )}
+      </div>
+      {error && <p className="err">{error}</p>}
+      {!error && entries.length === 0 && <p className="muted">No audit entries yet.</p>}
+      {entries.length > 0 && (
+        <div className="audit-list">
+          {entries.map((e) => (
+            <div className="audit-row" key={e.id}>
+              <span className="audit-seq">#{e.seq}</span>
+              <div className="audit-body">
+                <span className="audit-action">{fmt(e.action)}</span>
+                <span className="audit-meta">
+                  {e.resourceType}{e.resourceId ? ` · ${e.resourceId.slice(0, 10)}…` : ""} · {new Date(e.createdAt).toLocaleString()}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

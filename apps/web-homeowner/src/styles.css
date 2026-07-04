@@ -294,6 +294,14 @@ button.link {
 /* ── Tablet room (Ovio iPad bento layout) ─────────────────────────────────────── */
 @media (min-width: 900px) { .shell { max-width: 1180px; } .content { padding: 26px 26px 100px; } }
 .tablet-room { position: relative; }
+/* Audit log (read-only) */
+.audit-list { display: flex; flex-direction: column; gap: 4px; max-height: 340px; overflow-y: auto; }
+.audit-row { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 10px; background: var(--aureon-color-base-surface); }
+.audit-seq { font-variant-numeric: tabular-nums; color: var(--aureon-color-text-muted); font-size: 12px; min-width: 34px; }
+.audit-body { display: flex; flex-direction: column; }
+.audit-action { font-weight: 600; text-transform: capitalize; }
+.audit-meta { font-size: 12px; color: var(--aureon-color-text-muted); }
+
 /* Advanced settings panels */
 .adv-panel { border: 1px solid var(--aureon-color-base-hairline); border-radius: 12px; margin-top: 8px; overflow: hidden; }
 .adv-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--aureon-color-base-surface); border: 0; color: inherit; cursor: pointer; text-align: left; }
