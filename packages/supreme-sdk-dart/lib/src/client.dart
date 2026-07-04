@@ -741,6 +741,21 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// The tamper-evident audit log (admin). Returns the hash-chained activity entries, newest first.
+  Future<List<Map<String, dynamic>>> auditLog() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/audit'), headers: _authHeaders);
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['entries'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Verify the audit hash-chain is intact ({valid, brokenAt?}).
+  Future<Map<String, dynamic>> auditVerify() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/audit/verify'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Current security panel state.
   Future<Map<String, dynamic>> securityState() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/security'),

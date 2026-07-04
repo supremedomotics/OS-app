@@ -7,6 +7,7 @@ import '../providers.dart';
 import '../widgets/password_field.dart';
 import 'add_home_screen.dart';
 import 'advanced_settings_screen.dart';
+import 'audit_screen.dart';
 import 'driver_manager_screen.dart';
 
 /// Appearance settings (§11.2 Themes): Light / Dark / Automatic base palettes
@@ -73,6 +74,16 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const AdvancedSettingsScreen()),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('Audit log'),
+            subtitle: const Text('Tamper-evident activity trail'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AuditScreen()),
             ),
           ),
           const SizedBox(height: AureonSpacing.lg),
