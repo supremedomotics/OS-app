@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId, RoomId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { LightingDetail } from "./lighting.js";
-import { roomCardStyle } from "./room-image.js";
+import { useRoomPhoto, styleForPhoto } from "./room-image.js";
 
 /**
  * Tablet room experience (§11.1, Ovio iPad layout): a bento mosaic of light tiles around
@@ -13,6 +13,7 @@ import { roomCardStyle } from "./room-image.js";
 type Light = { id: string; name: string; hue: number; sat: number; on: boolean; level: number };
 
 export function TabletRoom({ roomId, name, heroImageUrl, onBack }: { roomId: string; name: string; heroImageUrl?: string | null; onBack: () => void }) {
+  const headPhoto = useRoomPhoto({ name, heroImageUrl }, client);
   const [devices, setDevices] = useState<Device[]>([]);
   const [lights, setLights] = useState<Light[]>([]);
   const [mode, setMode] = useState<"colour" | "white">("colour");
@@ -55,7 +56,7 @@ export function TabletRoom({ roomId, name, heroImageUrl, onBack }: { roomId: str
 
   return (
     <div className="tablet-room" onClick={() => setMenu(null)}>
-      <div className="tr-head has-image" style={(() => { const { emoji, ...s } = roomCardStyle({ name, heroImageUrl }, client, 0.55); return s; })()}>
+      <div className="tr-head has-image" style={(() => { const { emoji, ...s } = styleForPhoto(headPhoto, { name, heroImageUrl }, 0.55); return s; })()}>
         <button className="back" onClick={onBack}>‹ Rooms</button>
         <h1 className="title" style={{ margin: 0 }}>{name}</h1>
         <span />

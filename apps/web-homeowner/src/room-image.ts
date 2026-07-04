@@ -11,6 +11,7 @@
  * so the fallback doesn't reshuffle. If the network can't reach it, the card's dark gradient shows
  * through — graceful, never broken-looking.
  */
+import { useEffect, useState } from "react";
 import type { SupremeClient } from "@supreme/sdk";
 import type { RoomId } from "@supreme/domain-model";
 
@@ -120,6 +121,19 @@ export function roomImage(room: RoomLike, client?: SupremeClient): string | null
   return client?.heroImageSrc(hero) ?? hero;
 }
 
+/** Build the card/hero background from an already-resolved photo url (or the gradient when null). */
+export function styleForPhoto(
+  photo: string | null,
+  room: RoomLike,
+  scrim = 0.72,
+): { backgroundImage: string; backgroundSize: string; emoji: string | null } {
+  if (photo) {
+    return { backgroundImage: `linear-gradient(180deg, transparent 38%, rgba(0,0,0,${scrim})), url("${photo}")`, backgroundSize: "cover", emoji: null };
+  }
+  const g = roomGradient(room);
+  return { backgroundImage: g.backgroundImage, backgroundSize: "cover", emoji: g.emoji };
+}
+
 /**
  * The background style for a room card/hero: a real photo (with a legibility scrim) when the hub has
  * one, else the designed gradient. `emoji` is the motif watermark to render only for the gradient
@@ -136,6 +150,58 @@ export function roomCardStyle(
   }
   const g = roomGradient(room);
   return { backgroundImage: g.backgroundImage, backgroundSize: "cover", emoji: g.emoji };
+}
+
+// ── Real interior photos (client-side, keyless) ─────────────────────────────────────
+// Openverse is a keyless, CORS-enabled Creative-Commons image search. The browser fetches a real
+// interior photo by the room's keyword and displays it — so photos appear even when the hub itself
+// has no internet. Deterministic pick per room + cached (memory + localStorage) so a room's photo is
+// stable and only fetched once. Falls back to the designed gradient if the network can't reach it.
+const photoMem = new Map<string, string | null>();
+
+async function fetchOpenversePhoto(room: RoomLike): Promise<string | null> {
+  const cacheKey = `roomphoto:${room.name}:${room.areaType ?? ""}`;
+  if (photoMem.has(cacheKey)) return photoMem.get(cacheKey)!;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) { photoMem.set(cacheKey, cached); return cached; }
+  } catch { /* storage disabled */ }
+  try {
+    const q = encodeURIComponent(`${keywordFor(room)} interior`);
+    const res = await fetch(`https://api.openverse.org/v1/images/?q=${q}&page_size=12&mature=false&aspect_ratio=wide`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const body = (await res.json()) as { results?: { url?: string; thumbnail?: string }[] };
+    const results = (body.results ?? []).filter((r) => r.thumbnail || r.url);
+    if (results.length === 0) throw new Error("no results");
+    const pick = results[lockFor(room.name) % results.length]!;
+    const url = pick.thumbnail || pick.url!;
+    photoMem.set(cacheKey, url);
+    try { localStorage.setItem(cacheKey, url); } catch { /* ignore */ }
+    return url;
+  } catch {
+    photoMem.set(cacheKey, null); // don't hammer on failure this session
+    return null;
+  }
+}
+
+/**
+ * Resolve a room's display photo: the hub-stored photo if present (identical everywhere), else a real
+ * interior photo fetched from Openverse, else null (caller paints the gradient). Returns the URL and
+ * whether it's still resolving so the card can show the gradient meanwhile.
+ */
+export function useRoomPhoto(room: RoomLike, client?: SupremeClient): string | null {
+  const hub = roomImage(room, client);
+  const [photo, setPhoto] = useState<string | null>(hub);
+  useEffect(() => {
+    if (hub) { setPhoto(hub); return; }
+    let live = true;
+    void fetchOpenversePhoto(room).then((u) => { if (live) setPhoto(u); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, room.name, room.areaType]);
+  return photo;
 }
 
 // Rooms we've already asked the hub to pin, so we don't re-POST on every re-render.

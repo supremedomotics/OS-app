@@ -13,7 +13,7 @@ import type {
   Scene,
 } from "@supreme/domain-model";
 import { client } from "./api.js";
-import { roomImage, roomCardStyle, ensureRoomHeroes, type RoomLike } from "./room-image.js";
+import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./room-image.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
@@ -59,9 +59,10 @@ function greetingFor(d: Date): string {
   return "Good night";
 }
 
-/** A room tile: a real hub photo when present, else a designed motif gradient (never flat colour). */
+/** A room tile: a real interior photo (hub-stored or fetched), else a designed motif gradient. */
 function RoomCard({ room, onClick }: { room: RoomLike; onClick: () => void }) {
-  const { emoji, ...style } = roomCardStyle(room, client);
+  const photo = useRoomPhoto(room, client);
+  const { emoji, ...style } = styleForPhoto(photo, room);
   return (
     <div className="room-card has-image" style={style} onClick={onClick}>
       {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
@@ -87,7 +88,8 @@ export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: str
   }, [rooms.length]);
   // Home hero: a representative room's photo when one exists, else the home's own designed gradient.
   const heroRoom = rooms.find((r) => r.heroImageUrl) ?? rooms[0] ?? { name: home?.home.name ?? "Home" };
-  const heroStyle = roomCardStyle(heroRoom, client, 0.6);
+  const heroPhoto = useRoomPhoto(heroRoom, client);
+  const heroStyle = styleForPhoto(heroPhoto, heroRoom, 0.6);
 
   return (
     <div>
@@ -208,6 +210,7 @@ export function RoomsScreen({
 
 function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; name: string; heroImageUrl: string | null; onBack: () => void }) {
   const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
+  const roomPhoto = useRoomPhoto({ id: roomId, name, heroImageUrl }, client);
   const [detail, setDetail] = useState<Device | null>(null);
   const [sheet, setSheet] = useState<Device | null>(null);
   const list = devices ?? [];
@@ -224,7 +227,7 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
       </button>
       {/* Room hero — entering a room should feel like entering the space. */}
       {(() => {
-        const { emoji, ...s } = roomCardStyle({ name, heroImageUrl }, client, 0.66);
+        const { emoji, ...s } = styleForPhoto(roomPhoto, { name, heroImageUrl }, 0.66);
         return (
           <div className="hero room has-image" style={s}>
             {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}

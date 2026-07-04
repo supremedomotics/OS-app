@@ -48,8 +48,21 @@ describe("room hero imagery", () => {
     expect(calls[0]).toContain("api.unsplash.com/search/photos");
   });
 
-  it("falls back to the keyless source when no Unsplash key is set", async () => {
-    const url = await resolvePhotoUrl(room("Kitchen"), fetch, undefined);
+  it("uses keyless Openverse when no Unsplash key is set", async () => {
+    const fakeFetch = (async (u: string) => {
+      expect(u).toContain("api.openverse.org");
+      return new Response(JSON.stringify({ results: [{ url: "https://cc.example/room.jpg" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const url = await resolvePhotoUrl(room("Kitchen"), fakeFetch, undefined);
+    expect(url).toBe("https://cc.example/room.jpg");
+  });
+
+  it("falls back to the stock source when both providers fail", async () => {
+    const failing = (async () => new Response("", { status: 500 })) as unknown as typeof fetch;
+    const url = await resolvePhotoUrl(room("Kitchen"), failing, undefined);
     expect(url).toContain("loremflickr.com");
   });
 

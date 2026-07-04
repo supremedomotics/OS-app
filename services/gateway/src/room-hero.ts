@@ -71,9 +71,9 @@ export async function resolvePhotoUrl(
   fetchImpl: typeof fetch = fetch,
   key: string | undefined = process.env.SUPREME_UNSPLASH_KEY,
 ): Promise<string> {
+  const keyword = heroKeyword(room);
   if (key) {
     try {
-      const keyword = heroKeyword(room);
       const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(keyword)}&per_page=12&orientation=landscape&content_filter=high`;
       const res = await fetchImpl(url, { headers: { Authorization: `Client-ID ${key}`, "Accept-Version": "v1" } });
       if (res.ok) {
@@ -88,6 +88,22 @@ export async function resolvePhotoUrl(
     } catch {
       // fall through to the keyless source
     }
+  }
+  // Keyless: Openverse (Creative-Commons) returns a real interior photo with no API key.
+  try {
+    const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(`${keyword} interior`)}&page_size=12&mature=false`;
+    const res = await fetchImpl(url, { headers: { Accept: "application/json" } });
+    if (res.ok) {
+      const body = (await res.json()) as { results?: { url?: string; thumbnail?: string }[] };
+      const results = (body.results ?? []).filter((r) => r.url || r.thumbnail);
+      if (results.length > 0) {
+        const pick = results[lockFor(room.name) % results.length];
+        const src = pick?.url ?? pick?.thumbnail;
+        if (src) return src;
+      }
+    }
+  } catch {
+    // fall through to the last-resort keyless source
   }
   return stockPhotoUrl(room);
 }
