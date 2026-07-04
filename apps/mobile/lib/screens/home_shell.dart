@@ -69,44 +69,48 @@ class _FloatingNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // A centred Row sizes to the pill's height (an Align/Center here would expand vertically and
+    // swallow the whole screen). mainAxisAlignment.center floats the pill in the middle horizontally.
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: (Theme.of(context).cardTheme.color ?? scheme.surface).withValues(alpha: 0.86),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
-              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 26, offset: const Offset(0, 10))],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (var i = 0; i < items.length; i++)
-                  GestureDetector(
-                    onTap: () => onTap(i),
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                      decoration: BoxDecoration(
-                        color: index == i ? scheme.primary : Colors.transparent,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        index == i ? items[i].$2 : items[i].$1,
-                        size: 22,
-                        color: index == i ? scheme.onPrimary : scheme.onSurfaceVariant,
+        padding: const EdgeInsets.only(bottom: 12, top: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: (Theme.of(context).cardTheme.color ?? scheme.surface).withValues(alpha: 0.86),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 26, offset: const Offset(0, 10))],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < items.length; i++)
+                    GestureDetector(
+                      onTap: () => onTap(i),
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        decoration: BoxDecoration(
+                          color: index == i ? scheme.primary : Colors.transparent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          index == i ? items[i].$2 : items[i].$1,
+                          size: 22,
+                          color: index == i ? scheme.onPrimary : scheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
