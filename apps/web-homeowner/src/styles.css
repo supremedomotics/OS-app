@@ -59,8 +59,8 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 }
 .tabbar button {
   background: none; border: 0; color: var(--aureon-color-text-secondary);
-  font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 6px 10px; cursor: pointer; border-radius: 12px;
+  font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  flex: 1; padding: 6px 2px; cursor: pointer; border-radius: 12px;
 }
 .tabbar button .ic { font-size: 20px; line-height: 1; }
 .tabbar button.active { color: var(--aureon-color-gold-400); }
@@ -71,7 +71,8 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
   border: 1px solid var(--aureon-color-base-hairline);
   border-radius: 18px; padding: 16px; margin-bottom: 12px;
 }
-.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+/* Ovio room list: full-width photographic bands stacked vertically (not a dense grid of tiles). */
+.grid { display: flex; flex-direction: column; gap: 14px; }
 .tile {
   position: relative; overflow: hidden; border-radius: 18px;
   border: 1px solid var(--aureon-color-base-hairline);
@@ -91,16 +92,18 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .tile input[type="range"] { position: relative; z-index: 2; width: 100%; accent-color: var(--aureon-color-gold-500); }
 
 .room-card {
-  position: relative; border-radius: 18px; overflow: hidden; cursor: pointer;
-  border: 1px solid var(--aureon-color-base-hairline); min-height: 120px;
+  position: relative; border-radius: 22px; overflow: hidden; cursor: pointer;
+  border: 1px solid var(--aureon-color-base-hairline); min-height: 156px;
   background: linear-gradient(135deg, var(--aureon-color-base-surface-raised), var(--aureon-color-base-surface));
   background-size: cover; background-position: center;
-  padding: 16px; display: flex; align-items: flex-end;
+  padding: 20px; display: flex; align-items: flex-end;
+  transition: transform .18s ease;
 }
+.room-card:active { transform: scale(0.985); }
 /* Motif watermark shown on the designed (no-photo) gradient — large, soft, top-right. */
-.room-motif { position: absolute; top: -6px; right: 6px; font-size: 60px; line-height: 1; opacity: 0.16; filter: grayscale(0.2); pointer-events: none; user-select: none; }
-.hero .room-motif { font-size: 96px; top: 4px; right: 16px; opacity: 0.14; }
-.room-card .name { font-size: 18px; font-weight: 600; color: var(--aureon-color-text-primary); }
+.room-motif { position: absolute; top: 6px; right: 14px; font-size: 84px; line-height: 1; opacity: 0.15; filter: grayscale(0.2); pointer-events: none; user-select: none; }
+.hero .room-motif { font-size: 104px; top: 8px; right: 18px; opacity: 0.13; }
+.room-card .name { font-size: 22px; font-weight: 600; color: var(--aureon-color-text-primary); }
 /* Cards with a room photo carry a dark scrim (set inline) — text reads white over it. */
 .room-card.has-image .name { color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,0.5); }
 
@@ -191,6 +194,10 @@ button.link {
   background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px;
 }
 .greet { font-size: 30px; font-weight: 600; margin: 6px 0 18px; }
+.quick-row { display: flex; gap: 10px; margin: 14px 0; }
+.quick { flex: 1; display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); font-size: 14px; font-weight: 500; cursor: pointer; }
+.quick span { color: var(--aureon-color-gold-400); font-size: 16px; }
+.quick:hover { border-color: var(--aureon-color-gold-400); }
 /* Ovio quick-scene tiles: square cards with a play glyph; active = gold. */
 .scene-tiles { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 18px; -webkit-overflow-scrolling: touch; }
 .scene-tile {

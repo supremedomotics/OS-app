@@ -70,7 +70,7 @@ function RoomCard({ room, onClick }: { room: RoomLike; onClick: () => void }) {
   );
 }
 
-export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void }) {
+export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: string) => void; onNavigate: (tab: "automations" | "energy") => void }) {
   const [home, refreshHome] = useAsync<HomeView>(() => client.home());
   const [scenes] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
   const [activeScene, setActiveScene] = useState<string | null>(null);
@@ -108,39 +108,23 @@ export function Dashboard({ onOpenRoom }: { onOpenRoom: (roomId: string) => void
         </div>
       )}
 
-      <h2 className="section">{home?.home.name ?? "Home"}</h2>
-
-      {/* Ovio-style home hero: photographic backdrop → designed motif gradient fallback. */}
+      {/* One focal element: the home hero (photo → designed motif gradient). */}
       <div className="hero" style={{ backgroundImage: heroStyle.backgroundImage, backgroundSize: heroStyle.backgroundSize }}>
         {heroStyle.emoji && <span className="room-motif" aria-hidden>{heroStyle.emoji}</span>}
         <div className="hero-top">{home?.home.name ?? "Home"}</div>
         <div className="hero-stats">
           <div>
             <strong>All calm</strong>
-            <span>Home</span>
-          </div>
-          <div className="right">
-            <strong>{rooms.length}</strong>
-            <span>Rooms</span>
+            <span>{rooms.length} {rooms.length === 1 ? "room" : "rooms"}</span>
           </div>
         </div>
       </div>
 
-      {/* Calm category aggregates (no long entity lists). */}
-      <div className="cat-tiles">
-        <div className="cat-tile">
-          <span className="ic">▦</span>
-          <span className="lbl">Rooms</span>
-          <span className="v">{rooms.length}</span>
-        </div>
-        <div className="cat-tile">
-          <span className="ic">✦</span>
-          <span className="lbl">Scenes</span>
-          <span className="v">{scenes?.length ?? 0}</span>
-        </div>
+      <div className="quick-row">
+        <button className="quick" onClick={() => onNavigate("automations")}><span>⟲</span>Automations</button>
+        <button className="quick" onClick={() => onNavigate("energy")}><span>⚡</span>Energy</button>
       </div>
 
-      <h2 className="section">Rooms</h2>
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
           <RoomCard key={r.id} room={r} onClick={() => onOpenRoom(r.id)} />

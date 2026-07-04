@@ -10,13 +10,13 @@ import { Automations } from "./automations.js";
 
 type Tab = "home" | "rooms" | "scenes" | "automations" | "security" | "energy" | "settings";
 
+// A calm 5-tab bar (Ovio). Automations + Energy are reached from the Home dashboard, so the bar
+// stays uncrowded and everything still fits without truncation.
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "⌂" },
   { id: "rooms", label: "Rooms", icon: "▦" },
   { id: "scenes", label: "Scenes", icon: "✦" },
-  { id: "automations", label: "Automations", icon: "⟲" },
   { id: "security", label: "Security", icon: "🛡" },
-  { id: "energy", label: "Energy", icon: "⚡" },
   { id: "settings", label: "Settings", icon: "⚙" },
 ];
 
@@ -62,7 +62,7 @@ export function App() {
     <LiveContext.Provider value={{ states, apply }}>
       <div className="shell">
         <div className="content">
-          {tab === "home" && <Dashboard onOpenRoom={openRoom} />}
+          {tab === "home" && <Dashboard onOpenRoom={openRoom} onNavigate={setTab} />}
           {tab === "rooms" && (
             <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />
           )}
