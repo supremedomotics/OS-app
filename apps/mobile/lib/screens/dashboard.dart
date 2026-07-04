@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../room_image.dart';
 import 'automations_screen.dart';
 import 'energy_screen.dart';
 import 'home_switcher.dart';
@@ -81,6 +82,15 @@ class DashboardScreen extends ConsumerWidget {
     final text = Theme.of(context).textTheme;
     final homeName = home.maybeWhen(data: (h) => h.homeName, orElse: () => 'Supreme');
     final roomCount = home.maybeWhen(data: (h) => h.rooms.length, orElse: () => 0);
+    // Home hero photo — the hub-served image of a representative room (identical across apps).
+    final heroImage = home.maybeWhen(
+      data: (h) {
+        if (h.rooms.isEmpty) return null;
+        final r = h.rooms.firstWhere((room) => room.heroImageUrl != null, orElse: () => h.rooms.first);
+        return roomImageUrl(ref.read(clientProvider), r.name, r.areaType, r.heroImageUrl);
+      },
+      orElse: () => null,
+    );
 
     return SafeArea(
       child: ListView(
@@ -110,6 +120,7 @@ class DashboardScreen extends ConsumerWidget {
           RoomHero(
             title: homeName,
             subtitle: roomCount > 0 ? '$roomCount rooms' : null,
+            imageUrl: heroImage,
             statusValue: 'All calm',
             statusLabel: 'Home',
             metricValue: scenes.maybeWhen(data: (s) => '${s.length}', orElse: () => null),

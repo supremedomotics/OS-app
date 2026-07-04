@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../room_image.dart';
 import 'device_detail.dart';
 import 'device_sheet.dart';
 
@@ -11,9 +12,11 @@ import 'device_sheet.dart';
 /// multi-light colour disc. Each colour light is a draggable node; long-press a tile for
 /// Dim / Select on colour picker / Turn off. Used at tablet width.
 class TabletRoomView extends ConsumerStatefulWidget {
-  const TabletRoomView({super.key, required this.roomId, required this.roomName});
+  const TabletRoomView({super.key, required this.roomId, required this.roomName, this.areaType, this.heroImageUrl});
   final String roomId;
   final String roomName;
+  final String? areaType;
+  final String? heroImageUrl;
 
   @override
   ConsumerState<TabletRoomView> createState() => _TabletRoomViewState();
@@ -99,7 +102,13 @@ class _TabletRoomViewState extends ConsumerState<TabletRoomView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.roomName, style: Theme.of(context).textTheme.titleLarge),
+            // Same hub-served hero image as the phone room + web, so a room looks identical
+            // across every surface.
+            RoomHero(
+              title: widget.roomName,
+              imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
+              height: 120,
+            ),
             const SizedBox(height: AureonSpacing.md),
             Expanded(
               child: Row(

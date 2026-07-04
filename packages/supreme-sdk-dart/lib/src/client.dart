@@ -111,6 +111,61 @@ class SupremeClient {
         .toList();
   }
 
+  /// Create a room (owner/admin/installer). Returns the created room's id + name.
+  Future<Map<String, dynamic>> createRoom(String name,
+      {String? areaType, int? floor}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/rooms'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'name': name,
+        if (areaType != null) 'areaType': areaType,
+        if (floor != null) 'floor': floor,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['room']
+        as Map<String, dynamic>;
+  }
+
+  /// Ask the hub to download & store a stock hero photo for a room (by name) if it has none.
+  /// Idempotent and best-effort — returns whether a photo is now stored. Clients call this
+  /// fire-and-forget the first time they render a room card with no hero.
+  Future<bool> pinRoomHeroImage(String roomId, {bool force = false}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/rooms/$roomId/hero-image/auto${force ? '?force=1' : ''}'),
+      headers: _authHeaders,
+    );
+    if (res.statusCode >= 400) return false;
+    return (jsonDecode(res.body) as Map<String, dynamic>)['pinned'] == true;
+  }
+
+  /// Replace a room's hero with an owner-provided live photo (base64 or a data: URL).
+  Future<void> uploadRoomHeroImage(String roomId,
+      {String? dataBase64, String? dataUrl, String? contentType}) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/rooms/$roomId/hero-image'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        if (dataBase64 != null) 'dataBase64': dataBase64,
+        if (dataUrl != null) 'dataUrl': dataUrl,
+        if (contentType != null) 'contentType': contentType,
+      }),
+    );
+    _ensureOk(res);
+  }
+
+  /// Resolve a room's [heroImageUrl] to a loadable image URL. Absolute URLs pass through; a
+  /// hub-relative path (the hub stored the photo locally) is resolved against the base URL with
+  /// the access token as a query param (an `Image.network` request can't set an auth header).
+  String? heroImageSrc(String? heroImageUrl) {
+    if (heroImageUrl == null || heroImageUrl.isEmpty) return null;
+    if (heroImageUrl.startsWith('http')) return heroImageUrl;
+    final sep = heroImageUrl.contains('?') ? '&' : '?';
+    final token = _accessToken;
+    return '$baseUrl$heroImageUrl${token != null ? '${sep}access_token=${Uri.encodeComponent(token)}' : ''}';
+  }
+
   /// All devices in the home (flat, permission-filtered).
   Future<List<Device>> devices() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/devices'),

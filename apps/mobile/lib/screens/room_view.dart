@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../room_image.dart';
 import 'device_detail.dart';
 import 'device_sheet.dart';
 import 'tablet_room.dart';
@@ -28,8 +29,8 @@ class HomePager extends ConsumerWidget {
               children: [
                 for (final room in view.rooms)
                   wide
-                      ? TabletRoomView(roomId: room.id, roomName: room.name)
-                      : RoomView(roomId: room.id, roomName: room.name),
+                      ? TabletRoomView(roomId: room.id, roomName: room.name, areaType: room.areaType, heroImageUrl: room.heroImageUrl)
+                      : RoomView(roomId: room.id, roomName: room.name, areaType: room.areaType, heroImageUrl: room.heroImageUrl),
               ],
             ),
           );
@@ -75,10 +76,12 @@ class HomePager extends ConsumerWidget {
 /// A single room: aggregate device tiles using the Aureon [FillTile] grammar.
 /// Commands go out optimistically over the SDK; the WSS stream reconciles state.
 class RoomView extends ConsumerStatefulWidget {
-  const RoomView({super.key, required this.roomId, required this.roomName});
+  const RoomView({super.key, required this.roomId, required this.roomName, this.areaType, this.heroImageUrl});
 
   final String roomId;
   final String roomName;
+  final String? areaType;
+  final String? heroImageUrl;
 
   @override
   ConsumerState<RoomView> createState() => _RoomViewState();
@@ -93,6 +96,11 @@ class _RoomViewState extends ConsumerState<RoomView> {
     super.initState();
     _load();
     _listenToStream();
+    // First view of a room with no stored hero → have the hub download & save one locally, then
+    // refresh the home so the hub-served (identical-everywhere) image replaces the stock fallback.
+    ensureRoomHero(ref.read(clientProvider), widget.roomId, widget.heroImageUrl).then((pinned) {
+      if (pinned && mounted) ref.invalidate(homeProvider);
+    });
   }
 
   Future<void> _load() async {
@@ -156,7 +164,13 @@ class _RoomViewState extends ConsumerState<RoomView> {
       padding: const EdgeInsets.all(AureonSpacing.lg),
       children: [
         const SizedBox(height: AureonSpacing.sm),
-        RoomHero(title: widget.roomName, statusValue: '${_devices.length}', statusLabel: _devices.length == 1 ? 'device' : 'devices', height: 200),
+        RoomHero(
+          title: widget.roomName,
+          imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
+          statusValue: '${_devices.length}',
+          statusLabel: _devices.length == 1 ? 'device' : 'devices',
+          height: 200,
+        ),
         const SizedBox(height: AureonSpacing.lg),
         if (_loading)
           const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()))
