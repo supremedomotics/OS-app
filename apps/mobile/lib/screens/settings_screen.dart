@@ -2,8 +2,10 @@ import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../cloud/multi_home.dart';
 import '../providers.dart';
 import '../widgets/password_field.dart';
+import 'add_home_screen.dart';
 import 'driver_manager_screen.dart';
 
 /// Appearance settings (§11.2 Themes): Light / Dark / Automatic base palettes
@@ -46,6 +48,10 @@ class SettingsScreen extends ConsumerWidget {
             onSelectionChanged: (s) => ref.read(accentProvider.notifier).state = s.first,
             showSelectedIcon: false,
           ),
+          const SizedBox(height: AureonSpacing.xl),
+          Text('Homes', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: AureonSpacing.sm),
+          const _HomesSection(),
           const SizedBox(height: AureonSpacing.xl),
           Text('System', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: AureonSpacing.sm),
@@ -129,4 +135,40 @@ class _Label extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: AureonSpacing.sm),
         child: Text(text, style: Theme.of(context).textTheme.labelMedium),
       );
+}
+
+/// The homes this app can reach (§16): tap to switch the active home instantly; "Add a home" opens
+/// the setup screen. Self-explanatory when there's a single (or no) home yet.
+class _HomesSection extends ConsumerWidget {
+  const _HomesSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final homes = ref.watch(homesProvider);
+    final active = ref.watch(activeHomeProvider);
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        for (final home in homes)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(home.isLocalReachable ? Icons.wifi_rounded : Icons.cloud_outlined,
+                color: home.hubId == active?.hubId ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant),
+            title: Text(home.name),
+            subtitle: Text(home.localBaseUrl ?? home.cloudRouteUrl, style: theme.textTheme.labelSmall),
+            trailing: home.hubId == active?.hubId ? Icon(Icons.check_circle, color: theme.colorScheme.primary) : null,
+            onTap: () => ref.read(activeHomeIdProvider.notifier).state = home.hubId,
+          ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.add_home_outlined, color: theme.colorScheme.primary),
+          title: Text('Add a home', style: TextStyle(color: theme.colorScheme.primary)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const AddHomeScreen()),
+          ),
+        ),
+      ],
+    );
+  }
 }

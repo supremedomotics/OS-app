@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../cloud/multi_home.dart';
 import '../providers.dart';
+import 'add_home_screen.dart';
 
 /// Home switcher (blueprint §16): a pull-up sheet listing every home the account can access
 /// (Mumbai Villa, Dubai Apartment, Farmhouse, …). Tapping one switches the active home
@@ -47,7 +48,7 @@ class HomeSwitcherSheet extends ConsumerWidget {
             if (homes.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(20),
-                child: Text('No homes yet — claim a hub to add your first home.'),
+                child: Text('No homes yet — add your first home below.'),
               )
             else
               ...homes.map((home) => _HomeTile(
@@ -58,6 +59,14 @@ class HomeSwitcherSheet extends ConsumerWidget {
                       Navigator.of(context).pop();
                     },
                   )),
+            ListTile(
+              leading: Icon(Icons.add_home_outlined, color: theme.colorScheme.primary),
+              title: Text('Add a home', style: TextStyle(color: theme.colorScheme.primary)),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AddHomeScreen()));
+              },
+            ),
           ],
           ),
         ),

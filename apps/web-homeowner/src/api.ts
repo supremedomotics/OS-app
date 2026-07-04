@@ -1,14 +1,17 @@
-import { MemoryTokenStore, SupremeClient, SupremeStream } from "@supreme/sdk";
+import { SupremeClient, SupremeStream } from "@supreme/sdk";
+import { activeHome, homeTokenStore } from "./homes.js";
 
 /**
- * The single Supreme API client for the homeowner web app. The app binds to the
- * Supreme contract only — it has no concept of Home Assistant. The hub base URL is
- * resolved from the environment (LAN-direct in the home; cloud relay when remote).
+ * The Supreme API client for the homeowner web app. The app binds to the Supreme contract only — it
+ * has no concept of Home Assistant. The hub base URL is the ACTIVE home's base URL (multi-home, §16):
+ * resolved from the local home registry, which seeds from the build-time URL on first run. Switching
+ * homes writes the registry and reloads, so this re-resolves to the new hub. Each home keeps its own
+ * persisted session (homeTokenStore), so a switch doesn't force a re-login.
  */
-export const baseUrl = import.meta.env.VITE_SUPREME_API_URL ?? "http://127.0.0.1:8080";
+export const baseUrl = activeHome().baseUrl;
 const wsBaseUrl = baseUrl.replace(/^http/, "ws");
 
-export const client = new SupremeClient({ baseUrl, tokenStore: new MemoryTokenStore() });
+export const client = new SupremeClient({ baseUrl, tokenStore: homeTokenStore() });
 
 // ── Unauthenticated onboarding + account-recovery endpoints ─────────────────────
 // These are first-run / pre-login flows the SDK doesn't model; small fetch helpers

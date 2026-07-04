@@ -12,6 +12,15 @@ import { activateLicense, client, devIssueLicense, fetchLicense, setDevMode, typ
 import { PasswordInput } from "./password-input.js";
 import { DriverManager } from "./drivers.js";
 import { DeveloperTools } from "./developer.js";
+import {
+  activeHomeId,
+  addHome,
+  loadHomes,
+  removeHome,
+  setActiveHome,
+  testHome,
+  type Home,
+} from "./homes.js";
 
 /**
  * Settings (§11.2/§11.3): Appearance (theme + accent), Account (change password), and Integrations
@@ -55,11 +64,105 @@ export function ThemeSettings() {
         </div>
       </section>
 
+      <HomesSettings />
       <LicensingSettings />
       <AccountSettings />
       <DriverManager />
       <DeveloperTools />
     </div>
+  );
+}
+
+/**
+ * Homes (§16): manage the homes this browser can reach and switch the active one. Each home is one
+ * hub at a base URL; switching writes the local registry and reloads so every screen rebinds to the
+ * new hub (each home keeps its own saved session, so no re-login). "Add a home" is the setup screen
+ * — name + hub address, with a reachability check.
+ */
+function HomesSettings() {
+  const [homes, setHomes] = useState<Home[]>(loadHomes());
+  const [activeId, setActiveId] = useState(activeHomeId());
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [check, setCheck] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  function switchTo(id: string) {
+    if (id === activeId) return;
+    setActiveHome(id);
+    // A home is a different hub + session — reload so every screen rebinds cleanly to it.
+    window.location.reload();
+  }
+
+  async function probe() {
+    if (!url.trim()) return;
+    setBusy(true);
+    setCheck(null);
+    const res = await testHome(url);
+    setCheck(
+      res.ok
+        ? { ok: true, text: `Reachable${res.systemName ? ` · ${res.systemName}` : ""}` }
+        : { ok: false, text: "Couldn't reach a Supreme hub at that address." },
+    );
+    setBusy(false);
+  }
+
+  function add() {
+    if (!url.trim()) return;
+    const next = addHome(name, url);
+    setHomes(next);
+    setName("");
+    setUrl("");
+    setCheck(null);
+    setAdding(false);
+  }
+
+  function remove(id: string) {
+    const next = removeHome(id);
+    setHomes(next);
+    setActiveId(activeHomeId());
+  }
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Homes</h2>
+      <p className="muted" style={{ marginTop: -4 }}>Switch between the homes you can reach. Each home is one Supreme hub.</p>
+      <div className="home-list">
+        {homes.map((h) => (
+          <div key={h.id} className={`home-row${h.id === activeId ? " active" : ""}`}>
+            <button className="home-pick" onClick={() => switchTo(h.id)}>
+              <span className="home-dot">{h.id === activeId ? "●" : "○"}</span>
+              <span className="home-meta">
+                <span className="home-name">{h.name}</span>
+                <span className="home-url">{h.baseUrl}</span>
+              </span>
+              {h.id === activeId && <span className="chip">Active</span>}
+            </button>
+            {homes.length > 1 && (
+              <button className="home-remove" title="Remove home" onClick={() => remove(h.id)}>✕</button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {adding ? (
+        <div className="card" style={{ marginTop: 10 }}>
+          <p className="opt-label">Add a home</p>
+          <input placeholder="Home name (e.g. Dubai Apartment)" value={name} onChange={(e) => setName(e.target.value)} />
+          <div style={{ height: 8 }} />
+          <input placeholder="Hub address (e.g. http://192.168.1.20:8080)" value={url} onChange={(e) => { setUrl(e.target.value); setCheck(null); }} />
+          {check && <p className={check.ok ? "muted" : "err"} style={{ marginTop: 6 }}>{check.text}</p>}
+          <div className="dev-row2" style={{ marginTop: 8 }}>
+            <button disabled={busy || !url.trim()} onClick={probe}>{busy ? "Checking…" : "Test connection"}</button>
+            <button className="primary" disabled={!url.trim()} onClick={add}>Add home</button>
+            <button onClick={() => { setAdding(false); setCheck(null); }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button className="primary" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>+ Add a home</button>
+      )}
+    </section>
   );
 }
 

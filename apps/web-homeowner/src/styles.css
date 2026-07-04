@@ -291,6 +291,18 @@ button.link {
 /* ── Tablet room (Ovio iPad bento layout) ─────────────────────────────────────── */
 @media (min-width: 900px) { .shell { max-width: 1180px; } .content { padding: 26px 26px 100px; } }
 .tablet-room { position: relative; }
+/* Homes (multi-home switcher) */
+.home-list { display: flex; flex-direction: column; gap: 8px; }
+.home-row { display: flex; align-items: center; gap: 6px; }
+.home-row .home-pick { flex: 1; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }
+.home-row.active .home-pick { border-color: var(--aureon-color-gold-400); }
+.home-row .home-dot { color: var(--aureon-color-gold-400); font-size: 12px; }
+.home-meta { display: flex; flex-direction: column; flex: 1; }
+.home-meta .home-name { font-weight: 600; }
+.home-meta .home-url { font-size: 12px; color: var(--aureon-color-text-muted); }
+.home-remove { border: 0; background: none; color: var(--aureon-color-text-muted); cursor: pointer; padding: 8px; border-radius: 10px; }
+.home-remove:hover { color: var(--aureon-color-status-critical); }
+
 .tr-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .tr-head.has-image { padding: 22px 24px; border-radius: 18px; background-size: cover; background-position: center; box-shadow: inset 0 0 0 1px var(--aureon-color-base-hairline); }
 .tr-head.has-image .title { color: #fff; text-shadow: 0 1px 12px rgba(0,0,0,0.55); }
