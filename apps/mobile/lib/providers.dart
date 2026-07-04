@@ -4,9 +4,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import 'cloud/multi_home.dart';
+import 'room_image.dart';
 
 /// Riverpod wiring over the generated Supreme SDK (§11.3). Optimistic updates are
 /// reconciled by the WSS state stream. State is held in Supreme terms only.
+
+/// Resolve a room's display photo: the hub-stored photo when present (identical everywhere), else a
+/// real interior photo fetched client-side from Openverse. Null → the caller shows the designed
+/// gradient. Keyed by the room's identity so it's cached and fetched once.
+typedef RoomKey = ({String name, String? areaType, String? heroImageUrl});
+final roomPhotoProvider = FutureProvider.family<String?, RoomKey>((ref, room) async {
+  final client = ref.read(clientProvider);
+  final hub = client.heroImageSrc(room.heroImageUrl);
+  if (hub != null) return hub;
+  return fetchRoomPhoto(room.name, room.areaType);
+});
 
 /// Appearance (§11.2 Themes): base palette mode (Luxury Black / White / Automatic) and
 /// the accent ramp (Gold / Silver). Held in app state; the MaterialApp rebuilds on change.

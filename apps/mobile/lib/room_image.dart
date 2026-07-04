@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart' show Color;
+import 'package:http/http.dart' as http;
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 /// Room hero imagery (mobile/tablet parity with the web app, §11). A room's photo is, in order:
@@ -40,6 +43,45 @@ const List<List<String>> _nameKeywords = [
   [r'living|lounge|family', 'living room'],
   [r'kitchen|pantry', 'kitchen'],
 ];
+
+int _lockFor(String s) {
+  var h = 2166136261;
+  for (var i = 0; i < s.length; i++) {
+    h = (h ^ s.codeUnitAt(i)) & 0xffffffff;
+    h = (h * 16777619) & 0xffffffff;
+  }
+  return h % 100000;
+}
+
+// Resolved Openverse photo URLs, cached in-memory per room so we fetch once.
+final Map<String, String?> _photoCache = {};
+
+/// Fetch a REAL interior photo for a room from Openverse (keyless, Creative-Commons) so images show
+/// even when the hub has no internet — the device fetches them. Deterministic pick per room name,
+/// cached. Returns null (caller keeps the designed gradient) on any network problem.
+Future<String?> fetchRoomPhoto(String name, String? areaType, {http.Client? httpClient}) async {
+  final key = '$name|${areaType ?? ''}';
+  if (_photoCache.containsKey(key)) return _photoCache[key];
+  final client = httpClient ?? http.Client();
+  try {
+    final kw = _keywordFor(name, areaType);
+    final uri = Uri.parse(
+        'https://api.openverse.org/v1/images/?q=${Uri.encodeComponent('$kw interior')}&page_size=12&mature=false');
+    final res = await client.get(uri, headers: {'Accept': 'application/json'}).timeout(const Duration(seconds: 8));
+    if (res.statusCode >= 400) throw Exception('openverse ${res.statusCode}');
+    final results = (((jsonDecode(res.body) as Map<String, dynamic>)['results'] as List?) ?? [])
+        .where((r) => r['url'] != null || r['thumbnail'] != null)
+        .toList();
+    if (results.isEmpty) throw Exception('no results');
+    final pick = results[_lockFor(name) % results.length] as Map<String, dynamic>;
+    final url = (pick['url'] ?? pick['thumbnail']) as String;
+    _photoCache[key] = url;
+    return url;
+  } catch (_) {
+    _photoCache[key] = null;
+    return null;
+  }
+}
 
 String _keywordFor(String name, String? areaType) {
   for (final entry in _nameKeywords) {

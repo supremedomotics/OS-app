@@ -106,9 +106,10 @@ class _TabletRoomViewState extends ConsumerState<TabletRoomView> {
             // across every surface.
             Builder(builder: (_) {
               final st = roomStyle(widget.roomName, widget.areaType);
+              final photo = ref.watch(roomPhotoProvider((name: widget.roomName, areaType: widget.areaType, heroImageUrl: widget.heroImageUrl))).valueOrNull;
               return RoomHero(
                 title: widget.roomName,
-                imageUrl: roomImageUrl(ref.read(clientProvider), widget.roomName, widget.areaType, widget.heroImageUrl),
+                imageUrl: photo,
                 gradientColors: [st.from, st.to],
                 motif: st.emoji,
                 height: 120,

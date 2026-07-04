@@ -82,18 +82,19 @@ class DashboardScreen extends ConsumerWidget {
     final text = Theme.of(context).textTheme;
     final homeName = home.maybeWhen(data: (h) => h.homeName, orElse: () => 'Supreme');
     final roomCount = home.maybeWhen(data: (h) => h.rooms.length, orElse: () => 0);
-    // Home hero — a representative room's hub photo when one exists, else that room's designed style.
-    String? heroImage;
+    // Home hero — a representative room's real photo (hub or Openverse), else that room's style.
+    RoomKey? repKey;
     RoomStyle heroStyleValue = roomStyle(homeName, null);
     home.maybeWhen(
       data: (h) {
         if (h.rooms.isEmpty) return;
         final r = h.rooms.firstWhere((room) => room.heroImageUrl != null, orElse: () => h.rooms.first);
-        heroImage = roomImageUrl(ref.read(clientProvider), r.name, r.areaType, r.heroImageUrl);
+        repKey = (name: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl);
         heroStyleValue = roomStyle(r.name, r.areaType);
       },
       orElse: () {},
     );
+    final heroImage = repKey == null ? null : ref.watch(roomPhotoProvider(repKey!)).valueOrNull;
 
     return SafeArea(
       child: ListView(
