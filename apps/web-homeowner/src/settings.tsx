@@ -12,6 +12,7 @@ import { activateLicense, client, devIssueLicense, fetchLicense, setDevMode, typ
 import { PasswordInput } from "./password-input.js";
 import { DriverManager } from "./drivers.js";
 import { DeveloperTools } from "./developer.js";
+import { AdvancedSettings } from "./advanced.js";
 import {
   activeHomeId,
   addHome,
@@ -68,6 +69,7 @@ export function ThemeSettings() {
       <LicensingSettings />
       <AccountSettings />
       <DriverManager />
+      <AdvancedSettings />
       <DeveloperTools />
     </div>
   );

@@ -291,6 +291,30 @@ button.link {
 /* ── Tablet room (Ovio iPad bento layout) ─────────────────────────────────────── */
 @media (min-width: 900px) { .shell { max-width: 1180px; } .content { padding: 26px 26px 100px; } }
 .tablet-room { position: relative; }
+/* Advanced settings panels */
+.adv-panel { border: 1px solid var(--aureon-color-base-hairline); border-radius: 12px; margin-top: 8px; overflow: hidden; }
+.adv-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--aureon-color-base-surface); border: 0; color: inherit; cursor: pointer; text-align: left; }
+.adv-caret { color: var(--aureon-color-gold-400); width: 14px; }
+.adv-title { font-weight: 600; }
+.adv-sub { margin-left: auto; font-size: 12px; color: var(--aureon-color-text-muted); }
+.adv-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.adv-body select, .adv-body input { width: 100%; }
+.adv-blocks { display: flex; flex-direction: column; gap: 6px; }
+.adv-block { display: flex; align-items: center; gap: 8px; }
+.adv-block input[type=time] { width: 120px; }
+.adv-block input[type=number] { width: 90px; }
+.adv-block .unit { color: var(--aureon-color-text-muted); }
+.adv-x, .adv-body .adv-x { background: none; border: 0; color: var(--aureon-color-text-muted); cursor: pointer; width: auto; }
+.adv-tariff { border-top: 1px solid var(--aureon-color-base-hairline); padding-top: 8px; margin-top: 8px; }
+.adv-hours { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; margin-top: 6px; }
+.adv-hours button { padding: 4px 0; font-size: 11px; border: 1px solid var(--aureon-color-base-hairline); background: transparent; color: var(--aureon-color-text-muted); border-radius: 6px; cursor: pointer; width: auto; }
+.adv-hours button.on { background: var(--aureon-color-gold-400); color: #15161b; border-color: transparent; }
+.adv-devices { display: flex; flex-wrap: wrap; gap: 6px; }
+.adv-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--aureon-color-base-hairline); border-radius: 20px; font-size: 13px; cursor: pointer; width: auto !important; }
+.adv-chip.on { border-color: var(--aureon-color-gold-400); color: var(--aureon-color-gold-400); }
+.adv-chip input { width: auto !important; }
+.unit { color: var(--aureon-color-text-muted); font-size: 12px; }
+
 /* Homes (multi-home switcher) */
 .home-list { display: flex; flex-direction: column; gap: 8px; }
 .home-row { display: flex; align-items: center; gap: 6px; }

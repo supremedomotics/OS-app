@@ -268,6 +268,55 @@ export async function createAutomation(body: {
   return res.ok;
 }
 
+// ── Advanced automation & energy configuration (authenticated) ──────────────────────
+// These surface hub functions that were previously API-only: circadian lighting, the climate
+// schedule, adaptive ventilation, the energy tariff / provider, and peak load-shifting.
+async function getJson<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const res = await authed(path);
+    return res.ok ? ((await res.json()) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await authed(path, { method: "PUT", body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not save."));
+  return (await res.json()) as T;
+}
+
+export interface CircadianTarget { kelvin: number; brightness: number }
+export const getCircadian = () => getJson<{ target: CircadianTarget; atLocalMinute: number } | null>("/v1/lighting/circadian", null);
+export async function applyCircadian(roomId?: string): Promise<{ applied: string[] }> {
+  const res = await authed("/v1/lighting/circadian/apply", { method: "POST", body: JSON.stringify(roomId ? { roomId } : {}) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not apply circadian lighting."));
+  return (await res.json()) as { applied: string[] };
+}
+
+export interface ClimateBlock { atMinutes: number; targetC: number }
+export interface ClimateProgram { weekday: ClimateBlock[]; weekend: ClimateBlock[] }
+export const getClimateProgram = () => getJson<{ program: ClimateProgram | null }>("/v1/climate/program", { program: null });
+export const setClimateProgram = (program: ClimateProgram) => putJson<{ program: ClimateProgram }>("/v1/climate/program", { program });
+
+export interface VentilationConfig { sensorDeviceId: string; fanDeviceId: string; highThreshold?: number; lowThreshold?: number }
+export const getVentilation = () => getJson<{ config: VentilationConfig | null; fanOn: boolean }>("/v1/ventilation/config", { config: null, fanOn: false });
+export const setVentilation = (config: VentilationConfig) => putJson<{ config: VentilationConfig }>("/v1/ventilation/config", { config });
+
+export interface TariffPeriod { name: string; ratePerKwh: number; hours: number[] }
+export interface Tariff { currency: string; standingChargePerDay?: number; periods: TariffPeriod[] }
+export const getTariff = () => getJson<{ tariff: Tariff | null }>("/v1/energy/tariff", { tariff: null });
+export const setTariff = (tariff: Tariff) => putJson<{ tariff: Tariff }>("/v1/energy/tariff", { tariff });
+
+export interface EnergyProvider { country?: string; city?: string; provider?: string; ratePerKwh?: number; currency?: string }
+export const getEnergyProvider = () => getJson<{ provider: EnergyProvider | null }>("/v1/energy/provider", { provider: null });
+export const setEnergyProvider = (p: EnergyProvider) => putJson<{ provider: EnergyProvider }>("/v1/energy/provider", p);
+
+export interface DeviceLite { id: string; name: string; roomId?: string | null; capabilities: { kind: string }[] }
+export const getAllDevices = () => getJson<{ devices: DeviceLite[] }>("/v1/devices", { devices: [] });
+
+export const getDeferrableLoads = () => getJson<{ deviceIds: string[]; pausedNow: string[] }>("/v1/energy/deferrable-loads", { deviceIds: [], pausedNow: [] });
+export const setDeferrableLoads = (deviceIds: string[], ceiling?: number) => putJson<{ deviceIds: string[] }>("/v1/energy/deferrable-loads", ceiling !== undefined ? { deviceIds, ceiling } : { deviceIds });
+
 /** Open the realtime WSS stream once authenticated (live device state + notifications). */
 export function openStream(): SupremeStream | null {
   const token = client.accessToken;
