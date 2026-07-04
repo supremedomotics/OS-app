@@ -24,54 +24,86 @@ import {
 } from "./homes.js";
 
 /**
- * Settings (§11.2/§11.3): Appearance (theme + accent), Account (change password), and Integrations
- * (browse + install signed drivers). Applying a theme is a pure repaint; the rest binds to the
- * Supreme API — zero Home Assistant awareness.
+ * Settings (§11.2/§11.3) — a calm, Ovio-style menu. The default view is a short list of destinations;
+ * choosing one opens that focused panel with a back arrow, so nothing is crammed onto one screen.
+ * Everything binds to the Supreme API — zero Home Assistant awareness.
  */
-export function ThemeSettings() {
-  const [choice, setChoice] = useState(loadAureonTheme());
+type SettingsPage = { id: string; label: string; icon: string; hint: string; el: React.ReactNode };
 
+export function ThemeSettings() {
+  const [open, setOpen] = useState<string | null>(null);
+  const [devMode, setDevMode] = useState(false);
+  useEffect(() => { void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode))); }, []);
+
+  const pages: SettingsPage[] = [
+    { id: "appearance", label: "Appearance", icon: "◐", hint: "Theme & accent", el: <AppearanceSettings /> },
+    { id: "homes", label: "Homes", icon: "⌂", hint: "Switch or add a home", el: <HomesSettings /> },
+    { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
+    { id: "drivers", label: "Drivers & integrations", icon: "⧉", hint: "Add & configure protocols", el: <DriverManager /> },
+    { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
+    { id: "account", label: "Account", icon: "○", hint: "Change your password", el: <AccountSettings /> },
+    ...(devMode ? [{ id: "developer", label: "Developer", icon: "⚑", hint: "Engineering tools", el: <DeveloperTools /> }] : []),
+  ];
+
+  const current = pages.find((p) => p.id === open);
+  if (current) {
+    return (
+      <div className="settings">
+        <button className="back" onClick={() => setOpen(null)}>‹ Settings</button>
+        {current.el}
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings">
+      <h1 className="title">Settings</h1>
+      <div className="set-menu">
+        {pages.map((p) => (
+          <button key={p.id} className="set-row" onClick={() => setOpen(p.id)}>
+            <span className="set-ic">{p.icon}</span>
+            <span className="set-meta">
+              <span className="set-label">{p.label}</span>
+              <span className="set-hint">{p.hint}</span>
+            </span>
+            <span className="set-chev">›</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Appearance: base palette (Luxury Black/White/Auto) + accent (Gold/Silver). A pure repaint. */
+function AppearanceSettings() {
+  const [choice, setChoice] = useState(loadAureonTheme());
   function update(next: { mode?: AureonMode; accent?: AureonAccent }) {
     const merged = { ...choice, ...next };
     setChoice(merged);
     applyAureonTheme(merged);
     saveAureonTheme(merged);
   }
-
   return (
-    <div className="settings">
-      <h1 className="title">Settings</h1>
-
-      <section className="card-section">
-        <h2 className="section-title">Appearance</h2>
-
-        <p className="opt-label">Theme</p>
-        <div className="seg">
-          {AUREON_MODES.map((m) => (
-            <button key={m.key} className={choice.mode === m.key ? "on" : ""} onClick={() => update({ mode: m.key })}>
-              {m.label}
-            </button>
-          ))}
-        </div>
-
-        <p className="opt-label">Accent</p>
-        <div className="seg accents">
-          {AUREON_ACCENTS.map((a) => (
-            <button key={a.key} className={choice.accent === a.key ? "on" : ""} onClick={() => update({ accent: a.key })}>
-              <span className="swatch" style={{ background: a.swatch }} />
-              {a.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <HomesSettings />
-      <LicensingSettings />
-      <AccountSettings />
-      <DriverManager />
-      <AdvancedSettings />
-      <DeveloperTools />
-    </div>
+    <section className="card-section">
+      <h2 className="section-title">Appearance</h2>
+      <p className="opt-label">Theme</p>
+      <div className="seg">
+        {AUREON_MODES.map((m) => (
+          <button key={m.key} className={choice.mode === m.key ? "on" : ""} onClick={() => update({ mode: m.key })}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <p className="opt-label">Accent</p>
+      <div className="seg accents">
+        {AUREON_ACCENTS.map((a) => (
+          <button key={a.key} className={choice.accent === a.key ? "on" : ""} onClick={() => update({ accent: a.key })}>
+            <span className="swatch" style={{ background: a.swatch }} />
+            {a.label}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 

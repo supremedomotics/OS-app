@@ -294,6 +294,17 @@ button.link {
 /* ── Tablet room (Ovio iPad bento layout) ─────────────────────────────────────── */
 @media (min-width: 900px) { .shell { max-width: 1180px; } .content { padding: 26px 26px 100px; } }
 .tablet-room { position: relative; }
+/* Settings menu (Ovio-minimal) */
+.set-menu { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.set-row { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px; border-radius: 16px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; transition: border-color .15s ease; }
+.set-row:hover { border-color: var(--aureon-color-gold-400); }
+.set-ic { width: 30px; height: 30px; display: grid; place-items: center; font-size: 17px; color: var(--aureon-color-gold-400); }
+.set-meta { display: flex; flex-direction: column; flex: 1; }
+.set-label { font-size: 16px; font-weight: 600; }
+.set-hint { font-size: 12.5px; color: var(--aureon-color-text-muted); }
+.set-chev { color: var(--aureon-color-text-muted); font-size: 20px; }
+.settings .back { margin-bottom: 12px; }
+
 /* Audit log (read-only) */
 .audit-list { display: flex; flex-direction: column; gap: 4px; max-height: 340px; overflow-y: auto; }
 .audit-row { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 10px; background: var(--aureon-color-base-surface); }
