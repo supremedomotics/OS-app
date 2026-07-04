@@ -129,6 +129,12 @@ final energyDeviceWattsProvider =
   return ref.watch(clientProvider).energyDeviceWatts();
 });
 
+/// The unified driver registry (every driver + install state + config schema).
+final driverRegistryProvider =
+    FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  return ref.watch(clientProvider).driverRegistry();
+});
+
 /// Monthly energy budget + live month-to-date projection.
 final energyBudgetProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   return ref.watch(clientProvider).energyBudget();

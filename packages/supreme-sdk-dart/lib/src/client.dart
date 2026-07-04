@@ -539,6 +539,74 @@ class SupremeClient {
         as Map<String, dynamic>;
   }
 
+  // ── Driver Framework (§9) ──────────────────────────────────────────────────
+
+  /// Every driver merged with its installed state, config schema and supported operations —
+  /// the Driver Manager populates from this, so any current/future driver appears automatically.
+  Future<List<Map<String, dynamic>>> driverRegistry() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/drivers/registry'), headers: _authHeaders);
+    _ensureOk(res);
+    final list = (jsonDecode(res.body) as Map<String, dynamic>)['drivers'] as List<dynamic>? ?? [];
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  /// An installed driver's config schema + current (masked) values.
+  Future<Map<String, dynamic>> driverConfig(String id) async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/drivers/$id/config'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Save an installed driver's config (schema-validated on the hub).
+  Future<void> setDriverConfig(String id, Map<String, dynamic> config) async {
+    final res = await _http.put(Uri.parse('$baseUrl/v1/drivers/$id/config'),
+        headers: _authHeaders, body: jsonEncode({'config': config}));
+    _ensureOk(res);
+  }
+
+  /// A driver's health (verdict + config completeness + native connectivity).
+  Future<Map<String, dynamic>> driverHealth(String id) async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/drivers/$id/health'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// A driver's recent log entries.
+  Future<List<Map<String, dynamic>>> driverLogs(String id) async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/drivers/$id/logs'), headers: _authHeaders);
+    _ensureOk(res);
+    final list = (jsonDecode(res.body) as Map<String, dynamic>)['entries'] as List<dynamic>? ?? [];
+    return list.cast<Map<String, dynamic>>();
+  }
+
+  /// Install a driver by its catalog key.
+  Future<void> installDriver(String key) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/drivers/install'),
+        headers: _authHeaders, body: jsonEncode({'key': key}));
+    _ensureOk(res);
+  }
+
+  /// Enable or disable an installed driver.
+  Future<void> setDriverEnabled(String id, bool enabled) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/drivers/$id/enabled'),
+        headers: _authHeaders, body: jsonEncode({'enabled': enabled}));
+    _ensureOk(res);
+  }
+
+  /// Uninstall an installed driver.
+  Future<void> uninstallDriver(String id) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/drivers/$id'), headers: _authHeaders);
+    _ensureOk(res);
+  }
+
+  /// Connect or disconnect a driver's native protocol stack.
+  Future<void> connectDriver(String id, bool connect) async {
+    final res = await _http.post(
+        Uri.parse('$baseUrl/v1/drivers/$id/${connect ? 'connect' : 'disconnect'}'),
+        headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),
