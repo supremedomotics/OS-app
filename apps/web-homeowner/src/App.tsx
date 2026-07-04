@@ -7,17 +7,18 @@ import { ForgotPassword, SetupWizard } from "./onboarding.js";
 import { PasswordInput } from "./password-input.js";
 import { ThemeSettings } from "./settings.js";
 import { Automations } from "./automations.js";
+import { Icon } from "./icons.js";
 
 type Tab = "home" | "rooms" | "scenes" | "automations" | "security" | "energy" | "settings";
 
 // A calm 5-tab bar (Ovio). Automations + Energy are reached from the Home dashboard, so the bar
 // stays uncrowded and everything still fits without truncation.
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "home", label: "Home", icon: "⌂" },
-  { id: "rooms", label: "Rooms", icon: "▦" },
-  { id: "scenes", label: "Scenes", icon: "✦" },
-  { id: "security", label: "Security", icon: "🛡" },
-  { id: "settings", label: "Settings", icon: "⚙" },
+const TABS: { id: Tab; label: string; icon: "home" | "rooms" | "scenes" | "security" | "settings" }[] = [
+  { id: "home", label: "Home", icon: "home" },
+  { id: "rooms", label: "Rooms", icon: "rooms" },
+  { id: "scenes", label: "Scenes", icon: "scenes" },
+  { id: "security", label: "Security", icon: "security" },
+  { id: "settings", label: "Settings", icon: "settings" },
 ];
 
 export function App() {
@@ -83,8 +84,8 @@ export function App() {
                 setTab(t.id);
               }}
             >
-              <span className="ic">{t.icon}</span>
-              {t.label}
+              <span className="ic"><Icon name={t.icon} /></span>
+              <span className="lbl">{t.label}</span>
             </button>
           ))}
         </nav>

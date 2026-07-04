@@ -203,7 +203,8 @@ button.link {
 .greet { font-size: 30px; font-weight: 600; margin: 6px 0 18px; }
 .quick-row { display: flex; gap: 10px; margin: 14px 0; }
 .quick { flex: 1; display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); font-size: 14px; font-weight: 500; cursor: pointer; }
-.quick span { color: var(--aureon-color-gold-400); font-size: 16px; }
+.quick .qic { color: var(--aureon-color-gold-400); display: inline-flex; align-items: center; }
+.tabbar button .ic { display: inline-flex; }
 .quick:hover { border-color: var(--aureon-color-gold-400); }
 /* Ovio quick-scene tiles: square cards with a play glyph; active = gold. */
 .scene-tiles { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 18px; -webkit-overflow-scrolling: touch; }

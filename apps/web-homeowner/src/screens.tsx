@@ -19,6 +19,7 @@ import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
 import { TabletRoom } from "./tablet-room.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
+import { Icon } from "./icons.js";
 
 /** True on tablet/desktop widths — switches the room to the Ovio bento layout. */
 function useWide(): boolean {
@@ -123,8 +124,8 @@ export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: str
       </div>
 
       <div className="quick-row">
-        <button className="quick" onClick={() => onNavigate("automations")}><span>⟲</span>Automations</button>
-        <button className="quick" onClick={() => onNavigate("energy")}><span>⚡</span>Energy</button>
+        <button className="quick" onClick={() => onNavigate("automations")}><span className="qic"><Icon name="automations" size={18} /></span>Automations</button>
+        <button className="quick" onClick={() => onNavigate("energy")}><span className="qic"><Icon name="energy" size={18} /></span>Energy</button>
       </div>
 
       <div className="grid">
