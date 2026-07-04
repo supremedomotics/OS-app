@@ -7,19 +7,19 @@
   },
   "color": {
     "base": {
-      "void": "#0A0A0C",
-      "surface": "#121317",
-      "surfaceRaised": "#1A1C22",
-      "surfaceOverlay": "#22242C",
-      "hairline": "#2C2F38"
+      "void": "#0A0908",
+      "surface": "#141210",
+      "surfaceRaised": "#1C1A16",
+      "surfaceOverlay": "#242119",
+      "hairline": "#2D2A24"
     },
     "gold": {
-      "50": "#FBF3DE",
-      "200": "#F0D9A0",
-      "400": "#E3BE6A",
-      "500": "#D4A24A",
-      "600": "#B7842F",
-      "700": "#8A6020"
+      "50": "#EFE9DF",
+      "200": "#D8C9B4",
+      "400": "#B29B80",
+      "500": "#9C876C",
+      "600": "#7E6B52",
+      "700": "#5C4E3B"
     },
     "text": {
       "primary": "#F4F1EA",

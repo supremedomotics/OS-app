@@ -43,7 +43,7 @@ class SettingsScreen extends ConsumerWidget {
           const _Label('Accent'),
           SegmentedButton<AureonAccent>(
             segments: const [
-              ButtonSegment(value: AureonAccent.gold, label: Text('Gold'), icon: Icon(Icons.circle, color: AureonGold.c400)),
+              ButtonSegment(value: AureonAccent.gold, label: Text('Warm'), icon: Icon(Icons.circle, color: AureonGold.c400)),
               ButtonSegment(value: AureonAccent.silver, label: Text('Silver'), icon: Icon(Icons.circle, color: Color(0xFFC8CDD6))),
             ],
             selected: {accent},

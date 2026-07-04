@@ -8,8 +8,8 @@ describe("aureon tokens", () => {
 
   it("emits kebab-cased CSS custom properties", () => {
     const css = toCssVariables();
-    expect(css).toContain("--aureon-color-base-void: #0A0A0C;");
-    expect(css).toContain("--aureon-color-gold-500: #D4A24A;");
+    expect(css).toContain("--aureon-color-base-void: #0A0908;");
+    expect(css).toContain("--aureon-color-gold-500: #9C876C;");
     expect(css).toContain(":root {");
   });
 });

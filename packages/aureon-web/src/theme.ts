@@ -22,7 +22,9 @@ export const AUREON_MODES: ReadonlyArray<{ key: AureonMode; label: string }> = [
   { key: "auto", label: "Automatic" },
 ];
 export const AUREON_ACCENTS: ReadonlyArray<{ key: AureonAccent; label: string; swatch: string }> = [
-  { key: "gold", label: "Gold", swatch: "#E3BE6A" },
+  // The default accent is a muted Ovio-style taupe (the `gold` key is kept for stored-choice
+  // compatibility); Silver is the cool alternative.
+  { key: "gold", label: "Warm", swatch: "#B29B80" },
   { key: "silver", label: "Silver", swatch: "#C8CDD6" },
 ];
 

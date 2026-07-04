@@ -7,21 +7,21 @@ import 'package:flutter/widgets.dart';
 
 class AureonBase {
   const AureonBase._();
-  static const Color voidColor = Color(0xFF0A0A0C);
-  static const Color surface = Color(0xFF121317);
-  static const Color surfaceRaised = Color(0xFF1A1C22);
-  static const Color surfaceOverlay = Color(0xFF22242C);
-  static const Color hairline = Color(0xFF2C2F38);
+  static const Color voidColor = Color(0xFF0A0908);
+  static const Color surface = Color(0xFF141210);
+  static const Color surfaceRaised = Color(0xFF1C1A16);
+  static const Color surfaceOverlay = Color(0xFF242119);
+  static const Color hairline = Color(0xFF2D2A24);
 }
 
 class AureonGold {
   const AureonGold._();
-  static const Color c50 = Color(0xFFFBF3DE);
-  static const Color c200 = Color(0xFFF0D9A0);
-  static const Color c400 = Color(0xFFE3BE6A);
-  static const Color c500 = Color(0xFFD4A24A);
-  static const Color c600 = Color(0xFFB7842F);
-  static const Color c700 = Color(0xFF8A6020);
+  static const Color c50 = Color(0xFFEFE9DF);
+  static const Color c200 = Color(0xFFD8C9B4);
+  static const Color c400 = Color(0xFFB29B80);
+  static const Color c500 = Color(0xFF9C876C);
+  static const Color c600 = Color(0xFF7E6B52);
+  static const Color c700 = Color(0xFF5C4E3B);
 }
 
 class AureonText {

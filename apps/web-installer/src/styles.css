@@ -1,12 +1,13 @@
 /* Aureon web tokens are emitted at build time via @supreme/aureon-web. This file
    mirrors the key variables for the installer's dense, technical persona (§11.3). */
 :root {
-  --aureon-color-base-void: #0a0a0c;
-  --aureon-color-base-surface: #121317;
-  --aureon-color-base-surface-raised: #1a1c22;
-  --aureon-color-base-hairline: #2c2f38;
-  --aureon-color-gold-400: #e3be6a;
-  --aureon-color-gold-500: #d4a24a;
+  /* Ovio-inspired: warm near-black base + muted taupe accent. */
+  --aureon-color-base-void: #0a0908;
+  --aureon-color-base-surface: #141210;
+  --aureon-color-base-surface-raised: #1c1a16;
+  --aureon-color-base-hairline: #2d2a24;
+  --aureon-color-gold-400: #b29b80;
+  --aureon-color-gold-500: #9c876c;
   --aureon-color-text-primary: #f4f1ea;
   --aureon-color-text-secondary: #b6b2a8;
   --aureon-color-status-good: #6fbf8b;
