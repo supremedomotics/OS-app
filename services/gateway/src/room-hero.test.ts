@@ -6,6 +6,7 @@ import {
   heroImagePath,
   HeroImageError,
   heroKeyword,
+  resolvePhotoUrl,
   stockPhotoUrl,
 } from "./room-hero.js";
 
@@ -30,6 +31,26 @@ describe("room hero imagery", () => {
   it("derives the config key + hub path from the room id", () => {
     expect(heroImageKey("room_1")).toBe("room_hero:room_1");
     expect(heroImagePath("room_1")).toBe("/v1/rooms/room_1/hero-image");
+  });
+
+  it("uses Unsplash for a real photo when a key is configured (deterministic pick)", async () => {
+    const calls: string[] = [];
+    const fakeFetch = (async (u: string, init?: { headers?: Record<string, string> }) => {
+      calls.push(u);
+      expect(init?.headers?.Authorization).toBe("Client-ID test-key");
+      return new Response(
+        JSON.stringify({ results: [{ urls: { regular: "https://images.unsplash.com/a" } }, { urls: { regular: "https://images.unsplash.com/b" } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const url = await resolvePhotoUrl(room("Living Room"), fakeFetch, "test-key");
+    expect(url.startsWith("https://images.unsplash.com/")).toBe(true);
+    expect(calls[0]).toContain("api.unsplash.com/search/photos");
+  });
+
+  it("falls back to the keyless source when no Unsplash key is set", async () => {
+    const url = await resolvePhotoUrl(room("Kitchen"), fetch, undefined);
+    expect(url).toContain("loremflickr.com");
   });
 
   it("downloads and stores image bytes as base64", async () => {

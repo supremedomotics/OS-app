@@ -54,10 +54,42 @@ export function heroKeyword(room: Pick<Room, "name" | "areaType">): string {
   return AREA_KEYWORDS[room.areaType ?? "other"] ?? AREA_KEYWORDS.other!;
 }
 
-/** The external stock-photo source for a room (keyword-based, deterministic per room name). */
+/** The keyless stock-photo source for a room (deterministic per room name). */
 export function stockPhotoUrl(room: Pick<Room, "name" | "areaType">): string {
   const keyword = heroKeyword(room);
   return `https://loremflickr.com/1200/800/${encodeURIComponent(keyword)}?lock=${lockFor(room.name + (room.areaType ?? ""))}`;
+}
+
+/**
+ * Resolve the best available photo URL for a room. When an Unsplash Access Key is configured
+ * (`SUPREME_UNSPLASH_KEY`) we search Unsplash for a REAL interior photo matching the room's name and
+ * pick a deterministic result (so the same room always gets the same photo). Otherwise we fall back
+ * to the keyless stock source. The returned URL is then downloaded and stored locally by the hub.
+ */
+export async function resolvePhotoUrl(
+  room: Pick<Room, "name" | "areaType">,
+  fetchImpl: typeof fetch = fetch,
+  key: string | undefined = process.env.SUPREME_UNSPLASH_KEY,
+): Promise<string> {
+  if (key) {
+    try {
+      const keyword = heroKeyword(room);
+      const url = `https://api.unsplash.com/search/photos?query=${encodeURIComponent(keyword)}&per_page=12&orientation=landscape&content_filter=high`;
+      const res = await fetchImpl(url, { headers: { Authorization: `Client-ID ${key}`, "Accept-Version": "v1" } });
+      if (res.ok) {
+        const body = (await res.json()) as { results?: { urls?: { regular?: string; full?: string } }[] };
+        const results = body.results ?? [];
+        if (results.length > 0) {
+          const pick = results[lockFor(room.name) % results.length];
+          const src = pick?.urls?.regular ?? pick?.urls?.full;
+          if (src) return src;
+        }
+      }
+    } catch {
+      // fall through to the keyless source
+    }
+  }
+  return stockPhotoUrl(room);
 }
 
 /** A stored hero image: the raw bytes (base64) + content type + where it came from. */
@@ -88,7 +120,7 @@ export async function downloadHeroImage(
   fetchImpl: typeof fetch = fetch,
   now: () => Date = () => new Date(),
 ): Promise<StoredHeroImage> {
-  const url = stockPhotoUrl(room);
+  const url = await resolvePhotoUrl(room, fetchImpl);
   let res: Response;
   try {
     res = await fetchImpl(url, { redirect: "follow" });

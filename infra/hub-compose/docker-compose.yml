@@ -32,6 +32,8 @@ services:
       SUPREME_HA_ADMIN_PASSWORD: ${SUPREME_HA_ADMIN_PASSWORD:-admin@supremeos}
       SUPREME_SECRETS_DIR: /data/secrets
       SUPREME_SYSTEM_NAME: ${SUPREME_SYSTEM_NAME:-Supreme Residence}
+      # Optional Unsplash Access Key → real room photos by name (see .env.example).
+      SUPREME_UNSPLASH_KEY: ${SUPREME_UNSPLASH_KEY:-}
       SUPREME_TZ: ${SUPREME_TZ:-UTC}
       SUPREME_DEV_MODE: ${SUPREME_DEV_MODE:-0}
       # First boot shows the Supreme Setup Wizard (create the administrator) instead of a
