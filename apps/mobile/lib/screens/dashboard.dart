@@ -5,9 +5,11 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import '../room_image.dart';
+import 'alerts_screen.dart';
 import 'automations_screen.dart';
 import 'energy_screen.dart';
 import 'home_switcher.dart';
+import 'intelligence_screen.dart';
 
 /// Homeowner dashboard (§11.1/§11.3) — the Ovio-grade "Welcome home": a calm header, a
 /// full-bleed home hero, a quick-scene row, and proportional category tiles that drill
@@ -164,6 +166,24 @@ class DashboardScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right, size: 20),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const AutomationsScreen()),
+            ),
+          ),
+          const SizedBox(height: AureonSpacing.sm),
+          CategoryTile(
+            icon: Icons.insights_outlined,
+            label: 'Smart',
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const IntelligenceScreen()),
+            ),
+          ),
+          const SizedBox(height: AureonSpacing.sm),
+          CategoryTile(
+            icon: Icons.notifications_outlined,
+            label: 'Alerts',
+            trailing: const Icon(Icons.chevron_right, size: 20),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AlertsScreen()),
             ),
           ),
 
