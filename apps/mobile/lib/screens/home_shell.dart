@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import 'alerts_screen.dart';
 import 'assistant_screen.dart';
 import 'automations_screen.dart';
 import 'dashboard.dart';
@@ -10,6 +11,7 @@ import 'device_manager_screen.dart';
 import 'discover_devices_screen.dart';
 import 'driver_manager_screen.dart';
 import 'energy_screen.dart';
+import 'intelligence_screen.dart';
 import 'room_view.dart';
 import 'scenes_screen.dart';
 import 'security_screen.dart';
@@ -59,7 +61,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             (Icons.devices_other_outlined, 'Devices', const DeviceManagerScreen()),
             (Icons.extension_outlined, 'Extension Center', const ExtensionCenterScreen()),
             (Icons.account_tree_outlined, 'Automations', const AutomationsScreen()),
+            (Icons.insights_outlined, 'Smart', const IntelligenceScreen()),
             (Icons.bolt_outlined, 'Energy', const EnergyScreen()),
+            (Icons.notifications_outlined, 'Alerts', const AlertsScreen()),
             if (devMode) (Icons.code, 'Developer', const DeveloperScreen()),
           ])
             ListTile(

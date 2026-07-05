@@ -141,6 +141,9 @@ final energyDeviceWattsProvider =
   return ref.watch(clientProvider).energyDeviceWatts();
 });
 
+/// Hub diagnostics (version, backend health, counts, offline devices) — powers the Dashboard overview.
+final diagnosticsProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).diagnostics());
+
 /// Whether the hub is in Developer Mode — reveals the Developer section (§ Developer Mode).
 final devModeProvider = FutureProvider<bool>((ref) async {
   final info = await ref.watch(clientProvider).licenseInfo();
