@@ -112,15 +112,40 @@ class SupremeClient {
   }
 
   /// Create a room (owner/admin/installer). Returns the created room's id + name.
+  /// Location hierarchy (§ Unified Onboarding): Building › Floor › Room › Area — [building]
+  /// and [area] are optional labels the UI groups by; [floor] is the numeric storey.
   Future<Map<String, dynamic>> createRoom(String name,
-      {String? areaType, int? floor}) async {
+      {String? areaType, String? building, int? floor, String? area}) async {
     final res = await _http.post(
       Uri.parse('$baseUrl/v1/rooms'),
       headers: _authHeaders,
       body: jsonEncode({
         'name': name,
         if (areaType != null) 'areaType': areaType,
+        if (building != null) 'building': building,
         if (floor != null) 'floor': floor,
+        if (area != null) 'area': area,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['room']
+        as Map<String, dynamic>;
+  }
+
+  /// Rename / relocate a room (owner/admin/installer). Only the provided fields change; the
+  /// hub merges the patch over the stored room, so the onboarding flow can assign a device's
+  /// place one step at a time (building → floor → area) without resending the whole record.
+  Future<Map<String, dynamic>> updateRoom(String roomId,
+      {String? name, String? areaType, String? building, int? floor, String? area}) async {
+    final res = await _http.patch(
+      Uri.parse('$baseUrl/v1/rooms/$roomId'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        if (name != null) 'name': name,
+        if (areaType != null) 'areaType': areaType,
+        if (building != null) 'building': building,
+        if (floor != null) 'floor': floor,
+        if (area != null) 'area': area,
       }),
     );
     _ensureOk(res);

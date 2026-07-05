@@ -93,6 +93,39 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect(await new HomeService(sil, stores.home).getDevice(dimmer.id)).toBeNull();
   });
 
+  it("persists the room location hierarchy (building / floor / area)", async () => {
+    const sil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
+    await sil.start();
+    const home = new HomeService(sil, stores.home);
+    const roomId = newId("room") as RoomId;
+    await home.addRoom({
+      id: roomId,
+      homeId: newId("home") as HomeId,
+      name: "Primary Suite",
+      building: "Main House",
+      floor: 2,
+      area: "East Wing",
+      areaType: "bedroom",
+      sortOrder: 0,
+      icon: null,
+      heroImageUrl: null,
+      parentRoomId: null,
+    });
+
+    // A fresh service over the same store sees the persisted location labels.
+    const reloaded = await new HomeService(sil, stores.home).getRoom(roomId);
+    expect(reloaded?.building).toBe("Main House");
+    expect(reloaded?.floor).toBe(2);
+    expect(reloaded?.area).toBe("East Wing");
+
+    // Re-storing (upsert / PATCH-merge) only the area keeps building + floor intact.
+    await home.addRoom({ ...reloaded!, area: "West Wing" });
+    const moved = await new HomeService(sil, stores.home).getRoom(roomId);
+    expect(moved?.area).toBe("West Wing");
+    expect(moved?.building).toBe("Main House");
+    expect(moved?.floor).toBe(2);
+  });
+
   it("persists scenes and grants", async () => {
     const sil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
     await sil.start();

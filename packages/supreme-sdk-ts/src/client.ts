@@ -111,13 +111,13 @@ export class SupremeClient {
     return HomeView.parse(await this.request("GET", "/v1/home"));
   }
 
-  /** Create a room (owner/admin/installer). */
-  async createRoom(input: { name: string; areaType?: string; floor?: number }): Promise<{ room: { id: string; name: string } }> {
+  /** Create a room (owner/admin/installer). Location: building › floor › room › area. */
+  async createRoom(input: { name: string; areaType?: string; building?: string | null; floor?: number; area?: string | null }): Promise<{ room: { id: string; name: string } }> {
     return this.request("POST", "/v1/rooms", input) as Promise<{ room: { id: string; name: string } }>;
   }
 
-  /** Rename / restyle a room. */
-  async updateRoom(roomId: RoomId, patch: { name?: string; areaType?: string; floor?: number }): Promise<{ room: { id: string; name: string } }> {
+  /** Rename / restyle / relocate a room (building / floor / area). */
+  async updateRoom(roomId: RoomId, patch: { name?: string; areaType?: string; building?: string | null; floor?: number; area?: string | null }): Promise<{ room: { id: string; name: string } }> {
     return this.request("PATCH", `/v1/rooms/${roomId}`, patch) as Promise<{ room: { id: string; name: string } }>;
   }
 

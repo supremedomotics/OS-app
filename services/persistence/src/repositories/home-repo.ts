@@ -16,7 +16,9 @@ interface RoomRow {
   id: string;
   home_id: string;
   name: string;
+  building: string | null;
   floor: number;
+  area: string | null;
   area_type: string;
   sort_order: number;
   icon: string | null;
@@ -50,7 +52,9 @@ function rowToRoom(r: RoomRow): Room {
     id: r.id as RoomId,
     homeId: r.home_id as Home["id"],
     name: r.name,
+    building: r.building ?? null,
     floor: r.floor,
+    area: r.area ?? null,
     areaType: r.area_type as Room["areaType"],
     sortOrder: r.sort_order,
     icon: r.icon,
@@ -116,11 +120,11 @@ export class HomeRepo implements IHomeStore {
   }
   async putRoom(room: Room): Promise<void> {
     await this.db.query(
-      `INSERT INTO rooms (id, home_id, name, floor, area_type, sort_order, icon, hero_image_url, parent_room_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO rooms (id, home_id, name, building, floor, area, area_type, sort_order, icon, hero_image_url, parent_room_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (id) DO UPDATE SET
-         name=$3, floor=$4, area_type=$5, sort_order=$6, icon=$7, hero_image_url=$8, parent_room_id=$9`,
-      [room.id, room.homeId, room.name, room.floor, room.areaType, room.sortOrder, room.icon, room.heroImageUrl, room.parentRoomId],
+         name=$3, building=$4, floor=$5, area=$6, area_type=$7, sort_order=$8, icon=$9, hero_image_url=$10, parent_room_id=$11`,
+      [room.id, room.homeId, room.name, room.building, room.floor, room.area, room.areaType, room.sortOrder, room.icon, room.heroImageUrl, room.parentRoomId],
     );
   }
 

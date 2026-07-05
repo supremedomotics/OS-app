@@ -19,6 +19,7 @@ const MIGRATIONS = [
   "0009_migration_policy.sql",
   "0010_home_config.sql",
   "0011_intelligence.sql",
+  "0012_room_location.sql",
 ] as const;
 
 /**

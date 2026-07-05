@@ -44,7 +44,12 @@ export const Room = z.object({
   id: RoomId,
   homeId: HomeId,
   name: z.string().min(1),
+  /** Location hierarchy (§ Unified Onboarding): Building › Floor › Room › Area. `building` and
+   * `area` are optional free-text labels grouped in the UI; `floor` is the numeric storey. Devices
+   * inherit their room's location, so a homeowner never types a protocol — only a place. */
+  building: z.string().nullable().default(null),
   floor: z.number().int().default(0),
+  area: z.string().nullable().default(null),
   areaType: AreaType.default("other"),
   sortOrder: z.number().int().default(0),
   icon: z.string().nullable(),

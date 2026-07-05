@@ -6,17 +6,29 @@ class Room {
       {required this.id,
       required this.name,
       required this.areaType,
+      this.building,
+      this.floor = 0,
+      this.area,
       this.heroImageUrl});
 
   final String id;
   final String name;
   final String areaType;
+
+  /// Location hierarchy (§ Unified Onboarding): Building › Floor › Room › Area. [building] and
+  /// [area] are optional free-text labels the UI groups by; [floor] is the numeric storey.
+  final String? building;
+  final int floor;
+  final String? area;
   final String? heroImageUrl;
 
   factory Room.fromJson(Map<String, dynamic> json) => Room(
         id: json['id'] as String,
         name: json['name'] as String,
         areaType: json['areaType'] as String? ?? 'other',
+        building: json['building'] as String?,
+        floor: (json['floor'] as num?)?.toInt() ?? 0,
+        area: json['area'] as String?,
         heroImageUrl: json['heroImageUrl'] as String?,
       );
 }
