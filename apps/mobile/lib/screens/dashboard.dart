@@ -94,6 +94,9 @@ class DashboardScreen extends ConsumerWidget {
             }),
             const SizedBox(height: AureonSpacing.lg),
 
+            // Hub resources — real host telemetry (§ Installer Dashboard). Only measured fields show.
+            ..._hubResources(context, ref),
+
             // Quick actions.
             Text('Quick actions', style: text.titleSmall),
             const SizedBox(height: AureonSpacing.sm),
@@ -129,6 +132,54 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
+  /// Real host telemetry tiles — CPU / memory / storage / temperature / uptime. Rendered only when
+  /// the platform actually measures a field (§ Installer Dashboard, no fabrication).
+  List<Widget> _hubResources(BuildContext context, WidgetRef ref) {
+    final sys = ref.watch(systemHealthProvider).valueOrNull;
+    if (sys == null) return const [];
+    final cpu = sys['cpu'] as Map<String, dynamic>?;
+    final mem = sys['memory'] as Map<String, dynamic>?;
+    final storage = sys['storage'] as Map<String, dynamic>?;
+    final temp = (sys['temperatureC'] as num?)?.toDouble();
+    final uptime = (sys['uptimeSeconds'] as num?)?.toInt();
+    final text = Theme.of(context).textTheme;
+    final tiles = <Widget>[];
+    if (cpu?['utilizationPct'] != null) {
+      tiles.add(_Meter(label: 'CPU', pct: (cpu!['utilizationPct'] as num).toDouble(), sub: '${cpu['cores']} cores · load ${cpu['loadAvg1']}'));
+    }
+    if (mem != null) {
+      tiles.add(_Meter(label: 'Memory', pct: (mem['usedPct'] as num).toDouble(), sub: '${_bytes((mem['usedBytes'] as num).toInt())} / ${_bytes((mem['totalBytes'] as num).toInt())}'));
+    }
+    if (storage != null) {
+      tiles.add(_Meter(label: 'Storage', pct: (storage['usedPct'] as num).toDouble(), sub: '${_bytes((storage['usedBytes'] as num).toInt())} / ${_bytes((storage['totalBytes'] as num).toInt())}'));
+    }
+    if (temp != null) tiles.add(_Stat(value: '$temp°', label: 'Temperature', sub: 'CPU', color: temp >= 80 ? AureonStatus.warning : null));
+    if (uptime != null) tiles.add(_Stat(value: _uptime(uptime), label: 'Uptime', sub: 'hub process'));
+    if (tiles.isEmpty) return const [];
+    return [
+      Text('Hub resources', style: text.titleSmall),
+      const SizedBox(height: AureonSpacing.sm),
+      Builder(builder: (context) {
+        final half = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
+        return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+          for (final t in tiles) SizedBox(width: half, child: t),
+        ]);
+      }),
+      const SizedBox(height: AureonSpacing.lg),
+    ];
+  }
+
+  static String _bytes(int n) {
+    if (n >= 1 << 30) return '${(n / (1 << 30)).toStringAsFixed(1)} GB';
+    if (n >= 1 << 20) return '${(n / (1 << 20)).round()} MB';
+    return '${(n / 1024).round()} KB';
+  }
+
+  static String _uptime(int s) {
+    final d = s ~/ 86400, h = (s % 86400) ~/ 3600, m = (s % 3600) ~/ 60;
+    return d > 0 ? '${d}d ${h}h' : h > 0 ? '${h}h ${m}m' : '${m}m';
+  }
+
   static void _push(BuildContext c, Widget s) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => s));
   static String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
   static String _time(String iso) {
@@ -160,6 +211,40 @@ class _Stat extends StatelessWidget {
           if (sub != null) Text(sub!, style: text.labelSmall),
         ]),
       ),
+    );
+  }
+}
+
+/// A resource tile with a usage bar (0..100). Turns amber past 80%.
+class _Meter extends StatelessWidget {
+  const _Meter({required this.label, required this.pct, this.sub});
+  final String label;
+  final double pct;
+  final String? sub;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final warn = pct >= 80;
+    return Container(
+      padding: const EdgeInsets.all(AureonSpacing.md),
+      decoration: BoxDecoration(color: AureonBase.surface, borderRadius: BorderRadius.circular(AureonRadius.md), border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+        Text('${pct.round()}%', style: text.headlineSmall?.copyWith(fontWeight: FontWeight.w600, color: warn ? AureonStatus.warning : null)),
+        Text(label, style: text.labelMedium),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            value: (pct.clamp(0, 100)) / 100,
+            minHeight: 5,
+            backgroundColor: scheme.outlineVariant.withValues(alpha: 0.4),
+            valueColor: AlwaysStoppedAnimation(warn ? AureonStatus.warning : AureonStatus.good),
+          ),
+        ),
+        if (sub != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(sub!, style: text.labelSmall)),
+      ]),
     );
   }
 }

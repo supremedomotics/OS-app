@@ -744,6 +744,15 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Real host telemetry (CPU / memory / temperature / storage / uptime) for the Installer Dashboard.
+  /// Optional fields (cpu.utilizationPct, storage, temperatureC) are absent when the platform can't
+  /// measure them — read defensively and hide what isn't present.
+  Future<Map<String, dynamic>> systemHealth() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/system/health'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),

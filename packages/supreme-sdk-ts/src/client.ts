@@ -32,6 +32,7 @@ import {
   type NotificationList,
   type SecurityStateResponse,
   type EnergySummaryResponse,
+  type SystemHealth,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -124,6 +125,12 @@ export class SupremeClient {
   /** Change the signed-in user's password (requires the current password). */
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await this.request("POST", "/v1/me/password", { currentPassword, newPassword });
+  }
+
+  /** Real host telemetry (CPU / memory / temperature / storage / uptime) for the Installer Dashboard.
+   * Optional fields (utilizationPct, storage, temperatureC) are absent when the platform can't measure them. */
+  async systemHealth(): Promise<SystemHealth> {
+    return this.request("GET", "/v1/system/health") as Promise<SystemHealth>;
   }
 
   /**

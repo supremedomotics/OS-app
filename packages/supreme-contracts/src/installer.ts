@@ -120,6 +120,36 @@ export const DiagnosticsReport = z.object({
 });
 export type DiagnosticsReport = z.infer<typeof DiagnosticsReport>;
 
+/**
+ * Real host telemetry (§ Installer Dashboard). Every field is measured from the OS the hub runs on;
+ * the optional fields (`utilizationPct`, `storage`, `temperatureC`) are ABSENT when the platform
+ * can't measure them — clients hide what isn't present rather than showing a fabricated zero.
+ */
+export const SystemHealth = z.object({
+  uptimeSeconds: z.number(),
+  hostUptimeSeconds: z.number(),
+  cpu: z.object({
+    cores: z.number().int(),
+    model: z.string(),
+    loadAvg1: z.number(),
+    loadAvg5: z.number(),
+    loadAvg15: z.number(),
+    utilizationPct: z.number().optional(),
+  }),
+  memory: z.object({
+    totalBytes: z.number(),
+    usedBytes: z.number(),
+    freeBytes: z.number(),
+    usedPct: z.number(),
+  }),
+  process: z.object({ rssBytes: z.number(), heapUsedBytes: z.number() }),
+  storage: z
+    .object({ totalBytes: z.number(), usedBytes: z.number(), freeBytes: z.number(), usedPct: z.number() })
+    .optional(),
+  temperatureC: z.number().optional(),
+});
+export type SystemHealth = z.infer<typeof SystemHealth>;
+
 // ── Backup / restore ─────────────────────────────────────────────────────────
 
 export const BackupMetaResponse = z.object({

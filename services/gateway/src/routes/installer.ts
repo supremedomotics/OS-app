@@ -22,6 +22,7 @@ import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+import { collectSystemHealth } from "../system-health.js";
 
 /**
  * Installer & admin routes (§9, §14): Driver Store, discovery + commissioning,
@@ -276,6 +277,18 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "view");
       reply.send((await i().diagnostics()) satisfies DiagnosticsReport);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Real host telemetry (§ Installer Dashboard): CPU / memory / temperature / storage / uptime read
+  // straight from the OS. Metrics with no source on this platform are omitted, never faked.
+  app.get("/v1/system/health", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send(await collectSystemHealth());
     } catch (err) {
       sendError(reply, err);
     }

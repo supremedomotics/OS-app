@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { SystemHealth } from "@supreme/contracts";
 import { client, fetchAutomations, fetchDriverRegistry } from "./api.js";
 import type { Tab } from "./App.js";
 import { Icon } from "./icons.js";
@@ -6,8 +7,9 @@ import { Icon } from "./icons.js";
 /**
  * Dashboard (§ Dashboard Improvements) — the project overview. Aggregates the real signals the
  * platform actually exposes (hub health, device online/offline, extension health, automations,
- * security, recent events) into calm stat tiles + quick actions. Metrics without a backend source
- * (CPU/memory/temperature/firmware) are intentionally omitted rather than shown as placeholders.
+ * security, recent events, live host telemetry) into calm stat tiles + quick actions. Host metrics
+ * come from the real OS the hub runs on (`/v1/system/health`); any field the platform can't measure
+ * (e.g. temperature on hardware without a sensor) is omitted, never shown as a fabricated value.
  */
 type Diag = {
   hubVersion: string;
@@ -16,6 +18,16 @@ type Diag = {
   drivers: { key: string; version: string; enabled: boolean; status: string }[];
   offlineDevices: { id: string; name: string }[];
 };
+
+function fmtBytes(n: number): string {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(1)} GB`;
+  if (n >= 1 << 20) return `${Math.round(n / (1 << 20))} MB`;
+  return `${Math.round(n / 1024)} KB`;
+}
+function fmtUptime(s: number): string {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
 
 function useAsync<T>(fn: () => Promise<T>): T | null {
   const [v, setV] = useState<T | null>(null);
@@ -29,6 +41,7 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
   const autos = useAsync(() => fetchAutomations());
   const security = useAsync<{ armMode?: string; triggered?: boolean }>(() => client.securityState() as Promise<{ armMode?: string; triggered?: boolean }>);
   const events = useAsync<{ items?: { id: string; title: string; createdAt: string }[] }>(() => client.notifications() as Promise<{ items?: { id: string; title: string; createdAt: string }[] }>);
+  const sys = useAsync<SystemHealth>(() => client.systemHealth());
 
   const online = diag ? diag.counts.devices - diag.offlineDevices.length : null;
   const installed = (registry ?? []).filter((d) => d.installed);
@@ -88,12 +101,45 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
         </>
       )}
 
+      {/* Hub resources — real host telemetry (§ Installer Dashboard). Only measured fields render. */}
+      {sys && (
+        <>
+          <h2 className="section">Hub resources</h2>
+          <div className="stat-grid">
+            {sys.cpu.utilizationPct !== undefined && (
+              <Meter label="CPU" pct={sys.cpu.utilizationPct} sub={`${sys.cpu.cores} cores · load ${sys.cpu.loadAvg1}`} />
+            )}
+            <Meter label="Memory" pct={sys.memory.usedPct} sub={`${fmtBytes(sys.memory.usedBytes)} / ${fmtBytes(sys.memory.totalBytes)}`} />
+            {sys.storage && (
+              <Meter label="Storage" pct={sys.storage.usedPct} sub={`${fmtBytes(sys.storage.usedBytes)} / ${fmtBytes(sys.storage.totalBytes)}`} />
+            )}
+            {sys.temperatureC !== undefined && (
+              <Stat label="Temperature" value={`${sys.temperatureC}°`} sub="CPU" warn={sys.temperatureC >= 80} />
+            )}
+            <Stat label="Uptime" value={fmtUptime(sys.uptimeSeconds)} sub="hub process" />
+          </div>
+        </>
+      )}
+
       {/* Hub */}
       {diag && (
         <div className="hub-line">
           Hub {diag.hubVersion} · backend {diag.backend.kind} <span className={diag.backend.healthy ? "ok" : "err"}>{diag.backend.healthy ? "healthy" : "degraded"}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+/** A stat tile with a usage bar (0..100). Turns amber past 80%. */
+function Meter({ label, pct, sub }: { label: string; pct: number; sub?: string }) {
+  const warn = pct >= 80;
+  return (
+    <div className={`stat meter${warn ? " warn" : ""}`}>
+      <span className="stat-v">{Math.round(pct)}%</span>
+      <span className="stat-l">{label}</span>
+      <span className="meter-bar"><span className="meter-fill" style={{ width: `${Math.min(100, pct)}%` }} /></span>
+      {sub && <span className="stat-s">{sub}</span>}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { CatalogList, DiagnosticsReport, HomeView, License } from "@supreme/contracts";
+import type { CatalogList, DiagnosticsReport, HomeView, License, SystemHealth } from "@supreme/contracts";
 import { buildStores, migrate, PgliteDb } from "@supreme/persistence";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -143,6 +143,20 @@ describe("Phase-2 installer & drivers", () => {
     };
     expect(proj.home.name).toBe("Supreme Residence");
     expect(proj.devices.length).toBeGreaterThan(0);
+  });
+
+  it("reports real host system health (CPU / memory / uptime)", async () => {
+    const res = await fetch(`${baseUrl}/v1/system/health`, { headers: auth() });
+    expect(res.status).toBe(200);
+    const h = (await res.json()) as SystemHealth;
+    // These are real OS readings — assert they're present and sane, not exact values.
+    expect(h.cpu.cores).toBeGreaterThan(0);
+    expect(h.memory.totalBytes).toBeGreaterThan(0);
+    expect(h.memory.usedBytes).toBeGreaterThan(0);
+    expect(h.memory.usedPct).toBeGreaterThanOrEqual(0);
+    expect(h.memory.usedPct).toBeLessThanOrEqual(100);
+    expect(h.process.rssBytes).toBeGreaterThan(0);
+    expect(h.uptimeSeconds).toBeGreaterThanOrEqual(0);
   });
 
   it("requires persistence for backup", async () => {
