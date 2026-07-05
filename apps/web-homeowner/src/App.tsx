@@ -2,37 +2,65 @@ import { useEffect, useRef, useState } from "react";
 import type { SupremeStream } from "@supreme/sdk";
 import { client, fetchLicense, fetchSetupStatus, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
-import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
+import { Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
 import { PasswordInput } from "./password-input.js";
 import { ThemeSettings } from "./settings.js";
 import { Automations } from "./automations.js";
+import { DiscoverDevices } from "./discover.js";
+import { DeviceManager } from "./devices.js";
+import { ExtensionCenter } from "./extensions.js";
+import { DashboardOverview } from "./dashboard.js";
+import { DeveloperTools } from "./developer.js";
 import { Icon } from "./icons.js";
 
-type Tab = "home" | "rooms" | "scenes" | "automations" | "security" | "energy" | "settings";
+export type Tab =
+  | "dashboard" | "discover" | "devices" | "extensions"
+  | "automations" | "scenes" | "rooms" | "security" | "energy" | "settings" | "developer";
+type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "security" | "energy" | "settings" | "developer";
 
-// A calm 5-tab bar (Ovio). Automations + Energy are reached from the Home dashboard, so the bar
-// stays uncrowded and everything still fits without truncation.
-const TABS: { id: Tab; label: string; icon: "home" | "rooms" | "scenes" | "security" | "settings" }[] = [
-  { id: "home", label: "Home", icon: "home" },
-  { id: "rooms", label: "Rooms", icon: "rooms" },
+// The full platform navigation (§ Navigation). Nothing is hidden behind URLs — every backend area is
+// a first-class destination. "developer" appears only in Developer Mode.
+const NAV: { id: Tab; label: string; icon: NavIcon; dev?: boolean }[] = [
+  { id: "dashboard", label: "Dashboard", icon: "dashboard" },
+  { id: "discover", label: "Discover Devices", icon: "discover" },
+  { id: "devices", label: "Devices", icon: "devices" },
+  { id: "extensions", label: "Extension Center", icon: "extensions" },
+  { id: "automations", label: "Automations", icon: "automations" },
   { id: "scenes", label: "Scenes", icon: "scenes" },
+  { id: "rooms", label: "Rooms", icon: "rooms" },
   { id: "security", label: "Security", icon: "security" },
+  { id: "energy", label: "Energy", icon: "energy" },
   { id: "settings", label: "Settings", icon: "settings" },
+  { id: "developer", label: "Developer", icon: "developer", dev: true },
 ];
+// On a narrow (phone) bottom bar we surface the everyday five; the rest live behind "More" — a
+// visible menu, never hidden functionality.
+const PRIMARY: Tab[] = ["dashboard", "rooms", "scenes", "security", "settings"];
+
+function useWide(): boolean {
+  const [wide, setWide] = useState(typeof window !== "undefined" && window.innerWidth >= 900);
+  useEffect(() => {
+    const on = () => setWide(window.innerWidth >= 900);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return wide;
+}
 
 export function App() {
   const [authed, setAuthed] = useState(false);
   const [setup, setSetup] = useState<SetupStatus | null>(null);
-  const [tab, setTab] = useState<Tab>("home");
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [states, setStates] = useState<LiveStates>({});
+  const [devMode, setDevMode] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const streamRef = useRef<SupremeStream | null>(null);
+  const wide = useWide();
 
-  // First paint: discover whether the hub still needs first-run setup.
-  useEffect(() => {
-    void fetchSetupStatus().then(setSetup);
-  }, []);
+  useEffect(() => { void fetchSetupStatus().then(setSetup); }, []);
+  useEffect(() => { if (authed) void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode))); }, [authed]);
 
   const apply = (deviceId: string, capability: string, state: unknown) =>
     setStates((s) => ({ ...s, [deviceId]: { ...s[deviceId], [capability]: state } }));
@@ -42,10 +70,7 @@ export function App() {
     const stream = openStream();
     if (!stream) return;
     streamRef.current = stream;
-    stream.connect({
-      onOpen: () => stream.subscribe(["*"]),
-      onState: (f) => apply(f.deviceId, f.state.kind, f.state),
-    });
+    stream.connect({ onOpen: () => stream.subscribe(["*"]), onState: (f) => apply(f.deviceId, f.state.kind, f.state) });
     return () => stream.close();
   }, [authed]);
 
@@ -54,40 +79,78 @@ export function App() {
   }
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
-  const openRoom = (roomId: string) => {
-    setSelectedRoom(roomId);
-    setTab("rooms");
-  };
+  const go = (t: Tab) => { if (t === "rooms") setSelectedRoom(null); setTab(t); setMoreOpen(false); };
+  const items = NAV.filter((n) => !n.dev || devMode);
 
+  const page = (
+    <>
+      {tab === "dashboard" && <DashboardOverview onNavigate={go} />}
+      {tab === "discover" && <DiscoverDevices />}
+      {tab === "devices" && <DeviceManager />}
+      {tab === "extensions" && <ExtensionCenter />}
+      {tab === "automations" && <Automations />}
+      {tab === "scenes" && <Scenes />}
+      {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />}
+      {tab === "security" && <Security />}
+      {tab === "energy" && <Energy />}
+      {tab === "settings" && <ThemeSettings />}
+      {tab === "developer" && devMode && <DeveloperTools />}
+    </>
+  );
+
+  // Wide (tablet/desktop): a labelled left rail with every destination. Narrow (phone): a floating
+  // icon bar of the everyday five + a "More" sheet. Same features, only the layout changes.
+  if (wide) {
+    return (
+      <LiveContext.Provider value={{ states, apply }}>
+        <div className="app-wide">
+          <aside className="rail">
+            <div className="rail-brand">Supreme</div>
+            <nav>
+              {items.map((n) => (
+                <button key={n.id} className={`rail-item${tab === n.id ? " active" : ""}`} onClick={() => go(n.id)}>
+                  <span className="ic"><Icon name={n.icon} /></span><span>{n.label}</span>
+                </button>
+              ))}
+            </nav>
+            {devMode && <div className="rail-dev">DEVELOPMENT BUILD</div>}
+          </aside>
+          <main className="wide-content">{page}</main>
+        </div>
+      </LiveContext.Provider>
+    );
+  }
+
+  const primary = items.filter((n) => PRIMARY.includes(n.id));
+  const overflow = items.filter((n) => !PRIMARY.includes(n.id));
   return (
     <LiveContext.Provider value={{ states, apply }}>
       <div className="shell">
-        <div className="content">
-          {tab === "home" && <Dashboard onOpenRoom={openRoom} onNavigate={setTab} />}
-          {tab === "rooms" && (
-            <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />
-          )}
-          {tab === "scenes" && <Scenes />}
-          {tab === "automations" && <Automations />}
-          {tab === "security" && <Security />}
-          {tab === "energy" && <Energy />}
-          {tab === "settings" && <ThemeSettings />}
-        </div>
-        <DevWatermark />
+        <div className="content">{page}</div>
+        <DevWatermark show={devMode} />
+        {moreOpen && (
+          <div className="more-sheet" onClick={() => setMoreOpen(false)}>
+            <div className="more-panel" onClick={(e) => e.stopPropagation()}>
+              <div className="more-grip" />
+              {overflow.map((n) => (
+                <button key={n.id} className={`set-row${tab === n.id ? " active" : ""}`} onClick={() => go(n.id)}>
+                  <span className="set-ic"><Icon name={n.icon} /></span>
+                  <span className="set-meta"><span className="set-label">{n.label}</span></span>
+                  <span className="set-chev">›</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <nav className="tabbar">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={t.id === tab ? "active" : ""}
-              onClick={() => {
-                if (t.id === "rooms") setSelectedRoom(null);
-                setTab(t.id);
-              }}
-            >
-              <span className="ic"><Icon name={t.icon} /></span>
-              <span className="lbl">{t.label}</span>
+          {primary.map((t) => (
+            <button key={t.id} className={t.id === tab ? "active" : ""} onClick={() => go(t.id)}>
+              <span className="ic"><Icon name={t.icon} /></span><span className="lbl">{t.label}</span>
             </button>
           ))}
+          <button className={`more-btn${overflow.some((o) => o.id === tab) ? " active" : ""}`} onClick={() => setMoreOpen((v) => !v)}>
+            <span className="ic"><Icon name="extensions" /></span><span className="lbl">More</span>
+          </button>
         </nav>
       </div>
     </LiveContext.Provider>
@@ -95,12 +158,8 @@ export function App() {
 }
 
 /** A small persistent badge when the hub is in Developer Mode (every feature unlocked). */
-function DevWatermark() {
-  const [dev, setDev] = useState(false);
-  useEffect(() => {
-    void fetchLicense().then((l) => setDev(Boolean(l?.service?.devMode)));
-  }, []);
-  if (!dev) return null;
+function DevWatermark({ show }: { show: boolean }) {
+  if (!show) return null;
   return <div className="dev-watermark">DEVELOPMENT BUILD · Developer License</div>;
 }
 

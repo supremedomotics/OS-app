@@ -4,27 +4,81 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
 
-/// Driver Manager (§9) — mobile parity with the web app. Populates from the driver REGISTRY, so any
-/// current or future driver appears automatically; each expands to a schema-generated config page
-/// plus install / enable / connect / health / logs controls.
-class DriverManagerScreen extends ConsumerWidget {
-  const DriverManagerScreen({super.key});
+/// Extension Center (§ Extension Center) — mobile parity with the web app. The central place for
+/// every integration and protocol driver, populated from the driver REGISTRY so any current or
+/// future extension appears automatically. Browsable by category; each card expands to a
+/// schema-generated config page plus install / enable / connect / health / logs controls.
+const _deviceCategories = ['lighting', 'climate', 'shades', 'media', 'security', 'energy'];
+const _cats = <(String, String)>[
+  ('all', 'All'), ('official', 'Official'), ('community', 'Community'), ('protocol', 'Protocol'),
+  ('device', 'Device'), ('ai', 'AI'), ('experimental', 'Experimental'),
+];
+
+bool _matches(Map<String, dynamic> d, String cat) {
+  final protocols = ((d['protocols'] as List?) ?? const []);
+  final channel = d['channel'] as String?;
+  final category = d['category'] as String?;
+  switch (cat) {
+    case 'all': return true;
+    case 'official': return channel == 'official' || channel == 'certified';
+    case 'community': return channel == 'community';
+    case 'protocol': return category == 'protocol' || protocols.isNotEmpty;
+    case 'device': return _deviceCategories.contains(category);
+    case 'ai': return RegExp('ai|intelligence|assistant', caseSensitive: false).hasMatch('${d['name']} ${d['description']} $category');
+    case 'experimental': return channel == 'beta' || d['shipsDisabled'] == true;
+    default: return true;
+  }
+}
+
+class ExtensionCenterScreen extends ConsumerStatefulWidget {
+  const ExtensionCenterScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ExtensionCenterScreen> createState() => _ExtensionCenterScreenState();
+}
+
+class _ExtensionCenterScreenState extends ConsumerState<ExtensionCenterScreen> {
+  String _cat = 'all';
+
+  @override
+  Widget build(BuildContext context) {
     final registry = ref.watch(driverRegistryProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Drivers & integrations')),
+      appBar: AppBar(title: const Text('Extension Center')),
       body: registry.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load drivers\n$e', textAlign: TextAlign.center)),
-        data: (drivers) => RefreshIndicator(
-          onRefresh: () async => ref.invalidate(driverRegistryProvider),
-          child: ListView(
-            padding: const EdgeInsets.all(AureonSpacing.md),
-            children: [for (final d in drivers) _DriverTile(driver: d)],
-          ),
-        ),
+        error: (e, _) => Center(child: Text('Could not load extensions\n$e', textAlign: TextAlign.center)),
+        data: (drivers) {
+          final shown = drivers.where((d) => _matches(d, _cat)).toList();
+          return RefreshIndicator(
+            onRefresh: () async => ref.invalidate(driverRegistryProvider),
+            child: ListView(
+              padding: const EdgeInsets.all(AureonSpacing.md),
+              children: [
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      for (final (id, label) in _cats)
+                        if (id == 'all' || drivers.any((d) => _matches(d, id)))
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: ChoiceChip(
+                              label: Text('$label ${drivers.where((d) => _matches(d, id)).length}'),
+                              selected: _cat == id,
+                              onSelected: (_) => setState(() => _cat = id),
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: AureonSpacing.sm),
+                for (final d in shown) _DriverTile(driver: d),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

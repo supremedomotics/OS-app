@@ -1,17 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers.dart';
+import 'alerts_screen.dart';
 import 'assistant_screen.dart';
+import 'automations_screen.dart';
 import 'dashboard.dart';
+import 'developer_screen.dart';
+import 'device_manager_screen.dart';
+import 'discover_devices_screen.dart';
+import 'driver_manager_screen.dart';
+import 'energy_screen.dart';
+import 'intelligence_screen.dart';
 import 'room_view.dart';
 import 'scenes_screen.dart';
 import 'security_screen.dart';
 import 'settings_screen.dart';
 
-/// Post-login shell with the homeowner's primary destinations. Room-first, with a dashboard, scenes,
-/// security and settings a tap away, plus a one-tap AI assistant (§11.3, §16). The bottom bar is an
-/// Ovio-style floating, icon-only pill — Smart (Intelligence) and Alerts are reached from the
-/// dashboard so the bar stays minimal.
+/// Post-login shell (§ Navigation). The everyday five live on the floating pill; the platform's
+/// management destinations (Discover Devices, Devices, Extension Center, Automations, Energy, and —
+/// in Developer Mode — Developer) are one tap away behind "More", so nothing is hidden. A one-tap AI
+/// assistant floats above (§11.3, §16).
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -38,21 +47,50 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     (Icons.settings_outlined, Icons.settings),
   ];
 
+  void _open(Widget screen) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+
+  void _showMore() {
+    final devMode = ref.read(devModeProvider).valueOrNull ?? false;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final (icon, label, screen) in <(IconData, String, Widget)>[
+            (Icons.travel_explore_outlined, 'Discover Devices', const DiscoverDevicesScreen()),
+            (Icons.devices_other_outlined, 'Devices', const DeviceManagerScreen()),
+            (Icons.extension_outlined, 'Extension Center', const ExtensionCenterScreen()),
+            (Icons.account_tree_outlined, 'Automations', const AutomationsScreen()),
+            (Icons.insights_outlined, 'Smart', const IntelligenceScreen()),
+            (Icons.bolt_outlined, 'Energy', const EnergyScreen()),
+            (Icons.notifications_outlined, 'Alerts', const AlertsScreen()),
+            if (devMode) (Icons.code, 'Developer', const DeveloperScreen()),
+          ])
+            ListTile(
+              leading: Icon(icon),
+              title: Text(label),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () { Navigator.pop(sheet); _open(screen); },
+            ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       extendBody: true,
       body: _pages[_index],
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const AssistantScreen()),
-        ),
+        onPressed: () => _open(const AssistantScreen()),
         child: const Icon(Icons.auto_awesome),
       ),
       bottomNavigationBar: _FloatingNavBar(
         index: _index,
         items: _items,
         onTap: (i) => setState(() => _index = i),
+        onMore: _showMore,
       ),
     );
   }
@@ -61,10 +99,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 /// A floating, centred, icon-only pill (Ovio) — the active tab is a filled circle. Content scrolls
 /// behind it (extendBody).
 class _FloatingNavBar extends StatelessWidget {
-  const _FloatingNavBar({required this.index, required this.items, required this.onTap});
+  const _FloatingNavBar({required this.index, required this.items, required this.onTap, required this.onMore});
   final int index;
   final List<(IconData, IconData)> items;
   final ValueChanged<int> onTap;
+  final VoidCallback onMore;
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +146,17 @@ class _FloatingNavBar extends StatelessWidget {
                         ),
                       ),
                     ),
+                  // "More" — the platform's management destinations (nothing hidden).
+                  GestureDetector(
+                    onTap: onMore,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      child: Icon(Icons.more_horiz, size: 22, color: scheme.onSurfaceVariant),
+                    ),
+                  ),
                 ],
               ),
             ),

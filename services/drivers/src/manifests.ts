@@ -177,9 +177,11 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     configSchema: [hostField, portField(10102)],
   }),
   defineManifest({
+    // Internal key kept stable as an API identifier; the user-facing name is Supreme-branded only —
+    // the underlying compatibility bridge is never surfaced by name in the UI.
     key: "supreme-home-assistant",
-    name: "Supreme Home Assistant",
-    description: "Bridge an existing Home Assistant instance's entities into Supreme.",
+    name: "Supreme Universal Bridge",
+    description: "Bring devices from an existing compatible smart-home gateway into Supreme.",
     category: "other",
     channel: "official",
     publisher: PUBLISHER,
@@ -190,8 +192,8 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     backend: { type: "ha-integration", ref: "core" },
     operations: [...PROTO_OPS],
     configSchema: [
-      { key: "url", label: "Home Assistant URL", type: "text", required: true, placeholder: "http://homeassistant.local:8123", secret: false },
-      { key: "token", label: "Long-lived access token", type: "password", required: true, secret: true },
+      { key: "url", label: "Gateway URL", type: "text", required: true, placeholder: "http://gateway.local:8123", secret: false },
+      { key: "token", label: "Access token", type: "password", required: true, secret: true },
     ],
   }),
 ];
