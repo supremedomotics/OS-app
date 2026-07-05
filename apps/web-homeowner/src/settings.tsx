@@ -10,8 +10,6 @@ import {
 } from "@supreme/aureon-web";
 import { activateLicense, client, devIssueLicense, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
 import { PasswordInput } from "./password-input.js";
-import { DriverManager } from "./drivers.js";
-import { DeveloperTools } from "./developer.js";
 import { AdvancedSettings } from "./advanced.js";
 import {
   activeHomeId,
@@ -32,17 +30,14 @@ type SettingsPage = { id: string; label: string; icon: string; hint: string; el:
 
 export function ThemeSettings() {
   const [open, setOpen] = useState<string | null>(null);
-  const [devMode, setDevMode] = useState(false);
-  useEffect(() => { void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode))); }, []);
 
+  // Extensions & Developer are now top-level navigation destinations, so they're no longer here.
   const pages: SettingsPage[] = [
     { id: "appearance", label: "Appearance", icon: "◐", hint: "Theme & accent", el: <AppearanceSettings /> },
     { id: "homes", label: "Homes", icon: "⌂", hint: "Switch or add a home", el: <HomesSettings /> },
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
-    { id: "drivers", label: "Drivers & integrations", icon: "⧉", hint: "Add & configure protocols", el: <DriverManager /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
     { id: "account", label: "Account", icon: "○", hint: "Change your password", el: <AccountSettings /> },
-    ...(devMode ? [{ id: "developer", label: "Developer", icon: "⚑", hint: "Engineering tools", el: <DeveloperTools /> }] : []),
   ];
 
   const current = pages.find((p) => p.id === open);

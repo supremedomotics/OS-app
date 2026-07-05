@@ -45,7 +45,7 @@ export function DriverManager() {
   );
 }
 
-function statusLabel(d: DriverEntry): { text: string; cls: string } {
+export function statusLabel(d: DriverEntry): { text: string; cls: string } {
   if (!d.installed) return { text: "Not installed", cls: "off" };
   if (!d.enabled) return { text: "Disabled", cls: "off" };
   if (d.status === "error") return { text: "Error", cls: "err" };
@@ -69,7 +69,7 @@ function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEn
   );
 }
 
-function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onChanged: () => void }) {
+export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);

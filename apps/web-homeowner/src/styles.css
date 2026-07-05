@@ -71,6 +71,76 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .tabbar button:hover { color: var(--aureon-color-text-primary); }
 .tabbar button.active { background: var(--aureon-color-gold-400); color: #15161b; }
 .tabbar button.active .ic { color: #15161b; }
+.tabbar .more-btn.active { background: transparent; color: var(--aureon-color-gold-400); }
+
+/* ── Wide (tablet/desktop) layout: left rail + content ─────────────────────────── */
+.app-wide { display: flex; min-height: 100vh; }
+.rail { width: 232px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  border-right: 1px solid var(--aureon-color-base-hairline); padding: 20px 12px; display: flex; flex-direction: column; gap: 4px;
+  background: color-mix(in srgb, var(--aureon-color-base-surface) 60%, transparent); }
+.rail-brand { font-family: "Aureon Display", Inter, sans-serif; font-size: 22px; font-weight: 700; color: var(--aureon-color-gold-400); padding: 6px 12px 18px; }
+.rail-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 14px; border: 0; border-radius: 12px;
+  background: none; color: var(--aureon-color-text-secondary); font-size: 14.5px; cursor: pointer; text-align: left; }
+.rail-item .ic { display: inline-flex; }
+.rail-item:hover { color: var(--aureon-color-text-primary); background: var(--aureon-color-base-surface); }
+.rail-item.active { background: var(--aureon-color-gold-400); color: #15161b; font-weight: 600; }
+.rail-dev { margin-top: auto; font-size: 10px; letter-spacing: .12em; color: var(--aureon-color-gold-400); padding: 10px 14px; opacity: .8; }
+.wide-content { flex: 1; padding: 30px 34px 60px; max-width: 1100px; }
+
+/* ── "More" sheet (phone overflow nav) ─────────────────────────────────────────── */
+.more-sheet { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 40; display: flex; align-items: flex-end; }
+.more-panel { width: 100%; background: var(--aureon-color-base-surface-raised); border-radius: 22px 22px 0 0; padding: 10px 14px calc(96px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 6px; }
+.more-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--aureon-color-base-hairline); margin: 6px auto 10px; }
+
+/* ── Generic page scaffold (Discover / Devices / Extension Center) ─────────────── */
+.page-head { margin-bottom: 14px; }
+.page-head .title { margin: 0; }
+.page-head .sub { margin: 4px 0 0; color: var(--aureon-color-text-secondary); font-size: 13.5px; }
+.search { width: 100%; margin-bottom: 14px; }
+.section .chip-n, .chip .chip-n { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: 8px; border-radius: 999px; font-size: 11px; background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary); }
+
+.chip-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 14px; -webkit-overflow-scrolling: touch; }
+.chip { flex-shrink: 0; display: inline-flex; align-items: center; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); background: transparent; color: var(--aureon-color-text-secondary); font-size: 13px; cursor: pointer; }
+.chip.active { border-color: var(--aureon-color-gold-400); color: var(--aureon-color-gold-400); }
+
+/* ── Extension / discover / device cards ───────────────────────────────────────── */
+.ext-grid { display: flex; flex-direction: column; gap: 10px; }
+.ext-card { border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px; overflow: hidden; background: var(--aureon-color-base-surface); }
+.ext-card.open { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 50%, var(--aureon-color-base-hairline)); }
+.ext-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
+.ext-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
+.ext-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.ext-name { font-size: 15.5px; font-weight: 600; }
+.ext-sub { font-size: 12.5px; color: var(--aureon-color-text-secondary); }
+.ext-desc { font-size: 12.5px; color: var(--aureon-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.tag { font-size: 10.5px; letter-spacing: .02em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); text-transform: capitalize; }
+.tag.official, .tag.certified { color: var(--aureon-color-gold-400); border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, transparent); }
+.tag.ok { color: var(--aureon-color-status-good); border-color: color-mix(in srgb, var(--aureon-color-status-good) 45%, transparent); }
+.tag.proto { font-family: ui-monospace, monospace; opacity: .6; }
+.tag.proto.on { color: var(--aureon-color-status-good); border-color: color-mix(in srgb, var(--aureon-color-status-good) 45%, transparent); opacity: 1; }
+
+.drv-badge { flex-shrink: 0; font-size: 11.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); }
+.drv-badge.ok { color: var(--aureon-color-status-good); border-color: color-mix(in srgb, var(--aureon-color-status-good) 45%, transparent); }
+.drv-badge.err { color: var(--aureon-color-status-critical); border-color: color-mix(in srgb, var(--aureon-color-status-critical) 45%, transparent); }
+
+/* ── Discover ──────────────────────────────────────────────────────────────────── */
+.disc-protos { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+.disc-hero { display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 48px 0; text-align: center; }
+.disc-radar { font-size: 88px; color: var(--aureon-color-gold-400); opacity: .6; }
+.disc-radar.spin { animation: disc-pulse 1.4s ease-in-out infinite; }
+@keyframes disc-pulse { 0%,100% { opacity: .3; transform: scale(0.94); } 50% { opacity: .8; transform: scale(1.06); } }
+button.primary.lg { padding: 14px 28px; font-size: 16px; border-radius: 999px; }
+.disc-card .ext-ic { color: var(--aureon-color-gold-400); }
+
+/* ── Device manager ────────────────────────────────────────────────────────────── */
+.dev-group { margin-bottom: 18px; }
+.dev-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--aureon-color-base-hairline); flex-shrink: 0; }
+.dev-dot.on { background: var(--aureon-color-status-good); box-shadow: 0 0 8px color-mix(in srgb, var(--aureon-color-status-good) 60%, transparent); }
+.dev-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-bottom: 12px; }
+.dev-facts .k { display: block; font-size: 11px; color: var(--aureon-color-text-secondary); }
+.dev-facts .v { display: block; font-size: 13.5px; }
+button.danger { color: var(--aureon-color-status-critical); border-color: color-mix(in srgb, var(--aureon-color-status-critical) 40%, transparent); }
 
 /* Cards + tiles */
 .card {
