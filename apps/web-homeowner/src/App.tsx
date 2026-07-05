@@ -12,12 +12,13 @@ import { DeviceManager } from "./devices.js";
 import { ExtensionCenter } from "./extensions.js";
 import { DashboardOverview } from "./dashboard.js";
 import { DeveloperTools } from "./developer.js";
+import { AreasScreen } from "./areas.js";
 import { Icon } from "./icons.js";
 
 export type Tab =
   | "dashboard" | "discover" | "devices" | "extensions"
-  | "automations" | "scenes" | "rooms" | "security" | "energy" | "settings" | "developer";
-type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "security" | "energy" | "settings" | "developer";
+  | "automations" | "scenes" | "rooms" | "areas" | "security" | "energy" | "settings" | "developer";
+type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "areas" | "security" | "energy" | "settings" | "developer";
 
 // The full platform navigation (§ Navigation). Nothing is hidden behind URLs — every backend area is
 // a first-class destination. "developer" appears only in Developer Mode.
@@ -29,6 +30,7 @@ const NAV: { id: Tab; label: string; icon: NavIcon; dev?: boolean }[] = [
   { id: "automations", label: "Automations", icon: "automations" },
   { id: "scenes", label: "Scenes", icon: "scenes" },
   { id: "rooms", label: "Rooms", icon: "rooms" },
+  { id: "areas", label: "Areas", icon: "areas" },
   { id: "security", label: "Security", icon: "security" },
   { id: "energy", label: "Energy", icon: "energy" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -91,6 +93,7 @@ export function App() {
       {tab === "automations" && <Automations />}
       {tab === "scenes" && <Scenes />}
       {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />}
+      {tab === "areas" && <AreasScreen onNavigate={go} />}
       {tab === "security" && <Security />}
       {tab === "energy" && <Energy />}
       {tab === "settings" && <ThemeSettings />}
