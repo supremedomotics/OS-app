@@ -1,0 +1,43 @@
+import type { INativeProtocolDriver } from "@supreme/integration-layer";
+import { KnxProtocolDriver, ModbusProtocolDriver, MqttProtocolDriver } from "@supreme/protocols";
+
+/**
+ * Native driver factories — the manifest↔runtime bridge. Given a driver's PROTOCOL and its stored
+ * config (from the manifest config schema), build the matching {@link INativeProtocolDriver}. This is
+ * how an installed + enabled + configured driver becomes a live protocol stack, instead of the old
+ * env-only wiring in bootstrap.ts. A protocol with no factory (or missing required config) yields
+ * null and simply isn't brought up at runtime.
+ */
+export type NativeDriverFactory = (config: Record<string, unknown>) => INativeProtocolDriver | null;
+
+const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+const int = (v: unknown, fallback: number): number => {
+  const n = typeof v === "number" ? v : v !== undefined && v !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+};
+
+export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
+  knx: (c) => {
+    const host = str(c.host);
+    return host ? new KnxProtocolDriver({ host, port: int(c.port, 3671) }) : null;
+  },
+  mqtt: (c) => {
+    const url = str(c.url);
+    return url ? new MqttProtocolDriver({ url, username: str(c.username), password: str(c.password) }) : null;
+  },
+  modbus: (c) => {
+    const host = str(c.host);
+    return host ? new ModbusProtocolDriver({ host, port: int(c.port, 502) }) : null;
+  },
+};
+
+/** Build a native driver instance for a protocol from stored config; null if unsupported/unconfigured. */
+export function buildNativeDriver(protocol: string, config: Record<string, unknown>): INativeProtocolDriver | null {
+  const factory = NATIVE_DRIVER_FACTORIES[protocol];
+  return factory ? factory(config) : null;
+}
+
+/** Protocols that CAN be instantiated at runtime from a manifest (the rest are managed by the backend). */
+export function hasNativeFactory(protocol: string): boolean {
+  return protocol in NATIVE_DRIVER_FACTORIES;
+}

@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ts:
+    name: TS workspace (build · typecheck · test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  flutter:
+    name: Flutter analyze · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+      - name: Analyze + test packages
+        run: |
+          for pkg in packages/aureon-flutter packages/supreme-sdk-dart apps/mobile; do
+            echo "::group::$pkg"
+            (cd "$pkg" && flutter pub get && (flutter analyze || dart analyze))
+            echo "::endgroup::"
+          done
+      - name: Widget tests (mobile)
+        run: cd apps/mobile && flutter test
+      - name: Build web bundle (compile proof)
+        run: cd apps/mobile && flutter build web --no-tree-shake-icons
+
+  python:
+    name: Python services (ruff · pytest)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [commissioning-py, ai-py, appletv-py]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install fastapi "uvicorn[standard]" pydantic pytest httpx ruff
+      - run: ruff check .
+      - run: pytest -q
+
+  docker:
+    name: Docker images build + run smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hub images (gateway · commissioning · installer-portal)
+        working-directory: infra/hub-compose
+        env:
+          SUPREME_HA_TOKEN: ci
+          SUPREME_TOKEN_SECRET: ci-token-secret-ci-token-secret-0123456789
+          POSTGRES_PASSWORD: ci
+        run: docker compose build gateway commissioning installer-portal
+      - name: Gateway run smoke (gateway + Postgres, mock backend)
+        run: bash scripts/dev/compose-smoke.sh
+
+  security-scan:
+    name: Security scan (deps · secrets · vulns)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      # Dependency vulnerabilities (fail on high/critical).
+      - name: pnpm audit
+        run: pnpm audit --audit-level high || true   # report; tighten to hard-fail when triaged
+      # Filesystem scan: known-vuln deps, leaked secrets, and IaC/Dockerfile misconfig.
+      - name: Trivy filesystem scan
+        # Pin to the verified-signed v0.36.0 tag (the repo moved to v-prefixed,
+        # signed tags after a 2025 supply-chain incident; un-prefixed 0.28.0 was removed).
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"   # report-only initially; flip to "1" to enforce

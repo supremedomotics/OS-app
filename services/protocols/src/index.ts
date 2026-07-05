@@ -1,0 +1,157 @@
+/**
+ * @supreme/protocols — real native protocol drivers behind the SupremeNativeAdapter
+ * seam (§3, §7). Each driver speaks one real wire protocol and confines that
+ * protocol's framing, emitting pure Supreme capabilities upward.
+ */
+export { MqttProtocolDriver, type MqttDriverOptions } from "./mqtt-driver.js";
+export { stateFromPayload, payloadFromCommand } from "./mqtt-codec.js";
+export { discoveredFromZ2mBridge } from "./mqtt-discovery.js";
+export { ModbusProtocolDriver, type ModbusDriverOptions } from "./modbus-driver.js";
+export { KnxProtocolDriver, type KnxDriverOptions, type KnxConnection } from "./knx-driver.js";
+export { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./knx-codec.js";
+export {
+  MatterProtocolDriver,
+  type MatterDriverOptions,
+  type MatterController,
+  type MatterAddress,
+  type MatterAttributeReport,
+  type MatterNodeInfo,
+} from "./matter-driver.js";
+export {
+  capabilitiesFromClusters,
+  clusterForCapability,
+  invocationFromCommand,
+  stateFromAttribute as matterStateFromAttribute,
+} from "./matter-codec.js";
+export {
+  parseMatterSetupCode,
+  parseManualPairingCode,
+  parseQrPayload,
+  MatterPairingError,
+  type MatterOnboardingPayload,
+} from "./matter-pairing.js";
+export {
+  MatterFabricManager,
+  HttpMatterFabricSync,
+  type MatterFabricSync,
+  type MatterFabricManagerOptions,
+} from "./matter-fabric.js";
+export {
+  ZigbeeProtocolDriver,
+  type ZigbeeDriverOptions,
+  type ZigbeeController,
+  type ZigbeeAddress,
+  type ZigbeeReport,
+  type ZigbeeDeviceInfo,
+} from "./zigbee-driver.js";
+export {
+  capabilitiesFromZclClusters,
+  zclClusterForCapability,
+  commandToZcl,
+  stateFromZclReport,
+} from "./zigbee-codec.js";
+export {
+  DaliProtocolDriver,
+  type DaliDriverOptions,
+  type DaliBus,
+  type DaliUnitInfo,
+} from "./dali-driver.js";
+export {
+  type DaliAddress,
+  type DaliOperation,
+  type DimmingCurve,
+  parseDaliAddress,
+  daliAddressByte,
+  arcPowerFromPercent,
+  percentFromArcPower,
+  commandToDali,
+  capabilitiesFromDeviceType,
+  DALI_CMD,
+} from "./dali-codec.js";
+export { AvrProtocolDriver, type AvrDriverOptions } from "./avr-driver.js";
+export { commandToAvr, parseAvrLine, type AvrUpdate } from "./avr-codec.js";
+export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
+export {
+  parseUnitLine,
+  commandToCoolMaster,
+  temperatureStateFromUnit,
+  type CoolMasterUnit,
+} from "./coolmaster-codec.js";
+export {
+  SipProtocolDriver,
+  type SipDriverOptions,
+  type SipDoorStation,
+  type SipRingEvent,
+} from "./sip-driver.js";
+export { WiimProtocolDriver, type WiimDriverOptions } from "./wiim-driver.js";
+export { commandToLinkPlay, stateFromLinkPlay, decodeHex } from "./wiim-codec.js";
+export { DevialetProtocolDriver, type DevialetDriverOptions } from "./devialet-driver.js";
+export { commandToDevialet, stateFromDevialet, DEVIALET_STATE_PATHS } from "./devialet-codec.js";
+export {
+  SonosProtocolDriver,
+  type SonosDriverOptions,
+  type SonosPlayer,
+  type SonosPlayerState,
+  type SonosConnect,
+} from "./sonos-driver.js";
+export {
+  createSonosConnect,
+  wrapSonosDevice,
+  mapSonosPlayback,
+  type SonosDevice,
+} from "./sonos-transport.js";
+export {
+  ssdpSearch,
+  parseSsdpResponse,
+  type SsdpResponse,
+  type SsdpSocket,
+  type SsdpSearchOptions,
+} from "./ssdp.js";
+export {
+  mdnsBrowse,
+  encodeQuery,
+  decodeMessage,
+  readName,
+  resolveServices,
+  type MdnsService,
+  type MdnsSocket,
+  type MdnsBrowseOptions,
+} from "./mdns.js";
+export {
+  AjaxProtocolDriver,
+  type AjaxDriverOptions,
+  type AjaxClient,
+  type AjaxEvent,
+  type AjaxConnect,
+} from "./ajax-driver.js";
+export { ShellyProtocolDriver, type ShellyDriverOptions } from "./shelly-driver.js";
+export {
+  commandToShellyRpc,
+  stateFromShellyStatus,
+  capabilitiesFromShellyStatus,
+  type ShellyRpcCall,
+} from "./shelly-codec.js";
+export {
+  AirPlayProtocolDriver,
+  type AirPlayDriverOptions,
+  type AirPlaySender,
+  type AirPlaySenderState,
+  type AirPlayConnect,
+} from "./airplay-driver.js";
+export {
+  AppleTvProtocolDriver,
+  mediaStateFromNowPlaying,
+  type AppleTvDriverOptions,
+  type AppleTvClient,
+  type AppleTvNowPlaying,
+  type AppleTvConnect,
+} from "./apple-tv-driver.js";
+export { createAppleTvConnect, type AppleTvBridgeOptions } from "./apple-tv-bridge.js";
+export { LutronProtocolDriver, type LutronDriverOptions } from "./lutron-driver.js";
+export { commandToLutron, parseLutronLine, stateFromLutronLevel, type LutronLine } from "./lutron-codec.js";
+export {
+  TuyaProtocolDriver,
+  type TuyaDriverOptions,
+  type TuyaDevice,
+  type TuyaConnect,
+} from "./tuya-driver.js";

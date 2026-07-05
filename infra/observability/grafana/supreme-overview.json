@@ -1,0 +1,70 @@
+{
+  "title": "Supreme OS — Hub Overview",
+  "uid": "supreme-overview",
+  "schemaVersion": 39,
+  "tags": ["supreme"],
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate (by route)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(supreme_http_requests_total[5m])) by (route)", "legendFormat": "{{route}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Request latency p95",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(supreme_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "5xx error ratio",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(supreme_http_requests_total{status=~\"5..\"}[5m])) / sum(rate(supreme_http_requests_total[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Online users (presence)",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 8 },
+      "targets": [{ "expr": "max(supreme_presence_online_users)" }]
+    },
+    {
+      "id": 5,
+      "title": "Hub resident memory",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 8 },
+      "targets": [{ "expr": "supreme_process_resident_memory_bytes", "legendFormat": "rss" }]
+    }
+  ]
+}

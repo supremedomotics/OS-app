@@ -1,0 +1,21 @@
+name: aureon_flutter
+description: Aureon design system for Flutter — tokens, theme, and luxury controls.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+# The "Aureon Display" brand font is registered here once the licensed font files
+# are added under fonts/ during brand-asset integration. Until then the theme
+# references the family by name and Flutter falls back gracefully, so the package
+# (and apps that depend on it) build without the binary assets in the repo.

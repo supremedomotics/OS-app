@@ -1,0 +1,189 @@
+import { useEffect, useState } from "react";
+import {
+  connectDriver,
+  type DriverConfigField,
+  type DriverEntry,
+  fetchDriverHealth,
+  fetchDriverLogs,
+  fetchDriverRegistry,
+  getDriverConfig,
+  installDriverByKey,
+  setDriverConfig,
+  setDriverEnabled,
+  uninstallDriver,
+} from "./api.js";
+
+/**
+ * Driver Manager (§9 Driver Framework). Populates entirely from the driver REGISTRY, so any current
+ * or future driver appears automatically. Each driver expands to a schema-GENERATED config page plus
+ * install / enable / connect / health / logs controls. Fully responsive — the same component on
+ * desktop, tablet and mobile.
+ */
+export function DriverManager() {
+  const [drivers, setDrivers] = useState<DriverEntry[] | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+
+  async function load() {
+    setDrivers(await fetchDriverRegistry());
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Drivers &amp; integrations</h2>
+      <p className="sub">Add, configure and monitor every protocol and device integration.</p>
+      {drivers === null && <p className="muted">Loading…</p>}
+      {drivers?.length === 0 && <p className="muted">No drivers available.</p>}
+      <div className="drv-list">
+        {(drivers ?? []).map((d) => (
+          <DriverRow key={d.key} driver={d} expanded={open === d.key} onToggle={() => setOpen(open === d.key ? null : d.key)} onChanged={load} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function statusLabel(d: DriverEntry): { text: string; cls: string } {
+  if (!d.installed) return { text: "Not installed", cls: "off" };
+  if (!d.enabled) return { text: "Disabled", cls: "off" };
+  if (d.status === "error") return { text: "Error", cls: "err" };
+  return { text: "Active", cls: "ok" };
+}
+
+function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEntry; expanded: boolean; onToggle: () => void; onChanged: () => void }) {
+  const s = statusLabel(driver);
+  return (
+    <div className={`drv-row${expanded ? " open" : ""}`}>
+      <button className="drv-head" onClick={onToggle}>
+        <div className="drv-title">
+          <span className="nm">{driver.name}</span>
+          <span className="meta">{driver.category} · v{driver.version}{driver.requiresSku ? ` · ${driver.requiresSku}` : ""}</span>
+        </div>
+        <span className={`drv-badge ${s.cls}`}>{s.text}</span>
+        <span className="drv-chev">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && <DriverDetail driver={driver} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [schema, setSchema] = useState<DriverConfigField[]>(driver.configSchema);
+  const [values, setValues] = useState<Record<string, unknown>>(driver.config ?? {});
+  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
+  const [logs, setLogs] = useState<{ ts: string; level: string; message: string }[]>([]);
+
+  useEffect(() => {
+    if (!driver.installed || !driver.installedId) return;
+    void getDriverConfig(driver.installedId).then((c) => {
+      setSchema(c.schema);
+      setValues(c.config);
+    });
+    void fetchDriverHealth(driver.installedId).then(setHealth);
+    void fetchDriverLogs(driver.installedId).then(setLogs);
+  }, [driver.installedId, driver.installed]);
+
+  async function run(fn: () => Promise<void>, okMsg: string) {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      await fn();
+      setMsg(okMsg);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Action failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const id = driver.installedId ?? "";
+  const has = (op: string) => driver.operations.includes(op);
+  const isProtocol = driver.protocols.length > 0;
+
+  return (
+    <div className="drv-detail">
+      {driver.description && <p className="muted">{driver.description}</p>}
+
+      {/* Lifecycle actions */}
+      <div className="drv-actions">
+        {!driver.installed && has("install") && <button className="primary" disabled={busy} onClick={() => run(() => installDriverByKey(driver.key), "Installed")}>Install</button>}
+        {driver.installed && (
+          <>
+            {has("enable") && <button disabled={busy} onClick={() => run(() => setDriverEnabled(id, !driver.enabled), driver.enabled ? "Disabled" : "Enabled")}>{driver.enabled ? "Disable" : "Enable"}</button>}
+            {isProtocol && has("connect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, true), "Connect requested")}>Connect</button>}
+            {isProtocol && has("disconnect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, false), "Disconnect requested")}>Disconnect</button>}
+            {has("uninstall") && <button className="danger" disabled={busy} onClick={() => run(() => uninstallDriver(id), "Uninstalled")}>Uninstall</button>}
+          </>
+        )}
+      </div>
+
+      {/* Schema-generated config page */}
+      {driver.installed && schema.length > 0 && (
+        <div className="drv-config">
+          <h4>Configuration</h4>
+          {schema.map((f) => (
+            <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
+          ))}
+          <button className="primary" disabled={busy} onClick={() => run(() => setDriverConfig(id, values), "Configuration saved")} style={{ marginTop: 10 }}>Save configuration</button>
+        </div>
+      )}
+
+      {/* Health */}
+      {health && (
+        <div className="drv-health">
+          <span className={`drv-badge ${health.verdict === "healthy" ? "ok" : health.verdict === "error" ? "err" : "off"}`}>{String(health.verdict)}</span>
+          {health.configComplete === false && <span className="muted"> · needs configuration ({(health.missing as string[] | undefined)?.join(", ")})</span>}
+          {health.connected === true && <span className="muted"> · connected</span>}
+          {typeof health.connectError === "string" && <span className="err"> · {health.connectError as string}</span>}
+        </div>
+      )}
+
+      {/* Logs */}
+      {driver.installed && logs.length > 0 && (
+        <details className="drv-logs">
+          <summary>Logs ({logs.length})</summary>
+          {logs.slice(-15).reverse().map((l, idx) => (
+            <div key={idx} className={`log ${l.level}`}>
+              <span className="t">{new Date(l.ts).toLocaleTimeString()}</span> {l.message}
+            </div>
+          ))}
+        </details>
+      )}
+
+      {msg && <p className="muted">{msg}</p>}
+      {err && <p className="err">{err}</p>}
+    </div>
+  );
+}
+
+function ConfigField({ field, value, onChange }: { field: DriverConfigField; value: unknown; onChange: (v: unknown) => void }) {
+  const common = { placeholder: field.placeholder };
+  return (
+    <label className="drv-field">
+      <span className="lbl">{field.label}{field.required ? " *" : ""}</span>
+      {field.type === "boolean" ? (
+        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
+      ) : field.type === "select" ? (
+        <select value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
+          <option value="">—</option>
+          {(field.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      ) : (
+        <input
+          type={field.type === "password" ? "password" : field.type === "number" || field.type === "port" ? "number" : "text"}
+          value={value === undefined || value === null ? "" : String(value)}
+          onChange={(e) => onChange(e.target.value)}
+          {...common}
+        />
+      )}
+      {field.help && <span className="help">{field.help}</span>}
+    </label>
+  );
+}

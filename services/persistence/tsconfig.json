@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/domain-model" },
+    { "path": "../identity" },
+    { "path": "../home" },
+    { "path": "../scenes" },
+    { "path": "../permissions" },
+    { "path": "../notifications" },
+    { "path": "../drivers" },
+    { "path": "../automations" },
+    { "path": "../security" },
+    { "path": "../integration-layer" }
+  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts"]
+}

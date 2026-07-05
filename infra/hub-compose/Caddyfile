@@ -1,0 +1,46 @@
+# Supreme hub edge TLS terminator (production hardening §1).
+#
+# Terminates HTTPS for the hub and proxies to the internal gateway (Supreme API +
+# WSS) and the installer portal. Auto-HTTPS: a real domain gets an ACME cert; the
+# default `localhost` uses Caddy's internal CA (self-signed) for local/dev. The
+# gateway/portal are NOT published to the host — only this proxy is.
+
+{
+	# ACME contact for a real domain; ignored for localhost (internal CA).
+	email {$ACME_EMAIL:admin@supreme.local}
+}
+
+{$SUPREME_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Hardening headers (HSTS complements the gateway's helmet headers).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	# Supreme API + realtime stream → gateway (Caddy proxies WebSockets natively).
+	# NOTE: /metrics and /readyz are deliberately NOT routed here — they stay on the
+	# internal Docker network for the Prometheus scraper / orchestrator only, never
+	# exposed at the public edge.
+	@api path /v1/* /healthz
+	reverse_proxy @api gateway:8080
+
+	# Camera streaming engine (go2rtc): HLS + WebRTC for camera live view. The gateway
+	# hands clients URLs under /stream/* which Caddy proxies to go2rtc (WebSockets for
+	# WebRTC signalling are handled natively). Strip the /stream prefix.
+	handle_path /stream/* {
+		reverse_proxy streamer:1984
+	}
+
+	# Installer Portal under /installer/* (built with base=/installer/; strip the prefix).
+	handle_path /installer/* {
+		reverse_proxy installer-portal:80
+	}
+
+	# Everything else → the homeowner app (the primary web UI).
+	reverse_proxy homeowner:80
+}

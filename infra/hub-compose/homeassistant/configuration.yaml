@@ -1,0 +1,31 @@
+# Headless, HIDDEN Home Assistant Core configuration (blueprint §7, §12).
+#
+# HA is an internal backend ONLY. It is never published to the host/LAN (see
+# docker-compose.yml — no `ports:` on the homeassistant service), the SIL holds
+# the only access token, and end users/installers never see this UI or its brand.
+#
+# This file deliberately keeps HA minimal: it exists to expose entities to the
+# Supreme Integration Layer over the loopback/internal network and nothing more.
+
+default_config:
+
+http:
+  # Trust only the internal Supreme network; the SIL connects from the gateway.
+  use_x_forwarded_for: false
+  # HA binds on its container port on the internal `supreme-core` network only.
+  server_host:
+    - 0.0.0.0
+  ip_ban_enabled: true
+  login_attempts_threshold: 5
+
+# Recorder is treated as ephemeral/internal — Supreme owns the system of record
+# (Postgres + Timescale). Keep HA's own history short; Supreme analytics persist.
+recorder:
+  purge_keep_days: 2
+  commit_interval: 5
+
+logger:
+  default: warning
+
+# No `frontend:`/dashboards are provisioned for operators; the Supreme clients are
+# the only UI. (HA still serves its API for the SIL.)

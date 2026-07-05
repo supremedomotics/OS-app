@@ -1,0 +1,32 @@
+{
+  "name": "@supreme/cloud-persistence",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Postgres-backed stores for the Supreme Cloud control plane (durable hub/ownership graph).",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "migrations"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/hub-identity": "workspace:*",
+    "@supreme/hub-registry": "workspace:*",
+    "@supreme/cloud-authn": "workspace:*",
+    "@supreme/device-registry": "workspace:*",
+    "@supreme/cloud-identity": "workspace:*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

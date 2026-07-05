@@ -1,0 +1,183 @@
+# Supreme Cloud — OPTIONAL control plane (§8, §13). None of this is on the critical
+# path for in-home use; the hub is fully functional offline. Runs the relay (push +
+# remote-access tunnel), the installer fleet API, an OTel collector that hub traces
+# ship to, and Prometheus. Front it with a real TLS proxy + managed Postgres in
+# production — see infra/cloud-iac. Fleet persists via SqlFleetStore when a DB is wired.
+name: supreme-cloud
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/relay.Dockerfile
+    restart: unless-stopped
+    environment:
+      # The shared secret hubs present to register their tunnel + forward push.
+      SUPREME_RELAY_TOKEN: ${SUPREME_RELAY_TOKEN:?set a strong relay token}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+      PORT: "8090"
+    ports:
+      - "8090:8090"
+
+  fleet:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/fleet.Dockerfile
+    restart: unless-stopped
+    environment:
+      FLEET_API_KEYS: ${SUPREME_FLEET_API_KEYS:-dev-fleet-key:org_demo}
+      FLEET_PORT: "8091"
+      FLEET_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8091:8091"
+
+  # Dealer-Licensing API — OPTIONAL (§9 commercial). Lets an installer/dealer org issue signed,
+  # hub-bound licenses for their customers' hubs and activate / revoke / transfer them, with a live
+  # seat count + issuance ledger. The hub validates its token OFFLINE and works without this. Provide
+  # LICENSING_PRIVATE_KEY (the Ed25519 signing key PEM) in production — absent → an ephemeral dev key.
+  licensing:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/licensing.Dockerfile
+    restart: unless-stopped
+    environment:
+      LICENSING_PORT: "8098"
+      # `key1:dealerOrg1,key2:dealerOrg2` — issued per dealer org.
+      LICENSING_API_KEYS: ${SUPREME_LICENSING_API_KEYS:-dev-dealer-key:org_demo}
+      # The Ed25519 signing key PEM. REQUIRED in production; dev mints an ephemeral key if unset.
+      LICENSING_PRIVATE_KEY: ${SUPREME_LICENSING_PRIVATE_KEY:-}
+      LICENSING_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8098:8098"
+
+  # Hub Registry — zero-touch hub enrollment + device-cert issuance + claim/transfer.
+  # The Hub CA keypair is provided via secrets in production; dev generates a throwaway CA.
+  hub-registry:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/hub-registry.Dockerfile
+    restart: unless-stopped
+    environment:
+      HUB_REGISTRY_PORT: "8092"
+      SUPREME_BROKER_ENDPOINT: ${SUPREME_BROKER_ENDPOINT:-https://broker.supremedomotics.in}
+      SUPREME_HUB_CA_KEY_FILE: ${SUPREME_HUB_CA_KEY_FILE:-}
+      SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8092:8092"
+
+  # Identity plane — accounts, authentication (EdDSA JWT + rotating refresh), device registry.
+  # The AuthN signing key is provided via secrets in production; dev generates a throwaway key.
+  identity:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/identity.Dockerfile
+    restart: unless-stopped
+    environment:
+      IDENTITY_PORT: "8093"
+      SUPREME_AUTHN_KEY_FILE: ${SUPREME_AUTHN_KEY_FILE:-}
+      SUPREME_AUTHN_ISSUER: ${SUPREME_AUTHN_ISSUER:-https://id.supremedomotics.in}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8093:8093"
+
+  # Tunnel Broker — zero-trust, cert-authenticated, hub-initiated remote access (replaces the
+  # Phase-1 relay's tunnel). Trusts the Hub CA public key to verify hub device credentials.
+  tunnel-broker:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/tunnel-broker.Dockerfile
+    restart: unless-stopped
+    environment:
+      BROKER_PORT: "8094"
+      SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
+      SUPREME_BROKER_DEV_ALLOW_ALL: ${SUPREME_BROKER_DEV_ALLOW_ALL:-0}
+      # Real device-cert mTLS listener (hubs dial out here). Provide the broker's server cert/key
+      # and the Hub CA cert (PEM) to enable it; absent → only the HTTP/WS surface runs.
+      SUPREME_BROKER_CERT_FILE: ${SUPREME_BROKER_CERT_FILE:-}
+      SUPREME_BROKER_KEY_FILE: ${SUPREME_BROKER_KEY_FILE:-}
+      SUPREME_HUB_CA_CERT_FILE: ${SUPREME_HUB_CA_CERT_FILE:-}
+      BROKER_MTLS_PORT: "8443"
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8094:8094"
+      - "8443:8443"
+
+  # Voice service — OPTIONAL. OAuth2 account-linking IdP + Alexa/Google Smart Home fulfillment.
+  # Forwards every directive to the owning hub over the Tunnel Broker, where RBAC is enforced
+  # locally. Not on the critical path — the hub controls devices without it. authenticateUser
+  # must be wired to the Identity plane before production (the image refuses logins by default).
+  voice:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/voice.Dockerfile
+    restart: unless-stopped
+    environment:
+      VOICE_PORT: "8095"
+      # HMAC secret for OAuth tokens — REQUIRED. Use a strong, rotated secret in production.
+      VOICE_SIGNING_SECRET: ${VOICE_SIGNING_SECRET:?set a strong voice signing secret}
+      # `clientId:secret:assistant:redirectUri` entries, comma-separated (assistant = alexa|google).
+      VOICE_CLIENTS: ${VOICE_CLIENTS:-}
+      # Per-hub keys for proactive state-report ingest: "key1:home1,key2:home2".
+      VOICE_HUB_KEYS: ${VOICE_HUB_KEYS:-}
+      # Real proactive-report dispatch (optional; absent → reports are logged + dropped).
+      VOICE_ALEXA_CLIENT_ID: ${VOICE_ALEXA_CLIENT_ID:-}
+      VOICE_ALEXA_CLIENT_SECRET: ${VOICE_ALEXA_CLIENT_SECRET:-}
+      VOICE_GOOGLE_SA_EMAIL: ${VOICE_GOOGLE_SA_EMAIL:-}
+      VOICE_GOOGLE_SA_KEY: ${VOICE_GOOGLE_SA_KEY:-}
+      SUPREME_HUB_CA_PUB_FILE: ${SUPREME_HUB_CA_PUB_FILE:-}
+      VOICE_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8095:8095"
+
+  # Matter service — OPTIONAL. Brokers a home's Matter fabric/multi-admin metadata so it can be
+  # shared with Apple Home / Google. The hub commissions + controls Matter devices locally and
+  # syncs node metadata here; never on the critical path. Per-hub API keys map to a homeId.
+  matter:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/matter.Dockerfile
+    restart: unless-stopped
+    environment:
+      MATTER_PORT: "8096"
+      # `key1:home1,key2:home2` — issued per hub at enrollment.
+      MATTER_API_KEYS: ${SUPREME_MATTER_API_KEYS:-}
+      MATTER_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8096:8096"
+
+  # Off-site backup vault — OPTIONAL, zero-knowledge. Stores the hub's already-encrypted backup
+  # blobs (never a decryption key), per-hub-key scoped to a home, with retention. The hub backs up
+  # and restores locally without it. Production injects an S3-compatible blob store.
+  backups:
+    build:
+      context: ../..
+      dockerfile: infra/cloud-compose/backups.Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKUPS_PORT: "8097"
+      # `key1:home1,key2:home2` — issued per hub at enrollment.
+      BACKUPS_API_KEYS: ${SUPREME_BACKUPS_API_KEYS:-}
+      BACKUPS_RETENTION: ${SUPREME_BACKUPS_RETENTION:-30}
+      BACKUPS_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+    ports:
+      - "8097:8097"
+
+  # Receives OTLP traces from hubs/cloud services and exports them onward.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ../observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4318:4318" # OTLP/HTTP
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    volumes:
+      - ../observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"

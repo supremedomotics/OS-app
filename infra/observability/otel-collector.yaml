@@ -1,0 +1,32 @@
+# OpenTelemetry Collector config (§6). Hubs and cloud services ship OTLP/HTTP traces
+# here (SUPREME_OTEL_ENDPOINT=http://otel-collector:4318/v1/traces). Configure an
+# exporter for your tracing backend (Tempo/Jaeger/Honeycomb/etc.); `debug` is the
+# safe default for a first bring-up.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+exporters:
+  debug:
+    verbosity: normal
+  # Example: point at a Tempo/Jaeger OTLP endpoint in production.
+  # otlphttp:
+  #   endpoint: https://tempo.example:4318
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

@@ -1,0 +1,33 @@
+[project]
+name = "supreme-commissioning"
+version = "0.0.1"
+description = "Supreme protocol commissioning tooling (KNX/DALI/Modbus) — §4 Python service."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "pydantic>=2.9.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+  "httpx>=0.27.0",
+  "ruff>=0.7.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+# Run pytest from the service root without an editable install: put the root on
+# sys.path so `import app` resolves (CI does `pytest -q` here, no `pip install -e`).
+pythonpath = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

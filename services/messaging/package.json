@@ -1,0 +1,26 @@
+{
+  "name": "@supreme/messaging",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Event bus (NATS) + ephemeral/presence store (Redis) seams — in-process by default, real backends behind config (§5, §14).",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "nats": "^2.29.0",
+    "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

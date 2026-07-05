@@ -1,0 +1,39 @@
+{
+  "name": "@supreme/protocols",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Real native protocol drivers (MQTT, Modbus, KNX, Matter, Zigbee, DALI, AVR, CoolMaster, SIP, WiiM, Devialet, Sonos, Ajax, Shelly, AirPlay, Apple TV, Lutron, Tuya) + SSDP/mDNS discovery behind the SupremeNativeAdapter seam (§3, §7).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/domain-model": "workspace:*",
+    "@supreme/integration-layer": "workspace:*",
+    "modbus-serial": "^8.0.21",
+    "mqtt": "^5.10.1"
+  },
+  "optionalDependencies": {
+    "knx": "^2.6.0",
+    "sonos": "^1.15.0"
+  },
+  "devDependencies": {
+    "aedes": "^0.51.3",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

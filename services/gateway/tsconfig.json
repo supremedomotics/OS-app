@@ -1,0 +1,40 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/domain-model" },
+    { "path": "../../packages/supreme-contracts" },
+    { "path": "../integration-layer" },
+    { "path": "../protocols" },
+    { "path": "../identity" },
+    { "path": "../permissions" },
+    { "path": "../home" },
+    { "path": "../scenes" },
+    { "path": "../notifications" },
+    { "path": "../persistence" },
+    { "path": "../messaging" },
+    { "path": "../../packages/crypto" },
+    { "path": "../../packages/hub-identity" },
+    { "path": "../../packages/hub-pki" },
+    { "path": "../../cloud/hub-registry" },
+    { "path": "../../cloud/tunnel-broker" },
+    { "path": "../drivers" },
+    { "path": "../commissioning" },
+    { "path": "../../cloud/licensing" },
+    { "path": "../backup" },
+    { "path": "../automations" },
+    { "path": "../analytics" },
+    { "path": "../intelligence" },
+    { "path": "../license" },
+    { "path": "../audit" },
+    { "path": "../ai" },
+    { "path": "../security" },
+    { "path": "../cameras" },
+    { "path": "../homekit" }
+  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts"]
+}

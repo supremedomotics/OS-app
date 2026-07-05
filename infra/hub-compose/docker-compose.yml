@@ -1,0 +1,317 @@
+# Supreme OS — Home Hub (blueprint §2.1, §14).
+#
+# The hub is the whole product: it runs control, automation, data, identity and
+# AI entirely on the box, with zero internet required. Supreme services run as
+# sidecar containers beside a HEADLESS, HIDDEN Home Assistant Core. Only the SIL
+# (inside the gateway for Phase 0) ever talks to HA — and HA is never published to
+# the host, so its UI/branding can't leak (§7, §12, §17).
+#
+# Networks:
+#   supreme-edge   — client-facing; ONLY the gateway is attached here.
+#   supreme-core   — internal; HA, Postgres, Redis, NATS, MQTT. No host ports.
+# This segmentation enforces "HA admin bound to loopback" at the topology level.
+
+name: supreme-hub
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/gateway.Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPREME_HOST: 0.0.0.0
+      SUPREME_PORT: "8080"
+      SUPREME_BACKEND: ${SUPREME_BACKEND:-ha}
+      SUPREME_HA_URL: ws://homeassistant:8123/api/websocket
+      # NO HA token needed: on first boot the gateway provisions HA headlessly (creates the
+      # hidden internal account, mints a long-lived token) and stores it in the secrets
+      # volume. Set SUPREME_HA_TOKEN only to pin an existing token.
+      SUPREME_HA_TOKEN: ${SUPREME_HA_TOKEN:-}
+      SUPREME_HA_ADMIN_USER: ${SUPREME_HA_ADMIN_USER:-admin}
+      SUPREME_HA_ADMIN_PASSWORD: ${SUPREME_HA_ADMIN_PASSWORD:-admin@supremeos}
+      SUPREME_SECRETS_DIR: /data/secrets
+      SUPREME_SYSTEM_NAME: ${SUPREME_SYSTEM_NAME:-Supreme Residence}
+      # Optional Unsplash Access Key → real room photos by name (see .env.example).
+      SUPREME_UNSPLASH_KEY: ${SUPREME_UNSPLASH_KEY:-}
+      SUPREME_TZ: ${SUPREME_TZ:-UTC}
+      SUPREME_DEV_MODE: ${SUPREME_DEV_MODE:-0}
+      # First boot shows the Supreme Setup Wizard (create the administrator) instead of a
+      # demo owner. Set to 0 only for throwaway demo stacks.
+      SUPREME_SETUP_WIZARD: ${SUPREME_SETUP_WIZARD:-1}
+      SUPREME_TOKEN_SECRET: ${SUPREME_TOKEN_SECRET:?provide a 32+ char secret in .env}
+      DATABASE_URL: postgres://supreme:${POSTGRES_PASSWORD:?provide a db password in .env}@postgres:5432/supreme
+      SUPREME_COMMISSIONING_URL: http://commissioning:9100
+      SUPREME_AI_URL: http://ai:9200
+      # Cross-process scale: NATS event bus + Redis presence (both internal-only).
+      SUPREME_NATS_URL: ${SUPREME_NATS_URL:-nats://nats:4222}
+      SUPREME_REDIS_URL: ${SUPREME_REDIS_URL:-redis://redis:6379}
+      # Distributed tracing (off unless an OTLP/HTTP collector endpoint is set).
+      SUPREME_OTEL_ENDPOINT: ${SUPREME_OTEL_ENDPOINT:-}
+      # Native protocol stacks behind the Supreme-native engine (§3). MQTT points at
+      # the hub's Mosquitto (real Zigbee2MQTT/Tasmota devices); Modbus is set per-site.
+      SUPREME_MQTT_URL: ${SUPREME_MQTT_URL:-mqtt://mqtt:1883}
+      SUPREME_MODBUS_HOST: ${SUPREME_MODBUS_HOST:-}
+      SUPREME_MODBUS_PORT: ${SUPREME_MODBUS_PORT:-502}
+      SUPREME_KNX_HOST: ${SUPREME_KNX_HOST:-}
+      SUPREME_KNX_PORT: ${SUPREME_KNX_PORT:-3671}
+      # Matter: opt-in local controller (ships disabled per blueprint §9).
+      SUPREME_MATTER_ENABLED: ${SUPREME_MATTER_ENABLED:-0}
+      SUPREME_MATTER_STORAGE_PATH: ${SUPREME_MATTER_STORAGE_PATH:-/data/matter}
+      # Native Zigbee: coordinator radio on a serial port (no MQTT broker in the path).
+      SUPREME_ZIGBEE_PORT: ${SUPREME_ZIGBEE_PORT:-}
+      SUPREME_ZIGBEE_ADAPTER: ${SUPREME_ZIGBEE_ADAPTER:-zstack}
+      # DALI (IEC 62386): USB DALI interface serial port for architectural lighting.
+      SUPREME_DALI_PORT: ${SUPREME_DALI_PORT:-}
+      # AVR IP control (Denon/Marantz) — receivers added by IP at bind time.
+      SUPREME_AVR_ENABLED: ${SUPREME_AVR_ENABLED:-0}
+      # CoolMasterNet HVAC bridge host (VRF/VRV control).
+      SUPREME_COOLMASTER_HOST: ${SUPREME_COOLMASTER_HOST:-}
+      # SIP door stations — door release + ring (needs a SIP UA subsystem).
+      SUPREME_SIP_SERVER: ${SUPREME_SIP_SERVER:-}
+      # Media + security drivers (added by IP/account at bind time). WiiM/Devialet speak
+      # real local HTTP APIs; Sonos (UPnP) + Ajax (cloud) need a transport/client wired.
+      SUPREME_WIIM_ENABLED: ${SUPREME_WIIM_ENABLED:-0}
+      SUPREME_DEVIALET_ENABLED: ${SUPREME_DEVIALET_ENABLED:-0}
+      SUPREME_SONOS_ENABLED: ${SUPREME_SONOS_ENABLED:-0}
+      SUPREME_AJAX_ENABLED: ${SUPREME_AJAX_ENABLED:-0}
+      # Shelly Gen2 (local JSON-RPC + mDNS) + AirPlay (mDNS discovery; sender needs a stack).
+      SUPREME_SHELLY_ENABLED: ${SUPREME_SHELLY_ENABLED:-0}
+      SUPREME_AIRPLAY_ENABLED: ${SUPREME_AIRPLAY_ENABLED:-0}
+      # Apple TV media control + now-playing (mDNS discovery; pyatv MRP client seam).
+      SUPREME_APPLETV_ENABLED: ${SUPREME_APPLETV_ENABLED:-0}
+      # The pyatv bridge that holds Apple TV pairing credentials + drives control.
+      SUPREME_APPLETV_URL: ${SUPREME_APPLETV_URL:-http://appletv:9300}
+      # Public hub URL — used to build client-reachable media artwork (cover-art) URLs.
+      SUPREME_PUBLIC_BASE_URL: ${SUPREME_PUBLIC_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}}
+      # Lutron LIP bridge (RA2/HomeWorks QS wired or Caséta Smart Bridge Pro wireless).
+      SUPREME_LUTRON_HOST: ${SUPREME_LUTRON_HOST:-}
+      SUPREME_LUTRON_USERNAME: ${SUPREME_LUTRON_USERNAME:-lutron}
+      SUPREME_LUTRON_PASSWORD: ${SUPREME_LUTRON_PASSWORD:-integration}
+      # Tuya (proprietary; needs a device client / local keys provisioned).
+      SUPREME_TUYA_ENABLED: ${SUPREME_TUYA_ENABLED:-0}
+      # Camera streaming: clients reach go2rtc (HLS/WebRTC) at /stream behind the edge.
+      # The gateway registers RTSP sources via go2rtc's admin API on the core network.
+      SUPREME_STREAM_BASE_URL: ${SUPREME_STREAM_BASE_URL:-https://${SUPREME_DOMAIN:-localhost}/stream}
+      SUPREME_STREAM_ENGINE: ${SUPREME_STREAM_ENGINE:-go2rtc}
+      SUPREME_STREAM_API_URL: ${SUPREME_STREAM_API_URL:-http://streamer:1984}
+      # Push notifications (§13) — OPTIONAL. The cloud relay holds the FCM/APNs creds;
+      # empty = push off, notifications still deliver over WSS (on-LAN degrade).
+      SUPREME_PUSH_RELAY_URL: ${SUPREME_PUSH_RELAY_URL:-}
+      SUPREME_PUSH_RELAY_TOKEN: ${SUPREME_PUSH_RELAY_TOKEN:-}
+      # Remote access (§8): the hub dials this relay outbound; off-LAN clients reach it
+      # through the tunnel. Empty = LAN-only (no remote access).
+      SUPREME_RELAY_URL: ${SUPREME_RELAY_URL:-}
+      SUPREME_RELAY_TOKEN: ${SUPREME_RELAY_TOKEN:-}
+      SUPREME_HUB_VERSION: ${SUPREME_HUB_VERSION:-0.4.0}
+      SUPREME_LOG_LEVEL: ${SUPREME_LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+      SUPREME_CORS_ORIGINS: ${SUPREME_CORS_ORIGINS:-}
+      SUPREME_RATE_MAX: ${SUPREME_RATE_MAX:-1000}
+      SUPREME_AUTH_RATE_MAX: ${SUPREME_AUTH_RATE_MAX:-20}
+    # Not published to the host — the Caddy proxy terminates TLS and reverse-proxies
+    # the Supreme API. Only the proxy is reachable from the LAN.
+    volumes:
+      # Runtime secrets the hub generates (the provisioned HA token). Survives restarts.
+      - supreme-secrets:/data/secrets
+    networks:
+      - supreme-edge
+      - supreme-core
+    depends_on:
+      homeassistant:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      commissioning:
+        condition: service_started
+      nats:
+        condition: service_started
+      redis:
+        condition: service_started
+      mqtt:
+        condition: service_started
+
+  # Python protocol-commissioning tooling (KNX/DALI/Modbus). Internal only — the
+  # gateway's commissioning orchestrator calls it over the core network.
+  commissioning:
+    build:
+      # Repo-root context so the build can pick up the egress-proxy CA (if any)
+      # from infra/hub-compose/ca-certs for pip behind a TLS-intercepting proxy.
+      context: ../..
+      dockerfile: services/commissioning-py/Dockerfile
+    restart: unless-stopped
+    networks:
+      - supreme-core
+
+  # Camera stream engine (go2rtc). Ingests camera RTSP sources and republishes them as
+  # browser-playable HLS + low-latency WebRTC. The gateway registers sources via its
+  # admin API (core network); clients reach it under /stream behind the edge proxy.
+  streamer:
+    image: alexxit/go2rtc:latest
+    restart: unless-stopped
+    networks:
+      - supreme-core
+      - supreme-edge
+    # No host ports — only the edge proxy (/stream) and the gateway (admin API) reach it.
+
+  # On-box AI assistant (local model host). The gateway delegates to it and falls
+  # back to its built-in planner when unavailable — internal only.
+  #
+  # To enable the REAL local LLM: build with WITH_LLM=1 (compiles llama.cpp) and
+  # provide a GGUF model. Weights are never shipped in the repo/image — mount the
+  # model and point SUPREME_AI_MODEL_PATH at it. See scripts/dev/fetch-ai-model.sh.
+  ai:
+    build:
+      context: ../..
+      dockerfile: services/ai-py/Dockerfile
+      args:
+        WITH_LLM: ${SUPREME_AI_WITH_LLM:-0}
+    restart: unless-stopped
+    environment:
+      SUPREME_AI_MODEL_PATH: ${SUPREME_AI_MODEL_PATH:-}
+    volumes:
+      - ${SUPREME_AI_MODEL_DIR:-./ai-models}:/models:ro
+    networks:
+      - supreme-core
+
+  # Apple TV bridge (pyatv). Holds per-device pairing credentials and drives MRP
+  # control + now-playing for the Node Apple TV driver. On BOTH planes: the gateway
+  # reaches its API over supreme-core, and it reaches Apple TVs over supreme-edge
+  # (the LAN-routable plane). NOTE: reliable mDNS discovery from inside Docker may
+  # need host networking — see services/appletv-py/README.md. Only loaded when the
+  # Apple TV driver is enabled; harmless to leave running otherwise.
+  appletv:
+    build:
+      context: ../..
+      dockerfile: services/appletv-py/Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPREME_APPLETV_DATA: /data/appletv-creds.json
+    volumes:
+      - appletv-data:/data
+    networks:
+      - supreme-core
+      - supreme-edge
+
+  # Homeowner web app. The PRIMARY web UI, served at the edge root. Static bundle;
+  # talks to the Supreme API only (same-origin /v1), never to any backend.
+  homeowner:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/web-homeowner.Dockerfile
+    restart: unless-stopped
+    networks:
+      - supreme-edge
+
+  # Installer Portal (web). Static bundle served behind the TLS proxy under /installer/.
+  # Talks to the Supreme API only (VITE_SUPREME_API_URL), never to any backend.
+  installer-portal:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/web-installer.Dockerfile
+      args:
+        VITE_BASE: /installer/
+    restart: unless-stopped
+    networks:
+      - supreme-edge
+
+  # Edge TLS terminator (production hardening §1). The ONLY host-published service.
+  # Terminates HTTPS and reverse-proxies the gateway (API + WSS) and the portal.
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SUPREME_DOMAIN: ${SUPREME_DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@supreme.local}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - supreme-edge
+    depends_on:
+      - gateway
+      - homeowner
+      - installer-portal
+      - streamer
+
+  # Headless Home Assistant Core — hidden backend. NO published ports; reachable
+  # only on the internal supreme-core network by the SIL. Supervisor not used.
+  homeassistant:
+    # Official HA CORE image (NOT HAOS — Supreme OS is a Docker Compose appliance). `stable`
+    # tracks the latest stable Core release; pin to a dated tag (e.g. 2026.6) before a
+    # production rollout and gate upgrades through the HA-regression CI (§17). Docker Hub
+    # coordinates are used so it's pullable via a registry mirror in restricted networks.
+    image: ${SUPREME_HA_IMAGE:-homeassistant/home-assistant:stable}
+    restart: unless-stopped
+    volumes:
+      - ./homeassistant:/config
+      - ha-data:/config/.storage
+    environment:
+      TZ: ${SUPREME_TZ:-UTC}
+    networks:
+      - supreme-core
+    # Intentionally NO `ports:` — HA must never be exposed to the host/LAN.
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: supreme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?provide a db password in .env}
+      POSTGRES_DB: supreme
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - supreme-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supreme"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - supreme-core
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-js", "-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats/nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data
+    networks:
+      - supreme-core
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+    networks:
+      - supreme-core
+
+networks:
+  supreme-edge:
+    driver: bridge
+  supreme-core:
+    driver: bridge
+    internal: true # no outbound/inbound to host — pure internal plane
+
+volumes:
+  ha-data:
+  pg-data:
+  nats-data:
+  mqtt-data:
+  caddy-data:
+  caddy-config:
+  appletv-data:
+  supreme-secrets:

@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "references": [
+    { "path": "../hub-registry" },
+    { "path": "../../packages/hub-identity" },
+    { "path": "../authn" },
+    { "path": "../device-registry" },
+    { "path": "../identity" }
+  ],
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts"]
+}

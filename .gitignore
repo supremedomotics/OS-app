@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+
+# Flutter / Dart
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+**/ios/Pods/
+**/build/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.log
+
+# Local data volumes
+infra/hub-compose/.data/
+
+# Dart/Flutter library lockfiles (libraries should not pin; apps keep theirs)
+packages/aureon-flutter/pubspec.lock
+packages/supreme-sdk-dart/pubspec.lock
+
+# Environment-specific proxy CA certs (populated by enable-native-tools.sh)
+infra/hub-compose/ca-certs/*.crt
+
+# On-box AI model weights (provisioned to the appliance, never committed)
+services/ai-py/models/
+
+# On-box AI model mount (compose); weights provisioned at runtime
+infra/hub-compose/ai-models/

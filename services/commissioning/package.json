@@ -1,0 +1,32 @@
+{
+  "name": "@supreme/commissioning",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Device discovery + commissioning orchestration (SIL + protocol scanners).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@supreme/domain-model": "workspace:*",
+    "@supreme/contracts": "workspace:*",
+    "@supreme/integration-layer": "workspace:*",
+    "@supreme/home": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
