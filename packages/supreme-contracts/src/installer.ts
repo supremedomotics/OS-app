@@ -47,6 +47,18 @@ export type SetDriverEnabledRequest = z.infer<typeof SetDriverEnabledRequest>;
 
 // ── Discovery & commissioning ────────────────────────────────────────────────
 
+/**
+ * Real network coordinates for a discovered/commissioned device, when the discovery source resolved
+ * them (mDNS addresses, Shelly/Matter TXT, etc.). Every field is optional and only ever present when
+ * genuinely known — a device on a non-IP bus (KNX/Zigbee) simply has none. Never fabricated.
+ */
+export const NetworkInfo = z.object({
+  ip: z.string().optional(),
+  mac: z.string().optional(),
+  host: z.string().optional(),
+});
+export type NetworkInfo = z.infer<typeof NetworkInfo>;
+
 export const DiscoveredDeviceView = z.object({
   backendId: z.string(),
   suggestedName: z.string(),
@@ -54,6 +66,8 @@ export const DiscoveredDeviceView = z.object({
   source: z.string(),
   /** Native bus protocol this device was discovered on (e.g. "mqtt"), if any. */
   protocol: z.string().optional(),
+  /** Resolved network coordinates (IP/MAC/host), when the discovery source knows them. */
+  network: NetworkInfo.optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
@@ -79,6 +93,8 @@ export const CommissionRequest = z.object({
   protocol: z.string().optional(),
   address: z.string().optional(),
   config: z.record(z.unknown()).optional(),
+  /** Network coordinates carried over from discovery, persisted onto the device (§ Device Manager). */
+  network: NetworkInfo.optional(),
 });
 export type CommissionRequest = z.infer<typeof CommissionRequest>;
 

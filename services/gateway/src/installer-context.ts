@@ -247,6 +247,7 @@ export class InstallerServices {
     supremeType?: Parameters<CommissioningService["commission"]>[0]["supremeType"];
     manufacturer?: string | null;
     model?: string | null;
+    network?: Parameters<CommissioningService["commission"]>[0]["network"];
     protocol?: string;
     address?: string;
     config?: Record<string, unknown>;

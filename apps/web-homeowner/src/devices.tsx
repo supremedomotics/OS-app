@@ -109,6 +109,8 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const isOnline = online(device);
+  // Real network coordinates captured at discovery (present only for IP-bus devices).
+  const net = (device.metadata as { network?: { ip?: string; mac?: string; host?: string } } | undefined)?.network;
 
   async function save() {
     setBusy(true); setErr(null); setMsg(null);
@@ -142,6 +144,8 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
             {device.model && <div><span className="k">Model</span><span className="v">{device.model}</span></div>}
             {driver && <div><span className="k">Driver</span><span className="v">{driver.name}</span></div>}
             {driver?.protocol && <div><span className="k">Protocol</span><span className="v">{driver.protocol.toUpperCase()}</span></div>}
+            {net?.ip && <div><span className="k">IP address</span><span className="v">{net.ip}</span></div>}
+            {net?.mac && <div><span className="k">MAC</span><span className="v">{net.mac}</span></div>}
             <div><span className="k">Room</span><span className="v">{roomName(device.roomId)}</span></div>
             <div><span className="k">Status</span><span className="v">{device.status}{isOnline ? " · live" : ""}</span></div>
             <div><span className="k">Capabilities</span><span className="v">{device.capabilities.map((c) => c.kind).join(", ")}</span></div>

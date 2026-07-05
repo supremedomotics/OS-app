@@ -45,6 +45,7 @@ class Device {
     this.model,
     this.driverId,
     this.status = 'online',
+    this.metadata = const {},
   });
 
   final String id;
@@ -59,6 +60,16 @@ class Device {
   final String? model;
   final String? driverId;
   final String status;
+
+  /// Opaque device metadata (e.g. `network: {ip, mac, host}` captured at discovery).
+  final Map<String, dynamic> metadata;
+
+  /// Real network coordinates captured at discovery, or null for non-IP-bus devices.
+  ({String? ip, String? mac, String? host})? get network {
+    final n = metadata['network'];
+    if (n is! Map) return null;
+    return (ip: n['ip'] as String?, mac: n['mac'] as String?, host: n['host'] as String?);
+  }
 
   /// Latest normalized state keyed by capability kind.
   final Map<String, dynamic> state;
@@ -90,6 +101,7 @@ class Device {
         model: json['model'] as String?,
         driverId: json['driverId'] as String?,
         status: json['status'] as String? ?? 'online',
+        metadata: (json['metadata'] as Map<String, dynamic>?) ?? const {},
       );
 }
 

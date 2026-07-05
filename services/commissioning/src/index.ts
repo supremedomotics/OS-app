@@ -24,6 +24,13 @@ export interface IProtocolScanner {
   scan(): Promise<DiscoveredDevice[]>;
 }
 
+/** Real network coordinates resolved during discovery (IP/MAC/host). Only ever set when known. */
+export interface NetworkInfo {
+  ip?: string;
+  mac?: string;
+  host?: string;
+}
+
 export interface DiscoveredView {
   backendId: string;
   suggestedName: string;
@@ -32,6 +39,32 @@ export interface DiscoveredView {
   source: string;
   /** Native bus protocol this device lives on (e.g. "mqtt"), enabling auto-bind. */
   protocol?: string;
+  /** Network coordinates when the discovery source resolved them (mDNS/Shelly/Matter…). */
+  network?: NetworkInfo;
+}
+
+/**
+ * Pull real network coordinates out of a discovered device's opaque `raw` metadata. Discovery
+ * sources use different shapes (mDNS resolves `addresses`/`host`; Shelly/Matter carry an `ip`/`mac`
+ * in TXT), so this reads the common keys defensively and returns only the fields genuinely present —
+ * a device on a non-IP bus yields `undefined`, never a fabricated address.
+ */
+export function extractNetwork(raw: Record<string, unknown> | undefined): NetworkInfo | undefined {
+  if (!raw) return undefined;
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined;
+
+  // IP: a direct `ip`/`address` string, or the first entry of an `addresses` array (mDNS A records).
+  const addresses = Array.isArray(raw.addresses) ? (raw.addresses as unknown[]) : [];
+  const ip = str(raw.ip) ?? str(raw.address) ?? str(addresses.find((a) => typeof a === "string"));
+  // MAC: a direct field, or a Shelly-style TXT `id` that is a bare 12-hex MAC.
+  const txt = (raw.txt && typeof raw.txt === "object" ? (raw.txt as Record<string, unknown>) : {}) ?? {};
+  const macRaw = str(raw.mac) ?? str(txt.mac) ?? str(txt.id);
+  const mac = macRaw && /^[0-9a-fA-F]{12}$|^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(macRaw) ? macRaw : undefined;
+  const host = str(raw.host);
+
+  if (!ip && !mac && !host) return undefined;
+  return { ...(ip ? { ip } : {}), ...(mac ? { mac } : {}), ...(host ? { host } : {}) };
 }
 
 export class CommissioningService {
@@ -77,6 +110,7 @@ export class CommissioningService {
     supremeType?: SupremeDeviceType;
     manufacturer?: string | null;
     model?: string | null;
+    network?: NetworkInfo;
   }): Promise<Device> {
     const home = await this.requireHome();
     if (input.capabilities.length === 0) {
@@ -84,6 +118,11 @@ export class CommissioningService {
     }
     await this.home.requireRoom(input.roomId);
 
+    // Persist the real network coordinates resolved at discovery so the Device Manager can show the
+    // device's IP/MAC. Absent for non-IP-bus devices — we store nothing rather than a blank.
+    const network = input.network && (input.network.ip || input.network.mac || input.network.host)
+      ? input.network
+      : undefined;
     const device: Device = {
       id: newId("device") as DeviceId,
       homeId: home.id,
@@ -96,7 +135,7 @@ export class CommissioningService {
       status: "online",
       capabilities: input.capabilities.map((kind) => ({ kind, config: {} })),
       state: {},
-      metadata: { commissionedAt: new Date().toISOString() },
+      metadata: { commissionedAt: new Date().toISOString(), ...(network ? { network } : {}) },
     };
     const backendIds = Object.fromEntries(input.capabilities.map((c) => [c, input.backendId]));
     await this.home.addDevice(device, backendIds);
@@ -129,6 +168,7 @@ export { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto
 
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;
+  const network = extractNetwork(d.raw);
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -136,6 +176,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     // A native-bus device reports its protocol as the source (e.g. "mqtt"), not "backend".
     source: protocol ?? source,
     protocol,
+    ...(network ? { network } : {}),
   };
 }
 

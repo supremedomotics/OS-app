@@ -2,7 +2,7 @@ import { newId, type HomeId, type UserId } from "@supreme/domain-model";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { HomeService } from "@supreme/home";
 import { describe, expect, it } from "vitest";
-import { CommissioningService, type IProtocolScanner } from "./index.js";
+import { CommissioningService, extractNetwork, type IProtocolScanner } from "./index.js";
 
 async function setup(seedDiscovered = true) {
   const seed = seedDiscovered
@@ -91,5 +91,41 @@ describe("CommissioningService", () => {
     const svc = new CommissioningService(sil, home, [knxScanner]);
     const knxOnly = await svc.discover("knx");
     expect(knxOnly.every((f) => f.source === "knx")).toBe(true);
+  });
+
+  it("extracts real network coordinates from discovery metadata (and only when present)", () => {
+    // mDNS shape: A-record addresses + host + a Shelly-style 12-hex MAC in TXT id.
+    expect(extractNetwork({ addresses: ["192.168.1.42"], host: "shelly1.local", txt: { id: "a4cf12ff00aa" } }))
+      .toEqual({ ip: "192.168.1.42", mac: "a4cf12ff00aa", host: "shelly1.local" });
+    // Direct ip/mac fields with a colon-form MAC.
+    expect(extractNetwork({ ip: "10.0.0.5", mac: "AA:BB:CC:DD:EE:FF" }))
+      .toEqual({ ip: "10.0.0.5", mac: "AA:BB:CC:DD:EE:FF" });
+    // A non-MAC TXT id is not misread as a MAC.
+    expect(extractNetwork({ txt: { id: "living-room-lamp" } })).toBeUndefined();
+    // A non-IP-bus device (KNX) yields nothing — never fabricated.
+    expect(extractNetwork({})).toBeUndefined();
+    expect(extractNetwork(undefined)).toBeUndefined();
+  });
+
+  it("persists network coordinates onto the commissioned device", async () => {
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home);
+    const device = await svc.commission({
+      backendId: "light.studio",
+      name: "Studio Light",
+      roomId: roomId as never,
+      capabilities: ["onoff", "brightness"],
+      network: { ip: "192.168.1.42", mac: "a4cf12ff00aa" },
+    });
+    expect((device.metadata as { network?: unknown }).network).toEqual({ ip: "192.168.1.42", mac: "a4cf12ff00aa" });
+
+    // No network → no fabricated field on the device.
+    const bare = await svc.commission({
+      backendId: "light.studio",
+      name: "Studio Light 2",
+      roomId: roomId as never,
+      capabilities: ["onoff"],
+    });
+    expect((bare.metadata as { network?: unknown }).network).toBeUndefined();
   });
 });

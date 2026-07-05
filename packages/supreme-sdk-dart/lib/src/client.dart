@@ -710,6 +710,7 @@ class SupremeClient {
     required String roomId,
     required List<String> capabilities,
     String? protocol,
+    Map<String, dynamic>? network,
   }) async {
     final res = await _http.post(
       Uri.parse('$baseUrl/v1/commissioning/commission'),
@@ -720,6 +721,7 @@ class SupremeClient {
         'roomId': roomId,
         'capabilities': capabilities,
         if (protocol != null) 'protocol': protocol,
+        if (network != null && network.isNotEmpty) 'network': network,
       }),
     );
     _ensureOk(res);

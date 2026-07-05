@@ -11,7 +11,7 @@ import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } fro
  * Building › Floor › Room › Area › Name › Done — in one guided flow. The installer assigns a
  * *place*, never a protocol.
  */
-type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string };
+type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string } };
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 
 /** The extension that drives a given protocol, from registry metadata. */
@@ -177,6 +177,7 @@ function FoundDevice({
         roomId: targetRoomId,
         capabilities: device.capabilities as never,
         ...(device.protocol ? { protocol: device.protocol } : {}),
+        ...(device.network ? { network: device.network } : {}),
       });
       setStep("Ready");
       setPlacedIn(placedLabel);
@@ -198,6 +199,7 @@ function FoundDevice({
           <span className="ext-name">{device.suggestedName}</span>
           <span className="ext-sub">
             {device.protocol ? device.protocol.toUpperCase() : device.source} · {device.capabilities.join(", ")}
+            {device.network?.ip ? ` · ${device.network.ip}` : ""}
           </span>
           <span className="ext-tags">
             {driver ? <span className="tag ok">Extension: {driver.name}{driver.installed ? "" : " (auto-install)"}</span> : <span className="tag">No matching extension</span>}

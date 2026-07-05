@@ -169,6 +169,7 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
         roomId: targetRoomId,
         capabilities: ((widget.device['capabilities'] as List?) ?? const []).cast<String>(),
         protocol: widget.device['protocol'] as String?,
+        network: widget.device['network'] as Map<String, dynamic>?,
       );
       ref.invalidate(homeProvider);
       widget.onPaired();
@@ -192,7 +193,11 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
       child: ExpansionTile(
         leading: Icon(Icons.sensors, color: Theme.of(context).colorScheme.primary),
         title: Text(d['suggestedName'] as String? ?? 'Device'),
-        subtitle: Text('${(d['protocol'] as String?)?.toUpperCase() ?? d['source']} · ${caps.join(', ')}', style: Theme.of(context).textTheme.labelSmall),
+        subtitle: Text(
+          '${(d['protocol'] as String?)?.toUpperCase() ?? d['source']} · ${caps.join(', ')}'
+          '${(d['network'] as Map?)?['ip'] != null ? ' · ${(d['network'] as Map)['ip']}' : ''}',
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
         childrenPadding: const EdgeInsets.fromLTRB(AureonSpacing.md, 0, AureonSpacing.md, AureonSpacing.md),
         expandedCrossAxisAlignment: CrossAxisAlignment.start,
         children: [

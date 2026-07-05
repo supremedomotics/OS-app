@@ -148,6 +148,8 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
             ('Model', d.model),
             ('Driver', drv?['name'] as String?),
             ('Protocol', protocols.isEmpty ? null : protocols.first.toUpperCase()),
+            ('IP address', d.network?.ip),
+            ('MAC', d.network?.mac),
             ('Room', widget.roomName(d.roomId)),
             ('Status', online ? '${d.status} · live' : d.status),
             ('Capabilities', d.capabilities.isEmpty ? null : d.capabilities.join(', ')),
