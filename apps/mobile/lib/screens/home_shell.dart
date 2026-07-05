@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
 import 'alerts_screen.dart';
+import 'areas_screen.dart';
 import 'assistant_screen.dart';
 import 'automations_screen.dart';
 import 'dashboard.dart';
@@ -59,6 +60,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           for (final (icon, label, screen) in <(IconData, String, Widget)>[
             (Icons.travel_explore_outlined, 'Discover Devices', const DiscoverDevicesScreen()),
             (Icons.devices_other_outlined, 'Devices', const DeviceManagerScreen()),
+            (Icons.layers_outlined, 'Areas', const AreasScreen()),
             (Icons.extension_outlined, 'Extension Center', const ExtensionCenterScreen()),
             (Icons.account_tree_outlined, 'Automations', const AutomationsScreen()),
             (Icons.insights_outlined, 'Smart', const IntelligenceScreen()),
