@@ -41,6 +41,10 @@ class Device {
     required this.roomId,
     required this.capabilities,
     required this.state,
+    this.manufacturer,
+    this.model,
+    this.driverId,
+    this.status = 'online',
   });
 
   final String id;
@@ -48,6 +52,13 @@ class Device {
   final String supremeType;
   final String? roomId;
   final List<String> capabilities;
+
+  /// Real device metadata (§ Device Manager). Nullable — a device may not declare a make/model or
+  /// be bound to a driver. `status` is the platform's online/offline/unavailable enum.
+  final String? manufacturer;
+  final String? model;
+  final String? driverId;
+  final String status;
 
   /// Latest normalized state keyed by capability kind.
   final Map<String, dynamic> state;
@@ -75,6 +86,10 @@ class Device {
             .map((c) => (c as Map<String, dynamic>)['kind'] as String)
             .toList(),
         state: (json['state'] as Map<String, dynamic>?) ?? <String, dynamic>{},
+        manufacturer: json['manufacturer'] as String?,
+        model: json['model'] as String?,
+        driverId: json['driverId'] as String?,
+        status: json['status'] as String? ?? 'online',
       );
 }
 
@@ -92,15 +107,23 @@ class HomeView {
 }
 
 class Scene {
-  Scene({required this.id, required this.name, required this.icon});
+  Scene({required this.id, required this.name, required this.icon, this.deviceIds = const []});
   final String id;
   final String name;
   final String? icon;
+
+  /// The device ids this scene drives (from its steps) — used for per-device scene-usage counts.
+  final List<String> deviceIds;
 
   factory Scene.fromJson(Map<String, dynamic> json) => Scene(
         id: json['id'] as String,
         name: json['name'] as String,
         icon: json['icon'] as String?,
+        deviceIds: ((json['steps'] as List?) ?? const [])
+            .map((s) => (s as Map<String, dynamic>)['deviceId'] as String?)
+            .whereType<String>()
+            .toSet()
+            .toList(),
       );
 }
 

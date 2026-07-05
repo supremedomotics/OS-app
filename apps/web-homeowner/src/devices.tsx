@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { client } from "./api.js";
+import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
- * real per-device data the platform actually has (type, capabilities, live state, room) and the
- * actions the backend supports today (rename, move room, remove). Reuses the SDK's
- * devices()/updateDevice()/deleteDevice() — no duplicate device system. Fully responsive.
+ * real per-device data the platform actually has (manufacturer, model, driver, protocol, type,
+ * capabilities, live state, room, scene usage) and the actions the backend supports today (rename,
+ * move room, remove). Reuses the SDK's devices()/updateDevice()/deleteDevice() — no duplicate device
+ * system. Fields with no backend source (firmware, signal, battery, IP/MAC) are omitted, not faked.
+ * Fully responsive.
  */
 type Room = { id: string; name: string };
+/** The driver that backs a device + its protocol, resolved from the registry (never hardcoded). */
+type DriverInfo = { name: string; protocol: string | null };
 
 function online(d: Device): boolean {
   // A device is "online" when we hold live state for any capability.
@@ -30,16 +34,35 @@ function stateSummary(d: Device): string {
 export function DeviceManager() {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [registry, setRegistry] = useState<DriverEntry[]>([]);
+  const [sceneUse, setSceneUse] = useState<Record<string, number>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState("");
 
   async function load() {
-    const [devs, home] = await Promise.all([client.devices(), client.home()]);
+    const [devs, home, reg, scenes] = await Promise.all([
+      client.devices(), client.home(), fetchDriverRegistry(), client.scenes(),
+    ]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
+    setRegistry(reg);
+    // Real scene-usage count per device: how many scenes drive it (§ Device Manager scene count).
+    const use: Record<string, number> = {};
+    for (const sc of scenes.scenes) {
+      const ids = new Set((sc.steps ?? []).map((st) => st.deviceId));
+      for (const id of ids) use[id] = (use[id] ?? 0) + 1;
+    }
+    setSceneUse(use);
   }
   useEffect(() => { void load(); }, []);
 
+  // Resolve a device's driver → its display name + primary protocol, from the registry.
+  const driverInfo = (driverId: string | null | undefined): DriverInfo | null => {
+    if (!driverId) return null;
+    const d = registry.find((r) => r.installedId === driverId || r.key === driverId);
+    if (!d) return null;
+    return { name: d.name, protocol: d.protocols[0] ?? null };
+  };
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Unassigned";
   const filtered = (devices ?? []).filter((d) => d.name.toLowerCase().includes(q.toLowerCase()));
   const byRoom = useMemo(() => {
@@ -65,7 +88,8 @@ export function DeviceManager() {
           <div className="grid">
             {list.map((d) => (
               <DeviceRow key={d.id} device={d} rooms={rooms} expanded={open === d.id}
-                onToggle={() => setOpen(open === d.id ? null : d.id)} onChanged={load} roomName={roomName} />
+                onToggle={() => setOpen(open === d.id ? null : d.id)} onChanged={load} roomName={roomName}
+                driver={driverInfo(d.driverId)} sceneCount={sceneUse[d.id] ?? 0} />
             ))}
           </div>
         </div>
@@ -75,8 +99,9 @@ export function DeviceManager() {
   );
 }
 
-function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName }: {
-  device: Device; rooms: Room[]; expanded: boolean; onToggle: () => void; onChanged: () => void; roomName: (id: string | null | undefined) => string;
+function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount }: {
+  device: Device; rooms: Room[]; expanded: boolean; onToggle: () => void; onChanged: () => void;
+  roomName: (id: string | null | undefined) => string; driver: DriverInfo | null; sceneCount: number;
 }) {
   const [name, setName] = useState(device.name);
   const [roomId, setRoomId] = useState(device.roomId ?? "");
@@ -113,9 +138,14 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName }: {
         <div className="drv-detail">
           <div className="dev-facts">
             <div><span className="k">Type</span><span className="v">{device.supremeType}</span></div>
+            {device.manufacturer && <div><span className="k">Manufacturer</span><span className="v">{device.manufacturer}</span></div>}
+            {device.model && <div><span className="k">Model</span><span className="v">{device.model}</span></div>}
+            {driver && <div><span className="k">Driver</span><span className="v">{driver.name}</span></div>}
+            {driver?.protocol && <div><span className="k">Protocol</span><span className="v">{driver.protocol.toUpperCase()}</span></div>}
             <div><span className="k">Room</span><span className="v">{roomName(device.roomId)}</span></div>
-            <div><span className="k">Status</span><span className="v">{isOnline ? "Online" : "Unknown"}</span></div>
+            <div><span className="k">Status</span><span className="v">{device.status}{isOnline ? " · live" : ""}</span></div>
             <div><span className="k">Capabilities</span><span className="v">{device.capabilities.map((c) => c.kind).join(", ")}</span></div>
+            <div><span className="k">In scenes</span><span className="v">{sceneCount}</span></div>
           </div>
           <label className="drv-field"><span className="lbl">Name</span>
             <input value={name} onChange={(e) => setName(e.target.value)} />

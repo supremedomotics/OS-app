@@ -79,6 +79,22 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
 
   void _toast(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
+  /// A compact label/value list of a device's real facts; rows with no value are dropped.
+  Widget _facts(BuildContext context, List<(String, String?)> rows) {
+    final theme = Theme.of(context);
+    final present = rows.where((r) => r.$2 != null && r.$2!.isNotEmpty).toList();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final (label, value) in present)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(width: 104, child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant))),
+            Expanded(child: Text(value!, style: theme.textTheme.labelMedium)),
+          ]),
+        ),
+    ]);
+  }
+
   Future<void> _save() async {
     setState(() => _busy = true);
     try {
@@ -107,6 +123,15 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
   Widget build(BuildContext context) {
     final d = widget.device;
     final online = d.state.isNotEmpty;
+    // Resolve the backing driver → name + protocol from the registry (never hardcoded).
+    final registry = ref.watch(driverRegistryProvider).valueOrNull ?? const [];
+    Map<String, dynamic>? drv;
+    for (final r in registry) {
+      if (r['installedId'] == d.driverId || r['key'] == d.driverId) { drv = r; break; }
+    }
+    final protocols = ((drv?['protocols'] as List?) ?? const []).cast<String>();
+    final scenes = ref.watch(scenesProvider).valueOrNull ?? const [];
+    final sceneCount = scenes.where((s) => s.deviceIds.contains(d.id)).length;
     return Card(
       child: ExpansionTile(
         leading: Container(width: 10, height: 10, decoration: BoxDecoration(
@@ -116,6 +141,19 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
         childrenPadding: const EdgeInsets.fromLTRB(AureonSpacing.md, 0, AureonSpacing.md, AureonSpacing.md),
         expandedCrossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Real device facts — omit any field with no source (firmware/signal/battery/IP/MAC).
+          _facts(context, [
+            ('Type', d.supremeType),
+            ('Manufacturer', d.manufacturer),
+            ('Model', d.model),
+            ('Driver', drv?['name'] as String?),
+            ('Protocol', protocols.isEmpty ? null : protocols.first.toUpperCase()),
+            ('Room', widget.roomName(d.roomId)),
+            ('Status', online ? '${d.status} · live' : d.status),
+            ('Capabilities', d.capabilities.isEmpty ? null : d.capabilities.join(', ')),
+            ('In scenes', '$sceneCount'),
+          ]),
+          const SizedBox(height: 8),
           TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name')),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
