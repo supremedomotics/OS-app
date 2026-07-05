@@ -141,6 +141,13 @@ final energyDeviceWattsProvider =
   return ref.watch(clientProvider).energyDeviceWatts();
 });
 
+/// Whether the hub is in Developer Mode — reveals the Developer section (§ Developer Mode).
+final devModeProvider = FutureProvider<bool>((ref) async {
+  final info = await ref.watch(clientProvider).licenseInfo();
+  final service = info?['service'] as Map<String, dynamic>?;
+  return service?['devMode'] == true;
+});
+
 /// The unified driver registry (every driver + install state + config schema).
 final driverRegistryProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {

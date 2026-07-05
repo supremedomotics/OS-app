@@ -8,7 +8,6 @@ import '../widgets/password_field.dart';
 import 'add_home_screen.dart';
 import 'advanced_settings_screen.dart';
 import 'audit_screen.dart';
-import 'driver_manager_screen.dart';
 
 /// Appearance settings (§11.2 Themes): Light / Dark / Automatic base palettes
 /// (Luxury Black / Luxury White) and the accent colour (Gold / Silver). Changing a
@@ -57,15 +56,6 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: AureonSpacing.xl),
           Text('System', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: AureonSpacing.sm),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.extension_outlined),
-            title: const Text('Drivers & integrations'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const DriverManagerScreen()),
-            ),
-          ),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.tune_outlined),

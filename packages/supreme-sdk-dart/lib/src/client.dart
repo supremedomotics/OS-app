@@ -664,6 +664,61 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  // ── Device discovery / commissioning (§ Automatic Device Discovery) ─────────────
+  /// Scan every supported technology at once (or one [protocol]); returns the discovered devices
+  /// ({backendId, suggestedName, capabilities, source, protocol?}).
+  Future<List<Map<String, dynamic>>> discover([String? protocol]) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/discover'),
+      headers: _authHeaders,
+      body: jsonEncode(protocol == null ? {} : {'protocol': protocol}),
+    );
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['discovered'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Commission a discovered device into a room (optionally binding it to its native bus in one step).
+  Future<Map<String, dynamic>> commission({
+    required String backendId,
+    required String name,
+    required String roomId,
+    required List<String> capabilities,
+    String? protocol,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/commission'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'backendId': backendId,
+        'name': name,
+        'roomId': roomId,
+        'capabilities': capabilities,
+        if (protocol != null) 'protocol': protocol,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['device'] as Map<String, dynamic>;
+  }
+
+  /// License / entitlement info, incl. `service.devMode` used to reveal Developer tools.
+  Future<Map<String, dynamic>?> licenseInfo() async {
+    try {
+      final res = await _http.get(Uri.parse('$baseUrl/v1/license'), headers: _authHeaders);
+      if (res.statusCode >= 400) return null;
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Hub diagnostics (version, backend health, device counts) for the Developer / Dashboard views.
+  Future<Map<String, dynamic>> diagnostics() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/diagnostics'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// The home's climate program (programmable-thermostat setpoint schedule), or null.
   Future<Map<String, dynamic>?> climateProgram() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/climate/program'),
