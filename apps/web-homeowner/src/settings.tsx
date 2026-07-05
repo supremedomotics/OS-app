@@ -37,7 +37,7 @@ export function ThemeSettings() {
     { id: "homes", label: "Homes", icon: "⌂", hint: "Switch or add a home", el: <HomesSettings /> },
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
-    { id: "account", label: "Account", icon: "○", hint: "Change your password", el: <AccountSettings /> },
+    { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
   ];
 
   const current = pages.find((p) => p.id === open);
@@ -332,7 +332,10 @@ function AccountSettings() {
   return (
     <section className="card-section">
       <h2 className="section-title">Account</h2>
-      <p className="opt-label">Change password</p>
+
+      <ChangeEmail />
+
+      <p className="opt-label" style={{ marginTop: 18 }}>Change password</p>
       <PasswordInput value={current} onChange={setCurrent} placeholder="Current password" />
       <div style={{ height: 8 }} />
       <PasswordInput value={next} onChange={setNext} placeholder="New password (min 8 characters)" />
@@ -342,6 +345,84 @@ function AccountSettings() {
       <button className="primary" disabled={busy || !current || !next} onClick={change} style={{ marginTop: 10 }}>
         {busy ? "Updating…" : "Update password"}
       </button>
+
+      <DeleteAccount />
     </section>
+  );
+}
+
+/** Change the signed-in user's email/username (re-auth with the current password). */
+function ChangeEmail() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setMsg(null);
+    setBusy(true);
+    try {
+      const { user } = await client.changeEmail(email.trim(), password);
+      setEmail("");
+      setPassword("");
+      setMsg({ ok: true, text: `Email updated to ${user.email}.` });
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not change the email." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <p className="opt-label">Change email / username</p>
+      <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="New email address" />
+      <div style={{ height: 8 }} />
+      <PasswordInput value={password} onChange={setPassword} placeholder="Current password" />
+      {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
+      <button className="primary" disabled={busy || !email.trim() || !password} onClick={submit} style={{ marginTop: 10 }}>
+        {busy ? "Updating…" : "Update email"}
+      </button>
+    </>
+  );
+}
+
+/** Danger zone — permanently delete your own account (re-auth + explicit confirm). */
+function DeleteAccount() {
+  const [password, setPassword] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function del() {
+    setErr(null);
+    setBusy(true);
+    try {
+      await client.deleteAccount(password);
+      // The account (and its sessions) are gone — bounce back to the login screen.
+      window.location.reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not delete the account.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="danger-zone">
+      <p className="opt-label danger-label">Delete account</p>
+      <p className="muted">Permanently deletes your account and signs you out everywhere. This can’t be undone. The home owner (master) account can’t be deleted.</p>
+      {!confirming ? (
+        <button className="danger" onClick={() => setConfirming(true)} style={{ marginTop: 8 }}>Delete my account…</button>
+      ) : (
+        <>
+          <PasswordInput value={password} onChange={setPassword} placeholder="Confirm with your current password" />
+          {err && <p className="err">{err}</p>}
+          <div className="dev-row2" style={{ marginTop: 8 }}>
+            <button className="danger" disabled={busy || !password} onClick={del}>{busy ? "Deleting…" : "Permanently delete"}</button>
+            <button disabled={busy} onClick={() => { setConfirming(false); setPassword(""); setErr(null); }}>Cancel</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

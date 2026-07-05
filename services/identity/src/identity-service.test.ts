@@ -156,6 +156,42 @@ describe("password reset + change", () => {
   });
 });
 
+describe("account self-service (change email + delete)", () => {
+  it("changes the email only with the correct password and rejects a duplicate", async () => {
+    const s = svc();
+    const { home, master } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "owner-password-123", displayName: "Owner" });
+    const guest = await s.createUser({ homeId: home.id, email: "guest@example.com", password: "guest-password-123", displayName: "Guest", userType: "guest", expiresAt: null });
+
+    await expect(s.changeEmail(master.id, "new@example.com", "wrong")).rejects.toThrow(/current password is incorrect/);
+    // Can't take an email another user already has.
+    await expect(s.changeEmail(master.id, "guest@example.com", "owner-password-123")).rejects.toThrow(/already exists/);
+
+    const updated = await s.changeEmail(master.id, "owner2@example.com", "owner-password-123");
+    expect(updated.email).toBe("owner2@example.com");
+    expect((await s.login("owner2@example.com", "owner-password-123")).status).toBe("ok");
+    expect(guest.id).toBeDefined();
+  });
+
+  it("deletes a non-master account, revoking access; the master is protected", async () => {
+    const s = svc();
+    const { home, master } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "owner-password-123", displayName: "Owner" });
+    const guest = await s.createUser({ homeId: home.id, email: "guest@example.com", password: "guest-password-123", displayName: "Guest", userType: "guest", expiresAt: null });
+    const login = await s.login("guest@example.com", "guest-password-123");
+    if (login.status !== "ok") throw new Error("expected tokens");
+
+    // Wrong password → no self-delete.
+    await expect(s.deleteOwnAccount(guest.id, "nope")).rejects.toThrow(/current password is incorrect/);
+    // The master (owner) can never be deleted.
+    await expect(s.deleteUser(master.id)).rejects.toThrow(/master .*cannot be deleted/);
+
+    await s.deleteOwnAccount(guest.id, "guest-password-123");
+    await expect(s.getUser(guest.id)).rejects.toThrow(/not found/);
+    // The deleted user's token no longer authenticates, and they can't log back in.
+    await expect(s.authenticate(login.accessToken)).rejects.toThrow(/no longer valid/);
+    await expect(s.login("guest@example.com", "guest-password-123")).rejects.toThrow(/invalid email or password/);
+  });
+});
+
 describe("expiring (guest/temporary) access", () => {
   it("sweepExpired flips a past-expiry guest to 'expired' and their token stops authenticating", async () => {
     const s = svc();

@@ -35,8 +35,6 @@ class _Root extends ConsumerStatefulWidget {
 }
 
 class _RootState extends ConsumerState<_Root> {
-  bool _authed = false;
-
   Future<void> _onAuthenticated() async {
     final client = ref.read(clientProvider);
     final stream = SupremeStream(
@@ -44,12 +42,12 @@ class _RootState extends ConsumerState<_Root> {
       accessToken: client.accessToken!,
     )..connect();
     ref.read(streamProvider.notifier).state = stream;
-    setState(() => _authed = true);
+    ref.read(sessionActiveProvider.notifier).state = true;
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_authed) {
+    if (!ref.watch(sessionActiveProvider)) {
       return LoginScreen(onAuthenticated: _onAuthenticated);
     }
     return const HomeShell();

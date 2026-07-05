@@ -335,6 +335,49 @@ export class IdentityService {
     return user;
   }
 
+  /**
+   * Change a user's email/username after re-authenticating with their current password (§ account
+   * self-service). Rejects a duplicate email so logins stay unambiguous.
+   */
+  async changeEmail(userId: UserId, newEmail: string, currentPassword: string): Promise<User> {
+    const user = await this.getUser(userId);
+    const cred = await this.store.getCredential(userId);
+    const ok = cred ? await verify(cred.passwordHash, currentPassword).catch(() => false) : false;
+    if (!cred || !ok) {
+      throw new SupremeError("unauthorized", "current password is incorrect");
+    }
+    const normalized = newEmail.trim();
+    const existing = await this.store.findUserByEmail(normalized);
+    if (existing && existing.id !== userId) {
+      throw new SupremeError("conflict", "a user with that email already exists");
+    }
+    const next: User = { ...user, email: normalized };
+    await this.store.putUser(next);
+    return next;
+  }
+
+  /**
+   * Permanently delete a user account (admin flow). The master (home owner) can never be deleted —
+   * that would orphan the home — so this guards it explicitly.
+   */
+  async deleteUser(id: UserId): Promise<void> {
+    const user = await this.getUser(id);
+    if (user.userType === "master") {
+      throw new SupremeError("conflict", "the master (owner) account cannot be deleted");
+    }
+    await this.store.deleteUser(id);
+  }
+
+  /** Self-service account deletion — re-authenticate with the current password, then delete. */
+  async deleteOwnAccount(userId: UserId, currentPassword: string): Promise<void> {
+    const cred = await this.store.getCredential(userId);
+    const ok = cred ? await verify(cred.passwordHash, currentPassword).catch(() => false) : false;
+    if (!cred || !ok) {
+      throw new SupremeError("unauthorized", "current password is incorrect");
+    }
+    await this.deleteUser(userId); // reuses the master-account guard
+  }
+
   /** Suspend, reactivate, or expire a user (master/admin flow, §8). */
   async setUserStatus(id: UserId, status: "active" | "suspended" | "expired"): Promise<User> {
     const user = await this.getUser(id);

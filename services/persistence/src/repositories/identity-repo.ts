@@ -105,6 +105,15 @@ export class IdentityRepo implements IIdentityStore {
     );
   }
 
+  async deleteUser(id: UserId): Promise<void> {
+    // Remove the user's dependent rows first (favorites/grants/sessions carry a plain user_id, no FK),
+    // then the user itself — `auth_credentials` is FK ON DELETE CASCADE, so it goes automatically.
+    await this.db.query("DELETE FROM favorites WHERE user_id=$1", [id]);
+    await this.db.query("DELETE FROM grants WHERE user_id=$1", [id]);
+    await this.db.query("DELETE FROM sessions WHERE user_id=$1", [id]);
+    await this.db.query("DELETE FROM users WHERE id=$1", [id]);
+  }
+
   async getCredential(userId: UserId): Promise<StoredCredential | null> {
     const { rows } = await this.db.query<CredRow>(
       "SELECT * FROM auth_credentials WHERE user_id=$1",

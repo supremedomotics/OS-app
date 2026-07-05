@@ -43,6 +43,7 @@ import type {
   License,
   ProtocolKind,
   RoomId,
+  UserId,
 } from "@supreme/domain-model";
 
 /**
@@ -125,6 +126,21 @@ export class SupremeClient {
   /** Change the signed-in user's password (requires the current password). */
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await this.request("POST", "/v1/me/password", { currentPassword, newPassword });
+  }
+
+  /** Change the signed-in user's email/username (re-auth with the current password). */
+  async changeEmail(newEmail: string, currentPassword: string): Promise<{ user: { id: string; email: string } }> {
+    return this.request("POST", "/v1/me/email", { newEmail, currentPassword }) as Promise<{ user: { id: string; email: string } }>;
+  }
+
+  /** Delete the signed-in user's own account (re-auth with the current password). */
+  async deleteAccount(currentPassword: string): Promise<void> {
+    await this.request("DELETE", "/v1/me", { currentPassword });
+  }
+
+  /** Delete another user by id (admin/owner). The master account is protected server-side. */
+  async deleteUser(userId: UserId): Promise<void> {
+    await this.request("DELETE", `/v1/users/${userId}`);
   }
 
   /** Real host telemetry (CPU / memory / temperature / storage / uptime) for the Installer Dashboard.

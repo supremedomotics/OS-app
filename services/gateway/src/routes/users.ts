@@ -1,6 +1,7 @@
 import {
   CreateGrantRequest,
   CreateUserRequest,
+  SupremeError,
   type GrantList,
   type GrantResponse,
   type UserList,
@@ -69,6 +70,22 @@ export function registerUserRoutes(app: FastifyInstance, ctx: AppContext): void 
       const user = await ctx.identity.setUserStatus(req.params.id as UserId, "active");
       const body: UserResponse = { user };
       reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Permanently delete a user (admin). The master (owner) is protected in the service; an admin
+  // also can't delete their own account here (use DELETE /v1/me for that).
+  app.delete<{ Params: { id: string } }>("/v1/users/:id", async (req, reply) => {
+    try {
+      const actor = await authenticate(ctx, req);
+      await enforce(ctx, actor, "user", req.params.id, "admin");
+      if (actor.id === (req.params.id as UserId)) {
+        throw new SupremeError("validation_failed", "use DELETE /v1/me to delete your own account");
+      }
+      await ctx.identity.deleteUser(req.params.id as UserId);
+      reply.code(204).send();
     } catch (err) {
       sendError(reply, err);
     }

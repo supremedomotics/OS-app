@@ -142,6 +142,10 @@ final energyDeviceWattsProvider =
 });
 
 /// Hub diagnostics (version, backend health, counts, offline devices) — powers the Dashboard overview.
+/// Whether a session is active (post-login). Flipped true on authentication and false on logout /
+/// account deletion, so the root routes between LoginScreen and HomeShell.
+final sessionActiveProvider = StateProvider<bool>((ref) => false);
+
 final diagnosticsProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).diagnostics());
 
 /// Real host telemetry (CPU / memory / temperature / storage / uptime) for the dashboard.

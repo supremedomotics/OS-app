@@ -78,6 +78,33 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// Change the signed-in user's email/username (re-auth with the current password).
+  Future<Map<String, dynamic>> changeEmail(String newEmail, String currentPassword) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/me/email'),
+      headers: _authHeaders,
+      body: jsonEncode({'newEmail': newEmail, 'currentPassword': currentPassword}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
+  /// Delete the signed-in user's own account (re-auth with the current password).
+  Future<void> deleteAccount(String currentPassword) async {
+    final res = await _http.delete(
+      Uri.parse('$baseUrl/v1/me'),
+      headers: _authHeaders,
+      body: jsonEncode({'currentPassword': currentPassword}),
+    );
+    _ensureOk(res);
+  }
+
+  /// Delete another user by id (admin/owner). The master account is protected server-side.
+  Future<void> deleteUser(String userId) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/users/$userId'), headers: _authHeaders);
+    _ensureOk(res);
+  }
+
   Future<HomeView> home() async {
     final res =
         await _http.get(Uri.parse('$baseUrl/v1/home'), headers: _authHeaders);

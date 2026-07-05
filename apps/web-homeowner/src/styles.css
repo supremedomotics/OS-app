@@ -741,3 +741,7 @@ button.link {
 .meter-bar { height: 5px; border-radius: 999px; background: var(--aureon-color-base-hairline); overflow: hidden; margin: 6px 0 2px; }
 .meter-fill { display: block; height: 100%; background: var(--aureon-color-status-good); border-radius: 999px; }
 .stat.meter.warn .meter-fill { background: var(--aureon-color-status-warning); }
+
+/* Account danger zone (§ account deletion). */
+.danger-zone { margin-top: 22px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--aureon-color-status-critical) 30%, transparent); }
+.danger-label { color: var(--aureon-color-status-critical); }

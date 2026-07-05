@@ -57,6 +57,21 @@ export type CreateUserRequest = z.infer<typeof CreateUserRequest>;
 export const UserResponse = z.object({ user: User });
 export type UserResponse = z.infer<typeof UserResponse>;
 
+// ── Account self-service (§ Authentication / Security Center) ─────────────────
+
+/** Change the signed-in user's email/username. Requires the current password (re-auth). */
+export const ChangeEmailRequest = z.object({
+  newEmail: z.string().email(),
+  currentPassword: z.string().min(1),
+});
+export type ChangeEmailRequest = z.infer<typeof ChangeEmailRequest>;
+
+/** Delete the signed-in user's own account. Re-auth with the current password. */
+export const DeleteAccountRequest = z.object({
+  currentPassword: z.string().min(1),
+});
+export type DeleteAccountRequest = z.infer<typeof DeleteAccountRequest>;
+
 // ── Grants (ABAC overlay) ────────────────────────────────────────────────────
 
 export const CreateGrantRequest = z.object({

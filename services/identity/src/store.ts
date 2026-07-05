@@ -21,6 +21,8 @@ export interface IIdentityStore {
   getUser(id: UserId): Promise<User | null>;
   listUsers(): Promise<User[]>;
   putUser(user: User): Promise<void>;
+  /** Permanently remove a user + their credential (§ account deletion). */
+  deleteUser(id: UserId): Promise<void>;
   getCredential(userId: UserId): Promise<StoredCredential | null>;
   putCredential(cred: StoredCredential): Promise<void>;
 }
@@ -89,6 +91,10 @@ export class InMemoryIdentityStore implements IIdentityStore {
   }
   async putUser(user: User): Promise<void> {
     this.users.set(user.id, user);
+  }
+  async deleteUser(id: UserId): Promise<void> {
+    this.users.delete(id);
+    this.credentials.delete(id);
   }
   async getCredential(userId: UserId): Promise<StoredCredential | null> {
     return this.credentials.get(userId) ?? null;

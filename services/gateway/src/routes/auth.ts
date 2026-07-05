@@ -1,9 +1,12 @@
 import {
+  ChangeEmailRequest,
+  DeleteAccountRequest,
   LoginRequest,
   MfaCodeRequest,
   MfaVerifyRequest,
   RefreshRequest,
   type MfaEnrollResponse,
+  type UserResponse,
 } from "@supreme/contracts";
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.js";
@@ -118,6 +121,31 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       const user = await authenticate(ctx, req);
       const b = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
       await ctx.identity.changePassword(user.id, String(b.currentPassword ?? ""), String(b.newPassword ?? ""));
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Change the signed-in user's email/username (re-auth with the current password).
+  app.post("/v1/me/email", async (req, reply) => {
+    try {
+      const actor = await authenticate(ctx, req);
+      const body = ChangeEmailRequest.parse(req.body);
+      const user = await ctx.identity.changeEmail(actor.id, body.newEmail, body.currentPassword);
+      reply.send({ user } satisfies UserResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Delete the signed-in user's own account (re-auth with the current password). The master (owner)
+  // account cannot be self-deleted — that would orphan the home.
+  app.delete("/v1/me", async (req, reply) => {
+    try {
+      const actor = await authenticate(ctx, req);
+      const body = DeleteAccountRequest.parse(req.body);
+      await ctx.identity.deleteOwnAccount(actor.id, body.currentPassword);
       reply.code(204).send();
     } catch (err) {
       sendError(reply, err);

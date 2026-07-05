@@ -81,14 +81,106 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: AureonSpacing.sm),
           ListTile(
             contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.alternate_email_outlined),
+            title: const Text('Change email'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _changeEmail(context, ref),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.password_outlined),
             title: const Text('Change password'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _changePassword(context, ref),
           ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_outline, color: AureonStatus.critical),
+            title: const Text('Delete account', style: TextStyle(color: AureonStatus.critical)),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _deleteAccount(context, ref),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _changeEmail(BuildContext context, WidgetRef ref) async {
+    final email = TextEditingController();
+    final password = TextEditingController();
+    final messenger = ScaffoldMessenger.of(context);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Change email'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'New email address')),
+              const SizedBox(height: AureonSpacing.sm),
+              PasswordField(controller: password, label: 'Current password'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Update')),
+        ],
+      ),
+    );
+    if (saved == true) {
+      try {
+        final user = await ref.read(clientProvider).changeEmail(email.text.trim(), password.text);
+        messenger.showSnackBar(SnackBar(content: Text('Email updated to ${user['email']}')));
+      } catch (_) {
+        messenger.showSnackBar(const SnackBar(content: Text('Could not change email. Check your password and try a different address.')));
+      }
+    }
+    email.dispose();
+    password.dispose();
+  }
+
+  Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
+    final password = TextEditingController();
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete account'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('This permanently deletes your account and signs you out everywhere. It can’t be undone. The home owner (master) account can’t be deleted.'),
+              const SizedBox(height: AureonSpacing.sm),
+              PasswordField(controller: password, label: 'Confirm with your current password'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AureonStatus.critical),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        final client = ref.read(clientProvider);
+        await client.deleteAccount(password.text);
+        client.accessToken = null;
+        // Account (and its sessions) are gone — return to the login screen.
+        ref.read(sessionActiveProvider.notifier).state = false;
+      } catch (_) {
+        messenger.showSnackBar(const SnackBar(content: Text('Could not delete account. Check your password.')));
+      }
+    }
+    password.dispose();
   }
 
   Future<void> _changePassword(BuildContext context, WidgetRef ref) async {

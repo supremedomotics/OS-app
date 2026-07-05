@@ -50,6 +50,19 @@ describe("Postgres-backed persistence (PGlite)", () => {
     const identity2 = new IdentityService({ tokenSecret: "x".repeat(40), store: stores.identity });
     const fetched = await identity2.getUser(master.id);
     expect(fetched.email).toBe("owner@example.com");
+
+    // Account deletion removes the user + their credential (FK cascade) from real Postgres.
+    const guest = await identity.createUser({
+      homeId: master.homeId,
+      email: "guest@example.com",
+      password: "guest-strong-password",
+      displayName: "Guest",
+      userType: "guest",
+      expiresAt: null,
+    });
+    await identity.deleteOwnAccount(guest.id, "guest-strong-password");
+    expect(await stores.identity.getUser(guest.id)).toBeNull();
+    expect(await stores.identity.getCredential(guest.id)).toBeNull();
   });
 
   it("persists home topology, device state, and favorites", async () => {
