@@ -79,19 +79,19 @@ class DashboardScreen extends ConsumerWidget {
             ),
             const SizedBox(height: AureonSpacing.md),
 
-            // Stat tiles.
-            GridView.count(
-              crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AureonSpacing.sm, crossAxisSpacing: AureonSpacing.sm, childAspectRatio: 1.7,
-              children: [
-                _Stat(value: '$online', label: 'Online devices', sub: 'of $deviceTotal', color: AureonStatus.good, onTap: () => _push(context, const DeviceManagerScreen())),
-                _Stat(value: '$offline', label: 'Offline', sub: offline == 0 ? 'none' : 'need attention', color: offline > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const DeviceManagerScreen())),
-                _Stat(value: '${installed.length}', label: 'Extensions', sub: extErrors > 0 ? '$extErrors error' : 'all healthy', color: extErrors > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const ExtensionCenterScreen())),
-                _Stat(value: '$autoEnabled/${autos.length}', label: 'Automations', sub: 'enabled', onTap: () => _push(context, const AutomationsScreen())),
-                _Stat(value: (security?['triggered'] == true) ? 'Alert' : _cap((security?['armMode'] as String?) ?? '—'), label: 'Security', sub: 'armed state', color: security?['triggered'] == true ? AureonStatus.critical : null),
-                _Stat(value: counts == null ? '—' : '${counts['rooms']} · ${counts['scenes']}', label: 'Rooms · Scenes', sub: 'in this home'),
-              ],
-            ),
+            // Stat tiles — intrinsic-height (a Wrap, not a fixed-aspect grid) so content never clips.
+            Builder(builder: (context) {
+              final half = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
+              Widget s(Widget w) => SizedBox(width: half, child: w);
+              return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+                s(_Stat(value: '$online', label: 'Online devices', sub: 'of $deviceTotal', color: AureonStatus.good, onTap: () => _push(context, const DeviceManagerScreen()))),
+                s(_Stat(value: '$offline', label: 'Offline', sub: offline == 0 ? 'none' : 'need attention', color: offline > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const DeviceManagerScreen()))),
+                s(_Stat(value: '${installed.length}', label: 'Extensions', sub: extErrors > 0 ? '$extErrors error' : 'all healthy', color: extErrors > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const ExtensionCenterScreen()))),
+                s(_Stat(value: '$autoEnabled/${autos.length}', label: 'Automations', sub: 'enabled', onTap: () => _push(context, const AutomationsScreen()))),
+                s(_Stat(value: (security?['triggered'] == true) ? 'Alert' : _cap((security?['armMode'] as String?) ?? '—'), label: 'Security', sub: 'armed state', color: security?['triggered'] == true ? AureonStatus.critical : null)),
+                s(_Stat(value: counts == null ? '—' : '${counts['rooms']} · ${counts['scenes']}', label: 'Rooms · Scenes', sub: 'in this home')),
+              ]);
+            }),
             const SizedBox(height: AureonSpacing.lg),
 
             // Quick actions.

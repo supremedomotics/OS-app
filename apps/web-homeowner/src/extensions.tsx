@@ -34,7 +34,7 @@ function matches(d: DriverEntry, cat: Cat): boolean {
     case "device": return DEVICE_CATEGORIES.includes(d.category);
     case "ai": return /\bai\b|intelligence|assistant/i.test(`${d.name} ${d.description} ${d.category}`);
     case "developer": return d.channel === "beta" || /dev|sdk|debug/i.test(d.name);
-    case "experimental": return d.channel === "beta" || d.shipsDisabled;
+    case "experimental": return d.channel === "beta" || d.shipsDisabled === true;
   }
 }
 

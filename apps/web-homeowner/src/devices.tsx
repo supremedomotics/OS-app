@@ -35,7 +35,7 @@ export function DeviceManager() {
 
   async function load() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
-    setDevices(devs);
+    setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
   }
   useEffect(() => { void load(); }, []);

@@ -34,26 +34,33 @@ Widget _wrap(Widget child, {List<Override> overrides = const []}) =>
     ProviderScope(overrides: overrides, child: MaterialApp(home: child));
 
 void main() {
-  testWidgets('dashboard renders the home name and the Rooms aggregate', (tester) async {
-    // Use a real phone surface so the room-first ListView lays out like a device.
+  testWidgets('dashboard renders the project overview from live signals', (tester) async {
     await tester.binding.setSurfaceSize(const Size(430, 932));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(_wrap(
-      const DashboardScreen(),
+      // In the app the dashboard lives inside the shell's Scaffold (Material ancestor for the tiles).
+      const Scaffold(body: DashboardScreen()),
       overrides: [
-        homeProvider.overrideWith((ref) async => _home),
-        // Empty scenes → the optional horizontal scene-tile row isn't built (its fixed-height
-        // tiles overflow under flutter_test's boxy default font; this keeps the smoke test on the
-        // stable hero + aggregate tiles).
-        scenesProvider.overrideWith((ref) async => <Scene>[]),
-        favoritesProvider.overrideWith((ref) async => <Favorite>[]),
+        // The overview reads diagnostics + registry + security + automations + notifications.
+        diagnosticsProvider.overrideWith((ref) async => <String, dynamic>{
+              'hubVersion': '0.2.0',
+              'backend': {'kind': 'mock', 'healthy': true},
+              'counts': {'rooms': 2, 'devices': 3, 'scenes': 1, 'drivers': 0, 'users': 1},
+              'offlineDevices': <Map<String, dynamic>>[],
+              'drivers': <Map<String, dynamic>>[],
+            }),
+        driverRegistryProvider.overrideWith((ref) async => <Map<String, dynamic>>[]),
+        securityProvider.overrideWith((ref) async => <String, dynamic>{'armMode': 'disarmed'}),
+        automationsProvider.overrideWith((ref) async => <AutomationSummary>[]),
+        notificationsProvider.overrideWith((ref) async => <NotificationItem>[]),
       ],
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('The Penthouse'), findsWidgets); // home hero
-    expect(find.text('Rooms'), findsWidgets); // the rooms category aggregate tile
+    expect(find.text('All systems healthy'), findsWidgets); // health hero
+    expect(find.text('Online devices'), findsWidgets); // a stat tile
+    expect(find.text('Rooms · Scenes'), findsWidgets); // rooms/scenes stat
   });
 
   testWidgets('home switcher shows the active home and lists all homes', (tester) async {

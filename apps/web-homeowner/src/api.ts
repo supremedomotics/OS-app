@@ -115,6 +115,7 @@ export interface DriverEntry {
   capabilities: string[];
   protocols: string[];
   requiresSku: string | null;
+  shipsDisabled?: boolean;
   configSchema: DriverConfigField[];
   dependencies: string[];
   operations: string[];
