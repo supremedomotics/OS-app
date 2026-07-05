@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { SupremeStream } from "@supreme/sdk";
 import { client, fetchLicense, fetchSetupStatus, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
-import { Dashboard, Energy, RoomsScreen, Scenes, Security } from "./screens.js";
+import { Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
 import { PasswordInput } from "./password-input.js";
 import { ThemeSettings } from "./settings.js";
@@ -10,6 +10,7 @@ import { Automations } from "./automations.js";
 import { DiscoverDevices } from "./discover.js";
 import { DeviceManager } from "./devices.js";
 import { ExtensionCenter } from "./extensions.js";
+import { DashboardOverview } from "./dashboard.js";
 import { DeveloperTools } from "./developer.js";
 import { Icon } from "./icons.js";
 
@@ -78,13 +79,12 @@ export function App() {
   }
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
-  const openRoom = (roomId: string) => { setSelectedRoom(roomId); setTab("rooms"); };
   const go = (t: Tab) => { if (t === "rooms") setSelectedRoom(null); setTab(t); setMoreOpen(false); };
   const items = NAV.filter((n) => !n.dev || devMode);
 
   const page = (
     <>
-      {tab === "dashboard" && <Dashboard onOpenRoom={openRoom} onNavigate={(t) => go(t as Tab)} />}
+      {tab === "dashboard" && <DashboardOverview onNavigate={go} />}
       {tab === "discover" && <DiscoverDevices />}
       {tab === "devices" && <DeviceManager />}
       {tab === "extensions" && <ExtensionCenter />}

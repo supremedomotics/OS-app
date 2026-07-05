@@ -142,6 +142,38 @@ button.primary.lg { padding: 14px 28px; font-size: 16px; border-radius: 999px; }
 .dev-facts .v { display: block; font-size: 13.5px; }
 button.danger { color: var(--aureon-color-status-critical); border-color: color-mix(in srgb, var(--aureon-color-status-critical) 40%, transparent); }
 
+/* ── Dashboard overview ────────────────────────────────────────────────────────── */
+.health-hero { display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-radius: 18px; margin-bottom: 16px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); }
+.health-hero .hh-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--aureon-color-text-secondary); flex-shrink: 0; }
+.health-hero.ok .hh-dot { background: var(--aureon-color-status-good); box-shadow: 0 0 10px color-mix(in srgb, var(--aureon-color-status-good) 60%, transparent); }
+.health-hero.warn .hh-dot { background: var(--aureon-color-status-warning); box-shadow: 0 0 10px color-mix(in srgb, var(--aureon-color-status-warning) 60%, transparent); }
+.health-hero strong { display: block; font-size: 17px; }
+.health-hero .hh-sub { display: block; font-size: 12.5px; color: var(--aureon-color-text-secondary); margin-top: 2px; }
+
+.stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (min-width: 700px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
+.stat { display: flex; flex-direction: column; gap: 2px; padding: 16px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }
+.stat:hover { border-color: var(--aureon-color-gold-400); }
+.stat-v { font-size: 26px; font-weight: 600; }
+.stat.good .stat-v { color: var(--aureon-color-status-good); }
+.stat.warn .stat-v { color: var(--aureon-color-status-warning); }
+.stat-l { font-size: 13px; }
+.stat-s { font-size: 11.5px; color: var(--aureon-color-text-secondary); }
+
+.qa-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (min-width: 700px) { .qa-grid { grid-template-columns: repeat(4, 1fr); } }
+.qa { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; font-size: 14px; cursor: pointer; }
+.qa:hover { border-color: var(--aureon-color-gold-400); }
+.qa-ic { color: var(--aureon-color-gold-400); display: inline-flex; }
+
+.ev-list { display: flex; flex-direction: column; gap: 2px; }
+.ev-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--aureon-color-base-surface); }
+.ev-title { font-size: 13.5px; }
+.ev-time { font-size: 12px; color: var(--aureon-color-text-secondary); flex-shrink: 0; }
+.hub-line { margin-top: 20px; font-size: 12px; color: var(--aureon-color-text-secondary); }
+.hub-line .ok { color: var(--aureon-color-status-good); }
+.hub-line .err { color: var(--aureon-color-status-critical); }
+
 /* Cards + tiles */
 .card {
   background: var(--aureon-color-base-surface-raised);
