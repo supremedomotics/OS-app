@@ -89,11 +89,14 @@ export function ExtensionCenter() {
                 <span className="ext-meta">
                   <span className="ext-name">{d.name}</span>
                   <span className="ext-sub">v{d.version} · {d.category}{d.protocols.length ? ` · ${d.protocols.join("/")}` : ""}</span>
+                  <span className="ext-sub ext-pub">by {d.publisher}</span>
                   {d.description && <span className="ext-desc">{d.description}</span>}
                   <span className="ext-tags">
                     <span className={`tag ${d.channel}`}>{d.channel}</span>
                     {d.requiresSku && <span className="tag sku">{d.requiresSku}</span>}
-                    <span className="tag compat">hub ≥ {/* compat surfaced via requiresSku already */}v1</span>
+                    {d.hubMinVersion && <span className="tag compat">hub ≥ v{d.hubMinVersion}</span>}
+                    {d.dependencies.length > 0 && <span className="tag">{d.dependencies.length} dependenc{d.dependencies.length === 1 ? "y" : "ies"}</span>}
+                    {d.capabilities.length > 0 && <span className="tag soft">{d.capabilities.length} capabilit{d.capabilities.length === 1 ? "y" : "ies"}</span>}
                   </span>
                 </span>
                 <span className={`drv-badge ${s.cls}`}>{s.text}</span>

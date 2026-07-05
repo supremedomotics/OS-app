@@ -179,6 +179,20 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
         if ((d['description'] as String?)?.isNotEmpty ?? false)
           Padding(padding: const EdgeInsets.only(bottom: AureonSpacing.sm), child: Text(d['description'] as String, style: text.labelMedium)),
 
+        // About — the extension's real metadata (§ Extension Center rich fields). Only registry-backed
+        // fields are shown; nothing is fabricated.
+        _about(context, [
+          ('Developer', d['publisher'] as String?),
+          ('Version', d['version'] != null ? 'v${d['version']}' : null),
+          ('Channel', d['channel'] as String?),
+          ('Category', d['category'] as String?),
+          ('Compatibility', d['hubMinVersion'] != null ? 'Supreme OS ≥ v${d['hubMinVersion']}' : null),
+          ('Requires license', d['requiresSku'] as String?),
+          ('Protocols', _joinList(d['protocols'])),
+          ('Capabilities', _joinList(d['capabilities'])),
+          ('Dependencies', _joinList(d['dependencies'])),
+        ]),
+
         // Lifecycle actions.
         Wrap(spacing: 8, runSpacing: 8, children: [
           if (!_installed && _ops.contains('install'))
@@ -222,6 +236,31 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
           ),
         ],
       ],
+    );
+  }
+
+  static String? _joinList(dynamic v) {
+    final list = ((v as List?) ?? const []).cast<Object?>().map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+    return list.isEmpty ? null : list.join(', ');
+  }
+
+  /// A compact label/value list of the extension's real metadata; rows with no value are dropped.
+  Widget _about(BuildContext context, List<(String, String?)> rows) {
+    final text = Theme.of(context).textTheme;
+    final present = rows.where((r) => r.$2 != null && r.$2!.isNotEmpty).toList();
+    if (present.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AureonSpacing.sm),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final (label, value) in present)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 108, child: Text(label, style: text.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant))),
+              Expanded(child: Text(value!, style: text.labelMedium)),
+            ]),
+          ),
+      ]),
     );
   }
 

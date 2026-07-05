@@ -727,3 +727,11 @@ button.link {
 .area-rmeta { display: flex; gap: 6px; flex-wrap: wrap; }
 .area-rcount { font-size: 12px; color: var(--aureon-color-text-secondary); }
 .area-editor { grid-column: 1 / -1; }
+
+/* Extension Center — richer metadata (§ Extension Center). */
+.ext-pub { opacity: .8; }
+.drv-about { display: grid; grid-template-columns: 1fr; gap: 6px 16px; margin: 10px 0 4px; }
+@media (min-width: 560px) { .drv-about { grid-template-columns: 1fr 1fr; } }
+.drv-about > div { display: flex; gap: 8px; font-size: 12.5px; }
+.drv-about dt { color: var(--aureon-color-text-secondary); min-width: 96px; }
+.drv-about dd { margin: 0; color: var(--aureon-color-text-primary); }

@@ -111,6 +111,20 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
     <div className="drv-detail">
       {driver.description && <p className="muted">{driver.description}</p>}
 
+      {/* About — the extension's real metadata (§ Extension Center rich fields). Only fields the
+          registry genuinely exposes are shown; nothing is fabricated. */}
+      <dl className="drv-about">
+        <div><dt>Developer</dt><dd>{driver.publisher}</dd></div>
+        <div><dt>Version</dt><dd>v{driver.version}</dd></div>
+        <div><dt>Channel</dt><dd>{driver.channel}</dd></div>
+        <div><dt>Category</dt><dd>{driver.category}</dd></div>
+        {driver.hubMinVersion && <div><dt>Compatibility</dt><dd>Supreme OS ≥ v{driver.hubMinVersion}</dd></div>}
+        {driver.requiresSku && <div><dt>Requires license</dt><dd>{driver.requiresSku}</dd></div>}
+        {driver.protocols.length > 0 && <div><dt>Protocols</dt><dd>{driver.protocols.join(", ")}</dd></div>}
+        {driver.capabilities.length > 0 && <div><dt>Capabilities</dt><dd>{driver.capabilities.join(", ")}</dd></div>}
+        {driver.dependencies.length > 0 && <div><dt>Dependencies</dt><dd>{driver.dependencies.join(", ")}</dd></div>}
+      </dl>
+
       {/* Lifecycle actions */}
       <div className="drv-actions">
         {!driver.installed && has("install") && <button className="primary" disabled={busy} onClick={() => run(() => installDriverByKey(driver.key), "Installed")}>Install</button>}

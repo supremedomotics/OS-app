@@ -24,6 +24,8 @@ export interface DriverRegistryEntry {
   capabilities: string[];
   protocols: string[];
   requiresSku: string | null;
+  /** Minimum hub (Supreme OS) version this driver is compatible with (§ Extension Center). */
+  hubMinVersion: string;
   shipsDisabled: boolean;
   configSchema: DriverConfigField[];
   dependencies: string[];
@@ -103,6 +105,7 @@ export class DriverManager {
           capabilities: m.capabilities,
           protocols: m.protocols,
           requiresSku: m.compat.requiresSku,
+          hubMinVersion: m.compat.hubMinVersion,
           shipsDisabled: m.shipsDisabled,
           configSchema: m.configSchema,
           dependencies: m.dependencies,
