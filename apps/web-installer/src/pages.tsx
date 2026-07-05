@@ -418,7 +418,7 @@ export function Migration() {
     <section>
       <h2>Native migration</h2>
       <p className="muted">
-        Move each backend domain from Home Assistant to the Supreme-native engine. The
+        Move each backend domain from the legacy gateway to the Supreme-native engine. The
         homeowner experience is unaffected — control continues over the same API.
       </p>
       {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
@@ -441,7 +441,7 @@ export function Migration() {
                   color: d.engine === "native" ? "var(--aureon-color-status-good)" : undefined,
                 }}
               >
-                {d.engine === "native" ? "Supreme-native" : "Home Assistant"}
+                {d.engine === "native" ? "Supreme-native" : "Legacy gateway"}
               </span>
             </div>
             {d.engine === "ha" ? (
@@ -450,7 +450,7 @@ export function Migration() {
               </button>
             ) : (
               <button disabled={busy === d.domain} onClick={() => migrate(d.domain, "ha")}>
-                Revert to HA
+                Revert to legacy
               </button>
             )}
           </div>
@@ -458,7 +458,7 @@ export function Migration() {
       {status?.fullyMigrated && (
         <div className="card">
           <strong style={{ color: "var(--aureon-color-status-good)" }}>
-            Fully migrated — Home Assistant can be retired.
+            Fully migrated — the legacy gateway can be retired.
           </strong>
         </div>
       )}
@@ -771,7 +771,7 @@ export function Bindings() {
       <h2>Bus binding</h2>
       <p className="muted">
         Bind a commissioned device to a real field bus (KNX / Modbus / MQTT). The device
-        is then driven natively over that bus — no Home Assistant involved.
+        is then driven natively over that bus by the Supreme engine.
       </p>
       {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
 
