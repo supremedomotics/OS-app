@@ -128,18 +128,24 @@ class BackupScreen extends ConsumerWidget {
       return;
     }
     if (!context.mounted) return;
+    // A backup whose signature didn't verify is blocked — restore would risk the hub.
+    final invalid = preview['signatureValid'] == false;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('Restore this backup?'),
         content: Text(
-          '${preview['signatureValid'] == false ? '⚠ Invalid signature\n' : '✓ Verified backup\n'}'
+          '${invalid ? '⚠ Invalid signature — restore is blocked to protect your hub.\n' : '✓ Verified backup\n'}'
           'From ${preview['createdAt']}\n'
-          '${preview['rowCount']} rows across ${preview['tableCount']} tables will replace current data. A rollback snapshot is taken first.',
+          '${preview['rowCount']} rows across ${preview['tableCount']} tables will replace current data. A rollback snapshot is taken first, so a failed restore is undone automatically.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(style: FilledButton.styleFrom(backgroundColor: AureonStatus.critical), onPressed: () => Navigator.pop(c, true), child: const Text('Restore')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AureonStatus.critical),
+            onPressed: invalid ? null : () => Navigator.pop(c, true),
+            child: const Text('Restore'),
+          ),
         ],
       ),
     );

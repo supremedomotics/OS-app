@@ -711,8 +711,8 @@ function BackupCenter() {
   const [history, setHistory] = useState<BackupEntry[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [preview, setPreview] = useState<Inspection | null>(null);
-  const [restoreDoc, setRestoreDoc] = useState("");
+  // The document being restored — when set, the guided Restore Wizard opens.
+  const [wizardDoc, setWizardDoc] = useState<string | null>(null);
 
   async function load() {
     const [st, list] = await Promise.all([client.backupStatus(), client.backupList()]);
@@ -754,21 +754,11 @@ function BackupCenter() {
     finally { setBusy(null); }
   }
 
-  async function runPreview() {
-    setBusy("preview"); setMsg(null); setPreview(null);
-    try { const { inspection } = await client.inspectRestore(restoreDoc.trim()); setPreview(inspection as Inspection); }
-    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not read that backup." }); }
-    finally { setBusy(null); }
-  }
-
-  async function doRestore() {
-    if (!window.confirm("Restore this backup? Current data will be replaced (a rollback snapshot is taken first).")) return;
-    setBusy("restore"); setMsg(null);
-    try {
-      const r = await client.restore(restoreDoc.trim());
-      setPreview(null); setRestoreDoc(""); await load();
-      setMsg({ ok: true, text: `Restored ${r.rows} rows across ${r.tables} tables.` });
-    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Restore failed (rolled back)." }); }
+  /** Open the Restore Wizard for a stored history entry (fetches its document). */
+  async function restoreFromHistory(id: string) {
+    setBusy(id); setMsg(null);
+    try { const { document: doc } = await client.getBackup(id); setWizardDoc(doc); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not load that backup." }); }
     finally { setBusy(null); }
   }
 
@@ -827,34 +817,99 @@ function BackupCenter() {
                   <span className="sess-sub">{b.rowCount} rows · {b.tableCount} tables</span>
                 </span>
                 <button disabled={busy === b.id} onClick={() => reDownload(b.id)}>Download</button>
+                <button disabled={busy === b.id} onClick={() => restoreFromHistory(b.id)}>Restore…</button>
               </div>
             ))}
           </div>
         </>
       )}
 
-      {/* Restore with dry-run preview */}
-      <p className="opt-label" style={{ marginTop: 18 }}>Restore from a backup</p>
-      <textarea rows={3} value={restoreDoc} placeholder="Paste a .slic backup document…" onChange={(e) => { setRestoreDoc(e.target.value); setPreview(null); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--aureon-color-base-hairline)", background: "var(--aureon-color-base-surface)", color: "var(--aureon-color-text-primary)", fontFamily: "ui-monospace, monospace", fontSize: 12 }} />
-      <label className="chip" style={{ cursor: "pointer", marginTop: 6, display: "inline-block" }}>
-        Import file…
-        <input type="file" accept=".slic,.json,application/json" style={{ display: "none" }} onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setRestoreDoc(await f.text()); setPreview(null); } }} />
+      {/* Restore from a file → opens the guided Restore Wizard */}
+      <p className="opt-label" style={{ marginTop: 18 }}>Restore from a file</p>
+      <label className="chip" style={{ cursor: "pointer", display: "inline-block" }}>
+        Choose a .slic backup…
+        <input type="file" accept=".slic,.json,application/json" style={{ display: "none" }} onChange={async (e) => { const f = e.target.files?.[0]; if (f) setWizardDoc(await f.text()); e.target.value = ""; }} />
       </label>
-      <div className="dev-row2" style={{ marginTop: 8 }}>
-        <button disabled={busy === "preview" || !restoreDoc.trim()} onClick={runPreview}>{busy === "preview" ? "Reading…" : "Preview (dry-run)"}</button>
-        {preview && <button className="danger" disabled={busy === "restore"} onClick={doRestore}>{busy === "restore" ? "Restoring…" : "Restore this backup"}</button>}
-      </div>
-
-      {preview && (
-        <div className="update-avail" style={{ marginTop: 10 }}>
-          <strong>{preview.signatureValid === false ? "⚠ Invalid signature" : "✓ Verified backup"}</strong>
-          <span className="muted"> · from {fmt(preview.createdAt)} · {preview.rowCount} rows across {preview.tableCount} tables</span>
-          <p className="notif-body" style={{ marginTop: 6 }}>{preview.tables.map((t) => `${t.name} (${t.rows})`).join(", ")}</p>
-        </div>
-      )}
 
       {msg && <p className={msg.ok ? "muted" : "err"} style={{ marginTop: 10 }}>{msg.text}</p>}
+
+      {wizardDoc !== null && (
+        <RestoreWizard
+          document={wizardDoc}
+          fmt={fmt}
+          onClose={() => setWizardDoc(null)}
+          onDone={async (r) => { setWizardDoc(null); await load(); setMsg({ ok: true, text: `Restored ${r.rows} rows across ${r.tables} tables.` }); }}
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * Restore Wizard (§ Backup — restore wizard). A guided, safe restore: Preview (dry-run — verify the
+ * signature + show exactly what will be written) → Confirm (explicit warning; a rollback snapshot is
+ * taken first) → Result. Drives the rollback-safe restore endpoint already on the hub.
+ */
+function RestoreWizard({ document: doc, fmt, onClose, onDone }: {
+  document: string; fmt: (iso: string | null) => string; onClose: () => void; onDone: (r: { tables: number; rows: number }) => void;
+}) {
+  const [step, setStep] = useState<"preview" | "confirm" | "running">("preview");
+  const [inspection, setInspection] = useState<Inspection | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    client.inspectRestore(doc.trim())
+      .then((r) => { if (live) setInspection(r.inspection as Inspection); })
+      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : "Could not read that backup."); });
+    return () => { live = false; };
+  }, [doc]);
+
+  async function run() {
+    setStep("running"); setErr(null);
+    try { onDone(await client.restore(doc.trim())); }
+    catch (e) { setErr(e instanceof Error ? e.message : "Restore failed (rolled back)."); setStep("confirm"); }
+  }
+
+  const invalid = inspection?.signatureValid === false;
+  return (
+    <div className="more-sheet" onClick={onClose}>
+      <div className="more-panel wizard" onClick={(e) => e.stopPropagation()}>
+        <div className="more-grip" />
+        <h3 className="section" style={{ marginTop: 0 }}>Restore backup</h3>
+
+        <ol className="wiz-steps">
+          <li className={step === "preview" ? "on" : "done"}>1 · Review</li>
+          <li className={step === "confirm" ? "on" : step === "running" ? "done" : ""}>2 · Confirm</li>
+          <li className={step === "running" ? "on" : ""}>3 · Restore</li>
+        </ol>
+
+        {!inspection && !err && <p className="muted">Reading backup…</p>}
+        {err && <p className="err">{err}</p>}
+
+        {inspection && (
+          <>
+            <div className={`update-avail ${invalid ? "" : ""}`} style={invalid ? { borderColor: "var(--aureon-color-status-critical)" } : undefined}>
+              <strong>{invalid ? "⚠ Invalid signature" : "✓ Verified backup"}</strong>
+              <span className="muted"> · from {fmt(inspection.createdAt)} · {inspection.rowCount} rows across {inspection.tableCount} tables</span>
+              <p className="notif-body" style={{ marginTop: 6 }}>{inspection.tables.map((t) => `${t.name} (${t.rows})`).join(", ")}</p>
+            </div>
+
+            {step === "confirm" && (
+              <p className="err" style={{ marginTop: 10 }}>This replaces all current data with the backup. A rollback snapshot is taken first, so a failed restore is automatically undone — but a successful restore can’t be reversed except by restoring another backup.</p>
+            )}
+
+            <div className="dev-row2" style={{ marginTop: 12 }}>
+              {step === "preview" && <button className="primary" disabled={invalid} onClick={() => setStep("confirm")}>Continue</button>}
+              {step === "confirm" && <button className="danger" onClick={run}>Restore now</button>}
+              {step === "running" && <button className="danger" disabled>Restoring…</button>}
+              <button disabled={step === "running"} onClick={onClose}>Cancel</button>
+            </div>
+            {invalid && <p className="muted" style={{ marginTop: 6 }}>This backup’s signature didn’t verify — restore is blocked to protect your hub.</p>}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

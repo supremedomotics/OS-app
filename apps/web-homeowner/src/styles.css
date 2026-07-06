@@ -803,3 +803,10 @@ button.link {
 /* MFA recovery codes (§ Security Center). */
 .recovery-codes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 8px 0; }
 .recovery-codes code { font-family: ui-monospace, monospace; font-size: 14px; padding: 6px 10px; border-radius: 8px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); text-align: center; letter-spacing: .05em; }
+
+/* Restore Wizard (§ Backup — restore wizard). */
+.more-panel.wizard { max-width: 520px; margin: 0 auto; border-radius: 22px; padding-bottom: 20px; }
+.wiz-steps { display: flex; gap: 8px; list-style: none; padding: 0; margin: 8px 0 14px; }
+.wiz-steps li { flex: 1; text-align: center; font-size: 12px; padding: 6px 4px; border-radius: 999px; background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary); border: 1px solid var(--aureon-color-base-hairline); }
+.wiz-steps li.on { color: var(--aureon-color-gold-400); border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, transparent); }
+.wiz-steps li.done { color: var(--aureon-color-status-good); }
