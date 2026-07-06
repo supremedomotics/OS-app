@@ -343,6 +343,7 @@ function AccountSettings() {
       <PasswordInput value={current} onChange={setCurrent} placeholder="Current password" />
       <div style={{ height: 8 }} />
       <PasswordInput value={next} onChange={setNext} placeholder="New password (min 8 characters)" />
+      {next.length > 0 && <PasswordStrength value={next} />}
       <div style={{ height: 8 }} />
       <PasswordInput value={confirm} onChange={setConfirm} placeholder="Confirm new password" />
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
@@ -352,6 +353,25 @@ function AccountSettings() {
 
       <DeleteAccount />
     </section>
+  );
+}
+
+/** A password strength meter (§ password policies) — mirrors the hub's structural score 0..4. */
+function PasswordStrength({ value }: { value: string }) {
+  let score = 0;
+  if (value.length >= 8) score++;
+  if (value.length >= 12) score++;
+  if (/[a-z]/.test(value) && /[A-Z]/.test(value)) score++;
+  if (/[0-9]/.test(value)) score++;
+  if (/[^a-zA-Z0-9]/.test(value)) score++;
+  score = Math.min(4, score);
+  const labels = ["Very weak", "Weak", "Fair", "Good", "Strong"];
+  const colors = ["var(--aureon-color-status-critical)", "var(--aureon-color-status-critical)", "var(--aureon-color-status-warning)", "var(--aureon-color-status-good)", "var(--aureon-color-status-good)"];
+  return (
+    <div className="pw-strength">
+      <span className="pw-bar"><span className="pw-fill" style={{ width: `${(score / 4) * 100}%`, background: colors[score] }} /></span>
+      <span className="pw-label" style={{ color: colors[score] }}>{labels[score]}</span>
+    </div>
   );
 }
 

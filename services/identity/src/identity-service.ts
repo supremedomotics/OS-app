@@ -18,6 +18,7 @@ import {
 } from "./store.js";
 import { TokenService } from "./tokens.js";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "./totp.js";
+import { checkPassword, DEFAULT_PASSWORD_POLICY, type PasswordPolicy } from "./password-policy.js";
 
 /** Where a login came from — captured onto the session for the Security Center. */
 export interface LoginContext {
@@ -37,6 +38,12 @@ export interface IdentityServiceOptions {
   tokenSecret: string;
   store?: IIdentityStore;
   sessionStore?: ISessionStore;
+  /** Password policy (§ password policies); defaults to {@link DEFAULT_PASSWORD_POLICY}. */
+  passwordPolicy?: PasswordPolicy;
+  /** Consecutive failed logins before an account is temporarily locked (§ brute-force). Default 5. */
+  maxLoginAttempts?: number;
+  /** Lockout window in ms once the threshold is hit. Default 15 minutes. */
+  lockoutMs?: number;
 }
 
 // OWASP-recommended Argon2id parameters.
@@ -48,11 +55,34 @@ export class IdentityService {
   /** Pending (un-activated) TOTP secrets during enrollment, keyed by user. */
   private readonly pendingMfa = new Map<UserId, string>();
   readonly tokens: TokenService;
+  readonly passwordPolicy: PasswordPolicy;
+  private readonly maxLoginAttempts: number;
+  private readonly lockoutMs: number;
+  /** Brute-force tracker keyed by login identifier → failed count + lock expiry (ms). In-memory: a
+   * hub restart clears locks, which is the safe/conservative direction. */
+  private readonly loginFailures = new Map<string, { count: number; lockedUntil: number }>();
 
   constructor(opts: IdentityServiceOptions) {
     this.store = opts.store ?? new InMemoryIdentityStore();
     this.sessions = opts.sessionStore ?? new InMemorySessionStore();
     this.tokens = new TokenService({ secret: opts.tokenSecret });
+    this.passwordPolicy = opts.passwordPolicy ?? DEFAULT_PASSWORD_POLICY;
+    this.maxLoginAttempts = opts.maxLoginAttempts ?? 5;
+    this.lockoutMs = opts.lockoutMs ?? 15 * 60_000;
+  }
+
+  /** Enforce the configured password policy; throws a validation error on a weak/compromised choice. */
+  private enforcePasswordPolicy(password: string): void {
+    const res = checkPassword(password, this.passwordPolicy);
+    if (!res.ok) throw new SupremeError("validation_failed", res.reason ?? "password does not meet the policy");
+  }
+
+  /** Record a failed login and lock the identifier once the threshold is reached. */
+  private recordLoginFailure(key: string, nowMs: number): void {
+    const rec = this.loginFailures.get(key) ?? { count: 0, lockedUntil: 0 };
+    rec.count += 1;
+    if (rec.count >= this.maxLoginAttempts) rec.lockedUntil = nowMs + this.lockoutMs;
+    this.loginFailures.set(key, rec);
   }
 
   /**
@@ -68,6 +98,7 @@ export class IdentityService {
     if (await this.store.getHome()) {
       throw new SupremeError("conflict", "home is already commissioned");
     }
+    this.enforcePasswordPolicy(input.password);
     const homeId = newId("home") as HomeId;
     const userId = newId("user") as UserId;
     const now = new Date().toISOString();
@@ -111,6 +142,7 @@ export class IdentityService {
     expiresAt?: string | null;
   }): Promise<User> {
     const home = await this.requireHome();
+    this.enforcePasswordPolicy(input.password);
     if (await this.store.findUserByEmail(input.email)) {
       throw new SupremeError("conflict", "a user with that email already exists");
     }
@@ -135,17 +167,30 @@ export class IdentityService {
   }
 
   async login(email: string, password: string, context: LoginContext = {}): Promise<LoginResponse> {
+    // Brute-force lockout (§ Authentication): after too many consecutive failures the identifier is
+    // locked for a cooldown, whether or not the account exists (also blunts enumeration).
+    const key = email.trim().toLowerCase();
+    const nowMs = Date.now();
+    const lock = this.loginFailures.get(key);
+    if (lock && lock.lockedUntil > nowMs) {
+      const mins = Math.ceil((lock.lockedUntil - nowMs) / 60_000);
+      throw new SupremeError("forbidden", `too many failed attempts — try again in ${mins} minute${mins === 1 ? "" : "s"}`);
+    }
+
     const user = await this.store.findUserByEmail(email);
     const cred = user ? await this.store.getCredential(user.id) : null;
 
     // Always run a verification to keep timing uniform whether or not the user exists.
     const ok = cred ? await verify(cred.passwordHash, password).catch(() => false) : await dummyVerify(password);
     if (!user || !cred || !ok) {
+      this.recordLoginFailure(key, nowMs);
       throw new SupremeError("unauthorized", "invalid email or password");
     }
     if (user.status !== "active") {
       throw new SupremeError("forbidden", `account is ${user.status}`);
     }
+    // Success → clear the failure counter for this identifier.
+    this.loginFailures.delete(key);
 
     const base = { sub: user.id, homeId: user.homeId, userType: user.userType };
     if (cred.mfaSecret) {
@@ -303,9 +348,7 @@ export class IdentityService {
 
   /** Complete a reset with a valid, unexpired token. Sets only the Supreme password. */
   async resetPassword(token: string, newPassword: string): Promise<void> {
-    if (newPassword.length < 8) {
-      throw new SupremeError("validation_failed", "password must be at least 8 characters");
-    }
+    this.enforcePasswordPolicy(newPassword);
     const key = sha256(token);
     const rec = this.resetTokens.get(key);
     if (!rec || rec.expiresAt < Date.now()) {
@@ -327,9 +370,7 @@ export class IdentityService {
    * never touched.
    */
   async changePassword(userId: UserId, currentPassword: string, newPassword: string): Promise<void> {
-    if (newPassword.length < 8) {
-      throw new SupremeError("validation_failed", "password must be at least 8 characters");
-    }
+    this.enforcePasswordPolicy(newPassword);
     const cred = await this.store.getCredential(userId);
     const ok = cred ? await verify(cred.passwordHash, currentPassword).catch(() => false) : false;
     if (!cred || !ok) {

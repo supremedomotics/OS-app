@@ -156,6 +156,44 @@ describe("password reset + change", () => {
   });
 });
 
+describe("password policy + brute-force lockout", () => {
+  it("rejects a too-common password and enforces the minimum length", async () => {
+    const s = svc();
+    await expect(
+      s.commission({ homeName: "P", email: "owner@example.com", password: "password123", displayName: "O" }),
+    ).rejects.toThrow(/too common/);
+    await expect(
+      s.commission({ homeName: "P", email: "owner@example.com", password: "short", displayName: "O" }),
+    ).rejects.toThrow(/at least 8/);
+    // A strong password commissions fine, and change/reset enforce the same policy.
+    const { master } = await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+    await expect(s.changePassword(master.id, "a-strong-passphrase", "12345678")).rejects.toThrow(/too common/);
+  });
+
+  it("locks an account after repeated failed logins, then unlocks after the cooldown", async () => {
+    const s = new IdentityService({ tokenSecret: SECRET, maxLoginAttempts: 3, lockoutMs: 60_000 });
+    await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+
+    // Three wrong attempts → the fourth is locked out (even with the CORRECT password).
+    for (let i = 0; i < 3; i++) {
+      await expect(s.login("owner@example.com", "wrong")).rejects.toThrow(/invalid email or password/);
+    }
+    await expect(s.login("owner@example.com", "a-strong-passphrase")).rejects.toThrow(/too many failed attempts/);
+  });
+
+  it("clears the failure counter on a successful login", async () => {
+    const s = new IdentityService({ tokenSecret: SECRET, maxLoginAttempts: 3, lockoutMs: 60_000 });
+    await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+    await expect(s.login("owner@example.com", "wrong")).rejects.toThrow(/invalid/);
+    await expect(s.login("owner@example.com", "wrong")).rejects.toThrow(/invalid/);
+    expect((await s.login("owner@example.com", "a-strong-passphrase")).status).toBe("ok"); // resets counter
+    // Two fresh failures don't trip the (3-attempt) lock because the counter was cleared.
+    await expect(s.login("owner@example.com", "wrong")).rejects.toThrow(/invalid/);
+    await expect(s.login("owner@example.com", "wrong")).rejects.toThrow(/invalid/);
+    expect((await s.login("owner@example.com", "a-strong-passphrase")).status).toBe("ok");
+  });
+});
+
 describe("account self-service (change email + delete)", () => {
   it("changes the email only with the correct password and rejects a duplicate", async () => {
     const s = svc();

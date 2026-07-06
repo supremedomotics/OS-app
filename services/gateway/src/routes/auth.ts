@@ -35,6 +35,12 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
   });
 
+  // Password policy so clients can show the rules + a strength meter (§ password policies).
+  app.get("/v1/auth/password-policy", async (_req, reply) => {
+    const p = ctx.identity.passwordPolicy;
+    reply.send({ minLength: p.minLength, requireLetter: p.requireLetter, requireNumber: p.requireNumber });
+  });
+
   app.post("/v1/auth/login", authLimit, async (req, reply) => {
     try {
       const body = LoginRequest.parse(req.body);

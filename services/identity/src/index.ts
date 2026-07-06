@@ -6,6 +6,13 @@ export { IdentityService, type IdentityServiceOptions } from "./identity-service
 export { TokenService, type SupremeClaims, type TokenServiceOptions } from "./tokens.js";
 export { generateTotpSecret, otpauthUrl, totpAt, verifyTotp } from "./totp.js";
 export {
+  checkPassword,
+  passwordStrength,
+  DEFAULT_PASSWORD_POLICY,
+  type PasswordPolicy,
+  type PasswordCheck,
+} from "./password-policy.js";
+export {
   InMemoryIdentityStore,
   InMemorySessionStore,
   type IIdentityStore,
