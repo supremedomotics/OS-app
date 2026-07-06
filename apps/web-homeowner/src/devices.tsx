@@ -39,6 +39,13 @@ export function DeviceManager() {
   const [sceneUse, setSceneUse] = useState<Record<string, number>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  // Bulk-edit selection (§ Device Platform).
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRoom, setBulkRoom] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const toggleSelect = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   async function load() {
     const [devs, home, reg, scenes] = await Promise.all([
@@ -75,13 +82,41 @@ export function DeviceManager() {
 
   const onlineCount = filtered.filter(online).length;
 
+  async function applyBulk(action: "move" | "remove") {
+    if (selected.size === 0) return;
+    if (action === "remove" && !window.confirm(`Remove ${selected.size} device${selected.size === 1 ? "" : "s"}?`)) return;
+    if (action === "move" && !bulkRoom) return;
+    setBusy(true);
+    try {
+      await client.bulkDevices({ ids: [...selected], action, ...(action === "move" ? { roomId: bulkRoom } : {}) });
+      setSelected(new Set()); setSelectMode(false); await load();
+    } finally { setBusy(false); }
+  }
+
   return (
     <div className="page">
-      <div className="page-head">
-        <h1 className="title">Devices</h1>
-        <p className="sub">{devices ? `${filtered.length} devices · ${onlineCount} online` : "Loading…"}</p>
+      <div className="page-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="title">Devices</h1>
+          <p className="sub">{devices ? `${filtered.length} devices · ${onlineCount} online` : "Loading…"}</p>
+        </div>
+        {(devices?.length ?? 0) > 0 && (
+          <button onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}>{selectMode ? "Done" : "Select"}</button>
+        )}
       </div>
       <PendingApproval rooms={rooms} onChanged={load} />
+
+      {selectMode && (
+        <div className="bulk-bar">
+          <span className="muted">{selected.size} selected</span>
+          <select value={bulkRoom} onChange={(e) => setBulkRoom(e.target.value)}>
+            <option value="">Move to room…</option>
+            {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+          <button disabled={busy || selected.size === 0 || !bulkRoom} onClick={() => applyBulk("move")}>Move</button>
+          <button className="danger" disabled={busy || selected.size === 0} onClick={() => applyBulk("remove")}>Remove</button>
+        </div>
+      )}
 
       <input className="search" placeholder="Search devices…" value={q} onChange={(e) => setQ(e.target.value)} />
 
@@ -92,7 +127,8 @@ export function DeviceManager() {
             {list.map((d) => (
               <DeviceRow key={d.id} device={d} rooms={rooms} expanded={open === d.id}
                 onToggle={() => setOpen(open === d.id ? null : d.id)} onChanged={load} roomName={roomName}
-                driver={driverInfo(d.driverId)} sceneCount={sceneUse[d.id] ?? 0} />
+                driver={driverInfo(d.driverId)} sceneCount={sceneUse[d.id] ?? 0}
+                selectMode={selectMode} selected={selected.has(d.id)} onSelect={() => toggleSelect(d.id)} />
             ))}
           </div>
         </div>
@@ -102,9 +138,10 @@ export function DeviceManager() {
   );
 }
 
-function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount }: {
+function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount, selectMode, selected, onSelect }: {
   device: Device; rooms: Room[]; expanded: boolean; onToggle: () => void; onChanged: () => void;
   roomName: (id: string | null | undefined) => string; driver: DriverInfo | null; sceneCount: number;
+  selectMode: boolean; selected: boolean; onSelect: () => void;
 }) {
   const [name, setName] = useState(device.name);
   const [roomId, setRoomId] = useState(device.roomId ?? "");
@@ -128,10 +165,16 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
     try { await client.deleteDevice(device.id as DeviceId); onChanged(); }
     catch (e) { setErr(e instanceof Error ? e.message : "Remove failed."); setBusy(false); }
   }
+  async function clone() {
+    setBusy(true); setErr(null);
+    try { await client.cloneDevice(device.id as DeviceId); setMsg("Cloned."); onChanged(); }
+    catch (e) { setErr(e instanceof Error ? e.message : "Clone failed."); } finally { setBusy(false); }
+  }
 
   return (
-    <div className={`ext-card${expanded ? " open" : ""}`}>
-      <button className="ext-head" onClick={onToggle}>
+    <div className={`ext-card${expanded ? " open" : ""}${selected ? " selected" : ""}`}>
+      <button className="ext-head" onClick={selectMode ? onSelect : onToggle}>
+        {selectMode && <input type="checkbox" checked={selected} readOnly style={{ marginRight: 4 }} />}
         <span className={`dev-dot${isOnline ? " on" : ""}`} />
         <span className="ext-meta">
           <span className="ext-name">{device.name}</span>
@@ -164,6 +207,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
           </label>
           <div className="drv-actions">
             <button className="primary" disabled={busy} onClick={save}>Save</button>
+            <button disabled={busy} onClick={clone}>Clone</button>
             <button className="danger" disabled={busy} onClick={remove}>Remove device</button>
           </div>
           {msg && <p className="muted">{msg}</p>}

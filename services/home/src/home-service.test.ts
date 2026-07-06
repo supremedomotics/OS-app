@@ -66,6 +66,38 @@ describe("HomeService", () => {
     }
   });
 
+  it("clones a device's config into a new, unbound device (§ Device Platform)", async () => {
+    const { home } = await setup();
+    const src = (await home.listDevices()).find((d) => d.capabilities.length > 0)!;
+    const clone = await home.cloneDevice(src.id);
+    expect(clone.id).not.toBe(src.id);
+    expect(clone.name).toBe(`${src.name} (copy)`);
+    expect(clone.supremeType).toBe(src.supremeType);
+    expect(clone.capabilities).toEqual(src.capabilities);
+    expect(clone.roomId).toBe(src.roomId);
+    expect((clone.metadata as { clonedFrom?: string }).clonedFrom).toBe(src.id);
+    expect(clone.state).toEqual({});
+    // Both exist independently.
+    expect((await home.listDevices()).filter((d) => d.id === src.id || d.id === clone.id)).toHaveLength(2);
+  });
+
+  it("bulk-moves and bulk-removes a device selection (§ Device Platform)", async () => {
+    const { home } = await setup();
+    const rooms = await home.listRooms();
+    const bedroom = rooms.find((r) => r.name === "Bedroom")!;
+    const ids = (await home.listDevices()).slice(0, 2).map((d) => d.id);
+
+    const moved = await home.moveDevices(ids, bedroom.id);
+    expect(moved).toBe(2);
+    const inBedroom = (await home.listDevicesInRoom(bedroom.id)).map((d) => d.id);
+    expect(ids.every((id) => inBedroom.includes(id))).toBe(true);
+
+    const removed = await home.removeDevices(ids);
+    expect(removed).toBe(2);
+    const remaining = (await home.listDevices()).map((d) => d.id);
+    expect(ids.some((id) => remaining.includes(id))).toBe(false);
+  });
+
   it("rejects moving a device to a non-existent room", async () => {
     const { home } = await setup();
     const device = (await home.listDevices())[0]!;

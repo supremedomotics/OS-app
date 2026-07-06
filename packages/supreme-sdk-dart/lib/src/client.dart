@@ -333,6 +333,24 @@ class SupremeClient {
     return Device.fromJson((jsonDecode(res.body) as Map<String, dynamic>)['device'] as Map<String, dynamic>);
   }
 
+  /// Clone a device's configuration into a new device (§ Device Platform).
+  Future<Device> cloneDevice(String deviceId) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/devices/$deviceId/clone'), headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+    return Device.fromJson((jsonDecode(res.body) as Map<String, dynamic>)['device'] as Map<String, dynamic>);
+  }
+
+  /// Bulk-move a device selection to a room, or bulk-remove it. Returns how many were affected.
+  Future<int> bulkDevices({required List<String> ids, required String action, String? roomId}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/devices/bulk'),
+      headers: _authHeaders,
+      body: jsonEncode({'ids': ids, 'action': action, if (roomId != null) 'roomId': roomId}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['affected'] as int? ?? 0;
+  }
+
   /// Delete a device (also drops its backend bindings).
   Future<void> deleteDevice(String deviceId) async {
     final res = await _http.delete(Uri.parse('$baseUrl/v1/devices/$deviceId'), headers: _authHeaders);

@@ -810,3 +810,7 @@ button.link {
 .wiz-steps li { flex: 1; text-align: center; font-size: 12px; padding: 6px 4px; border-radius: 999px; background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary); border: 1px solid var(--aureon-color-base-hairline); }
 .wiz-steps li.on { color: var(--aureon-color-gold-400); border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, transparent); }
 .wiz-steps li.done { color: var(--aureon-color-status-good); }
+
+/* Device bulk-edit (§ Device Platform). */
+.bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 10px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--aureon-color-gold-400) 40%, transparent); background: var(--aureon-color-base-surface); }
+.ext-card.selected { border-color: var(--aureon-color-gold-400); }

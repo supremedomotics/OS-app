@@ -100,6 +100,55 @@ export class HomeService {
     return device;
   }
 
+  /**
+   * Clone a device's configuration into a new device (§ Device Platform). The copy keeps the type,
+   * capabilities, manufacturer/model and room, but gets a fresh id, a "(copy)" name, empty live
+   * state and NO backend bindings — it's a configuration duplicate (e.g. to pre-stage identical
+   * fixtures), not a second controller for the same physical device.
+   */
+  async cloneDevice(deviceId: DeviceId): Promise<Device> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) throw new SupremeError("not_found", "device not found");
+    const src = stored.device;
+    const clone: Device = {
+      ...src,
+      id: newId("device") as DeviceId,
+      name: `${src.name} (copy)`,
+      state: {},
+      metadata: { ...src.metadata, clonedFrom: src.id },
+    };
+    await this.store.putDevice(clone, {});
+    return clone;
+  }
+
+  /** Bulk-move devices to a room (§ Device Platform). Returns how many were moved. */
+  async moveDevices(ids: DeviceId[], roomId: RoomId): Promise<number> {
+    await this.requireRoom(roomId);
+    let moved = 0;
+    for (const id of ids) {
+      const stored = await this.store.getDevice(id);
+      if (stored) {
+        await this.store.putDevice({ ...stored.device, roomId }, stored.backendIds);
+        moved += 1;
+      }
+    }
+    return moved;
+  }
+
+  /** Bulk-remove devices (§ Device Platform). Returns how many were removed. */
+  async removeDevices(ids: DeviceId[]): Promise<number> {
+    let removed = 0;
+    for (const id of ids) {
+      const stored = await this.store.getDevice(id);
+      if (stored) {
+        this.sil.unmapDevice(id);
+        await this.store.deleteDevice(id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   /** Delete a device: drop its backend bindings from the SIL registry, then remove it. */
   async removeDevice(deviceId: DeviceId): Promise<void> {
     const stored = await this.store.getDevice(deviceId);

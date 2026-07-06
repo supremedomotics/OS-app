@@ -107,6 +107,15 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
     } catch (e) { _toast('Failed: $e'); } finally { if (mounted) setState(() => _busy = false); }
   }
 
+  Future<void> _clone() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(clientProvider).cloneDevice(widget.device.id);
+      ref.invalidate(_devicesProvider);
+      _toast('Cloned');
+    } catch (e) { _toast('Failed: $e'); } finally { if (mounted) setState(() => _busy = false); }
+  }
+
   Future<void> _remove() async {
     final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
       title: Text('Remove ${widget.device.name}?'),
@@ -168,9 +177,9 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
             onChanged: (v) => setState(() => _roomId = v),
           ),
           const SizedBox(height: 8),
-          Row(children: [
+          Wrap(spacing: 8, children: [
             FilledButton(onPressed: _busy ? null : _save, child: const Text('Save')),
-            const SizedBox(width: 8),
+            OutlinedButton(onPressed: _busy ? null : _clone, child: const Text('Clone')),
             OutlinedButton(
               style: OutlinedButton.styleFrom(foregroundColor: AureonStatus.critical),
               onPressed: _busy ? null : _remove,

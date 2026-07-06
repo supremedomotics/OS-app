@@ -94,6 +94,17 @@ export const UpdateDeviceRequest = z
   });
 export type UpdateDeviceRequest = z.infer<typeof UpdateDeviceRequest>;
 
+/** Bulk operation over a device selection (§ Device Platform): move to a room, or remove. */
+export const BulkDeviceRequest = z.object({
+  ids: z.array(z.string()).min(1),
+  action: z.enum(["move", "remove"]),
+  roomId: z.string().optional(),
+});
+export type BulkDeviceRequest = z.infer<typeof BulkDeviceRequest>;
+
+export const BulkDeviceResponse = z.object({ affected: z.number().int().nonnegative() });
+export type BulkDeviceResponse = z.infer<typeof BulkDeviceResponse>;
+
 export const DeviceResponse = z.object({ device: Device });
 export type DeviceResponse = z.infer<typeof DeviceResponse>;
 

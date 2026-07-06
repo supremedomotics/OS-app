@@ -262,6 +262,15 @@ export class SupremeClient {
     return this.request("PATCH", `/v1/devices/${deviceId}`, patch) as Promise<{ device: Device }>;
   }
 
+  /** Clone a device's configuration into a new device (§ Device Platform). */
+  cloneDevice(deviceId: DeviceId): Promise<{ device: Device }> {
+    return this.request("POST", `/v1/devices/${deviceId}/clone`) as Promise<{ device: Device }>;
+  }
+  /** Bulk-move a device selection to a room, or bulk-remove it. Returns how many were affected. */
+  bulkDevices(input: { ids: string[]; action: "move" | "remove"; roomId?: string }): Promise<{ affected: number }> {
+    return this.request("POST", "/v1/devices/bulk", input) as Promise<{ affected: number }>;
+  }
+
   /** Delete a device (also drops its backend bindings). */
   async deleteDevice(deviceId: DeviceId): Promise<void> {
     await this.request("DELETE", `/v1/devices/${deviceId}`);
