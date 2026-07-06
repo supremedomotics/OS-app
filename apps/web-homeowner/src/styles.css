@@ -119,6 +119,23 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .weather-temp { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
 .weather-sub { font-size: 12px; color: var(--aureon-color-text-secondary); }
 .weather-hum { font-size: 12.5px; color: var(--aureon-color-text-secondary); align-self: flex-start; }
+/* Weather detail sheet: current + hourly strip + city picker. */
+.weather-sheet { gap: 4px; }
+.wx-now { display: flex; align-items: center; gap: 14px; padding: 4px 0 10px; }
+.wx-now-glyph { font-size: 40px; line-height: 1; }
+.wx-now-temp { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+.wx-now-sub { font-size: 13px; color: var(--aureon-color-text-secondary); }
+.wx-hourly { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 12px; scrollbar-width: none; }
+.wx-hourly::-webkit-scrollbar { display: none; }
+.wx-hour { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 52px; padding: 10px 6px; border-radius: 12px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); }
+.wx-hour-t { font-size: 11.5px; color: var(--aureon-color-text-secondary); }
+.wx-hour-g { font-size: 18px; line-height: 1; }
+.wx-hour-deg { font-size: 14px; font-weight: 600; }
+.wx-picker { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.wx-picker .search { margin: 0; flex: 1; }
+.wx-results { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 200px; overflow-y: auto; }
+.wx-result { text-align: left; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--aureon-color-base-hairline); background: none; color: inherit; cursor: pointer; font-size: 14px; }
+.wx-result:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
 
 /* Media cards — whole-home players, reusing the device sheet for transport. */
 .media-card { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px; background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }
