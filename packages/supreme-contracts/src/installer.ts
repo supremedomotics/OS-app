@@ -166,6 +166,25 @@ export const SystemHealth = z.object({
 });
 export type SystemHealth = z.infer<typeof SystemHealth>;
 
+/**
+ * Hub software-update status for the Update Center (§ Update Center). `channelConfigured` is false
+ * when no signed OTA channel is set up on this hub (the honest common case for a LAN dev/demo hub) —
+ * the UI then simply shows the current version. `latest` (with signed release notes) appears only
+ * when a genuinely newer, signature-verified release exists.
+ */
+export const SystemUpdate = z.object({
+  current: z.string(),
+  channelConfigured: z.boolean(),
+  updateAvailable: z.boolean(),
+  latest: z
+    .object({ version: z.string(), notes: z.string().optional(), releasedAt: z.string() })
+    .optional(),
+  checkedAt: z.string(),
+  /** Present when a configured channel could not be reached/verified — surfaced, not hidden. */
+  error: z.string().optional(),
+});
+export type SystemUpdate = z.infer<typeof SystemUpdate>;
+
 // ── Backup / restore ─────────────────────────────────────────────────────────
 
 export const BackupMetaResponse = z.object({

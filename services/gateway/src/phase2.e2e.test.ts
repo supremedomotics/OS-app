@@ -171,6 +171,17 @@ describe("Phase-2 installer & drivers", () => {
     expect((await fetch(`${baseUrl}/v1/me/sessions`, { headers: auth() })).status).toBe(200);
   });
 
+  it("reports software-update status honestly when no OTA channel is configured (§ Update Center)", async () => {
+    const res = await fetch(`${baseUrl}/v1/system/update`, { headers: auth() });
+    expect(res.status).toBe(200);
+    const u = (await res.json()) as { current: string; channelConfigured: boolean; updateAvailable: boolean; checkedAt: string };
+    expect(u.current).toBeTruthy();
+    // The test hub has no OTA URL/key → no channel, no fabricated "update available".
+    expect(u.channelConfigured).toBe(false);
+    expect(u.updateAvailable).toBe(false);
+    expect(u.checkedAt).toBeTruthy();
+  });
+
   it("reports real host system health (CPU / memory / uptime)", async () => {
     const res = await fetch(`${baseUrl}/v1/system/health`, { headers: auth() });
     expect(res.status).toBe(200);

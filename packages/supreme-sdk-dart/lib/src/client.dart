@@ -385,6 +385,24 @@ class SupremeClient {
         .toList();
   }
 
+  /// Mark the given notifications read (pass every unread id to "mark all read").
+  Future<void> markNotificationsRead(List<String> ids) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/notifications/read'),
+      headers: _authHeaders,
+      body: jsonEncode({'ids': ids}),
+    );
+    _ensureOk(res);
+  }
+
+  /// Hub software-update status for the Update Center (checks the signed OTA channel if configured).
+  /// Returns {current, channelConfigured, updateAvailable, latest?, checkedAt, error?}.
+  Future<Map<String, dynamic>> systemUpdate() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/system/update'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   // ── Automations (visual Builder, §10) ────────────────────────────────────────
   Future<List<AutomationSummary>> automations() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/automations'),

@@ -16,6 +16,7 @@ import {
   type LicenseStatus,
   type ProjectExport,
   type ProtocolBindingList,
+  type SystemUpdate,
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
@@ -23,6 +24,7 @@ import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 import { collectSystemHealth } from "../system-health.js";
+import { OtaChecker } from "../ota.js";
 
 /**
  * Installer & admin routes (§9, §14): Driver Store, discovery + commissioning,
@@ -289,6 +291,36 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "view");
       reply.send(await collectSystemHealth());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Software-update status (§ Update Center). Checks the signed OTA channel if one is configured;
+  // otherwise honestly reports the current version with channelConfigured=false. Detection only —
+  // the OS updater applies verified releases (staged + rollback-safe).
+  app.get("/v1/system/update", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const cfg = ctx.config;
+      const checkedAt = new Date().toISOString();
+      if (!cfg.otaUrl || !cfg.otaPublicKey) {
+        reply.send({ current: cfg.hubVersion, channelConfigured: false, updateAvailable: false, checkedAt } satisfies SystemUpdate);
+        return;
+      }
+      try {
+        const result = await new OtaChecker({ url: cfg.otaUrl, publicKeyPem: cfg.otaPublicKey, currentVersion: cfg.hubVersion }).check();
+        reply.send({
+          current: result.current,
+          channelConfigured: true,
+          updateAvailable: result.updateAvailable,
+          ...(result.latest ? { latest: { version: result.latest.version, notes: result.latest.notes, releasedAt: result.latest.releasedAt } } : {}),
+          checkedAt,
+        } satisfies SystemUpdate);
+      } catch (e) {
+        reply.send({ current: cfg.hubVersion, channelConfigured: true, updateAvailable: false, checkedAt, error: e instanceof Error ? e.message : "update check failed" } satisfies SystemUpdate);
+      }
     } catch (err) {
       sendError(reply, err);
     }

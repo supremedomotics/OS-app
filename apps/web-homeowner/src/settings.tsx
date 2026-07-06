@@ -37,8 +37,10 @@ export function ThemeSettings() {
     { id: "homes", label: "Homes", icon: "⌂", hint: "Switch or add a home", el: <HomesSettings /> },
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
+    { id: "notifications", label: "Notifications", icon: "◔", hint: "Alerts & activity", el: <NotificationCenter /> },
     { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
     { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
+    { id: "update", label: "Software update", icon: "⤓", hint: "Version & updates", el: <UpdateCenter /> },
   ];
 
   const current = pages.find((p) => p.id === open);
@@ -463,6 +465,107 @@ function shortAgent(ua: string): string {
   const os = /Windows/i.test(ua) ? "Windows" : /iPhone|iPad|iOS/i.test(ua) ? "iOS" : /Mac OS X|Macintosh/i.test(ua) ? "macOS" : /Android/i.test(ua) ? "Android" : /Linux/i.test(ua) ? "Linux" : "";
   const br = /Edg\//i.test(ua) ? "Edge" : /Chrome\//i.test(ua) ? "Chrome" : /Safari\//i.test(ua) ? "Safari" : /Firefox\//i.test(ua) ? "Firefox" : /Dart|supreme/i.test(ua) ? "Supreme app" : "";
   return [br, os].filter(Boolean).join(" on ") || ua.slice(0, 40);
+}
+
+/**
+ * Notification Center (§ Notification Center). The full activity feed the hub already generates
+ * (device offline, security events, automation results), with unread state and read receipts — all
+ * from the real /v1/notifications backend; no new data invented.
+ */
+type NotifRow = { id: string; level: "info" | "warning" | "critical"; title: string; body: string; createdAt: string; readAt: string | null };
+
+function NotificationCenter() {
+  const [items, setItems] = useState<NotifRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    const res = await client.notifications();
+    setItems(res.notifications as NotifRow[]);
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function markRead(ids: string[]) {
+    if (ids.length === 0) return;
+    setBusy(true);
+    try { await client.markNotificationsRead(ids); await load(); } finally { setBusy(false); }
+  }
+
+  const unread = (items ?? []).filter((n) => !n.readAt);
+  const dot = (l: string) => (l === "critical" ? "var(--aureon-color-status-critical)" : l === "warning" ? "var(--aureon-color-status-warning)" : "var(--aureon-color-status-good)");
+  const fmt = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+
+  return (
+    <section className="card-section">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <h2 className="section-title" style={{ margin: 0 }}>Notifications{unread.length > 0 ? ` · ${unread.length} new` : ""}</h2>
+        {unread.length > 0 && <button disabled={busy} onClick={() => markRead(unread.map((n) => n.id))}>Mark all read</button>}
+      </div>
+
+      {items === null && <p className="muted">Loading…</p>}
+      {items && items.length === 0 && <p className="muted">No notifications yet.</p>}
+
+      <div className="notif-list">
+        {(items ?? []).map((n) => (
+          <button key={n.id} className={`notif-row${n.readAt ? " read" : ""}`} disabled={busy || Boolean(n.readAt)} onClick={() => markRead([n.id])}>
+            <span className="notif-dot" style={{ background: dot(n.level) }} />
+            <span className="notif-meta">
+              <span className="notif-title">{n.title}</span>
+              {n.body && <span className="notif-body">{n.body}</span>}
+              <span className="notif-time">{fmt(n.createdAt)}</span>
+            </span>
+            {!n.readAt && <span className="notif-new">New</span>}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Update Center (§ Update Center). Shows the hub's current version and, when a signed OTA channel is
+ * configured, whether a newer verified release exists (with its notes). No channel configured → it
+ * honestly says so rather than implying an update state.
+ */
+type UpdateInfo = { current: string; channelConfigured: boolean; updateAvailable: boolean; latest?: { version: string; notes?: string; releasedAt: string }; checkedAt: string; error?: string };
+
+function UpdateCenter() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function check() {
+    setBusy(true); setErr(null);
+    try { setInfo((await client.systemUpdate()) as UpdateInfo); }
+    catch (e) { setErr(e instanceof Error ? e.message : "Could not check for updates."); }
+    finally { setBusy(false); }
+  }
+  useEffect(() => { void check(); }, []);
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Software update</h2>
+      <div className="lic-grid">
+        <div><span className="k">Current version</span><span className="v">{info ? `v${info.current}` : "—"}</span></div>
+        <div><span className="k">Update channel</span><span className="v">{info ? (info.channelConfigured ? "Configured" : "Not configured") : "—"}</span></div>
+        <div><span className="k">Status</span><span className="v">{!info ? "—" : info.updateAvailable ? `Update available (v${info.latest?.version})` : "Up to date"}</span></div>
+        {info?.checkedAt && <div><span className="k">Last checked</span><span className="v">{new Date(info.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>}
+      </div>
+
+      {info?.updateAvailable && info.latest && (
+        <div className="update-avail">
+          <strong>Version {info.latest.version} is available</strong>
+          <span className="muted"> · released {new Date(info.latest.releasedAt).toLocaleDateString()}</span>
+          {info.latest.notes && <p className="notif-body" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{info.latest.notes}</p>}
+          <p className="muted" style={{ marginTop: 6 }}>The hub verifies and installs signed releases automatically (staged, rollback-safe).</p>
+        </div>
+      )}
+      {info && !info.channelConfigured && <p className="muted">No update channel is configured on this hub. Updates are managed by your installer.</p>}
+      {info?.error && <p className="err">Update check failed: {info.error}</p>}
+
+      <button disabled={busy} onClick={check} style={{ marginTop: 12 }}>{busy ? "Checking…" : "Check for updates"}</button>
+      {err && <p className="err">{err}</p>}
+    </section>
+  );
 }
 
 /** Danger zone — permanently delete your own account (re-auth + explicit confirm). */

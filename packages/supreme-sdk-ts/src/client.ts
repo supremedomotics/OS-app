@@ -33,6 +33,7 @@ import {
   type SecurityStateResponse,
   type EnergySummaryResponse,
   type SystemHealth,
+  type SystemUpdate,
   type SessionList,
   type RevokeOthersResponse,
 } from "@supreme/contracts";
@@ -164,6 +165,11 @@ export class SupremeClient {
    * Optional fields (utilizationPct, storage, temperatureC) are absent when the platform can't measure them. */
   async systemHealth(): Promise<SystemHealth> {
     return this.request("GET", "/v1/system/health") as Promise<SystemHealth>;
+  }
+
+  /** Hub software-update status for the Update Center (checks the signed OTA channel if configured). */
+  async systemUpdate(): Promise<SystemUpdate> {
+    return this.request("GET", "/v1/system/update") as Promise<SystemUpdate>;
   }
 
   /**
