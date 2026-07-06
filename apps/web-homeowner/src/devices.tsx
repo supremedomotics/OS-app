@@ -36,7 +36,7 @@ function stateSummary(d: Device): string {
   return online(d) ? "Online" : "—";
 }
 
-export function DeviceManager({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
+export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [registry, setRegistry] = useState<DriverEntry[]>([]);
@@ -134,7 +134,8 @@ export function DeviceManager({ onNavigate }: { onNavigate?: (t: Tab) => void })
                 onToggle={() => setOpen(open === d.id ? null : d.id)} onChanged={load} roomName={roomName}
                 driver={driverInfo(d.driverId)} sceneCount={sceneUse[d.id] ?? 0}
                 selectMode={selectMode} selected={selected.has(d.id)} onSelect={() => toggleSelect(d.id)}
-                isFav={fav.isFav({ type: "device", deviceId: d.id })} onFav={() => fav.toggle({ type: "device", deviceId: d.id })} />
+                isFav={fav.isFav({ type: "device", deviceId: d.id })} onFav={() => fav.toggle({ type: "device", deviceId: d.id })}
+                devMode={devMode} />
             ))}
           </div>
         </div>
@@ -150,10 +151,11 @@ export function DeviceManager({ onNavigate }: { onNavigate?: (t: Tab) => void })
   );
 }
 
-function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount, selectMode, selected, onSelect, isFav, onFav }: {
+function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount, selectMode, selected, onSelect, isFav, onFav, devMode }: {
   device: Device; rooms: Room[]; expanded: boolean; onToggle: () => void; onChanged: () => void;
   roomName: (id: string | null | undefined) => string; driver: DriverInfo | null; sceneCount: number;
   selectMode: boolean; selected: boolean; onSelect: () => void; isFav: boolean; onFav: () => void;
+  devMode: boolean;
 }) {
   const [name, setName] = useState(device.name);
   const [roomId, setRoomId] = useState(device.roomId ?? "");
@@ -201,10 +203,12 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
             <div><span className="k">Type</span><span className="v">{device.supremeType}</span></div>
             {device.manufacturer && <div><span className="k">Manufacturer</span><span className="v">{device.manufacturer}</span></div>}
             {device.model && <div><span className="k">Model</span><span className="v">{device.model}</span></div>}
-            {driver && <div><span className="k">Driver</span><span className="v">{driver.name}</span></div>}
-            {driver?.protocol && <div><span className="k">Protocol</span><span className="v">{driver.protocol.toUpperCase()}</span></div>}
-            {net?.ip && <div><span className="k">IP address</span><span className="v">{net.ip}</span></div>}
-            {net?.mac && <div><span className="k">MAC</span><span className="v">{net.mac}</span></div>}
+            {/* Technical plumbing (driver / protocol / network) is for Installer & Developer mode only —
+                a homeowner never needs to see it (§ Homeowner Experience). */}
+            {devMode && driver && <div><span className="k">Driver</span><span className="v">{driver.name}</span></div>}
+            {devMode && driver?.protocol && <div><span className="k">Protocol</span><span className="v">{driver.protocol.toUpperCase()}</span></div>}
+            {devMode && net?.ip && <div><span className="k">IP address</span><span className="v">{net.ip}</span></div>}
+            {devMode && net?.mac && <div><span className="k">MAC</span><span className="v">{net.mac}</span></div>}
             <div><span className="k">Room</span><span className="v">{roomName(device.roomId)}</span></div>
             <div><span className="k">Status</span><span className="v">{device.status}{isOnline ? " · live" : ""}</span></div>
             <div><span className="k">Capabilities</span><span className="v">{device.capabilities.map((c) => c.kind).join(", ")}</span></div>

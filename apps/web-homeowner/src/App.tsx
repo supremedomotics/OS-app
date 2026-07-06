@@ -111,7 +111,7 @@ export function App() {
     <div className="page-anim" key={tab}>
       {tab === "dashboard" && <DashboardOverview onNavigate={go} />}
       {tab === "discover" && <DiscoverDevices />}
-      {tab === "devices" && <DeviceManager onNavigate={go} />}
+      {tab === "devices" && <DeviceManager onNavigate={go} devMode={devMode} />}
       {tab === "extensions" && <ExtensionCenter />}
       {tab === "automations" && <Automations />}
       {tab === "scenes" && <Scenes />}

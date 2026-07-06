@@ -78,9 +78,9 @@ function PendingCard({ device, rooms, busy, onApprove, onReject }: {
         <span className="ext-ic">🛡️</span>
         <span className="ext-meta">
           <span className="ext-name">{device.suggestedName}</span>
+          {/* Homeowner-facing "new device" card: describe what it does, not how it connects. */}
           <span className="ext-sub">
-            {device.protocol ? device.protocol.toUpperCase() : device.source} · {device.capabilities.join(", ")}
-            {device.network?.ip ? ` · ${device.network.ip}` : ""}{device.network?.mac ? ` · ${device.network.mac}` : ""}
+            {device.capabilities.length > 0 ? device.capabilities.join(", ") : "New device"}
           </span>
         </span>
         <span className="drv-badge off">Pending</span>

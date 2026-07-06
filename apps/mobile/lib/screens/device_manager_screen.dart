@@ -155,6 +155,9 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
     final protocols = ((drv?['protocols'] as List?) ?? const []).cast<String>();
     final scenes = ref.watch(scenesProvider).valueOrNull ?? const [];
     final sceneCount = scenes.where((s) => s.deviceIds.contains(d.id)).length;
+    // Technical plumbing (driver / protocol / network) is for Installer & Developer mode only — a
+    // homeowner never needs to see it (§ Homeowner Experience).
+    final devMode = ref.watch(devModeProvider).valueOrNull ?? false;
     return Card(
       child: ExpansionTile(
         leading: Container(width: 10, height: 10, decoration: BoxDecoration(
@@ -169,10 +172,10 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
             ('Type', d.supremeType),
             ('Manufacturer', d.manufacturer),
             ('Model', d.model),
-            ('Driver', drv?['name'] as String?),
-            ('Protocol', protocols.isEmpty ? null : protocols.first.toUpperCase()),
-            ('IP address', d.network?.ip),
-            ('MAC', d.network?.mac),
+            ('Driver', devMode ? (drv?['name'] as String?) : null),
+            ('Protocol', devMode && protocols.isNotEmpty ? protocols.first.toUpperCase() : null),
+            ('IP address', devMode ? d.network?.ip : null),
+            ('MAC', devMode ? d.network?.mac : null),
             ('Room', widget.roomName(d.roomId)),
             ('Status', online ? '${d.status} · live' : d.status),
             ('Capabilities', d.capabilities.isEmpty ? null : d.capabilities.join(', ')),
@@ -265,7 +268,6 @@ class _PendingCardState extends ConsumerState<_PendingCard> {
   Widget build(BuildContext context) {
     final d = widget.device;
     _roomId ??= widget.rooms.isNotEmpty ? widget.rooms.first.id : null;
-    final net = d['network'] as Map<String, dynamic>?;
     final caps = ((d['capabilities'] as List?) ?? const []).cast<String>();
     final text = Theme.of(context).textTheme;
     final messenger = ScaffoldMessenger.of(context);
@@ -286,7 +288,8 @@ class _PendingCardState extends ConsumerState<_PendingCard> {
             Expanded(child: Text(d['suggestedName'] as String? ?? 'Device', style: text.titleSmall)),
             const Chip(label: Text('Pending', style: TextStyle(fontSize: 10)), visualDensity: VisualDensity.compact),
           ]),
-          Text('${(d['protocol'] as String?)?.toUpperCase() ?? d['source']} · ${caps.join(', ')}${net?['ip'] != null ? ' · ${net!['ip']}' : ''}', style: text.labelSmall),
+          // Homeowner-facing "new device" card: describe what it does, not how it connects.
+          Text(caps.isEmpty ? 'New device' : caps.join(', '), style: text.labelSmall),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
             initialValue: _roomId,
