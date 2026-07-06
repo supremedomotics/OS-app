@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import '../weather.dart';
 import 'automations_screen.dart';
 import 'backup_screen.dart';
 import 'device_manager_screen.dart';
@@ -92,7 +93,9 @@ class DashboardScreen extends ConsumerWidget {
               ])),
               const HomeSwitcherButton(),
             ]),
-            const SizedBox(height: AureonSpacing.lg),
+            const SizedBox(height: AureonSpacing.md),
+            const Align(alignment: Alignment.centerLeft, child: WeatherChip()),
+            const SizedBox(height: AureonSpacing.md),
 
             // Health hero.
             Container(

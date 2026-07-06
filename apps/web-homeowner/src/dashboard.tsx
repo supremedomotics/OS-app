@@ -3,6 +3,7 @@ import type { SystemHealth } from "@supreme/contracts";
 import { client, fetchAutomations, fetchAutomationRuns, fetchDriverRegistry } from "./api.js";
 import type { Tab } from "./App.js";
 import { FavoritesRow } from "./favorites.js";
+import { WeatherCard } from "./weather.js";
 import { Icon } from "./icons.js";
 
 /**
@@ -80,9 +81,12 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1 className="title">{greeting()}</h1>
-        <p className="sub">Supreme OS · {diag ? `v${diag.hubVersion}` : "…"}</p>
+      <div className="page-head dash-head">
+        <div>
+          <h1 className="title">{greeting()}</h1>
+          <p className="sub">Supreme OS · {diag ? `v${diag.hubVersion}` : "…"}</p>
+        </div>
+        <WeatherCard />
       </div>
 
       {/* Headline project health — a computed operations score (§ Operations Dashboard) */}
