@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../usage.dart';
 
 /// Scenes (§10/§11.1) — Ovio interactive cards in a grid, with an Edit mode that turns on
 /// drag-to-reorder + Save. One tap activates a scene; HA is never involved.
@@ -122,7 +123,7 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                               for (final s in _ordered(list))
                                 _SceneCard(
                                   name: s.name,
-                                  onTap: () => ref.read(clientProvider).activateScene(s.id),
+                                  onTap: () { ref.read(usageProvider.notifier).record('scene', s.id); ref.read(clientProvider).activateScene(s.id); },
                                   favorite: favIds.contains(s.id),
                                   onFav: () async {
                                     await ref.read(clientProvider).setFavorite({'type': 'scene', 'sceneId': s.id}, favorite: !favIds.contains(s.id));

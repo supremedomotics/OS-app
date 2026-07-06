@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useHeroFlip } from "./herotransition.js";
 import { FavHeart, useFavorites } from "./favorites.js";
+import { recordUse } from "./usage.js";
 import type {
   CameraStreamResponse,
   EnergySummaryResponse,
@@ -104,7 +105,7 @@ export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: str
             <button
               key={s.id}
               className={`scene-tile${activeScene === s.id ? " on" : ""}`}
-              onClick={() => { void client.activateScene(s.id); setActiveScene(s.id); }}
+              onClick={() => { recordUse("scene", s.id); void client.activateScene(s.id); setActiveScene(s.id); }}
             >
               <span className="play">{activeScene === s.id ? (s.icon ?? "◆") : "▷"}</span>
               <span className="nm">{s.name}</span>
@@ -282,6 +283,7 @@ function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => void })
 
   async function toggle() {
     const next = !on;
+    recordUse("device", device.id);
     apply(device.id, isDimmer ? "brightness" : "onoff", isDimmer ? { kind: "brightness", on: next, level: next ? Math.max(level, 1) : 0 } : { kind: "onoff", on: next });
     await client.command(device.id as DeviceId, { capability: "onoff", action: "toggle" } as CapabilityCommand);
   }
@@ -447,6 +449,7 @@ export function Scenes() {
             onDragOver={(e) => { if (edit && dragId && dragId !== s.id) { e.preventDefault(); move(dragId, s.id); } }}
             onClick={() => {
               if (edit) return;
+              recordUse("scene", s.id);
               void client.activateScene(s.id);
               setMsg(`${s.name} activated`);
             }}

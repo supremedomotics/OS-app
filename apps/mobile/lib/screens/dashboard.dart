@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import '../usage.dart';
 import '../weather.dart';
 import 'automations_screen.dart';
 import 'backup_screen.dart';
@@ -143,6 +144,7 @@ class DashboardScreen extends ConsumerWidget {
 
             // Favourites — pinned scenes + devices, one tap away (§ Favorites).
             ..._favourites(context, ref),
+            ..._recentlyUsed(context, ref),
 
             // Hub resources — real host telemetry (§ Installer Dashboard). Only measured fields show.
             ..._hubResources(context, ref),
@@ -197,13 +199,48 @@ class DashboardScreen extends ConsumerWidget {
       const SizedBox(height: AureonSpacing.sm),
       Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
         for (final s in scenes)
-          _FavTile(icon: Icons.auto_awesome_outlined, label: s.name, sub: 'Scene', onTap: () => ref.read(clientProvider).activateScene(s.id)),
+          _FavTile(icon: Icons.auto_awesome_outlined, label: s.name, sub: 'Scene', onTap: () { ref.read(usageProvider.notifier).record('scene', s.id); ref.read(clientProvider).activateScene(s.id); }),
         for (final d in devices)
           _FavTile(icon: d.isOn ? Icons.circle : Icons.circle_outlined, label: d.name, sub: d.isOn ? 'On' : 'Off', accent: d.isOn, onTap: () async {
+            ref.read(usageProvider.notifier).record('device', d.id);
             await ref.read(clientProvider).command(d.id, {'capability': 'onoff', 'action': 'toggle'});
             ref.invalidate(allDevicesProvider);
           }),
       ]),
+      const SizedBox(height: AureonSpacing.lg),
+    ];
+  }
+
+  /// Recently used (§ Personalization) — the scenes & devices the homeowner touched most recently,
+  /// surfaced automatically so everyday things stay one tap away. Appears ONLY when there's history.
+  List<Widget> _recentlyUsed(BuildContext context, WidgetRef ref) {
+    final recent = ref.watch(usageProvider.notifier).recent();
+    if (recent.isEmpty) return const [];
+    final scenes = ref.watch(scenesProvider).valueOrNull ?? const [];
+    final devices = ref.watch(allDevicesProvider).valueOrNull ?? const [];
+    final tiles = <Widget>[];
+    for (final u in recent) {
+      if (u.kind == 'scene') {
+        final s = scenes.where((x) => x.id == u.id).firstOrNull;
+        if (s == null) continue;
+        tiles.add(_FavTile(icon: Icons.auto_awesome_outlined, label: s.name, sub: 'Scene',
+            onTap: () { ref.read(usageProvider.notifier).record('scene', s.id); ref.read(clientProvider).activateScene(s.id); }));
+      } else {
+        final d = devices.where((x) => x.id == u.id).firstOrNull;
+        if (d == null) continue;
+        tiles.add(_FavTile(icon: d.isOn ? Icons.circle : Icons.circle_outlined, label: d.name, sub: d.isOn ? 'On' : 'Off', accent: d.isOn,
+            onTap: () async {
+              ref.read(usageProvider.notifier).record('device', d.id);
+              await ref.read(clientProvider).command(d.id, {'capability': 'onoff', 'action': 'toggle'});
+              ref.invalidate(allDevicesProvider);
+            }));
+      }
+    }
+    if (tiles.isEmpty) return const [];
+    return [
+      Text('Recently used', style: Theme.of(context).textTheme.titleSmall),
+      const SizedBox(height: AureonSpacing.sm),
+      Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: tiles),
       const SizedBox(height: AureonSpacing.lg),
     ];
   }

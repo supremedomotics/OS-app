@@ -5,6 +5,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import '../room_image.dart';
+import '../usage.dart';
 import 'device_detail.dart';
 import 'device_sheet.dart';
 import 'tablet_room.dart';
@@ -145,6 +146,7 @@ class _RoomViewState extends ConsumerState<RoomView> {
   }
 
   Future<void> _tap(Device device) async {
+    ref.read(usageProvider.notifier).record('device', device.id);
     final caps = device.capabilities;
     // Lights get the full-screen lighting detail; everything else opens an Ovio sheet.
     if (caps.contains('brightness') || caps.contains('color')) {

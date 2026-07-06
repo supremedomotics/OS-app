@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { SystemHealth } from "@supreme/contracts";
 import { client, fetchAutomations, fetchAutomationRuns, fetchDriverRegistry } from "./api.js";
 import type { Tab } from "./App.js";
-import { FavoritesRow } from "./favorites.js";
+import { FavoritesRow, RecentlyUsedRow } from "./favorites.js";
 import { WeatherCard } from "./weather.js";
 import { Icon } from "./icons.js";
 
@@ -121,6 +121,9 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
 
       {/* Favourites — pinned scenes + devices, one tap away */}
       <FavoritesRow onNavigate={onNavigate} />
+
+      {/* Recently used — learns from real use, appears only when there's history (§ Personalization) */}
+      <RecentlyUsedRow />
 
       {/* Quick actions */}
       <h2 className="section">Quick actions</h2>

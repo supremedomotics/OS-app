@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import type { Tab } from "./App.js";
+import { recordUse, recentUses } from "./usage.js";
 
 /**
  * Favorites (§ Favorites) — pin the rooms, devices and scenes you use most so they're one tap away.
@@ -78,11 +79,13 @@ export function FavoritesRow({ onNavigate }: { onNavigate: (t: Tab) => void }) {
   };
   async function toggleDevice(d: Device) {
     setBusy(d.id);
+    recordUse("device", d.id);
     try { await client.command(d.id as DeviceId, { capability: "onoff", action: "toggle" } as never); await load(); }
     catch { /* ignore */ } finally { setBusy(null); }
   }
   async function activate(id: string) {
     setBusy(id);
+    recordUse("scene", id);
     try { await client.activateScene(id); } finally { setBusy(null); }
   }
 
@@ -105,6 +108,70 @@ export function FavoritesRow({ onNavigate }: { onNavigate: (t: Tab) => void }) {
           </button>
         ))}
       </div>
+    </>
+  );
+}
+
+/**
+ * Recently used (§ Personalization) — the devices & scenes the homeowner touched most recently,
+ * surfaced automatically so the everyday things are always one tap away. Appears ONLY when there's
+ * history, so a fresh home stays calm. Sourced from the local usage log — no configuration, no
+ * backend, no invented data.
+ */
+export function RecentlyUsedRow() {
+  const [recent, setRecent] = useState<{ kind: "device" | "scene"; id: string }[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [scenes, setScenes] = useState<{ id: string; name: string; icon: string | null }[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const rec = recentUses(6);
+    setRecent(rec);
+    if (rec.length === 0) return;
+    try {
+      const [devs, scn] = await Promise.all([client.devices(), client.scenes()]);
+      setDevices(devs.devices);
+      setScenes(scn.scenes.map((s) => ({ id: s.id, name: s.name, icon: s.icon ?? null })));
+    } catch { /* keep */ }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  if (recent.length === 0) return null;
+  const isOn = (d: Device) => {
+    const s = d.state as Record<string, { on?: boolean }> | undefined;
+    return Boolean(s?.brightness?.on ?? s?.onoff?.on);
+  };
+
+  const tiles = recent.map((r) => {
+    if (r.kind === "scene") {
+      const s = scenes.find((x) => x.id === r.id);
+      if (!s) return null;
+      return (
+        <button key={`s:${s.id}`} className="fav-tile scene" disabled={busy === s.id}
+          onClick={async () => { setBusy(s.id); recordUse("scene", s.id); try { await client.activateScene(s.id); } finally { setBusy(null); } }}>
+          <span className="fav-ic">{s.icon ?? "◆"}</span>
+          <span className="fav-name">{s.name}</span>
+          <span className="fav-sub">Scene</span>
+        </button>
+      );
+    }
+    const d = devices.find((x) => x.id === r.id);
+    if (!d) return null;
+    return (
+      <button key={`d:${d.id}`} className={`fav-tile device${isOn(d) ? " on" : ""}`} disabled={busy === d.id}
+        onClick={async () => { setBusy(d.id); recordUse("device", d.id); try { await client.command(d.id as DeviceId, { capability: "onoff", action: "toggle" } as never); await load(); } finally { setBusy(null); } }}>
+        <span className="fav-ic">{isOn(d) ? "◉" : "○"}</span>
+        <span className="fav-name">{d.name}</span>
+        <span className="fav-sub">{isOn(d) ? "On" : "Off"}</span>
+      </button>
+    );
+  }).filter(Boolean);
+
+  if (tiles.length === 0) return null;
+  return (
+    <>
+      <h2 className="section">Recently used</h2>
+      <div className="fav-row">{tiles}</div>
     </>
   );
 }
