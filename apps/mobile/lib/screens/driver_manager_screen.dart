@@ -84,6 +84,23 @@ class _ExtensionCenterScreenState extends ConsumerState<ExtensionCenterScreen> {
   }
 }
 
+/// A prominent certification badge derived from the driver's registry `channel` — mobile parity with
+/// the web Extension Center — so homeowners can tell at a glance whether an extension is vetted by
+/// Supreme, community-made, or experimental. Presentation of existing registry data only.
+({String label, IconData icon, Color color}) _cert(String? channel, BuildContext context) {
+  switch (channel) {
+    case 'official':
+    case 'certified':
+      return (label: 'Official', icon: Icons.verified, color: AureonGold.c400);
+    case 'community':
+      return (label: 'Community', icon: Icons.people_outline, color: Theme.of(context).colorScheme.onSurfaceVariant);
+    case 'beta':
+      return (label: 'Experimental', icon: Icons.science_outlined, color: AureonStatus.warning);
+    default:
+      return (label: channel ?? 'Unknown', icon: Icons.extension_outlined, color: Theme.of(context).colorScheme.onSurfaceVariant);
+  }
+}
+
 ({String text, Color color}) _status(Map<String, dynamic> d, BuildContext context) {
   if (d['installed'] != true) return (text: 'Not installed', color: Theme.of(context).disabledColor);
   if (d['enabled'] != true) return (text: 'Disabled', color: Theme.of(context).disabledColor);
@@ -100,9 +117,25 @@ class _DriverTile extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final s = _status(driver, context);
     final requiresSku = driver['requiresSku'] as String?;
+    final cert = _cert(driver['channel'] as String?, context);
     return Card(
       child: ExpansionTile(
-        title: Text(driver['name'] as String? ?? driver['key'] as String? ?? 'Driver'),
+        title: Row(children: [
+          Flexible(child: Text(driver['name'] as String? ?? driver['key'] as String? ?? 'Driver', overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: cert.color.withValues(alpha: 0.55)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(cert.icon, size: 12, color: cert.color),
+              const SizedBox(width: 4),
+              Text(cert.label, style: text.labelSmall?.copyWith(color: cert.color, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ]),
         subtitle: Text('${driver['category'] ?? ''} · v${driver['version'] ?? ''}${requiresSku != null ? ' · $requiresSku' : ''}', style: text.labelSmall),
         trailing: Text(s.text, style: text.labelMedium?.copyWith(color: s.color, fontWeight: FontWeight.w600)),
         childrenPadding: const EdgeInsets.fromLTRB(AureonSpacing.md, 0, AureonSpacing.md, AureonSpacing.md),

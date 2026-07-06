@@ -29,7 +29,7 @@ export function useHeroFlip<T extends HTMLElement>(origin: DOMRect | null) {
     el.getBoundingClientRect(); // force reflow so the next frame animates
 
     const raf = requestAnimationFrame(() => {
-      el.style.transition = "transform 0.42s cubic-bezier(0.22, 1, 0.36, 1)";
+      el.style.transition = "transform 0.24s cubic-bezier(0.22, 1, 0.36, 1)";
       el.style.transform = "none";
     });
     const done = window.setTimeout(() => {
@@ -37,7 +37,7 @@ export function useHeroFlip<T extends HTMLElement>(origin: DOMRect | null) {
       el.style.transform = "";
       el.style.transformOrigin = "";
       el.style.willChange = "";
-    }, 520);
+    }, 300);
     return () => { cancelAnimationFrame(raf); clearTimeout(done); };
   }, [origin]);
   return ref;

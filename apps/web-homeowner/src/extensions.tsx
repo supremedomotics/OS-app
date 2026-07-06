@@ -25,6 +25,25 @@ const CATS: { id: Cat; label: string }[] = [
 
 const DEVICE_CATEGORIES = ["lighting", "climate", "shades", "media", "security", "energy"];
 
+/**
+ * A prominent certification badge derived from the driver's registry `channel` — so homeowners can
+ * tell at a glance whether an extension is vetted by Supreme, made by the community, or still
+ * experimental. Purely a presentation of existing registry data; no new trust concept is invented.
+ */
+function certBadge(channel: string): { label: string; cls: string; glyph: string } {
+  switch (channel) {
+    case "official":
+    case "certified":
+      return { label: "Official", cls: "cert-official", glyph: "✓" };
+    case "community":
+      return { label: "Community", cls: "cert-community", glyph: "◇" };
+    case "beta":
+      return { label: "Experimental", cls: "cert-experimental", glyph: "⚗" };
+    default:
+      return { label: channel, cls: "cert-other", glyph: "•" };
+  }
+}
+
 function matches(d: DriverEntry, cat: Cat): boolean {
   switch (cat) {
     case "all": return true;
@@ -87,12 +106,14 @@ export function ExtensionCenter() {
               <button className="ext-head" onClick={() => setOpen(expanded ? null : d.key)}>
                 <span className="ext-ic">{ICON[d.category] ?? ICON.other}</span>
                 <span className="ext-meta">
-                  <span className="ext-name">{d.name}</span>
+                  <span className="ext-name-row">
+                    <span className="ext-name">{d.name}</span>
+                    {(() => { const c = certBadge(d.channel); return <span className={`cert ${c.cls}`}><span className="cert-glyph">{c.glyph}</span>{c.label}</span>; })()}
+                  </span>
                   <span className="ext-sub">v{d.version} · {d.category}{d.protocols.length ? ` · ${d.protocols.join("/")}` : ""}</span>
                   <span className="ext-sub ext-pub">by {d.publisher}</span>
                   {d.description && <span className="ext-desc">{d.description}</span>}
                   <span className="ext-tags">
-                    <span className={`tag ${d.channel}`}>{d.channel}</span>
                     {d.requiresSku && <span className="tag sku">{d.requiresSku}</span>}
                     {d.updateAvailable && <span className="tag ok">Update available</span>}
                     {d.hubMinVersion && <span className="tag compat">hub ≥ v{d.hubMinVersion}</span>}

@@ -53,7 +53,7 @@ class RoomHero extends StatefulWidget {
 class _RoomHeroState extends State<RoomHero> with SingleTickerProviderStateMixin {
   // Entrance (§ Animation): the room photo "comes alive" — a gentle scale-in + fade so opening a
   // room feels like stepping into the space. The overlay text stays put; only the backdrop moves.
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 620));
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 240));
   late final Animation<double> _scale = Tween<double>(begin: 1.06, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
   late final Animation<double> _fade = CurvedAnimation(parent: _c, curve: Curves.easeOut);
 

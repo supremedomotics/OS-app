@@ -110,7 +110,14 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .ext-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
 .ext-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
 .ext-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.ext-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ext-name { font-size: 15.5px; font-weight: 600; }
+/* Prominent certification badge: at-a-glance trust signal from the driver channel. */
+.cert { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 2px 8px 2px 6px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); }
+.cert-glyph { font-size: 11px; line-height: 1; }
+.cert.cert-official { color: var(--aureon-color-gold-400); border-color: color-mix(in srgb, var(--aureon-color-gold-400) 55%, transparent); background: color-mix(in srgb, var(--aureon-color-gold-400) 10%, transparent); }
+.cert.cert-community { color: var(--aureon-color-text-secondary); }
+.cert.cert-experimental { color: var(--aureon-color-status-warning); border-color: color-mix(in srgb, var(--aureon-color-status-warning) 45%, transparent); }
 .ext-sub { font-size: 12.5px; color: var(--aureon-color-text-secondary); }
 .ext-desc { font-size: 12.5px; color: var(--aureon-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ext-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
@@ -836,7 +843,7 @@ button.link {
 @keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes palette-in { from { transform: translateY(-10px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
 
-.page-anim { animation: page-enter 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.page-anim { animation: page-enter 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
 /* Cards: a gentle press + a smooth reveal of the expanded detail. */
 .ext-card, .area-room, .stat, .qa { transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease; }
@@ -845,7 +852,7 @@ button.link {
 
 /* Overlays & sheets glide in. */
 .more-sheet { animation: overlay-in 0.18s ease both; }
-.more-panel { animation: sheet-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.more-panel { animation: sheet-up 0.24s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .palette-overlay { animation: overlay-in 0.15s ease both; }
 .palette { animation: palette-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both; }
 

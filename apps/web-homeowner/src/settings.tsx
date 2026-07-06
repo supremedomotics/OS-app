@@ -31,14 +31,15 @@ type SettingsPage = { id: string; label: string; icon: string; hint: string; el:
 
 export function ThemeSettings() {
   const [open, setOpen] = useState<string | null>(null);
+  const [q, setQ] = useState("");
 
-  // Extensions & Developer are now top-level navigation destinations, so they're no longer here.
+  // Extensions, Developer & Notifications are now top-level navigation destinations, so they're no
+  // longer here.
   const pages: SettingsPage[] = [
     { id: "appearance", label: "Appearance", icon: "◐", hint: "Theme & accent", el: <AppearanceSettings /> },
     { id: "homes", label: "Homes", icon: "⌂", hint: "Switch or add a home", el: <HomesSettings /> },
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
-    { id: "notifications", label: "Notifications", icon: "◔", hint: "Alerts & activity", el: <NotificationCenter /> },
     { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
     { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
     { id: "backup", label: "Backup & restore", icon: "❖", hint: "Backups, schedule & restore", el: <BackupCenter /> },
@@ -55,11 +56,17 @@ export function ThemeSettings() {
     );
   }
 
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? pages.filter((p) => `${p.label} ${p.hint}`.toLowerCase().includes(needle))
+    : pages;
+
   return (
     <div className="settings">
       <h1 className="title">Settings</h1>
+      <input className="search" placeholder="Search settings…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="set-menu">
-        {pages.map((p) => (
+        {shown.map((p) => (
           <button key={p.id} className="set-row" onClick={() => setOpen(p.id)}>
             <span className="set-ic">{p.icon}</span>
             <span className="set-meta">
@@ -69,6 +76,7 @@ export function ThemeSettings() {
             <span className="set-chev">›</span>
           </button>
         ))}
+        {shown.length === 0 && <p className="muted">No settings match “{q}”.</p>}
       </div>
     </div>
   );
@@ -690,7 +698,7 @@ function shortAgent(ua: string): string {
  */
 type NotifRow = { id: string; level: "info" | "warning" | "critical"; title: string; body: string; createdAt: string; readAt: string | null };
 
-function NotificationCenter() {
+export function NotificationCenter() {
   const [items, setItems] = useState<NotifRow[] | null>(null);
   const [busy, setBusy] = useState(false);
 
