@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { SystemHealth } from "@supreme/contracts";
 import { client, fetchAutomations, fetchAutomationRuns, fetchDriverRegistry } from "./api.js";
 import type { Tab } from "./App.js";
+import { FavoritesRow } from "./favorites.js";
 import { Icon } from "./icons.js";
 
 /**
@@ -113,6 +114,9 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
         <Stat label="Pending approval" value={pendingCount} sub={pendingCount ? "review devices" : "none"} onClick={() => onNavigate("devices")} warn={pendingCount > 0} />
         <Stat label="Automation errors" value={autoErrors} sub={autoErrors ? "check activity" : "none"} onClick={() => onNavigate("automations")} warn={autoErrors > 0} />
       </div>
+
+      {/* Favourites — pinned scenes + devices, one tap away */}
+      <FavoritesRow onNavigate={onNavigate} />
 
       {/* Quick actions */}
       <h2 className="section">Quick actions</h2>

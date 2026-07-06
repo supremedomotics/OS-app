@@ -28,6 +28,7 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
   @override
   Widget build(BuildContext context) {
     final scenes = ref.watch(scenesProvider);
+    final favIds = {for (final f in ref.watch(favoritesProvider).valueOrNull ?? const []) if (f.type == 'scene') f.refId};
     final text = Theme.of(context).textTheme;
 
     return SafeArea(
@@ -122,6 +123,11 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                                 _SceneCard(
                                   name: s.name,
                                   onTap: () => ref.read(clientProvider).activateScene(s.id),
+                                  favorite: favIds.contains(s.id),
+                                  onFav: () async {
+                                    await ref.read(clientProvider).setFavorite({'type': 'scene', 'sceneId': s.id}, favorite: !favIds.contains(s.id));
+                                    ref.invalidate(favoritesProvider);
+                                  },
                                 ),
                             ],
                           ),
@@ -136,10 +142,12 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
 }
 
 class _SceneCard extends StatelessWidget {
-  const _SceneCard({required this.name, this.onTap, this.handle = false});
+  const _SceneCard({required this.name, this.onTap, this.handle = false, this.favorite = false, this.onFav});
   final String name;
   final VoidCallback? onTap;
   final bool handle;
+  final bool favorite;
+  final VoidCallback? onFav;
 
   @override
   Widget build(BuildContext context) {
@@ -157,16 +165,25 @@ class _SceneCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: scheme.surface,
-                borderRadius: BorderRadius.circular(14),
+            Row(children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(handle ? Icons.drag_indicator : Icons.play_arrow_rounded,
+                    color: handle ? scheme.onSurface.withValues(alpha: 0.6) : scheme.primary),
               ),
-              child: Icon(handle ? Icons.drag_indicator : Icons.play_arrow_rounded,
-                  color: handle ? scheme.onSurface.withValues(alpha: 0.6) : scheme.primary),
-            ),
+              const Spacer(),
+              if (!handle && onFav != null)
+                GestureDetector(
+                  onTap: onFav,
+                  child: Icon(favorite ? Icons.favorite : Icons.favorite_border,
+                      size: 18, color: favorite ? AureonGold.c400 : scheme.onSurfaceVariant),
+                ),
+            ]),
             Text(name, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)),
           ],
         ),

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
 import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { PendingApproval } from "./pending.js";
+import { FavHeart, useFavorites } from "./favorites.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -44,6 +45,7 @@ export function DeviceManager() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRoom, setBulkRoom] = useState("");
   const [busy, setBusy] = useState(false);
+  const fav = useFavorites();
 
   const toggleSelect = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -128,7 +130,8 @@ export function DeviceManager() {
               <DeviceRow key={d.id} device={d} rooms={rooms} expanded={open === d.id}
                 onToggle={() => setOpen(open === d.id ? null : d.id)} onChanged={load} roomName={roomName}
                 driver={driverInfo(d.driverId)} sceneCount={sceneUse[d.id] ?? 0}
-                selectMode={selectMode} selected={selected.has(d.id)} onSelect={() => toggleSelect(d.id)} />
+                selectMode={selectMode} selected={selected.has(d.id)} onSelect={() => toggleSelect(d.id)}
+                isFav={fav.isFav({ type: "device", deviceId: d.id })} onFav={() => fav.toggle({ type: "device", deviceId: d.id })} />
             ))}
           </div>
         </div>
@@ -138,10 +141,10 @@ export function DeviceManager() {
   );
 }
 
-function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount, selectMode, selected, onSelect }: {
+function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, driver, sceneCount, selectMode, selected, onSelect, isFav, onFav }: {
   device: Device; rooms: Room[]; expanded: boolean; onToggle: () => void; onChanged: () => void;
   roomName: (id: string | null | undefined) => string; driver: DriverInfo | null; sceneCount: number;
-  selectMode: boolean; selected: boolean; onSelect: () => void;
+  selectMode: boolean; selected: boolean; onSelect: () => void; isFav: boolean; onFav: () => void;
 }) {
   const [name, setName] = useState(device.name);
   const [roomId, setRoomId] = useState(device.roomId ?? "");
@@ -181,6 +184,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
           <span className="ext-sub">{device.supremeType} · {device.capabilities.map((c) => c.kind).join(", ")}</span>
         </span>
         <span className="drv-badge ok">{stateSummary(device)}</span>
+        {!selectMode && <FavHeart fav={{ type: "device", deviceId: device.id }} active={isFav} onToggle={onFav} />}
       </button>
       {expanded && (
         <div className="drv-detail">

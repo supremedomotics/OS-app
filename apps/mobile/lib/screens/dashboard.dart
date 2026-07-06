@@ -138,6 +138,9 @@ class DashboardScreen extends ConsumerWidget {
             }),
             const SizedBox(height: AureonSpacing.lg),
 
+            // Favourites — pinned scenes + devices, one tap away (§ Favorites).
+            ..._favourites(context, ref),
+
             // Hub resources — real host telemetry (§ Installer Dashboard). Only measured fields show.
             ..._hubResources(context, ref),
 
@@ -174,6 +177,32 @@ class DashboardScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  /// Pinned scenes + devices — one tap away (§ Favorites). Empty when nothing is pinned.
+  List<Widget> _favourites(BuildContext context, WidgetRef ref) {
+    final favs = ref.watch(favoritesProvider).valueOrNull ?? const [];
+    if (favs.isEmpty) return const [];
+    final sceneIds = {for (final f in favs) if (f.type == 'scene') f.refId};
+    final deviceIds = {for (final f in favs) if (f.type == 'device') f.refId};
+    final scenes = (ref.watch(scenesProvider).valueOrNull ?? const []).where((s) => sceneIds.contains(s.id)).toList();
+    final devices = (ref.watch(allDevicesProvider).valueOrNull ?? const []).where((d) => deviceIds.contains(d.id)).toList();
+    if (scenes.isEmpty && devices.isEmpty) return const [];
+    final text = Theme.of(context).textTheme;
+    return [
+      Text('Favourites', style: text.titleSmall),
+      const SizedBox(height: AureonSpacing.sm),
+      Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+        for (final s in scenes)
+          _FavTile(icon: Icons.auto_awesome_outlined, label: s.name, sub: 'Scene', onTap: () => ref.read(clientProvider).activateScene(s.id)),
+        for (final d in devices)
+          _FavTile(icon: d.isOn ? Icons.circle : Icons.circle_outlined, label: d.name, sub: d.isOn ? 'On' : 'Off', accent: d.isOn, onTap: () async {
+            await ref.read(clientProvider).command(d.id, {'capability': 'onoff', 'action': 'toggle'});
+            ref.invalidate(allDevicesProvider);
+          }),
+      ]),
+      const SizedBox(height: AureonSpacing.lg),
+    ];
   }
 
   /// Real host telemetry tiles — CPU / memory / storage / temperature / uptime. Rendered only when
@@ -289,6 +318,43 @@ class _Meter extends StatelessWidget {
         ),
         if (sub != null) Padding(padding: const EdgeInsets.only(top: 2), child: Text(sub!, style: text.labelSmall)),
       ]),
+    );
+  }
+}
+
+/// A favourite tile — a scene to fire or a device to toggle.
+class _FavTile extends StatelessWidget {
+  const _FavTile({required this.icon, required this.label, required this.sub, required this.onTap, this.accent = false});
+  final IconData icon;
+  final String label;
+  final String sub;
+  final VoidCallback onTap;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AureonRadius.md),
+        child: Container(
+          padding: const EdgeInsets.all(AureonSpacing.md),
+          decoration: BoxDecoration(
+            color: AureonBase.surface,
+            borderRadius: BorderRadius.circular(AureonRadius.md),
+            border: Border.all(color: (accent ? AureonGold.c400 : scheme.outlineVariant).withValues(alpha: accent ? 0.5 : 0.4)),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(icon, size: 20, color: accent ? AureonGold.c400 : scheme.primary),
+            const SizedBox(height: 4),
+            Text(label, style: text.labelLarge, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(sub, style: text.labelSmall),
+          ]),
+        ),
+      ),
     );
   }
 }

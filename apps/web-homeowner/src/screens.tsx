@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useHeroFlip } from "./herotransition.js";
+import { FavHeart, useFavorites } from "./favorites.js";
 import type {
   CameraStreamResponse,
   EnergySummaryResponse,
@@ -349,6 +350,7 @@ const SCENE_ORDER_KEY = "supreme.sceneOrder";
 
 export function Scenes() {
   const [scenes, refresh] = useAsync<Scene[]>(async () => (await client.scenes()).scenes);
+  const fav = useFavorites();
   const [order, setOrder] = useState<string[]>([]);
   const [edit, setEdit] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -451,6 +453,7 @@ export function Scenes() {
           >
             <span className="play">{edit ? "⠿" : s.icon ? s.icon : "▷"}</span>
             <span className="nm">{s.name}</span>
+            {!edit && <FavHeart fav={{ type: "scene", sceneId: s.id }} active={fav.isFav({ type: "scene", sceneId: s.id })} onToggle={fav.toggle} />}
           </div>
         ))}
       </div>
