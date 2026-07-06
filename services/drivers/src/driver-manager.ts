@@ -13,6 +13,16 @@ import {
 import { SupremeError } from "@supreme/contracts";
 
 /** One row of the unified driver registry (catalog metadata + installed state). */
+/** True when `candidate` is a strictly newer semantic version than `current` (x.y.z). */
+export function isNewerSemver(candidate: string, current: string): boolean {
+  const parse = (v: string) => v.split(".").map((p) => Number.parseInt(p, 10) || 0);
+  const [a1, a2, a3] = parse(candidate);
+  const [b1, b2, b3] = parse(current);
+  if (a1 !== b1) return (a1 ?? 0) > (b1 ?? 0);
+  if (a2 !== b2) return (a2 ?? 0) > (b2 ?? 0);
+  return (a3 ?? 0) > (b3 ?? 0);
+}
+
 export interface DriverRegistryEntry {
   key: string;
   name: string;
@@ -26,6 +36,13 @@ export interface DriverRegistryEntry {
   requiresSku: string | null;
   /** Minimum hub (Supreme OS) version this driver is compatible with (§ Extension Center). */
   hubMinVersion: string;
+  /** Authored marketplace metadata (§ Extension Center). */
+  documentationUrl: string | null;
+  releaseNotes: string;
+  changelog: { version: string; date: string; notes: string }[];
+  /** The version currently installed (null when not installed) + whether the catalog has a newer one. */
+  installedVersion: string | null;
+  updateAvailable: boolean;
   shipsDisabled: boolean;
   configSchema: DriverConfigField[];
   dependencies: string[];
@@ -106,6 +123,11 @@ export class DriverManager {
           protocols: m.protocols,
           requiresSku: m.compat.requiresSku,
           hubMinVersion: m.compat.hubMinVersion,
+          documentationUrl: m.documentationUrl,
+          releaseNotes: m.releaseNotes,
+          changelog: m.changelog,
+          installedVersion: inst?.version ?? null,
+          updateAvailable: Boolean(inst) && isNewerSemver(m.version, inst?.version ?? m.version),
           shipsDisabled: m.shipsDisabled,
           configSchema: m.configSchema,
           dependencies: m.dependencies,

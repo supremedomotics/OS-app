@@ -116,6 +116,11 @@ export interface DriverEntry {
   protocols: string[];
   requiresSku: string | null;
   hubMinVersion?: string;
+  documentationUrl?: string | null;
+  releaseNotes?: string;
+  changelog?: { version: string; date: string; notes: string }[];
+  installedVersion?: string | null;
+  updateAvailable?: boolean;
   shipsDisabled?: boolean;
   configSchema: DriverConfigField[];
   dependencies: string[];
@@ -169,6 +174,11 @@ export async function installDriverByKey(key: string): Promise<void> {
 }
 export async function setDriverEnabled(id: string, enabled: boolean): Promise<void> {
   await authed(`/v1/drivers/${id}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) });
+}
+/** Update an installed driver to the latest catalog version (§ Extension Center). */
+export async function updateDriverByKey(key: string): Promise<void> {
+  const res = await authed(`/v1/drivers/${key}/update`, { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Update failed."));
 }
 export async function uninstallDriver(id: string): Promise<void> {
   await authed(`/v1/drivers/${id}`, { method: "DELETE" });

@@ -11,6 +11,7 @@ import {
   setDriverConfig,
   setDriverEnabled,
   uninstallDriver,
+  updateDriverByKey,
 } from "./api.js";
 
 /**
@@ -115,7 +116,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           registry genuinely exposes are shown; nothing is fabricated. */}
       <dl className="drv-about">
         <div><dt>Developer</dt><dd>{driver.publisher}</dd></div>
-        <div><dt>Version</dt><dd>v{driver.version}</dd></div>
+        <div><dt>Version</dt><dd>v{driver.version}{driver.installed && driver.installedVersion && driver.installedVersion !== driver.version ? ` (installed v${driver.installedVersion})` : ""}</dd></div>
         <div><dt>Channel</dt><dd>{driver.channel}</dd></div>
         <div><dt>Category</dt><dd>{driver.category}</dd></div>
         {driver.hubMinVersion && <div><dt>Compatibility</dt><dd>Supreme OS ≥ v{driver.hubMinVersion}</dd></div>}
@@ -123,13 +124,40 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
         {driver.protocols.length > 0 && <div><dt>Protocols</dt><dd>{driver.protocols.join(", ")}</dd></div>}
         {driver.capabilities.length > 0 && <div><dt>Capabilities</dt><dd>{driver.capabilities.join(", ")}</dd></div>}
         {driver.dependencies.length > 0 && <div><dt>Dependencies</dt><dd>{driver.dependencies.join(", ")}</dd></div>}
+        {driver.documentationUrl && <div><dt>Documentation</dt><dd><a href={driver.documentationUrl} target="_blank" rel="noreferrer">{driver.documentationUrl.replace(/^https?:\/\//, "")}</a></dd></div>}
       </dl>
+
+      {driver.updateAvailable && (
+        <div className="update-avail" style={{ marginBottom: 10 }}>
+          <strong>Update available</strong>
+          <span className="muted"> · installed v{driver.installedVersion} → v{driver.version}</span>
+        </div>
+      )}
+
+      {driver.releaseNotes && (
+        <div className="drv-notes">
+          <h4>Release notes</h4>
+          <p className="muted">{driver.releaseNotes}</p>
+        </div>
+      )}
+
+      {driver.changelog && driver.changelog.length > 0 && (
+        <details className="drv-logs">
+          <summary>Changelog ({driver.changelog.length})</summary>
+          {driver.changelog.map((c) => (
+            <div key={c.version} className="log">
+              <span className="t">v{c.version} · {c.date}</span> {c.notes}
+            </div>
+          ))}
+        </details>
+      )}
 
       {/* Lifecycle actions */}
       <div className="drv-actions">
         {!driver.installed && has("install") && <button className="primary" disabled={busy} onClick={() => run(() => installDriverByKey(driver.key), "Installed")}>Install</button>}
         {driver.installed && (
           <>
+            {driver.updateAvailable && <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>}
             {has("enable") && <button disabled={busy} onClick={() => run(() => setDriverEnabled(id, !driver.enabled), driver.enabled ? "Disabled" : "Enabled")}>{driver.enabled ? "Disable" : "Enable"}</button>}
             {isProtocol && has("connect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, true), "Connect requested")}>Connect</button>}
             {isProtocol && has("disconnect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, false), "Disconnect requested")}>Disconnect</button>}

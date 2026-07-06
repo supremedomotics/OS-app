@@ -136,6 +136,15 @@ export const DriverManifest = z.object({
   dependencies: z.array(z.string()).default([]),
   /** Operations this driver supports; empty → the default set is assumed. */
   operations: z.array(DriverOperation).default([]),
+  /** Authored marketplace metadata (§ Extension Center). Optional — a driver that doesn't provide a
+   * field simply has none, and the UI omits it rather than showing a blank. */
+  documentationUrl: z.string().url().nullable().default(null),
+  /** Release notes for the current version (short, human-facing). */
+  releaseNotes: z.string().default(""),
+  /** Per-version changelog, newest first. */
+  changelog: z
+    .array(z.object({ version: z.string(), date: z.string(), notes: z.string() }))
+    .default([]),
 });
 export type DriverManifest = z.infer<typeof DriverManifest>;
 

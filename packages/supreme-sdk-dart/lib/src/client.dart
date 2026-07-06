@@ -809,6 +809,13 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// Update an installed driver to the latest catalog version (§ Extension Center).
+  Future<void> updateDriver(String key) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/drivers/$key/update'),
+        headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+  }
+
   /// Enable or disable an installed driver.
   Future<void> setDriverEnabled(String id, bool enabled) async {
     final res = await _http.post(Uri.parse('$baseUrl/v1/drivers/$id/enabled'),

@@ -183,7 +183,9 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
         // fields are shown; nothing is fabricated.
         _about(context, [
           ('Developer', d['publisher'] as String?),
-          ('Version', d['version'] != null ? 'v${d['version']}' : null),
+          ('Version', d['version'] != null
+              ? 'v${d['version']}${_installed && d['installedVersion'] != null && d['installedVersion'] != d['version'] ? ' (installed v${d['installedVersion']})' : ''}'
+              : null),
           ('Channel', d['channel'] as String?),
           ('Category', d['category'] as String?),
           ('Compatibility', d['hubMinVersion'] != null ? 'Supreme OS ≥ v${d['hubMinVersion']}' : null),
@@ -191,13 +193,36 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
           ('Protocols', _joinList(d['protocols'])),
           ('Capabilities', _joinList(d['capabilities'])),
           ('Dependencies', _joinList(d['dependencies'])),
+          ('Documentation', d['documentationUrl'] as String?),
         ]),
+
+        // Release notes + changelog (§ Extension Center) — shown only when authored.
+        if ((d['releaseNotes'] as String?)?.isNotEmpty ?? false) ...[
+          Padding(padding: const EdgeInsets.only(bottom: 4), child: Text('Release notes', style: text.titleSmall)),
+          Padding(padding: const EdgeInsets.only(bottom: AureonSpacing.sm), child: Text(d['releaseNotes'] as String, style: text.labelMedium)),
+        ],
+        if (((d['changelog'] as List?) ?? const []).isNotEmpty)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: Text('Changelog (${((d['changelog'] as List?) ?? const []).length})', style: text.labelLarge),
+            children: [
+              for (final c in ((d['changelog'] as List?) ?? const []).cast<Map<String, dynamic>>())
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('v${c['version']} · ${c['date']}', style: text.labelSmall),
+                  subtitle: Text(c['notes'] as String? ?? ''),
+                ),
+            ],
+          ),
 
         // Lifecycle actions.
         Wrap(spacing: 8, runSpacing: 8, children: [
           if (!_installed && _ops.contains('install'))
             FilledButton(onPressed: _busy ? null : () => _run(() => client.installDriver(d['key'] as String), 'Installed'), child: const Text('Install')),
           if (_installed && id != null) ...[
+            if (d['updateAvailable'] == true)
+              FilledButton(onPressed: _busy ? null : () => _run(() => client.updateDriver(d['key'] as String), 'Updated'), child: Text('Update to v${d['version']}')),
             if (_ops.contains('enable'))
               OutlinedButton(onPressed: _busy ? null : () => _run(() => client.setDriverEnabled(id, d['enabled'] != true), d['enabled'] == true ? 'Disabled' : 'Enabled'), child: Text(d['enabled'] == true ? 'Disable' : 'Enable')),
             if (_isProtocol && _ops.contains('connect'))

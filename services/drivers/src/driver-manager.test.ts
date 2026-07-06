@@ -2,7 +2,7 @@ import { generateSigningKeyPair } from "@supreme/crypto";
 import { newId, type DriverId, type HomeId } from "@supreme/domain-model";
 import { beforeEach, describe, expect, it } from "vitest";
 import { InMemoryCatalog, seedFirstPartyCatalog } from "./catalog.js";
-import { DriverManager } from "./driver-manager.js";
+import { DriverManager, isNewerSemver } from "./driver-manager.js";
 
 const homeId = newId("home") as HomeId;
 
@@ -45,6 +45,20 @@ describe("DriverManager", () => {
     expect(knx2.installed).toBe(true);
     expect(knx2.status).toBe("active");
     expect(knx2.installedId).toBeTruthy();
+    // Marketplace metadata (§ Extension Center): authored fields surface; freshly installed at the
+    // catalog version → no update pending.
+    expect(knx2.installedVersion).toBe(knx2.version);
+    expect(knx2.updateAvailable).toBe(false);
+    expect(knx2.documentationUrl).toContain("http");
+    expect(knx2.releaseNotes.length).toBeGreaterThan(0);
+    expect(knx2.changelog.length).toBeGreaterThan(0);
+  });
+
+  it("flags updateAvailable via semver compare", () => {
+    expect(isNewerSemver("1.2.0", "1.1.9")).toBe(true);
+    expect(isNewerSemver("1.0.0", "1.0.0")).toBe(false);
+    expect(isNewerSemver("1.0.0", "1.0.1")).toBe(false);
+    expect(isNewerSemver("2.0.0", "1.9.9")).toBe(true);
   });
 
   it("installs a free driver and rejects an unlicensed paid driver", async () => {

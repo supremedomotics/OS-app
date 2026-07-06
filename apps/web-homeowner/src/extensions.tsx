@@ -94,6 +94,7 @@ export function ExtensionCenter() {
                   <span className="ext-tags">
                     <span className={`tag ${d.channel}`}>{d.channel}</span>
                     {d.requiresSku && <span className="tag sku">{d.requiresSku}</span>}
+                    {d.updateAvailable && <span className="tag ok">Update available</span>}
                     {d.hubMinVersion && <span className="tag compat">hub ≥ v{d.hubMinVersion}</span>}
                     {d.dependencies.length > 0 && <span className="tag">{d.dependencies.length} dependenc{d.dependencies.length === 1 ? "y" : "ies"}</span>}
                     {d.capabilities.length > 0 && <span className="tag soft">{d.capabilities.length} capabilit{d.capabilities.length === 1 ? "y" : "ies"}</span>}

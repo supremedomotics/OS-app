@@ -31,6 +31,12 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
     backend: { type: "native", ref: "knx" },
     operations: [...PROTO_OPS],
+    documentationUrl: "https://docs.supreme.local/extensions/knx",
+    releaseNotes:
+      "KNXnet/IP tunnelling with automatic group-address discovery from an ETS project export. Supports switching, dimming, shades and climate.",
+    changelog: [
+      { version: "1.0.0", date: "2026-05-01", notes: "First stable release: KNXnet/IP tunnelling, ETS import, onoff/brightness/position/temperature." },
+    ],
     configSchema: [
       hostField,
       portField(3671),
