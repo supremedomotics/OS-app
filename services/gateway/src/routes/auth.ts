@@ -273,6 +273,73 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // ── Passkeys / WebAuthn (§ Security Center) ──────────────────────────────────
+  app.get("/v1/me/passkeys", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      reply.send({ passkeys: await ctx.identity.listPasskeys(user.id) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/me/passkeys/register/begin", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      reply.send(await ctx.identity.beginPasskeyRegistration(user.id));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/me/passkeys/register/finish", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const b = (req.body ?? {}) as { name?: string; clientDataJSON?: string; attestationObject?: string };
+      const meta = await ctx.identity.finishPasskeyRegistration(user.id, {
+        name: b.name,
+        clientDataJSON: String(b.clientDataJSON ?? ""),
+        attestationObject: String(b.attestationObject ?? ""),
+      });
+      reply.code(201).send({ passkey: meta });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/v1/me/passkeys/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await ctx.identity.removePasskey(user.id, req.params.id);
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Passwordless passkey login.
+  app.post("/v1/auth/passkey/begin", authLimit, async (_req, reply) => {
+    reply.send(ctx.identity.beginPasskeyAuthentication());
+  });
+
+  app.post("/v1/auth/passkey/finish", authLimit, async (req, reply) => {
+    try {
+      const b = (req.body ?? {}) as { credentialId?: string; clientDataJSON?: string; authenticatorData?: string; signature?: string };
+      const pair = await ctx.identity.finishPasskeyAuthentication(
+        {
+          credentialId: String(b.credentialId ?? ""),
+          clientDataJSON: String(b.clientDataJSON ?? ""),
+          authenticatorData: String(b.authenticatorData ?? ""),
+          signature: String(b.signature ?? ""),
+        },
+        loginContext(req),
+      );
+      reply.send({ status: "ok", ...pair });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Personal API tokens (§ Security Center) ──────────────────────────────────
   const toView = (m: { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null; revoked: boolean }) =>
     ({ id: m.id, name: m.name, prefix: m.prefix, createdAt: m.createdAt, lastUsedAt: m.lastUsedAt, revoked: m.revoked });

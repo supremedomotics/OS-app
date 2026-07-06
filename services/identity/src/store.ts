@@ -115,6 +115,59 @@ export class InMemoryApiTokenStore implements IApiTokenStore {
   }
 }
 
+/** A registered passkey / WebAuthn credential (§ Security Center — passkeys). */
+export interface WebAuthnCredentialRecord {
+  id: string;
+  userId: UserId;
+  /** base64url credential id from the authenticator. */
+  credentialId: string;
+  publicKeyPem: string;
+  signCount: number;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export type WebAuthnCredentialMeta = Omit<WebAuthnCredentialRecord, "publicKeyPem">;
+
+export interface IWebAuthnStore {
+  create(rec: WebAuthnCredentialRecord): Promise<void>;
+  findByCredentialId(credentialId: string): Promise<WebAuthnCredentialRecord | null>;
+  listByUser(userId: UserId): Promise<WebAuthnCredentialMeta[]>;
+  get(userId: UserId, id: string): Promise<WebAuthnCredentialRecord | null>;
+  updateSignCount(id: string, signCount: number, lastUsedAt: string): Promise<void>;
+  remove(userId: UserId, id: string): Promise<void>;
+}
+
+export class InMemoryWebAuthnStore implements IWebAuthnStore {
+  private readonly creds = new Map<string, WebAuthnCredentialRecord>();
+  async create(rec: WebAuthnCredentialRecord): Promise<void> {
+    this.creds.set(rec.id, rec);
+  }
+  async findByCredentialId(credentialId: string): Promise<WebAuthnCredentialRecord | null> {
+    for (const c of this.creds.values()) if (c.credentialId === credentialId) return c;
+    return null;
+  }
+  async listByUser(userId: UserId): Promise<WebAuthnCredentialMeta[]> {
+    return [...this.creds.values()]
+      .filter((c) => c.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(({ publicKeyPem: _p, ...meta }) => meta);
+  }
+  async get(userId: UserId, id: string): Promise<WebAuthnCredentialRecord | null> {
+    const c = this.creds.get(id);
+    return c && c.userId === userId ? c : null;
+  }
+  async updateSignCount(id: string, signCount: number, lastUsedAt: string): Promise<void> {
+    const c = this.creds.get(id);
+    if (c) { c.signCount = signCount; c.lastUsedAt = lastUsedAt; }
+  }
+  async remove(userId: UserId, id: string): Promise<void> {
+    const c = this.creds.get(id);
+    if (c && c.userId === userId) this.creds.delete(id);
+  }
+}
+
 export class InMemorySessionStore implements ISessionStore {
   private readonly sessions = new Map<string, Session>();
   async create(session: Session): Promise<void> {

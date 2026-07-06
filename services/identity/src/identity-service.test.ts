@@ -1,5 +1,7 @@
+import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { IdentityService } from "./identity-service.js";
+import { InMemoryWebAuthnStore } from "./store.js";
 import { totpAt } from "./totp.js";
 
 const SECRET = "test-secret-test-secret-test-secret-123";
@@ -247,6 +249,50 @@ describe("email verification", () => {
     expect(req2).toBeNull();
     const moved = await s.changeEmail(guest.id, "guest2@example.com", "guest-passphrase");
     expect(moved.emailVerified).toBe(false);
+  });
+});
+
+describe("passkey (WebAuthn) login", () => {
+  it("verifies a real ES256 assertion for a registered credential and issues tokens", async () => {
+    const webAuthnStore = new InMemoryWebAuthnStore();
+    const s = new IdentityService({ tokenSecret: SECRET, webAuthnStore });
+    const { master } = await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+
+    // Seed a passkey credential (as registration would) with a generated P-256 key.
+    const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const credentialId = Buffer.from("cred-123").toString("base64url");
+    await webAuthnStore.create({
+      id: "pk1", userId: master.id, credentialId,
+      publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+      signCount: 0, name: "Test Key", createdAt: new Date().toISOString(), lastUsedAt: null,
+    });
+
+    // Begin → get a server challenge → sign the exact WebAuthn message → finish.
+    const { challenge } = s.beginPasskeyAuthentication();
+    const clientData = Buffer.from(JSON.stringify({ type: "webauthn.get", challenge, origin: "https://hub.local" }));
+    const authData = Buffer.concat([Buffer.alloc(32, 1), Buffer.from([0x05]), Buffer.from([0, 0, 0, 1])]);
+    const message = Buffer.concat([authData, createHash("sha256").update(clientData).digest()]);
+    const signature = cryptoSign("sha256", message, privateKey);
+
+    const pair = await s.finishPasskeyAuthentication({
+      credentialId,
+      clientDataJSON: clientData.toString("base64url"),
+      authenticatorData: authData.toString("base64url"),
+      signature: signature.toString("base64url"),
+    });
+    expect((await s.authenticate(pair.accessToken)).id).toBe(master.id);
+
+    // A replayed challenge (single-use) is rejected.
+    await expect(s.finishPasskeyAuthentication({
+      credentialId, clientDataJSON: clientData.toString("base64url"),
+      authenticatorData: authData.toString("base64url"), signature: signature.toString("base64url"),
+    })).rejects.toThrow(/challenge expired/);
+
+    // An unknown credential is rejected.
+    await expect(s.finishPasskeyAuthentication({
+      credentialId: "nope", clientDataJSON: clientData.toString("base64url"),
+      authenticatorData: authData.toString("base64url"), signature: signature.toString("base64url"),
+    })).rejects.toThrow(/unknown passkey/);
   });
 });
 

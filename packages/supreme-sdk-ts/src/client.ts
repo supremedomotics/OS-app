@@ -178,6 +178,28 @@ export class SupremeClient {
     await this.request("DELETE", `/v1/me/api-tokens/${id}`);
   }
 
+  // ── Passkeys / WebAuthn (§ Security Center) ──────────────────────────────────
+  async passkeys(): Promise<{ passkeys: { id: string; name: string; createdAt: string; lastUsedAt: string | null }[] }> {
+    return this.request("GET", "/v1/me/passkeys") as Promise<{ passkeys: { id: string; name: string; createdAt: string; lastUsedAt: string | null }[] }>;
+  }
+  beginPasskeyRegistration(): Promise<Record<string, unknown>> {
+    return this.request("POST", "/v1/me/passkeys/register/begin") as Promise<Record<string, unknown>>;
+  }
+  finishPasskeyRegistration(input: { name?: string; clientDataJSON: string; attestationObject: string }): Promise<{ passkey: { id: string; name: string } }> {
+    return this.request("POST", "/v1/me/passkeys/register/finish", input) as Promise<{ passkey: { id: string; name: string } }>;
+  }
+  async removePasskey(id: string): Promise<void> {
+    await this.request("DELETE", `/v1/me/passkeys/${id}`);
+  }
+  beginPasskeyLogin(): Promise<{ challenge: string; rpId: string; timeout: number }> {
+    return this.request("POST", "/v1/auth/passkey/begin") as Promise<{ challenge: string; rpId: string; timeout: number }>;
+  }
+  async finishPasskeyLogin(input: { credentialId: string; clientDataJSON: string; authenticatorData: string; signature: string }): Promise<LoginResponse> {
+    const res = (await this.request("POST", "/v1/auth/passkey/finish", input)) as LoginResponse & { accessToken?: string; refreshToken?: string };
+    if (res.status === "ok") this.tokens.set({ accessToken: res.accessToken!, refreshToken: res.refreshToken! });
+    return res;
+  }
+
   /** MFA recovery-code status: whether MFA is on + how many one-time codes remain. */
   async recoveryCodeStatus(): Promise<{ mfaEnabled: boolean; remaining: number }> {
     return this.request("GET", "/v1/me/mfa/recovery-codes") as Promise<{ mfaEnabled: boolean; remaining: number }>;

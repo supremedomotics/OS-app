@@ -13,12 +13,16 @@ import {
   InMemoryApiTokenStore,
   InMemoryIdentityStore,
   InMemorySessionStore,
+  InMemoryWebAuthnStore,
   type ApiTokenRecordMeta,
   type IApiTokenStore,
   type IIdentityStore,
   type ISessionStore,
+  type IWebAuthnStore,
   type Session,
+  type WebAuthnCredentialMeta,
 } from "./store.js";
+import { newChallenge, verifyAuthentication, verifyRegistration } from "./webauthn.js";
 import { TokenService } from "./tokens.js";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "./totp.js";
 import { checkPassword, DEFAULT_PASSWORD_POLICY, type PasswordPolicy } from "./password-policy.js";
@@ -43,6 +47,10 @@ export interface IdentityServiceOptions {
   sessionStore?: ISessionStore;
   /** Personal API-token store (§ Security Center). */
   apiTokenStore?: IApiTokenStore;
+  /** Passkey / WebAuthn credential store (§ Security Center). */
+  webAuthnStore?: IWebAuthnStore;
+  /** Relying-Party id + expected origin for WebAuthn (defaults to localhost/dev). */
+  webAuthn?: { rpId: string; rpName: string; origin?: string };
   /** Password policy (§ password policies); defaults to {@link DEFAULT_PASSWORD_POLICY}. */
   passwordPolicy?: PasswordPolicy;
   /** Consecutive failed logins before an account is temporarily locked (§ brute-force). Default 5. */
@@ -58,6 +66,11 @@ export class IdentityService {
   private readonly store: IIdentityStore;
   private readonly sessions: ISessionStore;
   private readonly apiTokens: IApiTokenStore;
+  private readonly webAuthnStore: IWebAuthnStore;
+  private readonly rp: { rpId: string; rpName: string; origin?: string };
+  /** Pending WebAuthn challenges: registration keyed by userId, authentication keyed by challenge. */
+  private readonly regChallenges = new Map<UserId, { challenge: string; expiresAt: number }>();
+  private readonly authChallenges = new Map<string, number>();
   /** Pending (un-activated) TOTP secrets during enrollment, keyed by user. */
   private readonly pendingMfa = new Map<UserId, string>();
   readonly tokens: TokenService;
@@ -72,6 +85,8 @@ export class IdentityService {
     this.store = opts.store ?? new InMemoryIdentityStore();
     this.sessions = opts.sessionStore ?? new InMemorySessionStore();
     this.apiTokens = opts.apiTokenStore ?? new InMemoryApiTokenStore();
+    this.webAuthnStore = opts.webAuthnStore ?? new InMemoryWebAuthnStore();
+    this.rp = opts.webAuthn ?? { rpId: "localhost", rpName: "Supreme OS" };
     this.tokens = new TokenService({ secret: opts.tokenSecret });
     this.passwordPolicy = opts.passwordPolicy ?? DEFAULT_PASSWORD_POLICY;
     this.maxLoginAttempts = opts.maxLoginAttempts ?? 5;
@@ -527,6 +542,103 @@ export class IdentityService {
     if (!user || user.status !== "active") return null;
     await this.apiTokens.touch(rec.id, new Date().toISOString());
     return user;
+  }
+
+  // ── Passkeys / WebAuthn (§ Security Center) ──────────────────────────────────
+  private static readonly WEBAUTHN_TTL_MS = 5 * 60 * 1000;
+
+  listPasskeys(userId: UserId): Promise<WebAuthnCredentialMeta[]> {
+    return this.webAuthnStore.listByUser(userId);
+  }
+
+  async removePasskey(userId: UserId, id: string): Promise<void> {
+    const rec = await this.webAuthnStore.get(userId, id);
+    if (!rec) throw new SupremeError("not_found", "passkey not found");
+    await this.webAuthnStore.remove(userId, id);
+  }
+
+  /** Begin passkey registration — returns the PublicKeyCredentialCreationOptions the browser needs. */
+  async beginPasskeyRegistration(userId: UserId): Promise<Record<string, unknown>> {
+    const user = await this.getUser(userId);
+    const challenge = newChallenge();
+    this.regChallenges.set(userId, { challenge, expiresAt: Date.now() + IdentityService.WEBAUTHN_TTL_MS });
+    const existing = await this.webAuthnStore.listByUser(userId);
+    return {
+      challenge,
+      rp: { id: this.rp.rpId, name: this.rp.rpName },
+      user: { id: Buffer.from(userId).toString("base64url"), name: user.email, displayName: user.displayName },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+      excludeCredentials: existing.map((c) => ({ type: "public-key", id: c.credentialId })),
+      timeout: 60000,
+    };
+  }
+
+  /** Finish registration: verify the attestation + store the credential. */
+  async finishPasskeyRegistration(userId: UserId, input: { name?: string; clientDataJSON: string; attestationObject: string }): Promise<WebAuthnCredentialMeta> {
+    const pending = this.regChallenges.get(userId);
+    if (!pending || pending.expiresAt < Date.now()) {
+      this.regChallenges.delete(userId);
+      throw new SupremeError("unauthorized", "registration challenge expired — try again");
+    }
+    this.regChallenges.delete(userId);
+    let reg;
+    try {
+      reg = verifyRegistration({ clientDataJSON: input.clientDataJSON, attestationObject: input.attestationObject, expectedChallenge: pending.challenge, expectedOrigin: this.rp.origin });
+    } catch (e) {
+      throw new SupremeError("validation_failed", e instanceof Error ? e.message : "passkey registration failed");
+    }
+    const meta: WebAuthnCredentialMeta = {
+      id: newId("session") as string,
+      userId,
+      credentialId: reg.credentialId,
+      signCount: reg.signCount,
+      name: input.name?.trim() || "Passkey",
+      createdAt: new Date().toISOString(),
+      lastUsedAt: null,
+    };
+    await this.webAuthnStore.create({ ...meta, publicKeyPem: reg.publicKeyPem });
+    return meta;
+  }
+
+  /** Begin a passkey login — returns the request options (discoverable credentials). */
+  beginPasskeyAuthentication(): { challenge: string; rpId: string; timeout: number } {
+    const challenge = newChallenge();
+    this.authChallenges.set(challenge, Date.now() + IdentityService.WEBAUTHN_TTL_MS);
+    return { challenge, rpId: this.rp.rpId, timeout: 60000 };
+  }
+
+  /** Finish a passkey login: verify the assertion, then issue tokens (a real, passwordless login). */
+  async finishPasskeyAuthentication(input: { credentialId: string; clientDataJSON: string; authenticatorData: string; signature: string }, context: LoginContext = {}): Promise<TokenPair> {
+    const cred = await this.webAuthnStore.findByCredentialId(input.credentialId);
+    if (!cred) throw new SupremeError("unauthorized", "unknown passkey");
+    // The challenge in clientData must be one we issued (and unexpired), then it's single-use.
+    const clientData = JSON.parse(Buffer.from(input.clientDataJSON, "base64url").toString("utf8")) as { challenge: string };
+    const exp = this.authChallenges.get(clientData.challenge);
+    if (!exp || exp < Date.now()) {
+      this.authChallenges.delete(clientData.challenge);
+      throw new SupremeError("unauthorized", "login challenge expired — try again");
+    }
+    this.authChallenges.delete(clientData.challenge);
+
+    let result;
+    try {
+      result = verifyAuthentication({
+        clientDataJSON: input.clientDataJSON,
+        authenticatorData: input.authenticatorData,
+        signature: input.signature,
+        publicKeyPem: cred.publicKeyPem,
+        expectedChallenge: clientData.challenge,
+        expectedOrigin: this.rp.origin,
+      });
+    } catch (e) {
+      throw new SupremeError("unauthorized", e instanceof Error ? e.message : "passkey verification failed");
+    }
+    const user = await this.store.getUser(cred.userId);
+    if (!user || user.status !== "active") throw new SupremeError("unauthorized", "account is not active");
+    await this.webAuthnStore.updateSignCount(cred.id, result.signCount, new Date().toISOString());
+    const { sid, jti } = await this.openSession(user.id, context);
+    return this.issueTokens(user, sid, jti);
   }
 
   /** Verify an access token and return the live user. Used by the gateway authn. */

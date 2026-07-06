@@ -9,6 +9,7 @@ import {
   type AureonMode,
 } from "@supreme/aureon-web";
 import { activateLicense, client, devIssueLicense, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
+import { PasskeysSection } from "./passkeys.js";
 import { PasswordInput } from "./password-input.js";
 import { AdvancedSettings } from "./advanced.js";
 import {
@@ -521,6 +522,7 @@ function SecuritySettings() {
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
 
       <RecoveryCodes />
+      <PasskeysSection />
       <ApiTokens />
     </section>
   );

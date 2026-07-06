@@ -14,6 +14,7 @@ import { DashboardOverview } from "./dashboard.js";
 import { DeveloperTools } from "./developer.js";
 import { AreasScreen } from "./areas.js";
 import { CommandPalette } from "./palette.js";
+import { passkeysSupported, signInWithPasskey } from "./passkeys.js";
 import { Icon } from "./icons.js";
 
 export type Tab =
@@ -239,6 +240,19 @@ function Login({ onAuthed }: { onAuthed: () => void }) {
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      {passkeysSupported() && (
+        <button
+          className="link"
+          onClick={async () => {
+            setError(null);
+            try { if (await signInWithPasskey()) onAuthed(); else setError("Passkey sign-in was cancelled."); }
+            catch (e) { setError(e instanceof Error ? e.message : "Passkey sign-in failed."); }
+          }}
+          style={{ marginTop: 8 }}
+        >
+          🔐 Sign in with a passkey
+        </button>
+      )}
       <div className="login-actions">
         <button className="link" onClick={() => setForgot(true)}>
           Forgot password?

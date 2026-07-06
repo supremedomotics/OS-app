@@ -102,6 +102,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.identityStore = stores.identity;
     deps.sessionStore = stores.sessions;
     deps.apiTokenStore = stores.apiTokens;
+    deps.webAuthnStore = stores.webAuthn;
     deps.homeStore = stores.home;
     deps.configStore = stores.config;
     deps.sceneStore = stores.scenes;

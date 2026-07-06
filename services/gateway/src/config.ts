@@ -151,6 +151,9 @@ export interface GatewayConfig {
   otaUrl: string;
   /** Embedded OTA signing public key (PEM) to verify release manifests. */
   otaPublicKey: string;
+  /** WebAuthn/passkey Relying-Party id (the hub's domain) + expected origin; unset → localhost dev. */
+  webAuthnRpId?: string;
+  webAuthnOrigin?: string;
   /** Deployment environment; "production" enables fail-closed checks. */
   nodeEnv: string;
   /** Allowed CORS origins; empty = allow all in dev, deny all in production. */
@@ -238,6 +241,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     hubRegistryUrl: env.SUPREME_HUB_REGISTRY_URL ?? "",
     hubModel: env.SUPREME_HUB_MODEL ?? "Supreme Hub",
     otaUrl: env.SUPREME_OTA_URL ?? "",
+    webAuthnRpId: env.SUPREME_WEBAUTHN_RP_ID,
+    webAuthnOrigin: env.SUPREME_WEBAUTHN_ORIGIN,
     otaPublicKey: secret(env, "SUPREME_OTA_PUBLIC_KEY") ?? "",
     nodeEnv: env.NODE_ENV ?? "development",
     corsOrigins: (env.SUPREME_CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),

@@ -5,7 +5,7 @@
  * tested in-process against embedded Postgres (PGlite). The hub runs node-postgres
  * against the Compose Postgres; the same SQL and migrations serve both.
  */
-import type { IIdentityStore, ISessionStore, IApiTokenStore } from "@supreme/identity";
+import type { IIdentityStore, ISessionStore, IApiTokenStore, IWebAuthnStore } from "@supreme/identity";
 import type { IHomeStore, IConfigStore } from "@supreme/home";
 import type { ISceneStore } from "@supreme/scenes";
 import type { IGrantStore } from "@supreme/permissions";
@@ -28,6 +28,7 @@ import { InstalledDriverRepo } from "./repositories/driver-repo.js";
 import { AutomationRepo } from "./repositories/automation-repo.js";
 import { SessionRepo } from "./repositories/session-repo.js";
 import { ApiTokenRepo } from "./repositories/api-token-repo.js";
+import { WebAuthnRepo } from "./repositories/webauthn-repo.js";
 import { SecurityRepo } from "./repositories/security-repo.js";
 import { ConfigRepo } from "./repositories/config-repo.js";
 import { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
@@ -47,6 +48,7 @@ export { InstalledDriverRepo } from "./repositories/driver-repo.js";
 export { AutomationRepo } from "./repositories/automation-repo.js";
 export { SessionRepo } from "./repositories/session-repo.js";
 export { ApiTokenRepo } from "./repositories/api-token-repo.js";
+export { WebAuthnRepo } from "./repositories/webauthn-repo.js";
 export { SecurityRepo } from "./repositories/security-repo.js";
 export { ConfigRepo } from "./repositories/config-repo.js";
 export {
@@ -85,6 +87,7 @@ export interface PersistenceStores {
   backups: IBackupStore;
   pendingDevices: IPendingDeviceStore;
   apiTokens: IApiTokenStore;
+  webAuthn: IWebAuthnStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -106,6 +109,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     backups: new BackupRepo(db),
     pendingDevices: new PendingDeviceRepo(db),
     apiTokens: new ApiTokenRepo(db),
+    webAuthn: new WebAuthnRepo(db),
   };
 }
 
