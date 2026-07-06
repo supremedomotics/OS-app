@@ -82,14 +82,36 @@ export function ThemeSettings() {
   );
 }
 
-/** Appearance: base palette (Luxury Black/White/Auto) + accent (Gold/Silver). A pure repaint. */
+/** Accessibility preferences (§ Accessibility): larger text + higher contrast, applied by toggling
+ * root classes the stylesheet keys off and persisted to localStorage. Read on load so the choice
+ * sticks across sessions. Reduced motion is honoured automatically via prefers-reduced-motion. */
+type A11y = { largeText: boolean; highContrast: boolean };
+const A11Y_KEY = "supreme.a11y";
+function loadA11y(): A11y {
+  try { return { largeText: false, highContrast: false, ...JSON.parse(localStorage.getItem(A11Y_KEY) ?? "{}") }; }
+  catch { return { largeText: false, highContrast: false }; }
+}
+export function applyA11y(a: A11y): void {
+  const root = document.documentElement;
+  root.classList.toggle("a11y-large-text", a.largeText);
+  root.classList.toggle("a11y-contrast", a.highContrast);
+}
+
+/** Appearance: base palette (Luxury Black/White/Auto) + accent (Gold/Silver) + accessibility. */
 function AppearanceSettings() {
   const [choice, setChoice] = useState(loadAureonTheme());
+  const [a11y, setA11y] = useState<A11y>(loadA11y);
   function update(next: { mode?: AureonMode; accent?: AureonAccent }) {
     const merged = { ...choice, ...next };
     setChoice(merged);
     applyAureonTheme(merged);
     saveAureonTheme(merged);
+  }
+  function updateA11y(next: Partial<A11y>) {
+    const merged = { ...a11y, ...next };
+    setA11y(merged);
+    applyA11y(merged);
+    localStorage.setItem(A11Y_KEY, JSON.stringify(merged));
   }
   return (
     <section className="card-section">
@@ -111,6 +133,15 @@ function AppearanceSettings() {
           </button>
         ))}
       </div>
+      <p className="opt-label">Accessibility</p>
+      <label className="toggle-row">
+        <span><span className="set-label">Larger text</span><span className="set-hint">Increase type size across the app</span></span>
+        <input type="checkbox" checked={a11y.largeText} onChange={(e) => updateA11y({ largeText: e.target.checked })} />
+      </label>
+      <label className="toggle-row">
+        <span><span className="set-label">Increase contrast</span><span className="set-hint">Stronger text & borders for readability</span></span>
+        <input type="checkbox" checked={a11y.highContrast} onChange={(e) => updateA11y({ highContrast: e.target.checked })} />
+      </label>
     </section>
   );
 }
@@ -716,7 +747,11 @@ export function NotificationCenter() {
 
   const unread = (items ?? []).filter((n) => !n.readAt);
   const dot = (l: string) => (l === "critical" ? "var(--aureon-color-status-critical)" : l === "warning" ? "var(--aureon-color-status-warning)" : "var(--aureon-color-status-good)");
-  const fmt = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  const fmt = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  // Group into Today / Yesterday / Earlier so the feed reads as a calm timeline, not a flat wall.
+  // Purely a client-side view over the same /v1/notifications data — no new backend, no new fields.
+  const groups = groupNotifsByDay(items ?? []);
 
   return (
     <section className="card-section">
@@ -728,21 +763,43 @@ export function NotificationCenter() {
       {items === null && <p className="muted">Loading…</p>}
       {items && items.length === 0 && <p className="muted">No notifications yet.</p>}
 
-      <div className="notif-list">
-        {(items ?? []).map((n) => (
-          <button key={n.id} className={`notif-row${n.readAt ? " read" : ""}`} disabled={busy || Boolean(n.readAt)} onClick={() => markRead([n.id])}>
-            <span className="notif-dot" style={{ background: dot(n.level) }} />
-            <span className="notif-meta">
-              <span className="notif-title">{n.title}</span>
-              {n.body && <span className="notif-body">{n.body}</span>}
-              <span className="notif-time">{fmt(n.createdAt)}</span>
-            </span>
-            {!n.readAt && <span className="notif-new">New</span>}
-          </button>
-        ))}
-      </div>
+      {groups.map(([label, rows]) => (
+        <div key={label} className="notif-group">
+          <div className="notif-day">{label}</div>
+          <div className="notif-list">
+            {rows.map((n) => (
+              <button key={n.id} className={`notif-row${n.readAt ? " read" : ""}`} disabled={busy || Boolean(n.readAt)} onClick={() => markRead([n.id])}>
+                <span className="notif-dot" style={{ background: dot(n.level) }} />
+                <span className="notif-meta">
+                  <span className="notif-title">{n.title}</span>
+                  {n.body && <span className="notif-body">{n.body}</span>}
+                  <span className="notif-time">{fmt(n.createdAt)}</span>
+                </span>
+                {!n.readAt && <span className="notif-new">New</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
     </section>
   );
+}
+
+/** Bucket notifications into Today / Yesterday / Earlier, preserving the incoming (newest-first) order. */
+function groupNotifsByDay(items: NotifRow[]): [string, NotifRow[]][] {
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const dayMs = 86_400_000;
+  const buckets = new Map<string, NotifRow[]>();
+  const order: string[] = [];
+  for (const n of items) {
+    const t = new Date(n.createdAt).getTime();
+    const label = t >= startOfToday.getTime() ? "Today"
+      : t >= startOfToday.getTime() - dayMs ? "Yesterday"
+      : "Earlier";
+    if (!buckets.has(label)) { buckets.set(label, []); order.push(label); }
+    buckets.get(label)!.push(n);
+  }
+  return order.map((l) => [l, buckets.get(l)!]);
 }
 
 /**
