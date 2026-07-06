@@ -1,11 +1,14 @@
 import {
   ChangeEmailRequest,
+  CreateApiTokenRequest,
   DeleteAccountRequest,
   LoginRequest,
   MfaCodeRequest,
   MfaVerifyRequest,
   RefreshRequest,
   SupremeError,
+  type ApiTokenList,
+  type CreateApiTokenResponse,
   type MfaEnrollResponse,
   type RevokeOthersResponse,
   type SessionList,
@@ -241,6 +244,40 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       const { user, sid } = await ctx.identity.authenticateSession(bearer(req));
       const revoked = await ctx.identity.revokeOtherSessions(user.id, sid ?? "");
       reply.send({ revoked } satisfies RevokeOthersResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Personal API tokens (§ Security Center) ──────────────────────────────────
+  const toView = (m: { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null; revoked: boolean }) =>
+    ({ id: m.id, name: m.name, prefix: m.prefix, createdAt: m.createdAt, lastUsedAt: m.lastUsedAt, revoked: m.revoked });
+
+  app.get("/v1/me/api-tokens", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      reply.send({ tokens: (await ctx.identity.listApiTokens(user.id)).map(toView) } satisfies ApiTokenList);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/me/api-tokens", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const { name } = CreateApiTokenRequest.parse(req.body ?? {});
+      const { token, meta } = await ctx.identity.createApiToken(user.id, name);
+      reply.code(201).send({ token, meta: toView(meta) } satisfies CreateApiTokenResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/v1/me/api-tokens/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await ctx.identity.revokeApiToken(user.id, req.params.id);
+      reply.code(204).send();
     } catch (err) {
       sendError(reply, err);
     }

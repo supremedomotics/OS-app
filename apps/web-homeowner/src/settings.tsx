@@ -479,7 +479,70 @@ function SecuritySettings() {
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
 
       <RecoveryCodes />
+      <ApiTokens />
     </section>
+  );
+}
+
+/**
+ * Personal API tokens (§ Security Center). Long-lived Bearer credentials for scripts/integrations.
+ * The token is shown once at creation (only a hash is stored); each can be revoked independently.
+ */
+type ApiToken = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };
+
+function ApiTokens() {
+  const [tokens, setTokens] = useState<ApiToken[] | null>(null);
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() { try { setTokens((await client.apiTokens()).tokens as ApiToken[]); } catch { /* keep */ } }
+  useEffect(() => { void load(); }, []);
+
+  async function create() {
+    setBusy(true);
+    try { const res = await client.createApiToken(name.trim() || "API token"); setCreated(res.token); setName(""); await load(); }
+    finally { setBusy(false); }
+  }
+  async function revoke(id: string) {
+    setBusy(true);
+    try { await client.revokeApiToken(id); await load(); }
+    finally { setBusy(false); }
+  }
+
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString([], { dateStyle: "medium" }) : "never");
+  return (
+    <div className="danger-zone" style={{ borderTopColor: "var(--aureon-color-base-hairline)" }}>
+      <p className="opt-label">API tokens</p>
+      <p className="muted">Long-lived tokens for scripts and integrations. Treat them like passwords.</p>
+
+      {created && (
+        <div className="update-avail" style={{ marginTop: 8 }}>
+          <strong>New token</strong>
+          <code style={{ display: "block", marginTop: 6, fontFamily: "ui-monospace, monospace", wordBreak: "break-all" }}>{created}</code>
+          <p className="err" style={{ marginTop: 4 }}>Copy it now — it won't be shown again.</p>
+          <button style={{ marginTop: 4 }} onClick={() => setCreated(null)}>Done</button>
+        </div>
+      )}
+
+      <div className="sess-list" style={{ marginTop: 8 }}>
+        {(tokens ?? []).map((t) => (
+          <div key={t.id} className="sess-row">
+            <span className="sess-ic">🔑</span>
+            <span className="sess-meta">
+              <span className="sess-name">{t.name} <code className="muted">{t.prefix}…</code></span>
+              <span className="sess-sub">created {fmt(t.createdAt)} · last used {fmt(t.lastUsedAt)}</span>
+            </span>
+            <button className="danger" disabled={busy} onClick={() => revoke(t.id)}>Revoke</button>
+          </div>
+        ))}
+      </div>
+
+      <div className="dev-row2" style={{ marginTop: 8 }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Token name (e.g. Backup script)" />
+        <button className="primary" disabled={busy} onClick={create}>{busy ? "…" : "Create token"}</button>
+      </div>
+    </div>
   );
 }
 

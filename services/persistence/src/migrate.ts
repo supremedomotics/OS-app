@@ -24,6 +24,7 @@ const MIGRATIONS = [
   "0014_backups.sql",
   "0015_pending_devices.sql",
   "0016_recovery_codes.sql",
+  "0017_api_tokens.sql",
 ] as const;
 
 /**

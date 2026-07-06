@@ -58,6 +58,63 @@ export interface ISessionStore {
   touch(id: string, lastSeenAt: string): Promise<void>;
 }
 
+/**
+ * A personal API token (§ Security Center — API tokens): a long-lived credential a user creates for
+ * programmatic/API access. Only the sha256 hash is stored; the plaintext is shown once at creation.
+ */
+export interface ApiTokenRecord {
+  id: string;
+  homeId: string;
+  userId: UserId;
+  name: string;
+  tokenHash: string;
+  /** A short non-secret prefix shown in the UI to identify the token. */
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revoked: boolean;
+}
+
+export type ApiTokenRecordMeta = Omit<ApiTokenRecord, "tokenHash">;
+
+export interface IApiTokenStore {
+  create(rec: ApiTokenRecord): Promise<void>;
+  findByHash(hash: string): Promise<ApiTokenRecord | null>;
+  listByUser(userId: UserId): Promise<ApiTokenRecordMeta[]>;
+  get(userId: UserId, id: string): Promise<ApiTokenRecord | null>;
+  revoke(userId: UserId, id: string): Promise<void>;
+  touch(id: string, lastUsedAt: string): Promise<void>;
+}
+
+export class InMemoryApiTokenStore implements IApiTokenStore {
+  private readonly tokens = new Map<string, ApiTokenRecord>();
+  async create(rec: ApiTokenRecord): Promise<void> {
+    this.tokens.set(rec.id, rec);
+  }
+  async findByHash(hash: string): Promise<ApiTokenRecord | null> {
+    for (const t of this.tokens.values()) if (t.tokenHash === hash) return t;
+    return null;
+  }
+  async listByUser(userId: UserId): Promise<ApiTokenRecordMeta[]> {
+    return [...this.tokens.values()]
+      .filter((t) => t.userId === userId && !t.revoked)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(({ tokenHash: _h, ...meta }) => meta);
+  }
+  async get(userId: UserId, id: string): Promise<ApiTokenRecord | null> {
+    const t = this.tokens.get(id);
+    return t && t.userId === userId ? t : null;
+  }
+  async revoke(userId: UserId, id: string): Promise<void> {
+    const t = this.tokens.get(id);
+    if (t && t.userId === userId) t.revoked = true;
+  }
+  async touch(id: string, lastUsedAt: string): Promise<void> {
+    const t = this.tokens.get(id);
+    if (t) t.lastUsedAt = lastUsedAt;
+  }
+}
+
 export class InMemorySessionStore implements ISessionStore {
   private readonly sessions = new Map<string, Session>();
   async create(session: Session): Promise<void> {

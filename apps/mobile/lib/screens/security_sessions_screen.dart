@@ -9,6 +9,7 @@ import '../providers.dart';
 /// last-seen shown when captured.
 final _sessionsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).sessions());
 final _recoveryProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).recoveryCodeStatus());
+final _apiTokensProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).apiTokens());
 
 class SecuritySessionsScreen extends ConsumerWidget {
   const SecuritySessionsScreen({super.key});
@@ -50,6 +51,8 @@ class SecuritySessionsScreen extends ConsumerWidget {
                 for (final s in active) _SessionTile(session: s, onRevoked: () => ref.invalidate(_sessionsProvider)),
                 const Divider(height: 28),
                 const _RecoveryCodes(),
+                const Divider(height: 28),
+                const _ApiTokens(),
               ],
             ),
           );
@@ -194,5 +197,86 @@ class _RecoveryCodesState extends ConsumerState<_RecoveryCodes> {
         ]);
       },
     );
+  }
+}
+
+/// Personal API tokens (§ Security Center) — long-lived Bearer credentials, shown once on creation.
+class _ApiTokens extends ConsumerStatefulWidget {
+  const _ApiTokens();
+  @override
+  ConsumerState<_ApiTokens> createState() => _ApiTokensState();
+}
+
+class _ApiTokensState extends ConsumerState<_ApiTokens> {
+  final TextEditingController _name = TextEditingController();
+  String? _created;
+  bool _busy = false;
+
+  @override
+  void dispose() { _name.dispose(); super.dispose(); }
+
+  String _fmt(String? iso) {
+    final d = iso == null ? null : DateTime.tryParse(iso)?.toLocal();
+    return d == null ? 'never' : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = ref.watch(_apiTokensProvider).valueOrNull ?? const [];
+    final text = Theme.of(context).textTheme;
+    final messenger = ScaffoldMessenger.of(context);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('API tokens', style: text.titleSmall),
+      const SizedBox(height: 4),
+      Text('Long-lived tokens for scripts and integrations. Treat them like passwords.', style: text.labelMedium),
+      if (_created != null) ...[
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(AureonSpacing.md),
+          decoration: BoxDecoration(color: AureonGold.c400.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(AureonRadius.md), border: Border.all(color: AureonGold.c400.withValues(alpha: 0.45))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SelectableText(_created!, style: const TextStyle(fontFamily: 'monospace')),
+            Padding(padding: const EdgeInsets.only(top: 4), child: Text("Copy it now — it won't be shown again.", style: text.labelSmall?.copyWith(color: AureonStatus.critical))),
+          ]),
+        ),
+      ],
+      for (final t in tokens)
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: Text('${t['name']}  ${t['prefix']}…'),
+            subtitle: Text('created ${_fmt(t['createdAt'] as String?)} · last used ${_fmt(t['lastUsedAt'] as String?)}', style: text.labelSmall),
+            trailing: TextButton(
+              style: TextButton.styleFrom(foregroundColor: AureonStatus.critical),
+              onPressed: _busy ? null : () async {
+                try { await ref.read(clientProvider).revokeApiToken(t['id'] as String); ref.invalidate(_apiTokensProvider); }
+                catch (e) { messenger.showSnackBar(SnackBar(content: Text('Failed: $e'))); }
+              },
+              child: const Text('Revoke'),
+            ),
+          ),
+        ),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: TextField(controller: _name, decoration: const InputDecoration(labelText: 'Token name'))),
+        const SizedBox(width: 8),
+        FilledButton(
+          onPressed: _busy ? null : () async {
+            setState(() => _busy = true);
+            try {
+              final res = await ref.read(clientProvider).createApiToken(_name.text.trim().isEmpty ? 'API token' : _name.text.trim());
+              setState(() => _created = res['token'] as String);
+              _name.clear();
+              ref.invalidate(_apiTokensProvider);
+            } catch (e) {
+              messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+            } finally {
+              if (mounted) setState(() => _busy = false);
+            }
+          },
+          child: const Text('Create'),
+        ),
+      ]),
+    ]);
   }
 }

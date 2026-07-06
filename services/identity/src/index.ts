@@ -15,8 +15,12 @@ export {
 export {
   InMemoryIdentityStore,
   InMemorySessionStore,
+  InMemoryApiTokenStore,
   type IIdentityStore,
   type ISessionStore,
+  type IApiTokenStore,
+  type ApiTokenRecord,
+  type ApiTokenRecordMeta,
   type Session,
   type StoredCredential,
 } from "./store.js";

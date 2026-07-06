@@ -37,6 +37,8 @@ import {
   type SessionList,
   type RevokeOthersResponse,
   type PendingDeviceList,
+  type ApiTokenList,
+  type CreateApiTokenResponse,
   type RestoreResponse,
   type BackupInspectionResponse,
   type BackupStatus,
@@ -151,6 +153,20 @@ export class SupremeClient {
   /** Delete another user by id (admin/owner). The master account is protected server-side. */
   async deleteUser(userId: UserId): Promise<void> {
     await this.request("DELETE", `/v1/users/${userId}`);
+  }
+
+  // ── Personal API tokens (§ Security Center) ──────────────────────────────────
+  /** List the user's personal API tokens (metadata only). */
+  async apiTokens(): Promise<ApiTokenList> {
+    return this.request("GET", "/v1/me/api-tokens") as Promise<ApiTokenList>;
+  }
+  /** Create an API token — the plaintext `token` is returned ONCE. */
+  async createApiToken(name: string): Promise<CreateApiTokenResponse> {
+    return this.request("POST", "/v1/me/api-tokens", { name }) as Promise<CreateApiTokenResponse>;
+  }
+  /** Revoke an API token by id. */
+  async revokeApiToken(id: string): Promise<void> {
+    await this.request("DELETE", `/v1/me/api-tokens/${id}`);
   }
 
   /** MFA recovery-code status: whether MFA is on + how many one-time codes remain. */

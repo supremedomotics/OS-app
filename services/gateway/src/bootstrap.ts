@@ -101,6 +101,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     const stores = await createPersistence({ connectionString: config.databaseUrl });
     deps.identityStore = stores.identity;
     deps.sessionStore = stores.sessions;
+    deps.apiTokenStore = stores.apiTokens;
     deps.homeStore = stores.home;
     deps.configStore = stores.config;
     deps.sceneStore = stores.scenes;

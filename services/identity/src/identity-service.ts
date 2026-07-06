@@ -10,8 +10,11 @@ import {
 } from "@supreme/domain-model";
 import { SupremeError, type LoginResponse, type TokenPair } from "@supreme/contracts";
 import {
+  InMemoryApiTokenStore,
   InMemoryIdentityStore,
   InMemorySessionStore,
+  type ApiTokenRecordMeta,
+  type IApiTokenStore,
   type IIdentityStore,
   type ISessionStore,
   type Session,
@@ -38,6 +41,8 @@ export interface IdentityServiceOptions {
   tokenSecret: string;
   store?: IIdentityStore;
   sessionStore?: ISessionStore;
+  /** Personal API-token store (§ Security Center). */
+  apiTokenStore?: IApiTokenStore;
   /** Password policy (§ password policies); defaults to {@link DEFAULT_PASSWORD_POLICY}. */
   passwordPolicy?: PasswordPolicy;
   /** Consecutive failed logins before an account is temporarily locked (§ brute-force). Default 5. */
@@ -52,6 +57,7 @@ const ARGON2 = { memoryCost: 19456, timeCost: 2, parallelism: 1 } as const;
 export class IdentityService {
   private readonly store: IIdentityStore;
   private readonly sessions: ISessionStore;
+  private readonly apiTokens: IApiTokenStore;
   /** Pending (un-activated) TOTP secrets during enrollment, keyed by user. */
   private readonly pendingMfa = new Map<UserId, string>();
   readonly tokens: TokenService;
@@ -65,6 +71,7 @@ export class IdentityService {
   constructor(opts: IdentityServiceOptions) {
     this.store = opts.store ?? new InMemoryIdentityStore();
     this.sessions = opts.sessionStore ?? new InMemorySessionStore();
+    this.apiTokens = opts.apiTokenStore ?? new InMemoryApiTokenStore();
     this.tokens = new TokenService({ secret: opts.tokenSecret });
     this.passwordPolicy = opts.passwordPolicy ?? DEFAULT_PASSWORD_POLICY;
     this.maxLoginAttempts = opts.maxLoginAttempts ?? 5;
@@ -430,8 +437,61 @@ export class IdentityService {
     if (sid) await this.sessions.revoke(sid);
   }
 
+  // ── Personal API tokens (§ Security Center) ──────────────────────────────────
+
+  /** Prefix that marks a Bearer credential as a long-lived personal API token (vs. a JWT). */
+  private static readonly API_TOKEN_PREFIX = "sup_pat_";
+
+  /**
+   * Create a personal API token for programmatic access. Returns the plaintext ONCE (only the hash
+   * is stored) plus its metadata. The token authenticates on every route the user can access.
+   */
+  async createApiToken(userId: UserId, name: string): Promise<{ token: string; meta: ApiTokenRecordMeta }> {
+    const user = await this.getUser(userId);
+    const label = name.trim() || "API token";
+    const token = `${IdentityService.API_TOKEN_PREFIX}${randomBytes(24).toString("base64url")}`;
+    const meta: ApiTokenRecordMeta = {
+      id: newId("session") as string,
+      homeId: user.homeId,
+      userId,
+      name: label,
+      prefix: token.slice(0, 16),
+      createdAt: new Date().toISOString(),
+      lastUsedAt: null,
+      revoked: false,
+    };
+    await this.apiTokens.create({ ...meta, tokenHash: sha256(token) });
+    return { token, meta };
+  }
+
+  listApiTokens(userId: UserId): Promise<ApiTokenRecordMeta[]> {
+    return this.apiTokens.listByUser(userId);
+  }
+
+  async revokeApiToken(userId: UserId, id: string): Promise<void> {
+    const rec = await this.apiTokens.get(userId, id);
+    if (!rec) throw new SupremeError("not_found", "API token not found");
+    await this.apiTokens.revoke(userId, id);
+  }
+
+  /** Resolve a personal API token to its live user (updating last-used), or null if invalid. */
+  private async authenticateApiToken(token: string): Promise<User | null> {
+    const rec = await this.apiTokens.findByHash(sha256(token));
+    if (!rec || rec.revoked) return null;
+    const user = await this.store.getUser(rec.userId);
+    if (!user || user.status !== "active") return null;
+    await this.apiTokens.touch(rec.id, new Date().toISOString());
+    return user;
+  }
+
   /** Verify an access token and return the live user. Used by the gateway authn. */
   async authenticate(accessToken: string): Promise<User> {
+    // A long-lived personal API token authenticates directly (no session/JWT).
+    if (accessToken.startsWith(IdentityService.API_TOKEN_PREFIX)) {
+      const user = await this.authenticateApiToken(accessToken);
+      if (!user) throw new SupremeError("unauthorized", "invalid API token");
+      return user;
+    }
     const claims = await this.tokens.verify(accessToken, "access");
     const user = await this.store.getUser(claims.sub);
     if (!user || user.status !== "active") {

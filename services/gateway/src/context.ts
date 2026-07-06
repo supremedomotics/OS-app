@@ -1,6 +1,6 @@
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
-import { IdentityService, type IIdentityStore, type ISessionStore } from "@supreme/identity";
+import { IdentityService, type IIdentityStore, type ISessionStore, type IApiTokenStore } from "@supreme/identity";
 import { SupremeError, type LoginResponse } from "@supreme/contracts";
 import { HomeService, InMemoryConfigStore, seedDemoHome, type IConfigStore, type IHomeStore } from "@supreme/home";
 import { SceneService, type ISceneStore } from "@supreme/scenes";
@@ -93,6 +93,7 @@ export interface AppDeps {
   /** Shared presence store (Redis in prod); defaults to in-process. */
   presence?: IPresenceStore;
   identityStore?: IIdentityStore;
+  apiTokenStore?: IApiTokenStore;
   sessionStore?: ISessionStore;
   homeStore?: IHomeStore;
   configStore?: IConfigStore;
@@ -327,6 +328,7 @@ export class AppContext {
       tokenSecret: config.tokenSecret,
       store: deps.identityStore,
       sessionStore: deps.sessionStore,
+      apiTokenStore: deps.apiTokenStore,
     });
     this.sil = deps.sil ?? buildSil(config);
     this.home = new HomeService(this.sil, deps.homeStore);

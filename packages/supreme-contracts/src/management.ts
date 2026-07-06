@@ -91,6 +91,28 @@ export type SessionList = z.infer<typeof SessionList>;
 export const RevokeOthersResponse = z.object({ revoked: z.number().int().nonnegative() });
 export type RevokeOthersResponse = z.infer<typeof RevokeOthersResponse>;
 
+// ── Personal API tokens (§ Security Center) ──────────────────────────────────
+
+export const ApiTokenView = z.object({
+  id: z.string(),
+  name: z.string(),
+  prefix: z.string(),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+  revoked: z.boolean(),
+});
+export type ApiTokenView = z.infer<typeof ApiTokenView>;
+
+export const ApiTokenList = z.object({ tokens: z.array(ApiTokenView) });
+export type ApiTokenList = z.infer<typeof ApiTokenList>;
+
+export const CreateApiTokenRequest = z.object({ name: z.string().min(1).max(80).default("API token") });
+export type CreateApiTokenRequest = z.infer<typeof CreateApiTokenRequest>;
+
+/** The plaintext token is returned ONCE at creation. */
+export const CreateApiTokenResponse = z.object({ token: z.string(), meta: ApiTokenView });
+export type CreateApiTokenResponse = z.infer<typeof CreateApiTokenResponse>;
+
 // ── Grants (ABAC overlay) ────────────────────────────────────────────────────
 
 export const CreateGrantRequest = z.object({

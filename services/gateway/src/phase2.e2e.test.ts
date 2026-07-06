@@ -171,6 +171,26 @@ describe("Phase-2 installer & drivers", () => {
     expect((await fetch(`${baseUrl}/v1/me/sessions`, { headers: auth() })).status).toBe(200);
   });
 
+  it("issues a personal API token that authenticates on a real route, then revokes it (§ API tokens)", async () => {
+    // Create a token (returned once), then use it as a Bearer credential on a normal route.
+    const created = (await (
+      await fetch(`${baseUrl}/v1/me/api-tokens`, { method: "POST", headers: auth(), body: JSON.stringify({ name: "CI" }) })
+    ).json()) as { token: string; meta: { id: string; prefix: string } };
+    expect(created.token.startsWith("sup_pat_")).toBe(true);
+
+    const tokenAuth = { authorization: `Bearer ${created.token}` };
+    const me = await fetch(`${baseUrl}/v1/me`, { headers: tokenAuth });
+    expect(me.status).toBe(200);
+
+    const list = (await (await fetch(`${baseUrl}/v1/me/api-tokens`, { headers: auth() })).json()) as { tokens: { id: string }[] };
+    expect(list.tokens.some((t) => t.id === created.meta.id)).toBe(true);
+
+    // Revoke → the token no longer authenticates.
+    const del = await fetch(`${baseUrl}/v1/me/api-tokens/${created.meta.id}`, { method: "DELETE", headers: auth() });
+    expect(del.status).toBe(204);
+    expect((await fetch(`${baseUrl}/v1/me`, { headers: tokenAuth })).status).toBe(401);
+  });
+
   it("reports software-update status honestly when no OTA channel is configured (§ Update Center)", async () => {
     const res = await fetch(`${baseUrl}/v1/system/update`, { headers: auth() });
     expect(res.status).toBe(200);

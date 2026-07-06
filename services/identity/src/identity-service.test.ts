@@ -224,6 +224,35 @@ describe("password policy + brute-force lockout", () => {
   });
 });
 
+describe("personal API tokens", () => {
+  it("issues a token that authenticates, then stops working once revoked", async () => {
+    const s = svc();
+    const { master } = await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+
+    const { token, meta } = await s.createApiToken(master.id, "CI script");
+    expect(token.startsWith("sup_pat_")).toBe(true);
+    expect(meta.name).toBe("CI script");
+    // The token authenticates directly as the user (no login/JWT).
+    expect((await s.authenticate(token)).id).toBe(master.id);
+
+    // It appears in the list (metadata only, no secret) and last-used is set after auth.
+    const list = await s.listApiTokens(master.id);
+    expect(list).toHaveLength(1);
+    expect((list[0] as { tokenHash?: string }).tokenHash).toBeUndefined();
+    expect(list[0]!.lastUsedAt).not.toBeNull();
+
+    await s.revokeApiToken(master.id, meta.id);
+    await expect(s.authenticate(token)).rejects.toThrow(/invalid API token/);
+    expect(await s.listApiTokens(master.id)).toHaveLength(0);
+  });
+
+  it("rejects a garbage or non-owned token", async () => {
+    const s = svc();
+    await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+    await expect(s.authenticate("sup_pat_not-a-real-token")).rejects.toThrow(/invalid API token/);
+  });
+});
+
 describe("account self-service (change email + delete)", () => {
   it("changes the email only with the correct password and rejects a duplicate", async () => {
     const s = svc();

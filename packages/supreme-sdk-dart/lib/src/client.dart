@@ -105,6 +105,28 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// List the user's personal API tokens (metadata only).
+  Future<List<Map<String, dynamic>>> apiTokens() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/me/api-tokens'), headers: _authHeaders);
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['tokens'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Create an API token — the plaintext token is returned ONCE. Returns {token, meta}.
+  Future<Map<String, dynamic>> createApiToken(String name) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/me/api-tokens'),
+        headers: _authHeaders, body: jsonEncode({'name': name}));
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Revoke an API token by id.
+  Future<void> revokeApiToken(String id) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/me/api-tokens/$id'), headers: _authHeaders);
+    _ensureOk(res);
+  }
+
   /// MFA recovery-code status: {mfaEnabled, remaining}.
   Future<Map<String, dynamic>> recoveryCodeStatus() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/me/mfa/recovery-codes'), headers: _authHeaders);
