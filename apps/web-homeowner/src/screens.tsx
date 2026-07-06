@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useHeroFlip } from "./herotransition.js";
 import type {
   CameraStreamResponse,
   EnergySummaryResponse,
@@ -61,11 +62,11 @@ function greetingFor(d: Date): string {
 }
 
 /** A room tile: a real interior photo (hub-stored or fetched), else a designed motif gradient. */
-function RoomCard({ room, onClick }: { room: RoomLike; onClick: () => void }) {
+function RoomCard({ room, onOpen }: { room: RoomLike; onOpen: (rect: DOMRect) => void }) {
   const photo = useRoomPhoto(room, client);
   const { emoji, ...style } = styleForPhoto(photo, room);
   return (
-    <div className="room-card has-image" style={style} onClick={onClick}>
+    <div className="room-card has-image" style={style} onClick={(e) => onOpen((e.currentTarget as HTMLElement).getBoundingClientRect())}>
       {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
       <span className="name">{room.name}</span>
     </div>
@@ -130,7 +131,7 @@ export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: str
 
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
-          <RoomCard key={r.id} room={r} onClick={() => onOpenRoom(r.id)} />
+          <RoomCard key={r.id} room={r} onOpen={() => onOpenRoom(r.id)} />
         ))}
       </div>
     </div>
@@ -150,6 +151,8 @@ export function RoomsScreen({
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  // The tapped room card's rect — origin for the hero FLIP into the room detail.
+  const heroOrigin = useRef<DOMRect | null>(null);
 
   const roomsForHero = home?.rooms ?? [];
   useEffect(() => {
@@ -175,12 +178,13 @@ export function RoomsScreen({
 
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
-    if (wide) return <TabletRoom roomId={selected} name={room?.name ?? "Room"} heroImageUrl={room?.heroImageUrl ?? null} onBack={() => onSelect(null)} />;
+    if (wide) return <TabletRoom roomId={selected} name={room?.name ?? "Room"} heroImageUrl={room?.heroImageUrl ?? null} heroOrigin={heroOrigin.current} onBack={() => onSelect(null)} />;
     return (
       <RoomDevices
         roomId={selected}
         name={room?.name ?? "Room"}
         heroImageUrl={room?.heroImageUrl ?? null}
+        heroOrigin={heroOrigin.current}
         onBack={() => onSelect(null)}
       />
     );
@@ -202,14 +206,15 @@ export function RoomsScreen({
       )}
       <div className="grid">
         {(home?.rooms ?? []).map((r) => (
-          <RoomCard key={r.id} room={r} onClick={() => onSelect(r.id)} />
+          <RoomCard key={r.id} room={r} onOpen={(rect) => { heroOrigin.current = rect; onSelect(r.id); }} />
         ))}
       </div>
     </div>
   );
 }
 
-function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; name: string; heroImageUrl: string | null; onBack: () => void }) {
+function RoomDevices({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void }) {
+  const heroRef = useHeroFlip<HTMLDivElement>(heroOrigin);
   const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
   const roomPhoto = useRoomPhoto({ id: roomId, name, heroImageUrl }, client);
   const [detail, setDetail] = useState<Device | null>(null);
@@ -230,7 +235,7 @@ function RoomDevices({ roomId, name, heroImageUrl, onBack }: { roomId: string; n
       {(() => {
         const { emoji, ...s } = styleForPhoto(roomPhoto, { name, heroImageUrl }, 0.66);
         return (
-          <div className="hero room has-image" style={s}>
+          <div ref={heroRef} className="hero room has-image" style={s}>
             {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
             <div className="hero-top">{name}</div>
             <div className="hero-stats">

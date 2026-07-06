@@ -8,7 +8,7 @@ import '../tokens.g.dart';
 ///
 /// Theme-aware: with no [imageUrl] it falls back to a tasteful accent gradient that
 /// reads cleanly in both Luxury Black and Luxury White.
-class RoomHero extends StatelessWidget {
+class RoomHero extends StatefulWidget {
   const RoomHero({
     super.key,
     required this.title,
@@ -47,10 +47,40 @@ class RoomHero extends StatelessWidget {
   final VoidCallback? onTap;
 
   @override
+  State<RoomHero> createState() => _RoomHeroState();
+}
+
+class _RoomHeroState extends State<RoomHero> with SingleTickerProviderStateMixin {
+  // Entrance (§ Animation): the room photo "comes alive" — a gentle scale-in + fade so opening a
+  // room feels like stepping into the space. The overlay text stays put; only the backdrop moves.
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 620));
+  late final Animation<double> _scale = Tween<double>(begin: 1.06, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+  late final Animation<double> _fade = CurvedAnimation(parent: _c, curve: Curves.easeOut);
+
+  @override
+  void initState() {
+    super.initState();
+    _c.forward();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Honour a user's reduced-motion preference — no entrance animation.
+    if (MediaQuery.of(context).disableAnimations) _c.value = 1;
+    final imageUrl = widget.imageUrl;
+    final height = widget.height;
+    final backdrop = (imageUrl != null && imageUrl.isNotEmpty)
+        ? Image.network(imageUrl, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _designed(scheme))
+        : _designed(scheme);
     return GestureDetector(
-      onTap: onTap,
+      onTap: widget.onTap,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AureonRadius.lg),
         child: SizedBox(
@@ -59,16 +89,13 @@ class RoomHero extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (imageUrl != null && imageUrl!.isNotEmpty)
-                Image.network(imageUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _designed(scheme))
-              else
-                _designed(scheme),
+              FadeTransition(opacity: _fade, child: ScaleTransition(scale: _scale, child: backdrop)),
               // Motif watermark on the designed (no-photo) state.
-              if ((imageUrl == null || imageUrl!.isEmpty) && motif != null)
+              if ((imageUrl == null || imageUrl.isEmpty) && widget.motif != null)
                 Positioned(
                   top: 6,
                   right: 14,
-                  child: Text(motif!, style: TextStyle(fontSize: height * 0.34, color: Colors.white.withValues(alpha: 0.12))),
+                  child: Text(widget.motif!, style: TextStyle(fontSize: height * 0.34, color: Colors.white.withValues(alpha: 0.12))),
                 ),
               // Bottom scrim so overlay text stays legible over any image.
               const DecoratedBox(
@@ -89,18 +116,18 @@ class RoomHero extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(title,
+                        Text(widget.title,
                             style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.white)),
-                        if (subtitle != null)
-                          Text(subtitle!, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
+                        if (widget.subtitle != null)
+                          Text(widget.subtitle!, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13)),
                       ],
                     ),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        if (statusValue != null) _overlayStat(statusValue!, statusLabel),
+                        if (widget.statusValue != null) _overlayStat(widget.statusValue!, widget.statusLabel),
                         const Spacer(),
-                        if (metricValue != null) _overlayStat(metricValue!, metricLabel, alignEnd: true),
+                        if (widget.metricValue != null) _overlayStat(widget.metricValue!, widget.metricLabel, alignEnd: true),
                       ],
                     ),
                   ],
@@ -115,8 +142,8 @@ class RoomHero extends StatelessWidget {
 
   /// The designed background: the room-type [gradientColors] when provided, else the accent gradient.
   Widget _designed(ColorScheme scheme) {
-    final colors = gradientColors != null && gradientColors!.length >= 2
-        ? gradientColors!
+    final colors = widget.gradientColors != null && widget.gradientColors!.length >= 2
+        ? widget.gradientColors!
         : [Color.alphaBlend(scheme.primary.withValues(alpha: 0.34), scheme.surface), scheme.surface];
     return DecoratedBox(
       decoration: BoxDecoration(
