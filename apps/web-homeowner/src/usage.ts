@@ -5,7 +5,7 @@
  * higher. This is genuine usage the client observes — never invented data, and it never leaves the
  * device or touches the backend.
  */
-export type UseKind = "device" | "scene";
+export type UseKind = "device" | "scene" | "room";
 type Event = { kind: UseKind; id: string; ts: number };
 
 const KEY = "supreme.usage";

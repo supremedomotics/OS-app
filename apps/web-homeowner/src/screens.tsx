@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useHeroFlip } from "./herotransition.js";
 import { FavHeart, useFavorites } from "./favorites.js";
-import { recordUse } from "./usage.js";
+import { recordUse, byFrequency } from "./usage.js";
 import { EmptyState } from "./empty.js";
 import type {
   CameraStreamResponse,
@@ -208,8 +208,10 @@ export function RoomsScreen({
         </div>
       )}
       <div className="grid">
-        {(home?.rooms ?? []).map((r) => (
-          <RoomCard key={r.id} room={r} onOpen={(rect) => { heroOrigin.current = rect; onSelect(r.id); }} />
+        {/* Frequently-used rooms move higher (§ Personalization) — a stable order until the home has
+            usage history, then the rooms you open most float to the top. */}
+        {byFrequency(home?.rooms ?? [], "room").map((r) => (
+          <RoomCard key={r.id} room={r} onOpen={(rect) => { heroOrigin.current = rect; recordUse("room", r.id); onSelect(r.id); }} />
         ))}
       </div>
     </div>

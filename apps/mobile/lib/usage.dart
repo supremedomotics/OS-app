@@ -23,6 +23,12 @@ class UsageNotifier extends Notifier<List<String>> {
     ref.read(sharedPreferencesProvider).setStringList(_key, trimmed);
   }
 
+  /// Use-count for one item — a frequency signal for ordering (frequently-used first).
+  int count(String kind, String id) {
+    final key = '$kind:$id';
+    return state.where((e) => e == key).length;
+  }
+
   /// Most-recently-used distinct items (newest first).
   List<Use> recent([int limit = 6]) {
     final seen = <String>{};

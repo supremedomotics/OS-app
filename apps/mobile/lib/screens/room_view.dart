@@ -25,10 +25,21 @@ class HomePager extends ConsumerWidget {
         data: (view) {
           // Tablet/desktop widths get the Ovio bento + multi-light disc layout.
           final wide = MediaQuery.of(context).size.width >= 900;
+          // Frequently-used rooms move higher (§ Personalization): a stable order per session that,
+          // once the home has history, puts the rooms you open most first. Read (not watch) so the
+          // pager doesn't reshuffle under you mid-swipe.
+          final usage = ref.read(usageProvider.notifier);
+          final indexed = [for (var i = 0; i < view.rooms.length; i++) (i, view.rooms[i])];
+          indexed.sort((a, b) {
+            final byCount = usage.count('room', b.$2.id).compareTo(usage.count('room', a.$2.id));
+            return byCount != 0 ? byCount : a.$1.compareTo(b.$1); // stable: keep original order on ties
+          });
+          final rooms = [for (final r in indexed) r.$2];
           return SafeArea(
             child: PageView(
+              onPageChanged: (i) => usage.record('room', rooms[i].id),
               children: [
-                for (final room in view.rooms)
+                for (final room in rooms)
                   wide
                       ? TabletRoomView(roomId: room.id, roomName: room.name, areaType: room.areaType, heroImageUrl: room.heroImageUrl)
                       : RoomView(roomId: room.id, roomName: room.name, areaType: room.areaType, heroImageUrl: room.heroImageUrl),

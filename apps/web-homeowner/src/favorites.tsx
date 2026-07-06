@@ -125,7 +125,8 @@ export function RecentlyUsedRow() {
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const rec = recentUses(6);
+    // Only devices & scenes are one-tap re-activatable here; room opens feed ordering elsewhere.
+    const rec = recentUses(12).filter((r): r is { kind: "device" | "scene"; id: string } => r.kind !== "room").slice(0, 6);
     setRecent(rec);
     if (rec.length === 0) return;
     try {
