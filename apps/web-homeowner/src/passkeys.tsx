@@ -92,14 +92,14 @@ export function PasskeysSection() {
   const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString([], { dateStyle: "medium" }) : "never");
   if (!passkeysSupported()) {
     return (
-      <div className="danger-zone" style={{ borderTopColor: "var(--aureon-color-base-hairline)" }}>
+      <div className="sec-block">
         <p className="opt-label">Passkeys</p>
         <p className="muted">This browser doesn’t support passkeys, or the page isn’t on a secure (https) origin.</p>
       </div>
     );
   }
   return (
-    <div className="danger-zone" style={{ borderTopColor: "var(--aureon-color-base-hairline)" }}>
+    <div className="sec-block">
       <p className="opt-label">Passkeys</p>
       <p className="muted">Sign in with your device’s biometrics instead of a password.</p>
       <div className="sess-list" style={{ marginTop: 8 }}>

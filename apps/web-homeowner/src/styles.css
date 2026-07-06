@@ -858,3 +858,9 @@ button.link {
   .page-anim, .drv-detail, .more-sheet, .more-panel, .palette-overlay, .palette, .dev-dot.on { animation: none !important; }
   .ext-card, .area-room, .stat, .qa { transition: none !important; }
 }
+
+/* Settings — consistent building blocks (replaces per-element inline styles). */
+.sec-block { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--aureon-color-base-hairline); }
+.mono { font-family: ui-monospace, Menlo, monospace; }
+.field-gap { height: 8px; }
+.token-shown { display: block; margin-top: 6px; word-break: break-all; }

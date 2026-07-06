@@ -184,7 +184,7 @@ function HomesSettings() {
         <div className="card" style={{ marginTop: 10 }}>
           <p className="opt-label">Add a home</p>
           <input placeholder="Home name (e.g. Dubai Apartment)" value={name} onChange={(e) => setName(e.target.value)} />
-          <div style={{ height: 8 }} />
+          <div className="field-gap" />
           <input placeholder="Hub address (e.g. http://192.168.1.20:8080)" value={url} onChange={(e) => { setUrl(e.target.value); setCheck(null); }} />
           {check && <p className={check.ok ? "muted" : "err"} style={{ marginTop: 6 }}>{check.text}</p>}
           <div className="dev-row2" style={{ marginTop: 8 }}>
@@ -343,10 +343,10 @@ function AccountSettings() {
 
       <p className="opt-label" style={{ marginTop: 18 }}>Change password</p>
       <PasswordInput value={current} onChange={setCurrent} placeholder="Current password" />
-      <div style={{ height: 8 }} />
+      <div className="field-gap" />
       <PasswordInput value={next} onChange={setNext} placeholder="New password (min 8 characters)" />
       {next.length > 0 && <PasswordStrength value={next} />}
-      <div style={{ height: 8 }} />
+      <div className="field-gap" />
       <PasswordInput value={confirm} onChange={setConfirm} placeholder="Confirm new password" />
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
       <button className="primary" disabled={busy || !current || !next} onClick={change} style={{ marginTop: 10 }}>
@@ -444,7 +444,7 @@ function ChangeEmail() {
     <>
       <p className="opt-label">Change email / username</p>
       <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="New email address" />
-      <div style={{ height: 8 }} />
+      <div className="field-gap" />
       <PasswordInput value={password} onChange={setPassword} placeholder="Current password" />
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
       <button className="primary" disabled={busy || !email.trim() || !password} onClick={submit} style={{ marginTop: 10 }}>
@@ -556,14 +556,14 @@ function ApiTokens() {
 
   const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString([], { dateStyle: "medium" }) : "never");
   return (
-    <div className="danger-zone" style={{ borderTopColor: "var(--aureon-color-base-hairline)" }}>
+    <div className="sec-block">
       <p className="opt-label">API tokens</p>
       <p className="muted">Long-lived tokens for scripts and integrations. Treat them like passwords.</p>
 
       {created && (
         <div className="update-avail" style={{ marginTop: 8 }}>
           <strong>New token</strong>
-          <code style={{ display: "block", marginTop: 6, fontFamily: "ui-monospace, monospace", wordBreak: "break-all" }}>{created}</code>
+          <code className="mono token-shown">{created}</code>
           <p className="err" style={{ marginTop: 4 }}>Copy it now — it won't be shown again.</p>
           <button style={{ marginTop: 4 }} onClick={() => setCreated(null)}>Done</button>
         </div>
@@ -609,7 +609,7 @@ function RecoveryCodes() {
   }
 
   return (
-    <div className="danger-zone" style={{ borderTopColor: "var(--aureon-color-base-hairline)" }}>
+    <div className="sec-block">
       <p className="opt-label">Recovery codes</p>
       {!status ? (
         <p className="muted">Loading…</p>
