@@ -103,8 +103,9 @@ export function App() {
     />
   ) : null;
 
+  // Keyed on the active tab so switching destinations replays the enter transition (§ Animation).
   const page = (
-    <>
+    <div className="page-anim" key={tab}>
       {tab === "dashboard" && <DashboardOverview onNavigate={go} />}
       {tab === "discover" && <DiscoverDevices />}
       {tab === "devices" && <DeviceManager />}
@@ -117,7 +118,7 @@ export function App() {
       {tab === "energy" && <Energy />}
       {tab === "settings" && <ThemeSettings />}
       {tab === "developer" && devMode && <DeveloperTools />}
-    </>
+    </div>
   );
 
   // Wide (tablet/desktop): a labelled left rail with every destination. Narrow (phone): a floating

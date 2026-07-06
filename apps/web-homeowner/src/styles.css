@@ -828,3 +828,33 @@ button.link {
 .palette-sub { font-size: 11.5px; color: var(--aureon-color-text-secondary); margin-left: auto; }
 .palette-empty { padding: 18px; color: var(--aureon-color-text-secondary); font-size: 13px; }
 .palette-hint { padding: 8px 18px; font-size: 11px; color: var(--aureon-color-text-secondary); border-top: 1px solid var(--aureon-color-base-hairline); }
+
+/* ── Animation system (§ Animation) — subtle, luxury-restrained motion ─────────── */
+@keyframes page-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes detail-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes palette-in { from { transform: translateY(-10px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.page-anim { animation: page-enter 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Cards: a gentle press + a smooth reveal of the expanded detail. */
+.ext-card, .area-room, .stat, .qa { transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease; }
+.ext-head:active, .area-room:active, .stat:active, .qa:active { transform: scale(0.985); }
+.drv-detail { animation: detail-in 0.2s ease both; }
+
+/* Overlays & sheets glide in. */
+.more-sheet { animation: overlay-in 0.18s ease both; }
+.more-panel { animation: sheet-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.palette-overlay { animation: overlay-in 0.15s ease both; }
+.palette { animation: palette-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Live status dot: a soft pulse when a device is online. */
+@keyframes dot-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--aureon-color-status-good) 40%, transparent); } 50% { box-shadow: 0 0 0 4px transparent; } }
+.dev-dot.on { animation: dot-pulse 2.4s ease-in-out infinite; }
+
+/* Accessibility: honour a user's reduced-motion preference — kill all of the above. */
+@media (prefers-reduced-motion: reduce) {
+  .page-anim, .drv-detail, .more-sheet, .more-panel, .palette-overlay, .palette, .dev-dot.on { animation: none !important; }
+  .ext-card, .area-room, .stat, .qa { transition: none !important; }
+}

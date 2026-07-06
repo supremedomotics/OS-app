@@ -66,6 +66,15 @@ class AureonTheme {
       fontFamily: 'Inter',
       textTheme: _textTheme(textPrimary, textSecondary),
       splashFactory: InkSparkle.splashFactory,
+      // Screen transitions (§ Animation): a restrained fade-and-rise on push; iOS keeps its native
+      // interactive back-swipe. Subtle by design — a luxury app understates its motion.
+      pageTransitionsTheme: const PageTransitionsTheme(builders: {
+        TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.iOS: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.macOS: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+      }),
       cardTheme: CardThemeData(
         color: surfaceRaised,
         elevation: 0,
