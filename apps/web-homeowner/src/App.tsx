@@ -13,6 +13,7 @@ import { ExtensionCenter } from "./extensions.js";
 import { DashboardOverview } from "./dashboard.js";
 import { DeveloperTools } from "./developer.js";
 import { AreasScreen } from "./areas.js";
+import { CommandPalette } from "./palette.js";
 import { Icon } from "./icons.js";
 
 export type Tab =
@@ -58,11 +59,20 @@ export function App() {
   const [states, setStates] = useState<LiveStates>({});
   const [devMode, setDevMode] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const streamRef = useRef<SupremeStream | null>(null);
   const wide = useWide();
 
   useEffect(() => { void fetchSetupStatus().then(setSetup); }, []);
   useEffect(() => { if (authed) void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode))); }, [authed]);
+  // Global command palette: ⌘K / Ctrl-K toggles it from anywhere.
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); }
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, []);
 
   const apply = (deviceId: string, capability: string, state: unknown) =>
     setStates((s) => ({ ...s, [deviceId]: { ...s[deviceId], [capability]: state } }));
@@ -83,6 +93,14 @@ export function App() {
 
   const go = (t: Tab) => { if (t === "rooms") setSelectedRoom(null); setTab(t); setMoreOpen(false); };
   const items = NAV.filter((n) => !n.dev || devMode);
+  const palette = paletteOpen ? (
+    <CommandPalette
+      navItems={items.map((n) => ({ id: n.id, label: n.label }))}
+      onNavigate={go}
+      onSelectRoom={setSelectedRoom}
+      onClose={() => setPaletteOpen(false)}
+    />
+  ) : null;
 
   const page = (
     <>
@@ -109,6 +127,9 @@ export function App() {
         <div className="app-wide">
           <aside className="rail">
             <div className="rail-brand">Supreme</div>
+            <button className="rail-search" onClick={() => setPaletteOpen(true)}>
+              <span className="ic"><Icon name="discover" /></span><span>Search</span><kbd>⌘K</kbd>
+            </button>
             <nav>
               {items.map((n) => (
                 <button key={n.id} className={`rail-item${tab === n.id ? " active" : ""}`} onClick={() => go(n.id)}>
@@ -119,6 +140,7 @@ export function App() {
             {devMode && <div className="rail-dev">DEVELOPMENT BUILD</div>}
           </aside>
           <main className="wide-content">{page}</main>
+          {palette}
         </div>
       </LiveContext.Provider>
     );
@@ -135,6 +157,11 @@ export function App() {
           <div className="more-sheet" onClick={() => setMoreOpen(false)}>
             <div className="more-panel" onClick={(e) => e.stopPropagation()}>
               <div className="more-grip" />
+              <button className="set-row" onClick={() => { setMoreOpen(false); setPaletteOpen(true); }}>
+                <span className="set-ic"><Icon name="discover" /></span>
+                <span className="set-meta"><span className="set-label">Search</span></span>
+                <span className="set-chev">›</span>
+              </button>
               {overflow.map((n) => (
                 <button key={n.id} className={`set-row${tab === n.id ? " active" : ""}`} onClick={() => go(n.id)}>
                   <span className="set-ic"><Icon name={n.icon} /></span>
@@ -155,6 +182,7 @@ export function App() {
             <span className="ic"><Icon name="extensions" /></span><span className="lbl">More</span>
           </button>
         </nav>
+        {palette}
       </div>
     </LiveContext.Provider>
   );

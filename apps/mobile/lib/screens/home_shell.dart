@@ -8,6 +8,7 @@ import 'assistant_screen.dart';
 import 'automations_screen.dart';
 import 'dashboard.dart';
 import 'developer_screen.dart';
+import 'global_search_screen.dart';
 import 'device_manager_screen.dart';
 import 'discover_devices_screen.dart';
 import 'driver_manager_screen.dart';
@@ -58,6 +59,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       builder: (sheet) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           for (final (icon, label, screen) in <(IconData, String, Widget)>[
+            (Icons.search, 'Search', const GlobalSearchScreen()),
             (Icons.travel_explore_outlined, 'Discover Devices', const DiscoverDevicesScreen()),
             (Icons.devices_other_outlined, 'Devices', const DeviceManagerScreen()),
             (Icons.layers_outlined, 'Areas', const AreasScreen()),
