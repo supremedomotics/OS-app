@@ -495,6 +495,7 @@ function SecuritySettings() {
   return (
     <section className="card-section">
       <h2 className="section-title">Security &amp; sign-in</h2>
+      <SecurityScore />
       <p className="muted" style={{ marginTop: -4 }}>Devices signed in to your account. Sign out any you don’t recognise.</p>
 
       {sessions === null && <p className="muted">Loading…</p>}
@@ -586,6 +587,48 @@ function ApiTokens() {
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Token name (e.g. Backup script)" />
         <button className="primary" disabled={busy} onClick={create}>{busy ? "…" : "Create token"}</button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Security score (§ Security Center) — a computed 0–100 posture from real signals: MFA, recovery
+ * codes, at least one passkey, and a verified email. Each unmet item is an actionable line.
+ */
+function SecurityScore() {
+  const [score, setScore] = useState<{ value: number; items: { ok: boolean; text: string }[] } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const [rec, keys, me] = await Promise.all([
+        client.recoveryCodeStatus().catch(() => ({ mfaEnabled: false, remaining: 0 })),
+        client.passkeys().then((r) => r.passkeys.length).catch(() => 0),
+        client.me().then((r) => r.user).catch(() => ({ emailVerified: false })),
+      ]);
+      const items = [
+        { ok: rec.mfaEnabled, text: "Two-factor authentication", weight: 35 },
+        { ok: rec.remaining > 0, text: "Recovery codes generated", weight: 15 },
+        { ok: keys > 0, text: "A passkey registered", weight: 20 },
+        { ok: (me as { emailVerified?: boolean }).emailVerified === true, text: "Email verified", weight: 10 },
+      ];
+      const base = 20;
+      const value = Math.min(100, base + items.reduce((n, i) => n + (i.ok ? i.weight : 0), 0));
+      setScore({ value, items: items.map(({ ok, text }) => ({ ok, text })) });
+    })();
+  }, []);
+
+  if (!score) return null;
+  const band = score.value >= 85 ? "ok" : score.value >= 60 ? "warn" : "warn";
+  return (
+    <div className={`health-hero ${band}`} style={{ marginTop: 8 }}>
+      <span className="hh-dot" />
+      <div style={{ flex: 1 }}>
+        <strong>Security score {score.value}/100</strong>
+        <span className="hh-sub">
+          {score.items.filter((i) => !i.ok).length === 0 ? "Fully protected" : `To improve: ${score.items.filter((i) => !i.ok).map((i) => i.text).join(", ")}`}
+        </span>
+      </div>
+      <span className="health-score">{score.value}</span>
     </div>
   );
 }

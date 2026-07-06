@@ -11,6 +11,26 @@ final _sessionsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => re
 final _recoveryProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).recoveryCodeStatus());
 final _apiTokensProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).apiTokens());
 
+/// Computed security posture (§ Security Center) from real signals: MFA, recovery codes, passkey,
+/// verified email. Returns {value, missing}.
+final _securityScoreProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  final c = ref.watch(clientProvider);
+  final rec = await c.recoveryCodeStatus().catchError((_) => <String, dynamic>{'mfaEnabled': false, 'remaining': 0});
+  final me = await c.me().catchError((_) => <String, dynamic>{'emailVerified': false});
+  // Passkeys are managed on the web (no mobile authenticator UI), so they're not scored here.
+  final items = <(bool, String, int)>[
+    (rec['mfaEnabled'] == true, 'Two-factor authentication', 40),
+    ((rec['remaining'] as num? ?? 0) > 0, 'Recovery codes', 20),
+    (me['emailVerified'] == true, 'Email verified', 15),
+  ];
+  var value = 25;
+  final missing = <String>[];
+  for (final (ok, text, w) in items) {
+    if (ok) { value += w; } else { missing.add(text); }
+  }
+  return {'value': value > 100 ? 100 : value, 'missing': missing};
+});
+
 class SecuritySessionsScreen extends ConsumerWidget {
   const SecuritySessionsScreen({super.key});
 
@@ -29,6 +49,8 @@ class SecuritySessionsScreen extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.all(AureonSpacing.md),
               children: [
+                const _SecurityScoreCard(),
+                const SizedBox(height: AureonSpacing.md),
                 Text('Devices signed in to your account. Sign out any you don’t recognise.',
                     style: Theme.of(context).textTheme.labelMedium),
                 const SizedBox(height: AureonSpacing.md),
@@ -278,5 +300,34 @@ class _ApiTokensState extends ConsumerState<_ApiTokens> {
         ),
       ]),
     ]);
+  }
+}
+
+/// The computed security-score card at the top of Security & sign-in.
+class _SecurityScoreCard extends ConsumerWidget {
+  const _SecurityScoreCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(_securityScoreProvider).valueOrNull;
+    if (s == null) return const SizedBox.shrink();
+    final value = s['value'] as int;
+    final missing = (s['missing'] as List).cast<String>();
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final good = value >= 85;
+    return Container(
+      padding: const EdgeInsets.all(AureonSpacing.md),
+      decoration: BoxDecoration(color: AureonBase.surface, borderRadius: BorderRadius.circular(AureonRadius.lg), border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4))),
+      child: Row(children: [
+        Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: good ? AureonStatus.good : AureonStatus.warning)),
+        const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Security score $value/100', style: text.titleMedium),
+          Text(missing.isEmpty ? 'Fully protected' : 'To improve: ${missing.join(', ')}', style: text.labelSmall),
+        ])),
+        Text('$value', style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
+      ]),
+    );
   }
 }
