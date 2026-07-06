@@ -58,7 +58,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('All systems healthy'), findsWidgets); // health hero
+    expect(find.textContaining('Health score'), findsWidgets); // ops health-score hero
+    expect(find.textContaining('All systems healthy'), findsWidgets); // healthy verdict
     expect(find.text('Online devices'), findsWidgets); // a stat tile
     expect(find.text('Rooms · Scenes'), findsWidgets); // rooms/scenes stat
   });

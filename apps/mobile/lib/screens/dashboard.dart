@@ -4,11 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
 import 'automations_screen.dart';
+import 'backup_screen.dart';
 import 'device_manager_screen.dart';
 import 'discover_devices_screen.dart';
 import 'driver_manager_screen.dart';
 import 'energy_screen.dart';
 import 'home_switcher.dart';
+import 'software_update_screen.dart';
 
 /// Dashboard (§ Dashboard Improvements) — mobile parity with the web overview. The platform overview:
 /// hub/device/extension health aggregated into calm stat tiles + quick actions, from the real signals
@@ -22,6 +24,12 @@ String _greeting() {
   if (h < 21) return 'Good evening';
   return 'Good night';
 }
+
+// Operations signals (§ Operations Dashboard) — all from endpoints we already expose.
+final _opsBackupProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).backupStatus());
+final _opsUpdateProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).systemUpdate());
+final _opsPendingProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).pendingDevices());
+final _opsRunsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).automationRuns());
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -44,7 +52,29 @@ class DashboardScreen extends ConsumerWidget {
     final extErrors = installed.where((d) => d['status'] == 'error').length;
     final backendHealthy = (diag?['backend'] as Map<String, dynamic>?)?['healthy'] == true;
     final autoEnabled = autos.where((a) => a.enabled).length;
-    final healthy = diag != null && backendHealthy && offline == 0 && extErrors == 0;
+    final updatesAvailable = installed.where((d) => d['updateAvailable'] == true).length;
+
+    // Operations signals.
+    final backup = ref.watch(_opsBackupProvider).valueOrNull;
+    final update = ref.watch(_opsUpdateProvider).valueOrNull;
+    final pendingCount = (ref.watch(_opsPendingProvider).valueOrNull ?? const []).length;
+    final autoErrors = (ref.watch(_opsRunsProvider).valueOrNull ?? const [])
+        .where((r) => r['conditionsPassed'] == true && r['ok'] != true).length;
+    final hubUpdate = update?['updateAvailable'] == true;
+
+    // Composite health score (0–100) from real problem signals.
+    int? score;
+    if (diag != null) {
+      var sc = 100;
+      if (!backendHealthy) sc -= 30;
+      sc -= (offline * 5).clamp(0, 20);
+      sc -= (extErrors * 10).clamp(0, 20);
+      sc -= (autoErrors * 5).clamp(0, 15);
+      if (backup != null && (backup['schedule'] as Map?)?['enabled'] == true && backup['lastBackupAt'] == null) sc -= 15;
+      if (security?['triggered'] == true) sc -= 20;
+      score = sc < 0 ? 0 : sc;
+    }
+    final healthy = score != null && score >= 90;
 
     return SafeArea(
       child: RefreshIndicator(
@@ -72,9 +102,10 @@ class DashboardScreen extends ConsumerWidget {
                 Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: diag == null ? scheme.onSurfaceVariant : healthy ? AureonStatus.good : AureonStatus.warning)),
                 const SizedBox(width: 14),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(diag == null ? 'Checking…' : healthy ? 'All systems healthy' : 'Attention needed', style: text.titleMedium),
-                  Text(diag == null ? '' : '$online/$deviceTotal devices online · ${installed.length} extensions${extErrors > 0 ? ' · $extErrors error' : ''}', style: text.labelSmall),
+                  Text(score == null ? 'Checking…' : 'Health score $score/100 · ${score >= 90 ? 'All systems healthy' : score >= 70 ? 'Minor issues' : 'Attention needed'}', style: text.titleMedium),
+                  Text(diag == null ? '' : '$online/$deviceTotal devices online · ${installed.length} extensions${extErrors > 0 ? ' · $extErrors error' : ''}${autoErrors > 0 ? ' · $autoErrors automation error' : ''}', style: text.labelSmall),
                 ])),
+                if (score != null) Text('$score', style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
               ]),
             ),
             const SizedBox(height: AureonSpacing.md),
@@ -90,6 +121,19 @@ class DashboardScreen extends ConsumerWidget {
                 s(_Stat(value: '$autoEnabled/${autos.length}', label: 'Automations', sub: 'enabled', onTap: () => _push(context, const AutomationsScreen()))),
                 s(_Stat(value: (security?['triggered'] == true) ? 'Alert' : _cap((security?['armMode'] as String?) ?? '—'), label: 'Security', sub: 'armed state', color: security?['triggered'] == true ? AureonStatus.critical : null)),
                 s(_Stat(value: counts == null ? '—' : '${counts['rooms']} · ${counts['scenes']}', label: 'Rooms · Scenes', sub: 'in this home')),
+              ]);
+            }),
+            const SizedBox(height: AureonSpacing.sm),
+
+            // Operations tiles — backups / updates / pending / automation errors.
+            Builder(builder: (context) {
+              final half = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
+              Widget s(Widget w) => SizedBox(width: half, child: w);
+              return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+                s(_Stat(value: backup == null ? '—' : '${backup['backupCount']}', label: 'Backups', sub: backup?['lastBackupAt'] == null ? 'none yet' : 'kept', color: (backup != null && (backup['schedule'] as Map?)?['enabled'] == true && backup['lastBackupAt'] == null) ? AureonStatus.warning : null, onTap: () => _push(context, const BackupScreen()))),
+                s(_Stat(value: hubUpdate ? '1' : (updatesAvailable > 0 ? '$updatesAvailable' : '0'), label: 'Updates', sub: hubUpdate ? 'hub v${(update?['latest'] as Map?)?['version']}' : updatesAvailable > 0 ? 'extensions' : 'up to date', color: (hubUpdate || updatesAvailable > 0) ? AureonStatus.warning : null, onTap: () => _push(context, const SoftwareUpdateScreen()))),
+                s(_Stat(value: '$pendingCount', label: 'Pending approval', sub: pendingCount > 0 ? 'review devices' : 'none', color: pendingCount > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const DeviceManagerScreen()))),
+                s(_Stat(value: '$autoErrors', label: 'Automation errors', sub: autoErrors > 0 ? 'check activity' : 'none', color: autoErrors > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const AutomationsScreen()))),
               ]);
             }),
             const SizedBox(height: AureonSpacing.lg),

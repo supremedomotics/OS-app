@@ -796,3 +796,6 @@ button.link {
 .pending { margin-bottom: 16px; }
 .pending-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .pending-card { border-color: color-mix(in srgb, var(--aureon-color-status-warning) 40%, transparent); }
+
+/* Operations command-center — health score badge (§ Operations Dashboard). */
+.health-score { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: .9; }
