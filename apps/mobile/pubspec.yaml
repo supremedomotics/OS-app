@@ -18,6 +18,7 @@ dependencies:
     path: ../../packages/aureon-flutter
   supreme_sdk:
     path: ../../packages/supreme-sdk-dart
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

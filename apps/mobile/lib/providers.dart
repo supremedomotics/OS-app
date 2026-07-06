@@ -1,10 +1,18 @@
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import 'cloud/multi_home.dart';
 import 'room_image.dart';
+
+/// The app's local key/value store, initialised once in main() and injected here so providers can
+/// read a persisted value synchronously at creation. Overridden in ProviderScope; the fallback
+/// throw makes a missing override a loud programmer error rather than silent data loss.
+final sharedPreferencesProvider = Provider<SharedPreferences>(
+  (ref) => throw StateError('sharedPreferencesProvider must be overridden in main()'),
+);
 
 /// Riverpod wiring over the generated Supreme SDK (§11.3). Optimistic updates are
 /// reconciled by the WSS state stream. State is held in Supreme terms only.
@@ -21,9 +29,37 @@ final roomPhotoProvider = FutureProvider.family<String?, RoomKey>((ref, room) as
 });
 
 /// Appearance (§11.2 Themes): base palette mode (Luxury Black / White / Automatic) and
-/// the accent ramp (Gold / Silver). Held in app state; the MaterialApp rebuilds on change.
-final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.dark);
-final accentProvider = StateProvider<AureonAccent>((ref) => AureonAccent.gold);
+/// the accent ramp (Gold / Silver). Persisted to local prefs so the choice survives restarts; the
+/// MaterialApp rebuilds on change. Read with watch(); change with read(provider.notifier).set(...).
+class ThemeModeNotifier extends Notifier<ThemeMode> {
+  @override
+  ThemeMode build() {
+    final saved = ref.watch(sharedPreferencesProvider).getString('appearance.themeMode');
+    return ThemeMode.values.where((m) => m.name == saved).firstOrNull ?? ThemeMode.dark;
+  }
+
+  void set(ThemeMode mode) {
+    state = mode;
+    ref.read(sharedPreferencesProvider).setString('appearance.themeMode', mode.name);
+  }
+}
+
+final themeModeProvider = NotifierProvider<ThemeModeNotifier, ThemeMode>(ThemeModeNotifier.new);
+
+class AccentNotifier extends Notifier<AureonAccent> {
+  @override
+  AureonAccent build() {
+    final saved = ref.watch(sharedPreferencesProvider).getString('appearance.accent');
+    return AureonAccent.values.where((a) => a.name == saved).firstOrNull ?? AureonAccent.gold;
+  }
+
+  void set(AureonAccent accent) {
+    state = accent;
+    ref.read(sharedPreferencesProvider).setString('appearance.accent', accent.name);
+  }
+}
+
+final accentProvider = NotifierProvider<AccentNotifier, AureonAccent>(AccentNotifier.new);
 
 /// The homeowner's custom scene order (ids), set in the Scenes "Edit" mode. In-memory
 /// for now (persisting it is a small follow-up).

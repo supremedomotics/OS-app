@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import 'package:supreme_mobile/cloud/multi_home.dart';
@@ -30,10 +31,20 @@ Device _light() => Device(
       },
     );
 
-Widget _wrap(Widget child, {List<Override> overrides = const []}) =>
-    ProviderScope(overrides: overrides, child: MaterialApp(home: child));
+late SharedPreferences _prefs;
+
+Widget _wrap(Widget child, {List<Override> overrides = const []}) => ProviderScope(
+      overrides: [sharedPreferencesProvider.overrideWithValue(_prefs), ...overrides],
+      child: MaterialApp(home: child),
+    );
 
 void main() {
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    _prefs = await SharedPreferences.getInstance();
+  });
+
   testWidgets('dashboard renders the project overview from live signals', (tester) async {
     await tester.binding.setSurfaceSize(const Size(430, 932));
     addTearDown(() => tester.binding.setSurfaceSize(null));

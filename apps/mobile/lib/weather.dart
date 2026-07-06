@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
+import 'providers.dart';
+
 /// Weather (§ Home Dashboard → Weather) — real local conditions + hourly forecast from Open-Meteo, a
 /// free keyless service, with a city picker backed by Open-Meteo's geocoding API. Mirrors the web
 /// dashboard. This is a CLIENT-SIDE concern: the app fetches Open-Meteo directly, touching no
@@ -18,7 +20,32 @@ class GeoLoc {
 }
 
 /// The active weather location; defaults to a sensible home coordinate, changed by the city picker.
-final locationProvider = StateProvider<GeoLoc>((ref) => const GeoLoc(lat: 19.076, lon: 72.8777, label: 'Home'));
+/// Persisted to local prefs (as "lat|lon|label") so the chosen city survives app restarts. Read with
+/// watch(); change with read(locationProvider.notifier).set(...).
+const _defaultLoc = GeoLoc(lat: 19.076, lon: 72.8777, label: 'Home');
+
+class LocationNotifier extends Notifier<GeoLoc> {
+  @override
+  GeoLoc build() {
+    final saved = ref.watch(sharedPreferencesProvider).getString('weather.location');
+    if (saved != null) {
+      final parts = saved.split('|');
+      final lat = parts.isNotEmpty ? double.tryParse(parts[0]) : null;
+      final lon = parts.length > 1 ? double.tryParse(parts[1]) : null;
+      if (lat != null && lon != null) {
+        return GeoLoc(lat: lat, lon: lon, label: parts.length > 2 ? parts.sublist(2).join('|') : 'Home');
+      }
+    }
+    return _defaultLoc;
+  }
+
+  void set(GeoLoc loc) {
+    state = loc;
+    ref.read(sharedPreferencesProvider).setString('weather.location', '${loc.lat}|${loc.lon}|${loc.label}');
+  }
+}
+
+final locationProvider = NotifierProvider<LocationNotifier, GeoLoc>(LocationNotifier.new);
 
 class Hour {
   const Hour({required this.time, required this.tempC, required this.code});
@@ -223,7 +250,7 @@ class _WeatherSheetState extends ConsumerState<_WeatherSheet> {
             leading: const Icon(Icons.place_outlined),
             title: Text(c.label),
             onTap: () {
-              ref.read(locationProvider.notifier).state = GeoLoc(lat: c.lat, lon: c.lon, label: c.name);
+              ref.read(locationProvider.notifier).set(GeoLoc(lat: c.lat, lon: c.lon, label: c.name));
               Navigator.pop(context);
             },
           ),
