@@ -791,3 +791,8 @@ button.link {
 .pw-bar { flex: 1; height: 4px; border-radius: 999px; background: var(--aureon-color-base-hairline); overflow: hidden; }
 .pw-fill { display: block; height: 100%; border-radius: 999px; transition: width .15s; }
 .pw-label { font-size: 11px; min-width: 64px; text-align: right; }
+
+/* Device Approval — pending queue (§ Device Approval). */
+.pending { margin-bottom: 16px; }
+.pending-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.pending-card { border-color: color-mix(in srgb, var(--aureon-color-status-warning) 40%, transparent); }

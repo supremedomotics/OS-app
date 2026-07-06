@@ -57,6 +57,53 @@ describe("Gateway persistence + restart", () => {
     await ctx2.shutdown();
   });
 
+  it("queues devices for approval, then approves one into a room; rejects stay out (§ Device Approval)", async () => {
+    const s = buildStores(db);
+    const config = loadConfig({ SUPREME_LOG_LEVEL: "silent" });
+    const ctx = await AppContext.create(config, { ...deps(), db, pendingDeviceStore: s.pendingDevices });
+    const inst = ctx.installer;
+    const home = await ctx.home.getHome();
+    const homeId = home!.id as string;
+
+    // Two devices announce themselves (as discovery would stage them). Upsert dedupes by backendId.
+    // No protocol here → approval just commissions (auto-bind is exercised by the protocol-binding
+    // e2e; this test focuses on the approval queue itself).
+    const stage = (backendId: string, name: string) =>
+      s.pendingDevices.upsert({
+        homeId, backendId, suggestedName: name, protocol: null, source: "backend",
+        capabilities: ["onoff"], network: { ip: "192.168.1.50", mac: "aabbccddeeff" },
+        seenAt: new Date().toISOString(), newId: `dev-${backendId}`,
+      });
+    await stage("mqtt.lamp", "Hallway Lamp");
+    await stage("mqtt.lamp", "Hallway Lamp"); // same backendId → still one entry
+    await stage("mqtt.fan", "Study Fan");
+
+    const pending = await inst.listPendingDevices();
+    expect(pending).toHaveLength(2);
+    const lamp = pending.find((p) => p.backendId === "mqtt.lamp")!;
+    expect(lamp.network?.ip).toBe("192.168.1.50");
+
+    const roomId = (await ctx.home.listRooms())[0]!.id;
+    const before = (await ctx.home.listDevices()).length;
+
+    // Approve the lamp → commissioned into the room (carrying its captured IP/MAC), leaves the queue.
+    const device = await inst.approvePendingDevice(lamp.id, { roomId, name: "Approved Lamp" });
+    expect(device.roomId).toBe(roomId);
+    expect((device.metadata as { network?: { ip?: string } }).network?.ip).toBe("192.168.1.50");
+    expect((await ctx.home.listDevices()).length).toBe(before + 1);
+    expect((await inst.listPendingDevices()).some((p) => p.id === lamp.id)).toBe(false);
+
+    // Reject the fan → it's gone from the queue and a re-stage of the same backendId won't resurface it.
+    const fan = (await inst.listPendingDevices())[0]!;
+    await inst.rejectPendingDevice(fan.id);
+    expect(await inst.listPendingDevices()).toHaveLength(0);
+    await stage("mqtt.fan", "Study Fan");
+    expect((await inst.listPendingDevices()).some((p) => p.backendId === "mqtt.fan")).toBe(false);
+
+    await new Promise((r) => setTimeout(r, 50));
+    await ctx.shutdown();
+  });
+
   it("persists backups + schedule, dry-runs, and restores rollback-safe (§ Backup)", async () => {
     const s = buildStores(db);
     const config = loadConfig({ SUPREME_LOG_LEVEL: "silent" });

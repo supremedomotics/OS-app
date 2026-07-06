@@ -9,6 +9,8 @@ import '../providers.dart';
 /// state, type and capabilities, and the actions the backend supports today (rename, move room,
 /// remove). Reuses the SDK's devices()/updateDevice()/deleteDevice() — no duplicate device system.
 final _devicesProvider = FutureProvider<List<Device>>((ref) => ref.watch(clientProvider).devices());
+/// Device Approval (§ Device Approval): the pending queue.
+final _pendingProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).pendingDevices());
 
 class DeviceManagerScreen extends ConsumerWidget {
   const DeviceManagerScreen({super.key});
@@ -41,6 +43,7 @@ class DeviceManagerScreen extends ConsumerWidget {
               children: [
                 Text('${list.length} devices · ${list.where(_online).length} online', style: Theme.of(context).textTheme.labelMedium),
                 const SizedBox(height: AureonSpacing.sm),
+                _PendingApproval(rooms: rooms, onChanged: () => ref.invalidate(_devicesProvider)),
                 if (list.isEmpty)
                   Padding(padding: const EdgeInsets.all(20), child: Text('No devices yet — use Discover Devices to add some.', style: Theme.of(context).textTheme.labelMedium)),
                 for (final k in keys) ...[
@@ -175,6 +178,117 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
             ),
           ]),
         ],
+      ),
+    );
+  }
+}
+
+/// Device Approval queue (§ Device Approval) — scan, then approve into a room or reject.
+class _PendingApproval extends ConsumerWidget {
+  const _PendingApproval({required this.rooms, required this.onChanged});
+  final List<Room> rooms;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pending = ref.watch(_pendingProvider);
+    final text = Theme.of(context).textTheme;
+    final list = pending.valueOrNull ?? const [];
+
+    Future<void> scan() async {
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        await ref.read(clientProvider).scanForApproval();
+        ref.invalidate(_pendingProvider);
+      } catch (e) {
+        messenger.showSnackBar(SnackBar(content: Text('Scan failed: $e')));
+      }
+    }
+
+    if (list.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(onPressed: scan, icon: const Icon(Icons.wifi_find_outlined, size: 18), label: const Text('Scan for new devices')),
+        ),
+      );
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('Pending approval · ${list.length}', style: text.titleSmall),
+        TextButton(onPressed: scan, child: const Text('Rescan')),
+      ]),
+      Text('Approve devices you recognise; reject the rest.', style: text.labelSmall),
+      for (final p in list) _PendingCard(device: p, rooms: rooms, onChanged: () { ref.invalidate(_pendingProvider); onChanged(); }),
+      const Divider(height: 24),
+    ]);
+  }
+}
+
+class _PendingCard extends ConsumerStatefulWidget {
+  const _PendingCard({required this.device, required this.rooms, required this.onChanged});
+  final Map<String, dynamic> device;
+  final List<Room> rooms;
+  final VoidCallback onChanged;
+
+  @override
+  ConsumerState<_PendingCard> createState() => _PendingCardState();
+}
+
+class _PendingCardState extends ConsumerState<_PendingCard> {
+  String? _roomId;
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.device;
+    _roomId ??= widget.rooms.isNotEmpty ? widget.rooms.first.id : null;
+    final net = d['network'] as Map<String, dynamic>?;
+    final caps = ((d['capabilities'] as List?) ?? const []).cast<String>();
+    final text = Theme.of(context).textTheme;
+    final messenger = ScaffoldMessenger.of(context);
+
+    Future<void> act(Future<void> Function() fn) async {
+      setState(() => _busy = true);
+      try { await fn(); widget.onChanged(); }
+      catch (e) { messenger.showSnackBar(SnackBar(content: Text('Failed: $e'))); if (mounted) setState(() => _busy = false); }
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AureonSpacing.md),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.verified_user_outlined, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(d['suggestedName'] as String? ?? 'Device', style: text.titleSmall)),
+            const Chip(label: Text('Pending', style: TextStyle(fontSize: 10)), visualDensity: VisualDensity.compact),
+          ]),
+          Text('${(d['protocol'] as String?)?.toUpperCase() ?? d['source']} · ${caps.join(', ')}${net?['ip'] != null ? ' · ${net!['ip']}' : ''}', style: text.labelSmall),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: _roomId,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Approve into room'),
+            items: [for (final r in widget.rooms) DropdownMenuItem(value: r.id, child: Text(r.name))],
+            onChanged: (v) => setState(() => _roomId = v),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            FilledButton(
+              onPressed: _busy || _roomId == null ? null : () => act(() => ref.read(clientProvider).approvePendingDevice(d['id'] as String, roomId: _roomId!)),
+              child: Text(_busy ? '…' : 'Approve'),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(foregroundColor: AureonStatus.critical),
+              onPressed: _busy ? null : () => act(() => ref.read(clientProvider).rejectPendingDevice(d['id'] as String)),
+              child: const Text('Reject'),
+            ),
+          ]),
+        ]),
       ),
     );
   }

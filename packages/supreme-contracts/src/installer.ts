@@ -74,6 +74,30 @@ export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 export const DiscoveryList = z.object({ discovered: z.array(DiscoveredDeviceView) });
 export type DiscoveryList = z.infer<typeof DiscoveryList>;
 
+/** A device discovered but awaiting installer approval (§ Device Approval). */
+export const PendingDeviceView = z.object({
+  id: z.string(),
+  backendId: z.string(),
+  suggestedName: z.string(),
+  protocol: z.string().nullable(),
+  source: z.string(),
+  capabilities: z.array(z.string()),
+  network: NetworkInfo.nullable(),
+  firstSeen: z.string(),
+  lastSeen: z.string(),
+});
+export type PendingDeviceView = z.infer<typeof PendingDeviceView>;
+
+export const PendingDeviceList = z.object({ pending: z.array(PendingDeviceView) });
+export type PendingDeviceList = z.infer<typeof PendingDeviceList>;
+
+export const ApproveDeviceRequest = z.object({
+  name: z.string().optional(),
+  roomId: z.string(),
+  capabilities: z.array(CapabilityKind).optional(),
+});
+export type ApproveDeviceRequest = z.infer<typeof ApproveDeviceRequest>;
+
 export const DiscoverRequest = z.object({ protocol: ProtocolKind.optional() });
 export type DiscoverRequest = z.infer<typeof DiscoverRequest>;
 

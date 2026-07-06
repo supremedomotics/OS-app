@@ -4,6 +4,7 @@ import {
   CommissionRequest,
   DiscoverRequest,
   InstallDriverRequest,
+  ApproveDeviceRequest,
   BackupScheduleInput,
   RestoreRequest,
   RollbackDriverRequest,
@@ -21,6 +22,7 @@ import {
   type BackupList,
   type BackupStatus,
   type BackupScheduleResponse,
+  type PendingDeviceList,
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
@@ -208,6 +210,62 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const { protocol } = DiscoverRequest.parse(req.body ?? {});
       const body: DiscoveryList = { discovered: await i().discover(protocol) };
       reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Device Approval (§ Device Approval): scan → pending queue → approve/reject ─────
+  app.post("/v1/commissioning/scan", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { protocol } = DiscoverRequest.parse(req.body ?? {});
+      reply.send({ pending: await i().scanForApproval(protocol) } satisfies PendingDeviceList);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get("/v1/devices/pending", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "view");
+      reply.send({ pending: await i().listPendingDevices() } satisfies PendingDeviceList);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/devices/pending/:id/approve", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const input = ApproveDeviceRequest.parse(req.body);
+      const device = await i().approvePendingDevice(req.params.id, { ...input, roomId: input.roomId as RoomId });
+      reply.code(201).send({ device });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/devices/pending/:id/reject", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      await i().rejectPendingDevice(req.params.id);
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/v1/devices/pending/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      await i().removePendingDevice(req.params.id);
+      reply.code(204).send();
     } catch (err) {
       sendError(reply, err);
     }

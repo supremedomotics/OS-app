@@ -48,7 +48,7 @@ import {
   type BackupInspection,
   type SignedBackup,
 } from "@supreme/backup";
-import type { SqlDb, IBackupStore, BackupRecordMeta } from "@supreme/persistence";
+import type { SqlDb, IBackupStore, BackupRecordMeta, IPendingDeviceStore, PendingDeviceRecord } from "@supreme/persistence";
 import type { GatewayConfig } from "./config.js";
 
 /** SKU tiers, lowest → highest. A higher tier entitles all lower SKUs. */
@@ -83,6 +83,8 @@ export interface InstallerDeps {
   protocolBindingStore?: IProtocolBindingStore;
   /** Backup history store (§ Backup). When absent, backups aren't persisted (dev/in-memory). */
   backupStore?: IBackupStore;
+  /** Pending-device queue (§ Device Approval). When absent, staging is a no-op. */
+  pendingDeviceStore?: IPendingDeviceStore;
 }
 
 /**
@@ -553,6 +555,76 @@ export class InstallerServices {
 
   discover(protocol?: ProtocolKind) {
     return this.commissioning.discover(protocol);
+  }
+
+  // ── Device Approval (§ Device Approval) ──────────────────────────────────────
+
+  /**
+   * Scan every technology and STAGE the results into the pending-device queue (dedupe by backendId,
+   * refreshing last-seen), then return the current queue. Nothing is trusted/commissioned until an
+   * installer approves it — the security-conscious counterpart to one-tap discovery.
+   */
+  async scanForApproval(protocol?: ProtocolKind): Promise<PendingDeviceRecord[]> {
+    const found = await this.commissioning.discover(protocol);
+    const store = this.d.pendingDeviceStore;
+    if (store) {
+      const seenAt = new Date().toISOString();
+      for (const d of found) {
+        await store.upsert({
+          homeId: this.d.homeId,
+          backendId: d.backendId,
+          suggestedName: d.suggestedName,
+          protocol: d.protocol ?? null,
+          source: d.source,
+          capabilities: d.capabilities as string[],
+          network: d.network ?? null,
+          seenAt,
+          newId: newId("device") as string,
+        });
+      }
+    }
+    return this.listPendingDevices();
+  }
+
+  listPendingDevices(): Promise<PendingDeviceRecord[]> {
+    return this.d.pendingDeviceStore ? this.d.pendingDeviceStore.list(this.d.homeId) : Promise.resolve([]);
+  }
+
+  private async requirePending(id: string): Promise<PendingDeviceRecord> {
+    const rec = this.d.pendingDeviceStore ? await this.d.pendingDeviceStore.get(this.d.homeId, id) : null;
+    if (!rec) throw new SupremeError("not_found", "pending device not found");
+    return rec;
+  }
+
+  /**
+   * Approve a pending device: commission it into a room (reusing the commissioning service — no
+   * duplicate device path), carrying over its captured protocol + network, then drop it from the
+   * queue. Optional overrides let the installer rename / pick the room at approval time.
+   */
+  async approvePendingDevice(id: string, input: { name?: string; roomId: RoomId; capabilities?: CapabilityKind[] }) {
+    const rec = await this.requirePending(id);
+    const device = await this.commissionDevice({
+      backendId: rec.backendId,
+      name: input.name?.trim() || rec.suggestedName,
+      roomId: input.roomId,
+      capabilities: (input.capabilities ?? (rec.capabilities as CapabilityKind[])),
+      ...(rec.protocol ? { protocol: rec.protocol } : {}),
+      ...(rec.network ? { network: rec.network } : {}),
+    });
+    await this.d.pendingDeviceStore?.remove(this.d.homeId, id);
+    return device;
+  }
+
+  /** Reject a pending device — kept as a `rejected` record so a re-scan doesn't resurface it. */
+  async rejectPendingDevice(id: string): Promise<void> {
+    await this.requirePending(id);
+    await this.d.pendingDeviceStore?.setStatus(this.d.homeId, id, "rejected");
+  }
+
+  /** Remove a pending device entirely (a future scan may surface it again). */
+  async removePendingDevice(id: string): Promise<void> {
+    await this.requirePending(id);
+    await this.d.pendingDeviceStore?.remove(this.d.homeId, id);
   }
 
   // ── Diagnostics ──────────────────────────────────────────────────────────────

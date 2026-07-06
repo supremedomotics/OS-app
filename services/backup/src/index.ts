@@ -39,7 +39,7 @@ export interface SignedBackup {
 
 /** Tables never included in a backup (transient/derived). `backups` is excluded so backups never
  * nest inside one another (which would grow exponentially). */
-const EXCLUDED = new Set(["schema_migrations", "backups"]);
+const EXCLUDED = new Set(["schema_migrations", "backups", "pending_devices"]);
 
 async function listTables(db: BackupDb): Promise<string[]> {
   const { rows } = await db.query<{ table_name: string }>(

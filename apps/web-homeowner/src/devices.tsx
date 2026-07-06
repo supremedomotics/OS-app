@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
 import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
+import { PendingApproval } from "./pending.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -80,6 +81,8 @@ export function DeviceManager() {
         <h1 className="title">Devices</h1>
         <p className="sub">{devices ? `${filtered.length} devices · ${onlineCount} online` : "Loading…"}</p>
       </div>
+      <PendingApproval rooms={rooms} onChanged={load} />
+
       <input className="search" placeholder="Search devices…" value={q} onChange={(e) => setQ(e.target.value)} />
 
       {byRoom.map(([room, list]) => (

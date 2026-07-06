@@ -861,6 +861,56 @@ class SupremeClient {
         .cast<Map<String, dynamic>>();
   }
 
+  // ── Device Approval (§ Device Approval) ─────────────────────────────────────
+  /// Scan every technology and stage results into the pending-approval queue; returns the queue.
+  Future<List<Map<String, dynamic>>> scanForApproval([String? protocol]) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/scan'),
+      headers: _authHeaders,
+      body: jsonEncode(protocol == null ? {} : {'protocol': protocol}),
+    );
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['pending'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// The pending-device queue awaiting approval.
+  Future<List<Map<String, dynamic>>> pendingDevices() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/devices/pending'), headers: _authHeaders);
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['pending'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Approve a pending device → commissions it into [roomId].
+  Future<Map<String, dynamic>> approvePendingDevice(String id,
+      {required String roomId, String? name, List<String>? capabilities}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/devices/pending/$id/approve'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'roomId': roomId,
+        if (name != null) 'name': name,
+        if (capabilities != null) 'capabilities': capabilities,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['device'] as Map<String, dynamic>;
+  }
+
+  /// Reject a pending device (won't resurface on the next scan).
+  Future<void> rejectPendingDevice(String id) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/devices/pending/$id/reject'),
+        headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+  }
+
+  /// Remove a pending device from the queue.
+  Future<void> removePendingDevice(String id) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/devices/pending/$id'), headers: _authHeaders);
+    _ensureOk(res);
+  }
+
   /// Commission a discovered device into a room (optionally binding it to its native bus in one step).
   Future<Map<String, dynamic>> commission({
     required String backendId,

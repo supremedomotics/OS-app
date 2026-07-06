@@ -36,6 +36,7 @@ import {
   type SystemUpdate,
   type SessionList,
   type RevokeOthersResponse,
+  type PendingDeviceList,
   type RestoreResponse,
   type BackupInspectionResponse,
   type BackupStatus,
@@ -291,6 +292,24 @@ export class SupremeClient {
 
   discover(protocol?: ProtocolKind): Promise<DiscoveryList> {
     return this.request("POST", "/v1/commissioning/discover", { protocol }) as Promise<DiscoveryList>;
+  }
+
+  // ── Device Approval (§ Device Approval) ──────────────────────────────────────
+  /** Scan every technology and stage results into the pending-approval queue; returns the queue. */
+  scanForApproval(protocol?: string): Promise<PendingDeviceList> {
+    return this.request("POST", "/v1/commissioning/scan", protocol ? { protocol } : {}) as Promise<PendingDeviceList>;
+  }
+  pendingDevices(): Promise<PendingDeviceList> {
+    return this.request("GET", "/v1/devices/pending") as Promise<PendingDeviceList>;
+  }
+  approvePendingDevice(id: string, input: { name?: string; roomId: string; capabilities?: string[] }): Promise<{ device: { id: string; name: string } }> {
+    return this.request("POST", `/v1/devices/pending/${id}/approve`, input) as Promise<{ device: { id: string; name: string } }>;
+  }
+  async rejectPendingDevice(id: string): Promise<void> {
+    await this.request("POST", `/v1/devices/pending/${id}/reject`);
+  }
+  async removePendingDevice(id: string): Promise<void> {
+    await this.request("DELETE", `/v1/devices/pending/${id}`);
   }
   commission(input: CommissionRequest): Promise<{ device: { id: string; name: string } }> {
     return this.request("POST", "/v1/commissioning/commission", input) as Promise<{

@@ -33,7 +33,7 @@ import {
   type IPresenceStore,
 } from "@supreme/messaging";
 import type { IProtocolBindingStore } from "@supreme/integration-layer";
-import type { IBackupStore } from "@supreme/persistence";
+import type { IBackupStore, IPendingDeviceStore } from "@supreme/persistence";
 import {
   AutomationEngine,
   AutomationService,
@@ -106,6 +106,8 @@ export interface AppDeps {
   pushTokenStore?: IPushTokenStore;
   /** Backup history store (§ Backup) — enables persisted backups + schedule + health. */
   backupStore?: IBackupStore;
+  /** Pending-device queue (§ Device Approval). */
+  pendingDeviceStore?: IPendingDeviceStore;
   /** Override push providers (tests); otherwise selected from config. */
   pushProviders?: IPushProvider[];
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
@@ -466,6 +468,7 @@ export class AppContext {
       scanners: deps.scanners,
       protocolBindingStore: deps.protocolBindingStore,
       backupStore: deps.backupStore,
+      pendingDeviceStore: deps.pendingDeviceStore,
     });
     await this.installer.init();
 

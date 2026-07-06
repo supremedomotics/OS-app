@@ -33,6 +33,7 @@ import { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 import { PushTokenRepo } from "./repositories/push-token-repo.js";
 import { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 import { BackupRepo } from "./repositories/backup-repo.js";
+import { PendingDeviceRepo, type IPendingDeviceStore } from "./repositories/pending-device-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -52,6 +53,12 @@ export {
   type BackupRecord,
   type BackupRecordMeta,
 } from "./repositories/backup-repo.js";
+export {
+  PendingDeviceRepo,
+  type IPendingDeviceStore,
+  type PendingDeviceRecord,
+  type StagePendingInput,
+} from "./repositories/pending-device-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
@@ -74,6 +81,7 @@ export interface PersistenceStores {
   migrationPolicy: IMigrationPolicyStore;
   config: IConfigStore;
   backups: IBackupStore;
+  pendingDevices: IPendingDeviceStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -93,6 +101,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     migrationPolicy: new MigrationPolicyRepo(db),
     config: new ConfigRepo(db),
     backups: new BackupRepo(db),
+    pendingDevices: new PendingDeviceRepo(db),
   };
 }
 
