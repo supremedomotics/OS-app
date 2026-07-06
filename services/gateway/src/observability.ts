@@ -135,9 +135,10 @@ export function attachObservability(app: FastifyInstance, ctx: AppContext): Metr
 
   app.addHook("onRequest", async (req) => {
     (req as unknown as Record<symbol, number>)[startKey] = performance.now();
-    // One server span per request. Non-recording (zero-cost) unless tracing is on.
+    // One server span per request. Non-recording (zero-cost) unless tracing is on. The correlation
+    // id (req.id) is attached so traces and structured logs share one key.
     const span = tracer.startSpan(`${req.method} ${req.url.split("?")[0]}`, {
-      attributes: { "http.request.method": req.method, "url.path": req.url.split("?")[0] },
+      attributes: { "http.request.method": req.method, "url.path": req.url.split("?")[0], "request.id": String(req.id) },
     });
     (req as unknown as Record<symbol, Span>)[spanKey] = span;
   });

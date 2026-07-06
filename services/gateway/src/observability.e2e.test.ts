@@ -39,6 +39,18 @@ describe("Gateway observability", () => {
     expect(body.checks.database).toBe("not-configured");
   });
 
+  it("stamps a correlation id on every response and honors an inbound one (§ Observability)", async () => {
+    // A request with no id gets a generated one echoed back.
+    const generated = await fetch(`${baseUrl}/healthz`);
+    const id = generated.headers.get("x-request-id");
+    expect(id).toBeTruthy();
+    expect(id!.length).toBeGreaterThan(0);
+
+    // An inbound correlation id is preserved end-to-end (cross-service tracing).
+    const correlated = await fetch(`${baseUrl}/healthz`, { headers: { "x-request-id": "trace-abc-123" } });
+    expect(correlated.headers.get("x-request-id")).toBe("trace-abc-123");
+  });
+
   it("exposes Prometheus metrics that count served requests", async () => {
     // Generate some traffic on a known route first.
     await fetch(`${baseUrl}/healthz`);

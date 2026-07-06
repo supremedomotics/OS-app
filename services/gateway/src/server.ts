@@ -3,6 +3,7 @@ import fastifyHelmet from "@fastify/helmet";
 import fastifyCors from "@fastify/cors";
 import fastifyRateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
+import { randomUUID } from "node:crypto";
 import type { AppContext } from "./context.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerSetupRoutes } from "./routes/setup.js";
@@ -28,7 +29,24 @@ import { attachStream } from "./stream.js";
  */
 export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   // 1 MB body cap blunts oversized-payload abuse on the JSON API.
-  const app = Fastify({ logger: { level: ctx.config.logLevel }, bodyLimit: 1_048_576 });
+  const app = Fastify({
+    logger: { level: ctx.config.logLevel },
+    bodyLimit: 1_048_576,
+    // Correlation id (§ Observability): honor an inbound x-request-id / x-correlation-id so a request
+    // can be traced across services (client → gateway → sidecars); otherwise mint one. Fastify stamps
+    // it on the per-request child logger, so EVERY structured log line for the request carries `reqId`.
+    requestIdHeader: false,
+    genReqId: (req) => {
+      const inbound = (req.headers["x-request-id"] ?? req.headers["x-correlation-id"]) as string | string[] | undefined;
+      const id = Array.isArray(inbound) ? inbound[0] : inbound;
+      return id && id.length > 0 && id.length <= 200 ? id : randomUUID();
+    },
+  });
+
+  // Echo the correlation id back so clients (and their logs) can line the request up end-to-end.
+  app.addHook("onRequest", async (req, reply) => {
+    reply.header("x-request-id", req.id);
+  });
 
   // ── Security middleware (§ production hardening) ──────────────────────────────
   // Standard hardening headers (HSTS, no-sniff, frame-deny, etc.).

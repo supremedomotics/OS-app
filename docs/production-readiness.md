@@ -133,7 +133,10 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       exported over OTLP/HTTP when `SUPREME_OTEL_ENDPOINT` is set; no-op (zero cost)
       otherwise. Cross-service context propagation to the Python sidecars is a follow-on
 - [x] Alerting + on-call runbooks + SLOs — `infra/observability/{alerts.yml,runbooks.md,slo.md}`
-- [ ] Structured request logging with correlation ids (partial: pino)
+- [x] Structured request logging with correlation ids — pino per-request child logger stamps
+      `reqId` on every line; the gateway honors an inbound `x-request-id`/`x-correlation-id`
+      (cross-service tracing) or mints one, echoes it on the response, and attaches it to the
+      request's trace span so logs + traces share one key
 - [x] Health/readiness probes beyond `/healthz` — `/readyz` is dependency-aware
       (backend health + DB reachability), returns 503 when not ready
 
