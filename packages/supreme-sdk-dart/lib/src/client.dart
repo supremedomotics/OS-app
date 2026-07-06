@@ -376,6 +376,28 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// Update a scene's editable fields (e.g. rename). Reaches PATCH /v1/scenes/:id.
+  Future<void> updateScene(String sceneId, {String? name, String? icon}) async {
+    final body = <String, dynamic>{};
+    if (name != null) body['name'] = name;
+    if (icon != null) body['icon'] = icon;
+    final res = await _http.patch(
+      Uri.parse('$baseUrl/v1/scenes/$sceneId'),
+      headers: {..._authHeaders, 'content-type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    _ensureOk(res);
+  }
+
+  /// Remove a scene. Reaches DELETE /v1/scenes/:id.
+  Future<void> deleteScene(String sceneId) async {
+    final res = await _http.delete(
+      Uri.parse('$baseUrl/v1/scenes/$sceneId'),
+      headers: _authHeaders,
+    );
+    _ensureOk(res);
+  }
+
   /// Apply the current circadian (human-centric) lighting target to every tunable-white
   /// light, optionally scoped to [roomId]. Returns the ids of the lights that were set.
   Future<List<String>> applyCircadian({String? roomId}) async {

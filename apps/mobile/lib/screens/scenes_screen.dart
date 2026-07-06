@@ -130,6 +130,7 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                                 _SceneCard(
                                   name: s.name,
                                   onTap: () { ref.read(usageProvider.notifier).record('scene', s.id); ref.read(clientProvider).activateScene(s.id); },
+                                  onLongPress: () => _sceneActions(context, ref, s, favIds.contains(s.id)),
                                   favorite: favIds.contains(s.id),
                                   onFav: () async {
                                     await ref.read(clientProvider).setFavorite({'type': 'scene', 'sceneId': s.id}, favorite: !favIds.contains(s.id));
@@ -148,10 +149,79 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
   }
 }
 
+/// Scene quick actions (§ Quick Actions) — the sheet a long-press reveals: run, pin/unpin, rename,
+/// or remove. Reuses the scene API (activate / updateScene / deleteScene) — no new backend.
+Future<void> _sceneActions(BuildContext context, WidgetRef ref, Scene s, bool favorite) async {
+  final client = ref.read(clientProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text(s.name, style: Theme.of(sheet).textTheme.titleMedium),
+        ),
+        ListTile(
+          leading: const Icon(Icons.play_arrow_outlined),
+          title: const Text('Run now'),
+          onTap: () { ref.read(usageProvider.notifier).record('scene', s.id); client.activateScene(s.id); Navigator.pop(sheet); },
+        ),
+        ListTile(
+          leading: Icon(favorite ? Icons.favorite : Icons.favorite_border, color: AureonGold.c400),
+          title: Text(favorite ? 'Unpin from favourites' : 'Pin to favourites'),
+          onTap: () async {
+            await client.setFavorite({'type': 'scene', 'sceneId': s.id}, favorite: !favorite);
+            ref.invalidate(favoritesProvider);
+            if (sheet.mounted) Navigator.pop(sheet);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.edit_outlined),
+          title: const Text('Rename'),
+          onTap: () async {
+            Navigator.pop(sheet);
+            final name = await _renameDialog(context, s.name);
+            if (name == null || name.trim().isEmpty || name.trim() == s.name) return;
+            try { await client.updateScene(s.id, name: name.trim()); ref.invalidate(scenesProvider); }
+            catch (e) { messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, "Couldn't rename the scene.")))); }
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.delete_outline, color: AureonStatus.critical),
+          title: const Text('Remove scene', style: TextStyle(color: AureonStatus.critical)),
+          onTap: () async {
+            Navigator.pop(sheet);
+            try { await client.deleteScene(s.id); ref.invalidate(scenesProvider); }
+            catch (e) { messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, "Couldn't remove the scene.")))); }
+          },
+        ),
+      ]),
+    ),
+  );
+}
+
+Future<String?> _renameDialog(BuildContext context, String current) {
+  final ctrl = TextEditingController(text: current);
+  return showDialog<String>(
+    context: context,
+    builder: (d) => AlertDialog(
+      title: const Text('Rename scene'),
+      content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Scene name')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(d, ctrl.text), child: const Text('Save')),
+      ],
+    ),
+  );
+}
+
 class _SceneCard extends StatelessWidget {
-  const _SceneCard({required this.name, this.onTap, this.handle = false, this.favorite = false, this.onFav});
+  const _SceneCard({required this.name, this.onTap, this.onLongPress, this.handle = false, this.favorite = false, this.onFav});
   final String name;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final bool handle;
   final bool favorite;
   final VoidCallback? onFav;
@@ -161,6 +231,7 @@ class _SceneCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         padding: const EdgeInsets.all(AureonSpacing.md),
         decoration: BoxDecoration(

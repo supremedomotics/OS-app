@@ -110,6 +110,15 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .ext-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
 .ext-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
 .ext-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+/* Scene quick actions — the long-press sheet. */
+.qa-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.qa-item { text-align: left; padding: 14px 12px; border: 0; background: none; color: inherit; font-size: 15px; cursor: pointer; border-radius: 12px; }
+.qa-item:hover { background: var(--aureon-color-base-surface); }
+.qa-item.danger { color: var(--aureon-color-status-critical); }
+.qa-item:disabled { opacity: 0.5; cursor: default; }
+.qa-rename { display: flex; gap: 8px; margin-top: 10px; }
+.qa-rename input { flex: 1; }
+
 /* EmptyState — one calm, actionable presentation for every empty page. */
 .empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 48px 24px; }
 .empty-ic { font-size: 40px; line-height: 1; opacity: 0.7; margin-bottom: 4px; }

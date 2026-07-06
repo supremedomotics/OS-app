@@ -313,6 +313,14 @@ export class SupremeClient {
   activateScene(id: string): Promise<void> {
     return this.request("POST", `/v1/scenes/${id}/activate`) as Promise<void>;
   }
+  /** Update a scene's editable fields (e.g. rename, change icon). Reaches PATCH /v1/scenes/:id. */
+  updateScene(id: string, patch: { name?: string; icon?: string | null }): Promise<{ scene: unknown }> {
+    return this.request("PATCH", `/v1/scenes/${id}`, patch) as Promise<{ scene: unknown }>;
+  }
+  /** Remove a scene. Reaches DELETE /v1/scenes/:id. */
+  deleteScene(id: string): Promise<void> {
+    return this.request("DELETE", `/v1/scenes/${id}`) as Promise<void>;
+  }
   favorites(): Promise<FavoriteList> {
     return this.request("GET", "/v1/favorites") as Promise<FavoriteList>;
   }

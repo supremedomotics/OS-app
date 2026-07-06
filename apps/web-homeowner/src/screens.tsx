@@ -366,6 +366,12 @@ export function Scenes() {
   const [msg, setMsg] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
+  // Long-press (or right-click) a scene to reveal quick actions — one gesture, no extra chrome.
+  const [menu, setMenu] = useState<Scene | null>(null);
+  const lpTimer = useRef<number | undefined>(undefined);
+  const lpFired = useRef(false);
+  const lpStart = (s: Scene) => { lpFired.current = false; lpTimer.current = window.setTimeout(() => { lpFired.current = true; setMenu(s); }, 500); };
+  const lpEnd = () => window.clearTimeout(lpTimer.current);
 
   // "Add scene" snapshots the CURRENT state of every device, so the new scene recreates the room
   // exactly as it is now. The user names it; later they can refine it in the automation builder.
@@ -454,8 +460,13 @@ export function Scenes() {
             onDragStart={() => setDragId(s.id)}
             onDragEnd={() => setDragId(null)}
             onDragOver={(e) => { if (edit && dragId && dragId !== s.id) { e.preventDefault(); move(dragId, s.id); } }}
+            onPointerDown={() => { if (!edit) lpStart(s); }}
+            onPointerUp={lpEnd}
+            onPointerLeave={lpEnd}
+            onContextMenu={(e) => { if (!edit) { e.preventDefault(); setMenu(s); } }}
             onClick={() => {
               if (edit) return;
+              if (lpFired.current) { lpFired.current = false; return; } // a long-press opened the menu — don't also activate
               recordUse("scene", s.id);
               void client.activateScene(s.id);
               setMsg(`${s.name} activated`);
@@ -474,6 +485,67 @@ export function Scenes() {
       )}
       {edit && <p className="muted">Drag the cards to reorder, then Save.</p>}
       {!edit && msg && <p className="muted">{msg}</p>}
+      {menu && (
+        <SceneQuickActions
+          scene={menu}
+          isFav={fav.isFav({ type: "scene", sceneId: menu.id })}
+          onClose={() => setMenu(null)}
+          onRun={() => { recordUse("scene", menu.id); void client.activateScene(menu.id); setMsg(`${menu.name} activated`); setMenu(null); }}
+          onFav={() => { void fav.toggle({ type: "scene", sceneId: menu.id }); }}
+          onChanged={() => { refresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Scene quick actions (§ Quick Actions) — the calm sheet a long-press (or right-click) reveals: run
+ * it now, pin/unpin, rename, or remove. Reuses the existing scene API (activate / updateScene /
+ * deleteScene) — no new backend. Rename & delete reach routes the gateway already exposes.
+ */
+function SceneQuickActions({ scene, isFav, onClose, onRun, onFav, onChanged }: {
+  scene: Scene; isFav: boolean; onClose: () => void; onRun: () => void; onFav: () => void; onChanged: () => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(scene.name);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function rename() {
+    const n = name.trim();
+    if (!n || n === scene.name) { setRenaming(false); return; }
+    setBusy(true); setErr(null);
+    try { await client.updateScene(scene.id, { name: n }); onChanged(); onClose(); }
+    catch (e) { setErr(friendlyError(e, "Couldn't rename the scene.")); setBusy(false); }
+  }
+  async function remove() {
+    if (!window.confirm(`Remove the scene "${scene.name}"?`)) return;
+    setBusy(true); setErr(null);
+    try { await client.deleteScene(scene.id); onChanged(); onClose(); }
+    catch (e) { setErr(friendlyError(e, "Couldn't remove the scene.")); setBusy(false); }
+  }
+
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <span className="grab" />
+        <div className="sheet-title"><h2>{scene.name}</h2><p>Scene</p></div>
+        {renaming ? (
+          <div className="qa-rename">
+            <input value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && rename()} />
+            <button className="primary" disabled={busy || !name.trim()} onClick={rename}>Save</button>
+          </div>
+        ) : (
+          <div className="qa-list">
+            <button className="qa-item" onClick={onRun}>▷ Run now</button>
+            <button className="qa-item" onClick={() => { onFav(); onClose(); }}>{isFav ? "♥ Unpin from favourites" : "♡ Pin to favourites"}</button>
+            <button className="qa-item" onClick={() => setRenaming(true)}>✎ Rename</button>
+            <button className="qa-item danger" disabled={busy} onClick={remove}>✕ Remove scene</button>
+          </div>
+        )}
+        {err && <p className="err">{err}</p>}
+      </div>
     </div>
   );
 }
