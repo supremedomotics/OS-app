@@ -170,10 +170,44 @@ export function Commissioning() {
 
   return (
     <section>
-      <h2>Commissioning</h2>
+      <h2>Discover Devices</h2>
+      <p className="muted">Scan the home, pick the room, and add. The required driver installs and
+        binds automatically — you never choose one by hand.</p>
 
-      {/* KNX has no live discovery — import the ETS group-address export to auto-create cards. */}
-      <div className="card">
+      {/* Discover-first (§ Installer Experience): the scan is the primary action. Choose the room the
+          found devices belong to, then Scan → each device commissions with its driver auto-installed. */}
+      <div className="card row">
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="muted">Assign to room</span>
+          <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+            {rooms.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="primary" onClick={scan}>Scan for devices</button>
+      </div>
+      {discovered.length === 0 && <p className="muted">No devices found yet — press Scan to search the home.</p>}
+      {discovered.map((d) => (
+        <div className="card row" key={d.backendId}>
+          <div>
+            <strong>{d.suggestedName}</strong> <span className="tag">{d.source}</span>
+            <div className="muted">
+              {d.capabilities.join(", ")}
+              {d.protocol && ` · driver auto-installs & binds (${d.protocol.toUpperCase()})`}
+            </div>
+          </div>
+          <button className="primary" onClick={() => commission(d)}>
+            Add to {rooms.find((r) => r.id === roomId)?.name ?? "room"}
+          </button>
+        </div>
+      ))}
+
+      {/* KNX has no live discovery — import the ETS group-address export to auto-create cards. A
+          secondary path, below the primary scan. */}
+      <div className="card" style={{ marginTop: 24 }}>
         <strong>Import KNX project</strong>
         <p className="muted">Upload a <code>.knxproj</code> (device cards placed in their ETS rooms), or paste an ETS group-address export (CSV/XML). Capabilities are inferred from each datapoint type.</p>
         <textarea
@@ -206,31 +240,6 @@ export function Commissioning() {
         )}
         {knxResult && <p className="muted">{knxResult}</p>}
       </div>
-
-      <div className="card row">
-        <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-          {rooms.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </select>
-        <button className="primary" onClick={scan}>Discover devices</button>
-      </div>
-      {discovered.map((d) => (
-        <div className="card row" key={d.backendId}>
-          <div>
-            <strong>{d.suggestedName}</strong> <span className="tag">{d.source}</span>
-            <div className="muted">
-              {d.capabilities.join(", ")}
-              {d.protocol && ` · auto-binds to ${d.protocol.toUpperCase()}`}
-            </div>
-          </div>
-          <button onClick={() => commission(d)}>
-            {d.protocol ? "Commission + bind" : "Commission"}
-          </button>
-        </div>
-      ))}
     </section>
   );
 }

@@ -35,10 +35,13 @@ type Tab =
   | "migration"
   | "fleet";
 
+// Discover-first (§ Installer Experience): the installer's first action is scanning for devices —
+// the required driver installs automatically on commission — so "Discover Devices" leads. The
+// Driver Store moves lower; it's a catalog to browse, not the starting point.
 const TABS: { id: Tab; label: string }[] = [
-  { id: "drivers", label: "Driver Store" },
-  { id: "commission", label: "Commissioning" },
+  { id: "commission", label: "Discover Devices" },
   { id: "devices", label: "Devices" },
+  { id: "drivers", label: "Driver Store" },
   { id: "bindings", label: "Bus Binding" },
   { id: "cameras", label: "Cameras" },
   { id: "diagnostics", label: "Diagnostics" },
@@ -51,7 +54,7 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function App() {
   const [authed, setAuthed] = useState(false);
-  const [tab, setTab] = useState<Tab>("drivers");
+  const [tab, setTab] = useState<Tab>("commission");
 
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
