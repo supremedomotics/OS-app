@@ -72,6 +72,25 @@ export const DeleteAccountRequest = z.object({
 });
 export type DeleteAccountRequest = z.infer<typeof DeleteAccountRequest>;
 
+/** One login session in the Security Center's active-sessions / login-history list. */
+export const SessionView = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  lastSeenAt: z.string().nullable(),
+  ip: z.string().nullable(),
+  userAgent: z.string().nullable(),
+  revoked: z.boolean(),
+  /** True for the session the request is being made from — the UI marks it "This device". */
+  current: z.boolean(),
+});
+export type SessionView = z.infer<typeof SessionView>;
+
+export const SessionList = z.object({ sessions: z.array(SessionView) });
+export type SessionList = z.infer<typeof SessionList>;
+
+export const RevokeOthersResponse = z.object({ revoked: z.number().int().nonnegative() });
+export type RevokeOthersResponse = z.infer<typeof RevokeOthersResponse>;
+
 // ── Grants (ABAC overlay) ────────────────────────────────────────────────────
 
 export const CreateGrantRequest = z.object({

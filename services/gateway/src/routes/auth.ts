@@ -5,10 +5,14 @@ import {
   MfaCodeRequest,
   MfaVerifyRequest,
   RefreshRequest,
+  SupremeError,
   type MfaEnrollResponse,
+  type RevokeOthersResponse,
+  type SessionList,
+  type SessionView,
   type UserResponse,
 } from "@supreme/contracts";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.js";
 import { authenticate } from "../auth.js";
 import { sendError } from "../http-errors.js";
@@ -18,13 +22,26 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   // Credential endpoints get a stricter per-IP rate limit to blunt brute force.
   const authLimit = { config: { rateLimit: { max: ctx.config.authRateMax, timeWindow: "1 minute" } } };
 
+  // Extract the Bearer access token (throws unauthorized when absent) for session routes.
+  const bearer = (req: FastifyRequest): string => {
+    const header = req.headers.authorization;
+    if (!header?.startsWith("Bearer ")) throw new SupremeError("unauthorized", "missing bearer token");
+    return header.slice("Bearer ".length);
+  };
+
+  // Capture where a login came from (Security Center). `req.ip` respects the configured trust proxy.
+  const loginContext = (req: FastifyRequest) => ({
+    ip: req.ip || null,
+    userAgent: (req.headers["user-agent"] as string | undefined) ?? null,
+  });
+
   app.post("/v1/auth/login", authLimit, async (req, reply) => {
     try {
       const body = LoginRequest.parse(req.body);
       // Accept a username or an email; accounts created from a bare username log in as
       // `<username>@supreme.local` (mirrors the Setup Wizard), so normalize the same way.
       const identifier = body.email.includes("@") ? body.email : `${body.email.trim()}@supreme.local`;
-      reply.send(await ctx.identity.login(identifier, body.password));
+      reply.send(await ctx.identity.login(identifier, body.password, loginContext(req)));
     } catch (err) {
       sendError(reply, err);
     }
@@ -43,7 +60,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.post("/v1/auth/mfa/verify", authLimit, async (req, reply) => {
     try {
       const body = MfaVerifyRequest.parse(req.body);
-      reply.send({ status: "ok", ...(await ctx.identity.verifyMfaLogin(body.mfaToken, body.code)) });
+      reply.send({ status: "ok", ...(await ctx.identity.verifyMfaLogin(body.mfaToken, body.code, loginContext(req))) });
     } catch (err) {
       sendError(reply, err);
     }
@@ -147,6 +164,56 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       const body = DeleteAccountRequest.parse(req.body);
       await ctx.identity.deleteOwnAccount(actor.id, body.currentPassword);
       reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Security Center: active sessions / login history + remote logout ─────────────
+  app.get("/v1/me/sessions", async (req, reply) => {
+    try {
+      const { user, sid } = await ctx.identity.authenticateSession(bearer(req));
+      const sessions = await ctx.identity.listSessions(user.id);
+      const body: SessionList = {
+        sessions: sessions.map(
+          (s): SessionView => ({
+            id: s.id,
+            createdAt: s.createdAt,
+            lastSeenAt: s.lastSeenAt ?? null,
+            ip: s.ip ?? null,
+            userAgent: s.userAgent ?? null,
+            revoked: s.revoked,
+            current: s.id === sid,
+          }),
+        ),
+      };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Remotely sign out one of your sessions. Blocks revoking the current one via this route —
+  // use /v1/auth/logout for that, so the UI intent stays clear.
+  app.delete<{ Params: { id: string } }>("/v1/me/sessions/:id", async (req, reply) => {
+    try {
+      const { user, sid } = await ctx.identity.authenticateSession(bearer(req));
+      if (req.params.id === sid) {
+        throw new SupremeError("validation_failed", "use logout to end the current session");
+      }
+      await ctx.identity.revokeSession(user.id, req.params.id);
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Sign out everywhere except this device.
+  app.post("/v1/me/sessions/revoke-others", async (req, reply) => {
+    try {
+      const { user, sid } = await ctx.identity.authenticateSession(bearer(req));
+      const revoked = await ctx.identity.revokeOtherSessions(user.id, sid ?? "");
+      reply.send({ revoked } satisfies RevokeOthersResponse);
     } catch (err) {
       sendError(reply, err);
     }

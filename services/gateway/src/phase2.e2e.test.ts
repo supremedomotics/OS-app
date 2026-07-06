@@ -145,6 +145,32 @@ describe("Phase-2 installer & drivers", () => {
     expect(proj.devices.length).toBeGreaterThan(0);
   });
 
+  it("lists login sessions, flags the current one, and revokes another remotely (§ Security Center)", async () => {
+    // A second login → a second session, captured with its own metadata.
+    const second = (await (
+      await fetch(`${baseUrl}/v1/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": "SecondDevice/1.0" },
+        body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+      })
+    ).json()) as { accessToken: string };
+
+    // From the first token, list sessions — exactly one is flagged current, ≥2 total.
+    const list = (await (await fetch(`${baseUrl}/v1/me/sessions`, { headers: auth() })).json()) as {
+      sessions: { id: string; current: boolean; revoked: boolean }[];
+    };
+    expect(list.sessions.length).toBeGreaterThanOrEqual(2);
+    expect(list.sessions.filter((s) => s.current)).toHaveLength(1);
+
+    // Revoke the *other* session; that token stops working, ours still does.
+    const other = list.sessions.find((s) => !s.current)!;
+    const del = await fetch(`${baseUrl}/v1/me/sessions/${other.id}`, { method: "DELETE", headers: auth() });
+    expect(del.status).toBe(204);
+    const otherAfter = await fetch(`${baseUrl}/v1/me/sessions`, { headers: { authorization: `Bearer ${second.accessToken}` } });
+    expect(otherAfter.status).toBe(401);
+    expect((await fetch(`${baseUrl}/v1/me/sessions`, { headers: auth() })).status).toBe(200);
+  });
+
   it("reports real host system health (CPU / memory / uptime)", async () => {
     const res = await fetch(`${baseUrl}/v1/system/health`, { headers: auth() });
     expect(res.status).toBe(200);

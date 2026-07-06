@@ -38,6 +38,11 @@ export interface Session {
   currentJti: string;
   revoked: boolean;
   createdAt: string;
+  /** Origin of the login, for the Security Center's "trusted devices / login history" (§ Security
+   * Center). Optional — older sessions predate capture, and a metric with no source stays null. */
+  ip?: string | null;
+  userAgent?: string | null;
+  lastSeenAt?: string | null;
 }
 
 export interface ISessionStore {
@@ -45,6 +50,10 @@ export interface ISessionStore {
   get(id: string): Promise<Session | null>;
   setCurrentJti(id: string, jti: string): Promise<void>;
   revoke(id: string): Promise<void>;
+  /** All of a user's sessions (active + revoked), newest first — the login history. */
+  listByUser(userId: UserId): Promise<Session[]>;
+  /** Record fresh activity on a session (updated on refresh). */
+  touch(id: string, lastSeenAt: string): Promise<void>;
 }
 
 export class InMemorySessionStore implements ISessionStore {
@@ -62,6 +71,15 @@ export class InMemorySessionStore implements ISessionStore {
   async revoke(id: string): Promise<void> {
     const s = this.sessions.get(id);
     if (s) s.revoked = true;
+  }
+  async listByUser(userId: UserId): Promise<Session[]> {
+    return [...this.sessions.values()]
+      .filter((s) => s.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  async touch(id: string, lastSeenAt: string): Promise<void> {
+    const s = this.sessions.get(id);
+    if (s) s.lastSeenAt = lastSeenAt;
   }
 }
 

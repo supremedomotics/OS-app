@@ -33,6 +33,8 @@ import {
   type SecurityStateResponse,
   type EnergySummaryResponse,
   type SystemHealth,
+  type SessionList,
+  type RevokeOthersResponse,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -141,6 +143,21 @@ export class SupremeClient {
   /** Delete another user by id (admin/owner). The master account is protected server-side. */
   async deleteUser(userId: UserId): Promise<void> {
     await this.request("DELETE", `/v1/users/${userId}`);
+  }
+
+  /** The signed-in user's login sessions (active + revoked), newest first — the Security Center. */
+  async sessions(): Promise<SessionList> {
+    return this.request("GET", "/v1/me/sessions") as Promise<SessionList>;
+  }
+
+  /** Remotely sign out one of your sessions (not the current one). */
+  async revokeSession(sessionId: string): Promise<void> {
+    await this.request("DELETE", `/v1/me/sessions/${sessionId}`);
+  }
+
+  /** Sign out everywhere except this device. Returns how many sessions were revoked. */
+  async revokeOtherSessions(): Promise<RevokeOthersResponse> {
+    return this.request("POST", "/v1/me/sessions/revoke-others") as Promise<RevokeOthersResponse>;
   }
 
   /** Real host telemetry (CPU / memory / temperature / storage / uptime) for the Installer Dashboard.

@@ -192,6 +192,56 @@ describe("account self-service (change email + delete)", () => {
   });
 });
 
+describe("Security Center — sessions & remote logout", () => {
+  it("lists sessions with capture metadata, flags the current one, and revokes remotely", async () => {
+    const s = svc();
+    await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "owner-password-123", displayName: "Owner" });
+
+    // Two logins from two "devices" → two sessions with captured ip/userAgent.
+    const a = await s.login("owner@example.com", "owner-password-123", { ip: "10.0.0.2", userAgent: "iPhone" });
+    const b = await s.login("owner@example.com", "owner-password-123", { ip: "10.0.0.3", userAgent: "MacBook" });
+    if (a.status !== "ok" || b.status !== "ok") throw new Error("expected tokens");
+
+    const me = (await s.authenticateSession(a.accessToken)).user;
+    const list = await s.listSessions(me.id);
+    expect(list).toHaveLength(2);
+    expect(list.map((x) => x.ip).sort()).toEqual(["10.0.0.2", "10.0.0.3"]);
+    expect(list.every((x) => !x.revoked)).toBe(true);
+
+    // Revoke device B's session from device A → B's token stops working, A still works.
+    const bSid = (await s.authenticateSession(b.accessToken)).sid!;
+    await s.revokeSession(me.id, bSid);
+    await expect(s.authenticate(b.accessToken)).rejects.toThrow(/revoked/);
+    expect((await s.authenticateSession(a.accessToken)).user.id).toBe(me.id);
+  });
+
+  it("revoke-others keeps only the current session; ownership is enforced", async () => {
+    const s = svc();
+    const { home } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "owner-password-123", displayName: "Owner" });
+    const other = await s.createUser({ homeId: home.id, email: "guest@example.com", password: "guest-password-123", displayName: "Guest", userType: "guest", expiresAt: null });
+
+    const a = await s.login("owner@example.com", "owner-password-123");
+    const b = await s.login("owner@example.com", "owner-password-123");
+    const c = await s.login("owner@example.com", "owner-password-123");
+    if (a.status !== "ok" || b.status !== "ok" || c.status !== "ok") throw new Error("expected tokens");
+    const owner = (await s.authenticateSession(a.accessToken)).user;
+    const keepSid = (await s.authenticateSession(a.accessToken)).sid!;
+
+    const revoked = await s.revokeOtherSessions(owner.id, keepSid);
+    expect(revoked).toBe(2);
+    expect((await s.authenticateSession(a.accessToken)).user.id).toBe(owner.id); // kept
+    await expect(s.authenticate(b.accessToken)).rejects.toThrow(/revoked/);
+    await expect(s.authenticate(c.accessToken)).rejects.toThrow(/revoked/);
+
+    // A user can't revoke a session that isn't theirs.
+    const guestLogin = await s.login("guest@example.com", "guest-password-123");
+    if (guestLogin.status !== "ok") throw new Error("expected tokens");
+    const guestSid = (await s.authenticateSession(guestLogin.accessToken)).sid!;
+    await expect(s.revokeSession(owner.id, guestSid)).rejects.toThrow(/not found/);
+    expect(other.id).toBeDefined();
+  });
+});
+
 describe("expiring (guest/temporary) access", () => {
   it("sweepExpired flips a past-expiry guest to 'expired' and their token stops authenticating", async () => {
     const s = svc();

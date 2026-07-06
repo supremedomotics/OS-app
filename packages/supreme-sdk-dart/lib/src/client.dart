@@ -105,6 +105,28 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// The signed-in user's login sessions (active + revoked), newest first — the Security Center.
+  /// Each carries {id, createdAt, lastSeenAt?, ip?, userAgent?, revoked, current}.
+  Future<List<Map<String, dynamic>>> sessions() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/me/sessions'), headers: _authHeaders);
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['sessions'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Remotely sign out one of your sessions (not the current one).
+  Future<void> revokeSession(String sessionId) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/me/sessions/$sessionId'), headers: _authHeaders);
+    _ensureOk(res);
+  }
+
+  /// Sign out everywhere except this device. Returns how many sessions were revoked.
+  Future<int> revokeOtherSessions() async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/me/sessions/revoke-others'), headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['revoked'] as int? ?? 0;
+  }
+
   Future<HomeView> home() async {
     final res =
         await _http.get(Uri.parse('$baseUrl/v1/home'), headers: _authHeaders);

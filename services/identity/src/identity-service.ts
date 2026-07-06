@@ -14,9 +14,16 @@ import {
   InMemorySessionStore,
   type IIdentityStore,
   type ISessionStore,
+  type Session,
 } from "./store.js";
 import { TokenService } from "./tokens.js";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "./totp.js";
+
+/** Where a login came from — captured onto the session for the Security Center. */
+export interface LoginContext {
+  ip?: string | null;
+  userAgent?: string | null;
+}
 
 /**
  * Supreme identity service (§8, §12).
@@ -127,7 +134,7 @@ export class IdentityService {
     return user;
   }
 
-  async login(email: string, password: string): Promise<LoginResponse> {
+  async login(email: string, password: string, context: LoginContext = {}): Promise<LoginResponse> {
     const user = await this.store.findUserByEmail(email);
     const cred = user ? await this.store.getCredential(user.id) : null;
 
@@ -145,10 +152,53 @@ export class IdentityService {
       return { status: "mfa_required", mfaToken: await this.tokens.issueMfa(base) };
     }
     // New login → new revocable session, with the first refresh jti in the chain.
+    const { sid, jti } = await this.openSession(user.id, context);
+    return { status: "ok", ...(await this.issueTokens(user, sid, jti)) };
+  }
+
+  /** Create a fresh revocable session, capturing where the login came from (§ Security Center). */
+  private async openSession(userId: UserId, context: LoginContext): Promise<{ sid: string; jti: string }> {
     const sid = newId("session") as string;
     const jti = newId("session") as string;
-    await this.sessions.create({ id: sid, userId: user.id, currentJti: jti, revoked: false, createdAt: new Date().toISOString() });
-    return { status: "ok", ...(await this.issueTokens(user, sid, jti)) };
+    const now = new Date().toISOString();
+    await this.sessions.create({
+      id: sid,
+      userId,
+      currentJti: jti,
+      revoked: false,
+      createdAt: now,
+      ip: context.ip ?? null,
+      userAgent: context.userAgent ?? null,
+      lastSeenAt: now,
+    });
+    return { sid, jti };
+  }
+
+  /** A user's sessions (active + revoked), newest first — the login history / trusted devices. */
+  listSessions(userId: UserId): Promise<Session[]> {
+    return this.sessions.listByUser(userId);
+  }
+
+  /** Revoke one of the user's own sessions (remote logout). Ownership is enforced. */
+  async revokeSession(userId: UserId, sessionId: string): Promise<void> {
+    const session = await this.sessions.get(sessionId);
+    if (!session || session.userId !== userId) {
+      throw new SupremeError("not_found", "session not found");
+    }
+    await this.sessions.revoke(sessionId);
+  }
+
+  /** Sign out everywhere except the caller's current session. Returns how many were revoked. */
+  async revokeOtherSessions(userId: UserId, keepSessionId: string): Promise<number> {
+    const sessions = await this.sessions.listByUser(userId);
+    let revoked = 0;
+    for (const s of sessions) {
+      if (s.id !== keepSessionId && !s.revoked) {
+        await this.sessions.revoke(s.id);
+        revoked += 1;
+      }
+    }
+    return revoked;
   }
 
   /**
@@ -176,6 +226,7 @@ export class IdentityService {
     }
     const nextJti = newId("session") as string;
     await this.sessions.setCurrentJti(claims.sid, nextJti);
+    await this.sessions.touch(claims.sid, new Date().toISOString());
     return this.issueTokens(user, claims.sid, nextJti);
   }
 
@@ -183,7 +234,7 @@ export class IdentityService {
    * Complete an MFA-gated login: verify the 6-digit TOTP against the short-lived
    * mfa token issued by {@link login}, then issue access/refresh tokens.
    */
-  async verifyMfaLogin(mfaToken: string, code: string): Promise<TokenPair> {
+  async verifyMfaLogin(mfaToken: string, code: string, context: LoginContext = {}): Promise<TokenPair> {
     const claims = await this.tokens.verify(mfaToken, "mfa");
     const user = await this.store.getUser(claims.sub);
     if (!user || user.status !== "active") {
@@ -193,9 +244,7 @@ export class IdentityService {
     if (!cred?.mfaSecret || !verifyTotp(cred.mfaSecret, code)) {
       throw new SupremeError("unauthorized", "invalid authentication code");
     }
-    const sid = newId("session") as string;
-    const jti = newId("session") as string;
-    await this.sessions.create({ id: sid, userId: user.id, currentJti: jti, revoked: false, createdAt: new Date().toISOString() });
+    const { sid, jti } = await this.openSession(user.id, context);
     return this.issueTokens(user, sid, jti);
   }
 
@@ -323,6 +372,14 @@ export class IdentityService {
       }
     }
     return user;
+  }
+
+  /** Like {@link authenticate} but also returns the caller's session id, so routes can flag the
+   * current session and support "sign out other sessions". */
+  async authenticateSession(accessToken: string): Promise<{ user: User; sid?: string }> {
+    const claims = await this.tokens.verify(accessToken, "access");
+    const user = await this.authenticate(accessToken);
+    return { user, sid: claims.sid };
   }
 
   listUsers(): Promise<User[]> {

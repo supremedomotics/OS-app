@@ -20,6 +20,7 @@ const MIGRATIONS = [
   "0010_home_config.sql",
   "0011_intelligence.sql",
   "0012_room_location.sql",
+  "0013_session_metadata.sql",
 ] as const;
 
 /**

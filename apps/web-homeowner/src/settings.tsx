@@ -38,6 +38,7 @@ export function ThemeSettings() {
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
     { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
+    { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
   ];
 
   const current = pages.find((p) => p.id === open);
@@ -385,6 +386,83 @@ function ChangeEmail() {
       </button>
     </>
   );
+}
+
+/**
+ * Security & sign-in (§ Security Center). Lists the user's login sessions (active + recent), flags
+ * the current device, and supports remote logout — sign out a single session or everywhere else.
+ * IP / device / last-seen shown when captured (older sessions predate capture).
+ */
+type SessionRow = { id: string; createdAt: string; lastSeenAt: string | null; ip: string | null; userAgent: string | null; revoked: boolean; current: boolean };
+
+function SecuritySettings() {
+  const [sessions, setSessions] = useState<SessionRow[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function load() {
+    try {
+      const res = await client.sessions();
+      setSessions(res.sessions as SessionRow[]);
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not load sessions." });
+    }
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function revoke(id: string) {
+    setBusy(id); setMsg(null);
+    try { await client.revokeSession(id); await load(); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not sign out that session." }); }
+    finally { setBusy(null); }
+  }
+  async function revokeOthers() {
+    setBusy("others"); setMsg(null);
+    try { const { revoked } = await client.revokeOtherSessions(); await load(); setMsg({ ok: true, text: revoked ? `Signed out ${revoked} other session${revoked === 1 ? "" : "s"}.` : "No other sessions." }); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not sign out other sessions." }); }
+    finally { setBusy(null); }
+  }
+
+  const active = (sessions ?? []).filter((s) => !s.revoked);
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—");
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Security &amp; sign-in</h2>
+      <p className="muted" style={{ marginTop: -4 }}>Devices signed in to your account. Sign out any you don’t recognise.</p>
+
+      {sessions === null && <p className="muted">Loading…</p>}
+      {sessions && active.length > 1 && (
+        <button disabled={busy === "others"} onClick={revokeOthers} style={{ marginBottom: 12 }}>
+          {busy === "others" ? "Signing out…" : "Sign out all other sessions"}
+        </button>
+      )}
+
+      <div className="sess-list">
+        {(sessions ?? []).filter((s) => !s.revoked).map((s) => (
+          <div key={s.id} className={`sess-row${s.current ? " current" : ""}`}>
+            <span className="sess-ic">🖥️</span>
+            <span className="sess-meta">
+              <span className="sess-name">{s.userAgent ? shortAgent(s.userAgent) : "Unknown device"}{s.current && <span className="chip"> This device</span>}</span>
+              <span className="sess-sub">{s.ip ?? "IP unknown"} · signed in {fmt(s.createdAt)}{s.lastSeenAt ? ` · last active ${fmt(s.lastSeenAt)}` : ""}</span>
+            </span>
+            {!s.current && (
+              <button className="danger" disabled={busy === s.id} onClick={() => revoke(s.id)}>{busy === s.id ? "…" : "Sign out"}</button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
+    </section>
+  );
+}
+
+/** Condense a UA string to something a person recognises ("Chrome on macOS"). Best-effort, real data. */
+function shortAgent(ua: string): string {
+  const os = /Windows/i.test(ua) ? "Windows" : /iPhone|iPad|iOS/i.test(ua) ? "iOS" : /Mac OS X|Macintosh/i.test(ua) ? "macOS" : /Android/i.test(ua) ? "Android" : /Linux/i.test(ua) ? "Linux" : "";
+  const br = /Edg\//i.test(ua) ? "Edge" : /Chrome\//i.test(ua) ? "Chrome" : /Safari\//i.test(ua) ? "Safari" : /Firefox\//i.test(ua) ? "Firefox" : /Dart|supreme/i.test(ua) ? "Supreme app" : "";
+  return [br, os].filter(Boolean).join(" on ") || ua.slice(0, 40);
 }
 
 /** Danger zone — permanently delete your own account (re-auth + explicit confirm). */

@@ -8,6 +8,7 @@ import '../widgets/password_field.dart';
 import 'add_home_screen.dart';
 import 'advanced_settings_screen.dart';
 import 'audit_screen.dart';
+import 'security_sessions_screen.dart';
 
 /// Appearance settings (§11.2 Themes): Light / Dark / Automatic base palettes
 /// (Luxury Black / Luxury White) and the accent colour (Gold / Silver). Changing a
@@ -92,6 +93,14 @@ class SettingsScreen extends ConsumerWidget {
             title: const Text('Change password'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _changePassword(context, ref),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.security_outlined),
+            title: const Text('Security & sign-in'),
+            subtitle: const Text('Active sessions & devices'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SecuritySessionsScreen())),
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
