@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 import '../usage.dart';
 import '../widgets/empty_state.dart';
@@ -102,7 +103,7 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
             Expanded(
               child: scenes.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => Center(child: Text('Could not load scenes\n$e')),
+                error: (e, _) => Center(child: Text(friendlyError(e, 'Could not load your scenes.'), textAlign: TextAlign.center)),
                 data: (list) => list.isEmpty
                     ? const EmptyState(
                         icon: Icons.auto_awesome_outlined,
@@ -259,7 +260,7 @@ class _SchedulesSheet extends ConsumerWidget {
               loading: () => const Padding(
                   padding: EdgeInsets.all(AureonSpacing.lg),
                   child: Center(child: CircularProgressIndicator())),
-              error: (e, _) => Text('Could not load schedules\n$e'),
+              error: (e, _) => Text(friendlyError(e, 'Could not load schedules.')),
               data: (list) => Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [

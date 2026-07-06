@@ -2,6 +2,7 @@ import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 
 /// Backup & restore (§ Backup) — mobile parity. Real backup health, one-tap backup (kept in the
@@ -34,7 +35,7 @@ class BackupScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Backup & restore')),
       body: status.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load backups\n$e', textAlign: TextAlign.center)),
+        error: (e, _) => Center(child: Text(friendlyError(e, 'Could not load backups.'), textAlign: TextAlign.center)),
         data: (st) {
           final sched = (st['schedule'] as Map<String, dynamic>?) ?? const {};
           final lastBackup = st['lastBackupAt'] as String?;
@@ -63,7 +64,7 @@ class BackupScreen extends ConsumerWidget {
                   onPressed: () async {
                     final messenger = ScaffoldMessenger.of(context);
                     try { await ref.read(clientProvider).createBackup(); await refresh(); messenger.showSnackBar(const SnackBar(content: Text('Backup created'))); }
-                    catch (e) { messenger.showSnackBar(SnackBar(content: Text('Backup failed: $e'))); }
+                    catch (e) { messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, 'Backup failed. Please try again.')))); }
                   },
                 ),
 
@@ -124,7 +125,7 @@ class BackupScreen extends ConsumerWidget {
       document = rec['document'] as String;
       preview = await client.inspectRestore(document);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Could not read backup: $e')));
+      messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, 'Could not read that backup file.'))));
       return;
     }
     if (!context.mounted) return;
@@ -155,7 +156,7 @@ class BackupScreen extends ConsumerWidget {
       await refresh();
       messenger.showSnackBar(SnackBar(content: Text('Restored ${r['rows']} rows across ${r['tables']} tables')));
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Restore failed (rolled back): $e')));
+      messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, 'Restore failed and was rolled back — your home is unchanged.'))));
     }
   }
 }

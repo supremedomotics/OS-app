@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 import 'discover_devices_screen.dart';
 
@@ -26,7 +27,7 @@ class AreasScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Areas')),
       body: home.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load: $e')),
+        error: (e, _) => Center(child: Text(friendlyError(e, 'Could not load your areas.'), textAlign: TextAlign.center)),
         data: (h) {
           final rooms = h.rooms;
           if (rooms.isEmpty) {
@@ -156,7 +157,7 @@ class _RoomLocationSheetState extends ConsumerState<_RoomLocationSheet> {
       ref.invalidate(homeProvider);
       if (mounted) Navigator.pop(context);
     } catch (e) {
-      setState(() { _err = 'Could not save: $e'; _busy = false; });
+      setState(() { _err = friendlyError(e, 'Could not save. Please try again.'); _busy = false; });
     }
   }
 

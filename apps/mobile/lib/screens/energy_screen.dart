@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 
 /// Energy & analytics (§16): per-measure totals + a tariff-aware cost card.
@@ -32,7 +33,7 @@ class EnergyScreen extends ConsumerWidget {
         padding: const EdgeInsets.all(AureonSpacing.lg),
         child: energy.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Energy data unavailable\n$e')),
+          error: (e, _) => Center(child: Text(friendlyError(e, 'Energy data is unavailable right now.'), textAlign: TextAlign.center)),
           data: (rows) => rows.isEmpty
               ? Text('No telemetry yet',
                   style: Theme.of(context).textTheme.labelMedium)

@@ -2,6 +2,7 @@ import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 
 /// Security & sign-in (§ Security Center) — mobile parity. Lists the user's login sessions, flags the
@@ -208,7 +209,7 @@ class _RecoveryCodesState extends ConsumerState<_RecoveryCodes> {
                   setState(() => _codes = (res['codes'] as List).cast<String>());
                   ref.invalidate(_recoveryProvider);
                 } catch (e) {
-                  messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
                 } finally {
                   if (mounted) setState(() => _busy = false);
                 }
@@ -272,7 +273,7 @@ class _ApiTokensState extends ConsumerState<_ApiTokens> {
               style: TextButton.styleFrom(foregroundColor: AureonStatus.critical),
               onPressed: _busy ? null : () async {
                 try { await ref.read(clientProvider).revokeApiToken(t['id'] as String); ref.invalidate(_apiTokensProvider); }
-                catch (e) { messenger.showSnackBar(SnackBar(content: Text('Failed: $e'))); }
+                catch (e) { messenger.showSnackBar(SnackBar(content: Text(friendlyError(e)))); }
               },
               child: const Text('Revoke'),
             ),
@@ -291,7 +292,7 @@ class _ApiTokensState extends ConsumerState<_ApiTokens> {
               _name.clear();
               ref.invalidate(_apiTokensProvider);
             } catch (e) {
-              messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+              messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
             } finally {
               if (mounted) setState(() => _busy = false);
             }

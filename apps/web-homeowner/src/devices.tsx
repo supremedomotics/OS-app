@@ -5,6 +5,7 @@ import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { PendingApproval } from "./pending.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
+import { friendlyError } from "./errors.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -168,18 +169,18 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
     try {
       await client.updateDevice(device.id as DeviceId, { name: name.trim(), roomId });
       setMsg("Saved."); onChanged();
-    } catch (e) { setErr(e instanceof Error ? e.message : "Save failed."); } finally { setBusy(false); }
+    } catch (e) { setErr(friendlyError(e, "Couldn't save your changes. Please try again.")); } finally { setBusy(false); }
   }
   async function remove() {
     if (!window.confirm(`Remove ${device.name}? This also drops its bindings.`)) return;
     setBusy(true); setErr(null);
     try { await client.deleteDevice(device.id as DeviceId); onChanged(); }
-    catch (e) { setErr(e instanceof Error ? e.message : "Remove failed."); setBusy(false); }
+    catch (e) { setErr(friendlyError(e, "Couldn't remove this device. Please try again.")); setBusy(false); }
   }
   async function clone() {
     setBusy(true); setErr(null);
     try { await client.cloneDevice(device.id as DeviceId); setMsg("Cloned."); onChanged(); }
-    catch (e) { setErr(e instanceof Error ? e.message : "Clone failed."); } finally { setBusy(false); }
+    catch (e) { setErr(friendlyError(e, "Couldn't duplicate this device. Please try again.")); } finally { setBusy(false); }
   }
 
   return (

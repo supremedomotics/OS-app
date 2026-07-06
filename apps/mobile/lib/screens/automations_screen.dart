@@ -2,6 +2,7 @@ import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 import '../widgets/empty_state.dart';
 import 'automation_canvas.dart';
@@ -56,7 +57,7 @@ class _AutomationsScreenState extends ConsumerState<AutomationsScreen> {
               Expanded(
                 child: automations.when(
                   loading: () => const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => Center(child: Text('Could not load automations\n$e')),
+                  error: (e, _) => Center(child: Text(friendlyError(e, 'Could not load your automations.'), textAlign: TextAlign.center)),
                   data: (list) {
                     final shown = list.where((a) => a.name.toLowerCase().contains(_q)).toList();
                     if (shown.isEmpty) {

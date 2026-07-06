@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useHeroFlip } from "./herotransition.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { recordUse, byFrequency } from "./usage.js";
+import { friendlyError } from "./errors.js";
 import { EmptyState } from "./empty.js";
 import type {
   CameraStreamResponse,
@@ -175,7 +176,7 @@ export function RoomsScreen({
       setErr(null);
       refresh();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not add the room.");
+      setErr(friendlyError(e, "Could not add the room. Please try again."));
     }
   }
 
@@ -388,8 +389,8 @@ export function Scenes() {
       setAdding(false);
       setMsg(`Scene "${name}" saved`);
       refresh();
-    } catch {
-      setMsg("Could not create the scene.");
+    } catch (e) {
+      setMsg(friendlyError(e, "Couldn't save the scene. Please try again."));
     }
   }
 

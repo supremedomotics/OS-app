@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 import '../widgets/empty_state.dart';
 import 'device_sheet.dart';
@@ -34,7 +35,7 @@ class MediaScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Media')),
       body: devices.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load media\n$e', textAlign: TextAlign.center)),
+        error: (e, _) => Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(friendlyError(e, 'Could not load your media players.'), textAlign: TextAlign.center))),
         data: (all) {
           final media = all.where((d) => d.capabilities.contains('media')).toList();
           if (media.isEmpty) {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../cloud/multi_home.dart';
+import '../errors.dart';
 import '../providers.dart';
 import '../widgets/password_field.dart';
 import 'add_home_screen.dart';
@@ -338,7 +339,7 @@ class _VerifyEmailTile extends ConsumerWidget {
                     messenger.showSnackBar(const SnackBar(content: Text('Verification email sent — check your inbox')));
                   }
                 } catch (e) {
-                  messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  messenger.showSnackBar(SnackBar(content: Text(friendlyError(e))));
                 }
               },
               child: const Text('Verify'),

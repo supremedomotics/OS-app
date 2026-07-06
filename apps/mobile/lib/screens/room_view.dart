@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 import '../room_image.dart';
 import '../usage.dart';
@@ -21,7 +22,7 @@ class HomePager extends ConsumerWidget {
     return Scaffold(
       body: home.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Could not load home\n$e')),
+        error: (e, _) => Center(child: Text(friendlyError(e, 'Could not load your home.'), textAlign: TextAlign.center)),
         data: (view) {
           // Tablet/desktop widths get the Ovio bento + multi-light disc layout.
           final wide = MediaQuery.of(context).size.width >= 900;

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 
 /// Advanced settings (§10/§16) — mobile parity with the web app. The "pro" hub functions that were
@@ -85,7 +86,7 @@ class _AdvancedSettingsScreenState extends ConsumerState<AdvancedSettingsScreen>
 
   void _toast(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   Future<void> _run(Future<void> Function() action, String ok) async {
-    try { await action(); _toast(ok); } catch (e) { _toast('Failed: $e'); }
+    try { await action(); _toast(ok); } catch (e) { _toast(friendlyError(e)); }
   }
 
   @override

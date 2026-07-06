@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 import 'camera_player.dart';
 
@@ -19,7 +20,7 @@ class SecurityScreen extends ConsumerWidget {
         padding: const EdgeInsets.all(AureonSpacing.lg),
         child: state.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Could not load security\n$e')),
+          error: (e, _) => Center(child: Text(friendlyError(e, 'Could not load security.'), textAlign: TextAlign.center)),
           data: (s) {
             final mode = s['mode'] as String;
             final triggered = s['triggered'] as bool? ?? false;
@@ -188,7 +189,7 @@ class _AlertRulesSheet extends ConsumerWidget {
             const SizedBox(height: AureonSpacing.md),
             rules.when(
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Text('Could not load alerts\n$e'),
+              error: (e, _) => Text(friendlyError(e, 'Could not load alerts.')),
               data: (list) => Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [

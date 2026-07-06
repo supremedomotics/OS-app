@@ -2,6 +2,7 @@ import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../errors.dart';
 import '../providers.dart';
 
 /// Notification Center (§ Notification Center). Live alerts arrive over the WSS stream; this screen
@@ -41,7 +42,7 @@ class AlertsScreen extends ConsumerWidget {
               child: alerts.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) =>
-                    Center(child: Text('Could not load alerts\n$e')),
+                    Center(child: Text(friendlyError(e, 'Could not load your notifications.'), textAlign: TextAlign.center)),
                 data: (list) => list.isEmpty
                     ? Text('All clear',
                         style: Theme.of(context).textTheme.labelMedium)
