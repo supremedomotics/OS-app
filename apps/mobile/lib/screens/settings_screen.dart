@@ -82,6 +82,7 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: AureonSpacing.lg),
           Text('Account', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: AureonSpacing.sm),
+          const _VerifyEmailTile(),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.alternate_email_outlined),
@@ -300,6 +301,48 @@ class _HomesSection extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The signed-in user (incl. emailVerified) for the verification banner (§ email verification).
+final _meProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).me());
+
+class _VerifyEmailTile extends ConsumerWidget {
+  const _VerifyEmailTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final me = ref.watch(_meProvider).valueOrNull;
+    if (me == null) return const SizedBox.shrink();
+    final verified = me['emailVerified'] == true;
+    final email = me['email'] as String? ?? '';
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(verified ? Icons.verified_outlined : Icons.mark_email_unread_outlined,
+          color: verified ? AureonStatus.good : AureonStatus.warning),
+      title: Text(email),
+      subtitle: Text(verified ? 'Email verified' : 'Email not verified'),
+      trailing: verified
+          ? null
+          : TextButton(
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  final res = await ref.read(clientProvider).requestEmailVerification();
+                  if (res['token'] != null) {
+                    await ref.read(clientProvider).verifyEmail(res['token'] as String);
+                    ref.invalidate(_meProvider);
+                    messenger.showSnackBar(const SnackBar(content: Text('Email verified')));
+                  } else {
+                    messenger.showSnackBar(const SnackBar(content: Text('Verification email sent — check your inbox')));
+                  }
+                } catch (e) {
+                  messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+                }
+              },
+              child: const Text('Verify'),
+            ),
     );
   }
 }

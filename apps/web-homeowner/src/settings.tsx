@@ -337,6 +337,7 @@ function AccountSettings() {
     <section className="card-section">
       <h2 className="section-title">Account</h2>
 
+      <VerifyEmail />
       <ChangeEmail />
 
       <p className="opt-label" style={{ marginTop: 18 }}>Change password</p>
@@ -371,6 +372,47 @@ function PasswordStrength({ value }: { value: string }) {
     <div className="pw-strength">
       <span className="pw-bar"><span className="pw-fill" style={{ width: `${(score / 4) * 100}%`, background: colors[score] }} /></span>
       <span className="pw-label" style={{ color: colors[score] }}>{labels[score]}</span>
+    </div>
+  );
+}
+
+/**
+ * Email verification (§ Authentication). Shows whether the signed-in user's email is verified and,
+ * if not, lets them request a verification link. On a local hub (non-production) the token is
+ * returned and applied immediately; in production it's delivered by email (the integration point).
+ */
+function VerifyEmail() {
+  const [user, setUser] = useState<{ email: string; emailVerified: boolean } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() { try { setUser((await client.me()).user); } catch { /* keep */ } }
+  useEffect(() => { void load(); }, []);
+
+  async function verify() {
+    setBusy(true); setMsg(null);
+    try {
+      const res = await client.requestEmailVerification();
+      if (res.token) { await client.verifyEmail(res.token); await load(); setMsg({ ok: true, text: "Email verified." }); }
+      else if (res.alreadyVerified) { await load(); }
+      else setMsg({ ok: true, text: "Verification email sent — check your inbox." });
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not verify." }); }
+    finally { setBusy(false); }
+  }
+
+  if (!user) return null;
+  return (
+    <div className="verify-email" style={{ marginBottom: 14 }}>
+      <p className="opt-label" style={{ margin: 0 }}>
+        {user.email}{" "}
+        {user.emailVerified
+          ? <span className="tag ok">Verified</span>
+          : <span className="tag" style={{ color: "var(--aureon-color-status-warning)", borderColor: "color-mix(in srgb, var(--aureon-color-status-warning) 45%, transparent)" }}>Not verified</span>}
+      </p>
+      {!user.emailVerified && (
+        <button disabled={busy} onClick={verify} style={{ marginTop: 8 }}>{busy ? "Verifying…" : "Verify email"}</button>
+      )}
+      {msg && <p className={msg.ok ? "muted" : "err"} style={{ marginTop: 6 }}>{msg.text}</p>}
     </div>
   );
 }

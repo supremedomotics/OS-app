@@ -174,6 +174,30 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // Email verification (§ Authentication). Request/resend a token; in non-production the token is
+  // returned so LAN self-service works (production delivers it by email — the integration point).
+  app.post("/v1/me/email/verify/request", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const res = await ctx.identity.requestEmailVerification(user.id);
+      const expose = ctx.config.nodeEnv !== "production" && res ? { token: res.token } : {};
+      reply.send({ sent: res !== null, alreadyVerified: res === null, ...expose });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Complete verification with the token (public — the token proves possession of the mailbox).
+  app.post("/v1/auth/verify-email", async (req, reply) => {
+    try {
+      const token = String((req.body as { token?: unknown })?.token ?? "");
+      const user = await ctx.identity.verifyEmail(token);
+      reply.send({ user } satisfies UserResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Change the signed-in user's email/username (re-auth with the current password).
   app.post("/v1/me/email", async (req, reply) => {
     try {

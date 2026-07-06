@@ -224,6 +224,32 @@ describe("password policy + brute-force lockout", () => {
   });
 });
 
+describe("email verification", () => {
+  it("verifies an invited user's email with a one-time token; changing email un-verifies it", async () => {
+    const s = svc();
+    const { home, master } = await s.commission({ homeName: "P", email: "owner@example.com", password: "a-strong-passphrase", displayName: "O" });
+    // The master (who commissions the home) is verified on creation.
+    expect(master.emailVerified).toBe(true);
+
+    const guest = await s.createUser({ homeId: home.id, email: "guest@example.com", password: "guest-passphrase", displayName: "G", userType: "guest", expiresAt: null });
+    expect(guest.emailVerified).toBe(false);
+
+    const req = await s.requestEmailVerification(guest.id);
+    if (!req) throw new Error("expected a token");
+    await expect(s.verifyEmail("wrong-token")).rejects.toThrow(/invalid or expired/);
+    const verified = await s.verifyEmail(req.token);
+    expect(verified.emailVerified).toBe(true);
+    // Requesting again for an already-verified user is a no-op.
+    expect(await s.requestEmailVerification(guest.id)).toBeNull();
+
+    // Changing the email drops verification; a stale token for the old address no longer applies.
+    const req2 = await s.requestEmailVerification(guest.id); // null (still verified)
+    expect(req2).toBeNull();
+    const moved = await s.changeEmail(guest.id, "guest2@example.com", "guest-passphrase");
+    expect(moved.emailVerified).toBe(false);
+  });
+});
+
 describe("personal API tokens", () => {
   it("issues a token that authenticates, then stops working once revoked", async () => {
     const s = svc();

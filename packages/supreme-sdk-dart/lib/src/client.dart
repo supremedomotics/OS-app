@@ -78,6 +78,28 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// The signed-in user (incl. emailVerified).
+  Future<Map<String, dynamic>> me() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/me'), headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
+  /// Request (or resend) an email-verification token. Non-production returns {token} for LAN use.
+  Future<Map<String, dynamic>> requestEmailVerification() async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/me/email/verify/request'), headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Complete email verification with the token.
+  Future<Map<String, dynamic>> verifyEmail(String token) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/auth/verify-email'),
+        headers: _authHeaders, body: jsonEncode({'token': token}));
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
   /// Change the signed-in user's email/username (re-auth with the current password).
   Future<Map<String, dynamic>> changeEmail(String newEmail, String currentPassword) async {
     final res = await _http.post(

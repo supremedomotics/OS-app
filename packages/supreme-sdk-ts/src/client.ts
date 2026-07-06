@@ -145,6 +145,15 @@ export class SupremeClient {
     return this.request("POST", "/v1/me/email", { newEmail, currentPassword }) as Promise<{ user: { id: string; email: string } }>;
   }
 
+  /** Request (or resend) an email-verification token. Non-production returns the token for LAN use. */
+  async requestEmailVerification(): Promise<{ sent: boolean; alreadyVerified: boolean; token?: string }> {
+    return this.request("POST", "/v1/me/email/verify/request") as Promise<{ sent: boolean; alreadyVerified: boolean; token?: string }>;
+  }
+  /** Complete email verification with the token. */
+  async verifyEmail(token: string): Promise<{ user: { id: string; email: string; emailVerified: boolean } }> {
+    return this.request("POST", "/v1/auth/verify-email", { token }) as Promise<{ user: { id: string; email: string; emailVerified: boolean } }>;
+  }
+
   /** Delete the signed-in user's own account (re-auth with the current password). */
   async deleteAccount(currentPassword: string): Promise<void> {
     await this.request("DELETE", "/v1/me", { currentPassword });

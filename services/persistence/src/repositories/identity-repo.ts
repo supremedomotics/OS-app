@@ -18,6 +18,7 @@ interface UserRow {
   display_name: string;
   user_type: string;
   status: string;
+  email_verified: boolean;
   created_at: string;
   expires_at: string | null;
 }
@@ -48,6 +49,7 @@ export function rowToUser(r: UserRow): User {
     displayName: r.display_name,
     userType: r.user_type as User["userType"],
     status: r.status as User["status"],
+    emailVerified: r.email_verified ?? false,
     createdAt: r.created_at,
     expiresAt: r.expires_at,
   };
@@ -88,10 +90,10 @@ export class IdentityRepo implements IIdentityStore {
   }
   async putUser(user: User): Promise<void> {
     await this.db.query(
-      `INSERT INTO users (id, home_id, email, phone, display_name, user_type, status, created_at, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO users (id, home_id, email, phone, display_name, user_type, status, email_verified, created_at, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (id) DO UPDATE SET
-         email=$3, phone=$4, display_name=$5, user_type=$6, status=$7, expires_at=$9`,
+         email=$3, phone=$4, display_name=$5, user_type=$6, status=$7, email_verified=$8, expires_at=$10`,
       [
         user.id,
         user.homeId,
@@ -100,6 +102,7 @@ export class IdentityRepo implements IIdentityStore {
         user.displayName,
         user.userType,
         user.status,
+        user.emailVerified,
         user.createdAt,
         user.expiresAt,
       ],

@@ -118,6 +118,8 @@ export class IdentityService {
       displayName: input.displayName,
       userType: "master",
       status: "active",
+      // The master commissions the home in person, so their email starts verified.
+      emailVerified: true,
       createdAt: now,
       expiresAt: null,
     };
@@ -161,6 +163,8 @@ export class IdentityService {
       displayName: input.displayName,
       userType: input.userType,
       status: "active",
+      // Invited users must verify their email (§ email verification).
+      emailVerified: false,
       createdAt: new Date().toISOString(),
       expiresAt: input.expiresAt ?? null,
     };
@@ -366,6 +370,47 @@ export class IdentityService {
   /** One-time reset tokens keyed by their SHA-256 (we never store the raw token). */
   private readonly resetTokens = new Map<string, { userId: UserId; expiresAt: number }>();
   private static readonly RESET_TTL_MS = 30 * 60 * 1000;
+  /** Email-verification tokens (hash → {userId, email, expiry}). Bound to the email so changing it
+   * invalidates a pending link. */
+  private readonly verifyTokens = new Map<string, { userId: UserId; email: string; expiresAt: number }>();
+  private static readonly VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
+
+  /**
+   * Begin (or resend) email verification for a user. Returns a one-time token the caller delivers
+   * out-of-band (email) in production; the local hub surfaces it for LAN self-service — the SAME
+   * honest pattern as password reset. A no-op returning null when the email is already verified.
+   */
+  async requestEmailVerification(userId: UserId): Promise<{ token: string } | null> {
+    const user = await this.getUser(userId);
+    if (user.emailVerified) return null;
+    const token = randomBytes(24).toString("base64url");
+    this.verifyTokens.set(sha256(token), {
+      userId: user.id,
+      email: user.email.toLowerCase(),
+      expiresAt: Date.now() + IdentityService.VERIFY_TTL_MS,
+    });
+    return { token };
+  }
+
+  /** Complete verification with a valid, unexpired token; marks the email verified. */
+  async verifyEmail(token: string): Promise<User> {
+    const key = sha256(token);
+    const rec = this.verifyTokens.get(key);
+    if (!rec || rec.expiresAt < Date.now()) {
+      this.verifyTokens.delete(key);
+      throw new SupremeError("unauthorized", "invalid or expired verification token");
+    }
+    this.verifyTokens.delete(key);
+    const user = await this.getUser(rec.userId);
+    // If the email changed since the token was issued, the link no longer applies.
+    if (user.email.toLowerCase() !== rec.email) {
+      throw new SupremeError("conflict", "email has changed since this link was sent");
+    }
+    if (user.emailVerified) return user;
+    const next: User = { ...user, emailVerified: true };
+    await this.store.putUser(next);
+    return next;
+  }
 
   /**
    * Begin a password reset. Returns a one-time token for the caller to deliver
@@ -541,7 +586,9 @@ export class IdentityService {
     if (existing && existing.id !== userId) {
       throw new SupremeError("conflict", "a user with that email already exists");
     }
-    const next: User = { ...user, email: normalized };
+    // A new address is unverified until re-verified (unless unchanged).
+    const emailVerified = normalized.toLowerCase() === user.email.toLowerCase() ? user.emailVerified : false;
+    const next: User = { ...user, email: normalized, emailVerified };
     await this.store.putUser(next);
     return next;
   }

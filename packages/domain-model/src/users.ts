@@ -34,6 +34,9 @@ export const User = z.object({
   displayName: z.string().min(1),
   userType: UserType,
   status: UserStatus.default("active"),
+  /** Whether the email address has been verified (§ Authentication — email verification). Defaults
+   * false for invited users; the master (who commissions the home) is verified on creation. */
+  emailVerified: z.boolean().default(false),
   createdAt: z.string().datetime(),
   /** Temporary / expiring users (guests, staff) — null = no expiry. */
   expiresAt: z.string().datetime().nullable(),
