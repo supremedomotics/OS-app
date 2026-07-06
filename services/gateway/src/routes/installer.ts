@@ -4,6 +4,7 @@ import {
   CommissionRequest,
   DiscoverRequest,
   InstallDriverRequest,
+  BackupScheduleInput,
   RestoreRequest,
   RollbackDriverRequest,
   SetDriverEnabledRequest,
@@ -17,6 +18,9 @@ import {
   type ProjectExport,
   type ProtocolBindingList,
   type SystemUpdate,
+  type BackupList,
+  type BackupStatus,
+  type BackupScheduleResponse,
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
@@ -352,8 +356,67 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "admin");
-      const { document } = RestoreRequest.parse(req.body);
+      const { document, dryRun } = RestoreRequest.parse(req.body);
+      // Dry-run previews what would be restored (and verifies the signature) without touching data.
+      if (dryRun) {
+        reply.send({ inspection: i().inspectRestore(document) });
+        return;
+      }
       reply.send(await i().restore(document));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Backup history (metadata only) + re-download by id.
+  app.get("/v1/backup/list", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "admin");
+      reply.send({ backups: await i().listBackups() } satisfies BackupList);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/backup/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "admin");
+      reply.send(await i().getBackupDocument(req.params.id));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Backup health indicator: last backup, next due, retention, last restore.
+  app.get("/v1/backup/status", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send((await i().backupStatus()) satisfies BackupStatus);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Backup schedule (automatic backups on the hub tick).
+  app.get("/v1/backup/schedule", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send({ schedule: await i().getBackupSchedule() } satisfies BackupScheduleResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put("/v1/backup/schedule", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "admin");
+      const input = BackupScheduleInput.parse(req.body);
+      reply.send({ schedule: await i().setBackupSchedule(input) } satisfies BackupScheduleResponse);
     } catch (err) {
       sendError(reply, err);
     }

@@ -200,11 +200,76 @@ export const BackupMetaResponse = z.object({
 });
 export type BackupMetaResponse = z.infer<typeof BackupMetaResponse>;
 
-export const RestoreRequest = z.object({ document: z.string() });
+export const RestoreRequest = z.object({
+  document: z.string(),
+  /** Preview only — verify + report what would be restored, without touching data (§ dry-run). */
+  dryRun: z.boolean().optional(),
+});
 export type RestoreRequest = z.infer<typeof RestoreRequest>;
 
-export const RestoreResponse = z.object({ tables: z.number().int(), rows: z.number().int() });
+export const RestoreResponse = z.object({
+  tables: z.number().int(),
+  rows: z.number().int(),
+  /** True when the restore failed and the pre-restore snapshot was re-applied. */
+  rolledBack: z.boolean(),
+});
 export type RestoreResponse = z.infer<typeof RestoreResponse>;
+
+/** Dry-run inspection of a backup — what a restore WOULD write, plus signature validity. */
+export const BackupInspectionResponse = z.object({
+  inspection: z.object({
+    signatureValid: z.boolean().nullable(),
+    schemaVersion: z.string(),
+    createdAt: z.string(),
+    tableCount: z.number().int(),
+    rowCount: z.number().int(),
+    tables: z.array(z.object({ name: z.string(), rows: z.number().int() })),
+  }),
+});
+export type BackupInspectionResponse = z.infer<typeof BackupInspectionResponse>;
+
+/** One backup in the history (metadata only). */
+export const BackupHistoryEntry = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  schemaVersion: z.string(),
+  tableCount: z.number().int(),
+  rowCount: z.number().int(),
+  source: z.string(),
+});
+export type BackupHistoryEntry = z.infer<typeof BackupHistoryEntry>;
+
+export const BackupList = z.object({ backups: z.array(BackupHistoryEntry) });
+export type BackupList = z.infer<typeof BackupList>;
+
+export const BackupSchedule = z.object({
+  enabled: z.boolean(),
+  everyHours: z.number().int().positive(),
+  retain: z.number().int().positive(),
+});
+export type BackupSchedule = z.infer<typeof BackupSchedule>;
+
+/** Accepts a partial schedule patch. */
+export const BackupScheduleInput = z.object({
+  enabled: z.boolean().optional(),
+  everyHours: z.number().int().positive().optional(),
+  retain: z.number().int().positive().optional(),
+});
+export type BackupScheduleInput = z.infer<typeof BackupScheduleInput>;
+
+export const BackupScheduleResponse = z.object({ schedule: BackupSchedule });
+export type BackupScheduleResponse = z.infer<typeof BackupScheduleResponse>;
+
+/** Backup health indicator (§ Backup). */
+export const BackupStatus = z.object({
+  lastBackupAt: z.string().nullable(),
+  lastBackupSource: z.string().nullable(),
+  backupCount: z.number().int(),
+  schedule: BackupSchedule,
+  nextDueAt: z.string().nullable(),
+  lastRestoreAt: z.string().nullable(),
+});
+export type BackupStatus = z.infer<typeof BackupStatus>;
 
 // ── Project export ───────────────────────────────────────────────────────────
 

@@ -111,6 +111,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.securityStore = stores.security;
     deps.protocolBindingStore = stores.protocolBindings;
     deps.pushTokenStore = stores.pushTokens;
+    deps.backupStore = stores.backups;
     migrationStore = stores.migrationPolicy;
     deps.db = stores.db;
   }

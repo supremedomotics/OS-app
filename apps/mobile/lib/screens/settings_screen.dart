@@ -8,6 +8,7 @@ import '../widgets/password_field.dart';
 import 'add_home_screen.dart';
 import 'advanced_settings_screen.dart';
 import 'audit_screen.dart';
+import 'backup_screen.dart';
 import 'security_sessions_screen.dart';
 import 'software_update_screen.dart';
 
@@ -102,6 +103,14 @@ class SettingsScreen extends ConsumerWidget {
             subtitle: const Text('Active sessions & devices'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SecuritySessionsScreen())),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('Backup & restore'),
+            subtitle: const Text('Backups, schedule & restore'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const BackupScreen())),
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,

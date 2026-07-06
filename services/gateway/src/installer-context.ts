@@ -41,12 +41,14 @@ import {
 import { issueLicense, validateLicense } from "@supreme/licensing";
 import {
   createBackup,
+  inspectBackup,
   restoreBackup,
   serializeBackup,
   signBackup,
+  type BackupInspection,
   type SignedBackup,
 } from "@supreme/backup";
-import type { SqlDb } from "@supreme/persistence";
+import type { SqlDb, IBackupStore, BackupRecordMeta } from "@supreme/persistence";
 import type { GatewayConfig } from "./config.js";
 
 /** SKU tiers, lowest → highest. A higher tier entitles all lower SKUs. */
@@ -79,6 +81,8 @@ export interface InstallerDeps {
   db?: SqlDb;
   scanners?: IProtocolScanner[];
   protocolBindingStore?: IProtocolBindingStore;
+  /** Backup history store (§ Backup). When absent, backups aren't persisted (dev/in-memory). */
+  backupStore?: IBackupStore;
 }
 
 /**
@@ -606,27 +610,159 @@ export class InstallerServices {
     };
   }
 
-  // ── Backup / restore ─────────────────────────────────────────────────────────
+  // ── Backup / restore (§ Backup: history, schedule, dry-run, rollback, health) ──
 
-  async createBackup() {
+  /** Create + sign a backup, persist it to the history (pruning to the retention limit), and return
+   * its meta + document. `source` distinguishes manual vs scheduled runs. */
+  async createBackup(source = "manual") {
     const db = this.requireDb();
     const signed = signBackup(await createBackup(db), this.backupKeys.privateKey);
-    return { meta: signed.bundle.meta, document: serializeBackup(signed) };
+    const document = serializeBackup(signed);
+    const meta = signed.bundle.meta;
+    if (this.d.backupStore) {
+      await this.d.backupStore.save({
+        id: meta.id,
+        homeId: this.d.homeId,
+        createdAt: meta.createdAt,
+        schemaVersion: meta.schemaVersion,
+        tableCount: meta.tableCount,
+        rowCount: meta.rowCount,
+        source,
+        document,
+      });
+      const { retain } = await this.getBackupSchedule();
+      await this.d.backupStore.prune(this.d.homeId, retain);
+    }
+    return { meta, document };
   }
 
-  async restore(document: string): Promise<{ tables: number; rows: number }> {
-    const db = this.requireDb();
-    let signed: SignedBackup;
+  /** Parse a backup document (throws a clean error on bad JSON). */
+  private parseBackup(document: string): SignedBackup {
     try {
-      signed = JSON.parse(document) as SignedBackup;
+      return JSON.parse(document) as SignedBackup;
     } catch {
       throw new SupremeError("validation_failed", "backup document is not valid JSON");
     }
-    try {
-      return await restoreBackup(db, signed, { publicKeyPem: this.backupKeys.publicKey });
-    } catch (err) {
-      throw new SupremeError("validation_failed", err instanceof Error ? err.message : "restore failed");
+  }
+
+  /** Dry-run: verify + report exactly what a restore would write, without touching the database. */
+  inspectRestore(document: string): BackupInspection {
+    return inspectBackup(this.parseBackup(document), { publicKeyPem: this.backupKeys.publicKey });
+  }
+
+  /**
+   * Rollback-safe restore. Takes a safety snapshot of the current state first; if the restore fails
+   * partway, the snapshot is re-applied so the hub is never left in a half-restored state.
+   */
+  async restore(document: string): Promise<{ tables: number; rows: number; rolledBack: boolean }> {
+    const db = this.requireDb();
+    const signed = this.parseBackup(document);
+    // Verify up-front so an invalid backup never triggers the (destructive) restore path.
+    const inspection = inspectBackup(signed, { publicKeyPem: this.backupKeys.publicKey });
+    if (inspection.signatureValid === false) {
+      throw new SupremeError("validation_failed", "backup signature verification failed");
     }
+    const safety = signBackup(await createBackup(db), this.backupKeys.privateKey);
+    try {
+      const result = await restoreBackup(db, signed, { publicKeyPem: this.backupKeys.publicKey });
+      await this.setConfigJson("backup_last_restore", { at: new Date().toISOString(), rows: result.rows });
+      return { ...result, rolledBack: false };
+    } catch (err) {
+      // Roll back to the pre-restore snapshot; surface the original failure either way.
+      try {
+        await restoreBackup(db, safety);
+      } catch {
+        throw new SupremeError("internal", "restore failed AND rollback failed — data may be inconsistent");
+      }
+      throw new SupremeError("validation_failed", `restore failed and was rolled back: ${err instanceof Error ? err.message : "unknown error"}`);
+    }
+  }
+
+  /** Backup history (metadata only — documents are fetched on demand). */
+  listBackups(): Promise<BackupRecordMeta[]> {
+    return this.d.backupStore ? this.d.backupStore.listMeta(this.d.homeId) : Promise.resolve([]);
+  }
+
+  /** Re-download a stored backup's document by id. */
+  async getBackupDocument(id: string): Promise<{ meta: BackupRecordMeta; document: string }> {
+    const rec = this.d.backupStore ? await this.d.backupStore.get(this.d.homeId, id) : null;
+    if (!rec) throw new SupremeError("not_found", "backup not found");
+    const { document, ...meta } = rec;
+    return { meta, document };
+  }
+
+  /** The backup schedule (persisted); defaults to disabled, daily, keep 14. */
+  async getBackupSchedule(): Promise<{ enabled: boolean; everyHours: number; retain: number }> {
+    const cfg = (await this.getConfigJson<{ enabled?: boolean; everyHours?: number; retain?: number }>("backup_schedule")) ?? {};
+    return {
+      enabled: cfg.enabled ?? false,
+      everyHours: Math.max(1, cfg.everyHours ?? 24),
+      retain: Math.max(1, cfg.retain ?? 14),
+    };
+  }
+
+  async setBackupSchedule(input: { enabled?: boolean; everyHours?: number; retain?: number }): Promise<{ enabled: boolean; everyHours: number; retain: number }> {
+    const current = await this.getBackupSchedule();
+    const next = {
+      enabled: input.enabled ?? current.enabled,
+      everyHours: Math.max(1, input.everyHours ?? current.everyHours),
+      retain: Math.max(1, input.retain ?? current.retain),
+    };
+    await this.setConfigJson("backup_schedule", next);
+    return next;
+  }
+
+  /** Health indicator: last backup, next due, retention + restore marker — all real, from history. */
+  async backupStatus() {
+    const [latest, schedule, lastRestore, all] = await Promise.all([
+      this.d.backupStore ? this.d.backupStore.latest(this.d.homeId) : Promise.resolve(null),
+      this.getBackupSchedule(),
+      this.getConfigJson<{ at: string; rows: number }>("backup_last_restore"),
+      this.listBackups(),
+    ]);
+    const nextDueAt =
+      schedule.enabled && latest
+        ? new Date(new Date(latest.createdAt).getTime() + schedule.everyHours * 3_600_000).toISOString()
+        : null;
+    return {
+      lastBackupAt: latest?.createdAt ?? null,
+      lastBackupSource: latest?.source ?? null,
+      backupCount: all.length,
+      schedule,
+      nextDueAt,
+      lastRestoreAt: lastRestore?.at ?? null,
+    };
+  }
+
+  /** Runner hook: create a scheduled backup if the schedule is enabled and one is due. */
+  async runScheduledBackupIfDue(nowMs: number): Promise<boolean> {
+    if (!this.d.backupStore) return false;
+    const schedule = await this.getBackupSchedule();
+    if (!schedule.enabled) return false;
+    const latest = await this.d.backupStore.latest(this.d.homeId);
+    const dueMs = latest ? new Date(latest.createdAt).getTime() + schedule.everyHours * 3_600_000 : 0;
+    if (nowMs < dueMs) return false;
+    await this.createBackup("scheduled");
+    return true;
+  }
+
+  // Small JSON config helpers over home_config — same TEXT storage + JSON.parse the ConfigRepo uses.
+  private async getConfigJson<T>(key: string): Promise<T | null> {
+    if (!this.d.db) return null;
+    const { rows } = await this.d.db.query<{ value_json: string }>(
+      "SELECT value_json FROM home_config WHERE home_id=$1 AND key=$2",
+      [this.d.homeId, key],
+    );
+    return rows[0] ? (JSON.parse(rows[0].value_json) as T) : null;
+  }
+  private async setConfigJson(key: string, value: unknown): Promise<void> {
+    if (!this.d.db) return;
+    await this.d.db.query(
+      `INSERT INTO home_config (home_id, key, value_json, updated_at)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (home_id, key) DO UPDATE SET value_json=$3, updated_at=$4`,
+      [this.d.homeId, key, JSON.stringify(value ?? null), new Date().toISOString()],
+    );
   }
 
   // ── driver helpers (thin pass-throughs used by routes) ───────────────────────

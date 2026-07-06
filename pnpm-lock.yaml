@@ -737,9 +737,6 @@ importers:
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
-      '@supreme/persistence':
-        specifier: workspace:*
-        version: link:../persistence
     devDependencies:
       '@electric-sql/pglite':
         specifier: ^0.2.17
@@ -747,6 +744,9 @@ importers:
       '@supreme/identity':
         specifier: workspace:*
         version: link:../identity
+      '@supreme/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       typescript:
         specifier: ^5.7.3
         version: 5.9.3

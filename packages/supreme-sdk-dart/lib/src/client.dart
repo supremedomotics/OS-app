@@ -403,6 +403,80 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  // ── Backup (§ Backup: history, schedule, dry-run, rollback, health) ──────────
+  /// Create + persist a signed backup. Returns {meta, document}.
+  Future<Map<String, dynamic>> createBackup() async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/backup'), headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Backup health indicator: {lastBackupAt, lastBackupSource, backupCount, schedule, nextDueAt, lastRestoreAt}.
+  Future<Map<String, dynamic>> backupStatus() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/backup/status'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Backup history (metadata only), newest first.
+  Future<List<Map<String, dynamic>>> backupList() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/backup/list'), headers: _authHeaders);
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['backups'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// Re-fetch a stored backup's document + meta by id.
+  Future<Map<String, dynamic>> getBackup(String id) async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/backup/$id'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// The backup schedule ({enabled, everyHours, retain}).
+  Future<Map<String, dynamic>> backupSchedule() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/backup/schedule'), headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['schedule'] as Map<String, dynamic>;
+  }
+
+  /// Update the backup schedule (partial patch).
+  Future<Map<String, dynamic>> setBackupSchedule({bool? enabled, int? everyHours, int? retain}) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/backup/schedule'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        if (enabled != null) 'enabled': enabled,
+        if (everyHours != null) 'everyHours': everyHours,
+        if (retain != null) 'retain': retain,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['schedule'] as Map<String, dynamic>;
+  }
+
+  /// Dry-run: verify + preview what a restore would write, without touching data.
+  Future<Map<String, dynamic>> inspectRestore(String document) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/backup/restore'),
+      headers: _authHeaders,
+      body: jsonEncode({'document': document, 'dryRun': true}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['inspection'] as Map<String, dynamic>;
+  }
+
+  /// Rollback-safe restore of a backup document. Returns {tables, rows, rolledBack}.
+  Future<Map<String, dynamic>> restoreBackup(String document) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/backup/restore'),
+      headers: _authHeaders,
+      body: jsonEncode({'document': document}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   // ── Automations (visual Builder, §10) ────────────────────────────────────────
   Future<List<AutomationSummary>> automations() async {
     final res = await _http.get(Uri.parse('$baseUrl/v1/automations'),

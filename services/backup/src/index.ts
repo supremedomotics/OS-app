@@ -1,6 +1,15 @@
 import { newId, type BackupId } from "@supreme/domain-model";
 import { canonicalJson, signPayload, verifyPayload } from "@supreme/crypto";
-import type { SqlDb } from "@supreme/persistence";
+
+/**
+ * Minimal SQL surface the backup engine needs — structurally compatible with @supreme/persistence's
+ * `SqlDb`, but declared here so the backup package doesn't depend on persistence (which in turn
+ * depends on this package for its {@link IBackupStore}). Breaking that import cycle keeps the build
+ * acyclic; any `SqlDb` is assignable to `BackupDb`.
+ */
+export interface BackupDb {
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+}
 
 /**
  * Backup & restore of the Supreme system of record (§14). A backup is a JSON dump
@@ -28,10 +37,11 @@ export interface SignedBackup {
   signature: string;
 }
 
-/** Tables never included in a backup (transient/derived). */
-const EXCLUDED = new Set(["schema_migrations"]);
+/** Tables never included in a backup (transient/derived). `backups` is excluded so backups never
+ * nest inside one another (which would grow exponentially). */
+const EXCLUDED = new Set(["schema_migrations", "backups"]);
 
-async function listTables(db: SqlDb): Promise<string[]> {
+async function listTables(db: BackupDb): Promise<string[]> {
   const { rows } = await db.query<{ table_name: string }>(
     "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name",
   );
@@ -42,7 +52,7 @@ async function listTables(db: SqlDb): Promise<string[]> {
  * Order tables so a parent table is restored before any table that references it
  * (FK-safe insert order). Computed by topologically sorting the foreign-key graph.
  */
-async function insertionOrder(db: SqlDb, tables: string[]): Promise<string[]> {
+async function insertionOrder(db: BackupDb, tables: string[]): Promise<string[]> {
   const { rows } = await db.query<{ child: string; parent: string }>(
     `SELECT tc.table_name AS child, ccu.table_name AS parent
        FROM information_schema.table_constraints tc
@@ -72,7 +82,7 @@ async function insertionOrder(db: SqlDb, tables: string[]): Promise<string[]> {
 }
 
 /** Dump the whole Supreme database into an in-memory backup bundle. */
-export async function createBackup(db: SqlDb, schemaVersion = "0001"): Promise<BackupBundle> {
+export async function createBackup(db: BackupDb, schemaVersion = "0001"): Promise<BackupBundle> {
   const tables: Record<string, Record<string, unknown>[]> = {};
   let rowCount = 0;
   for (const table of await listTables(db)) {
@@ -100,13 +110,43 @@ export function verifyBackup(signed: SignedBackup, publicKeyPem: string): boolea
   return verifyPayload(signed.bundle, signed.signature, publicKeyPem);
 }
 
+export interface BackupInspection {
+  /** Whether the signature verifies against the given key (null when no key was supplied). */
+  signatureValid: boolean | null;
+  schemaVersion: string;
+  createdAt: string;
+  tableCount: number;
+  rowCount: number;
+  /** Per-table row counts that WOULD be restored — the dry-run preview. */
+  tables: { name: string; rows: number }[];
+}
+
+/**
+ * Inspect a signed backup WITHOUT touching any database (§ restore dry-run). Verifies the signature
+ * (when a key is provided) and reports exactly what a restore would write, so an operator can preview
+ * a restore safely before committing to it.
+ */
+export function inspectBackup(signed: SignedBackup, opts: { publicKeyPem?: string } = {}): BackupInspection {
+  const tables = Object.entries(signed.bundle.tables)
+    .map(([name, rows]) => ({ name, rows: rows.length }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    signatureValid: opts.publicKeyPem ? verifyBackup(signed, opts.publicKeyPem) : null,
+    schemaVersion: signed.bundle.meta.schemaVersion,
+    createdAt: signed.bundle.meta.createdAt,
+    tableCount: tables.length,
+    rowCount: tables.reduce((n, t) => n + t.rows, 0),
+    tables,
+  };
+}
+
 /**
  * Restore a backup into a database (which must already be migrated). Existing rows
  * in the affected tables are cleared first. If `publicKeyPem` is given, the
  * signature is verified before any data is touched.
  */
 export async function restoreBackup(
-  db: SqlDb,
+  db: BackupDb,
   signed: SignedBackup,
   opts: { publicKeyPem?: string } = {},
 ): Promise<{ tables: number; rows: number }> {
@@ -144,6 +184,7 @@ export async function restoreBackup(
 export function serializeBackup(signed: SignedBackup): string {
   return canonicalJson(signed);
 }
+
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

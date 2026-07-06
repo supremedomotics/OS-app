@@ -40,6 +40,7 @@ export function ThemeSettings() {
     { id: "notifications", label: "Notifications", icon: "◔", hint: "Alerts & activity", el: <NotificationCenter /> },
     { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
     { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
+    { id: "backup", label: "Backup & restore", icon: "❖", hint: "Backups, schedule & restore", el: <BackupCenter /> },
     { id: "update", label: "Software update", icon: "⤓", hint: "Version & updates", el: <UpdateCenter /> },
   ];
 
@@ -564,6 +565,167 @@ function UpdateCenter() {
 
       <button disabled={busy} onClick={check} style={{ marginTop: 12 }}>{busy ? "Checking…" : "Check for updates"}</button>
       {err && <p className="err">{err}</p>}
+    </section>
+  );
+}
+
+/**
+ * Backup & restore (§ Backup). Real backup health (last/next/count), one-tap backup (downloaded +
+ * kept in the hub's signed history), an automatic schedule, a re-downloadable history, and a
+ * rollback-safe restore that previews (dry-run) before it commits.
+ */
+type BackupStatusT = { lastBackupAt: string | null; lastBackupSource: string | null; backupCount: number; schedule: { enabled: boolean; everyHours: number; retain: number }; nextDueAt: string | null; lastRestoreAt: string | null };
+type BackupEntry = { id: string; createdAt: string; rowCount: number; tableCount: number; source: string };
+type Inspection = { signatureValid: boolean | null; schemaVersion: string; createdAt: string; tableCount: number; rowCount: number; tables: { name: string; rows: number }[] };
+
+function BackupCenter() {
+  const [status, setStatus] = useState<BackupStatusT | null>(null);
+  const [history, setHistory] = useState<BackupEntry[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [preview, setPreview] = useState<Inspection | null>(null);
+  const [restoreDoc, setRestoreDoc] = useState("");
+
+  async function load() {
+    const [st, list] = await Promise.all([client.backupStatus(), client.backupList()]);
+    setStatus(st as BackupStatusT);
+    setHistory(list.backups as BackupEntry[]);
+  }
+  useEffect(() => { void load(); }, []);
+
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Never");
+
+  function download(name: string, doc: string) {
+    const blob = new Blob([doc], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function createNow() {
+    setBusy("create"); setMsg(null);
+    try {
+      const { meta, document: doc } = await client.backup();
+      download(`supreme-backup-${meta.id}.slic`, doc);
+      await load();
+      setMsg({ ok: true, text: "Backup created and downloaded." });
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Backup failed." }); }
+    finally { setBusy(null); }
+  }
+
+  async function reDownload(id: string) {
+    setBusy(id);
+    try { const { document: doc } = await client.getBackup(id); download(`supreme-backup-${id}.slic`, doc); }
+    finally { setBusy(null); }
+  }
+
+  async function saveSchedule(patch: { enabled?: boolean; everyHours?: number; retain?: number }) {
+    setBusy("schedule");
+    try { const { schedule } = await client.setBackupSchedule(patch); setStatus((s) => (s ? { ...s, schedule } : s)); await load(); }
+    finally { setBusy(null); }
+  }
+
+  async function runPreview() {
+    setBusy("preview"); setMsg(null); setPreview(null);
+    try { const { inspection } = await client.inspectRestore(restoreDoc.trim()); setPreview(inspection as Inspection); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not read that backup." }); }
+    finally { setBusy(null); }
+  }
+
+  async function doRestore() {
+    if (!window.confirm("Restore this backup? Current data will be replaced (a rollback snapshot is taken first).")) return;
+    setBusy("restore"); setMsg(null);
+    try {
+      const r = await client.restore(restoreDoc.trim());
+      setPreview(null); setRestoreDoc(""); await load();
+      setMsg({ ok: true, text: `Restored ${r.rows} rows across ${r.tables} tables.` });
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Restore failed (rolled back)." }); }
+    finally { setBusy(null); }
+  }
+
+  const sched = status?.schedule;
+  const healthy = status && status.lastBackupAt && (!sched?.enabled || (status.nextDueAt ? new Date(status.nextDueAt).getTime() > Date.now() - 3_600_000 : true));
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Backup &amp; restore</h2>
+
+      {/* Health indicator */}
+      <div className={`health-hero ${status ? (healthy ? "ok" : "warn") : ""}`}>
+        <span className="hh-dot" />
+        <div>
+          <strong>{!status ? "Checking…" : status.lastBackupAt ? "Backups healthy" : "No backups yet"}</strong>
+          <span className="hh-sub">{status ? `Last backup ${fmt(status.lastBackupAt)} · ${status.backupCount} kept${status.lastRestoreAt ? ` · last restore ${fmt(status.lastRestoreAt)}` : ""}` : ""}</span>
+        </div>
+      </div>
+
+      <div className="dev-row2" style={{ marginTop: 12 }}>
+        <button className="primary" disabled={busy === "create"} onClick={createNow}>{busy === "create" ? "Creating…" : "Back up now"}</button>
+      </div>
+
+      {/* Schedule */}
+      <p className="opt-label" style={{ marginTop: 18 }}>Automatic backups</p>
+      {sched && (
+        <>
+          <label className="dev-toggle">
+            <input type="checkbox" checked={sched.enabled} disabled={busy === "schedule"} onChange={(e) => saveSchedule({ enabled: e.target.checked })} />
+            <span>Automatically back up on a schedule</span>
+          </label>
+          {sched.enabled && (
+            <div className="lic-grid" style={{ marginTop: 8 }}>
+              <label className="drv-field"><span className="lbl">Every (hours)</span>
+                <input type="number" min={1} defaultValue={sched.everyHours} onBlur={(e) => saveSchedule({ everyHours: Math.max(1, Number.parseInt(e.target.value, 10) || sched.everyHours) })} />
+              </label>
+              <label className="drv-field"><span className="lbl">Keep (backups)</span>
+                <input type="number" min={1} defaultValue={sched.retain} onBlur={(e) => saveSchedule({ retain: Math.max(1, Number.parseInt(e.target.value, 10) || sched.retain) })} />
+              </label>
+              {status?.nextDueAt && <div><span className="k">Next backup</span><span className="v">{fmt(status.nextDueAt)}</span></div>}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* History */}
+      {history.length > 0 && (
+        <>
+          <p className="opt-label" style={{ marginTop: 18 }}>Backup history</p>
+          <div className="sess-list">
+            {history.map((b) => (
+              <div key={b.id} className="sess-row">
+                <span className="sess-ic">❖</span>
+                <span className="sess-meta">
+                  <span className="sess-name">{fmt(b.createdAt)} <span className="tag soft">{b.source}</span></span>
+                  <span className="sess-sub">{b.rowCount} rows · {b.tableCount} tables</span>
+                </span>
+                <button disabled={busy === b.id} onClick={() => reDownload(b.id)}>Download</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Restore with dry-run preview */}
+      <p className="opt-label" style={{ marginTop: 18 }}>Restore from a backup</p>
+      <textarea rows={3} value={restoreDoc} placeholder="Paste a .slic backup document…" onChange={(e) => { setRestoreDoc(e.target.value); setPreview(null); }} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--aureon-color-base-hairline)", background: "var(--aureon-color-base-surface)", color: "var(--aureon-color-text-primary)", fontFamily: "ui-monospace, monospace", fontSize: 12 }} />
+      <label className="chip" style={{ cursor: "pointer", marginTop: 6, display: "inline-block" }}>
+        Import file…
+        <input type="file" accept=".slic,.json,application/json" style={{ display: "none" }} onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setRestoreDoc(await f.text()); setPreview(null); } }} />
+      </label>
+      <div className="dev-row2" style={{ marginTop: 8 }}>
+        <button disabled={busy === "preview" || !restoreDoc.trim()} onClick={runPreview}>{busy === "preview" ? "Reading…" : "Preview (dry-run)"}</button>
+        {preview && <button className="danger" disabled={busy === "restore"} onClick={doRestore}>{busy === "restore" ? "Restoring…" : "Restore this backup"}</button>}
+      </div>
+
+      {preview && (
+        <div className="update-avail" style={{ marginTop: 10 }}>
+          <strong>{preview.signatureValid === false ? "⚠ Invalid signature" : "✓ Verified backup"}</strong>
+          <span className="muted"> · from {fmt(preview.createdAt)} · {preview.rowCount} rows across {preview.tableCount} tables</span>
+          <p className="notif-body" style={{ marginTop: 6 }}>{preview.tables.map((t) => `${t.name} (${t.rows})`).join(", ")}</p>
+        </div>
+      )}
+
+      {msg && <p className={msg.ok ? "muted" : "err"} style={{ marginTop: 10 }}>{msg.text}</p>}
     </section>
   );
 }

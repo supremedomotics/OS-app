@@ -56,4 +56,45 @@ describe("Gateway persistence + restart", () => {
     await new Promise((r) => setTimeout(r, 50));
     await ctx2.shutdown();
   });
+
+  it("persists backups + schedule, dry-runs, and restores rollback-safe (§ Backup)", async () => {
+    const s = buildStores(db);
+    const config = loadConfig({ SUPREME_LOG_LEVEL: "silent" });
+    const ctx = await AppContext.create(config, { ...deps(), db, backupStore: s.backups });
+    const inst = ctx.installer;
+
+    // Create a backup → it lands in history and drives the health indicator.
+    const { document } = await inst.createBackup("manual");
+    const status1 = await inst.backupStatus();
+    expect(status1.backupCount).toBeGreaterThanOrEqual(1);
+    expect(status1.lastBackupAt).toBeTruthy();
+    expect(status1.lastBackupSource).toBe("manual");
+
+    // Dry-run inspects without touching data: valid signature + a real per-table preview.
+    const inspection = inst.inspectRestore(document);
+    expect(inspection.signatureValid).toBe(true);
+    expect(inspection.rowCount).toBeGreaterThan(0);
+    expect(inspection.tables.some((t) => t.name === "users")).toBe(true);
+
+    // Schedule is persisted + reflected in status (next-due computed from the last backup).
+    const sched = await inst.setBackupSchedule({ enabled: true, everyHours: 6, retain: 5 });
+    expect(sched).toEqual({ enabled: true, everyHours: 6, retain: 5 });
+    const status2 = await inst.backupStatus();
+    expect(status2.schedule.enabled).toBe(true);
+    expect(status2.nextDueAt).toBeTruthy();
+
+    // A rollback-safe restore of the snapshot succeeds and is recorded.
+    const restore = await inst.restore(document);
+    expect(restore.rolledBack).toBe(false);
+    expect(restore.rows).toBeGreaterThan(0);
+    expect((await inst.backupStatus()).lastRestoreAt).toBeTruthy();
+
+    // A corrupt/invalid backup is rejected before any destructive write (signature check).
+    const tampered = JSON.parse(document) as { signature: string };
+    tampered.signature = "00";
+    await expect(inst.restore(JSON.stringify(tampered))).rejects.toThrow(/signature/i);
+
+    await new Promise((r) => setTimeout(r, 50));
+    await ctx.shutdown();
+  });
 });

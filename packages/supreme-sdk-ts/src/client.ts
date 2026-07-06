@@ -36,6 +36,12 @@ import {
   type SystemUpdate,
   type SessionList,
   type RevokeOthersResponse,
+  type RestoreResponse,
+  type BackupInspectionResponse,
+  type BackupStatus,
+  type BackupList,
+  type BackupHistoryEntry,
+  type BackupScheduleResponse,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -335,8 +341,30 @@ export class SupremeClient {
   backup(): Promise<{ meta: { id: string; rowCount: number }; document: string }> {
     return this.request("POST", "/v1/backup") as Promise<{ meta: { id: string; rowCount: number }; document: string }>;
   }
-  restore(document: string): Promise<{ tables: number; rows: number }> {
-    return this.request("POST", "/v1/backup/restore", { document }) as Promise<{ tables: number; rows: number }>;
+  restore(document: string): Promise<RestoreResponse> {
+    return this.request("POST", "/v1/backup/restore", { document }) as Promise<RestoreResponse>;
+  }
+  /** Dry-run: verify + preview what a restore would write, without touching data (§ dry-run). */
+  inspectRestore(document: string): Promise<BackupInspectionResponse> {
+    return this.request("POST", "/v1/backup/restore", { document, dryRun: true }) as Promise<BackupInspectionResponse>;
+  }
+  /** Backup health indicator: last backup, next due, retention, last restore. */
+  backupStatus(): Promise<BackupStatus> {
+    return this.request("GET", "/v1/backup/status") as Promise<BackupStatus>;
+  }
+  /** Backup history (metadata only). */
+  backupList(): Promise<BackupList> {
+    return this.request("GET", "/v1/backup/list") as Promise<BackupList>;
+  }
+  /** Re-download a stored backup's document by id. */
+  getBackup(id: string): Promise<{ meta: BackupHistoryEntry; document: string }> {
+    return this.request("GET", `/v1/backup/${id}`) as Promise<{ meta: BackupHistoryEntry; document: string }>;
+  }
+  backupSchedule(): Promise<BackupScheduleResponse> {
+    return this.request("GET", "/v1/backup/schedule") as Promise<BackupScheduleResponse>;
+  }
+  setBackupSchedule(input: { enabled?: boolean; everyHours?: number; retain?: number }): Promise<BackupScheduleResponse> {
+    return this.request("PUT", "/v1/backup/schedule", input) as Promise<BackupScheduleResponse>;
   }
 
   licenseStatus(): Promise<LicenseStatus> {

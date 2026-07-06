@@ -21,6 +21,7 @@ const MIGRATIONS = [
   "0011_intelligence.sql",
   "0012_room_location.sql",
   "0013_session_metadata.sql",
+  "0014_backups.sql",
 ] as const;
 
 /**

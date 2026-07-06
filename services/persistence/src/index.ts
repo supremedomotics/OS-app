@@ -16,6 +16,7 @@ import type { ISecurityStore } from "@supreme/security";
 import type { IProtocolBindingStore } from "@supreme/integration-layer";
 import type { IPushTokenStore } from "@supreme/notifications";
 import type { IMigrationPolicyStore } from "@supreme/integration-layer";
+import type { IBackupStore } from "./repositories/backup-repo.js";
 import { migrate } from "./migrate.js";
 import { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
 import { IdentityRepo } from "./repositories/identity-repo.js";
@@ -31,6 +32,7 @@ import { ConfigRepo } from "./repositories/config-repo.js";
 import { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 import { PushTokenRepo } from "./repositories/push-token-repo.js";
 import { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
+import { BackupRepo } from "./repositories/backup-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -44,6 +46,12 @@ export { AutomationRepo } from "./repositories/automation-repo.js";
 export { SessionRepo } from "./repositories/session-repo.js";
 export { SecurityRepo } from "./repositories/security-repo.js";
 export { ConfigRepo } from "./repositories/config-repo.js";
+export {
+  BackupRepo,
+  type IBackupStore,
+  type BackupRecord,
+  type BackupRecordMeta,
+} from "./repositories/backup-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
@@ -65,6 +73,7 @@ export interface PersistenceStores {
   pushTokens: IPushTokenStore;
   migrationPolicy: IMigrationPolicyStore;
   config: IConfigStore;
+  backups: IBackupStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -83,6 +92,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     pushTokens: new PushTokenRepo(db),
     migrationPolicy: new MigrationPolicyRepo(db),
     config: new ConfigRepo(db),
+    backups: new BackupRepo(db),
   };
 }
 
