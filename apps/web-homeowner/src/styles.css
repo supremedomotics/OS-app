@@ -110,6 +110,14 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .ext-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
 .ext-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
 .ext-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+/* Media cards — whole-home players, reusing the device sheet for transport. */
+.media-card { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px; background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }
+.media-card:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
+.media-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; color: var(--aureon-color-gold-400); }
+.media-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.media-name { font-size: 15.5px; font-weight: 600; }
+.media-now { font-size: 12.5px; color: var(--aureon-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .ext-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ext-name { font-size: 15.5px; font-weight: 600; }
 /* Prominent certification badge: at-a-glance trust signal from the driver channel. */

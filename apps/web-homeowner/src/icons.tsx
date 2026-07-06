@@ -5,7 +5,7 @@
 type IconName =
   | "home" | "rooms" | "scenes" | "security" | "settings"
   | "automations" | "energy" | "play" | "developer"
-  | "dashboard" | "discover" | "devices" | "extensions" | "areas" | "notifications";
+  | "dashboard" | "discover" | "devices" | "extensions" | "areas" | "notifications" | "media";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <><path d="M3 10.7 12 3.5l9 7.2" /><path d="M5.6 9.6V20h12.8V9.6" /><path d="M10 20v-5h4v5" /></>,
@@ -23,6 +23,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   play: <path d="M7.5 5.5 18 12 7.5 18.5z" />,
   developer: <><path d="M8.5 8.5 5 12l3.5 3.5" /><path d="M15.5 8.5 19 12l-3.5 3.5" /><path d="M13.2 5l-2.4 14" /></>,
   notifications: <><path d="M6 9.5a6 6 0 0 1 12 0c0 4.2 1.2 5.7 2 6.6H4c.8-.9 2-2.4 2-6.6z" /><path d="M9.7 19.5a2.4 2.4 0 0 0 4.6 0" /></>,
+  media: <><path d="M9 6.5v11l8.5-5.5z" /><circle cx="12" cy="12" r="9" /></>,
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {

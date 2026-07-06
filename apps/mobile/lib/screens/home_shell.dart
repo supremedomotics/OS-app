@@ -14,6 +14,7 @@ import 'discover_devices_screen.dart';
 import 'driver_manager_screen.dart';
 import 'energy_screen.dart';
 import 'intelligence_screen.dart';
+import 'media_screen.dart';
 import 'room_view.dart';
 import 'scenes_screen.dart';
 import 'security_screen.dart';
@@ -63,6 +64,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             (Icons.travel_explore_outlined, 'Discover Devices', const DiscoverDevicesScreen()),
             (Icons.devices_other_outlined, 'Devices', const DeviceManagerScreen()),
             (Icons.layers_outlined, 'Areas', const AreasScreen()),
+            (Icons.play_circle_outline, 'Media', const MediaScreen()),
             (Icons.extension_outlined, 'Extension Center', const ExtensionCenterScreen()),
             (Icons.account_tree_outlined, 'Automations', const AutomationsScreen()),
             (Icons.insights_outlined, 'Smart', const IntelligenceScreen()),
