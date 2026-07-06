@@ -23,6 +23,7 @@ const MIGRATIONS = [
   "0013_session_metadata.sql",
   "0014_backups.sql",
   "0015_pending_devices.sql",
+  "0016_recovery_codes.sql",
 ] as const;
 
 /**

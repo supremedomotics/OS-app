@@ -93,6 +93,27 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // MFA recovery codes (§ Security Center). Status is safe to read; regeneration returns the
+  // plaintext codes ONCE (only hashes are stored) and requires MFA to be enabled.
+  app.get("/v1/me/mfa/recovery-codes", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      reply.send(await ctx.identity.recoveryCodeStatus(user.id));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/me/mfa/recovery-codes", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const codes = await ctx.identity.regenerateRecoveryCodes(user.id);
+      reply.send({ codes, remaining: codes.length });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post("/v1/me/mfa/disable", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);

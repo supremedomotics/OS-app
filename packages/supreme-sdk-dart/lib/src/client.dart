@@ -105,6 +105,20 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// MFA recovery-code status: {mfaEnabled, remaining}.
+  Future<Map<String, dynamic>> recoveryCodeStatus() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/me/mfa/recovery-codes'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Generate a fresh set of MFA recovery codes (returned in plaintext ONCE). Returns {codes, remaining}.
+  Future<Map<String, dynamic>> generateRecoveryCodes() async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/me/mfa/recovery-codes'), headers: _authHeaders, body: '{}');
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// The signed-in user's login sessions (active + revoked), newest first — the Security Center.
   /// Each carries {id, createdAt, lastSeenAt?, ip?, userAgent?, revoked, current}.
   Future<List<Map<String, dynamic>>> sessions() async {

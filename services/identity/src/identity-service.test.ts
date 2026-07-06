@@ -96,6 +96,36 @@ describe("login + token lifecycle", () => {
     expect((await s.authenticate(pair.accessToken)).email).toBe("owner@example.com");
   });
 
+  it("generates recovery codes and accepts one instead of TOTP, consuming it (§ recovery codes)", async () => {
+    const s = svc();
+    const { master } = await s.commission({ homeName: "P", email: "owner@example.com", password: "correct horse battery staple", displayName: "O" });
+
+    // Can't generate recovery codes before MFA is on.
+    await expect(s.regenerateRecoveryCodes(master.id)).rejects.toThrow(/enable two-factor/);
+    const { secret } = await s.startMfaEnrollment(master.id);
+    await s.confirmMfaEnrollment(master.id, totpAt(secret));
+
+    const codes = await s.regenerateRecoveryCodes(master.id);
+    expect(codes).toHaveLength(10);
+    expect((await s.recoveryCodeStatus(master.id)).remaining).toBe(10);
+
+    // Log in using a RECOVERY code instead of the authenticator; it is then consumed.
+    const login = await s.login("owner@example.com", "correct horse battery staple");
+    if (login.status !== "mfa_required") throw new Error("expected mfa");
+    const pair = await s.verifyMfaLogin(login.mfaToken, codes[0]!);
+    expect((await s.authenticate(pair.accessToken)).email).toBe("owner@example.com");
+    expect((await s.recoveryCodeStatus(master.id)).remaining).toBe(9);
+
+    // The same code can't be reused.
+    const login2 = await s.login("owner@example.com", "correct horse battery staple");
+    if (login2.status !== "mfa_required") throw new Error("expected mfa");
+    await expect(s.verifyMfaLogin(login2.mfaToken, codes[0]!)).rejects.toThrow(/invalid/);
+
+    // Disabling MFA clears the codes.
+    await s.disableMfa(master.id, totpAt(secret));
+    expect(await s.recoveryCodeStatus(master.id)).toEqual({ mfaEnabled: false, remaining: 0 });
+  });
+
   it("revokes a session on logout so its access token stops working", async () => {
     const s = svc();
     await s.commission({

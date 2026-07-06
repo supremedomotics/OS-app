@@ -153,6 +153,15 @@ export class SupremeClient {
     await this.request("DELETE", `/v1/users/${userId}`);
   }
 
+  /** MFA recovery-code status: whether MFA is on + how many one-time codes remain. */
+  async recoveryCodeStatus(): Promise<{ mfaEnabled: boolean; remaining: number }> {
+    return this.request("GET", "/v1/me/mfa/recovery-codes") as Promise<{ mfaEnabled: boolean; remaining: number }>;
+  }
+  /** Generate a fresh set of MFA recovery codes (returned in plaintext ONCE; replaces any prior set). */
+  async generateRecoveryCodes(): Promise<{ codes: string[]; remaining: number }> {
+    return this.request("POST", "/v1/me/mfa/recovery-codes") as Promise<{ codes: string[]; remaining: number }>;
+  }
+
   /** The signed-in user's login sessions (active + revoked), newest first — the Security Center. */
   async sessions(): Promise<SessionList> {
     return this.request("GET", "/v1/me/sessions") as Promise<SessionList>;

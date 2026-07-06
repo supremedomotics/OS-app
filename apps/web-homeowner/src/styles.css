@@ -799,3 +799,7 @@ button.link {
 
 /* Operations command-center — health score badge (§ Operations Dashboard). */
 .health-score { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: .9; }
+
+/* MFA recovery codes (§ Security Center). */
+.recovery-codes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 8px 0; }
+.recovery-codes code { font-family: ui-monospace, monospace; font-size: 14px; padding: 6px 10px; border-radius: 8px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); text-align: center; letter-spacing: .05em; }

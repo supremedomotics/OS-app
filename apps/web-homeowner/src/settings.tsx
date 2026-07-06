@@ -477,7 +477,52 @@ function SecuritySettings() {
       </div>
 
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
+
+      <RecoveryCodes />
     </section>
+  );
+}
+
+/**
+ * MFA recovery codes (§ Security Center). One-time backup codes to sign in if the authenticator is
+ * lost. Codes are shown once on generation (only hashes are stored); regenerating replaces them.
+ */
+function RecoveryCodes() {
+  const [status, setStatus] = useState<{ mfaEnabled: boolean; remaining: number } | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() { try { setStatus(await client.recoveryCodeStatus()); } catch { /* keep */ } }
+  useEffect(() => { void load(); }, []);
+
+  async function generate() {
+    setBusy(true);
+    try { const res = await client.generateRecoveryCodes(); setCodes(res.codes); await load(); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="danger-zone" style={{ borderTopColor: "var(--aureon-color-base-hairline)" }}>
+      <p className="opt-label">Recovery codes</p>
+      {!status ? (
+        <p className="muted">Loading…</p>
+      ) : !status.mfaEnabled ? (
+        <p className="muted">Enable two-factor authentication to set up recovery codes.</p>
+      ) : (
+        <>
+          <p className="muted">One-time codes to sign in if you lose your authenticator. {status.remaining} unused.</p>
+          {codes && (
+            <div className="recovery-codes">
+              {codes.map((c) => <code key={c}>{c}</code>)}
+              <p className="err" style={{ gridColumn: "1 / -1" }}>Save these now — they won't be shown again.</p>
+            </div>
+          )}
+          <button disabled={busy} onClick={generate} style={{ marginTop: 8 }}>
+            {busy ? "Generating…" : status.remaining > 0 ? "Regenerate codes" : "Generate recovery codes"}
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 

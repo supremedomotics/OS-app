@@ -12,6 +12,8 @@ export interface StoredCredential {
   passwordHash: string;
   /** Base32 TOTP secret, or null if MFA is not enrolled. */
   mfaSecret: string | null;
+  /** Unused MFA recovery-code hashes (sha256). One-time backup codes; consumed on use. */
+  recoveryCodes?: string[];
 }
 
 export interface IIdentityStore {

@@ -8,6 +8,7 @@ import '../providers.dart';
 /// current device, and supports remote logout (one session, or everywhere else). IP / device /
 /// last-seen shown when captured.
 final _sessionsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) => ref.watch(clientProvider).sessions());
+final _recoveryProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).recoveryCodeStatus());
 
 class SecuritySessionsScreen extends ConsumerWidget {
   const SecuritySessionsScreen({super.key});
@@ -47,6 +48,8 @@ class SecuritySessionsScreen extends ConsumerWidget {
                   ),
                 const SizedBox(height: AureonSpacing.sm),
                 for (final s in active) _SessionTile(session: s, onRevoked: () => ref.invalidate(_sessionsProvider)),
+                const Divider(height: 28),
+                const _RecoveryCodes(),
               ],
             ),
           );
@@ -126,6 +129,70 @@ class _SessionTile extends ConsumerWidget {
                 child: const Text('Sign out'),
               ),
       ),
+    );
+  }
+}
+
+/// MFA recovery codes (§ Security Center) — one-time backup codes shown once on generation.
+class _RecoveryCodes extends ConsumerStatefulWidget {
+  const _RecoveryCodes();
+  @override
+  ConsumerState<_RecoveryCodes> createState() => _RecoveryCodesState();
+}
+
+class _RecoveryCodesState extends ConsumerState<_RecoveryCodes> {
+  List<String>? _codes;
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = ref.watch(_recoveryProvider);
+    final text = Theme.of(context).textTheme;
+    return status.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (s) {
+        final enabled = s['mfaEnabled'] == true;
+        final remaining = (s['remaining'] as num?)?.toInt() ?? 0;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Recovery codes', style: text.titleSmall),
+          const SizedBox(height: 4),
+          if (!enabled)
+            Text('Enable two-factor authentication to set up recovery codes.', style: text.labelMedium)
+          else ...[
+            Text('One-time codes to sign in if you lose your authenticator. $remaining unused.', style: text.labelMedium),
+            if (_codes != null) ...[
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final c in _codes!)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(color: AureonBase.surface, borderRadius: BorderRadius.circular(8), border: Border.all(color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.4))),
+                    child: Text(c, style: const TextStyle(fontFamily: 'monospace', letterSpacing: 1)),
+                  ),
+              ]),
+              Padding(padding: const EdgeInsets.only(top: 6), child: Text("Save these now — they won't be shown again.", style: text.labelSmall?.copyWith(color: AureonStatus.critical))),
+            ],
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: _busy ? null : () async {
+                setState(() => _busy = true);
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  final res = await ref.read(clientProvider).generateRecoveryCodes();
+                  setState(() => _codes = (res['codes'] as List).cast<String>());
+                  ref.invalidate(_recoveryProvider);
+                } catch (e) {
+                  messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+                } finally {
+                  if (mounted) setState(() => _busy = false);
+                }
+              },
+              child: Text(remaining > 0 ? 'Regenerate codes' : 'Generate recovery codes'),
+            ),
+          ],
+        ]);
+      },
     );
   }
 }

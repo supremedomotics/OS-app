@@ -286,11 +286,40 @@ export class IdentityService {
       throw new SupremeError("unauthorized", "session is no longer valid");
     }
     const cred = await this.store.getCredential(user.id);
-    if (!cred?.mfaSecret || !verifyTotp(cred.mfaSecret, code)) {
+    if (!cred?.mfaSecret) {
       throw new SupremeError("unauthorized", "invalid authentication code");
+    }
+    // Accept a TOTP code OR a one-time recovery code (consumed on use).
+    const normalized = code.replace(/\s+/g, "");
+    if (!verifyTotp(cred.mfaSecret, normalized)) {
+      const codeHash = sha256(normalized.toLowerCase());
+      const remaining = cred.recoveryCodes ?? [];
+      if (!remaining.includes(codeHash)) {
+        throw new SupremeError("unauthorized", "invalid authentication code");
+      }
+      await this.store.putCredential({ ...cred, recoveryCodes: remaining.filter((h) => h !== codeHash) });
     }
     const { sid, jti } = await this.openSession(user.id, context);
     return this.issueTokens(user, sid, jti);
+  }
+
+  /**
+   * Generate a fresh set of one-time MFA recovery codes (§ Security Center). Requires MFA to be
+   * enabled; returns the plaintext codes ONCE (only hashes are stored) and replaces any prior set.
+   */
+  async regenerateRecoveryCodes(userId: UserId, count = 10): Promise<string[]> {
+    const cred = await this.store.getCredential(userId);
+    if (!cred) throw new SupremeError("not_found", "credential not found");
+    if (!cred.mfaSecret) throw new SupremeError("conflict", "enable two-factor authentication first");
+    const codes = Array.from({ length: count }, () => formatRecoveryCode(randomBytes(5)));
+    await this.store.putCredential({ ...cred, recoveryCodes: codes.map((c) => sha256(c.toLowerCase())) });
+    return codes;
+  }
+
+  /** Recovery-code status for a user: whether MFA is on + how many unused codes remain. */
+  async recoveryCodeStatus(userId: UserId): Promise<{ mfaEnabled: boolean; remaining: number }> {
+    const cred = await this.store.getCredential(userId);
+    return { mfaEnabled: Boolean(cred?.mfaSecret), remaining: cred?.recoveryCodes?.length ?? 0 };
   }
 
   /** Begin TOTP enrollment: returns the secret + otpauth URL to show as a QR code. */
@@ -317,7 +346,8 @@ export class IdentityService {
     const cred = await this.store.getCredential(userId);
     if (!cred?.mfaSecret) return;
     if (!verifyTotp(cred.mfaSecret, code)) throw new SupremeError("unauthorized", "invalid authentication code");
-    await this.store.putCredential({ ...cred, mfaSecret: null });
+    // Disabling MFA also invalidates any outstanding recovery codes.
+    await this.store.putCredential({ ...cred, mfaSecret: null, recoveryCodes: [] });
   }
 
   /** Whether a user has MFA enabled. */
@@ -361,6 +391,7 @@ export class IdentityService {
       userId: rec.userId,
       passwordHash: await hash(newPassword, ARGON2),
       mfaSecret: cred?.mfaSecret ?? null,
+      recoveryCodes: cred?.recoveryCodes ?? [],
     });
   }
 
@@ -380,6 +411,7 @@ export class IdentityService {
       userId,
       passwordHash: await hash(newPassword, ARGON2),
       mfaSecret: cred.mfaSecret ?? null,
+      recoveryCodes: cred.recoveryCodes ?? [],
     });
   }
 
@@ -536,4 +568,12 @@ async function dummyVerify(password: string): Promise<boolean> {
 /** Hash a reset token so the raw value is never held in memory or compared directly. */
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/** Format recovery-code bytes as a readable "xxxx-xxxx" Crockford-base32 string (no ambiguous chars). */
+function formatRecoveryCode(bytes: Buffer): string {
+  const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"; // Crockford (no i/l/o/u)
+  let out = "";
+  for (const b of bytes) out += alphabet[b % 32]! + alphabet[(b >> 3) % 32]!;
+  return `${out.slice(0, 4)}-${out.slice(4, 8)}`;
 }

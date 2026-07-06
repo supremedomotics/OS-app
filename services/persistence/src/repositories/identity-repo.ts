@@ -25,6 +25,7 @@ interface CredRow {
   user_id: string;
   password_hash: string;
   mfa_secret: string | null;
+  recovery_codes: string[] | null;
 }
 
 export function rowToHome(r: HomeRow): Home {
@@ -120,14 +121,16 @@ export class IdentityRepo implements IIdentityStore {
       [userId],
     );
     const r = rows[0];
-    return r ? { userId: r.user_id as UserId, passwordHash: r.password_hash, mfaSecret: r.mfa_secret } : null;
+    return r
+      ? { userId: r.user_id as UserId, passwordHash: r.password_hash, mfaSecret: r.mfa_secret, recoveryCodes: r.recovery_codes ?? [] }
+      : null;
   }
   async putCredential(cred: StoredCredential): Promise<void> {
     await this.db.query(
-      `INSERT INTO auth_credentials (user_id, password_hash, mfa_secret)
-       VALUES ($1,$2,$3)
-       ON CONFLICT (user_id) DO UPDATE SET password_hash=$2, mfa_secret=$3`,
-      [cred.userId, cred.passwordHash, cred.mfaSecret],
+      `INSERT INTO auth_credentials (user_id, password_hash, mfa_secret, recovery_codes)
+       VALUES ($1,$2,$3,$4::jsonb)
+       ON CONFLICT (user_id) DO UPDATE SET password_hash=$2, mfa_secret=$3, recovery_codes=$4::jsonb`,
+      [cred.userId, cred.passwordHash, cred.mfaSecret, JSON.stringify(cred.recoveryCodes ?? [])],
     );
   }
 }
