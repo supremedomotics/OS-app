@@ -61,9 +61,21 @@ class AccentNotifier extends Notifier<AureonAccent> {
 
 final accentProvider = NotifierProvider<AccentNotifier, AureonAccent>(AccentNotifier.new);
 
-/// The homeowner's custom scene order (ids), set in the Scenes "Edit" mode. In-memory
-/// for now (persisting it is a small follow-up).
-final sceneOrderProvider = StateProvider<List<String>>((ref) => const []);
+/// The homeowner's custom scene order (ids), set in the Scenes "Edit" mode. Persisted to local prefs
+/// so the arrangement survives restarts. Read with watch(); change with notifier.set(...).
+class SceneOrderNotifier extends Notifier<List<String>> {
+  static const _key = 'scenes.order';
+
+  @override
+  List<String> build() => ref.watch(sharedPreferencesProvider).getStringList(_key) ?? const [];
+
+  void set(List<String> ids) {
+    state = ids;
+    ref.read(sharedPreferencesProvider).setStringList(_key, ids);
+  }
+}
+
+final sceneOrderProvider = NotifierProvider<SceneOrderNotifier, List<String>>(SceneOrderNotifier.new);
 
 /// Hub base URL — resolved automatically from the ACTIVE home's connection (verified mDNS
 /// LAN-direct when on the home's network, else the cloud Tunnel Broker route; blueprint §8,

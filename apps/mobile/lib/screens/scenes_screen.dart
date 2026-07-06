@@ -84,7 +84,7 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                       : FilledButton.tonal(
                           onPressed: () {
                             if (_edit) {
-                              ref.read(sceneOrderProvider.notifier).state = _ordered(list).map((s) => s.id).toList();
+                              ref.read(sceneOrderProvider.notifier).set(_ordered(list).map((s) => s.id).toList());
                             } else {
                               _order = _ordered(list).map((s) => s.id).toList();
                             }
