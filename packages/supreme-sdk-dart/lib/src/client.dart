@@ -514,6 +514,16 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  /// Recent execution traces for the Automation Debugger — all automations, or one by [id].
+  /// Each run: {id, automationId, startedAt, trigger, conditionsPassed, failedCondition?, actions[], durationMs, ok, error?}.
+  Future<List<Map<String, dynamic>>> automationRuns([String? id]) async {
+    final path = id == null ? '/v1/automations/runs' : '/v1/automations/$id/runs';
+    final res = await _http.get(Uri.parse('$baseUrl$path'), headers: _authHeaders);
+    _ensureOk(res);
+    return (((jsonDecode(res.body) as Map<String, dynamic>)['runs'] as List?) ?? [])
+        .cast<Map<String, dynamic>>();
+  }
+
   Future<void> deleteAutomation(String id) async {
     final res = await _http.delete(Uri.parse('$baseUrl/v1/automations/$id'),
         headers: _authHeaders);

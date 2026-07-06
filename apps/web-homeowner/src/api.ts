@@ -270,6 +270,30 @@ export async function runAutomation(id: string): Promise<void> {
   await authed(`/v1/automations/${id}/run`, { method: "POST", body: "{}" });
 }
 
+/** One execution trace for the Automation Debugger. */
+export interface AutomationRunView {
+  id: string;
+  automationId: string;
+  startedAt: string;
+  trigger: string;
+  conditionsPassed: boolean;
+  failedCondition?: string;
+  actions: { type: string; ok: boolean; error?: string; durationMs: number; summary: string }[];
+  durationMs: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** Recent execution traces (§ Automation Debugger) — all automations, or one by id. */
+export async function fetchAutomationRuns(id?: string): Promise<AutomationRunView[]> {
+  try {
+    const res = await authed(id ? `/v1/automations/${id}/runs` : "/v1/automations/runs");
+    return res.ok ? ((await res.json()) as { runs: AutomationRunView[] }).runs : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function createAutomation(body: {
   name: string;
   triggers: unknown[];

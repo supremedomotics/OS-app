@@ -7,6 +7,7 @@ import {
   type AuditList,
   type AuditVerifyResponse,
   type AutomationList,
+  type AutomationRunList,
   type AutomationResponse,
   type DeviceEnergyResponse,
   type EnergySummaryResponse,
@@ -83,6 +84,29 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "automation", id, "control");
       await ctx.automations.testRun(id);
       reply.send({ ran: true });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Automation Debugger (§ Automation Debugger): recent execution traces — trigger, condition
+  // result, per-action outcome + timing, failure reason. All runs, or scoped to one automation.
+  app.get("/v1/automations/runs", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "automation", null, "view");
+      reply.send({ runs: ctx.automations.recentRuns(undefined, 100) } satisfies AutomationRunList);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/automations/:id/runs", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const id = req.params.id as AutomationId;
+      await enforce(ctx, user, "automation", id, "view");
+      reply.send({ runs: ctx.automations.recentRuns(id, 100) } satisfies AutomationRunList);
     } catch (err) {
       sendError(reply, err);
     }

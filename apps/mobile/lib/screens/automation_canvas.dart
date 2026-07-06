@@ -40,12 +40,77 @@ class _AutomationCanvasState extends ConsumerState<AutomationCanvas> {
           AutomationFlow(triggers: a.triggers, conditions: a.conditions, actions: a.actions),
           const SizedBox(height: AureonSpacing.lg),
           FilledButton.icon(
-            onPressed: () => ref.read(clientProvider).runAutomation(a.id),
+            onPressed: () async {
+              await ref.read(clientProvider).runAutomation(a.id);
+              ref.invalidate(_runsProvider(a.id));
+            },
             icon: const Icon(Icons.play_arrow),
             label: const Text('Run now'),
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
           ),
+          const SizedBox(height: AureonSpacing.lg),
+          _ActivityLog(automationId: a.id),
         ],
+      ),
+    );
+  }
+}
+
+/// Recent execution traces for one automation (§ Automation Debugger).
+final _runsProvider = FutureProvider.family<List<Map<String, dynamic>>, String>(
+  (ref, id) => ref.watch(clientProvider).automationRuns(id),
+);
+
+class _ActivityLog extends ConsumerWidget {
+  const _ActivityLog({required this.automationId});
+  final String automationId;
+
+  String _fmt(String? iso) {
+    final d = iso == null ? null : DateTime.tryParse(iso)?.toLocal();
+    return d == null ? '' : '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}:${d.second.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final runs = ref.watch(_runsProvider(automationId));
+    final text = Theme.of(context).textTheme;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('Recent activity', style: text.titleSmall),
+        IconButton(icon: const Icon(Icons.refresh, size: 18), onPressed: () => ref.invalidate(_runsProvider(automationId))),
+      ]),
+      runs.when(
+        loading: () => const Padding(padding: EdgeInsets.all(8), child: Center(child: CircularProgressIndicator())),
+        error: (e, _) => Text('Could not load activity\n$e', style: text.labelSmall),
+        data: (list) => list.isEmpty
+            ? Text('No runs yet. Trigger it or press “Run now”.', style: text.labelMedium)
+            : Column(children: [
+                for (final r in list) _runTile(context, r),
+              ]),
+      ),
+    ]);
+  }
+
+  Widget _runTile(BuildContext context, Map<String, dynamic> r) {
+    final text = Theme.of(context).textTheme;
+    final ok = r['ok'] == true;
+    final conditionsPassed = r['conditionsPassed'] == true;
+    final color = ok ? AureonStatus.good : conditionsPassed ? AureonStatus.critical : Theme.of(context).colorScheme.onSurfaceVariant;
+    final actions = ((r['actions'] as List?) ?? const []).cast<Map<String, dynamic>>();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AureonSpacing.sm),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.only(top: 5, right: 8), child: Container(width: 9, height: 9, decoration: BoxDecoration(shape: BoxShape.circle, color: color))),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${ok ? 'Ran' : conditionsPassed ? 'Failed' : 'Skipped'} · ${r['trigger']} · ${_fmt(r['startedAt'] as String?)} · ${r['durationMs']}ms', style: text.labelMedium?.copyWith(fontWeight: FontWeight.w600)),
+            if (conditionsPassed != true && r['failedCondition'] != null)
+              Text('Condition not met: ${r['failedCondition']}', style: text.labelSmall),
+            for (final a in actions)
+              Text('${a['ok'] == true ? '✓' : '✕'} ${a['summary']} · ${a['durationMs']}ms${a['error'] != null ? ' — ${a['error']}' : ''}',
+                  style: text.labelSmall?.copyWith(color: a['ok'] == true ? null : AureonStatus.critical, fontFamily: 'monospace')),
+          ])),
+        ]),
       ),
     );
   }

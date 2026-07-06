@@ -35,6 +35,35 @@ export type AutomationList = z.infer<typeof AutomationList>;
 export const SetAutomationEnabledRequest = z.object({ enabled: z.boolean() });
 export type SetAutomationEnabledRequest = z.infer<typeof SetAutomationEnabledRequest>;
 
+// ── Automation Debugger (§ Automation Debugger) ──────────────────────────────
+
+export const AutomationRunAction = z.object({
+  type: z.string(),
+  ok: z.boolean(),
+  error: z.string().optional(),
+  durationMs: z.number(),
+  summary: z.string(),
+});
+export type AutomationRunAction = z.infer<typeof AutomationRunAction>;
+
+/** One execution trace: what triggered it, whether conditions passed, per-action outcome + timing. */
+export const AutomationRun = z.object({
+  id: z.string(),
+  automationId: z.string(),
+  startedAt: z.string(),
+  trigger: z.string(),
+  conditionsPassed: z.boolean(),
+  failedCondition: z.string().optional(),
+  actions: z.array(AutomationRunAction),
+  durationMs: z.number(),
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+export type AutomationRun = z.infer<typeof AutomationRun>;
+
+export const AutomationRunList = z.object({ runs: z.array(AutomationRun) });
+export type AutomationRunList = z.infer<typeof AutomationRunList>;
+
 // ── Energy / analytics ───────────────────────────────────────────────────────
 
 export const MeasureSummary = z.object({

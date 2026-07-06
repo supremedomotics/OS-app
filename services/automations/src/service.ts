@@ -102,6 +102,11 @@ export class AutomationService {
     await this.engine.run(await this.get(id));
   }
 
+  /** Recent execution traces for the Automation Debugger (optionally scoped to one automation). */
+  recentRuns(id?: AutomationId, limit?: number) {
+    return this.engine.recentRuns(id, limit);
+  }
+
   /** Feed a normalized device-state delta to the engine. */
   onDeviceState(event: DeviceStateEvent): Promise<void> {
     return this.loaded ? this.engine.onDeviceState(event) : Promise.resolve();

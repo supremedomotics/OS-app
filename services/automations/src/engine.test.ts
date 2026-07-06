@@ -76,6 +76,44 @@ describe("AutomationEngine — device_state triggers", () => {
 
     await svc.onDeviceState({ deviceId: sensor, capability: "onoff", state: { kind: "onoff", on: true } });
     expect(ex.notify).not.toHaveBeenCalled(); // guard is off → condition fails
+
+    // The Debugger trace records WHY it didn't run (the failing condition).
+    const blocked = svc.recentRuns()[0]!;
+    expect(blocked.trigger).toBe("device_state");
+    expect(blocked.conditionsPassed).toBe(false);
+    expect(blocked.failedCondition).toContain("onoff");
+    expect(blocked.actions).toHaveLength(0);
+    expect(blocked.ok).toBe(false);
+  });
+
+  it("records a per-action execution trace incl. failures (§ Automation Debugger)", async () => {
+    const lamp = devId();
+    const ex = executors({
+      command: vi.fn(async () => { throw new Error("device offline"); }),
+    });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+
+    const motion = devId();
+    const auto = await svc.create({
+      homeId: homeId(),
+      name: "Lamp on motion",
+      triggers: [{ type: "device_state", deviceId: motion, capability: "onoff", field: "on", op: "eq", value: true }],
+      actions: [{ type: "device_command", deviceId: lamp, command: { capability: "onoff", action: "on" } }],
+    });
+
+    await svc.onDeviceState({ deviceId: motion, capability: "onoff", state: { kind: "onoff", on: true } });
+
+    const run = svc.recentRuns(auto.id)[0]!;
+    expect(run.trigger).toBe("device_state");
+    expect(run.conditionsPassed).toBe(true);
+    expect(run.actions).toHaveLength(1);
+    expect(run.actions[0]!.ok).toBe(false);
+    expect(run.actions[0]!.error).toContain("device offline");
+    expect(run.actions[0]!.summary).toContain("Command onoff");
+    expect(run.ok).toBe(false);
+    expect(run.error).toContain("device offline");
   });
 });
 

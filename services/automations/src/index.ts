@@ -7,6 +7,8 @@ export {
   type AutomationExecutors,
   type DeviceStateEvent,
   type EngineOptions,
+  type AutomationRun,
+  type AutomationRunAction,
 } from "./engine.js";
 export { AutomationService, type CreateAutomationInput } from "./service.js";
 export { InMemoryAutomationStore, type IAutomationStore } from "./store.js";

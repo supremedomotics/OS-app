@@ -4,6 +4,7 @@ import {
   client,
   createAutomation,
   fetchAutomations,
+  fetchAutomationRuns,
   runAutomation,
   setAutomationEnabled,
   type AutomationView,
@@ -267,6 +268,50 @@ function Canvas({ automation, onBack }: { automation: AutomationView; onBack: ()
       </div>
 
       <button className="big-action canvas-run" onClick={() => void runAutomation(automation.id)}>▷ Run now</button>
+
+      <ActivityLog automationId={automation.id} />
+    </div>
+  );
+}
+
+/**
+ * Automation Debugger (§ Automation Debugger) — the recent execution timeline for one automation:
+ * what triggered it, whether conditions passed (and which failed), each action's outcome + timing,
+ * and failure reasons. Populated from the engine's real run history.
+ */
+function ActivityLog({ automationId }: { automationId: string }) {
+  const [runs, setRuns] = useState<import("./api.js").AutomationRunView[] | null>(null);
+  const load = () => void fetchAutomationRuns(automationId).then(setRuns);
+  useEffect(load, [automationId]);
+
+  const fmt = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
+  return (
+    <div className="activity">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <h3 className="section" style={{ margin: 0 }}>Recent activity</h3>
+        <button onClick={load}>Refresh</button>
+      </div>
+      {runs === null && <p className="muted">Loading…</p>}
+      {runs && runs.length === 0 && <p className="muted">No runs yet. Trigger it or press “Run now”.</p>}
+      <div className="run-list">
+        {(runs ?? []).map((r) => (
+          <div key={r.id} className={`run-row ${r.ok ? "ok" : r.conditionsPassed ? "err" : "skip"}`}>
+            <span className="run-dot" />
+            <div className="run-meta">
+              <span className="run-head">
+                {r.ok ? "Ran" : r.conditionsPassed ? "Failed" : "Skipped"} · {r.trigger} · {fmt(r.startedAt)} · {r.durationMs}ms
+              </span>
+              {!r.conditionsPassed && r.failedCondition && <span className="run-sub">Condition not met: {r.failedCondition}</span>}
+              {r.actions.map((a, i) => (
+                <span key={i} className={`run-action${a.ok ? "" : " bad"}`}>
+                  {a.ok ? "✓" : "✕"} {a.summary} · {a.durationMs}ms{a.error ? ` — ${a.error}` : ""}
+                </span>
+              ))}
+              {r.error && r.actions.length === 0 && <span className="run-sub err">{r.error}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

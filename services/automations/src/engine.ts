@@ -46,6 +46,35 @@ export interface EngineOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Called whenever an automation runs (for audit/last-run tracking). */
   onRun?: (automationId: string, ok: boolean) => void;
+  /** How many recent execution records to retain per engine (Automation Debugger). */
+  historyLimit?: number;
+  /** Monotonic clock for durations (tests can inject); defaults to Date.now. */
+  now?: () => number;
+}
+
+/** One action's outcome within a run (§ Automation Debugger). */
+export interface AutomationRunAction {
+  type: string;
+  ok: boolean;
+  error?: string;
+  durationMs: number;
+  summary: string;
+}
+
+/** A single automation execution trace — the unit the Automation Debugger renders. */
+export interface AutomationRun {
+  id: string;
+  automationId: string;
+  startedAt: string;
+  /** What set it off: "device_state" | "time" | "interval" | "manual". */
+  trigger: string;
+  conditionsPassed: boolean;
+  /** The first condition that failed (why it didn't run), when applicable. */
+  failedCondition?: string;
+  actions: AutomationRunAction[];
+  durationMs: number;
+  ok: boolean;
+  error?: string;
 }
 
 export class AutomationEngine {
@@ -55,11 +84,24 @@ export class AutomationEngine {
   private readonly onRun?: (id: string, ok: boolean) => void;
   /** Dedupe keys for time/interval triggers: automationId#index -> last fire ms. */
   private readonly lastFired = new Map<string, number>();
+  /** Execution history ring buffer (newest last) for the Automation Debugger. */
+  private readonly runs: AutomationRun[] = [];
+  private readonly historyLimit: number;
+  private readonly now: () => number;
+  private runSeq = 0;
 
   constructor(opts: EngineOptions) {
     this.ex = opts.executors;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.onRun = opts.onRun;
+    this.historyLimit = opts.historyLimit ?? 100;
+    this.now = opts.now ?? (() => Date.now());
+  }
+
+  /** Recent execution traces, newest first (optionally for one automation). */
+  recentRuns(automationId?: string, limit = 50): AutomationRun[] {
+    const all = automationId ? this.runs.filter((r) => r.automationId === automationId) : this.runs;
+    return all.slice(-limit).reverse();
   }
 
   setAutomations(list: Automation[]): void {
@@ -78,7 +120,7 @@ export class AutomationEngine {
           t.capability === event.capability &&
           compare(readField(event.state, t.field), t.op, t.value),
       );
-      if (fired) await this.maybeRun(a);
+      if (fired) await this.execute(a, "device_state");
     }
   }
 
@@ -89,16 +131,16 @@ export class AutomationEngine {
       for (let i = 0; i < a.triggers.length; i++) {
         const t = a.triggers[i]!;
         if (await this.timeTriggerFires(a.id, i, t, now, minute)) {
-          await this.maybeRun(a);
+          await this.execute(a, t.type);
           break; // one fire per automation per tick
         }
       }
     }
   }
 
-  /** Run an automation's actions immediately (manual "test run"). */
+  /** Run an automation's actions immediately (manual "test run"; conditions are skipped). */
   async run(automation: Automation): Promise<void> {
-    await this.runActions(automation);
+    await this.execute(automation, "manual", true);
   }
 
   private async timeTriggerFires(
@@ -126,31 +168,75 @@ export class AutomationEngine {
     return false;
   }
 
-  private async maybeRun(a: Automation): Promise<void> {
-    if (await this.conditionsPass(a.conditions, new Date())) {
-      await this.runActions(a);
+  /**
+   * Execute an automation with a full trace (§ Automation Debugger): evaluate conditions (capturing
+   * the first failure), run actions capturing each one's outcome + duration, and record the run.
+   */
+  private async execute(a: Automation, trigger: string, skipConditions = false): Promise<void> {
+    const started = new Date();
+    const t0 = this.now();
+    let conditionsPassed = true;
+    let failedCondition: string | undefined;
+    if (!skipConditions) {
+      const res = await this.evaluateConditions(a.conditions, started);
+      conditionsPassed = res.passed;
+      failedCondition = res.failed;
     }
+
+    const actions: AutomationRunAction[] = [];
+    let ok = true;
+    let error: string | undefined;
+    if (conditionsPassed) {
+      for (const action of a.actions) {
+        const a0 = this.now();
+        try {
+          await this.runAction(action);
+          actions.push({ type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAction(action) });
+        } catch (e) {
+          ok = false;
+          error = e instanceof Error ? e.message : String(e);
+          actions.push({ type: action.type, ok: false, error, durationMs: this.now() - a0, summary: describeAction(action) });
+          break; // stop the run on the first failing action (as before)
+        }
+      }
+    }
+
+    this.record({
+      id: `run-${started.getTime()}-${this.runSeq++}`,
+      automationId: a.id,
+      startedAt: started.toISOString(),
+      trigger,
+      conditionsPassed,
+      ...(failedCondition ? { failedCondition } : {}),
+      actions,
+      durationMs: this.now() - t0,
+      ok: conditionsPassed && ok,
+      ...(error ? { error } : {}),
+    });
   }
 
-  private async conditionsPass(conditions: AutomationCondition[], now: Date): Promise<boolean> {
+  private record(run: AutomationRun): void {
+    this.runs.push(run);
+    if (this.runs.length > this.historyLimit) this.runs.shift();
+    // A run only counts as "ran" (for last-run tracking) when its conditions passed.
+    if (run.conditionsPassed) this.onRun?.(run.automationId, run.ok);
+  }
+
+  private async evaluateConditions(
+    conditions: AutomationCondition[],
+    now: Date,
+  ): Promise<{ passed: boolean; failed?: string }> {
     for (const c of conditions) {
       if (c.type === "device_state") {
         const state = await this.ex.getState(c.deviceId, c.capability);
-        if (!state || !compare(readField(state, c.field), c.op, c.value)) return false;
+        if (!state || !compare(readField(state, c.field), c.op, c.value)) {
+          return { passed: false, failed: `${c.capability}.${c.field} ${c.op} ${JSON.stringify(c.value)} on ${c.deviceId}` };
+        }
       } else if (c.type === "time_window") {
-        if (!inWindow(c.window, now)) return false;
+        if (!inWindow(c.window, now)) return { passed: false, failed: `outside window ${c.window.start}–${c.window.end}` };
       }
     }
-    return true;
-  }
-
-  private async runActions(a: Automation): Promise<void> {
-    try {
-      for (const action of a.actions) await this.runAction(action);
-      this.onRun?.(a.id, true);
-    } catch {
-      this.onRun?.(a.id, false);
-    }
+    return { passed: true };
   }
 
   private async runAction(action: AutomationAction): Promise<void> {
@@ -177,6 +263,20 @@ export class AutomationEngine {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** A short human summary of an action for the debugger timeline. */
+function describeAction(action: AutomationAction): string {
+  switch (action.type) {
+    case "device_command":
+      return `Command ${action.command.capability} → ${action.deviceId}`;
+    case "scene_activate":
+      return `Activate scene ${action.sceneId}`;
+    case "notify":
+      return `Notify "${action.title}"`;
+    case "delay":
+      return `Delay ${action.ms}ms`;
+  }
+}
 
 function readField(state: CapabilityState, field: string): unknown {
   return (state as unknown as Record<string, unknown>)[field];
