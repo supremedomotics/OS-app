@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
+import type { Tab } from "./App.js";
 import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { PendingApproval } from "./pending.js";
 import { FavHeart, useFavorites } from "./favorites.js";
+import { EmptyState } from "./empty.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -33,7 +35,7 @@ function stateSummary(d: Device): string {
   return online(d) ? "Online" : "—";
 }
 
-export function DeviceManager() {
+export function DeviceManager({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [registry, setRegistry] = useState<DriverEntry[]>([]);
@@ -136,7 +138,13 @@ export function DeviceManager() {
           </div>
         </div>
       ))}
-      {devices && filtered.length === 0 && <p className="muted">No devices yet — use Discover Devices to add some.</p>}
+      {devices && filtered.length === 0 && (
+        q
+          ? <EmptyState icon="⌕" title={`No devices match “${q}”`} hint="Try a different name, or clear the search." />
+          : <EmptyState icon="◎" title="No devices yet"
+              hint="Supreme finds your lights, blinds, climate and more automatically — start a scan to bring your home online."
+              action={onNavigate ? { label: "Discover Devices", onClick: () => onNavigate("discover") } : undefined} />
+      )}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   setAutomationEnabled,
   type AutomationView,
 } from "./api.js";
+import { EmptyState } from "./empty.js";
 
 /**
  * Automations section (§10) — the Ovio "at a glance" list, and a node canvas that shows
@@ -47,7 +48,13 @@ export function Automations() {
             <span className={`auto-state${a.enabled ? " on" : ""}`}>{a.enabled ? "Enabled" : "Off"}</span>
           </button>
         ))}
-        {shown.length === 0 && <p className="muted">No automations yet.</p>}
+        {shown.length === 0 && (
+          q
+            ? <EmptyState icon="⌕" title={`No automations match “${q}”`} hint="Try a different name, or clear the search." />
+            : <EmptyState icon="⟳" title="No automations yet"
+                hint="Let your home run itself — lights at sunset, doors locked at night, a scene when you arrive."
+                action={{ label: "Create automation", onClick: () => setEditing(true) }} />
+        )}
       </div>
       <button className="auto-fab" onClick={() => setEditing(true)} aria-label="New automation">＋</button>
     </div>

@@ -110,6 +110,13 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .ext-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
 .ext-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
 .ext-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+/* EmptyState — one calm, actionable presentation for every empty page. */
+.empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 48px 24px; }
+.empty-ic { font-size: 40px; line-height: 1; opacity: 0.7; margin-bottom: 4px; }
+.empty-title { font-size: 16px; font-weight: 600; }
+.empty-hint { font-size: 13.5px; color: var(--aureon-color-text-secondary); max-width: 340px; margin: 0; }
+.empty-action { margin-top: 12px; }
+
 /* Weather chip on the dashboard — real local conditions from Open-Meteo (client-side). */
 .dash-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .weather-card { display: inline-flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px; background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; }

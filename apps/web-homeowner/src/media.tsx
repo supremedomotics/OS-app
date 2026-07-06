@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import type { Device } from "@supreme/domain-model";
+import type { Tab } from "./App.js";
 import { client } from "./api.js";
 import { DeviceSheet } from "./device-sheets.js";
 import { FavHeart, useFavorites } from "./favorites.js";
+import { EmptyState } from "./empty.js";
 
 /**
  * Media (§ Navigation → Media) — the whole-home view of everything that plays: every device the
@@ -23,7 +25,7 @@ function nowPlaying(d: Device): string {
   return playing ? "Playing" : "Idle";
 }
 
-export function Media() {
+export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [sheet, setSheet] = useState<Device | null>(null);
@@ -49,7 +51,11 @@ export function Media() {
         <p className="sub">{devices ? `${media.length} player${media.length === 1 ? "" : "s"} across your home` : "Loading…"}</p>
       </div>
 
-      {devices && media.length === 0 && <p className="muted">No media players yet — add a speaker or TV from Discover Devices.</p>}
+      {devices && media.length === 0 && (
+        <EmptyState icon="♪" title="No media players yet"
+          hint="Speakers and TVs you add will appear here, ready to play — grouped by room."
+          action={onNavigate ? { label: "Add a player", onClick: () => onNavigate("discover") } : undefined} />
+      )}
 
       {groups.map(([room, list]) => (
         <div key={room} className="dev-group">

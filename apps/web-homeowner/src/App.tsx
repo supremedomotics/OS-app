@@ -111,13 +111,13 @@ export function App() {
     <div className="page-anim" key={tab}>
       {tab === "dashboard" && <DashboardOverview onNavigate={go} />}
       {tab === "discover" && <DiscoverDevices />}
-      {tab === "devices" && <DeviceManager />}
+      {tab === "devices" && <DeviceManager onNavigate={go} />}
       {tab === "extensions" && <ExtensionCenter />}
       {tab === "automations" && <Automations />}
       {tab === "scenes" && <Scenes />}
       {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />}
       {tab === "areas" && <AreasScreen onNavigate={go} />}
-      {tab === "media" && <Media />}
+      {tab === "media" && <Media onNavigate={go} />}
       {tab === "security" && <Security />}
       {tab === "energy" && <Energy />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}

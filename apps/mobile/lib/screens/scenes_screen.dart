@@ -5,6 +5,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import '../usage.dart';
+import '../widgets/empty_state.dart';
 
 /// Scenes (§10/§11.1) — Ovio interactive cards in a grid, with an Edit mode that turns on
 /// drag-to-reorder + Save. One tap activates a scene; HA is never involved.
@@ -103,7 +104,11 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) => Center(child: Text('Could not load scenes\n$e')),
                 data: (list) => list.isEmpty
-                    ? Text('No scenes yet', style: text.labelMedium)
+                    ? const EmptyState(
+                        icon: Icons.auto_awesome_outlined,
+                        title: 'No scenes yet',
+                        hint: 'A scene sets many devices at once — “Movie Night”, “Good Morning”, “Away”. Arrange your home, then save it as a scene.',
+                      )
                     : _edit
                         ? _ReorderList(
                             scenes: _ordered(list),

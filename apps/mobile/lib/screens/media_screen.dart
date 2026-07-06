@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../widgets/empty_state.dart';
 import 'device_sheet.dart';
 
 /// Media (§ Navigation → Media) — mobile parity with the web Media view. The whole-home list of
@@ -37,10 +38,11 @@ class MediaScreen extends ConsumerWidget {
         data: (all) {
           final media = all.where((d) => d.capabilities.contains('media')).toList();
           if (media.isEmpty) {
-            return const Center(child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('No media players yet — add a speaker or TV from Discover Devices.', textAlign: TextAlign.center),
-            ));
+            return const EmptyState(
+              icon: Icons.music_note_outlined,
+              title: 'No media players yet',
+              hint: 'Speakers and TVs you add will appear here, ready to play — grouped by room.',
+            );
           }
           final byRoom = <String, List<Device>>{};
           for (final d in media) { (byRoom[roomName(d.roomId)] ??= []).add(d); }

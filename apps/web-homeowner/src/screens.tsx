@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useHeroFlip } from "./herotransition.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { recordUse } from "./usage.js";
+import { EmptyState } from "./empty.js";
 import type {
   CameraStreamResponse,
   EnergySummaryResponse,
@@ -254,7 +255,10 @@ function RoomDevices({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomI
           <DeviceTile key={d.id} device={d} onOpen={() => open(d)} />
         ))}
       </div>
-      {devices && list.length === 0 && <p className="muted">No devices in this room yet.</p>}
+      {devices && list.length === 0 && (
+        <EmptyState icon="◎" title="This room is empty"
+          hint="Devices you assign to this room will appear here. Add one from Discover Devices or move an existing device into this room." />
+      )}
       {sheet && <DeviceSheet device={sheet} onClose={() => setSheet(null)} />}
     </div>
   );
@@ -460,6 +464,11 @@ export function Scenes() {
           </div>
         ))}
       </div>
+      {scenes !== null && ordered.length === 0 && !adding && (
+        <EmptyState icon="✦" title="No scenes yet"
+          hint="A scene sets many devices at once — “Movie Night”, “Good Morning”, “Away”. Arrange your home, then save it as a scene."
+          action={{ label: "Add scene", onClick: () => setAdding(true) }} />
+      )}
       {edit && <p className="muted">Drag the cards to reorder, then Save.</p>}
       {!edit && msg && <p className="muted">{msg}</p>}
     </div>

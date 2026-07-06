@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../widgets/empty_state.dart';
+import 'discover_devices_screen.dart';
 
 /// Device Manager (§ Device Manager) — mobile parity. Every device grouped by room with its live
 /// state, type and capabilities, and the actions the backend supports today (rename, move room,
@@ -45,7 +47,16 @@ class DeviceManagerScreen extends ConsumerWidget {
                 const SizedBox(height: AureonSpacing.sm),
                 _PendingApproval(rooms: rooms, onChanged: () => ref.invalidate(_devicesProvider)),
                 if (list.isEmpty)
-                  Padding(padding: const EdgeInsets.all(20), child: Text('No devices yet — use Discover Devices to add some.', style: Theme.of(context).textTheme.labelMedium)),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 40),
+                    child: EmptyState(
+                      icon: Icons.devices_other_outlined,
+                      title: 'No devices yet',
+                      hint: 'Supreme finds your lights, blinds, climate and more automatically — start a scan to bring your home online.',
+                      actionLabel: 'Discover Devices',
+                      onAction: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const DiscoverDevicesScreen())),
+                    ),
+                  ),
                 for (final k in keys) ...[
                   Padding(
                     padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),

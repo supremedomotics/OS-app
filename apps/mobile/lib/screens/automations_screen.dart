@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import '../widgets/empty_state.dart';
 import 'automation_canvas.dart';
 import 'automation_editor.dart';
 
@@ -58,7 +59,19 @@ class _AutomationsScreenState extends ConsumerState<AutomationsScreen> {
                   error: (e, _) => Center(child: Text('Could not load automations\n$e')),
                   data: (list) {
                     final shown = list.where((a) => a.name.toLowerCase().contains(_q)).toList();
-                    if (shown.isEmpty) return Text('No automations yet — tap +', style: text.labelMedium);
+                    if (shown.isEmpty) {
+                      return EmptyState(
+                        icon: Icons.account_tree_outlined,
+                        title: _q.isEmpty ? 'No automations yet' : 'No automations match',
+                        hint: _q.isEmpty
+                            ? 'Let your home run itself — lights at sunset, doors locked at night, a scene when you arrive.'
+                            : 'Try a different name, or clear the search.',
+                        actionLabel: _q.isEmpty ? 'Create automation' : null,
+                        onAction: _q.isEmpty
+                            ? () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AutomationEditor()))
+                            : null,
+                      );
+                    }
                     return ListView.separated(
                       itemCount: shown.length,
                       separatorBuilder: (_, __) => const SizedBox(height: AureonSpacing.sm),
