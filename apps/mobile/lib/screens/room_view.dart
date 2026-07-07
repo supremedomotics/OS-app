@@ -197,7 +197,7 @@ class _RoomViewState extends ConsumerState<RoomView> {
         else
           for (final device in _devices)
             Padding(
-              padding: const EdgeInsets.only(bottom: AureonSpacing.sm),
+              padding: const EdgeInsets.only(bottom: AureonSpacing.md),
               child: Builder(builder: (context) {
                 final spec = _tileSpec(device);
                 return DeviceControlTile(

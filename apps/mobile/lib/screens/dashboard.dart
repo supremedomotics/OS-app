@@ -89,6 +89,7 @@ class DashboardScreen extends ConsumerWidget {
     final allRooms = ref.watch(homeProvider).valueOrNull?.rooms ?? const <Room>[];
     final rooms = [...allRooms]..sort((a, b) => usage.count('room', b.id).compareTo(usage.count('room', a.id)));
     final allDevices = ref.watch(allDevicesProvider).valueOrNull ?? const <Device>[];
+    final firstName = (((ref.watch(meProvider).valueOrNull?['user'] as Map<String, dynamic>?)?['displayName'] as String?) ?? '').trim().split(RegExp(r'\s+')).first;
 
     // A warm, true one-liner about the moment — real sunset time + which room is alive right now.
     Room? liveRoom;
@@ -132,7 +133,7 @@ class DashboardScreen extends ConsumerWidget {
           children: [
             // The home greets you — typography is the hierarchy, no boxes (§ Project Monolith).
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: Text(_greeting(), style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w600, letterSpacing: -1.2, height: 1.0))),
+              Expanded(child: Text('${_greeting()}${firstName.isNotEmpty ? ', $firstName' : ''}', style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w600, letterSpacing: -1.2, height: 1.0))),
               const HomeSwitcherButton(),
             ]),
             const SizedBox(height: 10),
@@ -184,7 +185,7 @@ class DashboardScreen extends ConsumerWidget {
                       width: w,
                       child: _RoomTile(
                         name: r.name,
-                        summary: summarizeRoom(allDevices.where((d) => d.roomId == r.id).toList()),
+                        chips: roomChips(allDevices.where((d) => d.roomId == r.id).toList()),
                         onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
                       ),
                     ),
@@ -387,14 +388,27 @@ LinearGradient _roomTint(String name) {
 }
 
 /// Rooms are the hero: a softly-lit tile with an ambient shadow and a bottom-anchored name.
+IconData _chipIcon(String kind) {
+  switch (kind) {
+    case 'light': return Icons.lightbulb_outline;
+    case 'climate': return Icons.thermostat;
+    case 'media': return Icons.music_note_outlined;
+    case 'fan': return Icons.mode_fan_off_outlined;
+    case 'switch': return Icons.power_settings_new;
+    case 'cover': return Icons.blinds_outlined;
+    default: return Icons.circle_outlined;
+  }
+}
+
 class _RoomTile extends StatelessWidget {
-  const _RoomTile({required this.name, required this.onTap, this.summary = ''});
+  const _RoomTile({required this.name, required this.onTap, this.chips = const []});
   final String name;
-  final String summary;
+  final List<RoomChip> chips;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
     return InkWell(
       borderRadius: BorderRadius.circular(22),
       onTap: onTap,
@@ -411,11 +425,23 @@ class _RoomTile extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.end,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(name, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(summary.isEmpty ? 'All off' : summary,
-                maxLines: 2, overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.white.withValues(alpha: 0.72))),
+            Text(name, style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            if (chips.isEmpty)
+              Row(children: [
+                Container(width: 6, height: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withValues(alpha: 0.45))),
+                const SizedBox(width: 7),
+                Text('Resting', style: text.labelMedium?.copyWith(color: Colors.white.withValues(alpha: 0.6))),
+              ])
+            else
+              Wrap(spacing: 12, runSpacing: 6, children: [
+                for (final c in chips)
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(_chipIcon(c.kind), size: 15, color: Colors.white.withValues(alpha: 0.85)),
+                    const SizedBox(width: 4),
+                    Text(c.label, style: text.labelLarge?.copyWith(color: Colors.white.withValues(alpha: 0.9), fontWeight: FontWeight.w600)),
+                  ]),
+              ]),
           ],
         ),
       ),

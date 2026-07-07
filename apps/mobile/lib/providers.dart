@@ -108,6 +108,11 @@ final clientProvider = Provider<SupremeClient>((ref) {
 /// Holds the live WSS stream once authenticated.
 final streamProvider = StateProvider<SupremeStream?>((ref) => null);
 
+/// The signed-in user (for a personal greeting). Shape: { user: { displayName, email, … } }.
+final meProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  return ref.watch(clientProvider).me();
+});
+
 /// The home topology, loaded after login.
 final homeProvider = FutureProvider<HomeView>((ref) async {
   final client = ref.watch(clientProvider);
