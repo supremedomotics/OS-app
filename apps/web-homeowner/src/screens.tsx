@@ -3,6 +3,7 @@ import { useHeroFlip } from "./herotransition.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { recordUse, byFrequency } from "./usage.js";
 import { friendlyError } from "./errors.js";
+import { summarizeRoom } from "./roomsummary.js";
 import { EmptyState } from "./empty.js";
 import type {
   CameraStreamResponse,
@@ -66,13 +67,14 @@ function greetingFor(d: Date): string {
 }
 
 /** A room tile: a real interior photo (hub-stored or fetched), else a designed motif gradient. */
-function RoomCard({ room, onOpen }: { room: RoomLike; onOpen: (rect: DOMRect) => void }) {
+function RoomCard({ room, summary, onOpen }: { room: RoomLike; summary?: string; onOpen: (rect: DOMRect) => void }) {
   const photo = useRoomPhoto(room, client);
   const { emoji, ...style } = styleForPhoto(photo, room);
   return (
     <div className="room-card has-image" style={style} onClick={(e) => onOpen((e.currentTarget as HTMLElement).getBoundingClientRect())}>
       {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
       <span className="name">{room.name}</span>
+      <span className="room-card-sub">{summary || "All off"}</span>
     </div>
   );
 }
@@ -151,6 +153,7 @@ export function RoomsScreen({
   onSelect: (roomId: string | null) => void;
 }) {
   const [home, refresh] = useAsync<HomeView>(() => client.home());
+  const [allDevices] = useAsync<Device[]>(async () => (await client.devices()).devices);
   const wide = useWide();
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -212,7 +215,8 @@ export function RoomsScreen({
         {/* Frequently-used rooms move higher (§ Personalization) — a stable order until the home has
             usage history, then the rooms you open most float to the top. */}
         {byFrequency(home?.rooms ?? [], "room").map((r) => (
-          <RoomCard key={r.id} room={r} onOpen={(rect) => { heroOrigin.current = rect; recordUse("room", r.id); onSelect(r.id); }} />
+          <RoomCard key={r.id} room={r} summary={summarizeRoom((allDevices ?? []).filter((d) => d.roomId === r.id))}
+            onOpen={(rect) => { heroOrigin.current = rect; recordUse("room", r.id); onSelect(r.id); }} />
         ))}
       </div>
     </div>

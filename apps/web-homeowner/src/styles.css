@@ -244,6 +244,7 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 .room-tile::after { content: ""; position: absolute; inset: 0; background: radial-gradient(130% 90% at 100% 0%, rgba(255, 255, 255, 0.06), transparent 55%); pointer-events: none; }
 .room-tile:hover { transform: translateY(-3px); box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4); }
 .room-tile-name { font-size: 21px; font-weight: 600; letter-spacing: -0.01em; position: relative; }
+.room-tile-sub { font-size: 13px; color: rgba(255, 255, 255, 0.72); margin-top: 3px; position: relative; }
 @media (prefers-reduced-motion: reduce) { .room-tile:hover { transform: none; } }
 
 /* Needs-attention list — plain-language rows, shown only when something is actually wrong. */
@@ -316,7 +317,7 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
   border: 1px solid var(--aureon-color-base-hairline); min-height: 156px;
   background: linear-gradient(135deg, var(--aureon-color-base-surface-raised), var(--aureon-color-base-surface));
   background-size: cover; background-position: center;
-  padding: 20px; display: flex; align-items: flex-end;
+  padding: 20px; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end;
   transition: transform .18s ease;
 }
 .room-card:active { transform: scale(0.985); }
@@ -324,6 +325,7 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 .room-motif { position: absolute; top: 6px; right: 14px; font-size: 84px; line-height: 1; opacity: 0.15; filter: grayscale(0.2); pointer-events: none; user-select: none; }
 .hero .room-motif { font-size: 104px; top: 8px; right: 18px; opacity: 0.13; }
 .room-card .name { font-size: 22px; font-weight: 600; color: var(--aureon-color-text-primary); }
+.room-card-sub { font-size: 13px; color: rgba(255, 255, 255, 0.72); margin-top: 3px; position: relative; }
 /* Cards with a room photo carry a dark scrim (set inline) — text reads white over it. */
 .room-card.has-image .name { color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,0.5); }
 
