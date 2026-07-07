@@ -69,10 +69,10 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Health score'), findsWidgets); // ops health-score hero
-    expect(find.textContaining('All systems healthy'), findsWidgets); // healthy verdict
-    expect(find.text('Online devices'), findsWidgets); // a stat tile
-    expect(find.text('Rooms · Scenes'), findsWidgets); // rooms/scenes stat
+    expect(find.textContaining("Everything's running beautifully"), findsWidgets); // calm all-good status
+    expect(find.textContaining('devices online'), findsWidgets); // homeowner-friendly summary line
+    expect(find.text('Quick actions'), findsWidgets); // everyday jumps
+    expect(find.text('Scenes'), findsWidgets); // a quick action
   });
 
   testWidgets('home switcher shows the active home and lists all homes', (tester) async {

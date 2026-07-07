@@ -1,6 +1,7 @@
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import '../usage.dart';
@@ -12,6 +13,9 @@ import 'discover_devices_screen.dart';
 import 'driver_manager_screen.dart';
 import 'energy_screen.dart';
 import 'home_switcher.dart';
+import 'room_view.dart';
+import 'scenes_screen.dart';
+import 'security_screen.dart';
 import 'software_update_screen.dart';
 
 /// Dashboard (§ Dashboard Improvements) — mobile parity with the web overview. The platform overview:
@@ -76,7 +80,26 @@ class DashboardScreen extends ConsumerWidget {
       if (security?['triggered'] == true) sc -= 20;
       score = sc < 0 ? 0 : sc;
     }
-    final healthy = score != null && score >= 90;
+    // "My Home", not a system dashboard (§ Project Aurelia): operational telemetry is gated to
+    // Developer/Installer mode; the homeowner sees a calm home screen.
+    final devMode = ref.watch(devModeProvider).valueOrNull ?? false;
+    final usage = ref.read(usageProvider.notifier);
+    final allRooms = ref.watch(homeProvider).valueOrNull?.rooms ?? const <Room>[];
+    final rooms = [...allRooms]..sort((a, b) => usage.count('room', b.id).compareTo(usage.count('room', a.id)));
+
+    // Plain-language things that actually need a decision — nothing when all is well.
+    final attention = <({String textLabel, bool warn, Widget target})>[];
+    if (security?['triggered'] == true) {
+      attention.add((textLabel: 'Security alert — check your home', warn: true, target: Scaffold(appBar: AppBar(title: const Text('Security')), body: const SecurityScreen())));
+    }
+    if (offline > 0) attention.add((textLabel: '$offline device${offline == 1 ? '' : 's'} offline', warn: true, target: const DeviceManagerScreen()));
+    if (autoErrors > 0) attention.add((textLabel: '$autoErrors automation${autoErrors == 1 ? '' : 's'} need attention', warn: true, target: const AutomationsScreen()));
+    if (pendingCount > 0) attention.add((textLabel: '$pendingCount new device${pendingCount == 1 ? '' : 's'} waiting to be added', warn: false, target: const DeviceManagerScreen()));
+    if (hubUpdate || updatesAvailable > 0) attention.add((textLabel: 'A software update is available', warn: false, target: const SoftwareUpdateScreen()));
+    if (backup != null && (backup['schedule'] as Map?)?['enabled'] == true && backup['lastBackupAt'] == null) {
+      attention.add((textLabel: 'No backup yet — protect your setup', warn: false, target: const BackupScreen()));
+    }
+    final anyWarn = attention.any((a) => a.warn);
 
     return SafeArea(
       child: RefreshIndicator(
@@ -90,7 +113,7 @@ class DashboardScreen extends ConsumerWidget {
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(_greeting(), style: text.titleLarge),
-                Text('Supreme OS${diag != null ? ' · v${diag['hubVersion']}' : ''}', style: text.labelMedium),
+                if (devMode) Text('Supreme OS${diag != null ? ' · v${diag['hubVersion']}' : ''}', style: text.labelMedium),
               ])),
               const HomeSwitcherButton(),
             ]),
@@ -98,72 +121,76 @@ class DashboardScreen extends ConsumerWidget {
             const Align(alignment: Alignment.centerLeft, child: WeatherChip()),
             const SizedBox(height: AureonSpacing.md),
 
-            // Health hero.
+            // One calm status line: all-good, or how many things want a look.
             Container(
               padding: const EdgeInsets.all(AureonSpacing.md),
               decoration: BoxDecoration(color: AureonBase.surface, borderRadius: BorderRadius.circular(AureonRadius.lg), border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4))),
               child: Row(children: [
-                Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: diag == null ? scheme.onSurfaceVariant : healthy ? AureonStatus.good : AureonStatus.warning)),
+                Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: diag == null ? scheme.onSurfaceVariant : anyWarn ? AureonStatus.warning : AureonStatus.good)),
                 const SizedBox(width: 14),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(score == null ? 'Checking…' : 'Health score $score/100 · ${score >= 90 ? 'All systems healthy' : score >= 70 ? 'Minor issues' : 'Attention needed'}', style: text.titleMedium),
-                  Text(diag == null ? '' : '$online/$deviceTotal devices online · ${installed.length} extensions${extErrors > 0 ? ' · $extErrors error' : ''}${autoErrors > 0 ? ' · $autoErrors automation error' : ''}', style: text.labelSmall),
+                  Text(score == null
+                      ? 'Checking on your home…'
+                      : attention.isEmpty ? "Everything's running beautifully" : attention.length == 1 ? 'One thing needs a look' : '${attention.length} things need a look', style: text.titleMedium),
+                  if (diag != null) Text('$online/$deviceTotal devices online · ${counts?['rooms'] ?? 0} rooms', style: text.labelSmall),
                 ])),
-                if (score != null) Text('$score', style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
               ]),
             ),
             const SizedBox(height: AureonSpacing.md),
 
-            // Stat tiles — intrinsic-height (a Wrap, not a fixed-aspect grid) so content never clips.
-            Builder(builder: (context) {
-              final half = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
-              Widget s(Widget w) => SizedBox(width: half, child: w);
-              return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
-                s(_Stat(value: '$online', label: 'Online devices', sub: 'of $deviceTotal', color: AureonStatus.good, onTap: () => _push(context, const DeviceManagerScreen()))),
-                s(_Stat(value: '$offline', label: 'Offline', sub: offline == 0 ? 'none' : 'need attention', color: offline > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const DeviceManagerScreen()))),
-                s(_Stat(value: '${installed.length}', label: 'Extensions', sub: extErrors > 0 ? '$extErrors error' : 'all healthy', color: extErrors > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const ExtensionCenterScreen()))),
-                s(_Stat(value: '$autoEnabled/${autos.length}', label: 'Automations', sub: 'enabled', onTap: () => _push(context, const AutomationsScreen()))),
-                s(_Stat(value: (security?['triggered'] == true) ? 'Alert' : _cap((security?['armMode'] as String?) ?? '—'), label: 'Security', sub: 'armed state', color: security?['triggered'] == true ? AureonStatus.critical : null)),
-                s(_Stat(value: counts == null ? '—' : '${counts['rooms']} · ${counts['scenes']}', label: 'Rooms · Scenes', sub: 'in this home')),
-              ]);
-            }),
-            const SizedBox(height: AureonSpacing.sm),
-
-            // Operations tiles — backups / updates / pending / automation errors.
-            Builder(builder: (context) {
-              final half = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
-              Widget s(Widget w) => SizedBox(width: half, child: w);
-              return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
-                s(_Stat(value: backup == null ? '—' : '${backup['backupCount']}', label: 'Backups', sub: backup?['lastBackupAt'] == null ? 'none yet' : 'kept', color: (backup != null && (backup['schedule'] as Map?)?['enabled'] == true && backup['lastBackupAt'] == null) ? AureonStatus.warning : null, onTap: () => _push(context, const BackupScreen()))),
-                s(_Stat(value: hubUpdate ? '1' : (updatesAvailable > 0 ? '$updatesAvailable' : '0'), label: 'Updates', sub: hubUpdate ? 'hub v${(update?['latest'] as Map?)?['version']}' : updatesAvailable > 0 ? 'extensions' : 'up to date', color: (hubUpdate || updatesAvailable > 0) ? AureonStatus.warning : null, onTap: () => _push(context, const SoftwareUpdateScreen()))),
-                s(_Stat(value: '$pendingCount', label: 'Pending approval', sub: pendingCount > 0 ? 'review devices' : 'none', color: pendingCount > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const DeviceManagerScreen()))),
-                s(_Stat(value: '$autoErrors', label: 'Automation errors', sub: autoErrors > 0 ? 'check activity' : 'none', color: autoErrors > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const AutomationsScreen()))),
-              ]);
-            }),
-            const SizedBox(height: AureonSpacing.lg),
+            // Needs attention — real problems only, in plain language. Absent when all is well.
+            for (final a in attention) ...[
+              InkWell(
+                borderRadius: BorderRadius.circular(AureonRadius.lg),
+                onTap: () => _push(context, a.target),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: AureonSpacing.md, vertical: 14),
+                  decoration: BoxDecoration(color: AureonBase.surface, borderRadius: BorderRadius.circular(AureonRadius.lg), border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4))),
+                  child: Row(children: [
+                    Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: a.warn ? AureonStatus.warning : AureonGold.c400)),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(a.textLabel, style: text.bodyMedium)),
+                    Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                  ]),
+                ),
+              ),
+              const SizedBox(height: AureonSpacing.sm),
+            ],
+            if (attention.isNotEmpty) const SizedBox(height: AureonSpacing.sm),
 
             // Favourites — pinned scenes + devices, one tap away (§ Favorites).
             ..._favourites(context, ref),
             ..._recentlyUsed(context, ref),
 
-            // Hub resources — real host telemetry (§ Installer Dashboard). Only measured fields show.
-            ..._hubResources(context, ref),
+            // Your rooms — the home leads, most-used first (§ Home as the interface).
+            if (rooms.isNotEmpty) ...[
+              Text('Your rooms', style: text.titleSmall),
+              const SizedBox(height: AureonSpacing.sm),
+              Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+                for (final r in rooms)
+                  ActionChip(
+                    label: Text(r.name),
+                    onPressed: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
+                  ),
+              ]),
+              const SizedBox(height: AureonSpacing.lg),
+            ],
 
             // Quick actions.
             Text('Quick actions', style: text.titleSmall),
             const SizedBox(height: AureonSpacing.sm),
             Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
-              _Quick(icon: Icons.travel_explore_outlined, label: 'Discover Devices', onTap: () => _push(context, const DiscoverDevicesScreen())),
-              _Quick(icon: Icons.extension_outlined, label: 'Extension Center', onTap: () => _push(context, const ExtensionCenterScreen())),
+              _Quick(icon: Icons.auto_awesome_outlined, label: 'Scenes', onTap: () => _push(context, const ScenesScreen())),
+              _Quick(icon: Icons.travel_explore_outlined, label: 'Add a device', onTap: () => _push(context, const DiscoverDevicesScreen())),
               _Quick(icon: Icons.bolt_outlined, label: 'Energy', onTap: () => _push(context, const EnergyScreen())),
-              _Quick(icon: Icons.account_tree_outlined, label: 'Automations', onTap: () => _push(context, const AutomationsScreen())),
+              _Quick(icon: Icons.extension_outlined, label: 'Extensions', onTap: () => _push(context, const ExtensionCenterScreen())),
             ]),
 
             if (events.isNotEmpty) ...[
               const SizedBox(height: AureonSpacing.lg),
-              Text('Recent events', style: text.titleSmall),
+              Text('Recent activity', style: text.titleSmall),
               const SizedBox(height: AureonSpacing.sm),
-              for (final e in events.take(6))
+              for (final e in events.take(5))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Row(children: [
@@ -173,10 +200,26 @@ class DashboardScreen extends ConsumerWidget {
                 ),
             ],
 
-            if (diag != null) ...[
+            // ── Operations — Developer/Installer only. A homeowner never sees system telemetry. ──
+            if (devMode) ...[
               const SizedBox(height: AureonSpacing.lg),
-              Text('Hub ${diag['hubVersion']} · backend ${(diag['backend'] as Map)['kind']} · ${backendHealthy ? 'healthy' : 'degraded'}',
-                  style: text.labelSmall?.copyWith(color: backendHealthy ? AureonStatus.good : AureonStatus.critical)),
+              Builder(builder: (context) {
+                final half = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
+                Widget s(Widget w) => SizedBox(width: half, child: w);
+                return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+                  s(_Stat(value: '$online', label: 'Online devices', sub: 'of $deviceTotal', color: AureonStatus.good, onTap: () => _push(context, const DeviceManagerScreen()))),
+                  s(_Stat(value: '$offline', label: 'Offline', sub: offline == 0 ? 'none' : 'need attention', color: offline > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const DeviceManagerScreen()))),
+                  s(_Stat(value: '${installed.length}', label: 'Extensions', sub: extErrors > 0 ? '$extErrors error' : 'all healthy', color: extErrors > 0 ? AureonStatus.warning : null, onTap: () => _push(context, const ExtensionCenterScreen()))),
+                  s(_Stat(value: '$autoEnabled/${autos.length}', label: 'Automations', sub: 'enabled', onTap: () => _push(context, const AutomationsScreen()))),
+                  s(_Stat(value: backup == null ? '—' : '${backup['backupCount']}', label: 'Backups', sub: backup?['lastBackupAt'] == null ? 'none yet' : 'kept', color: (backup != null && (backup['schedule'] as Map?)?['enabled'] == true && backup['lastBackupAt'] == null) ? AureonStatus.warning : null, onTap: () => _push(context, const BackupScreen()))),
+                  s(_Stat(value: hubUpdate ? '1' : (updatesAvailable > 0 ? '$updatesAvailable' : '0'), label: 'Updates', sub: hubUpdate ? 'hub v${(update?['latest'] as Map?)?['version']}' : updatesAvailable > 0 ? 'extensions' : 'up to date', color: (hubUpdate || updatesAvailable > 0) ? AureonStatus.warning : null, onTap: () => _push(context, const SoftwareUpdateScreen()))),
+                ]);
+              }),
+              const SizedBox(height: AureonSpacing.lg),
+              ..._hubResources(context, ref),
+              if (diag != null)
+                Text('Hub ${diag['hubVersion']} · backend ${(diag['backend'] as Map)['kind']} · ${backendHealthy ? 'healthy' : 'degraded'}',
+                    style: text.labelSmall?.copyWith(color: backendHealthy ? AureonStatus.good : AureonStatus.critical)),
             ],
           ],
         ),
@@ -294,7 +337,6 @@ class DashboardScreen extends ConsumerWidget {
   }
 
   static void _push(BuildContext c, Widget s) => Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => s));
-  static String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
   static String _time(String iso) {
     final d = DateTime.tryParse(iso)?.toLocal();
     return d == null ? '' : '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
