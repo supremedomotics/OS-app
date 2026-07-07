@@ -5,6 +5,7 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import '../roomsummary.dart';
+import '../suntimes.dart';
 import '../usage.dart';
 import '../weather.dart';
 import 'automations_screen.dart';
@@ -89,6 +90,25 @@ class DashboardScreen extends ConsumerWidget {
     final rooms = [...allRooms]..sort((a, b) => usage.count('room', b.id).compareTo(usage.count('room', a.id)));
     final allDevices = ref.watch(allDevicesProvider).valueOrNull ?? const <Device>[];
 
+    // A warm, true one-liner about the moment — real sunset time + which room is alive right now.
+    Room? liveRoom;
+    for (final r in rooms) {
+      if (summarizeRoom(allDevices.where((d) => d.roomId == r.id).toList()).isNotEmpty) { liveRoom = r; break; }
+    }
+    final sunParts = <String>[];
+    final loc = ref.read(locationProvider);
+    final ss = sunset(loc.lat, loc.lon);
+    if (ss != null) {
+      final mins = ss.difference(DateTime.now()).inMinutes;
+      if (mins > 0 && mins <= 90) {
+        sunParts.add('Sunset in $mins minute${mins == 1 ? '' : 's'}');
+      } else if (mins > 0 && mins < 600) {
+        sunParts.add('Sunset at ${TimeOfDay.fromDateTime(ss).format(context)}');
+      }
+    }
+    sunParts.add(liveRoom != null ? '${liveRoom.name} is alive' : 'Your home is resting');
+    final emotionalLine = sunParts.join(' · ');
+
     // Plain-language things that actually need a decision — nothing when all is well.
     final attention = <({String textLabel, bool warn, Widget target})>[];
     if (security?['triggered'] == true) {
@@ -112,21 +132,21 @@ class DashboardScreen extends ConsumerWidget {
           children: [
             // The home greets you — typography is the hierarchy, no boxes (§ Project Monolith).
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: Text(_greeting(), style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600, letterSpacing: -0.5))),
+              Expanded(child: Text(_greeting(), style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w600, letterSpacing: -1.2, height: 1.0))),
               const HomeSwitcherButton(),
             ]),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Text(
               score == null
                   ? 'Settling in…'
                   : attention.isEmpty
-                      ? (diag != null ? 'All calm. $online of $deviceTotal devices online.' : 'All calm.')
+                      ? emotionalLine
                       : attention.length == 1 ? 'One thing would like your attention.' : '${attention.length} things would like your attention.',
-              style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+              style: text.titleMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: AureonSpacing.md),
             const Align(alignment: Alignment.centerLeft, child: WeatherChip()),
-            const SizedBox(height: AureonSpacing.lg),
+            const SizedBox(height: AureonSpacing.xl),
 
             // Needs attention — real problems only, in plain language. Absent when all is well.
             for (final a in attention) ...[
@@ -510,13 +530,20 @@ class _Quick extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Understated text link, not a card — the rooms stay the hero (§ subtract cards).
     return SizedBox(
       width: (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2,
-      child: OutlinedButton.icon(
-        onPressed: onTap,
-        icon: Icon(icon, size: 18, color: scheme.primary),
-        label: Align(alignment: Alignment.centerLeft, child: Text(label, overflow: TextOverflow.ellipsis)),
-        style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14), alignment: Alignment.centerLeft),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AureonRadius.md),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+          child: Row(children: [
+            Icon(icon, size: 20, color: AureonGold.c400),
+            const SizedBox(width: 11),
+            Expanded(child: Text(label, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 15, color: scheme.onSurfaceVariant))),
+          ]),
+        ),
       ),
     );
   }

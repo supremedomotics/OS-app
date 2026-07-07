@@ -69,8 +69,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('All calm'), findsWidgets); // calm all-good status
-    expect(find.textContaining('devices online'), findsWidgets); // homeowner-friendly summary line
+    expect(find.textContaining('Good'), findsWidgets); // large typographic greeting
+    expect(find.textContaining('resting'), findsWidgets); // emotional calm status (no active rooms in test)
     expect(find.text('SHORTCUTS'), findsWidgets); // understated shortcut label
     expect(find.text('Scenes'), findsWidgets); // a shortcut
   });
