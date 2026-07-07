@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "@fontsource-variable/inter";
 import { initAureonTheme } from "@supreme/aureon-web";
 import { App } from "./App.js";
 import { applyA11y } from "./settings.js";

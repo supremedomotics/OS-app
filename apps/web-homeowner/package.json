@@ -13,10 +13,11 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@supreme/sdk": "workspace:*",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@supreme/aureon-web": "workspace:*",
     "@supreme/contracts": "workspace:*",
     "@supreme/domain-model": "workspace:*",
-    "@supreme/aureon-web": "workspace:*",
+    "@supreme/sdk": "workspace:*",
     "hls.js": "^1.5.20",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

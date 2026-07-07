@@ -37,18 +37,24 @@
 html, body, #root { height: 100%; }
 body {
   margin: 0;
-  font-family: Inter, system-ui, -apple-system, sans-serif;
+  font-family: "Inter Variable", Inter, system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+  font-feature-settings: "cv05" 1, "ss03" 1, "cv08" 1; /* Inter: refined a, g, tighter dots */
   background:
     radial-gradient(1200px 600px at 50% -10%, #191510 0%, var(--aureon-color-base-void) 60%);
   color: var(--aureon-color-text-primary);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .shell { max-width: 720px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
 .content { flex: 1; padding: 20px 18px 96px; }
-h1.title { font-size: 26px; font-weight: 600; margin: 8px 0 2px; }
-.sub { color: var(--aureon-color-text-secondary); font-size: 14px; margin: 0 0 18px; }
-h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 22px 0 10px; color: var(--aureon-color-text-secondary); text-transform: uppercase; }
+h1.title { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; margin: 8px 0 2px; }
+.sub { color: var(--aureon-color-text-secondary); font-size: 14.5px; line-height: 1.45; margin: 4px 0 22px; }
+h2.section { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; margin: 30px 0 14px; color: var(--aureon-color-text-secondary); text-transform: uppercase; }
 
 /* Bottom nav */
 /* Ovio-style bottom bar: a floating, icon-only pill (no text labels), centred, with the active tab
