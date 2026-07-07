@@ -6,6 +6,8 @@ import { FavoritesRow, RecentlyUsedRow } from "./favorites.js";
 import { WeatherCard } from "./weather.js";
 import { byFrequency } from "./usage.js";
 import { summarizeRoom } from "./roomsummary.js";
+import { loadLocation } from "./weather.js";
+import { sunset } from "./suntimes.js";
 import { Icon } from "./icons.js";
 
 /**
@@ -96,10 +98,28 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
   const rooms = byFrequency(home?.rooms ?? [], "room").slice(0, 8);
   const roomSummary = (roomId: string) => summarizeRoom((allDevices ?? []).filter((d) => d.roomId === roomId));
 
+  // A warm, true one-liner about the moment — real sunset time + which room is alive right now —
+  // rather than a device count. Falls back gracefully when a signal isn't available.
+  const emotionalLine = (() => {
+    const parts: string[] = [];
+    try {
+      const loc = loadLocation();
+      const ss = sunset(loc.lat, loc.lon);
+      if (ss) {
+        const mins = Math.round((ss.getTime() - Date.now()) / 60_000);
+        if (mins > 0 && mins <= 90) parts.push(`Sunset in ${mins} minute${mins === 1 ? "" : "s"}`);
+        else if (mins > 0 && mins < 600) parts.push(`Sunset at ${ss.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`);
+      }
+    } catch { /* no location yet */ }
+    const liveRoom = (home?.rooms ?? []).find((r) => summarizeRoom((allDevices ?? []).filter((d) => d.roomId === r.id)) !== "");
+    parts.push(liveRoom ? `${liveRoom.name} is alive` : "Your home is resting");
+    return parts.join(" · ");
+  })();
+
   const statusLine = score === null
     ? "Settling in…"
     : attention.length === 0
-      ? (diag ? `All calm. ${diag.counts.devices - offline} of ${diag.counts.devices} devices online.` : "All calm.")
+      ? emotionalLine
       : attention.length === 1 ? "One thing would like your attention." : `${attention.length} things would like your attention.`;
 
   return (

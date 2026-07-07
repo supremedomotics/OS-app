@@ -235,9 +235,10 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
    Typography is the hierarchy; rooms are the hero; depth replaces flat black. */
 .page.home { background: radial-gradient(130% 70% at 50% -15%, color-mix(in srgb, var(--aureon-color-gold-400) 6%, transparent), transparent 62%); }
 .home-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin: 10px 0 30px; flex-wrap: wrap; }
-.home-greet { font-size: clamp(30px, 4.5vw, 44px); font-weight: 600; letter-spacing: -0.025em; line-height: 1.02; margin: 0; }
-.home-status { margin: 12px 0 0; font-size: 16px; line-height: 1.5; color: var(--aureon-color-text-secondary); max-width: 560px; }
-.home-label { font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--aureon-color-text-secondary); margin: 32px 0 14px; }
+.home-greet { font-size: clamp(38px, 5.6vw, 58px); font-weight: 600; letter-spacing: -0.035em; line-height: 1.0; margin: 0; }
+.home-status { margin: 14px 0 0; font-size: 17.5px; line-height: 1.5; color: var(--aureon-color-text-secondary); max-width: 620px; }
+.home-label { font-size: 12px; font-weight: 600; letter-spacing: 0.11em; text-transform: uppercase; color: var(--aureon-color-text-secondary); margin: 40px 0 16px; }
+.home-hero { margin-bottom: 40px; }
 
 .room-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
 .room-tile { position: relative; min-height: 148px; border-radius: 22px; border: 1px solid color-mix(in srgb, var(--aureon-color-base-hairline) 70%, transparent); padding: 20px 22px; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; color: var(--aureon-color-text-primary); cursor: pointer; text-align: left; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28); transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease; }
@@ -274,8 +275,9 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 
 .qa-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 @media (min-width: 700px) { .qa-grid { grid-template-columns: repeat(4, 1fr); } }
-.qa { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; font-size: 14px; cursor: pointer; }
-.qa:hover { border-color: var(--aureon-color-gold-400); }
+/* Shortcuts are understated text links, not cards — the rooms stay the hero (§ subtract cards). */
+.qa { display: flex; align-items: center; gap: 11px; padding: 12px 6px; border-radius: 12px; border: 0; background: none; color: var(--aureon-color-text-secondary); font-size: 15px; cursor: pointer; transition: color .15s ease; }
+.qa:hover { color: var(--aureon-color-text-primary); background: none; border: 0; }
 .qa-ic { color: var(--aureon-color-gold-400); display: inline-flex; }
 
 .ev-list { display: flex; flex-direction: column; gap: 2px; }
