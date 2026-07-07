@@ -2,13 +2,25 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// One light represented on the disc — placed by its hue/saturation.
+/// One light represented on the disc — placed by hue/saturation (colour) or kelvin (white).
 class DiscLight {
-  const DiscLight({required this.id, required this.hue, required this.saturation, required this.on});
+  const DiscLight({required this.id, required this.hue, required this.saturation, required this.kelvin, required this.on});
   final String id;
   final double hue; // 0..360
   final double saturation; // 0..1
+  final double kelvin; // 2200..6500 (tunable white)
   final bool on;
+}
+
+// Tunable-white range (warm → cool). The `color` capability carries kelvin alongside hue/saturation,
+// so one disc drives both RGB(W) colour and tunable white.
+const double kMinKelvin = 2200;
+const double kMaxKelvin = 6500;
+
+/// Approximate the glow of a colour temperature — warm amber-white → cool blue-white.
+Color kelvinColor(double k) {
+  final t = ((k - kMinKelvin) / (kMaxKelvin - kMinKelvin)).clamp(0.0, 1.0);
+  return Color.fromARGB(255, (255 - t * 55).round(), (180 + t * 40).round(), (120 + t * 135).round());
 }
 
 /// The Ovio iPad multi-light colour field (§11.1): a large disc — a full HSV wheel in
@@ -20,6 +32,7 @@ class MultiLightDisc extends StatefulWidget {
     required this.lights,
     required this.colour,
     required this.onChange,
+    required this.onKelvin,
     required this.onSelect,
     this.selected,
     this.size = 380,
@@ -29,6 +42,7 @@ class MultiLightDisc extends StatefulWidget {
   final bool colour;
   final String? selected;
   final void Function(String id, double hue, double saturation) onChange;
+  final void Function(String id, double kelvin) onKelvin;
   final void Function(String id) onSelect;
   final double size;
 
@@ -43,6 +57,12 @@ class _MultiLightDiscState extends State<MultiLightDisc> {
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
     final local = box.globalToLocal(globalPos);
+    if (!widget.colour) {
+      // Tunable white: horizontal position across the disc → colour temperature (warm ↔ cool).
+      final frac = (local.dx / widget.size).clamp(0.0, 1.0);
+      widget.onKelvin(id, kMinKelvin + frac * (kMaxKelvin - kMinKelvin));
+      return;
+    }
     final r = widget.size / 2;
     final dx = local.dx - r;
     final dy = local.dy - r;
@@ -70,13 +90,24 @@ class _MultiLightDiscState extends State<MultiLightDisc> {
   }
 
   Widget _node(DiscLight l, double r) {
-    final ang = (l.hue - 90) * math.pi / 180;
-    final dist = l.saturation.clamp(0.0, 1.0) * r;
-    final cx = r + dist * math.cos(ang);
-    final cy = r + dist * math.sin(ang);
+    double cx, cy;
+    if (!widget.colour) {
+      // White mode: horizontal by kelvin, with a gentle vertical stagger so lights at a similar
+      // temperature stay individually grabbable.
+      final frac = ((l.kelvin - kMinKelvin) / (kMaxKelvin - kMinKelvin)).clamp(0.0, 1.0);
+      cx = widget.size * (0.08 + frac * 0.84);
+      final i = widget.lights.indexOf(l);
+      final spread = widget.lights.length > 1 ? (i - (widget.lights.length - 1) / 2) * 0.14 : 0.0;
+      cy = widget.size * (0.5 + spread).clamp(0.18, 0.82);
+    } else {
+      final ang = (l.hue - 90) * math.pi / 180;
+      final dist = l.saturation.clamp(0.0, 1.0) * r;
+      cx = r + dist * math.cos(ang);
+      cy = r + dist * math.sin(ang);
+    }
     final sel = widget.selected == l.id;
     final d = sel ? 36.0 : 30.0;
-    final colour = l.on ? HSVColor.fromAHSV(1, l.hue % 360, l.saturation.clamp(0.0, 1.0), 0.55).toColor() : const Color(0x99969696);
+    final colour = !l.on ? const Color(0x99969696) : (widget.colour ? HSVColor.fromAHSV(1, l.hue % 360, l.saturation.clamp(0.0, 1.0), 0.55).toColor() : kelvinColor(l.kelvin));
     return Positioned(
       left: cx - d / 2,
       top: cy - d / 2,
@@ -112,10 +143,16 @@ class _DiscPainter extends CustomPainter {
       canvas.drawCircle(center, r, Paint()..shader = SweepGradient(colors: hues, transform: const GradientRotation(-math.pi / 2)).createShader(Rect.fromCircle(center: center, radius: r)));
       canvas.drawCircle(center, r, Paint()..shader = RadialGradient(colors: [Colors.white, Colors.white.withValues(alpha: 0)]).createShader(Rect.fromCircle(center: center, radius: r)));
     } else {
-      canvas.drawCircle(center, r, Paint()..shader = const RadialGradient(
-        center: Alignment(0, -0.15),
-        colors: [Color(0xFFFFF6E2), Color(0xFFFFE9BD), Color(0xFFF4D79A)],
-        stops: [0, 0.45, 1],
+      // Tunable white: a true warm→cool colour-temperature spectrum (2200K → 6500K), left to right.
+      canvas.drawCircle(center, r, Paint()..shader = const LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        colors: [Color(0xFFFF9B3D), Color(0xFFFFD9A8), Color(0xFFFFF4E8), Color(0xFFDCEBFF), Color(0xFFA9CEFF)],
+        stops: [0, 0.28, 0.5, 0.72, 1],
+      ).createShader(Rect.fromCircle(center: center, radius: r)));
+      canvas.drawCircle(center, r, Paint()..shader = RadialGradient(
+        colors: [Colors.white.withValues(alpha: 0.55), Colors.white.withValues(alpha: 0)],
+        stops: const [0, 0.7],
       ).createShader(Rect.fromCircle(center: center, radius: r)));
     }
     canvas.drawCircle(center, r - 0.5, Paint()

@@ -59,6 +59,21 @@ class _TabletRoomViewState extends ConsumerState<TabletRoomView> {
     ref.read(clientProvider).command(d.id, {'capability': 'color', 'hue': hue.round(), 'saturation': (sat * 100).round()});
   }
 
+  // White mode drives the correlated colour temperature (tunable white) on the same `color` capability.
+  void _setKelvin(Device d, double kelvin) {
+    final k = kelvin.round();
+    final c = Map<String, dynamic>.from((d.state['color'] as Map<String, dynamic>?) ?? {});
+    c['kelvin'] = k;
+    c['on'] = true;
+    setState(() {
+      final i = _devices.indexWhere((x) => x.id == d.id);
+      if (i >= 0) {
+        _devices[i] = Device(id: d.id, name: d.name, supremeType: d.supremeType, roomId: d.roomId, capabilities: d.capabilities, state: {...d.state, 'color': c});
+      }
+    });
+    ref.read(clientProvider).command(d.id, {'capability': 'color', 'kelvin': k});
+  }
+
   Future<void> _menu(Device d, Offset pos) async {
     final v = await showMenu<String>(
       context: context,
@@ -92,6 +107,7 @@ class _TabletRoomViewState extends ConsumerState<TabletRoomView> {
           id: d.id,
           hue: ((d.state['color'] as Map<String, dynamic>?)?['hue'] as num?)?.toDouble() ?? 40,
           saturation: (((d.state['color'] as Map<String, dynamic>?)?['saturation'] as num?)?.toDouble() ?? 70) / 100,
+          kelvin: ((d.state['color'] as Map<String, dynamic>?)?['kelvin'] as num?)?.toDouble() ?? 3000,
           on: (d.state['color'] as Map<String, dynamic>?)?['on'] == true,
         ),
     ];
@@ -148,6 +164,7 @@ class _TabletRoomViewState extends ConsumerState<TabletRoomView> {
                           size: size,
                           onSelect: (id) => setState(() => _selected = id),
                           onChange: (id, h, s) => _setColour(_devices.firstWhere((d) => d.id == id), h, s),
+                          onKelvin: (id, k) => _setKelvin(_devices.firstWhere((d) => d.id == id), k),
                         );
                       }),
                       const SizedBox(height: AureonSpacing.md),
