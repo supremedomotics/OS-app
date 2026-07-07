@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { SystemHealth } from "@supreme/contracts";
 import { client, fetchAutomations, fetchAutomationRuns, fetchDriverRegistry } from "./api.js";
 import type { Tab } from "./App.js";
@@ -160,8 +160,8 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
         <section>
           <h2 className="home-label">Rooms</h2>
           <div className="room-tiles">
-            {rooms.map((r) => (
-              <button key={r.id} className="room-tile" style={roomTint(r.name)} onClick={() => (onOpenRoom ? onOpenRoom(r.id) : onNavigate("rooms"))}>
+            {rooms.map((r, i) => (
+              <button key={r.id} className="room-tile" style={{ ...roomTint(r.name), "--i": i } as CSSProperties} onClick={() => (onOpenRoom ? onOpenRoom(r.id) : onNavigate("rooms"))}>
                 <span className="room-tile-name">{r.name}</span>
                 <span className="room-tile-sub"><RoomChips devices={(allDevices ?? []).filter((d) => d.roomId === r.id)} /></span>
               </button>
