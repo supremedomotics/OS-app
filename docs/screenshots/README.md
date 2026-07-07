@@ -18,7 +18,8 @@ mock demo home (no mockups). Commit these reflect: `2e2e140`.
 ### `web/` — homeowner web (desktop/tablet rail layout)
 `01-dashboard` · `02-discover-devices` · `03-devices` · `04-extension-center` · `05-automations` ·
 `06-scenes` · `07-rooms` · `08-areas` · `09-media` · `10-security` · `11-energy` ·
-`12-notifications` · `13-settings` · `14-room-detail`
+`12-notifications` · `13-settings` · `14-room-detail` · `15-room-tunable-white` (the multi-light disc
+in tunable-white mode — warm→cool colour temperature)
 
 ### `mobile/` — iPhone/Android app (phone layout)
 `00-login` · `01-dashboard` · `02-rooms` · `03-scenes` · `04-security` · `05-settings` ·
