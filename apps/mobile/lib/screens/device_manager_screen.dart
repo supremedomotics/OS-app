@@ -7,6 +7,24 @@ import '../providers.dart';
 import '../widgets/empty_state.dart';
 import 'discover_devices_screen.dart';
 
+/// A homeowner-friendly name for what a device IS — never its type slug or capability kinds.
+String _friendlyType(Device d) {
+  final t = d.supremeType.toLowerCase();
+  final caps = d.capabilities;
+  if (t.contains('dimmer') || caps.contains('brightness')) return caps.contains('color') ? 'Colour light' : 'Dimmable light';
+  if (t.contains('thermostat') || caps.contains('temperature')) return 'Climate';
+  if (t.contains('cover') || caps.contains('position')) return 'Blinds';
+  if (t.contains('lock') || caps.contains('lock')) return 'Lock';
+  if (t.contains('fan') || caps.contains('fan')) return 'Fan';
+  if (t.contains('vacuum') || caps.contains('vacuum')) return 'Vacuum';
+  if (t.contains('media') || caps.contains('media')) return 'Media';
+  if (t.contains('sensor') || caps.contains('sensor')) return 'Sensor';
+  if (t.contains('camera')) return 'Camera';
+  if (t.contains('light')) return 'Light';
+  if (caps.contains('onoff')) return caps.length == 1 ? 'Light' : 'Switch';
+  return 'Device';
+}
+
 /// Device Manager (§ Device Manager) — mobile parity. Every device grouped by room with its live
 /// state, type and capabilities, and the actions the backend supports today (rename, move room,
 /// remove). Reuses the SDK's devices()/updateDevice()/deleteDevice() — no duplicate device system.
@@ -163,13 +181,13 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
         leading: Container(width: 10, height: 10, decoration: BoxDecoration(
           shape: BoxShape.circle, color: online ? AureonStatus.good : Theme.of(context).colorScheme.outlineVariant)),
         title: Text(d.name),
-        subtitle: Text('${d.supremeType} · ${d.capabilities.join(', ')}', style: Theme.of(context).textTheme.labelSmall),
+        subtitle: Text(devMode ? '${_friendlyType(d)} · ${d.supremeType} · ${d.capabilities.join(', ')}' : _friendlyType(d), style: Theme.of(context).textTheme.labelSmall),
         childrenPadding: const EdgeInsets.fromLTRB(AureonSpacing.md, 0, AureonSpacing.md, AureonSpacing.md),
         expandedCrossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Real device facts — omit any field with no source (firmware/signal/battery/IP/MAC).
           _facts(context, [
-            ('Type', d.supremeType),
+            ('Type', devMode ? d.supremeType : _friendlyType(d)),
             ('Manufacturer', d.manufacturer),
             ('Model', d.model),
             ('Driver', devMode ? (drv?['name'] as String?) : null),
@@ -178,7 +196,7 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
             ('MAC', devMode ? d.network?.mac : null),
             ('Room', widget.roomName(d.roomId)),
             ('Status', online ? '${d.status} · live' : d.status),
-            ('Capabilities', d.capabilities.isEmpty ? null : d.capabilities.join(', ')),
+            ('Capabilities', devMode && d.capabilities.isNotEmpty ? d.capabilities.join(', ') : null),
             ('In scenes', '$sceneCount'),
           ]),
           const SizedBox(height: 8),

@@ -19,6 +19,26 @@ type Room = { id: string; name: string };
 /** The driver that backs a device + its protocol, resolved from the registry (never hardcoded). */
 type DriverInfo = { name: string; protocol: string | null };
 
+/** A homeowner-friendly name for what a device IS — never its type slug or capability kinds. */
+function friendlyType(d: Device): string {
+  const t = d.supremeType.toLowerCase();
+  const caps = d.capabilities.map((c) => c.kind);
+  if (t.includes("dimmer") || (caps.includes("brightness"))) return caps.includes("color") ? "Colour light" : "Dimmable light";
+  if (t.includes("light") || caps.includes("onoff") && !caps.includes("position")) {
+    if (t.includes("light") || caps.length === 1) return "Light";
+  }
+  if (t.includes("thermostat") || caps.includes("temperature")) return "Climate";
+  if (t.includes("cover") || caps.includes("position")) return "Blinds";
+  if (t.includes("lock") || caps.includes("lock")) return "Lock";
+  if (t.includes("fan") || caps.includes("fan")) return "Fan";
+  if (t.includes("vacuum") || caps.includes("vacuum")) return "Vacuum";
+  if (t.includes("media") || caps.includes("media")) return "Media";
+  if (t.includes("sensor") || caps.includes("sensor")) return "Sensor";
+  if (t.includes("camera")) return "Camera";
+  if (caps.includes("onoff")) return "Switch";
+  return "Device";
+}
+
 function online(d: Device): boolean {
   // A device is "online" when we hold live state for any capability.
   return d.state != null && Object.keys(d.state).length > 0;
@@ -192,7 +212,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
         <span className={`dev-dot${isOnline ? " on" : ""}`} />
         <span className="ext-meta">
           <span className="ext-name">{device.name}</span>
-          <span className="ext-sub">{device.supremeType} · {device.capabilities.map((c) => c.kind).join(", ")}</span>
+          <span className="ext-sub">{friendlyType(device)}{devMode ? ` · ${device.supremeType} · ${device.capabilities.map((c) => c.kind).join(", ")}` : ""}</span>
         </span>
         <span className="drv-badge ok">{stateSummary(device)}</span>
         {!selectMode && <FavHeart fav={{ type: "device", deviceId: device.id }} active={isFav} onToggle={onFav} />}
@@ -200,7 +220,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
       {expanded && (
         <div className="drv-detail">
           <div className="dev-facts">
-            <div><span className="k">Type</span><span className="v">{device.supremeType}</span></div>
+            <div><span className="k">Type</span><span className="v">{devMode ? device.supremeType : friendlyType(device)}</span></div>
             {device.manufacturer && <div><span className="k">Manufacturer</span><span className="v">{device.manufacturer}</span></div>}
             {device.model && <div><span className="k">Model</span><span className="v">{device.model}</span></div>}
             {/* Technical plumbing (driver / protocol / network) is for Installer & Developer mode only —
@@ -211,7 +231,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
             {devMode && net?.mac && <div><span className="k">MAC</span><span className="v">{net.mac}</span></div>}
             <div><span className="k">Room</span><span className="v">{roomName(device.roomId)}</span></div>
             <div><span className="k">Status</span><span className="v">{device.status}{isOnline ? " · live" : ""}</span></div>
-            <div><span className="k">Capabilities</span><span className="v">{device.capabilities.map((c) => c.kind).join(", ")}</span></div>
+            {devMode && <div><span className="k">Capabilities</span><span className="v">{device.capabilities.map((c) => c.kind).join(", ")}</span></div>}
             <div><span className="k">In scenes</span><span className="v">{sceneCount}</span></div>
           </div>
           <label className="drv-field"><span className="lbl">Name</span>

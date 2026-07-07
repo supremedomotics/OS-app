@@ -121,8 +121,9 @@ input::placeholder, textarea::placeholder { color: var(--aureon-color-text-muted
 
 /* ── Extension / discover / device cards ───────────────────────────────────────── */
 .ext-grid { display: flex; flex-direction: column; gap: 10px; }
-.ext-card { border: 1px solid var(--aureon-color-base-hairline); border-radius: 16px; overflow: hidden; background: var(--aureon-color-base-surface); }
-.ext-card.open { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 50%, var(--aureon-color-base-hairline)); }
+.ext-card { border: 1px solid var(--aureon-color-base-hairline); border-radius: 18px; overflow: hidden; background: var(--aureon-color-base-surface); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); }
+.ext-card:hover { box-shadow: 0 7px 22px rgba(0, 0, 0, 0.24); }
+.ext-card.open { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 50%, var(--aureon-color-base-hairline)); box-shadow: 0 8px 26px rgba(0, 0, 0, 0.28); }
 .ext-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 16px; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
 .ext-ic { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
 .ext-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
