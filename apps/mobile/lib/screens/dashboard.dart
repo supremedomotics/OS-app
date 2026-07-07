@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../roomsummary.dart';
 import '../usage.dart';
 import '../weather.dart';
 import 'automations_screen.dart';
@@ -86,6 +87,7 @@ class DashboardScreen extends ConsumerWidget {
     final usage = ref.read(usageProvider.notifier);
     final allRooms = ref.watch(homeProvider).valueOrNull?.rooms ?? const <Room>[];
     final rooms = [...allRooms]..sort((a, b) => usage.count('room', b.id).compareTo(usage.count('room', a.id)));
+    final allDevices = ref.watch(allDevicesProvider).valueOrNull ?? const <Device>[];
 
     // Plain-language things that actually need a decision — nothing when all is well.
     final attention = <({String textLabel, bool warn, Widget target})>[];
@@ -162,6 +164,7 @@ class DashboardScreen extends ConsumerWidget {
                       width: w,
                       child: _RoomTile(
                         name: r.name,
+                        summary: summarizeRoom(allDevices.where((d) => d.roomId == r.id).toList()),
                         onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
                       ),
                     ),
@@ -365,8 +368,9 @@ LinearGradient _roomTint(String name) {
 
 /// Rooms are the hero: a softly-lit tile with an ambient shadow and a bottom-anchored name.
 class _RoomTile extends StatelessWidget {
-  const _RoomTile({required this.name, required this.onTap});
+  const _RoomTile({required this.name, required this.onTap, this.summary = ''});
   final String name;
+  final String summary;
   final VoidCallback onTap;
 
   @override
@@ -377,14 +381,23 @@ class _RoomTile extends StatelessWidget {
       child: Container(
         height: 132,
         padding: const EdgeInsets.all(18),
-        alignment: Alignment.bottomLeft,
         decoration: BoxDecoration(
           gradient: _roomTint(name),
           borderRadius: BorderRadius.circular(22),
           border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 24, offset: const Offset(0, 10))],
         ),
-        child: Text(name, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(name, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(summary.isEmpty ? 'All off' : summary,
+                maxLines: 2, overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.white.withValues(alpha: 0.72))),
+          ],
+        ),
       ),
     );
   }
