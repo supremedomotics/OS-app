@@ -208,6 +208,21 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 .health-hero strong { display: block; font-size: 17px; }
 .health-hero .hh-sub { display: block; font-size: 12.5px; color: var(--aureon-color-text-secondary); margin-top: 2px; }
 
+/* Needs-attention list — plain-language rows, shown only when something is actually wrong. */
+.attention { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+.attn-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 15px 18px; border-radius: 16px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }
+.attn-row:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
+.attn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--aureon-color-text-secondary); }
+.attn-row.warn .attn-dot { background: var(--aureon-color-status-warning); }
+.attn-row.info .attn-dot { background: var(--aureon-color-gold-400); }
+.attn-text { flex: 1; font-size: 15px; }
+.attn-chev { color: var(--aureon-color-text-secondary); font-size: 20px; }
+
+/* Your-rooms chips — the home leads, calm and typographic (no boxes-in-boxes). */
+.room-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.room-chip { padding: 11px 18px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; font-size: 14.5px; font-weight: 500; }
+.room-chip:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, var(--aureon-color-base-hairline)); }
+
 .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 @media (min-width: 700px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
 .stat { display: flex; flex-direction: column; gap: 2px; padding: 16px; border-radius: 14px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }

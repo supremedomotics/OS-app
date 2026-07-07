@@ -4,6 +4,7 @@ import { client, fetchAutomations, fetchAutomationRuns, fetchDriverRegistry } fr
 import type { Tab } from "./App.js";
 import { FavoritesRow, RecentlyUsedRow } from "./favorites.js";
 import { WeatherCard } from "./weather.js";
+import { byFrequency } from "./usage.js";
 import { Icon } from "./icons.js";
 
 /**
@@ -42,8 +43,9 @@ function useAsync<T>(fn: () => Promise<T>): T | null {
   return v;
 }
 
-export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void }) {
+export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: { onNavigate: (t: Tab) => void; onOpenRoom?: (roomId: string) => void; devMode?: boolean }) {
   const diag = useAsync<Diag>(() => client.diagnostics() as Promise<Diag>);
+  const home = useAsync<{ rooms: { id: string; name: string }[] }>(() => client.home() as never);
   const registry = useAsync(() => fetchDriverRegistry());
   const autos = useAsync(() => fetchAutomations());
   const security = useAsync<{ armMode?: string; triggered?: boolean }>(() => client.securityState() as Promise<{ armMode?: string; triggered?: boolean }>);
@@ -79,45 +81,50 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
   })();
   const healthy = score === null ? null : score >= 90;
 
+  // What actually needs a decision, in plain homeowner language — nothing when all is well, so the
+  // home breathes. Ordered by urgency (§ Dashboard: stop showing statistics users don't care about).
+  const attention: { key: string; text: string; tone: "warn" | "info"; go: () => void }[] = [];
+  if (security?.triggered) attention.push({ key: "sec", text: "Security alert — check your home", tone: "warn", go: () => onNavigate("security") });
+  const offline = diag?.offlineDevices.length ?? 0;
+  if (offline > 0) attention.push({ key: "off", text: `${offline} device${offline === 1 ? "" : "s"} offline`, tone: "warn", go: () => onNavigate("devices") });
+  if (autoErrors > 0) attention.push({ key: "auto", text: `${autoErrors} automation${autoErrors === 1 ? "" : "s"} need attention`, tone: "warn", go: () => onNavigate("automations") });
+  if (pendingCount > 0) attention.push({ key: "pend", text: `${pendingCount} new device${pendingCount === 1 ? "" : "s"} waiting to be added`, tone: "info", go: () => onNavigate("devices") });
+  if (update?.updateAvailable || updatesAvailable > 0) attention.push({ key: "upd", text: "A software update is available", tone: "info", go: () => onNavigate("settings") });
+  if (backup && backup.schedule.enabled && !backup.lastBackupAt) attention.push({ key: "bak", text: "No backup yet — protect your setup", tone: "info", go: () => onNavigate("settings") });
+
+  const rooms = byFrequency(home?.rooms ?? [], "room").slice(0, 8);
+
   return (
     <div className="page">
       <div className="page-head dash-head">
         <div>
           <h1 className="title">{greeting()}</h1>
-          <p className="sub">Supreme OS · {diag ? `v${diag.hubVersion}` : "…"}</p>
+          {devMode && <p className="sub">Supreme OS · {diag ? `v${diag.hubVersion}` : "…"}</p>}
         </div>
         <WeatherCard />
       </div>
 
-      {/* Headline project health — a computed operations score (§ Operations Dashboard) */}
-      <div className={`health-hero ${healthy === null ? "" : healthy ? "ok" : "warn"}`}>
+      {/* One calm line: all-good, or how many things want a look. Detail lives in the list below. */}
+      <div className={`health-hero ${healthy === null ? "" : attention.some((a) => a.tone === "warn") ? "warn" : "ok"}`}>
         <span className="hh-dot" />
         <div style={{ flex: 1 }}>
-          <strong>{score === null ? "Checking…" : `Health score ${score}/100 · ${score >= 90 ? "All systems healthy" : score >= 70 ? "Minor issues" : "Attention needed"}`}</strong>
-          <span className="hh-sub">
-            {diag ? `${online}/${diag.counts.devices} devices online · ${installed.length} extensions${extErrors ? ` · ${extErrors} error` : ""}${autoErrors ? ` · ${autoErrors} automation error${autoErrors === 1 ? "" : "s"}` : ""}` : ""}
-          </span>
+          <strong>{score === null ? "Checking on your home…" : attention.length === 0 ? "Everything's running beautifully" : attention.length === 1 ? "One thing needs a look" : `${attention.length} things need a look`}</strong>
+          {diag && <span className="hh-sub">{diag.counts.devices - offline}/{diag.counts.devices} devices online · {diag.counts.rooms} rooms</span>}
         </div>
-        {score !== null && <span className="health-score">{score}</span>}
       </div>
 
-      {/* Stat tiles — real data only */}
-      <div className="stat-grid">
-        <Stat label="Online devices" value={online ?? "—"} sub={diag ? `of ${diag.counts.devices}` : ""} onClick={() => onNavigate("devices")} good />
-        <Stat label="Offline" value={diag?.offlineDevices.length ?? "—"} sub={diag?.offlineDevices.length ? diag.offlineDevices.slice(0, 1).map((d) => d.name).join("") : "none"} onClick={() => onNavigate("devices")} warn={Boolean(diag?.offlineDevices.length)} />
-        <Stat label="Extensions" value={installed.length} sub={extErrors ? `${extErrors} error` : "all healthy"} onClick={() => onNavigate("extensions")} warn={extErrors > 0} />
-        <Stat label="Automations" value={autos ? `${autoEnabled}/${autos.length}` : "—"} sub="enabled" onClick={() => onNavigate("automations")} />
-        <Stat label="Security" value={security?.triggered ? "Alert" : cap(security?.armMode ?? "—")} sub={security?.triggered ? "triggered" : "armed state"} onClick={() => onNavigate("security")} warn={Boolean(security?.triggered)} />
-        <Stat label="Rooms · Scenes" value={diag ? `${diag.counts.rooms} · ${diag.counts.scenes}` : "—"} sub="in this home" onClick={() => onNavigate("rooms")} />
-      </div>
-
-      {/* Operations cards — backups / updates / pending approvals / driver problems */}
-      <div className="stat-grid" style={{ marginTop: 10 }}>
-        <Stat label="Backups" value={backup ? backup.backupCount : "—"} sub={backup ? (backup.lastBackupAt ? `last ${timeAgo(backup.lastBackupAt)}` : "none yet") : ""} onClick={() => onNavigate("settings")} warn={Boolean(backup && backup.schedule.enabled && !backup.lastBackupAt)} />
-        <Stat label="Updates" value={update ? (update.updateAvailable ? "1" : "0") + (updatesAvailable ? `+${updatesAvailable}` : "") : "—"} sub={update?.updateAvailable ? `hub v${update.latest?.version}` : updatesAvailable ? `${updatesAvailable} extension${updatesAvailable === 1 ? "" : "s"}` : "up to date"} onClick={() => onNavigate("settings")} warn={Boolean(update?.updateAvailable) || updatesAvailable > 0} />
-        <Stat label="Pending approval" value={pendingCount} sub={pendingCount ? "review devices" : "none"} onClick={() => onNavigate("devices")} warn={pendingCount > 0} />
-        <Stat label="Automation errors" value={autoErrors} sub={autoErrors ? "check activity" : "none"} onClick={() => onNavigate("automations")} warn={autoErrors > 0} />
-      </div>
+      {/* Needs attention — real problems only, in plain language. Absent when all is well. */}
+      {attention.length > 0 && (
+        <div className="attention">
+          {attention.map((a) => (
+            <button key={a.key} className={`attn-row ${a.tone}`} onClick={a.go}>
+              <span className="attn-dot" />
+              <span className="attn-text">{a.text}</span>
+              <span className="attn-chev">›</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Favourites — pinned scenes + devices, one tap away */}
       <FavoritesRow onNavigate={onNavigate} />
@@ -125,21 +132,35 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
       {/* Recently used — learns from real use, appears only when there's history (§ Personalization) */}
       <RecentlyUsedRow />
 
-      {/* Quick actions */}
+      {/* Your rooms — the home leads, most-used first (§ Home as the interface) */}
+      {rooms.length > 0 && (
+        <>
+          <h2 className="section">Your rooms</h2>
+          <div className="room-row">
+            {rooms.map((r) => (
+              <button key={r.id} className="room-chip" onClick={() => (onOpenRoom ? onOpenRoom(r.id) : onNavigate("rooms"))}>
+                {r.name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Quick actions — the everyday jumps */}
       <h2 className="section">Quick actions</h2>
       <div className="qa-grid">
-        <QuickAction icon="discover" label="Discover Devices" onClick={() => onNavigate("discover")} />
-        <QuickAction icon="extensions" label="Extension Center" onClick={() => onNavigate("extensions")} />
         <QuickAction icon="scenes" label="Scenes" onClick={() => onNavigate("scenes")} />
+        <QuickAction icon="discover" label="Add a device" onClick={() => onNavigate("discover")} />
         <QuickAction icon="energy" label="Energy" onClick={() => onNavigate("energy")} />
+        <QuickAction icon="extensions" label="Extensions" onClick={() => onNavigate("extensions")} />
       </div>
 
-      {/* Recent events */}
+      {/* Recent events — the home's recent activity */}
       {events?.items && events.items.length > 0 && (
         <>
-          <h2 className="section">Recent events</h2>
+          <h2 className="section">Recent activity</h2>
           <div className="ev-list">
-            {events.items.slice(0, 6).map((e) => (
+            {events.items.slice(0, 5).map((e) => (
               <div className="ev-row" key={e.id}>
                 <span className="ev-title">{e.title}</span>
                 <span className="ev-time">{new Date(e.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
@@ -149,31 +170,35 @@ export function DashboardOverview({ onNavigate }: { onNavigate: (t: Tab) => void
         </>
       )}
 
-      {/* Hub resources — real host telemetry (§ Installer Dashboard). Only measured fields render. */}
-      {sys && (
+      {/* ── Operations — Installer & Developer only. A homeowner never sees system telemetry. ── */}
+      {devMode && (
         <>
-          <h2 className="section">Hub resources</h2>
-          <div className="stat-grid">
-            {sys.cpu.utilizationPct !== undefined && (
-              <Meter label="CPU" pct={sys.cpu.utilizationPct} sub={`${sys.cpu.cores} cores · load ${sys.cpu.loadAvg1}`} />
-            )}
-            <Meter label="Memory" pct={sys.memory.usedPct} sub={`${fmtBytes(sys.memory.usedBytes)} / ${fmtBytes(sys.memory.totalBytes)}`} />
-            {sys.storage && (
-              <Meter label="Storage" pct={sys.storage.usedPct} sub={`${fmtBytes(sys.storage.usedBytes)} / ${fmtBytes(sys.storage.totalBytes)}`} />
-            )}
-            {sys.temperatureC !== undefined && (
-              <Stat label="Temperature" value={`${sys.temperatureC}°`} sub="CPU" warn={sys.temperatureC >= 80} />
-            )}
-            <Stat label="Uptime" value={fmtUptime(sys.uptimeSeconds)} sub="hub process" />
+          <div className="stat-grid" style={{ marginTop: 18 }}>
+            <Stat label="Online devices" value={online ?? "—"} sub={diag ? `of ${diag.counts.devices}` : ""} onClick={() => onNavigate("devices")} good />
+            <Stat label="Offline" value={offline} sub={offline ? diag!.offlineDevices.slice(0, 1).map((d) => d.name).join("") : "none"} onClick={() => onNavigate("devices")} warn={offline > 0} />
+            <Stat label="Extensions" value={installed.length} sub={extErrors ? `${extErrors} error` : "all healthy"} onClick={() => onNavigate("extensions")} warn={extErrors > 0} />
+            <Stat label="Automations" value={autos ? `${autoEnabled}/${autos.length}` : "—"} sub="enabled" onClick={() => onNavigate("automations")} />
+            <Stat label="Backups" value={backup ? backup.backupCount : "—"} sub={backup ? (backup.lastBackupAt ? `last ${timeAgo(backup.lastBackupAt)}` : "none yet") : ""} onClick={() => onNavigate("settings")} warn={Boolean(backup && backup.schedule.enabled && !backup.lastBackupAt)} />
+            <Stat label="Updates" value={update ? (update.updateAvailable ? "1" : "0") + (updatesAvailable ? `+${updatesAvailable}` : "") : "—"} sub={update?.updateAvailable ? `hub v${update.latest?.version}` : "up to date"} onClick={() => onNavigate("settings")} warn={Boolean(update?.updateAvailable) || updatesAvailable > 0} />
           </div>
+          {sys && (
+            <>
+              <h2 className="section">Hub resources</h2>
+              <div className="stat-grid">
+                {sys.cpu.utilizationPct !== undefined && <Meter label="CPU" pct={sys.cpu.utilizationPct} sub={`${sys.cpu.cores} cores · load ${sys.cpu.loadAvg1}`} />}
+                <Meter label="Memory" pct={sys.memory.usedPct} sub={`${fmtBytes(sys.memory.usedBytes)} / ${fmtBytes(sys.memory.totalBytes)}`} />
+                {sys.storage && <Meter label="Storage" pct={sys.storage.usedPct} sub={`${fmtBytes(sys.storage.usedBytes)} / ${fmtBytes(sys.storage.totalBytes)}`} />}
+                {sys.temperatureC !== undefined && <Stat label="Temperature" value={`${sys.temperatureC}°`} sub="CPU" warn={sys.temperatureC >= 80} />}
+                <Stat label="Uptime" value={fmtUptime(sys.uptimeSeconds)} sub="hub process" />
+              </div>
+            </>
+          )}
+          {diag && (
+            <div className="hub-line">
+              Hub {diag.hubVersion} · backend {diag.backend.kind} <span className={diag.backend.healthy ? "ok" : "err"}>{diag.backend.healthy ? "healthy" : "degraded"}</span>
+            </div>
+          )}
         </>
-      )}
-
-      {/* Hub */}
-      {diag && (
-        <div className="hub-line">
-          Hub {diag.hubVersion} · backend {diag.backend.kind} <span className={diag.backend.healthy ? "ok" : "err"}>{diag.backend.healthy ? "healthy" : "degraded"}</span>
-        </div>
       )}
     </div>
   );
@@ -215,4 +240,3 @@ function greeting(): string {
   const h = new Date().getHours();
   return h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : h < 21 ? "Good evening" : "Good night";
 }
-const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);

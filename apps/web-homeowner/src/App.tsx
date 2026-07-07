@@ -109,7 +109,7 @@ export function App() {
   // Keyed on the active tab so switching destinations replays the enter transition (§ Animation).
   const page = (
     <div className="page-anim" key={tab}>
-      {tab === "dashboard" && <DashboardOverview onNavigate={go} />}
+      {tab === "dashboard" && <DashboardOverview onNavigate={go} onOpenRoom={(id) => { setSelectedRoom(id); setTab("rooms"); }} devMode={devMode} />}
       {tab === "discover" && <DiscoverDevices />}
       {tab === "devices" && <DeviceManager onNavigate={go} devMode={devMode} />}
       {tab === "extensions" && <ExtensionCenter />}
