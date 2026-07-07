@@ -112,6 +112,12 @@ input[type="number"], input[type="time"], input[type="url"], input:not([type]), 
 }
 input:focus, textarea:focus, select:focus { border-color: var(--aureon-color-gold-400); }
 input::placeholder, textarea::placeholder { color: var(--aureon-color-text-muted); }
+
+/* Base styling for plain buttons — no button should render as a light browser default. Element-level
+   specificity, so every class-based button (.primary, .rail-item, .chip, .room-tile…) still wins. */
+button { font: inherit; cursor: pointer; padding: 9px 16px; border-radius: 12px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); transition: border-color .15s ease, background .15s ease; }
+button:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
+button:disabled { opacity: 0.5; cursor: default; }
 .search { width: 100%; margin-bottom: 14px; }
 .section .chip-n, .chip .chip-n { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: 8px; border-radius: 999px; font-size: 11px; background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary); }
 
