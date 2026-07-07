@@ -99,8 +99,6 @@ class DashboardScreen extends ConsumerWidget {
     if (backup != null && (backup['schedule'] as Map?)?['enabled'] == true && backup['lastBackupAt'] == null) {
       attention.add((textLabel: 'No backup yet — protect your setup', warn: false, target: const BackupScreen()));
     }
-    final anyWarn = attention.any((a) => a.warn);
-
     return SafeArea(
       child: RefreshIndicator(
         onRefresh: () async {
@@ -110,33 +108,23 @@ class DashboardScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.lg, AureonSpacing.xxl),
           children: [
+            // The home greets you — typography is the hierarchy, no boxes (§ Project Monolith).
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(_greeting(), style: text.titleLarge),
-                if (devMode) Text('Supreme OS${diag != null ? ' · v${diag['hubVersion']}' : ''}', style: text.labelMedium),
-              ])),
+              Expanded(child: Text(_greeting(), style: text.headlineMedium?.copyWith(fontWeight: FontWeight.w600, letterSpacing: -0.5))),
               const HomeSwitcherButton(),
             ]),
-            const SizedBox(height: AureonSpacing.md),
-            const Align(alignment: Alignment.centerLeft, child: WeatherChip()),
-            const SizedBox(height: AureonSpacing.md),
-
-            // One calm status line: all-good, or how many things want a look.
-            Container(
-              padding: const EdgeInsets.all(AureonSpacing.md),
-              decoration: BoxDecoration(color: AureonBase.surface, borderRadius: BorderRadius.circular(AureonRadius.lg), border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.4))),
-              child: Row(children: [
-                Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: diag == null ? scheme.onSurfaceVariant : anyWarn ? AureonStatus.warning : AureonStatus.good)),
-                const SizedBox(width: 14),
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(score == null
-                      ? 'Checking on your home…'
-                      : attention.isEmpty ? "Everything's running beautifully" : attention.length == 1 ? 'One thing needs a look' : '${attention.length} things need a look', style: text.titleMedium),
-                  if (diag != null) Text('$online/$deviceTotal devices online · ${counts?['rooms'] ?? 0} rooms', style: text.labelSmall),
-                ])),
-              ]),
+            const SizedBox(height: 8),
+            Text(
+              score == null
+                  ? 'Settling in…'
+                  : attention.isEmpty
+                      ? (diag != null ? 'All calm. $online of $deviceTotal devices online.' : 'All calm.')
+                      : attention.length == 1 ? 'One thing would like your attention.' : '${attention.length} things would like your attention.',
+              style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: AureonSpacing.md),
+            const Align(alignment: Alignment.centerLeft, child: WeatherChip()),
+            const SizedBox(height: AureonSpacing.lg),
 
             // Needs attention — real problems only, in plain language. Absent when all is well.
             for (final a in attention) ...[
@@ -162,22 +150,28 @@ class DashboardScreen extends ConsumerWidget {
             ..._favourites(context, ref),
             ..._recentlyUsed(context, ref),
 
-            // Your rooms — the home leads, most-used first (§ Home as the interface).
+            // Rooms are the hero — each a calm, softly-lit surface you step into (§ Project Monolith).
             if (rooms.isNotEmpty) ...[
-              Text('Your rooms', style: text.titleSmall),
+              _sectionLabel(context, 'Rooms'),
               const SizedBox(height: AureonSpacing.sm),
-              Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
-                for (final r in rooms)
-                  ActionChip(
-                    label: Text(r.name),
-                    onPressed: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
-                  ),
-              ]),
+              Builder(builder: (context) {
+                final w = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
+                return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
+                  for (final r in rooms)
+                    SizedBox(
+                      width: w,
+                      child: _RoomTile(
+                        name: r.name,
+                        onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
+                      ),
+                    ),
+                ]);
+              }),
               const SizedBox(height: AureonSpacing.lg),
             ],
 
-            // Quick actions.
-            Text('Quick actions', style: text.titleSmall),
+            // Everyday jumps — understated, the rooms stay the hero.
+            _sectionLabel(context, 'Shortcuts'),
             const SizedBox(height: AureonSpacing.sm),
             Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
               _Quick(icon: Icons.auto_awesome_outlined, label: 'Scenes', onTap: () => _push(context, const ScenesScreen())),
@@ -188,7 +182,7 @@ class DashboardScreen extends ConsumerWidget {
 
             if (events.isNotEmpty) ...[
               const SizedBox(height: AureonSpacing.lg),
-              Text('Recent activity', style: text.titleSmall),
+              _sectionLabel(context, 'Recent activity'),
               const SizedBox(height: AureonSpacing.sm),
               for (final e in events.take(5))
                 Padding(
@@ -340,6 +334,59 @@ class DashboardScreen extends ConsumerWidget {
   static String _time(String iso) {
     final d = DateTime.tryParse(iso)?.toLocal();
     return d == null ? '' : '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+/// A quiet uppercase section label — typography as hierarchy, no boxes (§ Project Monolith).
+Widget _sectionLabel(BuildContext context, String label) => Text(
+      label.toUpperCase(),
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            letterSpacing: 1.1,
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+    );
+
+/// A deterministic warm tint per room so each reads as its own softly-lit place (no photo required).
+LinearGradient _roomTint(String name) {
+  var h = 0;
+  for (var i = 0; i < name.length; i++) {
+    h = (h * 31 + name.codeUnitAt(i)) % 360;
+  }
+  return LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      HSLColor.fromAHSL(1, h.toDouble(), 0.20, 0.15).toColor(),
+      HSLColor.fromAHSL(1, ((h + 28) % 360).toDouble(), 0.18, 0.09).toColor(),
+    ],
+  );
+}
+
+/// Rooms are the hero: a softly-lit tile with an ambient shadow and a bottom-anchored name.
+class _RoomTile extends StatelessWidget {
+  const _RoomTile({required this.name, required this.onTap});
+  final String name;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(22),
+      onTap: onTap,
+      child: Container(
+        height: 132,
+        padding: const EdgeInsets.all(18),
+        alignment: Alignment.bottomLeft,
+        decoration: BoxDecoration(
+          gradient: _roomTint(name),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 24, offset: const Offset(0, 10))],
+        ),
+        child: Text(name, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+      ),
+    );
   }
 }
 

@@ -69,10 +69,10 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining("Everything's running beautifully"), findsWidgets); // calm all-good status
+    expect(find.textContaining('All calm'), findsWidgets); // calm all-good status
     expect(find.textContaining('devices online'), findsWidgets); // homeowner-friendly summary line
-    expect(find.text('Quick actions'), findsWidgets); // everyday jumps
-    expect(find.text('Scenes'), findsWidgets); // a quick action
+    expect(find.text('SHORTCUTS'), findsWidgets); // understated shortcut label
+    expect(find.text('Scenes'), findsWidgets); // a shortcut
   });
 
   testWidgets('home switcher shows the active home and lists all homes', (tester) async {
