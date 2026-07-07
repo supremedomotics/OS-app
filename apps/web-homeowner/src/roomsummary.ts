@@ -13,6 +13,34 @@ function plural(n: number, word: string): string {
   return `${n} ${n === 1 ? word : p}`;
 }
 
+export type ChipKind = "light" | "climate" | "media" | "fan" | "switch" | "cover";
+export type RoomChip = { kind: ChipKind; label: string };
+
+/** Structured, glyph-friendly summary — luxury communicates before you read (icons, then counts). */
+export function roomChips(devices: Device[]): RoomChip[] {
+  let lights = 0, climate = 0, media = 0, fans = 0, switches = 0;
+  const coversOpen: number[] = [];
+  for (const d of devices) {
+    const caps = d.capabilities.map((c) => c.kind) as Caps;
+    const st = (d.state ?? {}) as State;
+    if (caps.includes("position")) { const p = Math.round(st.position?.position ?? 0); if (p > 0) coversOpen.push(p); continue; }
+    if (caps.includes("brightness") || caps.includes("color")) { if (st.brightness?.on ?? st.color?.on ?? st.onoff?.on) lights++; continue; }
+    if (caps.includes("temperature")) { const m = st.temperature?.mode; if (m && m !== "off") climate++; continue; }
+    if (caps.includes("media")) { const pb = st.media?.playback; if (pb === "playing" || pb === "paused") media++; continue; }
+    if (caps.includes("fan")) { if (st.fan?.on) fans++; continue; }
+    if (caps.includes("onoff")) { if (st.onoff?.on) switches++; continue; }
+  }
+  const chips: RoomChip[] = [];
+  if (lights) chips.push({ kind: "light", label: `${lights}` });
+  if (climate) chips.push({ kind: "climate", label: `${climate}` });
+  if (media) chips.push({ kind: "media", label: `${media}` });
+  if (fans) chips.push({ kind: "fan", label: `${fans}` });
+  if (switches) chips.push({ kind: "switch", label: `${switches}` });
+  if (coversOpen.length === 1) chips.push({ kind: "cover", label: `${coversOpen[0]}%` });
+  else if (coversOpen.length > 1) chips.push({ kind: "cover", label: `${coversOpen.length}` });
+  return chips;
+}
+
 export function summarizeRoom(devices: Device[]): string {
   let lights = 0, climate = 0, media = 0, fans = 0, switches = 0;
   const coversOpen: number[] = [];

@@ -245,7 +245,14 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 .room-tile::after { content: ""; position: absolute; inset: 0; background: radial-gradient(130% 90% at 100% 0%, rgba(255, 255, 255, 0.06), transparent 55%); pointer-events: none; }
 .room-tile:hover { transform: translateY(-3px); box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4); }
 .room-tile-name { font-size: 21px; font-weight: 600; letter-spacing: -0.01em; position: relative; }
-.room-tile-sub { font-size: 13px; color: rgba(255, 255, 255, 0.72); margin-top: 3px; position: relative; }
+.room-tile-sub { margin-top: 7px; position: relative; }
+/* Glyph room summary — icons first, counts second. */
+.rc-row { display: inline-flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.rc-chip { display: inline-flex; align-items: center; gap: 4px; color: rgba(255, 255, 255, 0.9); }
+.rc-chip svg { opacity: 0.85; }
+.rc-count { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.rc-rest { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: rgba(255, 255, 255, 0.6); }
+.rc-rest-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.45); }
 @media (prefers-reduced-motion: reduce) { .room-tile:hover { transform: none; } }
 
 /* Needs-attention list — plain-language rows, shown only when something is actually wrong. */

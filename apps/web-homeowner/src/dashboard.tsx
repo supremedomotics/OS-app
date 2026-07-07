@@ -6,6 +6,7 @@ import { FavoritesRow, RecentlyUsedRow } from "./favorites.js";
 import { WeatherCard } from "./weather.js";
 import { byFrequency } from "./usage.js";
 import { summarizeRoom } from "./roomsummary.js";
+import { RoomChips } from "./roomchips.js";
 import { loadLocation } from "./weather.js";
 import { sunset } from "./suntimes.js";
 import { Icon } from "./icons.js";
@@ -50,6 +51,9 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
   const diag = useAsync<Diag>(() => client.diagnostics() as Promise<Diag>);
   const home = useAsync<{ rooms: { id: string; name: string }[] }>(() => client.home() as never);
   const allDevices = useAsync(() => client.devices().then((r) => r.devices));
+  const me = useAsync<{ user?: { displayName?: string } }>(() => client.me() as never);
+  // A first name makes the greeting personal — "Good evening, Mujeeb". Falls back to no name.
+  const firstName = (me?.user?.displayName ?? "").trim().split(/\s+/)[0] || "";
   const registry = useAsync(() => fetchDriverRegistry());
   const autos = useAsync(() => fetchAutomations());
   const security = useAsync<{ armMode?: string; triggered?: boolean }>(() => client.securityState() as Promise<{ armMode?: string; triggered?: boolean }>);
@@ -96,7 +100,6 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
   if (backup && backup.schedule.enabled && !backup.lastBackupAt) attention.push({ key: "bak", text: "No backup yet — protect your setup", tone: "info", go: () => onNavigate("settings") });
 
   const rooms = byFrequency(home?.rooms ?? [], "room").slice(0, 8);
-  const roomSummary = (roomId: string) => summarizeRoom((allDevices ?? []).filter((d) => d.roomId === roomId));
 
   // A warm, true one-liner about the moment — real sunset time + which room is alive right now —
   // rather than a device count. Falls back gracefully when a signal isn't available.
@@ -127,7 +130,7 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
       {/* The home greets you — typography is the hierarchy, no boxes. */}
       <div className="home-hero">
         <div className="home-hero-main">
-          <h1 className="home-greet">{greeting()}</h1>
+          <h1 className="home-greet">{greeting()}{firstName ? `, ${firstName}` : ""}</h1>
           <p className="home-status">{statusLine}</p>
         </div>
         <WeatherCard />
@@ -160,7 +163,7 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
             {rooms.map((r) => (
               <button key={r.id} className="room-tile" style={roomTint(r.name)} onClick={() => (onOpenRoom ? onOpenRoom(r.id) : onNavigate("rooms"))}>
                 <span className="room-tile-name">{r.name}</span>
-                <span className="room-tile-sub">{roomSummary(r.id) || "All off"}</span>
+                <span className="room-tile-sub"><RoomChips devices={(allDevices ?? []).filter((d) => d.roomId === r.id)} /></span>
               </button>
             ))}
           </div>
