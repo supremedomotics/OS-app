@@ -200,7 +200,7 @@ export function RoomsScreen({
         <h1 className="title">Rooms</h1>
         <button className="primary" onClick={() => setAdding((v) => !v)}>{adding ? "Cancel" : "+ Add room"}</button>
       </div>
-      <p className="sub">Choose a room to control.</p>
+      <p className="sub">Step into any room.</p>
       {adding && (
         <div className="card" style={{ marginBottom: 12 }}>
           <input placeholder="Room name (e.g. Home Gym)" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createRoom()} autoFocus />

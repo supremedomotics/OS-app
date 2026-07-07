@@ -83,7 +83,7 @@ export function ExtensionCenter() {
     <div className="page">
       <div className="page-head">
         <h1 className="title">Extension Center</h1>
-        <p className="sub">Add, configure and monitor every integration and protocol driver.</p>
+        <p className="sub">Everything that connects to your home — browse, add and keep it healthy.</p>
       </div>
 
       <div className="chip-row">
