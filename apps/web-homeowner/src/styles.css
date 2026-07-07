@@ -96,6 +96,22 @@ h2.section { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; margin: 
 .page-head { margin-bottom: 14px; }
 .page-head .title { margin: 0; }
 .page-head .sub { margin: 4px 0 0; color: var(--aureon-color-text-secondary); font-size: 13.5px; }
+/* Base styling for text inputs — no input should ever render as a harsh white browser box. Placed
+   before the more specific per-context rules (login, node-config…) so those still win where set. */
+input[type="text"], input[type="search"], input[type="email"], input[type="password"],
+input[type="number"], input[type="time"], input[type="url"], input:not([type]), textarea, select {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--aureon-color-base-hairline);
+  background: var(--aureon-color-base-surface);
+  color: var(--aureon-color-text-primary);
+  font: inherit;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color .15s ease;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--aureon-color-gold-400); }
+input::placeholder, textarea::placeholder { color: var(--aureon-color-text-muted); }
 .search { width: 100%; margin-bottom: 14px; }
 .section .chip-n, .chip .chip-n { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; margin-left: 8px; border-radius: 999px; font-size: 11px; background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary); }
 
@@ -485,9 +501,13 @@ button.link {
 @media (min-width: 900px) { .shell { max-width: 1180px; } .content { padding: 26px 26px 100px; } }
 .tablet-room { position: relative; }
 /* Settings menu (Ovio-minimal) */
-.set-menu { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.set-menu { display: flex; flex-direction: column; margin-top: 8px; border: 1px solid var(--aureon-color-base-hairline); border-radius: 18px; overflow: hidden; background: var(--aureon-color-base-surface); }
 .set-row { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px; border-radius: 16px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; transition: border-color .15s ease; }
 .set-row:hover { border-color: var(--aureon-color-gold-400); }
+/* Inside the Settings menu, rows are one grouped list with hairline dividers — no boxes-in-boxes. */
+.set-menu .set-row { border: 0; border-bottom: 1px solid var(--aureon-color-base-hairline); border-radius: 0; background: none; transition: background .15s ease; }
+.set-menu .set-row:last-child { border-bottom: 0; }
+.set-menu .set-row:hover { background: color-mix(in srgb, var(--aureon-color-gold-400) 8%, transparent); }
 .set-ic { width: 30px; height: 30px; display: grid; place-items: center; font-size: 17px; color: var(--aureon-color-gold-400); }
 .set-meta { display: flex; flex-direction: column; flex: 1; }
 .set-label { font-size: 16px; font-weight: 600; }

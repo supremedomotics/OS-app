@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../errors.dart';
+import '../widgets/empty_state.dart';
 import '../providers.dart';
 
 /// Energy & analytics (§16): per-measure totals + a tariff-aware cost card.
@@ -35,8 +36,11 @@ class EnergyScreen extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text(friendlyError(e, 'Energy data is unavailable right now.'), textAlign: TextAlign.center)),
           data: (rows) => rows.isEmpty
-              ? Text('No telemetry yet',
-                  style: Theme.of(context).textTheme.labelMedium)
+              ? const EmptyState(
+                  icon: Icons.bolt_outlined,
+                  title: 'No energy data yet',
+                  hint: "Once your home has metered devices reporting usage, you'll see where the power goes here — by device and over time.",
+                )
               : ListView(
                   children: [
                     cost.maybeWhen(

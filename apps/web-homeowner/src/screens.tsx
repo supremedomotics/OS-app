@@ -632,33 +632,46 @@ function label(mode: string): string {
 
 // ── Energy ───────────────────────────────────────────────────────────────────
 export function Energy() {
-  const [summary] = useAsync<EnergySummaryResponse>(() => client.energySummary());
+  const [summary, setSummary] = useState<EnergySummaryResponse | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [devices] = useAsync<Device[]>(async () => (await client.devices()).devices);
+  useEffect(() => {
+    let live = true;
+    client.energySummary().then((v) => { if (live) { setSummary(v); setLoaded(true); } }).catch(() => { if (live) setLoaded(true); });
+    return () => { live = false; };
+  }, []);
+  const deviceName = (id: string) => (devices ?? []).find((d) => d.id === id)?.name ?? "A device";
+  const hasData = Boolean(summary && (summary.summary.length > 0 || summary.topConsumers.length > 0));
   return (
-    <div>
-      <h1 className="title">Energy</h1>
-      <p className="sub">Where your home spends its power.</p>
-      {(summary?.summary ?? []).map((m) => (
-        <div className="card row" key={m.measure}>
-          <span style={{ textTransform: "capitalize" }}>{m.measure}</span>
-          <strong>
-            {Math.round(m.total)} {m.unit}
-          </strong>
-        </div>
-      ))}
-      {summary && summary.topConsumers.length > 0 && (
+    <div className="page">
+      <div className="page-head">
+        <h1 className="title">Energy</h1>
+        <p className="sub">Where your home spends its power.</p>
+      </div>
+      {loaded && !hasData ? (
+        <EmptyState icon="⚡" title="No energy data yet"
+          hint="Once your home has metered devices reporting usage, you'll see where the power goes here — by device and over time." />
+      ) : (
         <>
-          <h2 className="section">Top consumers</h2>
-          {summary.topConsumers.map((t) => (
-            <div className="card row" key={t.deviceId}>
-              <span className="muted">{t.deviceId}</span>
-              <span>
-                {Math.round(t.total)} {t.unit}
-              </span>
+          {(summary?.summary ?? []).map((m) => (
+            <div className="card row" key={m.measure}>
+              <span style={{ textTransform: "capitalize" }}>{m.measure}</span>
+              <strong>{Math.round(m.total)} {m.unit}</strong>
             </div>
           ))}
+          {summary && summary.topConsumers.length > 0 && (
+            <>
+              <h2 className="section">Top consumers</h2>
+              {summary.topConsumers.map((t) => (
+                <div className="card row" key={t.deviceId}>
+                  <span>{deviceName(t.deviceId)}</span>
+                  <span className="muted">{Math.round(t.total)} {t.unit}</span>
+                </div>
+              ))}
+            </>
+          )}
         </>
       )}
-      {summary && summary.summary.length === 0 && <p className="muted">No energy data yet.</p>}
     </div>
   );
 }
