@@ -79,7 +79,6 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
     if (security?.triggered) s -= 20;
     return Math.max(0, s);
   })();
-  const healthy = score === null ? null : score >= 90;
 
   // What actually needs a decision, in plain homeowner language — nothing when all is well, so the
   // home breathes. Ordered by urgency (§ Dashboard: stop showing statistics users don't care about).
@@ -94,23 +93,21 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
 
   const rooms = byFrequency(home?.rooms ?? [], "room").slice(0, 8);
 
+  const statusLine = score === null
+    ? "Settling in…"
+    : attention.length === 0
+      ? (diag ? `All calm. ${diag.counts.devices - offline} of ${diag.counts.devices} devices online.` : "All calm.")
+      : attention.length === 1 ? "One thing would like your attention." : `${attention.length} things would like your attention.`;
+
   return (
-    <div className="page">
-      <div className="page-head dash-head">
-        <div>
-          <h1 className="title">{greeting()}</h1>
-          {devMode && <p className="sub">Supreme OS · {diag ? `v${diag.hubVersion}` : "…"}</p>}
+    <div className="page home">
+      {/* The home greets you — typography is the hierarchy, no boxes. */}
+      <div className="home-hero">
+        <div className="home-hero-main">
+          <h1 className="home-greet">{greeting()}</h1>
+          <p className="home-status">{statusLine}</p>
         </div>
         <WeatherCard />
-      </div>
-
-      {/* One calm line: all-good, or how many things want a look. Detail lives in the list below. */}
-      <div className={`health-hero ${healthy === null ? "" : attention.some((a) => a.tone === "warn") ? "warn" : "ok"}`}>
-        <span className="hh-dot" />
-        <div style={{ flex: 1 }}>
-          <strong>{score === null ? "Checking on your home…" : attention.length === 0 ? "Everything's running beautifully" : attention.length === 1 ? "One thing needs a look" : `${attention.length} things need a look`}</strong>
-          {diag && <span className="hh-sub">{diag.counts.devices - offline}/{diag.counts.devices} devices online · {diag.counts.rooms} rooms</span>}
-        </div>
       </div>
 
       {/* Needs attention — real problems only, in plain language. Absent when all is well. */}
@@ -132,22 +129,22 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
       {/* Recently used — learns from real use, appears only when there's history (§ Personalization) */}
       <RecentlyUsedRow />
 
-      {/* Your rooms — the home leads, most-used first (§ Home as the interface) */}
+      {/* Rooms are the hero — each a calm, softly-lit surface you step into. */}
       {rooms.length > 0 && (
-        <>
-          <h2 className="section">Your rooms</h2>
-          <div className="room-row">
+        <section>
+          <h2 className="home-label">Rooms</h2>
+          <div className="room-tiles">
             {rooms.map((r) => (
-              <button key={r.id} className="room-chip" onClick={() => (onOpenRoom ? onOpenRoom(r.id) : onNavigate("rooms"))}>
-                {r.name}
+              <button key={r.id} className="room-tile" style={roomTint(r.name)} onClick={() => (onOpenRoom ? onOpenRoom(r.id) : onNavigate("rooms"))}>
+                <span className="room-tile-name">{r.name}</span>
               </button>
             ))}
           </div>
-        </>
+        </section>
       )}
 
-      {/* Quick actions — the everyday jumps */}
-      <h2 className="section">Quick actions</h2>
+      {/* Everyday jumps — understated text, the rooms stay the hero. */}
+      <h2 className="home-label">Shortcuts</h2>
       <div className="qa-grid">
         <QuickAction icon="scenes" label="Scenes" onClick={() => onNavigate("scenes")} />
         <QuickAction icon="discover" label="Add a device" onClick={() => onNavigate("discover")} />
@@ -158,7 +155,7 @@ export function DashboardOverview({ onNavigate, onOpenRoom, devMode = false }: {
       {/* Recent events — the home's recent activity */}
       {events?.items && events.items.length > 0 && (
         <>
-          <h2 className="section">Recent activity</h2>
+          <h2 className="home-label">Recent activity</h2>
           <div className="ev-list">
             {events.items.slice(0, 5).map((e) => (
               <div className="ev-row" key={e.id}>
@@ -239,4 +236,12 @@ function QuickAction({ icon, label, onClick }: { icon: "discover" | "extensions"
 function greeting(): string {
   const h = new Date().getHours();
   return h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : h < 21 ? "Good evening" : "Good night";
+}
+
+/** A calm, softly-lit surface unique to each room — a deterministic warm tint from the room's name,
+ * so every room reads as its own place (surface variation + depth), no photo required. */
+function roomTint(name: string): React.CSSProperties {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return { background: `linear-gradient(155deg, hsl(${h} 20% 15%), hsl(${(h + 28) % 360} 18% 9%))` };
 }

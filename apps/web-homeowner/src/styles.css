@@ -224,6 +224,21 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 .health-hero strong { display: block; font-size: 17px; }
 .health-hero .hh-sub { display: block; font-size: 12.5px; color: var(--aureon-color-text-secondary); margin-top: 2px; }
 
+/* ── Home (§ Project Monolith) — you enter your home, you don't open an app. ────────────────
+   Typography is the hierarchy; rooms are the hero; depth replaces flat black. */
+.page.home { background: radial-gradient(130% 70% at 50% -15%, color-mix(in srgb, var(--aureon-color-gold-400) 6%, transparent), transparent 62%); }
+.home-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin: 10px 0 30px; flex-wrap: wrap; }
+.home-greet { font-size: clamp(30px, 4.5vw, 44px); font-weight: 600; letter-spacing: -0.025em; line-height: 1.02; margin: 0; }
+.home-status { margin: 12px 0 0; font-size: 16px; line-height: 1.5; color: var(--aureon-color-text-secondary); max-width: 560px; }
+.home-label { font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--aureon-color-text-secondary); margin: 32px 0 14px; }
+
+.room-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+.room-tile { position: relative; min-height: 148px; border-radius: 22px; border: 1px solid color-mix(in srgb, var(--aureon-color-base-hairline) 70%, transparent); padding: 20px 22px; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; color: var(--aureon-color-text-primary); cursor: pointer; text-align: left; overflow: hidden; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28); transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease; }
+.room-tile::after { content: ""; position: absolute; inset: 0; background: radial-gradient(130% 90% at 100% 0%, rgba(255, 255, 255, 0.06), transparent 55%); pointer-events: none; }
+.room-tile:hover { transform: translateY(-3px); box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4); }
+.room-tile-name { font-size: 21px; font-weight: 600; letter-spacing: -0.01em; position: relative; }
+@media (prefers-reduced-motion: reduce) { .room-tile:hover { transform: none; } }
+
 /* Needs-attention list — plain-language rows, shown only when something is actually wrong. */
 .attention { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
 .attn-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 15px 18px; border-radius: 16px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: inherit; cursor: pointer; text-align: left; }
