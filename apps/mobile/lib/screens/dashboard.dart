@@ -180,13 +180,16 @@ class DashboardScreen extends ConsumerWidget {
               Builder(builder: (context) {
                 final w = (MediaQuery.sizeOf(context).width - AureonSpacing.lg * 2 - AureonSpacing.sm) / 2;
                 return Wrap(spacing: AureonSpacing.sm, runSpacing: AureonSpacing.sm, children: [
-                  for (final r in rooms)
+                  for (final (i, r) in rooms.indexed)
                     SizedBox(
                       width: w,
-                      child: _RoomTile(
-                        name: r.name,
-                        chips: roomChips(allDevices.where((d) => d.roomId == r.id).toList()),
-                        onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
+                      child: _Reveal(
+                        delayMs: i * 55,
+                        child: _RoomTile(
+                          name: r.name,
+                          chips: roomChips(allDevices.where((d) => d.roomId == r.id).toList()),
+                          onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
+                        ),
                       ),
                     ),
                 ]);
@@ -388,6 +391,41 @@ LinearGradient _roomTint(String name) {
 }
 
 /// Rooms are the hero: a softly-lit tile with an ambient shadow and a bottom-anchored name.
+/// Signature entrance (§ motion): a gentle staggered fade + rise, matching the web card-rise.
+class _Reveal extends StatefulWidget {
+  const _Reveal({required this.child, this.delayMs = 0});
+  final Widget child;
+  final int delayMs;
+  @override
+  State<_Reveal> createState() => _RevealState();
+}
+
+class _RevealState extends State<_Reveal> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.delayed(Duration(milliseconds: widget.delayMs), () { if (mounted) _c.forward(); });
+  }
+
+  @override
+  void dispose() { _c.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    if (MediaQuery.of(context).disableAnimations) return widget.child;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, child) {
+        final t = Curves.easeOutCubic.transform(_c.value);
+        return Opacity(opacity: t, child: Transform.translate(offset: Offset(0, (1 - t) * 12), child: child));
+      },
+      child: widget.child,
+    );
+  }
+}
+
 IconData _chipIcon(String kind) {
   switch (kind) {
     case 'light': return Icons.lightbulb_outline;
