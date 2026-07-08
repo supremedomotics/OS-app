@@ -11,7 +11,7 @@ RUN for f in /usr/local/share/ca-certificates/*.crt; do [ -f "$f" ] && cat "$f" 
 
 FROM base AS build
 WORKDIR /app
-COPY pnpm-workspace.yaml package.json turbo.json tsconfig.base.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json tsconfig.base.json ./
 # The gateway's workspace graph spans packages/, services/, cloud/ (licensing) and
 # drivers/ (driver SDK), so all four are needed to resolve + build it.
 COPY packages ./packages
@@ -25,7 +25,7 @@ COPY tools ./tools
 # dev deps and the rest of the monorepo dropped) so the runtime image stays small.
 RUN [ -s /usr/local/share/proxy-ca.pem ] && export NODE_EXTRA_CA_CERTS=/usr/local/share/proxy-ca.pem; \
     corepack enable && \
-    pnpm install --frozen-lockfile=false && \
+    pnpm install --frozen-lockfile && \
     pnpm --filter @supreme/gateway... run build && \
     pnpm --filter @supreme/gateway deploy --prod --legacy /deploy
 
