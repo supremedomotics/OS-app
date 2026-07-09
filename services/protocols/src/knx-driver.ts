@@ -15,8 +15,8 @@ import { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./k
 
 /**
  * KNXnet/IP transport seam. A real KNXnet/IP connection (tunnelling or routing) is
- * injected or loaded from the optional `knx` library; this keeps the byte-level DPT
- * framing in the transport and lets the driver be unit-tested against a fake bus.
+ * injected or loaded from `knxultimate`; this keeps the byte-level DPT framing in
+ * the transport and lets the driver be unit-tested against a fake bus.
  */
 export interface KnxConnection {
   connect(): Promise<void>;
@@ -31,7 +31,7 @@ export interface KnxDriverOptions {
   /** KNXnet/IP gateway host (tunnelling) or multicast group (routing). */
   host: string;
   port?: number;
-  /** Injectable transport (tests pass a fake bus; prod loads the `knx` library). */
+  /** Injectable transport (tests pass a fake bus; prod loads `knxultimate`). */
   createConnection?: (opts: { host: string; port: number }) => Promise<KnxConnection>;
 }
 
@@ -119,7 +119,7 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    // KNX has no runtime discovery without an ETS project import; devices are
+    // KNX has no device discovery without an ETS project import; devices are
     // commissioned explicitly from their group-address map.
     return [];
   }
@@ -148,57 +148,95 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
   }
 }
 
-/** Default transport backed by the optional `knx` library (KNXnet/IP). */
+/** Default transport backed by `knxultimate` (KNXnet/IP tunnelling over UDP). */
 async function defaultKnxConnection(opts: { host: string; port: number }): Promise<KnxConnection> {
-  const moduleName = "knx";
-  const knx = (await import(moduleName)) as unknown as {
-    Connection: (o: Record<string, unknown>) => KnxRawConnection;
-    Datapoint: new (o: { ga: string; dpt: string }, conn: KnxRawConnection) => KnxDatapoint;
-  };
-  return new Promise<KnxConnection>((resolve, reject) => {
-    const raw = knx.Connection({
-      ipAddr: opts.host,
-      ipPort: opts.port,
-      handlers: {
-        connected: () => resolve(wrapKnx(knx, raw)),
-        error: (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
-      },
-    });
+  const moduleName = "knxultimate";
+  const imported = (await import(moduleName)) as unknown as KnxUltimateModule;
+  const runtime = (imported.default ?? imported) as KnxUltimateModule;
+  const Client = imported.KNXClient ?? runtime.KNXClient;
+  const dptlib = imported.dptlib ?? runtime.dptlib;
+  if (!Client || !dptlib) throw new Error("knx: knxultimate did not expose KNXClient and dptlib");
+
+  const client = new Client({
+    hostProtocol: "TunnelUDP",
+    ipAddr: opts.host,
+    ipPort: opts.port,
   });
+  return wrapKnxUltimate(client, dptlib);
 }
 
-interface KnxRawConnection {
-  Disconnect(): void;
-}
-interface KnxDatapoint {
-  write(value: KnxValue): void;
-  on(event: "change", cb: (oldValue: KnxValue, newValue: KnxValue) => void): void;
+interface KnxUltimateModule {
+  default?: KnxUltimateModule;
+  KNXClient?: new (opts: Record<string, unknown>) => KnxUltimateClient;
+  dptlib?: KnxUltimateDptLib;
 }
 
-function wrapKnx(
-  knx: { Datapoint: new (o: { ga: string; dpt: string }, conn: KnxRawConnection) => KnxDatapoint },
-  raw: KnxRawConnection,
-): KnxConnection {
-  const datapoints = new Map<string, KnxDatapoint>();
-  const dp = (ga: string, dpt: string): KnxDatapoint => {
-    const key = `${ga}:${dpt}`;
-    let d = datapoints.get(key);
-    if (!d) {
-      d = new knx.Datapoint({ ga, dpt }, raw);
-      datapoints.set(key, d);
-    }
-    return d;
+interface KnxUltimateClient {
+  Connect(): void;
+  Disconnect(): Promise<void>;
+  write(groupAddress: string, value: KnxValue, dpt: string): void;
+  on(event: "connected", cb: () => void): KnxUltimateClient;
+  on(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
+  on(event: "indication", cb: (packet: KnxUltimateIndication) => void): KnxUltimateClient;
+}
+
+interface KnxUltimateDptLib {
+  resolve(dpt: string): unknown;
+  fromBuffer(raw: Buffer, dptConfig: unknown): KnxValue;
+}
+
+interface KnxUltimateIndication {
+  cEMIMessage?: {
+    dstAddress?: { toString(): string };
+    npdu?: {
+      dataValue?: Buffer;
+      isGroupWrite?: boolean;
+      isGroupResponse?: boolean;
+    };
   };
+}
+
+function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): KnxConnection {
+  const observers = new Map<string, Set<(value: KnxValue) => void>>();
+  client.on("indication", (packet) => {
+    const cemi = packet.cEMIMessage;
+    const dst = cemi?.dstAddress?.toString?.();
+    const raw = cemi?.npdu?.dataValue;
+    if (!dst || !raw) return;
+    const handlers = observers.get(dst);
+    if (!handlers?.size) return;
+    for (const key of handlers) {
+      const [, dpt] = key;
+      const value = dptlib.fromBuffer(raw, dptlib.resolve(dpt));
+      key(value);
+    }
+  });
+
   return {
-    async connect() {},
+    async connect() {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        client.on("connected", () => {
+          settled = true;
+          resolve();
+        });
+        client.on("error", (err) => {
+          if (!settled) reject(err instanceof Error ? err : new Error(String(err)));
+        });
+        client.Connect();
+      });
+    },
     async disconnect() {
-      raw.Disconnect();
+      await client.Disconnect();
     },
     async write(ga, value, dpt) {
-      dp(ga, dpt).write(value);
+      client.write(ga, value, dpt);
     },
     observe(ga, dpt, handler) {
-      dp(ga, dpt).on("change", (_old, next) => handler(next));
+      const handlers = observers.get(ga) ?? new Set<(value: KnxValue) => void>();
+      const typedHandler = Object.assign(handler, { 0: dpt });
+      handlers.add(typedHandler);
+      observers.set(ga, handlers);
     },
   };
 }
