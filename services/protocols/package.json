@@ -24,7 +24,7 @@
   "dependencies": {
     "@supreme/domain-model": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
-    "knx": "^2.5.4",
+    "knxultimate": "^6.0.1",
     "modbus-serial": "^8.0.21",
     "mqtt": "^5.10.1"
   },
