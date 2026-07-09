@@ -196,19 +196,23 @@ interface KnxUltimateIndication {
   };
 }
 
+interface KnxUltimateObserver {
+  dpt: string;
+  handler: (value: KnxValue) => void;
+}
+
 function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): KnxConnection {
-  const observers = new Map<string, Set<(value: KnxValue) => void>>();
+  const observers = new Map<string, KnxUltimateObserver[]>();
   client.on("indication", (packet) => {
     const cemi = packet.cEMIMessage;
     const dst = cemi?.dstAddress?.toString?.();
     const raw = cemi?.npdu?.dataValue;
     if (!dst || !raw) return;
     const handlers = observers.get(dst);
-    if (!handlers?.size) return;
-    for (const key of handlers) {
-      const [, dpt] = key;
+    if (!handlers?.length) return;
+    for (const { dpt, handler } of handlers) {
       const value = dptlib.fromBuffer(raw, dptlib.resolve(dpt));
-      key(value);
+      handler(value);
     }
   });
 
@@ -233,9 +237,8 @@ function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): 
       client.write(ga, value, dpt);
     },
     observe(ga, dpt, handler) {
-      const handlers = observers.get(ga) ?? new Set<(value: KnxValue) => void>();
-      const typedHandler = Object.assign(handler, { 0: dpt });
-      handlers.add(typedHandler);
+      const handlers = observers.get(ga) ?? [];
+      handlers.push({ dpt, handler });
       observers.set(ga, handlers);
     },
   };
