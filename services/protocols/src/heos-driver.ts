@@ -20,6 +20,7 @@ import {
   parseHeosMessage,
   playbackFromHeosState,
   type HeosMediaCache,
+  type HeosPlayerInfo,
 } from "./heos-codec.js";
 import { ReconnectScheduler } from "./avr-reconnect.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
@@ -34,6 +35,9 @@ export interface HeosDriverOptions {
   reconnectMaxMs?: number;
   /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
   ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
+  /** How long discovery waits for a candidate host's `get_players` reply before
+   * giving up on it (ms). Default 3000. */
+  discoverTimeoutMs?: number;
 }
 
 interface HeosBinding {
@@ -150,15 +154,68 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
 
   async discover(): Promise<DiscoveredDevice[]> {
     // Real SSDP discovery: HEOS speakers answer this Denon-defined search target
-    // (spec §2.1: ST = urn:schemas-denon-com:device:ACT-Denon:1).
+    // (spec §2.1: ST = urn:schemas-denon-com:device:ACT-Denon:1). SSDP alone only
+    // gives us candidate IPs; a HEOS *device* is really one or more *players* — so we
+    // follow up with a real `player/get_players` query (spec §4.2.1) against each
+    // candidate to resolve their actual pids and names, exactly what `bind()` needs
+    // (`config.pid`). Any one HEOS unit's `get_players` response lists EVERY player on
+    // that whole network, so results are deduped by pid across all queried hosts —
+    // the same player answering via two different SSDP hits must not appear twice.
     const search = this.opts.ssdp ?? ssdpSearch;
     const responses = await search({ st: "urn:schemas-denon-com:device:ACT-Denon:1" });
-    return responses.map((r) => ({
-      backendId: r.address,
-      suggestedName: `HEOS ${r.address}`,
-      capabilities: ["media"] as DiscoveredDevice["capabilities"],
-      raw: { server: r.server ?? null, location: r.location ?? null },
-    }));
+    const hosts = [...new Set(responses.map((r) => r.address))];
+    const perHost = await Promise.all(hosts.map((host) => this.queryPlayers(host)));
+
+    const out: DiscoveredDevice[] = [];
+    const seenPid = new Set<string>();
+    for (let i = 0; i < hosts.length; i++) {
+      for (const player of perHost[i]!) {
+        if (seenPid.has(player.pid)) continue;
+        seenPid.add(player.pid);
+        out.push({
+          backendId: player.pid,
+          suggestedName: player.name || `HEOS ${hosts[i]}`,
+          capabilities: ["media"] as DiscoveredDevice["capabilities"],
+          raw: { ip: hosts[i], model: player.model ?? null, bindConfig: { pid: player.pid } },
+        });
+      }
+    }
+    return out;
+  }
+
+  /** One-off `player/get_players` query against a freshly-opened socket — used only
+   * during discovery, separate from the persistent per-host `HeosLink`. Tolerates an
+   * unresponsive/non-HEOS host by resolving an empty list rather than failing the
+   * whole scan. */
+  private queryPlayers(host: string): Promise<HeosPlayerInfo[]> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (players: HeosPlayerInfo[]) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(players);
+      };
+      const timer = setTimeout(() => finish([]), this.opts.discoverTimeoutMs ?? 3_000);
+      (timer as { unref?: () => void }).unref?.();
+
+      const socket = this.opts.createSocket ? this.opts.createSocket(host, this.defaultPort) : net.connect(this.defaultPort, host);
+      socket.setEncoding("utf8");
+      let buffer = "";
+      socket.on("connect", () => socket.write(`${buildHeosCommand("player", "get_players", {})}\r\n`));
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        const lines = buffer.split("\r\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const update = parseHeosMessage(line);
+          if (update?.kind === "players") finish(update.players);
+        }
+      });
+      socket.on("error", () => finish([]));
+      socket.on("close", () => finish([]));
+    });
   }
 
   onState(listener: StateListener): () => void {

@@ -41,6 +41,10 @@ export interface DiscoveredView {
   protocol?: string;
   /** Network coordinates when the discovery source resolved them (mDNS/Shelly/Matter…). */
   network?: NetworkInfo;
+  /** Protocol-specific binding config the driver already resolved at discovery time (a
+   * HEOS player's `pid`, an AVR/Yamaha `zone`, …) — pass straight through as the bind
+   * `config` so commissioning needs no manual entry beyond room + name. */
+  bindConfig?: Record<string, unknown>;
 }
 
 /**
@@ -169,6 +173,10 @@ export { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;
   const network = extractNetwork(d.raw);
+  const bindConfig =
+    d.raw?.bindConfig && typeof d.raw.bindConfig === "object" && !Array.isArray(d.raw.bindConfig)
+      ? (d.raw.bindConfig as Record<string, unknown>)
+      : undefined;
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -177,6 +185,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     source: protocol ?? source,
     protocol,
     ...(network ? { network } : {}),
+    ...(bindConfig ? { bindConfig } : {}),
   };
 }
 

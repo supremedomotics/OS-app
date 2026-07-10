@@ -14,6 +14,7 @@ import {
 } from "@supreme/integration-layer";
 import { buildMediaState, commandToAvr, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
 import { ReconnectScheduler } from "./avr-reconnect.js";
+import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 
 export interface AvrDriverOptions {
   /** Default control port (Denon/Marantz Telnet = 23). */
@@ -23,6 +24,8 @@ export interface AvrDriverOptions {
   /** Reconnect backoff floor / ceiling (ms). Defaults 2_000 / 60_000. */
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
+  ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
 }
 
 interface AvrBinding {
@@ -131,7 +134,22 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    return []; // AVRs are added by IP; no broadcast discovery on the classic Telnet protocol
+    // The classic Telnet control protocol itself defines no SSDP presence (verified:
+    // none is documented in the spec) — but every Denon/Marantz unit that exposes
+    // Telnet also ships HEOS (standard across the lineup since ~2014, same physical
+    // receiver), which DOES answer SSDP on this Denon-defined search target. This is
+    // therefore "co-located discovery": finding the HEOS presence to locate the same
+    // box's Telnet port (23, this driver's default), not a wire-verified Telnet
+    // capability. An installer should confirm Network Control / Telnet is enabled in
+    // the unit's setup menu before binding — some models ship it off by default.
+    const search = this.opts.ssdp ?? ssdpSearch;
+    const responses = await search({ st: "urn:schemas-denon-com:device:ACT-Denon:1" });
+    return responses.map((r) => ({
+      backendId: r.address,
+      suggestedName: `AVR ${r.address}`,
+      capabilities: ["onoff", "media"] as DiscoveredDevice["capabilities"],
+      raw: { ip: r.address, server: r.server ?? null, location: r.location ?? null, bindConfig: { zone: "main" } },
+    }));
   }
 
   onState(listener: StateListener): () => void {

@@ -1,4 +1,4 @@
-import { createServer, type Server, type Socket } from "node:net";
+import { createServer, Socket, type Server } from "node:net";
 import type { DeviceId } from "@supreme/domain-model";
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -74,6 +74,13 @@ function startFakeHeos(): Promise<{ server: Server; port: number; received: stri
               `${heosOk("player/get_queue", `pid=${pid}&range=${params.range}&sequence=${params.sequence}`, [
                 { song: "Track A", album: "Album A", artist: "Artist A", image_url: "https://art.example/a.jpg", qid: "1" },
                 { song: "Track B", album: "Album A", artist: "Artist A", image_url: "https://art.example/b.jpg", qid: "2" },
+              ])}\r\n`,
+            );
+          } else if (g === "player" && c === "get_players") {
+            sock.write(
+              `${heosOk("player/get_players", "", [
+                { name: "Living Room", pid: "1", model: "HEOS Bar" },
+                { name: "Theatre", pid: "2", model: "HEOS Bar" },
               ])}\r\n`,
             );
           }
@@ -225,5 +232,46 @@ describe("HeosProtocolDriver — auto-reconnect on drop", () => {
 
     await driver.disconnect();
     await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+});
+
+describe("HeosProtocolDriver — discovery", () => {
+  it("resolves real pids via get_players after SSDP, one DiscoveredDevice per player", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver({
+      port: heos.port,
+      ssdp: async (opts) => {
+        expect(opts?.st).toBe("urn:schemas-denon-com:device:ACT-Denon:1");
+        return [{ address: "127.0.0.1" }];
+      },
+    });
+    const found = await driver.discover();
+    expect(found).toEqual([
+      { backendId: "1", suggestedName: "Living Room", capabilities: ["media"], raw: { ip: "127.0.0.1", model: "HEOS Bar", bindConfig: { pid: "1" } } },
+      { backendId: "2", suggestedName: "Theatre", capabilities: ["media"], raw: { ip: "127.0.0.1", model: "HEOS Bar", bindConfig: { pid: "2" } } },
+    ]);
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+
+  it("dedupes players seen from more than one SSDP hit on the same network", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver({
+      port: heos.port,
+      // Two different SSDP responders (e.g. two physical units) both answering
+      // get_players with the SAME whole-network player list must not double-list.
+      ssdp: async () => [{ address: "127.0.0.1" }, { address: "127.0.0.1" }],
+    });
+    const found = await driver.discover();
+    expect(found).toHaveLength(2);
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+
+  it("tolerates an unresponsive candidate host without failing the whole scan", async () => {
+    const driver = new HeosProtocolDriver({
+      discoverTimeoutMs: 50,
+      ssdp: async () => [{ address: "10.255.255.1" }], // non-routable — never responds
+      createSocket: () => new Socket(), // never connects; the discovery timeout resolves it
+    });
+    await expect(driver.discover()).resolves.toEqual([]);
   });
 });

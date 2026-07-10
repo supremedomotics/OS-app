@@ -282,3 +282,37 @@ describe("YamahaProtocolDriver (in-process YXC unit over HTTP, 2 zones)", () => 
     await expect(driver.command("device-nope" as DeviceId, { capability: "media", action: "play" })).rejects.toThrow();
   });
 });
+
+describe("YamahaProtocolDriver — discovery", () => {
+  it("filters MediaRenderer SSDP hits to Yamaha units and defaults to zone 'main'", async () => {
+    const upnpXml = "<root><device><manufacturer>Yamaha Corporation</manufacturer><friendlyName>Master Bedroom</friendlyName></device></root>";
+    const driver = new YamahaProtocolDriver({
+      ssdp: async (opts) => {
+        expect(opts?.st).toBe("urn:schemas-upnp-org:device:MediaRenderer:1");
+        return [
+          { address: "192.168.1.60", location: "http://192.168.1.60/desc.xml" },
+          { address: "192.168.1.61", location: "http://192.168.1.61/desc.xml" }, // a non-Yamaha renderer
+        ];
+      },
+      fetchImpl: (async (url: string) => ({
+        ok: true,
+        text: async () => (url.includes("192.168.1.60") ? upnpXml : "<root><device><manufacturer>Sonos, Inc.</manufacturer></device></root>"),
+      })) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found).toEqual([
+      {
+        backendId: "192.168.1.60",
+        suggestedName: "Master Bedroom",
+        capabilities: ["onoff", "media"],
+        raw: {
+          ip: "192.168.1.60",
+          location: "http://192.168.1.60/desc.xml",
+          manufacturer: "Yamaha Corporation",
+          friendlyName: "Master Bedroom",
+          bindConfig: { zone: "main" },
+        },
+      },
+    ]);
+  });
+});

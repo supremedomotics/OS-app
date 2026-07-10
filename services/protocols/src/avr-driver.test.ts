@@ -208,3 +208,33 @@ describe("AvrProtocolDriver — auto-reconnect on drop", () => {
     await new Promise<void>((r) => avr.server.close(() => r()));
   });
 });
+
+describe("AvrProtocolDriver — discovery", () => {
+  it("finds receivers via the co-located HEOS SSDP presence and defaults to zone 'main'", async () => {
+    const driver = new AvrProtocolDriver({
+      ssdp: async (opts) => {
+        expect(opts?.st).toBe("urn:schemas-denon-com:device:ACT-Denon:1");
+        return [{ address: "192.168.1.50", server: "Linux/3.10 UPnP/1.0 Denon-Heos/1.0", location: "http://192.168.1.50:60006/desc.xml" }];
+      },
+    });
+    const found = await driver.discover();
+    expect(found).toEqual([
+      {
+        backendId: "192.168.1.50",
+        suggestedName: "AVR 192.168.1.50",
+        capabilities: ["onoff", "media"],
+        raw: {
+          ip: "192.168.1.50",
+          server: "Linux/3.10 UPnP/1.0 Denon-Heos/1.0",
+          location: "http://192.168.1.50:60006/desc.xml",
+          bindConfig: { zone: "main" },
+        },
+      },
+    ]);
+  });
+
+  it("returns no candidates when nothing answers the SSDP search", async () => {
+    const driver = new AvrProtocolDriver({ ssdp: async () => [] });
+    expect(await driver.discover()).toEqual([]);
+  });
+});

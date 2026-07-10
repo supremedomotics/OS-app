@@ -195,7 +195,9 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
           backendId: r.address,
           suggestedName: friendlyName || `Yamaha ${r.address}`,
           capabilities: ["onoff", "media"] as DiscoveredDevice["capabilities"],
-          raw: { location: r.location, manufacturer, friendlyName: friendlyName ?? null },
+          // Defaults to the main zone — a unit's zone2/3/4 (if any) aren't discoverable
+          // as separate SSDP hits, so they stay a manual second/third/fourth bind.
+          raw: { ip: r.address, location: r.location, manufacturer, friendlyName: friendlyName ?? null, bindConfig: { zone: "main" } },
         });
       } catch {
         // tolerate one bad device during discovery

@@ -68,6 +68,13 @@ export const DiscoveredDeviceView = z.object({
   protocol: z.string().optional(),
   /** Resolved network coordinates (IP/MAC/host), when the discovery source knows them. */
   network: NetworkInfo.optional(),
+  /**
+   * Protocol-specific binding config the discovery source already resolved (e.g. a
+   * HEOS player's `pid`, an AVR/Yamaha zone) — pass straight through as `config` on a
+   * `CommissionRequest` to bind correctly without the installer typing it in by hand.
+   * Absent when the protocol needs no config (KNX group address, Modbus register, …).
+   */
+  bindConfig: z.record(z.unknown()).optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
