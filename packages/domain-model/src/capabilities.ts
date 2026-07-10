@@ -74,6 +74,19 @@ export const MediaState = z.object({
   artist: z.string().nullable(),
   source: z.string().nullable(),
   artworkUrl: z.string().url().nullable(),
+  /** Track duration/position in seconds; null/absent when the source doesn't report them
+   * (e.g. a live radio station) or the device hasn't reported them yet. */
+  durationSec: z.number().nonnegative().nullable().optional(),
+  positionSec: z.number().nonnegative().nullable().optional(),
+  /** Null/absent when the source doesn't support shuffle/repeat (e.g. AVR line-in). */
+  shuffle: z.boolean().nullable().optional(),
+  repeat: z.enum(["off", "all", "one"]).nullable().optional(),
+  /** Current value of whichever "advanced" (installer-facing) audio parameters this
+   * specific device supports — bass/treble/soundMode/equalizer bands, etc. Keys are
+   * device-declared (see AudioCapabilityConfig in @supreme/protocols), never a fixed
+   * cross-brand enum; the shared schema stays uncluttered by any one brand's DSP/tone
+   * vocabulary. Absent entirely for devices with no advanced controls. */
+  advanced: z.record(z.unknown()).nullable().optional(),
 });
 
 export const LockState = z.object({
@@ -144,9 +157,22 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
   }),
   z.object({
     capability: z.literal("media"),
-    action: z.enum(["play", "pause", "stop", "next", "previous", "volume", "mute", "unmute", "source"]),
+    action: z.enum([
+      "play", "pause", "stop", "next", "previous", "volume", "mute", "unmute", "source",
+      "seek", "shuffle", "repeat", "advanced",
+    ]),
     volume: Percent.optional(),
     source: z.string().optional(),
+    /** Seek target in seconds — used with action "seek". */
+    positionSec: z.number().nonnegative().optional(),
+    /** Used with action "shuffle". */
+    shuffle: z.boolean().optional(),
+    /** Used with action "repeat". */
+    repeat: z.enum(["off", "all", "one"]).optional(),
+    /** Used with action "advanced" — one or more device-declared parameters (bass,
+     * treble, soundMode, …) from this device's own AudioCapabilityConfig. Installer/
+     * Developer surface only; never rendered generically in the homeowner UI. */
+    advanced: z.record(z.unknown()).optional(),
   }),
   z.object({ capability: z.literal("lock"), action: z.enum(["lock", "unlock"]) }),
   z.object({

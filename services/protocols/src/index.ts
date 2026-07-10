@@ -80,6 +80,16 @@ export {
 } from "./dali-codec.js";
 export { AvrProtocolDriver, type AvrDriverOptions } from "./avr-driver.js";
 export { commandToAvr, parseAvrLine, type AvrUpdate } from "./avr-codec.js";
+export {
+  percentFromScale,
+  scaleFromPercent,
+  type AudioCapabilityConfig,
+  type AvrInput,
+  type AvrSoundMode,
+  type AvrRange,
+  type AvrZoneInfo,
+} from "./avr-capabilities.js";
+export { ReconnectScheduler, type ReconnectSchedulerOptions } from "./avr-reconnect.js";
 export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
 export {
   parseUnitLine,
