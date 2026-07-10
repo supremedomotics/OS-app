@@ -1,0 +1,20 @@
+# Release signing for the Supreme OS Android app.
+#
+# 1. Create an upload keystore (once):
+#      keytool -genkey -v -keystore ~/supreme-upload.jks -keyalg RSA -keysize 2048 \
+#              -validity 10000 -alias supreme
+#
+# 2. Copy this file to android/key.properties and fill in the values below.
+#    (android/key.properties and *.jks/*.keystore are git-ignored — never commit them.)
+#
+# 3. Build a signed release:
+#      flutter build apk --release        # → build/app/outputs/flutter-apk/app-release.apk
+#      flutter build appbundle --release  # → build/app/outputs/bundle/release/app-release.aab
+#
+# Without android/key.properties present, the release build is debug-signed so it still installs on a
+# phone for testing — it just isn't Play-store uploadable.
+
+storePassword=your-store-password
+keyPassword=your-key-password
+keyAlias=supreme
+storeFile=/absolute/path/to/supreme-upload.jks
