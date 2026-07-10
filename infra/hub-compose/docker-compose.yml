@@ -65,6 +65,11 @@ services:
       SUPREME_DALI_PORT: ${SUPREME_DALI_PORT:-}
       # AVR IP control (Denon/Marantz) — receivers added by IP at bind time.
       SUPREME_AVR_ENABLED: ${SUPREME_AVR_ENABLED:-0}
+      # HEOS CLI (Denon/Marantz whole-home streaming) — one connection reaches every
+      # player on the network by pid; the network is added by any one player's IP.
+      SUPREME_HEOS_ENABLED: ${SUPREME_HEOS_ENABLED:-0}
+      # Yamaha Extended Control (YXC/MusicCast) — units added by IP at bind time.
+      SUPREME_YAMAHA_ENABLED: ${SUPREME_YAMAHA_ENABLED:-0}
       # CoolMasterNet HVAC bridge host (VRF/VRV control).
       SUPREME_COOLMASTER_HOST: ${SUPREME_COOLMASTER_HOST:-}
       # SIP door stations — door release + ring (needs a SIP UA subsystem).
