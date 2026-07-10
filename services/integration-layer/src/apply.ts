@@ -77,6 +77,7 @@ export function applyCommand(
         muted: command.action === "mute" ? true : command.action === "unmute" ? false : base?.muted ?? false,
         title: base?.title ?? null,
         artist: base?.artist ?? null,
+        album: base?.album ?? null,
         source: command.action === "source" ? command.source ?? base?.source ?? null : base?.source ?? null,
         artworkUrl: base?.artworkUrl ?? null,
         durationSec: base?.durationSec ?? null,

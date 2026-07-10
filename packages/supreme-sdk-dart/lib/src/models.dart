@@ -98,8 +98,10 @@ class Device {
   /// This device's advertised media inputs (Universal AVR Framework §7 — dynamic
   /// capability detection): read from its own AudioCapabilityConfig (device-reported
   /// or installer-declared depending on the protocol), never a hardcoded brand list.
-  /// Empty for non-media devices or media devices with no configured inputs.
-  List<({String id, String label})> get mediaInputs {
+  /// Empty for non-media devices or media devices with no configured inputs. `type` is
+  /// a loose, unvalidated icon hint ("hdmi" | "optical" | "analog" | "tuner" | "usb" |
+  /// "bluetooth" | "streaming" | "network" | null) — never required.
+  List<({String id, String label, String? type})> get mediaInputs {
     final inputs = capabilityConfig['media']?['inputs'];
     if (inputs is! List) return const [];
     return inputs
@@ -107,9 +109,33 @@ class Device {
         .map((i) => (
               id: i['id'] as String? ?? '',
               label: (i['label'] as String?) ?? (i['id'] as String?) ?? '',
+              type: i['type'] as String?,
             ))
         .where((i) => i.id.isNotEmpty)
         .toList();
+  }
+
+  /// This device's selectable DSP/surround/sound-program modes (§ AudioCapabilityConfig
+  /// `soundModes`) — brand-specific names passed through verbatim. Empty when the
+  /// device has none.
+  List<({String id, String label})> get mediaSoundModes {
+    final modes = capabilityConfig['media']?['soundModes'];
+    if (modes is! List) return const [];
+    return modes
+        .whereType<Map<String, dynamic>>()
+        .map((m) => (id: m['id'] as String? ?? '', label: (m['label'] as String?) ?? (m['id'] as String?) ?? ''))
+        .where((m) => m.id.isNotEmpty)
+        .toList();
+  }
+
+  /// This device's extra homeowner-facing controls (§ AudioCapabilityConfig
+  /// `advancedControls`, e.g. a receiver's Sleep Timer) — the ONLY mechanism a
+  /// brand-specific control reaches the UI; nothing outside this list is ever rendered
+  /// generically. Empty when the device declares none.
+  List<MediaAdvancedControl> get mediaAdvancedControls {
+    final controls = capabilityConfig['media']?['advancedControls'];
+    if (controls is! List) return const [];
+    return controls.whereType<Map<String, dynamic>>().map(MediaAdvancedControl.fromJson).toList();
   }
 
   factory Device.fromJson(Map<String, dynamic> json) => Device(
@@ -131,6 +157,39 @@ class Device {
         driverId: json['driverId'] as String?,
         status: json['status'] as String? ?? 'online',
         metadata: (json['metadata'] as Map<String, dynamic>?) ?? const {},
+      );
+}
+
+/// One entry from `AudioCapabilityConfig.advancedControls` (§7) — a generic,
+/// self-describing "extra" homeowner-facing control (e.g. a receiver's Sleep Timer).
+/// `key` matches a field this control reads/writes inside the `media` capability's
+/// `advanced` state/command bag.
+class MediaAdvancedControl {
+  MediaAdvancedControl({
+    required this.key,
+    required this.label,
+    required this.kind,
+    this.icon,
+    this.options = const [],
+  });
+
+  final String key;
+  final String label;
+
+  /// "toggle" | "select" | "range".
+  final String kind;
+  final String? icon;
+  final List<({String id, String label})> options;
+
+  factory MediaAdvancedControl.fromJson(Map<String, dynamic> json) => MediaAdvancedControl(
+        key: json['key'] as String? ?? '',
+        label: json['label'] as String? ?? '',
+        kind: json['kind'] as String? ?? 'toggle',
+        icon: json['icon'] as String?,
+        options: ((json['options'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((o) => (id: o['id'] as String? ?? '', label: (o['label'] as String?) ?? (o['id'] as String?) ?? ''))
+            .toList(),
       );
 }
 

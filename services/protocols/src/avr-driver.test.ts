@@ -83,7 +83,7 @@ describe("AVR codec", () => {
     expect(commandToAvr({ capability: "onoff", action: "on" }, null)).toEqual(["PWON"]);
     expect(commandToAvr({ capability: "media", action: "volume", volume: 50 }, null)).toEqual(["MV49"]);
     expect(parseAvrLine("PWON")).toEqual({ kind: "power", on: true });
-    expect(parseAvrLine("MV60")).toEqual({ kind: "volume", volume: 61 });
+    expect(parseAvrLine("MV60")).toEqual({ kind: "volume", volume: 61, volumeDb: -20 });
     expect(parseAvrLine("MVMAX 98")).toBeNull();
   });
 });
@@ -128,7 +128,7 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
       advanced: { bass: 2, treble: -1, soundMode: "STEREO" },
     });
     const state = (await ev).state as { advanced: Record<string, unknown> };
-    expect(state.advanced).toEqual({ bass: 2, treble: -1, soundMode: "STEREO" });
+    expect(state.advanced).toEqual({ volumeDb: -2, bass: 2, treble: -1, soundMode: "STEREO" });
     expect(avr.received).toContain("PSBAS 52");
     expect(avr.received).toContain("PSTRE 49");
     expect(avr.received).toContain("MSSTEREO");

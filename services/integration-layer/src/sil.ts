@@ -159,6 +159,11 @@ export class SupremeIntegrationLayer {
     return this.adapter.getQueue ? this.adapter.getQueue(deviceId) : null;
   }
 
+  /** Fetch a device+capability's real AudioCapabilityConfig (null if none/unsupported). */
+  async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
+    return this.adapter.getCapabilityConfig ? this.adapter.getCapabilityConfig(deviceId, capability) : null;
+  }
+
   /** Subscribe to normalized state changes for all mapped devices. */
   subscribe(listener: (event: BackendStateEvent) => void): () => void {
     return this.adapter.onState(listener);

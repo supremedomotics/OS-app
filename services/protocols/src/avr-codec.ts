@@ -38,10 +38,22 @@ function pad2(n: number): string {
 export function mvFromPercent(pct: number): string {
   return pad2(Math.max(0, Math.min(MV_MAX, Math.round((pct / 100) * MV_MAX))));
 }
+/** Decode an `MV` token's raw 0..98(.5) step value — 2-digit = whole step (MV55 → 55),
+ * 3-digit = half step (MV555 → 55.5). Shared by {@link percentFromMv} and
+ * {@link dbFromMv}, which are two different real-world readings of the same token. */
+function stepFromMvToken(mv: string): number {
+  return mv.length >= 3 ? Number(mv.slice(0, 2)) + (mv[2] === "5" ? 0.5 : 0) : Number(mv);
+}
 export function percentFromMv(mv: string): number {
-  // 2-digit = whole step (MV55 → 55); 3-digit = half step (MV555 → 55.5).
-  const n = mv.length >= 3 ? Number(mv.slice(0, 2)) + (mv[2] === "5" ? 0.5 : 0) : Number(mv);
-  return Math.max(0, Math.min(100, Math.round((n / MV_MAX) * 100)));
+  return Math.max(0, Math.min(100, Math.round((stepFromMvToken(mv) / MV_MAX) * 100)));
+}
+/** Denon's own front-panel "Relative" display: MV80 (step 80) reads as 0.0dB, MV00 as
+ * -80.0dB, MV98 as +18.0dB — the receiver's documented volume range. Derived straight
+ * from the raw wire token, not from the 0..100 percent (so it's exact, not rounded
+ * twice), and is genuinely Denon-specific — no other driver in this codebase has a
+ * verified native dB reading, so nothing else should synthesize one. */
+export function dbFromMv(mv: string): number {
+  return stepFromMvToken(mv) - 80;
 }
 
 /** Encode a signed dB tone value (-6..+6 typical) to the two-digit biased token. */
@@ -113,7 +125,7 @@ export function commandToAvr(
 
 export type AvrUpdate =
   | { kind: "power"; on: boolean }
-  | { kind: "volume"; volume: number }
+  | { kind: "volume"; volume: number; volumeDb: number }
   | { kind: "mute"; muted: boolean }
   | { kind: "source"; source: string }
   | { kind: "sleep"; minutes: number | null }
@@ -134,7 +146,7 @@ export function parseAvrLine(line: string): AvrUpdate | null {
   // MVMAX is the max-volume advert, not the current level — ignore it.
   if (t.startsWith("MV") && !t.startsWith("MVMAX")) {
     const digits = t.slice(2);
-    if (/^\d{2,3}$/.test(digits)) return { kind: "volume", volume: percentFromMv(digits) };
+    if (/^\d{2,3}$/.test(digits)) return { kind: "volume", volume: percentFromMv(digits), volumeDb: dbFromMv(digits) };
   }
   if (t === "SLPOFF") return { kind: "sleep", minutes: null };
   if (/^SLP\d{3}$/.test(t)) return { kind: "sleep", minutes: Number(t.slice(3)) };
@@ -155,16 +167,20 @@ export function parseAvrLine(line: string): AvrUpdate | null {
 /** Build a full Supreme MediaState from the driver's per-device media cache. */
 export function buildMediaState(cache: {
   volume: number;
+  volumeDb?: number;
   muted: boolean;
   source: string | null;
   bass?: number;
   treble?: number;
   soundMode?: string;
+  sleepMinutes?: number | null;
 }): CapabilityState {
   const advanced: Record<string, unknown> = {};
+  if (cache.volumeDb !== undefined) advanced.volumeDb = cache.volumeDb;
   if (cache.bass !== undefined) advanced.bass = cache.bass;
   if (cache.treble !== undefined) advanced.treble = cache.treble;
   if (cache.soundMode !== undefined) advanced.soundMode = cache.soundMode;
+  if (cache.sleepMinutes !== undefined) advanced.sleepMinutes = cache.sleepMinutes ?? 0;
   return {
     kind: "media",
     playback: "idle",
@@ -182,13 +198,32 @@ export function buildMediaState(cache: {
  * (the protocol has no feature-query command, verified against the spec). `hasZone2` and
  * `hasToneControl` come from the binding config the installer sets at commissioning. */
 export function denonCapabilityConfig(opts: { hasZone2: boolean; hasToneControl: boolean }): AudioCapabilityConfig {
+  const inputs = DENON_INPUTS.map((id) => ({ id, label: id, type: DENON_INPUT_TYPES[id] }));
   return {
     source: "installer_declared",
-    inputs: DENON_INPUTS.map((id) => ({ id, label: id })),
+    inputs,
     soundModes: DENON_SOUND_MODES.map((id) => ({ id, label: id })),
     ...(opts.hasToneControl ? { toneControl: { bass: { min: -6, max: 6, step: 1 }, treble: { min: -6, max: 6, step: 1 } } } : {}),
-    ...(opts.hasZone2 ? { zones: [{ id: "main", label: "Main Zone", inputs: DENON_INPUTS.map((id) => ({ id, label: id })) }, { id: "zone2", label: "Zone 2", inputs: DENON_INPUTS.map((id) => ({ id, label: id })) }] } : {}),
+    ...(opts.hasZone2 ? { zones: [{ id: "main", label: "Main Zone", inputs }, { id: "zone2", label: "Zone 2", inputs }] } : {}),
     transport: { play: false, pause: false, stop: false, next: false, previous: false, seek: false, shuffle: false, repeat: false },
+    // Denon's `SLP<mmm>` accepts any 1-120 minute value (spec p.15), but the front panel
+    // itself only ever offers these presets plus Off — matching that exactly rather than
+    // exposing a raw 1..120 range keeps the control honest to how the device is actually used.
+    advancedControls: [
+      {
+        key: "sleepMinutes",
+        label: "Sleep Timer",
+        kind: "select",
+        icon: "sleep",
+        options: [
+          { id: "0", label: "Off" },
+          { id: "30", label: "30 min" },
+          { id: "60", label: "60 min" },
+          { id: "90", label: "90 min" },
+          { id: "120", label: "120 min" },
+        ],
+      },
+    ],
   };
 }
 
@@ -197,3 +232,25 @@ export const DENON_INPUTS = [
   "TUNER", "DVD", "BD", "TV", "SAT/CBL", "MPLAY", "GAME", "AUX1", "NET",
   "PANDORA", "SIRIUSXM", "LASTFM", "FLICKR", "FAVORITES", "IRADIO", "SERVER", "USB/IPOD",
 ] as const;
+
+/** Best-guess icon category per input (§ `AvrInput.type` — a display hint only, not a
+ * protocol fact; the spec's `SI` table has no notion of physical-connector type). */
+const DENON_INPUT_TYPES: Partial<Record<(typeof DENON_INPUTS)[number], string>> = {
+  TUNER: "tuner",
+  DVD: "hdmi",
+  BD: "hdmi",
+  TV: "hdmi",
+  "SAT/CBL": "hdmi",
+  MPLAY: "hdmi",
+  GAME: "hdmi",
+  AUX1: "analog",
+  NET: "network",
+  PANDORA: "streaming",
+  SIRIUSXM: "streaming",
+  LASTFM: "streaming",
+  FLICKR: "streaming",
+  FAVORITES: "streaming",
+  IRADIO: "streaming",
+  SERVER: "network",
+  "USB/IPOD": "usb",
+};

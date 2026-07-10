@@ -291,6 +291,7 @@ export interface HeosMediaCache {
   source: string | null;
   title: string | null;
   artist: string | null;
+  album: string | null;
   artworkUrl: string | null;
   durationSec: number | null;
   positionSec: number | null;
@@ -306,6 +307,7 @@ export function buildHeosMediaState(cache: HeosMediaCache): CapabilityState {
     muted: cache.muted,
     title: cache.title,
     artist: cache.artist,
+    album: cache.album,
     source: cache.source,
     artworkUrl: cache.artworkUrl,
     durationSec: cache.durationSec,
@@ -327,6 +329,18 @@ export const HEOS_INPUTS = [
   "cd", "tuner", "hdradio", "tvaudio", "phono", "usbdac", "analog_in_1", "analog_in_2", "recorder_in_1", "tv",
 ] as const;
 
+/** Best-guess icon category per input (§ `AvrInput.type` — a display hint only; the
+ * spec's `browse/play_input` enum has no notion of physical-connector type). */
+function heosInputType(id: (typeof HEOS_INPUTS)[number]): string | undefined {
+  if (id.startsWith("hdmi")) return "hdmi";
+  if (id.startsWith("optical") || id.startsWith("coax")) return "optical";
+  if (id.startsWith("aux") || id.startsWith("line_in") || id.startsWith("analog_in") || id === "recorder_in_1" || id === "phono") return "analog";
+  if (id === "tuner" || id === "hdradio") return "tuner";
+  if (id === "usbdac") return "usb";
+  if (["cable_sat", "dvd", "bluray", "game", "game2", "mediaplayer", "cd", "tvaudio", "tv"].includes(id)) return "hdmi";
+  return undefined;
+}
+
 /** The AudioCapabilityConfig for a HEOS player — `device_reported` because the input
  * enum and transport surface are fixed facts of the published protocol (same for every
  * unit), not something an installer manually declares, even though nothing is queried
@@ -334,7 +348,7 @@ export const HEOS_INPUTS = [
 export function heosCapabilityConfig(): AudioCapabilityConfig {
   return {
     source: "device_reported",
-    inputs: HEOS_INPUTS.map((id) => ({ id: `inputs/${id}`, label: id.replace(/_/g, " ") })),
+    inputs: HEOS_INPUTS.map((id) => ({ id: `inputs/${id}`, label: id.replace(/_/g, " "), type: heosInputType(id) })),
     transport: { play: true, pause: true, stop: true, next: true, previous: true, seek: false, shuffle: true, repeat: true },
   };
 }

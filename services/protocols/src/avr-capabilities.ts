@@ -16,10 +16,16 @@
  */
 
 /** One selectable input/source. `label` defaults to `id` when a protocol has no separate
- * display name (e.g. Denon's Telnet `SI` parameters double as both). */
+ * display name (e.g. Denon's Telnet `SI` parameters double as both).
+ *
+ * `type` is a loose, non-enumerated hint (e.g. "hdmi" | "optical" | "analog" | "tuner" |
+ * "usb" | "bluetooth" | "streaming" | "network") the UI uses ONLY to pick an icon — it's
+ * never required and never validated against a fixed list, matching every other
+ * brand-specific string in this file. Absent when a codec can't reasonably guess it. */
 export interface AvrInput {
   id: string;
   label: string;
+  type?: string;
 }
 
 /** One selectable DSP / surround / sound-program mode. Brand-specific names (Yamaha's
@@ -73,6 +79,30 @@ export interface AudioCapabilityConfig {
   };
   presets?: { id: string; label: string }[];
   bluetooth?: boolean;
+  /** Extra homeowner-facing controls this device genuinely supports, beyond the fixed
+   * play/pause/volume/mute/source/shuffle/repeat surface — e.g. a receiver's sleep
+   * timer. Each entry's `key` matches a key the device reads/writes inside the `media`
+   * capability's `advanced` state/command bag. This is the ONLY mechanism a brand-
+   * specific "quick action" (Sleep Timer, Night Mode, …) reaches the homeowner UI —
+   * nothing outside this list is ever rendered generically, so a control a device
+   * doesn't declare here simply doesn't appear (§ Universal AVR Framework "never
+   * hardcode a brand's controls"). */
+  advancedControls?: AvrAdvancedControl[];
+}
+
+/** One generic, self-describing "extra" control a device advertises via
+ * `advancedControls`. `key` is the field this control reads/writes inside the `media`
+ * capability's `advanced` bag (state and the "advanced" command's `advanced` payload). */
+export interface AvrAdvancedControl {
+  key: string;
+  label: string;
+  kind: "toggle" | "select" | "range";
+  /** UI icon hint — same loose, unvalidated convention as {@link AvrInput.type}. */
+  icon?: string;
+  /** For kind "select" — the legal values, each written as `{ [key]: option.id }`. */
+  options?: { id: string; label: string }[];
+  /** For kind "range". */
+  range?: AvrRange;
 }
 
 /** Convert a device-native scale reading (e.g. Yamaha volume 0..194) to Supreme's 0..100. */

@@ -17,6 +17,7 @@ import {
   buildHeosCommand,
   buildHeosMediaState,
   commandToHeos,
+  heosCapabilityConfig,
   parseHeosMessage,
   playbackFromHeosState,
   type HeosMediaCache,
@@ -124,7 +125,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     this.devices.add(binding.deviceId);
     if (!this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, {
-        playback: "idle", volume: 0, muted: false, source: null, title: null, artist: null,
+        playback: "idle", volume: 0, muted: false, source: null, title: null, artist: null, album: null,
         artworkUrl: null, durationSec: null, positionSec: null, shuffle: null, repeat: null,
       });
     }
@@ -150,6 +151,11 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
+  }
+
+  getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
+    if (capability !== "media" || !this.devices.has(deviceId)) return null;
+    return heosCapabilityConfig() as unknown as Record<string, unknown>;
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
@@ -350,6 +356,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
         this.patchMedia(update.pid, (c) => {
           c.title = update.media.song ?? null;
           c.artist = update.media.artist ?? null;
+          c.album = update.media.album ?? null;
           c.artworkUrl = update.media.imageUrl;
           if (update.media.type === "station" && update.media.station) c.source = update.media.station;
         });

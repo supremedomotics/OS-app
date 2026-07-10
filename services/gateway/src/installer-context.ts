@@ -234,6 +234,12 @@ export class InstallerServices {
       binding.protocol,
     );
     await this.d.protocolBindingStore?.put(binding);
+    // If the driver has a real AudioCapabilityConfig (inputs/sound modes/zones/
+    // advancedControls) for this device now that it's bound, persist it onto the
+    // device's capability config so the UI has real, capability-driven data to render
+    // instead of an empty `{}` — never fabricated: null/undefined drivers leave it be.
+    const config = await this.d.sil.getCapabilityConfig(binding.deviceId, binding.capability);
+    if (config) await this.d.home.setCapabilityConfig(binding.deviceId, binding.capability, config);
     return binding;
   }
 

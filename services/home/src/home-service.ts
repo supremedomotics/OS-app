@@ -1,5 +1,6 @@
 import {
   newId,
+  type CapabilityKind,
   type CapabilityState,
   type Device,
   type DeviceId,
@@ -181,6 +182,18 @@ export class HomeService {
     return device;
   }
 
+  /** Replace one capability's config (e.g. an AVR's real AudioCapabilityConfig, once its
+   * driver reports it at bind time) — the same "merge onto the stored device" shape as
+   * {@link setDeviceMetadata}, scoped to a single `DeviceCapability.config`. */
+  async setCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind, config: Record<string, unknown>): Promise<Device | null> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) return null;
+    const capabilities = stored.device.capabilities.map((c) => (c.kind === capability ? { ...c, config } : c));
+    const device = { ...stored.device, capabilities };
+    await this.store.putDevice(device, stored.backendIds);
+    return device;
+  }
+
   // ── Favorites ──────────────────────────────────────────────────────────────
   listFavorites(userId: UserId): Promise<Favorite[]> {
     return this.store.listFavorites(userId);
@@ -248,7 +261,46 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
     { position: "cover.living_room" },
   );
   await home.addDevice(
-    device(hid, living.id, "Media", "media_player", [{ kind: "media", config: {} }], {
+    device(hid, living.id, "Media", "media_player", [{
+      kind: "media",
+      // A representative AVR-shaped AudioCapabilityConfig (§ Universal AVR Framework) so
+      // the seeded demo home exercises the same capability-driven console a real
+      // commissioned Denon/Marantz/Yamaha receiver renders — inputs/soundModes/
+      // advancedControls, never hardcoded in the UI. Hand-written here (not imported from
+      // @supreme/protocols, which this package doesn't otherwise depend on) since it's
+      // demo seed data, not the production Denon config builder.
+      config: {
+        source: "installer_declared",
+        inputs: [
+          { id: "BD", label: "Blu-ray", type: "hdmi" },
+          { id: "SAT/CBL", label: "Apple TV", type: "hdmi" },
+          { id: "NET", label: "Spotify", type: "streaming" },
+          { id: "SERVER", label: "TIDAL", type: "streaming" },
+          { id: "USB/IPOD", label: "Music Server", type: "network" },
+        ],
+        soundModes: [
+          { id: "MOVIE", label: "MOVIE" },
+          { id: "MUSIC", label: "MUSIC" },
+          { id: "GAME", label: "GAME" },
+          { id: "PURE DIRECT", label: "PURE DIRECT" },
+          { id: "DOLBY DIGITAL", label: "DOLBY DIGITAL" },
+        ],
+        toneControl: { bass: { min: -6, max: 6, step: 1 }, treble: { min: -6, max: 6, step: 1 } },
+        advancedControls: [{
+          key: "sleepMinutes",
+          label: "Sleep Timer",
+          kind: "select",
+          icon: "sleep",
+          options: [
+            { id: "0", label: "Off" },
+            { id: "30", label: "30 min" },
+            { id: "60", label: "60 min" },
+            { id: "90", label: "90 min" },
+            { id: "120", label: "120 min" },
+          ],
+        }],
+      },
+    }], {
       media: {
         kind: "media",
         playback: "idle",
@@ -256,8 +308,10 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
         muted: false,
         title: null,
         artist: null,
-        source: null,
+        album: null,
+        source: "NET",
         artworkUrl: null,
+        advanced: { soundMode: "PURE DIRECT", sleepMinutes: 0 },
       },
     }),
     { media: "media_player.living_room" },

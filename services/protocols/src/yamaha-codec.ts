@@ -104,6 +104,22 @@ export function parseYamahaFeatures(json: Record<string, unknown>): YamahaFeatur
   return { systemInputs, zones };
 }
 
+const SLEEP_MINUTES = [0, 30, 60, 90, 120] as const;
+
+/** Best-guess icon category per input id (§ `AvrInput.type` — a display hint only;
+ * `/system/getFeatures`'s `input_list` has no connector-type field). Yamaha input ids
+ * are lowercase/underscored (e.g. "hdmi1", "audio2", "net_radio", "bluetooth"). */
+function yamahaInputType(id: string): string | undefined {
+  if (id.startsWith("hdmi")) return "hdmi";
+  if (id.startsWith("optical") || id.startsWith("coaxial")) return "optical";
+  if (id.startsWith("audio") || id.startsWith("aux") || id.startsWith("line")) return "analog";
+  if (id === "bluetooth") return "bluetooth";
+  if (id === "usb") return "usb";
+  if (id === "tuner" || id === "am" || id === "fm") return "tuner";
+  if (["net_radio", "spotify", "tidal", "airplay", "server", "mc_link", "main_sync", "napster", "juke", "qobuz", "deezer"].includes(id)) return "streaming";
+  return undefined;
+}
+
 /** The AudioCapabilityConfig for one zone — `device_reported` because every field here
  * genuinely comes off the wire via `/system/getFeatures` (unlike Denon Telnet's
  * installer-declared fallback). */
@@ -111,11 +127,23 @@ export function yamahaCapabilityConfig(zf: YamahaZoneFeatures): AudioCapabilityC
   const label = (id: string) => id.replace(/_/g, " ");
   return {
     source: "device_reported",
-    inputs: zf.inputList.map((id) => ({ id, label: label(id) })),
+    inputs: zf.inputList.map((id) => ({ id, label: label(id), type: yamahaInputType(id) })),
     soundModes: zf.soundProgramList.map((id) => ({ id, label: label(id) })),
     volumeRange: zf.volumeRange,
     ...(zf.funcList.includes("tone_control") && zf.toneRange ? { toneControl: { bass: zf.toneRange, treble: zf.toneRange } } : {}),
     bluetooth: zf.inputList.includes("bluetooth"),
+    // `setSleep` (spec §7.11) is a zone-level call with no `func_list` gate documented —
+    // every zone accepts it. The discrete option set matches `nearestSleepMinutes`
+    // exactly, so every value this control can pick is one the device actually accepts.
+    advancedControls: [
+      {
+        key: "sleepMinutes",
+        label: "Sleep Timer",
+        kind: "select",
+        icon: "sleep",
+        options: SLEEP_MINUTES.map((m) => ({ id: String(m), label: m === 0 ? "Off" : `${m} min` })),
+      },
+    ],
   };
 }
 
@@ -133,7 +161,6 @@ export interface YamahaCommandContext {
   volumeRange: AvrRange;
 }
 
-const SLEEP_MINUTES = [0, 30, 60, 90, 120] as const;
 function nearestSleepMinutes(requested: number): number {
   return SLEEP_MINUTES.reduce((best, candidate) => (Math.abs(candidate - requested) < Math.abs(best - requested) ? candidate : best));
 }
@@ -311,6 +338,7 @@ export function buildYamahaMediaState(cache: YamahaMediaCache, volumeRange: AvrR
     muted: cache.muted,
     title: n?.track ?? null,
     artist: n?.artist ?? null,
+    album: n?.album ?? null,
     source: cache.input || null,
     artworkUrl: n?.artworkUrl ?? null,
     durationSec: n?.durationSec ?? null,

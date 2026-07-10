@@ -1,0 +1,468 @@
+import { useMemo, useState } from "react";
+import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import { client } from "./api.js";
+import { useLive } from "./live.js";
+
+/**
+ * The AVR/Receiver console (§ AVR Detail Page) — a rich, capability-driven control
+ * surface for any `media` device, replacing the plain MediaSheet for the Media page's
+ * device-detail view. Every section is driven entirely by this device's own
+ * AudioCapabilityConfig (`device.capabilities.find(c => c.kind === "media").config`)
+ * and live MediaState — nothing here is hardcoded per brand. A device that declares no
+ * inputs, no sound modes, no advanced controls, and no transport support renders a
+ * console with those sections simply absent, exactly like a Denon Telnet unit (no
+ * transport, no artwork) vs a HEOS player (full transport, no DSP modes) vs a Yamaha
+ * zone (both) — the same shape serves Denon/Marantz/Yamaha/HEOS today and any future
+ * brand (Onkyo/Pioneer/Anthem/Arcam/NAD/Sonos/BluOS/WiiM/…) that reports this config.
+ */
+
+// ── Capability-config types (mirrors @supreme/protocols' AudioCapabilityConfig) ──────
+interface AvrInputCfg { id: string; label: string; type?: string }
+interface AvrSoundModeCfg { id: string; label: string }
+interface AvrRangeCfg { min: number; max: number; step: number }
+interface AvrAdvancedControlCfg {
+  key: string;
+  label: string;
+  kind: "toggle" | "select" | "range";
+  icon?: string;
+  options?: { id: string; label: string }[];
+  range?: AvrRangeCfg;
+}
+interface AvrZoneCfg { id: string; label: string; inputs: AvrInputCfg[] }
+interface AudioCapabilityConfigView {
+  source?: string;
+  inputs?: AvrInputCfg[];
+  soundModes?: AvrSoundModeCfg[];
+  volumeRange?: AvrRangeCfg;
+  toneControl?: { bass: AvrRangeCfg; treble: AvrRangeCfg };
+  zones?: AvrZoneCfg[];
+  transport?: { play?: boolean; pause?: boolean; stop?: boolean; next?: boolean; previous?: boolean; seek?: boolean; shuffle?: boolean; repeat?: boolean };
+  presets?: { id: string; label: string }[];
+  bluetooth?: boolean;
+  advancedControls?: AvrAdvancedControlCfg[];
+}
+interface MediaStateView {
+  playback: "playing" | "paused" | "stopped" | "idle";
+  volume: number;
+  muted: boolean;
+  title: string | null;
+  artist: string | null;
+  album?: string | null;
+  source: string | null;
+  artworkUrl: string | null;
+  durationSec?: number | null;
+  positionSec?: number | null;
+  shuffle?: boolean | null;
+  repeat?: "off" | "all" | "one" | null;
+  advanced?: Record<string, unknown> | null;
+}
+
+const cmd = (id: string, c: CapabilityCommand) => client.command(id as DeviceId, c);
+
+function fmtTime(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+}
+
+/** Loose, unvalidated icon hint → glyph. Unknown/absent types fall back to a generic
+ * note — never a hard requirement, matching AvrInput.type's own "display hint only"
+ * contract. */
+function inputGlyph(type?: string): string {
+  switch (type) {
+    case "hdmi": return "📺";
+    case "optical": return "🔦";
+    case "analog": return "🔌";
+    case "tuner": return "📻";
+    case "usb": return "🔧";
+    case "bluetooth": return "🔵";
+    case "streaming": return "☁️";
+    case "network": return "🖴";
+    default: return "♪";
+  }
+}
+
+/** Sibling zone devices of the SAME physical unit (§ Zone selector) — computed
+ * client-side from discovery-captured network metadata (`metadata.network.ip/host`),
+ * not a driver-level runtime zone switch (no protocol here has one — see the AVR
+ * console data-contract notes). Empty when this device wasn't discovered with network
+ * info, or no sibling shares it — the Zone control simply doesn't render then. */
+function zoneSiblings(device: Device, allDevices: Device[]): Device[] {
+  const net = (device.metadata as Record<string, unknown> | undefined)?.network as { ip?: string; host?: string } | undefined;
+  const key = net?.ip ?? net?.host;
+  if (!key) return [];
+  return allDevices.filter((d) => {
+    if (d.id === device.id) return false;
+    if (!d.capabilities.some((c) => c.kind === "media")) return false;
+    const dn = (d.metadata as Record<string, unknown> | undefined)?.network as { ip?: string; host?: string } | undefined;
+    return (dn?.ip ?? dn?.host) === key;
+  });
+}
+
+// ── Ambient halo — a slow, subtle pulse behind the artwork; never flashes ────────────
+function AmbientHalo({ playing }: { playing: boolean }) {
+  return <div className={`avr-halo${playing ? " on" : ""}`} aria-hidden="true" />;
+}
+
+function AlbumArt({ url, name, playing }: { url: string | null; name: string; playing: boolean }) {
+  return (
+    <div className="avr-art-wrap">
+      <AmbientHalo playing={playing} />
+      {url ? (
+        <img className="avr-art" src={url} alt="" />
+      ) : (
+        <div className="avr-art avr-art-placeholder">{name.charAt(0).toUpperCase()}</div>
+      )}
+    </div>
+  );
+}
+
+/** A slim animated bar visualizer — only animates while genuinely playing (§ Animation:
+ * "no flashing effects" — bars ease, they don't strobe). Purely decorative; the real
+ * transport state is the progress bar below it. */
+function Waveform({ playing }: { playing: boolean }) {
+  const bars = 28;
+  return (
+    <div className={`avr-waveform${playing ? " on" : ""}`} aria-hidden="true">
+      {Array.from({ length: bars }, (_, i) => (
+        <span key={i} style={{ animationDelay: `${(i % 7) * 0.09}s` }} />
+      ))}
+    </div>
+  );
+}
+
+function VolumeDial({
+  volume, volumeDb, muted, onChange, onMuteToggle,
+}: { volume: number; volumeDb: number | null; muted: boolean; onChange: (v: number) => void; onMuteToggle: () => void }) {
+  const r = 72;
+  const c = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, volume));
+  const offset = c - (pct / 100) * c;
+  return (
+    <div className="avr-dial-col">
+      <div className="avr-dial">
+        <svg width="176" height="176" viewBox="0 0 176 176">
+          <circle cx="88" cy="88" r={r} className="avr-dial-track" />
+          <circle
+            cx="88" cy="88" r={r} className="avr-dial-fill"
+            strokeDasharray={c} strokeDashoffset={offset}
+            transform="rotate(-90 88 88)"
+          />
+        </svg>
+        <div className="avr-dial-label">
+          <span className="avr-dial-value">{volumeDb !== null ? volumeDb.toFixed(1) : Math.round(volume)}</span>
+          <span className="avr-dial-unit">{volumeDb !== null ? "dB" : "%"}</span>
+          <span className="avr-dial-caption">MASTER VOLUME</span>
+        </div>
+        <input
+          className="avr-dial-input"
+          type="range" min={0} max={100} value={volume}
+          onChange={(e) => onChange(Number(e.target.value))}
+          aria-label="Master volume"
+        />
+      </div>
+      <div className="avr-dial-mute">
+        <button className={`avr-icon-btn${muted ? " on" : ""}`} onClick={onMuteToggle} aria-label={muted ? "Unmute" : "Mute"}>
+          {muted ? "🔇" : "🔈"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ListeningModeSelector({ modes, active, onSelect }: { modes: AvrSoundModeCfg[]; active: string | null; onSelect: (id: string) => void }) {
+  if (modes.length === 0) return null;
+  return (
+    <div className="avr-field">
+      <span className="avr-field-label">Listening Mode</span>
+      <div className="avr-chip-row">
+        {modes.map((m) => (
+          <button key={m.id} className={`avr-chip${active === m.id ? " on" : ""}`} onClick={() => onSelect(m.id)}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ZoneSelector({ current, siblings, onNavigate }: { current: Device; siblings: Device[]; onNavigate: (d: Device) => void }) {
+  if (siblings.length === 0) return null;
+  return (
+    <div className="avr-field">
+      <span className="avr-field-label">Zone</span>
+      <div className="avr-chip-row">
+        <button className="avr-chip on" disabled>{current.name}</button>
+        {siblings.map((d) => (
+          <button key={d.id} className="avr-chip" onClick={() => onNavigate(d)}>{d.name}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InputSelector({ inputs, active, onSelect }: { inputs: AvrInputCfg[]; active: string | null; onSelect: (id: string) => void }) {
+  if (inputs.length === 0) return null;
+  return (
+    <div className="avr-field">
+      <span className="avr-field-label">Input</span>
+      <select className="avr-select" value={active ?? ""} onChange={(e) => onSelect(e.target.value)}>
+        {!active && <option value="" disabled>Choose an input</option>}
+        {inputs.map((i) => (
+          <option key={i.id} value={i.id}>{inputGlyph(i.type)} {i.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/** Renders whatever `advancedControls` this device declares — the ONLY mechanism a
+ * brand-specific quick action (Sleep Timer, …) reaches this UI. A device that declares
+ * none (HEOS today) simply shows Mute alone. */
+function QuickActions({
+  muted, onMuteToggle, controls, advanced, onSetAdvanced,
+}: {
+  muted: boolean; onMuteToggle: () => void;
+  controls: AvrAdvancedControlCfg[]; advanced: Record<string, unknown>;
+  onSetAdvanced: (key: string, value: unknown) => void;
+}) {
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  return (
+    <div className="avr-quick">
+      <span className="avr-field-label">Quick Actions</span>
+      <div className="avr-quick-grid">
+        <button className={`avr-quick-tile${muted ? " on" : ""}`} onClick={onMuteToggle}>
+          <span className="avr-quick-ic">{muted ? "🔇" : "🔈"}</span>
+          <span>Audio Mute</span>
+        </button>
+        {controls.map((ctl) => {
+          const current = advanced[ctl.key];
+          const currentOption = ctl.options?.find((o) => o.id === String(current));
+          return (
+            <div key={ctl.key} className="avr-quick-pop-wrap">
+              <button
+                className={`avr-quick-tile${current !== undefined && current !== 0 && current !== "0" ? " on" : ""}`}
+                onClick={() => setOpenKey(openKey === ctl.key ? null : ctl.key)}
+              >
+                <span className="avr-quick-ic">{ctl.icon === "sleep" ? "⏾" : "⚙️"}</span>
+                <span>{ctl.label}</span>
+                <span className="avr-quick-val">{currentOption?.label ?? "—"}</span>
+              </button>
+              {openKey === ctl.key && ctl.kind === "select" && (
+                <div className="avr-quick-pop">
+                  {(ctl.options ?? []).map((o) => (
+                    <button
+                      key={o.id}
+                      className={`avr-quick-pop-row${String(current) === o.id ? " on" : ""}`}
+                      onClick={() => { onSetAdvanced(ctl.key, Number.isNaN(Number(o.id)) ? o.id : Number(o.id)); setOpenKey(null); }}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SourceRail({ inputs, active, onSelect }: { inputs: AvrInputCfg[]; active: string | null; onSelect: (id: string) => void }) {
+  if (inputs.length === 0) return null;
+  return (
+    <div className="avr-source-rail">
+      <span className="avr-field-label">Source</span>
+      <div className="avr-source-list">
+        {inputs.map((i) => (
+          <button key={i.id} className={`avr-source-row${active === i.id ? " on" : ""}`} onClick={() => onSelect(i.id)}>
+            <span className="avr-source-ic">{inputGlyph(i.type)}</span>
+            <span className="avr-source-meta">
+              <span className="avr-source-name">{i.label}</span>
+              {i.type && <span className="avr-source-type">{i.type.toUpperCase()}</span>}
+            </span>
+            {active === i.id && <span className="avr-source-check">✓</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MiniPlayer({
+  device, media, transportShown, onToggle, onVolume,
+}: { device: Device; media: MediaStateView; transportShown: (a: "previous" | "next") => boolean; onToggle: () => void; onVolume: (v: number) => void }) {
+  const playing = media.playback === "playing";
+  return (
+    <div className="avr-mini">
+      <div className="avr-mini-art">
+        {media.artworkUrl ? <img src={media.artworkUrl} alt="" /> : <span>♪</span>}
+      </div>
+      <div className="avr-mini-meta">
+        <span className="avr-mini-title">{media.title ?? device.name}</span>
+        <span className="avr-mini-sub">{media.artist ?? (playing ? "Playing" : "Idle")}</span>
+      </div>
+      <div className="avr-mini-transport">
+        {transportShown("previous") && <button onClick={() => void cmd(device.id, { capability: "media", action: "previous" })}>⏮</button>}
+        <button className="avr-mini-pp" onClick={onToggle}>{playing ? "⏸" : "▶"}</button>
+        {transportShown("next") && <button onClick={() => void cmd(device.id, { capability: "media", action: "next" })}>⏭</button>}
+      </div>
+      {media.durationSec ? (
+        <div className="avr-mini-progress">
+          <span>{fmtTime(media.positionSec ?? 0)}</span>
+          <div className="avr-mini-bar"><div style={{ width: `${((media.positionSec ?? 0) / media.durationSec) * 100}%` }} /></div>
+          <span>{fmtTime(media.durationSec)}</span>
+        </div>
+      ) : null}
+      <div className="avr-mini-vol">
+        <span>🔈</span>
+        <input type="range" min={0} max={100} value={media.volume} onChange={(e) => onVolume(Number(e.target.value))} />
+        <span className="avr-mini-db">{typeof media.advanced?.volumeDb === "number" ? `${(media.advanced.volumeDb as number).toFixed(1)} dB` : `${media.volume}%`}</span>
+      </div>
+      <span className="avr-mini-zone">{device.name}</span>
+    </div>
+  );
+}
+
+export function AvrConsole({
+  device, allDevices, roomName, onBack, onNavigateDevice, onRemoved,
+}: {
+  device: Device;
+  allDevices: Device[];
+  roomName: string;
+  onBack: () => void;
+  onNavigateDevice: (d: Device) => void;
+  onRemoved: () => void;
+}) {
+  const { states, apply } = useLive();
+  const mediaCap = device.capabilities.find((c) => c.kind === "media");
+  const config = (mediaCap?.config ?? {}) as AudioCapabilityConfigView;
+  const onoff = device.capabilities.some((c) => c.kind === "onoff");
+  const live = (states[device.id]?.media ?? (device.state as Record<string, MediaStateView>).media ?? {}) as MediaStateView;
+  const power = (states[device.id]?.onoff ?? (device.state as Record<string, { on?: boolean }>).onoff) as { on?: boolean } | undefined;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [seekPreview, setSeekPreview] = useState<number | null>(null);
+
+  const siblings = useMemo(() => zoneSiblings(device, allDevices), [device, allDevices]);
+  const inputs = config.inputs ?? [];
+  const soundModes = config.soundModes ?? [];
+  const advancedControls = config.advancedControls ?? [];
+  const advanced = live.advanced ?? {};
+  const transportCfg = config.transport;
+  const transportShown = (action: "play" | "pause" | "next" | "previous" | "seek" | "shuffle" | "repeat") =>
+    transportCfg ? transportCfg[action] !== false : true;
+
+  const playing = live.playback === "playing";
+  const volumeDb = typeof advanced.volumeDb === "number" ? (advanced.volumeDb as number) : null;
+  const duration = live.durationSec ?? null;
+  const position = seekPreview ?? live.positionSec ?? null;
+  const soundMode = typeof advanced.soundMode === "string" ? (advanced.soundMode as string) : null;
+
+  const applyMedia = (patch: Partial<MediaStateView>) => apply(device.id, "media", { ...live, ...patch });
+  const toggle = () => { applyMedia({ playback: playing ? "paused" : "playing" }); void cmd(device.id, { capability: "media", action: playing ? "pause" : "play" }); };
+  const setVolume = (v: number) => { applyMedia({ volume: v }); void cmd(device.id, { capability: "media", action: "volume", volume: v }); };
+  const setMuted = () => { applyMedia({ muted: !live.muted }); void cmd(device.id, { capability: "media", action: live.muted ? "unmute" : "mute" }); };
+  const setSource = (id: string) => { applyMedia({ source: id }); void cmd(device.id, { capability: "media", action: "source", source: id }); };
+  const setSoundMode = (id: string) => {
+    applyMedia({ advanced: { ...advanced, soundMode: id } });
+    void cmd(device.id, { capability: "media", action: "advanced", advanced: { soundMode: id } });
+  };
+  const setAdvanced = (key: string, value: unknown) => {
+    applyMedia({ advanced: { ...advanced, [key]: value } });
+    void cmd(device.id, { capability: "media", action: "advanced", advanced: { [key]: value } });
+  };
+  const setPower = (on: boolean) => void cmd(device.id, { capability: "onoff", action: on ? "on" : "off" });
+  const rename = async () => {
+    const name = window.prompt("Rename device", device.name);
+    if (name && name.trim() && name !== device.name) await client.updateDevice(device.id, { name: name.trim() });
+    setMenuOpen(false);
+  };
+  const remove = async () => {
+    if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
+    await client.deleteDevice(device.id);
+    onRemoved();
+  };
+
+  return (
+    <div className="avr-console">
+      <div className="avr-main">
+        <div className="avr-head-card">
+          <button className="avr-back" onClick={onBack} aria-label="Back">←</button>
+          <div className="avr-head-ic">📻</div>
+          <div className="avr-head-meta">
+            <h2>{device.name}</h2>
+            <p>{roomName}</p>
+            <span className={`avr-status${device.status === "online" ? " good" : ""}`}>
+              <i /> {device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable"}
+            </span>
+          </div>
+          <div className="avr-head-actions">
+            {onoff && (
+              <button className={`avr-icon-btn${power?.on ? " on" : ""}`} onClick={() => setPower(!power?.on)} aria-label="Power">⏻</button>
+            )}
+            <div className="avr-menu-wrap">
+              <button className="avr-icon-btn" onClick={() => setMenuOpen((v) => !v)} aria-label="More">⋮</button>
+              {menuOpen && (
+                <div className="avr-menu">
+                  <button onClick={() => void rename()}>Rename</button>
+                  <button className="danger" onClick={() => void remove()}>Remove device</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="avr-now">
+          <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} />
+          <div className="avr-now-meta">
+            <span className="avr-now-label">NOW PLAYING</span>
+            <h3>{live.title ?? "Idle"}</h3>
+            {live.artist && <p className="avr-now-artist">{live.artist}</p>}
+            {live.album && <p className="avr-now-album">{live.album}</p>}
+            <div className="avr-badges">
+              {soundMode && <span className="avr-badge">{soundMode}</span>}
+              {typeof advanced.audioFormat === "string" && <span className="avr-badge">{advanced.audioFormat as string}</span>}
+              {typeof advanced.sampleRateKHz === "number" && <span className="avr-badge">{advanced.sampleRateKHz as number} kHz</span>}
+              {typeof advanced.bitDepth === "number" && <span className="avr-badge">{advanced.bitDepth as number}-bit</span>}
+            </div>
+            <Waveform playing={playing} />
+            {duration ? (
+              <div className="avr-progress">
+                <input
+                  type="range" min={0} max={duration} value={position ?? 0}
+                  disabled={!transportShown("seek")}
+                  onChange={(e) => setSeekPreview(Number(e.target.value))}
+                  onMouseUp={(e) => { const v = Number((e.target as HTMLInputElement).value); setSeekPreview(null); applyMedia({ positionSec: v }); void cmd(device.id, { capability: "media", action: "seek", positionSec: v }); }}
+                />
+                <div className="avr-progress-time"><span>{fmtTime(position ?? 0)}</span><span>{fmtTime(duration)}</span></div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="avr-transport-row">
+          {transportShown("previous") && <button className="avr-icon-btn lg" onClick={() => void cmd(device.id, { capability: "media", action: "previous" })}>⏮</button>}
+          {(transportShown("play") || transportShown("pause")) && (
+            <button className="avr-icon-btn xl on" onClick={toggle}>{playing ? "⏸" : "▶"}</button>
+          )}
+          {transportShown("next") && <button className="avr-icon-btn lg" onClick={() => void cmd(device.id, { capability: "media", action: "next" })}>⏭</button>}
+        </div>
+
+        <div className="avr-fields-row">
+          <InputSelector inputs={inputs} active={live.source ?? null} onSelect={setSource} />
+          <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
+          <ZoneSelector current={device} siblings={siblings} onNavigate={onNavigateDevice} />
+        </div>
+
+        <VolumeDial volume={live.volume ?? 0} volumeDb={volumeDb} muted={live.muted ?? false} onChange={setVolume} onMuteToggle={setMuted} />
+      </div>
+
+      <aside className="avr-sidebar">
+        <SourceRail inputs={inputs} active={live.source ?? null} onSelect={setSource} />
+        <QuickActions muted={live.muted ?? false} onMuteToggle={setMuted} controls={advancedControls} advanced={advanced} onSetAdvanced={setAdvanced} />
+      </aside>
+
+      <MiniPlayer device={device} media={live} transportShown={(a) => transportShown(a)} onToggle={toggle} onVolume={setVolume} />
+    </div>
+  );
+}

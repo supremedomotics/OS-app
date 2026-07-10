@@ -12,7 +12,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { buildMediaState, commandToAvr, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
+import { buildMediaState, commandToAvr, denonCapabilityConfig, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
 import { ReconnectScheduler } from "./avr-reconnect.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 
@@ -36,6 +36,9 @@ interface AvrBinding {
   /** Which zone this binding controls — "main" (power/volume/mute/source/tone/DSP) or
    * "zone2" (power/mute/source only; no documented Zone 2 volume token, see avr-codec.ts). */
   zone: AvrZone;
+  /** Installer-declared: does this unit have tone control (bass/treble)? Telnet has no
+   * feature-query command (see avr-codec.ts), so this can't be wire-detected. */
+  hasToneControl: boolean;
 }
 
 interface AvrLink {
@@ -46,11 +49,13 @@ interface AvrLink {
 
 interface MediaCache {
   volume: number;
+  volumeDb?: number;
   muted: boolean;
   source: string | null;
   bass?: number;
   treble?: number;
   soundMode?: string;
+  sleepMinutes?: number | null;
 }
 
 /**
@@ -107,7 +112,8 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const { host, port } = parseHostPort(binding.address, this.defaultPort);
     const key = `${host}:${port}`;
     const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone });
+    const hasToneControl = binding.config?.hasToneControl !== false;
+    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
@@ -131,6 +137,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
+  }
+
+  getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
+    if (capability !== "media") return null;
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
+    if (!b) return null;
+    const hasZone2 = this.bindings.some((x) => x.host === b.host && x.port === b.port && x.zone === "zone2");
+    return denonCapabilityConfig({ hasZone2, hasToneControl: b.zone === "main" && b.hasToneControl }) as unknown as Record<string, unknown>;
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
@@ -224,7 +238,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         this.emitFor(host, port, "onoff", "zone2", { kind: "onoff", on: update.on });
         return;
       case "volume":
-        this.patchMedia(host, port, "main", (c) => { c.volume = update.volume; });
+        this.patchMedia(host, port, "main", (c) => { c.volume = update.volume; c.volumeDb = update.volumeDb; });
         return;
       case "mute":
         this.patchMedia(host, port, "main", (c) => { c.muted = update.muted; });
@@ -248,7 +262,8 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         this.patchMedia(host, port, "zone2", (c) => { c.source = update.source; });
         return;
       case "sleep":
-        return; // main-zone sleep timer isn't surfaced as Supreme state today
+        this.patchMedia(host, port, "main", (c) => { c.sleepMinutes = update.minutes; });
+        return;
     }
   }
 

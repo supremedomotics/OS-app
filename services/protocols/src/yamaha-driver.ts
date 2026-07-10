@@ -24,6 +24,7 @@ import {
   parseYamahaZoneStatus,
   supremeRepeatFromYamaha,
   supremeShuffleFromYamaha,
+  yamahaCapabilityConfig,
   yamahaUrl,
   YAMAHA_ZONES,
   type YamahaFeatures,
@@ -174,6 +175,14 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
+  }
+
+  getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
+    if (capability !== "media") return null;
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
+    if (!b) return null;
+    const zf = this.hosts.get(b.host)?.features.zones.find((z) => z.id === b.zone);
+    return zf ? (yamahaCapabilityConfig(zf) as unknown as Record<string, unknown>) : null;
   }
 
   async discover(): Promise<DiscoveredDevice[]> {

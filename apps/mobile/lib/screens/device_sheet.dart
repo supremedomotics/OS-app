@@ -4,11 +4,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
+import '../widgets/avr_console.dart';
+import 'avr_console_screen.dart';
 
 /// Ovio device-detail BOTTOM SHEETS (§11.1) — capability-routed controls (climate dual
 /// setpoint, cover up/stop/down, lock unlatch/unlock, fan presets, vacuum, switch, media)
 /// presented as a modal sheet over the dimmed room. Mirrors the web experience.
+///
+/// Media devices are the one exception (§ AVR Detail Page "Tablet Layout: a dedicated
+/// tablet layout, not a stretched desktop/mobile UI"): on a tablet-sized screen they get
+/// a full-page two-pane console instead of a bottom sheet — everything else, on every
+/// screen size, keeps the sheet.
 Future<void> showDeviceSheet(BuildContext context, Device device) {
+  if (device.capabilities.contains('media') && isTabletWidth(context)) {
+    return Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AvrConsoleScreen(device: device)));
+  }
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -34,24 +44,27 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
     final caps = widget.device.capabilities;
     final scheme = Theme.of(context).colorScheme;
     return Container(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.9),
       decoration: BoxDecoration(
         color: scheme.surface,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       ),
       padding: EdgeInsets.fromLTRB(22, 12, 22, 28 + MediaQuery.of(context).padding.bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 44, height: 5, margin: const EdgeInsets.only(bottom: 18), decoration: BoxDecoration(color: scheme.outlineVariant, borderRadius: BorderRadius.circular(3))),
-          if (caps.contains('temperature')) ..._climate()
-          else if (caps.contains('position')) ..._cover()
-          else if (caps.contains('lock')) ..._lock()
-          else if (caps.contains('fan')) ..._fan()
-          else if (caps.contains('vacuum')) ..._vacuum()
-          else if (caps.contains('media')) ..._media()
-          else ..._switch(),
-          ..._manage(),
-        ],
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 44, height: 5, margin: const EdgeInsets.only(bottom: 18), decoration: BoxDecoration(color: scheme.outlineVariant, borderRadius: BorderRadius.circular(3))),
+            if (caps.contains('temperature')) ..._climate()
+            else if (caps.contains('position')) ..._cover()
+            else if (caps.contains('lock')) ..._lock()
+            else if (caps.contains('fan')) ..._fan()
+            else if (caps.contains('vacuum')) ..._vacuum()
+            else if (caps.contains('media')) ..._media()
+            else ..._switch(),
+            ..._manage(),
+          ],
+        ),
       ),
     );
   }
@@ -310,118 +323,19 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
     ];
   }
 
-  // ── Media ──
-  String _fmtTime(num sec) {
-    final s = sec.round().clamp(0, 1 << 30);
-    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
-  }
-
+  // ── Media (§ AVR Detail Page) — the shared, capability-driven console content;
+  // presented here as the phone bottom sheet's single-column layout. Tablet width gets
+  // the dedicated two-pane AvrConsoleScreen instead (see showDeviceSheet below). ──
   List<Widget> _media() {
-    final m = _s('media');
-    bool playing = (m['playback'] as String?) == 'playing';
-    double vol = ((m['volume'] as num?) ?? 30).toDouble();
-    final title = m['title'] as String?;
-    final artist = m['artist'] as String?;
-    final artworkUrl = m['artworkUrl'] as String?;
-    final durationSec = (m['durationSec'] as num?)?.toDouble();
-    double? positionSec = (m['positionSec'] as num?)?.toDouble();
-    bool? shuffle = m['shuffle'] as bool?;
-    String? repeat = m['repeat'] as String?;
-    String? source = m['source'] as String?;
-    bool picker = false;
-    final inputs = widget.device.mediaInputs;
-    final scheme = Theme.of(context).colorScheme;
     return [
-      StatefulBuilder(builder: (context, set) {
-        if (picker) {
-          return Column(mainAxisSize: MainAxisSize.min, children: [
-            _title('Home', 'Choose inputs'),
-            if (inputs.isEmpty)
-              Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('No inputs configured for this device.', style: Theme.of(context).textTheme.bodyMedium))
-            else
-              for (final input in inputs)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Container(width: 48, height: 48, decoration: BoxDecoration(color: scheme.surfaceContainerHighest.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(12))),
-                  title: Text(input.label, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  trailing: Icon(source == input.id ? Icons.radio_button_checked : Icons.radio_button_unchecked),
-                  onTap: () { set(() { source = input.id; picker = false; }); _cmd({'capability': 'media', 'action': 'source', 'source': input.id}); },
-                ),
-          ]);
-        }
-        final sourceLabel = inputs.where((i) => i.id == source).map((i) => i.label).firstOrNull ?? source ?? 'Speakers';
-        return Column(children: [
-          Row(children: [
-            Expanded(child: _title(widget.device.name, title != null ? (artist != null ? '$title · $artist' : title) : 'Idle')),
-          ]),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(onPressed: () => set(() => picker = true), icon: const Icon(Icons.speaker_outlined, size: 18), label: Text(sourceLabel)),
-          ),
-          if (artworkUrl != null) ...[
-            const SizedBox(height: 8),
-            ClipRRect(borderRadius: BorderRadius.circular(16), child: Image.network(artworkUrl, height: 160, width: 160, fit: BoxFit.cover)),
-            const SizedBox(height: 12),
-          ],
-          if (durationSec != null) ...[
-            Slider(
-              value: (positionSec ?? 0).clamp(0, durationSec),
-              max: durationSec,
-              onChanged: (v) => set(() => positionSec = v),
-              onChangeEnd: (v) => _cmd({'capability': 'media', 'action': 'seek', 'positionSec': v.round()}),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text(_fmtTime(positionSec ?? 0), style: Theme.of(context).textTheme.labelSmall),
-                Text(_fmtTime(durationSec), style: Theme.of(context).textTheme.labelSmall),
-              ]),
-            ),
-          ],
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            IconButton(iconSize: 34, onPressed: () => _cmd({'capability': 'media', 'action': 'previous'}), icon: const Icon(Icons.skip_previous)),
-            const SizedBox(width: 16),
-            _bigBtn(playing ? Icons.pause : Icons.play_arrow, () { set(() => playing = !playing); _cmd({'capability': 'media', 'action': playing ? 'play' : 'pause'}); }),
-            const SizedBox(width: 16),
-            IconButton(iconSize: 34, onPressed: () => _cmd({'capability': 'media', 'action': 'next'}), icon: const Icon(Icons.skip_next)),
-          ]),
-          if (shuffle != null || repeat != null) ...[
-            const SizedBox(height: 12),
-            Row(children: [
-              if (shuffle != null)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: OutlinedButton.icon(
-                      style: shuffle == true ? OutlinedButton.styleFrom(backgroundColor: scheme.primary, foregroundColor: scheme.onPrimary) : null,
-                      onPressed: () { final next = !shuffle!; set(() => shuffle = next); _cmd({'capability': 'media', 'action': 'shuffle', 'shuffle': next}); },
-                      icon: const Icon(Icons.shuffle, size: 18),
-                      label: const Text('Shuffle'),
-                    ),
-                  ),
-                ),
-              if (repeat != null)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: OutlinedButton.icon(
-                      style: repeat != 'off' ? OutlinedButton.styleFrom(backgroundColor: scheme.primary, foregroundColor: scheme.onPrimary) : null,
-                      onPressed: () {
-                        final next = repeat == 'off' ? 'all' : (repeat == 'all' ? 'one' : 'off');
-                        set(() => repeat = next);
-                        _cmd({'capability': 'media', 'action': 'repeat', 'repeat': next});
-                      },
-                      icon: Icon(repeat == 'one' ? Icons.repeat_one : Icons.repeat, size: 18),
-                      label: Text(repeat == 'one' ? 'Repeat One' : 'Repeat'),
-                    ),
-                  ),
-                ),
-            ]),
-          ],
-          const SizedBox(height: 12),
-          Slider(value: vol.clamp(0, 100), max: 100, onChanged: (v) { set(() => vol = v); }, onChangeEnd: (v) => _cmd({'capability': 'media', 'action': 'volume', 'volume': v.round()})),
-        ]);
-      }),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: AvrConsoleBody(
+          device: widget.device,
+          layout: AvrConsoleLayout.compact,
+          onNavigateSibling: (ctx, d) { Navigator.of(ctx).pop(); showDeviceSheet(ctx, d); },
+        ),
+      ),
     ];
   }
 

@@ -78,7 +78,7 @@ class DeviceDetailScreen extends ConsumerWidget {
                           : 'off',
                 }),
         source: m?['source'] as String?,
-        inputs: device.mediaInputs,
+        inputs: [for (final i in device.mediaInputs) (id: i.id, label: i.label)],
         onSelectInput: (id) =>
             _cmd(ref, {'capability': 'media', 'action': 'source', 'source': id}),
         onPlayPause: () => _cmd(

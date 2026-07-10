@@ -84,4 +84,8 @@ export interface IBackendAdapter {
 
   /** Optional: fetch a media device's current play queue (null if none/unsupported). */
   getQueue?(deviceId: DeviceId): Promise<MediaQueueItem[] | null>;
+
+  /** Optional: fetch a device+capability's real AudioCapabilityConfig, if the owning
+   * driver reports one (null if none/unsupported). */
+  getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null>;
 }

@@ -60,6 +60,12 @@ export interface INativeProtocolDriver {
   /** Optional: fetch the device's current play queue (media drivers with a real
    * queue concept on the wire only — e.g. HEOS; not fabricated where none exists). */
   getQueue?(deviceId: DeviceId): Promise<MediaQueueItem[] | null>;
+
+  /** Optional: this device+capability's real AudioCapabilityConfig (inputs, sound
+   * modes, zones, advancedControls, …), if this driver has one to report. Called once
+   * right after a successful `bind()` so a rich console has real, capability-driven
+   * data to render instead of a device with no config at all. */
+  getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

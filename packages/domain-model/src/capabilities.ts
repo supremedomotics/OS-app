@@ -72,6 +72,9 @@ export const MediaState = z.object({
   muted: z.boolean(),
   title: z.string().nullable(),
   artist: z.string().nullable(),
+  /** Album/collection name; null/absent when the source doesn't report one (radio,
+   * line-in, an AVR's classic control protocol). */
+  album: z.string().nullable().optional(),
   source: z.string().nullable(),
   artworkUrl: z.string().url().nullable(),
   /** Track duration/position in seconds; null/absent when the source doesn't report them
@@ -170,8 +173,10 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
     /** Used with action "repeat". */
     repeat: z.enum(["off", "all", "one"]).optional(),
     /** Used with action "advanced" — one or more device-declared parameters (bass,
-     * treble, soundMode, …) from this device's own AudioCapabilityConfig. Installer/
-     * Developer surface only; never rendered generically in the homeowner UI. */
+     * treble, soundMode, sleepMinutes, …) from this device's own AudioCapabilityConfig.
+     * Only the keys a device lists in `AudioCapabilityConfig.advancedControls` are
+     * ever rendered as a generic homeowner-facing control (e.g. a receiver's Sleep
+     * Timer); everything else stays an installer/developer surface. */
     advanced: z.record(z.unknown()).optional(),
   }),
   z.object({ capability: z.literal("lock"), action: z.enum(["lock", "unlock"]) }),

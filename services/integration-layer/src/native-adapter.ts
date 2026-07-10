@@ -229,6 +229,13 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     if (owner?.getQueue) return owner.getQueue(deviceId);
     return null;
   }
+
+  /** Fetch the owning driver's real AudioCapabilityConfig for this device+capability. */
+  async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getCapabilityConfig) return owner.getCapabilityConfig(deviceId, capability);
+    return null;
+  }
 }
 
 function key(deviceId: DeviceId, capability: CapabilityKind): string {
