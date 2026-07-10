@@ -24,17 +24,30 @@ replaces the previous `ha-integration` manifest backend with a real native drive
 | `casambi-transport.ts` | The only place that touches the wire. REST session/auth + network/state fetch, and the WebSocket wire (open/ping/controlUnit framing). `fetch` and `WebSocket` are injectable seams. |
 | `casambi-driver.ts` | `CasambiProtocolDriver` — lifecycle, heartbeat, auto-reconnect, event → state, room mapping, health. |
 
-### Enabling it
+### Enabling it — two ways, both wired
 
-Provide credentials via the sealed-secrets `*_FILE` convention (never plaintext env). The
-driver is added at boot only when the API key **and** e-mail **and** password are present:
+1. **Driver Manager UI** (recommended). The `supreme-casambi` manifest exposes an API-key /
+   email / password / network-id config page; on save, the runtime builds the driver via the
+   native-driver factory (`native-driver-factory.ts` → `casambi` case) and registers it live.
+2. **Boot env vars** (headless / compose). Provide credentials via the sealed-secrets `*_FILE`
+   convention (never plaintext env); the driver is added at boot when the API key **and**
+   e-mail **and** password are present:
 
-```bash
-SUPREME_CASAMBI_API_KEY_FILE=/run/secrets/casambi_api_key   # WebSocket-enabled key from Casambi
-SUPREME_CASAMBI_EMAIL=network-admin@site.example
-SUPREME_CASAMBI_PASSWORD_FILE=/run/secrets/casambi_password
-SUPREME_CASAMBI_NETWORK_ID=                                 # optional: faster session handshake
-```
+   ```bash
+   SUPREME_CASAMBI_API_KEY_FILE=/run/secrets/casambi_api_key   # WebSocket-enabled key from Casambi
+   SUPREME_CASAMBI_EMAIL=network-admin@site.example
+   SUPREME_CASAMBI_PASSWORD_FILE=/run/secrets/casambi_password
+   SUPREME_CASAMBI_NETWORK_ID=                                 # optional: faster session handshake
+   ```
+
+### One-tap setup — auto-commission with room mapping
+
+`POST /v1/commissioning/auto {"protocol":"casambi"}` runs the full flow: discover every unit,
+create any missing rooms **from the Casambi group names**, then commission + bind each fixture's
+capabilities to the bus. This is the generic live-bus equivalent of the KNX ETS import, and is
+covered end-to-end by `auto-commission.e2e.test.ts` (discover → rooms → commission → bind →
+command reaches the driver). Individual fixtures can still be commissioned one at a time via the
+normal `discover` → `commission` (with a chosen `roomId`) flow.
 
 > The API key requires WebSocket entitlement — request it from Casambi Support. Availability
 > of API keys is limited by Casambi.
@@ -79,6 +92,8 @@ That is how the installer finds the IP interface/router to configure the driver'
 `host`/`port`. The UDP socket is injectable, so the frame encoding is unit-tested without
 real multicast.
 
+Surfaced at `GET /v1/commissioning/knx/interfaces` (installer picks the gateway), or directly:
+
 ```ts
 import { knxSearch } from "@supreme/protocols";
 const interfaces = await knxSearch();   // e.g. [{ address: "192.168.1.10", name: "MDT IP Interface", ... }]
@@ -87,25 +102,22 @@ const interfaces = await knxSearch();   // e.g. [{ address: "192.168.1.10", name
 > KNX has no per-device discovery without a project — individual devices come from the ETS
 > import below.
 
-### ETS import + automatic device generator (`knx-ets.ts`)
+### ETS import + automatic device generator (already complete)
 
-Installers hand over a project's **group addresses** as an ETS export. `parseEtsGroupAddresses`
-accepts both the "Group Addresses" **CSV** export and the `GroupAddress-Export` **XML**
-(integer or slash addresses), normalizing every DPT spelling (`DPST-1-1`, `DPT-1`, `1.001` →
-`DPT1.001`). `generateKnxDevices` then folds the flat address list into Supreme devices:
+This was already implemented and wired in `@supreme/commissioning`
+(`knx-import.ts` + `knx-project.ts`) and is reachable at `POST /v1/commissioning/import/knx`:
 
-- a fixture's **Switch / Dimming / Status** addresses are grouped by name;
-- capability is derived from **DPT + name** — DPT1 → `onoff` (or `position` for a blind),
-  DPT5 scaling → `brightness` (or `position` by name), DPT9 float → temperature `sensor`;
-- **Status** group addresses are wired to the binding's `config.statusAddress`.
+- **Group-address export** — `parseKnxGroupExport` reads both the "Group Addresses" CSV export
+  and the `GroupAddress-Export` XML, normalizes every DPT spelling, infers capability from
+  DPT + name (onoff / brightness / position / temperature / lock / sensor), groups a fixture's
+  addresses, and **derives the room from the name**.
+- **Full `.knxproj`** — `parseKnxProject` / `unzipKnxproj` read a real (optionally
+  password-protected) ETS project, including its building → room → function structure, so
+  device cards land in their real ETS rooms.
 
-The output binds 1:1 onto `KnxProtocolDriver`, so importing an ETS file yields working
-devices with no hand-mapping.
-
-```ts
-import { parseEtsGroupAddresses, generateKnxDevices } from "@supreme/protocols";
-const devices = generateKnxDevices(parseEtsGroupAddresses(fileContents));
-```
+`InstallerServices.importKnx` then creates the rooms and binds every capability to its group
+address. (An earlier duplicate of this parser was removed from `@supreme/protocols` in this
+change — the commissioning implementation is the single source of truth.)
 
 ---
 
@@ -113,10 +125,11 @@ const devices = generateKnxDevices(parseEtsGroupAddresses(fileContents));
 
 All of the below is green on this branch:
 
-- `pnpm --filter @supreme/protocols run test` — 111 tests, incl. 39 Casambi + 17 KNX
-  discovery/ETS assertions (driver tested against a fake transport; frames/codecs pure-tested).
-- `pnpm run typecheck` / `pnpm run build` / `pnpm run test` — 93/93 tasks.
-- Gateway boot wiring + config are covered by the existing gateway suite (191 tests).
+- `pnpm --filter @supreme/protocols run test` — 104 tests, incl. 39 Casambi codec/driver +
+  KNXnet/IP discovery assertions (driver tested against a fake transport; frames/codecs pure).
+- `services/gateway/src/auto-commission.e2e.test.ts` — full live-bus flow end-to-end:
+  discover → create rooms from group names → commission → bind → a command reaches the driver.
+- `pnpm run typecheck` / `pnpm run build` / `pnpm run test` — all tasks green (gateway 192).
 
 ---
 

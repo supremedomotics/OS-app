@@ -20,15 +20,6 @@ export {
   type KnxDiscoverySocketFactory,
 } from "./knx-discovery.js";
 export {
-  parseEtsGroupAddresses,
-  generateKnxDevices,
-  normalizeDpt,
-  groupIntToTriplet,
-  type EtsGroupAddress,
-  type GeneratedKnxDevice,
-  type GeneratedKnxBinding,
-} from "./knx-ets.js";
-export {
   MatterProtocolDriver,
   type MatterDriverOptions,
   type MatterController,

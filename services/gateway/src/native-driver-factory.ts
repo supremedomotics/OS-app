@@ -1,5 +1,5 @@
 import type { INativeProtocolDriver } from "@supreme/integration-layer";
-import { KnxProtocolDriver, ModbusProtocolDriver, MqttProtocolDriver } from "@supreme/protocols";
+import { CasambiProtocolDriver, KnxProtocolDriver, ModbusProtocolDriver, MqttProtocolDriver } from "@supreme/protocols";
 
 /**
  * Native driver factories — the manifest↔runtime bridge. Given a driver's PROTOCOL and its stored
@@ -28,6 +28,16 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   modbus: (c) => {
     const host = str(c.host);
     return host ? new ModbusProtocolDriver({ host, port: int(c.port, 502) }) : null;
+  },
+  casambi: (c) => {
+    const apiKey = str(c.apiKey);
+    const email = str(c.email);
+    const password = str(c.password);
+    if (!apiKey || !email || !password) return null;
+    const networkId = str(c.networkId);
+    return new CasambiProtocolDriver({
+      credentials: { apiKey, email, password, ...(networkId ? { networkId } : {}) },
+    });
   },
 };
 

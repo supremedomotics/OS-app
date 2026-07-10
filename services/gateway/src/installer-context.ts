@@ -28,6 +28,7 @@ import {
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
 import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
+import { knxSearch, type KnxGateway } from "@supreme/protocols";
 import {
   CommissioningService,
   groupIntoDevices,
@@ -310,8 +311,37 @@ export class InstallerServices {
     return this.commissionImported(devices);
   }
 
-  /** Commission a parsed device list into rooms (creating rooms as needed) + bind GAs. */
-  private async commissionImported(imported: ImportedDevice[]): Promise<KnxImportResult> {
+  /**
+   * Auto-commission a native protocol's discovered devices into rooms in one step: read the driver's
+   * discovery (each device carries its capabilities and, when the bus exposes one, a suggested room —
+   * e.g. a Casambi group name), create any missing rooms, then commission + bind every capability to
+   * its bus address. This is the "dynamic device → room assignment" path for live buses, mirroring the
+   * KNX ETS import for projects. Returns the same summary shape as the KNX import.
+   */
+  async autoCommission(protocol: string): Promise<KnxImportResult> {
+    const discovered = await this.d.sil.discover();
+    const imported: ImportedDevice[] = discovered
+      .filter((d) => (typeof d.raw?.protocol === "string" ? d.raw.protocol : "") === protocol)
+      .map((d) => ({
+        name: d.suggestedName,
+        room: typeof d.raw?.room === "string" && d.raw.room.trim() ? d.raw.room : null,
+        bindings: d.capabilities.map((capability) => ({ capability, address: d.backendId })),
+      }))
+      .filter((d) => d.bindings.length > 0);
+    if (imported.length === 0) {
+      throw new SupremeError("validation_failed", `no ${protocol} devices discovered to commission`);
+    }
+    return this.commissionImported(imported, protocol);
+  }
+
+  /** Discover KNXnet/IP interfaces on the LAN (SEARCH_REQUEST multicast) so the installer can pick the
+   * gateway host/port for the KNX driver config. Returns [] when none answer. */
+  async discoverKnxInterfaces(): Promise<KnxGateway[]> {
+    return knxSearch();
+  }
+
+  /** Commission a parsed device list into rooms (creating rooms as needed) + bind each capability. */
+  private async commissionImported(imported: ImportedDevice[], protocol = "knx"): Promise<KnxImportResult> {
     const existing = await this.d.home.listRooms();
     const roomByName = new Map(existing.map((r) => [r.name.toLowerCase(), r] as const));
     let roomsCreated = 0;
@@ -346,7 +376,7 @@ export class InstallerServices {
         capabilities: dev.bindings.map((b) => b.capability),
       });
       for (const b of dev.bindings) {
-        await this.bindProtocol({ deviceId: device.id, capability: b.capability, protocol: "knx", address: b.address });
+        await this.bindProtocol({ deviceId: device.id, capability: b.capability, protocol, address: b.address });
       }
       created.push({ name: dev.name, room: dev.room, capabilities: dev.bindings.map((b) => b.capability) });
     }

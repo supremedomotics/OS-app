@@ -305,6 +305,33 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Auto-commission a live native bus (e.g. Casambi): discover → create rooms from the bus's
+  // group names → commission + bind every device in one step.
+  app.post("/v1/commissioning/auto", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const protocol = (req.body as { protocol?: unknown })?.protocol;
+      if (typeof protocol !== "string" || !protocol) {
+        throw new SupremeError("validation_failed", "provide the native `protocol` to auto-commission");
+      }
+      reply.code(201).send(await i().autoCommission(protocol));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // KNXnet/IP interface discovery — find gateways on the LAN to configure the KNX driver host/port.
+  app.get("/v1/commissioning/knx/interfaces", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      reply.send({ interfaces: await i().discoverKnxInterfaces() });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Native protocol bindings (§3) ────────────────────────────────────────────
   app.post("/v1/commissioning/bind", async (req, reply) => {
     try {
