@@ -19,7 +19,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~80% | unit/e2e/PGlite/fake-HA/real-LLM-gated + load/chaos harness; no real-hardware/multi-hour soak |
 | Persistence | ~88% | identity/home/scenes/grants/drivers/automations/audit/sessions/security/bindings/push tokens/migration policy persisted |
 | Real HA integration | ~70% | verified against a REAL HA (auth+discovery) + CI upgrade gate — see §2 |
-| Drivers & protocols | ~85% | 17 drivers incl. Lutron LIP (wired RA2/HWQS + wireless Caséta Pro) + Tuya; KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP/WiiM/Devialet/Shelly/Sonos/Ajax/AirPlay; MQTT/SSDP/mDNS discovery; bind + portal UI + persistence; Casambi pending |
+| Drivers & protocols | ~86% | 18 drivers incl. Lutron LIP (wired RA2/HWQS + wireless Caséta Pro), Tuya, and Casambi (native Cloud REST + WebSocket, auto room mapping); KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP/WiiM/Devialet/Shelly/Sonos/Ajax/AirPlay; MQTT/SSDP/mDNS + KNXnet/IP discovery + ETS import; bind + portal UI + persistence |
 | Native migration engine | ~70% | routing proven; native engine fronts real bus stacks; migration policy persisted across restart |
 | Security hardening | ~80% | fail-closed config, helmet/CORS/rate-limit, Argon2id/TOTP, token rotation, TLS/HSTS, authz matrix, scanning — see §1 |
 | Infra / deploy | ~78% | hub + cloud compose, Terraform IaC skeleton, CD pipeline, OTA channel (signed) |
@@ -75,8 +75,11 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       (LinkPlay HTTP) + **Devialet** (local IP-control HTTP) as media drivers, **Sonos**
       (UPnP/SOAP transport seam), and **Ajax security sensors** (proprietary cloud-client
       seam → sensor events) land as real drivers (each tested vs a fake bus / embedded
-      broker / in-process HTTP-TCP server); Casambi (proprietary BLE — needs official
-      Cloud-API access) is the notable remaining bus. **SIP door stations** map
+      broker / in-process HTTP-TCP server). **Casambi** (Bluetooth-mesh lighting) is a
+      native driver over the documented Casambi Cloud REST + WebSocket API — session
+      auth, live `unitChanged` state with heartbeat + auto-reconnect, per-fixture
+      capability derivation, and automatic room mapping from Casambi group names (tested
+      against a fake transport). **SIP door stations** map
       door-release→lock + ring→sensor (UA is a
       seam). **RTSP camera streaming** is handled correctly as a *stream source* (not a
       capability driver): `@supreme/cameras` resolves a camera's RTSP source into
