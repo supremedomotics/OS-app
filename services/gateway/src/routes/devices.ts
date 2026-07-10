@@ -5,15 +5,18 @@ import {
   UpdateDeviceRequest,
   type CommandResponse,
   type DeviceResponse,
+  type MediaQueueResponse,
 } from "@supreme/contracts";
 import type { DeviceId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
+import { ArtworkCache } from "../artwork-cache.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 
 /** The core control verb (§6): POST /v1/devices/:id/command. */
 export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): void {
+  const artworkCache = new ArtworkCache();
   app.post<{ Params: { id: string } }>("/v1/devices/:id/command", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
@@ -133,8 +136,10 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
   });
 
   // Cover art proxy (§11 media): streams a media device's current artwork bytes from
-  // the backend (e.g. the Apple TV bridge) so clients render it without reaching any
-  // internal service. The media state's `artworkUrl` points here.
+  // the backend (e.g. the Apple TV bridge, or a Yamaha unit's device-local album-art
+  // path) so clients render it without reaching any internal service. The media
+  // state's `artworkUrl` points here. Fronted by an in-process cache (artwork-cache.ts)
+  // so now-playing polling doesn't re-fetch the same bytes on every refresh.
   app.get<{ Params: { id: string } }>("/v1/devices/:id/media/artwork", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
@@ -142,11 +147,29 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       const device = await ctx.home.getDevice(deviceId);
       if (!device) throw new SupremeError("not_found", "device not found");
       await enforce(ctx, user, "device", deviceId, "view");
-      const art = await ctx.sil.getArtwork(deviceId);
+      const art = await artworkCache.get(deviceId, () => ctx.sil.getArtwork(deviceId));
       if (!art) throw new SupremeError("not_found", "no artwork");
       reply.header("content-type", art.contentType);
       reply.header("cache-control", "private, max-age=60");
       reply.send(Buffer.from(art.data));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Play-queue pull (§ Universal AVR Framework — media integration): GET
+  // /v1/devices/:id/media/queue. Only meaningful for protocols with a real queue
+  // concept on the wire (HEOS today); other media devices return an empty list rather
+  // than a fabricated one — the response shape stays uniform either way.
+  app.get<{ Params: { id: string } }>("/v1/devices/:id/media/queue", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "view");
+      const items = (await ctx.sil.getQueue(deviceId)) ?? [];
+      reply.send({ items } satisfies MediaQueueResponse);
     } catch (err) {
       sendError(reply, err);
     }

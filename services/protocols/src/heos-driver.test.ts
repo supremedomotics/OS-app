@@ -69,6 +69,13 @@ function startFakeHeos(): Promise<{ server: Server; port: number; received: stri
             sock.write(`${heosOk("player/play_next", `pid=${pid}`)}\r\n`);
           } else if (g === "browse" && c === "play_input" && p) {
             sock.write(`${heosOk("browse/play_input", `pid=${pid}&input=${params.input}`)}\r\n`);
+          } else if (g === "player" && c === "get_queue" && p) {
+            sock.write(
+              `${heosOk("player/get_queue", `pid=${pid}&range=${params.range}&sequence=${params.sequence}`, [
+                { song: "Track A", album: "Album A", artist: "Artist A", image_url: "https://art.example/a.jpg", qid: "1" },
+                { song: "Track B", album: "Album A", artist: "Artist A", image_url: "https://art.example/b.jpg", qid: "2" },
+              ])}\r\n`,
+            );
           }
         }
       });
@@ -172,6 +179,24 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
 
   it("rejects a command for an unbound device", async () => {
     await expect(driver.command("device-nope" as DeviceId, { capability: "media", action: "play" })).rejects.toThrow();
+  });
+
+  it("fetches the real HEOS queue (get_queue), correlated via the spec's sequence argument", async () => {
+    const items = await driver.getQueue(livingRoom);
+    expect(items).toEqual([
+      { id: "1", title: "Track A", artist: "Artist A", album: "Album A", artworkUrl: "https://art.example/a.jpg" },
+      { id: "2", title: "Track B", artist: "Artist A", album: "Album A", artworkUrl: "https://art.example/b.jpg" },
+    ]);
+  });
+
+  it("two concurrent getQueue calls resolve independently (sequence correlation, not just FIFO)", async () => {
+    const [a, b] = await Promise.all([driver.getQueue(livingRoom), driver.getQueue(theatre)]);
+    expect(a).toHaveLength(2);
+    expect(b).toHaveLength(2);
+  });
+
+  it("getQueue on an unbound device resolves null rather than throwing", async () => {
+    await expect(driver.getQueue("device-nope" as DeviceId)).resolves.toBeNull();
   });
 });
 

@@ -115,6 +115,21 @@ export const CommandResponse = z.object({
 });
 export type CommandResponse = z.infer<typeof CommandResponse>;
 
+/** One item in a media device's play queue — GET /v1/devices/:id/media/queue. Only
+ * populated for protocols with a real queue concept on the wire (e.g. HEOS); other
+ * media devices return an empty list rather than a fabricated one. */
+export const MediaQueueItem = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  artist: z.string().nullable(),
+  album: z.string().nullable(),
+  artworkUrl: z.string().nullable(),
+});
+export type MediaQueueItem = z.infer<typeof MediaQueueItem>;
+
+export const MediaQueueResponse = z.object({ items: z.array(MediaQueueItem) });
+export type MediaQueueResponse = z.infer<typeof MediaQueueResponse>;
+
 // ── Scenes ───────────────────────────────────────────────────────────────────
 
 export const SceneList = z.object({ scenes: z.array(Scene) });

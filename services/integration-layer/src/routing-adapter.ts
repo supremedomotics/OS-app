@@ -9,6 +9,7 @@ import type {
   DiscoveredDevice,
   IBackendAdapter,
   MediaArtwork,
+  MediaQueueItem,
   StateListener,
 } from "./adapter.js";
 import type { EntityRegistryMirror } from "./registry.js";
@@ -82,6 +83,12 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
     if (this.native.manages(deviceId)) return this.native.getArtwork(deviceId);
     return this.ha.getArtwork ? this.ha.getArtwork(deviceId) : null;
+  }
+
+  /** Same routing as {@link getArtwork}: native-engine feature first. */
+  async getQueue(deviceId: DeviceId): Promise<MediaQueueItem[] | null> {
+    if (this.native.manages(deviceId)) return this.native.getQueue(deviceId);
+    return this.ha.getQueue ? this.ha.getQueue(deviceId) : null;
   }
 
   /**

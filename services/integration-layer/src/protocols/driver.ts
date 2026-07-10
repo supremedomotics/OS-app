@@ -4,7 +4,7 @@ import type {
   CapabilityState,
   DeviceId,
 } from "@supreme/domain-model";
-import type { DiscoveredDevice, MediaArtwork, StateListener } from "../adapter.js";
+import type { DiscoveredDevice, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
 
 /**
  * Native protocol driver contract (blueprint §7, §9, §16).
@@ -56,6 +56,10 @@ export interface INativeProtocolDriver {
 
   /** Optional: fetch the device's current media artwork bytes (media drivers only). */
   getArtwork?(deviceId: DeviceId): Promise<MediaArtwork | null>;
+
+  /** Optional: fetch the device's current play queue (media drivers with a real
+   * queue concept on the wire only — e.g. HEOS; not fabricated where none exists). */
+  getQueue?(deviceId: DeviceId): Promise<MediaQueueItem[] | null>;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

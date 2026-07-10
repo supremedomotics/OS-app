@@ -43,6 +43,17 @@ export interface MediaArtwork {
   data: Uint8Array;
 }
 
+/** One entry in a media device's play queue (protocols that genuinely expose one,
+ * e.g. HEOS's `get_queue` — not fabricated for protocols that don't, like classic
+ * Denon Telnet or Yamaha's Basic YXC surface). */
+export interface MediaQueueItem {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  artworkUrl: string | null;
+}
+
 export interface IBackendAdapter {
   /** Stable identifier for the adapter implementation (e.g. "ha", "supreme-native"). */
   readonly kind: string;
@@ -70,4 +81,7 @@ export interface IBackendAdapter {
 
   /** Optional: fetch a device's current media artwork bytes (null if none/unsupported). */
   getArtwork?(deviceId: DeviceId): Promise<MediaArtwork | null>;
+
+  /** Optional: fetch a media device's current play queue (null if none/unsupported). */
+  getQueue?(deviceId: DeviceId): Promise<MediaQueueItem[] | null>;
 }

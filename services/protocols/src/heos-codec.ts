@@ -159,8 +159,17 @@ export type HeosUpdate =
   | { kind: "nowPlayingChanged"; pid: string }
   | { kind: "progress"; pid: string; positionSec: number; durationSec: number }
   | { kind: "source"; pid: string; source: string }
+  | { kind: "queue"; pid: string; sequence: string | null; items: HeosQueueItem[] }
   | { kind: "playersChanged" }
   | { kind: "error"; command: string; text: string };
+
+export interface HeosQueueItem {
+  qid: string;
+  song: string | null;
+  album: string | null;
+  artist: string | null;
+  imageUrl: string | null;
+}
 
 /** Parse one full JSON response/event line (already split on the CRLF delimiter) into a
  * structured update (null = unrecognized/no-state-change response, e.g. a bare command
@@ -242,6 +251,22 @@ export function parseHeosMessage(raw: string): HeosUpdate | null {
     case "event/player_now_playing_progress":
       if (!attrs.pid || attrs.cur_pos === undefined || attrs.duration === undefined) return null;
       return { kind: "progress", pid: attrs.pid, positionSec: Number(attrs.cur_pos) / 1000, durationSec: Number(attrs.duration) / 1000 };
+    case "player/get_queue": {
+      if (!attrs.pid) return null;
+      const payload = Array.isArray(msg.payload) ? (msg.payload as Record<string, unknown>[]) : [];
+      return {
+        kind: "queue",
+        pid: attrs.pid,
+        sequence: attrs.sequence ?? null,
+        items: payload.map((p) => ({
+          qid: String(p.qid ?? ""),
+          song: typeof p.song === "string" ? p.song : null,
+          album: typeof p.album === "string" ? p.album : null,
+          artist: typeof p.artist === "string" ? p.artist : null,
+          imageUrl: typeof p.image_url === "string" && p.image_url ? p.image_url : null,
+        })),
+      };
+    }
     case "browse/play_input":
       // Also fires a Now Playing Changed event for aux-in streams (spec §4.4.9); that
       // event triggers our own get_now_playing_media re-query separately.

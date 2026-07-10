@@ -9,6 +9,7 @@ import {
   bindingKey,
   type DiscoveredDevice,
   type INativeProtocolDriver,
+  type MediaQueueItem,
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
@@ -72,6 +73,11 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   private readonly states = new Map<string, CapabilityState>();
   private readonly media = new Map<DeviceId, HeosMediaCache>();
   private readonly listeners = new Set<StateListener>();
+  private readonly pendingQueue = new Map<
+    string,
+    { resolve: (items: MediaQueueItem[] | null) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  private queueSequence = 0;
 
   constructor(opts: HeosDriverOptions = {}) {
     this.opts = opts;
@@ -88,6 +94,11 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       link.socket?.destroy();
     }
     this.links.clear();
+    for (const [sequence, pending] of this.pendingQueue) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+      this.pendingQueue.delete(sequence);
+    }
     this.connected = false;
   }
 
@@ -153,6 +164,30 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   onState(listener: StateListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Fetch the first 50 items of a player's HEOS queue (spec §4.2.13 `get_queue`).
+   * HEOS has no per-request id, but its own spec (§2.1.3 "Miscellaneous") documents a
+   * `sequence` argument that's echoed back verbatim in the response — the driver uses
+   * that to correlate this one-off request against the shared multiplexed connection
+   * without disturbing the unsolicited event stream. Resolves null on a dropped/slow
+   * response rather than hanging the caller. */
+  async getQueue(deviceId: DeviceId): Promise<MediaQueueItem[] | null> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    const link = this.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
+    if (!link.socket || link.socket.destroyed) return null;
+    const sequence = String(++this.queueSequence);
+    const socket = link.socket;
+    return new Promise<MediaQueueItem[] | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingQueue.delete(sequence);
+        resolve(null);
+      }, 5_000);
+      (timer as { unref?: () => void }).unref?.();
+      this.pendingQueue.set(sequence, { resolve: (items) => resolve(items), timer });
+      socket.write(`${buildHeosCommand("player", "get_queue", { pid: b.pid, range: "0,49", sequence })}\r\n`);
+    });
   }
 
   private ensureLink(key: string, host: string, port: number): HeosLink {
@@ -268,6 +303,16 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       case "progress":
         this.patchMedia(update.pid, (c) => { c.positionSec = update.positionSec; c.durationSec = update.durationSec; });
         return;
+      case "queue": {
+        const pending = update.sequence ? this.pendingQueue.get(update.sequence) : undefined;
+        if (!pending) return; // unsolicited or already-timed-out get_queue reply — ignore
+        clearTimeout(pending.timer);
+        this.pendingQueue.delete(update.sequence!);
+        pending.resolve(
+          update.items.map((i) => ({ id: i.qid, title: i.song, artist: i.artist, album: i.album, artworkUrl: i.imageUrl })),
+        );
+        return;
+      }
       case "players":
       case "playersChanged":
       case "error":

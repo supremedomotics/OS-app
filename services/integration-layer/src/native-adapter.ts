@@ -9,6 +9,7 @@ import type {
   DiscoveredDevice,
   IBackendAdapter,
   MediaArtwork,
+  MediaQueueItem,
   StateListener,
 } from "./adapter.js";
 import { applyCommand } from "./apply.js";
@@ -219,6 +220,13 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
     const owner = this.ownerByDevice.get(deviceId);
     if (owner?.getArtwork) return owner.getArtwork(deviceId);
+    return null;
+  }
+
+  /** Fetch the play queue from the owning driver, if it exposes one. */
+  async getQueue(deviceId: DeviceId): Promise<MediaQueueItem[] | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getQueue) return owner.getQueue(deviceId);
     return null;
   }
 }

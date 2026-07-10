@@ -6,7 +6,7 @@ import type {
 } from "@supreme/domain-model";
 import { READONLY_CAPABILITIES } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
-import type { BackendStateEvent, IBackendAdapter, MediaArtwork } from "./adapter.js";
+import type { BackendStateEvent, IBackendAdapter, MediaArtwork, MediaQueueItem } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { EngineKind } from "./migration.js";
@@ -152,6 +152,11 @@ export class SupremeIntegrationLayer {
    * out-of-band by the gateway so cover art never rides on every state delta. */
   async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
     return this.adapter.getArtwork ? this.adapter.getArtwork(deviceId) : null;
+  }
+
+  /** Fetch a media device's current play queue (null if none/unsupported). */
+  async getQueue(deviceId: DeviceId): Promise<MediaQueueItem[] | null> {
+    return this.adapter.getQueue ? this.adapter.getQueue(deviceId) : null;
   }
 
   /** Subscribe to normalized state changes for all mapped devices. */
