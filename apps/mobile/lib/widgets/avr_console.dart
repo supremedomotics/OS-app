@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
@@ -53,6 +54,35 @@ List<Device> zoneSiblings(Device device, List<Device> allDevices) {
   }).toList();
 }
 
+/// A layered surface — a subtle top-lit gradient + soft ambient shadow — used for every
+/// grouped section (now playing, selectors, source list, quick actions) so the console
+/// reads as sculpted panels rather than flat rectangles.
+class AvrCard extends StatelessWidget {
+  const AvrCard({super.key, required this.child, this.padding = const EdgeInsets.all(AureonSpacing.md + 2)});
+  final Widget child;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AureonRadius.lg + 2),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Color.lerp(AureonBase.surfaceRaised, Colors.white, 0.02)!, AureonBase.surfaceRaised],
+        ),
+        border: Border.all(color: AureonBase.hairline),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 28, offset: const Offset(0, 16)),
+          BoxShadow(color: Colors.white.withValues(alpha: 0.03), blurRadius: 0, spreadRadius: 0.5),
+        ],
+      ),
+      child: child,
+    );
+  }
+}
+
 // ── Ambient halo — a slow pulse behind the artwork; never flashes ───────────────────
 class AvrAmbientHalo extends StatefulWidget {
   const AvrAmbientHalo({super.key, required this.playing});
@@ -63,7 +93,7 @@ class AvrAmbientHalo extends StatefulWidget {
 }
 
 class _AvrAmbientHaloState extends State<AvrAmbientHalo> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 4500))..repeat(reverse: true);
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 6000))..repeat(reverse: true);
 
   @override
   void dispose() {
@@ -73,25 +103,37 @@ class _AvrAmbientHaloState extends State<AvrAmbientHalo> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.playing) return const SizedBox.shrink();
+    // A quiet, always-present glow — barely visible at rest, breathing slowly
+    // wider/brighter only while genuinely playing. Two soft layers (a wide diffuse
+    // bloom + a tighter core) read as depth rather than a flat colored circle.
     return AnimatedBuilder(
       animation: _c,
       builder: (context, _) {
-        final t = Curves.easeInOut.transform(_c.value);
-        return Container(
-          width: 200 + t * 24, height: 200 + t * 24,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(colors: [AureonGold.c400.withValues(alpha: 0.30 + t * 0.2), AureonGold.c400.withValues(alpha: 0)]),
+        final t = widget.playing ? Curves.easeInOut.transform(_c.value) : 0.0;
+        final baseAlpha = widget.playing ? 0.30 : 0.08;
+        return Stack(alignment: Alignment.center, children: [
+          Container(
+            width: 248 + t * 26, height: 248 + t * 26,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [AureonGold.c400.withValues(alpha: baseAlpha + t * 0.14), AureonGold.c400.withValues(alpha: 0)]),
+            ),
           ),
-        );
+          Container(
+            width: 190 + t * 14, height: 190 + t * 14,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [AureonGold.c200.withValues(alpha: (baseAlpha + t * 0.16) * 0.9), AureonGold.c200.withValues(alpha: 0)]),
+            ),
+          ),
+        ]);
       },
     );
   }
 }
 
 class AvrAlbumArt extends StatelessWidget {
-  const AvrAlbumArt({super.key, required this.url, required this.name, required this.playing, this.size = 176});
+  const AvrAlbumArt({super.key, required this.url, required this.name, required this.playing, this.size = 216});
   final String? url;
   final String name;
   final bool playing;
@@ -100,18 +142,34 @@ class AvrAlbumArt extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: size + 24, height: size + 24,
+      width: size + 32, height: size + 32,
       child: Stack(alignment: Alignment.center, children: [
         AvrAmbientHalo(playing: playing),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(AureonRadius.md),
-          child: url != null
-              ? Image.network(url!, width: size, height: size, fit: BoxFit.cover)
-              : Container(
-                  width: size, height: size, color: AureonBase.surface,
-                  alignment: Alignment.center,
-                  child: Text(name.isNotEmpty ? name[0].toUpperCase() : '♪', style: TextStyle(fontSize: size * 0.32, fontWeight: FontWeight.w700, color: AureonGold.c400)),
-                ),
+        Container(
+          width: size, height: size,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AureonRadius.lg),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 32, offset: const Offset(0, 18)),
+              BoxShadow(color: Colors.white.withValues(alpha: 0.05), blurRadius: 0, spreadRadius: 0.5),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AureonRadius.lg),
+            child: url != null
+                ? Image.network(url!, width: size, height: size, fit: BoxFit.cover)
+                : Container(
+                    width: size, height: size,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft, end: Alignment.bottomRight,
+                        colors: [AureonBase.surface, Color.lerp(AureonBase.surface, Colors.black, 0.25)!],
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(name.isNotEmpty ? name[0].toUpperCase() : '♪', style: TextStyle(fontSize: size * 0.30, fontWeight: FontWeight.w600, color: AureonGold.c400)),
+                  ),
+          ),
         ),
       ]),
     );
@@ -129,8 +187,8 @@ class AvrWaveform extends StatefulWidget {
 }
 
 class _AvrWaveformState extends State<AvrWaveform> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat();
-  static const _bars = 24;
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1150))..repeat();
+  static const _bars = 30;
   final _seeds = List.generate(_bars, (i) => (i * 0.13) % 1.0);
 
   @override
@@ -142,22 +200,25 @@ class _AvrWaveformState extends State<AvrWaveform> with SingleTickerProviderStat
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 26,
+      height: 40,
       child: AnimatedBuilder(
         animation: _c,
         builder: (context, _) {
           return Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               for (var i = 0; i < _bars; i++)
                 Padding(
-                  padding: const EdgeInsets.only(right: 2),
+                  padding: const EdgeInsets.only(right: 3),
                   child: Container(
-                    width: 3,
-                    height: widget.playing ? 6 + 16 * (0.5 + 0.5 * math.sin((_c.value * 2 * math.pi) + _seeds[i] * 2 * math.pi)) : 4,
+                    width: 4,
+                    height: widget.playing ? 6 + 30 * (0.5 + 0.5 * math.sin((_c.value * 2 * math.pi) + _seeds[i] * 2 * math.pi)) : 4,
                     decoration: BoxDecoration(
-                      color: widget.playing ? AureonGold.c400 : AureonBase.hairline,
+                      gradient: widget.playing ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AureonGold.c200, AureonGold.c500]) : null,
+                      color: widget.playing ? null : AureonBase.hairline,
                       borderRadius: BorderRadius.circular(2),
+                      boxShadow: widget.playing ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.4), blurRadius: 5)] : null,
                     ),
                   ),
                 ),
@@ -169,18 +230,45 @@ class _AvrWaveformState extends State<AvrWaveform> with SingleTickerProviderStat
   }
 }
 
+/// Styled after a physical AVR/preamp knob: an outer ring of tick marks (lit gold up
+/// to the current level, dim otherwise) plus a slim inner progress arc — the same
+/// two-layer language as the web dial.
 class _DialPainter extends CustomPainter {
   _DialPainter(this.pct);
   final double pct;
+  static const _tickCount = 48;
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
-    final radius = size.width / 2 - 8;
-    final track = Paint()..color = AureonBase.hairline..style = PaintingStyle.stroke..strokeWidth = 8;
-    canvas.drawCircle(center, radius, track);
-    final fill = Paint()..color = AureonGold.c400..style = PaintingStyle.stroke..strokeWidth = 8..strokeCap = StrokeCap.round;
-    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -math.pi / 2, 2 * math.pi * pct.clamp(0, 1), false, fill);
+    final tickRadius = size.width / 2 - 6;
+    final lit = (pct.clamp(0, 1) * _tickCount).round();
+    for (var i = 0; i < _tickCount; i++) {
+      final angle = (i / _tickCount) * 2 * math.pi - math.pi / 2;
+      final major = i % 4 == 0;
+      final len = major ? 11.0 : 8.0;
+      final on = i < lit;
+      final p1 = center + Offset(math.cos(angle), math.sin(angle)) * (tickRadius - len);
+      final p2 = center + Offset(math.cos(angle), math.sin(angle)) * tickRadius;
+      final paint = Paint()
+        ..color = on ? AureonGold.c400 : AureonBase.hairline
+        ..strokeWidth = major ? 2.5 : 2
+        ..strokeCap = StrokeCap.round;
+      if (on) {
+        paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.2);
+      }
+      canvas.drawLine(p1, p2, paint);
+    }
+    final arcRadius = tickRadius - 20;
+    final track = Paint()..color = AureonBase.hairline.withValues(alpha: 0.7)..style = PaintingStyle.stroke..strokeWidth = 3;
+    canvas.drawCircle(center, arcRadius, track);
+    final fill = Paint()
+      ..color = AureonGold.c400
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.0);
+    canvas.drawArc(Rect.fromCircle(center: center, radius: arcRadius), -math.pi / 2, 2 * math.pi * pct.clamp(0, 1), false, fill);
   }
 
   @override
@@ -188,7 +276,7 @@ class _DialPainter extends CustomPainter {
 }
 
 class AvrVolumeDial extends StatelessWidget {
-  const AvrVolumeDial({super.key, required this.volume, required this.volumeDb, required this.muted, required this.onChanged, required this.onMuteToggle, this.size = 176});
+  const AvrVolumeDial({super.key, required this.volume, required this.volumeDb, required this.muted, required this.onChanged, required this.onMuteToggle, this.size = 208});
   final double volume;
   final double? volumeDb;
   final bool muted;
@@ -202,12 +290,28 @@ class AvrVolumeDial extends StatelessWidget {
       SizedBox(
         width: size, height: size,
         child: Stack(alignment: Alignment.center, children: [
+          // Recessed metal-toned knob face.
+          Container(
+            width: size - 16, height: size - 16,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                center: const Alignment(0, -0.2),
+                colors: [Color.lerp(AureonBase.surfaceRaised, Colors.white, 0.03)!, AureonBase.surface, Color.lerp(AureonBase.voidColor, Colors.black, 0.15)!],
+                stops: const [0, 0.6, 1],
+              ),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 26, offset: const Offset(0, 14)),
+                BoxShadow(color: Colors.white.withValues(alpha: 0.04), blurRadius: 0, spreadRadius: 0.5),
+              ],
+            ),
+          ),
           CustomPaint(size: Size(size, size), painter: _DialPainter(volume / 100)),
           Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(volumeDb != null ? volumeDb!.toStringAsFixed(1) : volume.round().toString(), style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700, color: AureonText.primary)),
+            Text(volumeDb != null ? volumeDb!.toStringAsFixed(1) : volume.round().toString(), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w600, color: AureonText.primary, letterSpacing: -0.3)),
             Text(volumeDb != null ? 'dB' : '%', style: const TextStyle(fontSize: 12, color: AureonText.secondary)),
-            const SizedBox(height: 8),
-            const Text('MASTER VOLUME', style: TextStyle(fontSize: 10, letterSpacing: 1.2, color: AureonText.secondary)),
+            const SizedBox(height: 10),
+            const Text('MASTER VOLUME', style: TextStyle(fontSize: 10, letterSpacing: 1.6, color: AureonText.secondary)),
           ]),
           Positioned.fill(
             child: RotatedBox(
@@ -222,11 +326,17 @@ class AvrVolumeDial extends StatelessWidget {
           ),
         ]),
       ),
-      const SizedBox(height: 14),
+      const SizedBox(height: 16),
       IconButton.filled(
         onPressed: onMuteToggle,
         icon: Icon(muted ? Icons.volume_off : Icons.volume_up),
-        style: IconButton.styleFrom(backgroundColor: muted ? AureonGold.c400 : AureonBase.surface, foregroundColor: muted ? AureonText.inverse : AureonText.primary),
+        style: IconButton.styleFrom(
+          backgroundColor: muted ? AureonGold.c400 : AureonBase.surface,
+          foregroundColor: muted ? AureonText.inverse : AureonText.primary,
+          elevation: muted ? 6 : 0,
+          shadowColor: AureonGold.c400.withValues(alpha: 0.5),
+          side: muted ? null : BorderSide(color: AureonBase.hairline),
+        ),
       ),
     ]);
   }
@@ -243,21 +353,45 @@ class AvrModeChips extends StatelessWidget {
   Widget build(BuildContext context) {
     if (modes.isEmpty) return const SizedBox.shrink();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label.toUpperCase(), style: const TextStyle(fontSize: 11, letterSpacing: 1, color: AureonText.secondary, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 8),
+      Text(label.toUpperCase(), style: const TextStyle(fontSize: 10.5, letterSpacing: 1.4, color: AureonText.secondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 9),
       Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final m in modes)
-          ChoiceChip(
-            label: Text(m.label),
-            selected: active == m.id,
-            onSelected: (_) => onSelect(m.id),
-            selectedColor: AureonGold.c400,
-            labelStyle: TextStyle(color: active == m.id ? AureonText.inverse : AureonText.primary, fontWeight: active == m.id ? FontWeight.w700 : FontWeight.w500),
-            backgroundColor: AureonBase.surface,
-            side: BorderSide(color: AureonBase.hairline),
-          ),
+        for (final m in modes) _AvrChip(label: m.label, selected: active == m.id, onTap: () => onSelect(m.id)),
       ]),
     ]);
+  }
+}
+
+/// A custom chip (rather than Material's ChoiceChip) so the "on" state can carry a
+/// gold gradient + soft glow — the same restrained "gold only when active" language
+/// used everywhere else in this console.
+class _AvrChip extends StatelessWidget {
+  const _AvrChip({required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AureonRadius.pill),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: AureonMotion.base,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AureonRadius.pill),
+            gradient: selected ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AureonGold.c200, AureonGold.c500]) : null,
+            color: selected ? null : AureonBase.surface,
+            border: Border.all(color: selected ? Colors.transparent : AureonBase.hairline),
+            boxShadow: selected ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 4))] : null,
+          ),
+          child: Text(label, style: TextStyle(fontSize: 12.5, letterSpacing: 0.2, color: selected ? AureonText.inverse : AureonText.primary, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+        ),
+      ),
+    );
   }
 }
 
@@ -270,30 +404,32 @@ class AvrSourceList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (inputs.isEmpty) return const SizedBox.shrink();
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('SOURCE', style: TextStyle(fontSize: 11, letterSpacing: 1, color: AureonText.secondary, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 8),
+    return AvrCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      const Text('SOURCE', style: TextStyle(fontSize: 10.5, letterSpacing: 1.4, color: AureonText.secondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 9),
       for (final i in inputs)
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Material(
-            color: active == i.id ? AureonGold.c400.withValues(alpha: 0.14) : AureonBase.surface,
+            color: Colors.transparent,
             borderRadius: BorderRadius.circular(AureonRadius.md),
             child: InkWell(
               borderRadius: BorderRadius.circular(AureonRadius.md),
               onTap: () => onSelect(i.id),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: AnimatedContainer(
+                duration: AureonMotion.base,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
                 decoration: BoxDecoration(
+                  color: active == i.id ? AureonGold.c400.withValues(alpha: 0.10) : AureonBase.surface,
                   borderRadius: BorderRadius.circular(AureonRadius.md),
-                  border: Border.all(color: active == i.id ? AureonGold.c400 : Colors.transparent),
+                  border: Border.all(color: active == i.id ? AureonGold.c400.withValues(alpha: 0.55) : Colors.transparent),
                 ),
                 child: Row(children: [
-                  Icon(inputIcon(i.type), size: 20, color: AureonText.primary),
-                  const SizedBox(width: 12),
+                  Icon(inputIcon(i.type), size: 20, color: active == i.id ? AureonGold.c400 : AureonText.primary),
+                  const SizedBox(width: 13),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(i.label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-                    if (i.type != null) Text(i.type!.toUpperCase(), style: const TextStyle(fontSize: 10, color: AureonText.secondary)),
+                    if (i.type != null) Text(i.type!.toUpperCase(), style: const TextStyle(fontSize: 9.5, letterSpacing: 0.4, color: AureonText.secondary)),
                   ])),
                   if (active == i.id) const Icon(Icons.check, size: 18, color: AureonGold.c400),
                 ]),
@@ -301,7 +437,7 @@ class AvrSourceList extends StatelessWidget {
             ),
           ),
         ),
-    ]);
+    ]));
   }
 }
 
@@ -344,9 +480,9 @@ class AvrQuickActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('QUICK ACTIONS', style: TextStyle(fontSize: 11, letterSpacing: 1, color: AureonText.secondary, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 8),
+    return AvrCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      const Text('QUICK ACTIONS', style: TextStyle(fontSize: 10.5, letterSpacing: 1.4, color: AureonText.secondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 10),
       Wrap(spacing: 10, runSpacing: 10, children: [
         _tile(context, icon: muted ? Icons.volume_off : Icons.volume_up, label: 'Audio Mute', value: null, on: muted, onTap: onMuteToggle),
         for (final ctl in controls)
@@ -359,27 +495,41 @@ class AvrQuickActions extends StatelessWidget {
             onTap: () => _pick(context, ctl),
           ),
       ]),
-    ]);
+    ]));
   }
 
+  // Glass quick-action button: translucent + blurred, a hairline top highlight to
+  // catch light like brushed metal, gold reserved strictly for the "on" state.
   Widget _tile(BuildContext context, {required IconData icon, required String label, required String? value, required bool on, required VoidCallback onTap}) {
     return SizedBox(
       width: (MediaQuery.of(context).size.width - AureonSpacing.md * 2 - 10) / 2 > 220 ? 220 : (MediaQuery.of(context).size.width - AureonSpacing.md * 2 - 10) / 2,
-      child: Material(
-        color: on ? AureonGold.c400.withValues(alpha: 0.14) : AureonBase.surface,
-        borderRadius: BorderRadius.circular(AureonRadius.md),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AureonRadius.md),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(AureonRadius.md), border: Border.all(color: on ? AureonGold.c400 : AureonBase.hairline)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Icon(icon, size: 18, color: AureonText.primary),
-              const SizedBox(height: 4),
-              Text(label, style: const TextStyle(fontSize: 12.5)),
-              if (value != null) Text(value, style: const TextStyle(fontSize: 11, color: AureonText.secondary)),
-            ]),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AureonRadius.lg),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: Material(
+            color: AureonBase.surfaceRaised.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(AureonRadius.lg),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AureonRadius.lg),
+              onTap: onTap,
+              child: Container(
+                padding: const EdgeInsets.all(13),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AureonRadius.lg),
+                  border: Border.all(color: on ? AureonGold.c400.withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.08)),
+                  boxShadow: on
+                      ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.28), blurRadius: 16, offset: const Offset(0, 6))]
+                      : [BoxShadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 14, offset: const Offset(0, 6))],
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Icon(icon, size: 18, color: on ? AureonGold.c400 : AureonText.primary),
+                  const SizedBox(height: 5),
+                  Text(label, style: const TextStyle(fontSize: 12.5)),
+                  if (value != null) Text(value, style: const TextStyle(fontSize: 11, color: AureonText.secondary)),
+                ]),
+              ),
+            ),
           ),
         ),
       ),
@@ -503,13 +653,13 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
 
     void goToDevice(Device d) => widget.onNavigateSibling?.call(context, d);
 
-    final nowPlaying = Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+    final nowPlaying = AvrCard(padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20), child: Column(crossAxisAlignment: CrossAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
       AvrAlbumArt(url: artworkUrl, name: widget.device.name, playing: playing),
-      const SizedBox(height: 14),
-      Text(title ?? 'Idle', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
+      const SizedBox(height: 18),
+      Text(title ?? 'Idle', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600, letterSpacing: -0.2), textAlign: TextAlign.center),
       if (artist != null) Text(artist, style: const TextStyle(fontSize: 13.5, color: AureonText.primary), textAlign: TextAlign.center),
       if (album != null) Text(album, style: const TextStyle(fontSize: 12.5, color: AureonText.secondary), textAlign: TextAlign.center),
-      const SizedBox(height: 10),
+      const SizedBox(height: 12),
       AvrWaveform(playing: playing),
       if (durationSec != null) ...[
         const SizedBox(height: 6),
@@ -527,18 +677,18 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
           ]),
         ),
       ],
-      const SizedBox(height: 8),
+      const SizedBox(height: 10),
       AvrTransportRow(
         playing: playing, showPrevious: true, showNext: true, showPlayPause: true,
         onToggle: toggle,
         onPrevious: () => _cmd({'capability': 'media', 'action': 'previous'}),
         onNext: () => _cmd({'capability': 'media', 'action': 'next'}),
       ),
-    ]);
+    ]));
 
     final volumeSection = AvrVolumeDial(volume: volume, volumeDb: volumeDb, muted: muted, onChanged: setVolume, onMuteToggle: setMuted);
 
-    final fields = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    final fields = AvrCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
       if (inputs.isNotEmpty) ...[
         AvrModeChips(label: 'Input', modes: [for (final i in inputs) (id: i.id, label: i.label)], active: source, onSelect: setSource),
         const SizedBox(height: 16),
@@ -554,7 +704,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
         ),
         const SizedBox(height: 16),
       ],
-    ]);
+    ]));
 
     final quickActions = AvrQuickActions(muted: muted, onMuteToggle: setMuted, controls: advancedControls, advanced: advanced, onSetAdvanced: setAdvanced);
     final sourceList = AvrSourceList(inputs: inputs, active: source, onSelect: setSource);

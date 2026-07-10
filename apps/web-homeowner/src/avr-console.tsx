@@ -130,22 +130,34 @@ function Waveform({ playing }: { playing: boolean }) {
   );
 }
 
+const DIAL_TICK_COUNT = 48;
+
 function VolumeDial({
   volume, volumeDb, muted, onChange, onMuteToggle,
 }: { volume: number; volumeDb: number | null; muted: boolean; onChange: (v: number) => void; onMuteToggle: () => void }) {
-  const r = 72;
+  const r = 80;
   const c = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, volume));
   const offset = c - (pct / 100) * c;
+  const litTicks = Math.round((pct / 100) * DIAL_TICK_COUNT);
   return (
     <div className="avr-dial-col">
       <div className="avr-dial">
-        <svg width="176" height="176" viewBox="0 0 176 176">
-          <circle cx="88" cy="88" r={r} className="avr-dial-track" />
+        <div className="avr-dial-ticks">
+          {Array.from({ length: DIAL_TICK_COUNT }, (_, i) => (
+            <span
+              key={i}
+              className={`avr-dial-tick${i < litTicks ? " on" : ""}${i % 4 === 0 ? " major" : ""}`}
+              style={{ transform: `rotate(${(i / DIAL_TICK_COUNT) * 360}deg)` }}
+            />
+          ))}
+        </div>
+        <svg width="208" height="208" viewBox="0 0 208 208">
+          <circle cx="104" cy="104" r={r} className="avr-dial-track" />
           <circle
-            cx="88" cy="88" r={r} className="avr-dial-fill"
+            cx="104" cy="104" r={r} className="avr-dial-fill"
             strokeDasharray={c} strokeDashoffset={offset}
-            transform="rotate(-90 88 88)"
+            transform="rotate(-90 104 104)"
           />
         </svg>
         <div className="avr-dial-label">
