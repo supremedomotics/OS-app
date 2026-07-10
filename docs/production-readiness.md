@@ -19,7 +19,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 | Automated testing | ~80% | unit/e2e/PGlite/fake-HA/real-LLM-gated + load/chaos harness; no real-hardware/multi-hour soak |
 | Persistence | ~88% | identity/home/scenes/grants/drivers/automations/audit/sessions/security/bindings/push tokens/migration policy persisted |
 | Real HA integration | ~70% | verified against a REAL HA (auth+discovery) + CI upgrade gate — see §2 |
-| Drivers & protocols | ~86% | 18 drivers incl. Lutron LIP (wired RA2/HWQS + wireless Caséta Pro), Tuya, and Casambi (native Cloud REST + WebSocket, auto room mapping); KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/CoolMaster/SIP/WiiM/Devialet/Shelly/Sonos/Ajax/AirPlay; MQTT/SSDP/mDNS + KNXnet/IP discovery + ETS import; bind + portal UI + persistence |
+| Drivers & protocols | ~87% | 20 drivers incl. Lutron LIP (wired RA2/HWQS + wireless Caséta Pro), Tuya, and Casambi (native Cloud REST + WebSocket, auto room mapping); KNX/MQTT/Modbus/Matter/Zigbee/DALI/AVR/HEOS/Yamaha/CoolMaster/SIP/WiiM/Devialet/Shelly/Sonos/Ajax/AirPlay/AppleTv; MQTT/SSDP/mDNS + KNXnet/IP discovery + ETS import; Universal AVR Framework (ADR 0015) — Denon/Marantz Telnet + HEOS + Yamaha YXC/MusicCast, dynamic per-device capability detection, multi-zone, artwork cache + play-queue endpoint; bind + portal UI + persistence |
 | Native migration engine | ~70% | routing proven; native engine fronts real bus stacks; migration policy persisted across restart |
 | Security hardening | ~80% | fail-closed config, helmet/CORS/rate-limit, Argon2id/TOTP, token rotation, TLS/HSTS, authz matrix, scanning — see §1 |
 | Infra / deploy | ~78% | hub + cloud compose, Terraform IaC skeleton, CD pipeline, OTA channel (signed) |
@@ -70,7 +70,12 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       in-process model (`@supreme/protocols`)
 - [~] Real first-party adapter code — **KNXnet/IP**, **MQTT** (Zigbee2MQTT/Tasmota),
       **Modbus TCP**, **Matter**, **native Zigbee** (ZCL via zigbee-herdsman), **DALI**
-      (IEC 62386), **AVR** (Denon/Marantz IP — onoff + media over real TCP), and
+      (IEC 62386), and the **Universal AVR Framework** (ADR 0015) — **AVR** (Denon/
+      Marantz Telnet — onoff + media, auto-reconnect, Zone 2 as its own device, tone/
+      DSP via `advanced`), **HEOS** (Denon/Marantz whole-home streaming — one
+      connection reaches every player by `pid`, real play-queue), and **Yamaha**
+      (Extended Control/MusicCast — up to 4 zones, a real `getFeatures` dynamic-
+      capability query, UDP-push events) — and
       **CoolMasterNet HVAC** (VRF/VRV — onoff + climate over real TCP), **WiiM**
       (LinkPlay HTTP) + **Devialet** (local IP-control HTTP) as media drivers, **Sonos**
       (UPnP/SOAP transport seam), and **Ajax security sensors** (proprietary cloud-client

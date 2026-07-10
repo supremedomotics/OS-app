@@ -1,14 +1,17 @@
 # Architecture Review — Universal AVR Framework
 
-- Status: **Draft — awaiting approval** (Phase 1 deliverable; no implementation code included)
+- Status: **Implemented** (Phase 1 deliverable; approved and built out in Phases 2–4 —
+  see ADR 0015 for the as-built decision record and
+  `docs/architecture/adding-avr-brands.md` for extending this framework to a new brand)
 - Date: 2026-07-10
 - Context: blueprint §3 (protocol drivers), §7 (SIL abstraction guarantee), §9 (driver
   framework), §11 (media subsystem); ADR 0001 (Supreme Integration Layer), ADR 0014
   (licensing + driver framework)
 - Scope: analysis of the existing SupremeOS repository and a plan for a Universal AVR
   Framework (Denon/Marantz Telnet + HEOS; Yamaha Extended Control, which is the one
-  protocol controlling MusicCast — not two protocols, §0). **No code in this
-  document.** Phase 2 begins only after this is approved.
+  protocol controlling MusicCast — not two protocols, §0). This document is the
+  **original Phase 1 plan**, kept as-written for the record; ADR 0015 documents what
+  was actually built and where the implementation diverged from or refined this plan.
 
 ---
 

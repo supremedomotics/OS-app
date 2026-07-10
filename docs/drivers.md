@@ -1,6 +1,6 @@
 # Supreme OS — Native Protocol Driver Matrix
 
-> The 18 first-party native drivers in `@supreme/protocols`. Each fronts the
+> The 20 first-party native drivers in `@supreme/protocols`. Each fronts the
 > `INativeProtocolDriver` seam and is surfaced to the SIL through
 > `SupremeNativeAdapter` (§3, §7), so the same Supreme capability commands drive
 > every ecosystem without HA in the path. Drivers are **gated at the boot edge** —
@@ -29,7 +29,9 @@
 | **Matter** | onoff, brightness, color, lock, position, sensor | `@matter/main` controller seam (opt-in, off by default) | fabric/commissioned nodes | `SUPREME_MATTER_ENABLED` | fake fabric |
 | **Zigbee** | onoff, brightness, color, position, sensor | `zigbee-herdsman` coordinator seam | paired devices on coordinator | `SUPREME_ZIGBEE_PORT` | fake coordinator |
 | **DALI** | onoff, brightness, color | **real** IEC 62386 codec in-repo, USB gateway seam | — (short address by config) | `SUPREME_DALI_PORT` | codec + fake bus |
-| **AVR** | onoff, media | **real** AV-receiver TCP control | — (host by config) | `SUPREME_AVR_ENABLED` | in-process server |
+| **AVR** | onoff, media (zones, DSP/tone via `advanced`) | **real** Denon/Marantz Telnet control — auto-reconnect, Zone 2 as an independent Supreme device on the same link | — (host + `config.zone` by config) | `SUPREME_AVR_ENABLED` | in-process server (power/volume/media + zone2 + reconnect + tone/DSP) |
+| **HEOS** | media | **real** HEOS CLI (Denon/Marantz whole-home streaming) — ONE TCP connection reaches every player on the network by `pid`; play queue via the spec's own `sequence`-correlated `get_queue` | SSDP (`ACT-Denon:1`) | `SUPREME_HEOS_ENABLED` | in-process server (multi-pid isolation, reconnect + re-sync, queue correlation) |
+| **Yamaha** | onoff, media (up to 4 zones, DSP/tone via `advanced`) | **real** Yamaha Extended Control (YXC/MusicCast — one protocol, covers both standalone streamers and MusicCast AVRs) — HTTP commands + a real `/system/getFeatures` dynamic-capability query + UDP-unicast push events | SSDP `MediaRenderer` + UPnP description (`manufacturer=Yamaha`) | `SUPREME_YAMAHA_ENABLED` | in-process HTTP + fake UDP event socket (zone isolation, netusb-typed-input gating, direct vs full-refetch events) |
 | **CoolMaster** | onoff, temperature | **real** CoolMasterNet TCP line protocol | — (unit ids by config) | `SUPREME_COOLMASTER_HOST` | in-process bridge |
 | **SIP** | lock, sensor (door ring) | SIP UA seam (intercom/door station) | — (registrar by config) | `SUPREME_SIP_SERVER` | unit tests |
 | **WiiM** | media | **real** LinkPlay HTTP API | SSDP | `SUPREME_WIIM_ENABLED` | in-process HTTP |
@@ -45,7 +47,9 @@
 ## Discovery transports (shared)
 
 - **SSDP** — raw UDP datagram `M-SEARCH` + response parsing (`ssdp.ts`). Used by
-  WiiM and Sonos.
+  WiiM, Sonos, HEOS (Denon's `ACT-Denon:1` search target), and Yamaha (standard UPnP
+  `MediaRenderer`, filtered by fetching each hit's device-description XML and checking
+  `<manufacturer>`).
 - **mDNS / DNS-SD** — hand-rolled DNS codec over raw datagram (`mdns.ts`), no native
   dependency. Used by Devialet, AirPlay, Apple TV (`_mediaremotetv._tcp`), and Shelly
   (Shelly then enriches each hit with a `Shelly.GetStatus` call to learn the device's
@@ -55,7 +59,8 @@
 ## Authenticity at a glance
 
 - **Real wire protocol implemented in-repo (codec + tested vs in-process server):**
-  KNX (DPT), MQTT, Modbus, DALI (IEC 62386), AVR, CoolMaster, WiiM (LinkPlay),
+  KNX (DPT), MQTT, Modbus, DALI (IEC 62386), AVR (Denon/Marantz Telnet), HEOS (Denon/
+  Marantz CLI), Yamaha (Extended Control/MusicCast), CoolMaster, WiiM (LinkPlay),
   Devialet, Shelly (Gen2 RPC), Lutron (LIP).
 - **Library seam (heavy/native client wired at edge, faked in tests):** Matter,
   Zigbee, Sonos, SIP, AirPlay, Apple TV (pyatv-backed MRP).
