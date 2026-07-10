@@ -718,11 +718,27 @@ export function Dealer() {
  * the device is driven over that bus by the Supreme-native engine. Bindings persist
  * and are re-bound on hub restart.
  */
-const PROTOCOLS = ["knx", "modbus", "mqtt"] as const;
+const PROTOCOLS = ["knx", "modbus", "mqtt", "avr", "heos", "yamaha"] as const;
 const CONFIG_HINTS: Record<string, string> = {
   knx: '{"statusAddress":"1/2/1","dpt":"DPT5.001"}',
   modbus: '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
   mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
+  // AVR (Denon/Marantz Telnet) and Yamaha (YXC/MusicCast) zones default to "main" if
+  // omitted; set "zone2"/"zone3"/"zone4" to bind a Zone 2+ device on the same unit.
+  avr: '{"zone":"main"}',
+  yamaha: '{"zone":"main"}',
+  // HEOS: one connection reaches every player on the network by pid — this is
+  // REQUIRED (get it from the HEOS app's "About This Device" screen, or the
+  // heos://player/get_players response for this unit).
+  heos: '{"pid":"<player id>"}',
+};
+const PROTOCOL_ADDRESS_HINT: Record<(typeof PROTOCOLS)[number], string> = {
+  knx: "Group address e.g. 1/2/0",
+  modbus: "Register e.g. 100",
+  mqtt: "Base topic e.g. z2m/lamp",
+  avr: "Receiver IP e.g. 192.168.1.50 (Telnet, port 23)",
+  heos: "Any one HEOS player's IP e.g. 192.168.1.51 (port 1255)",
+  yamaha: "Unit IP e.g. 192.168.1.52 (HTTP, port 80)",
 };
 
 type BindDevice = { id: string; name: string; capabilities: string[] };
@@ -807,7 +823,7 @@ export function Bindings() {
         <input
           value={address}
           onChange={(e) => setAddress(e.target.value)}
-          placeholder={protocol === "knx" ? "Group address e.g. 1/2/0" : protocol === "modbus" ? "Register e.g. 100" : "Base topic e.g. z2m/lamp"}
+          placeholder={PROTOCOL_ADDRESS_HINT[protocol]}
           style={{ marginTop: 8 }}
         />
         <input
