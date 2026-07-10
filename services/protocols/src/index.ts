@@ -108,6 +108,41 @@ export {
   type HeosNowPlaying,
   type HeosMediaCache,
 } from "./heos-codec.js";
+export {
+  YamahaProtocolDriver,
+  type YamahaDriverOptions,
+  type YamahaEventSocket,
+  type YamahaEventSocketFactory,
+} from "./yamaha-driver.js";
+export {
+  yamahaUrl,
+  yamahaBaseUrl,
+  yamahaAbsoluteUrl,
+  commandToYamaha,
+  parseYamahaFeatures,
+  yamahaCapabilityConfig,
+  parseYamahaZoneStatus,
+  parseYamahaPlayInfo,
+  parseYamahaEvent,
+  parseUpnpDescription,
+  playbackFromYamaha,
+  supremeRepeatFromYamaha,
+  supremeShuffleFromYamaha,
+  buildYamahaMediaState,
+  isYamahaZone,
+  YAMAHA_ZONES,
+  type YamahaZone,
+  type YamahaFeatures,
+  type YamahaZoneFeatures,
+  type YamahaInputInfo,
+  type YamahaPlayInfoType,
+  type YamahaZoneStatus,
+  type YamahaNetUsbPlayInfo,
+  type YamahaMediaCache,
+  type YamahaEvent,
+  type YamahaZoneEvent,
+  type YamahaRequest,
+} from "./yamaha-codec.js";
 export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
 export {
   parseUnitLine,
