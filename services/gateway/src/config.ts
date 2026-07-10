@@ -129,6 +129,12 @@ export interface GatewayConfig {
   lutronUsername: string;
   lutronPassword: string;
   tuyaEnabled: boolean;
+  /** Casambi Cloud credentials (BLE-mesh luminaires). All empty = off. Key/password come from the
+   * sealed secrets store, never plaintext env — see the *_FILE convention above. */
+  casambiApiKey: string;
+  casambiEmail: string;
+  casambiPassword: string;
+  casambiNetworkId: string;
   /** Public base URL of the hub's camera stream engine (HLS/WebRTC); empty = no transcode. */
   streamBaseUrl: string;
   /** Stream engine the hub runs: "go2rtc" | "mediamtx". */
@@ -231,6 +237,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     lutronUsername: env.SUPREME_LUTRON_USERNAME ?? "lutron",
     lutronPassword: secret(env, "SUPREME_LUTRON_PASSWORD") ?? "integration",
     tuyaEnabled: env.SUPREME_TUYA_ENABLED === "1" || env.SUPREME_TUYA_ENABLED === "true",
+    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") ?? "",
+    casambiEmail: env.SUPREME_CASAMBI_EMAIL ?? "",
+    casambiPassword: secret(env, "SUPREME_CASAMBI_PASSWORD") ?? "",
+    casambiNetworkId: env.SUPREME_CASAMBI_NETWORK_ID ?? "",
     streamBaseUrl: env.SUPREME_STREAM_BASE_URL ?? "",
     streamEngine: env.SUPREME_STREAM_ENGINE ?? "go2rtc",
     streamApiUrl: env.SUPREME_STREAM_API_URL ?? "",

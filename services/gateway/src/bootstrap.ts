@@ -32,6 +32,7 @@ import {
   AppleTvProtocolDriver,
   LutronProtocolDriver,
   TuyaProtocolDriver,
+  CasambiProtocolDriver,
   MatterFabricManager,
   HttpMatterFabricSync,
   createSonosConnect,
@@ -230,6 +231,20 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   }
   // Tuya — proprietary; needs a device client (tuyapi local key / cloud SDK) provisioned.
   if (config.tuyaEnabled) nativeDrivers.push(new TuyaProtocolDriver());
+  // Casambi — Bluetooth-mesh luminaires via Casambi Cloud (REST + WebSocket). Enabled only when
+  // credentials are provisioned; the key/password come from the sealed secrets store and never log.
+  if (config.casambiApiKey && config.casambiEmail && config.casambiPassword) {
+    nativeDrivers.push(
+      new CasambiProtocolDriver({
+        credentials: {
+          apiKey: config.casambiApiKey,
+          email: config.casambiEmail,
+          password: config.casambiPassword,
+          ...(config.casambiNetworkId ? { networkId: config.casambiNetworkId } : {}),
+        },
+      }),
+    );
+  }
 
   // Restore persisted native-migration routing so migrated domains stay native on reboot.
   const policy = new MigrationPolicy([], migrationStore);

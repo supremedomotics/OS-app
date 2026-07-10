@@ -155,3 +155,31 @@ export {
   type TuyaDevice,
   type TuyaConnect,
 } from "./tuya-driver.js";
+export {
+  CasambiProtocolDriver,
+  type CasambiDriverOptions,
+  type CasambiHealth,
+} from "./casambi-driver.js";
+export {
+  HttpCasambiTransport,
+  CasambiSessionExpiredError,
+  type CasambiTransport,
+  type CasambiCredentials,
+  type CasambiSession,
+  type CasambiNetwork,
+  type CasambiGroup,
+  type CasambiEvent,
+  type CasambiWire,
+  type CasambiWireHandlers,
+  type CasambiSocketFactory,
+  type WebSocketLike,
+  type HttpCasambiTransportOptions,
+} from "./casambi-transport.js";
+export {
+  capabilitiesFromUnit,
+  statesFromUnit,
+  commandToTargetControls,
+  rgbToHueSat,
+  type CasambiUnit,
+  type CasambiControl,
+} from "./casambi-codec.js";
