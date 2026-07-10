@@ -21,6 +21,8 @@ import {
   ZigbeeProtocolDriver,
   DaliProtocolDriver,
   AvrProtocolDriver,
+  HeosProtocolDriver,
+  YamahaProtocolDriver,
   CoolMasterProtocolDriver,
   SipProtocolDriver,
   WiimProtocolDriver,
@@ -184,6 +186,16 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // AVR (Denon/Marantz) IP control — receivers added by IP address at bind time.
   if (config.avrEnabled) {
     nativeDrivers.push(new AvrProtocolDriver());
+  }
+  // HEOS CLI (Denon/Marantz whole-home streaming) — one connection per network reaches
+  // every player by pid; the network is added by any one player's IP at bind time.
+  if (config.heosEnabled) {
+    nativeDrivers.push(new HeosProtocolDriver());
+  }
+  // Yamaha Extended Control (YXC/MusicCast) — units (standalone streamers or
+  // MusicCast-enabled AVRs) added by IP address at bind time; up to 4 zones each.
+  if (config.yamahaEnabled) {
+    nativeDrivers.push(new YamahaProtocolDriver());
   }
   // CoolMasterNet HVAC bridge — VRF/VRV indoor units over the CoolAutomation bridge.
   if (config.coolMasterHost) {

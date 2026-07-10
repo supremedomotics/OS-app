@@ -106,6 +106,11 @@ export interface GatewayConfig {
   daliPort: string;
   /** Enable the AVR IP-control driver (Denon/Marantz); receivers are added by IP at bind time. */
   avrEnabled: boolean;
+  /** Enable the HEOS CLI driver (Denon/Marantz whole-home streaming); the HEOS network is added
+   * by any one player's IP at bind time — one connection then reaches every player by pid. */
+  heosEnabled: boolean;
+  /** Enable the Yamaha Extended Control driver (YXC/MusicCast); units are added by IP at bind time. */
+  yamahaEnabled: boolean;
   /** CoolMasterNet HVAC bridge host for the native CoolMaster driver; empty = not loaded. */
   coolMasterHost: string;
   /** SIP registrar/server for the door-station driver; empty = not loaded. */
@@ -222,6 +227,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     daliPort: env.SUPREME_DALI_PORT ?? "",
     avrEnabled: env.SUPREME_AVR_ENABLED === "1" || env.SUPREME_AVR_ENABLED === "true",
+    heosEnabled: env.SUPREME_HEOS_ENABLED === "1" || env.SUPREME_HEOS_ENABLED === "true",
+    yamahaEnabled: env.SUPREME_YAMAHA_ENABLED === "1" || env.SUPREME_YAMAHA_ENABLED === "true",
     coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",
     sipServer: env.SUPREME_SIP_SERVER ?? "",
     wiimEnabled: env.SUPREME_WIIM_ENABLED === "1" || env.SUPREME_WIIM_ENABLED === "true",
