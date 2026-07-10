@@ -29,7 +29,7 @@
     "mqtt": "^5.10.1"
   },
   "optionalDependencies": {
-    "sonos": "^1.15.0"
+    "sonos": "^1.14.3"
   },
   "devDependencies": {
     "aedes": "^0.51.3",
