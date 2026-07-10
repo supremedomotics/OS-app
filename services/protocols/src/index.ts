@@ -10,6 +10,25 @@ export { ModbusProtocolDriver, type ModbusDriverOptions } from "./modbus-driver.
 export { KnxProtocolDriver, type KnxDriverOptions, type KnxConnection } from "./knx-driver.js";
 export { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./knx-codec.js";
 export {
+  knxSearch,
+  encodeSearchRequest,
+  parseSearchResponse,
+  formatIndividualAddress,
+  type KnxGateway,
+  type KnxSearchOptions,
+  type KnxDiscoverySocket,
+  type KnxDiscoverySocketFactory,
+} from "./knx-discovery.js";
+export {
+  parseEtsGroupAddresses,
+  generateKnxDevices,
+  normalizeDpt,
+  groupIntToTriplet,
+  type EtsGroupAddress,
+  type GeneratedKnxDevice,
+  type GeneratedKnxBinding,
+} from "./knx-ets.js";
+export {
   MatterProtocolDriver,
   type MatterDriverOptions,
   type MatterController,

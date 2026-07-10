@@ -46,20 +46,27 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
   defineManifest({
     key: "supreme-casambi",
     name: "Supreme Casambi",
-    description: "Casambi Bluetooth lighting control.",
+    description: "Casambi Bluetooth-mesh lighting control.",
     category: "lighting",
     channel: "official",
     publisher: PUBLISHER,
     version: "1.0.0",
-    capabilities: ["onoff", "brightness", "color"],
+    capabilities: ["onoff", "brightness", "color", "position", "sensor"],
     protocols: ["casambi"],
     compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
-    backend: { type: "ha-integration", ref: "casambi" },
+    backend: { type: "native", ref: "casambi" },
     operations: [...PROTO_OPS],
+    documentationUrl: "https://docs.supreme.local/extensions/casambi",
+    releaseNotes:
+      "Native Casambi Cloud driver (REST + WebSocket): live state streaming with heartbeat and auto-reconnect, capabilities derived per fixture, and automatic room mapping from Casambi group names.",
+    changelog: [
+      { version: "1.0.0", date: "2026-07-10", notes: "First stable release: native REST + WebSocket, onoff/brightness/color/position/sensor, auto room mapping." },
+    ],
     configSchema: [
-      { key: "network", label: "Network name", type: "text", required: true, secret: false },
-      { key: "apiKey", label: "API key", type: "password", required: true, secret: true },
-      { key: "email", label: "Casambi account email", type: "text", secret: false },
+      { key: "apiKey", label: "API key", type: "password", required: true, secret: true, help: "WebSocket-enabled key from Casambi Support." },
+      { key: "email", label: "Network admin email", type: "text", required: true, secret: false },
+      { key: "password", label: "Network admin password", type: "password", required: true, secret: true },
+      { key: "networkId", label: "Network id (optional)", type: "text", help: "Pin a single network for a faster session handshake.", secret: false },
     ],
   }),
   defineManifest({
