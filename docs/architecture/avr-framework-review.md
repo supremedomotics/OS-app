@@ -6,37 +6,52 @@
   framework), §11 (media subsystem); ADR 0001 (Supreme Integration Layer), ADR 0014
   (licensing + driver framework)
 - Scope: analysis of the existing SupremeOS repository and a plan for a Universal AVR
-  Framework (Denon/Marantz Telnet + HEOS, Yamaha YXC + MusicCast). **No code in this
+  Framework (Denon/Marantz Telnet + HEOS; Yamaha Extended Control, which is the one
+  protocol controlling MusicCast — not two protocols, §0). **No code in this
   document.** Phase 2 begins only after this is approved.
 
 ---
 
 ## 0. Document-scope caveat (read first)
 
-**Update:** the HEOS CLI Protocol Specification (v1.17) has now been supplied and fully
-read (44 pages, every command/event section) — see §2.11 for the resulting design. Two
-documents are in hand now:
+**Update: all three vendor protocol documents are now supplied and fully read.**
 
 - `Denon_API.pdf` — Denon AVR Telnet control protocol, v8.6.0 (24-Feb-2012), application
   model AVR‑1713/AVR‑1613 — the classic ASCII-over-Telnet command set (`PW`, `MV`, `MU`,
   `SI`, `SD`, `DC`, `SV`, `SLP`, `MS`, `PS`, `Z2`).
 - `HEOS_CLI_ProtocolSpecificationVersion1.17.pdf` — the HEOS CLI protocol (Telnet port
   1255, `heos://` command URIs, JSON responses) — Denon/Marantz/HEOS's streaming and
-  multi-room layer, fully independent of the Telnet protocol above.
+  multi-room layer, fully independent of the Telnet protocol above. See §2.11.
+- **Yamaha Extended Control (YXC) API Specification (Basic), Rev. 1.10** — supplied as
+  three split PDFs (pages 1–40, 41–80, 81–104), all read in full. See §2.12.
 
-**Still outstanding: no Yamaha document (YXC / MusicCast) has been attached.** Phase 3
-cannot start on Yamaha without it — see §8.
+**Correction to the original Phase 1 plan:** the brief's "Yamaha YXC + MusicCast" reads
+as two protocols; it is **one**. The spec's own Preface states YXC *is* "Yamaha's new
+communication protocol... to control MusicCast enabled devices" — MusicCast is the
+ecosystem/feature (multi-room linking), YXC is the one HTTP/JSON API that controls it,
+including the linking fields. §5 and §6 below are corrected accordingly: **one**
+`YamahaProtocolDriver`, not two.
 
-The attached Telnet spec is from a 2012 entry-level model. Denon/Marantz have kept this
-command set essentially additive and backward-compatible across generations (confirmed
-by cross-referencing the shape already implemented in this repo — see §2.1), so it is
-usable as the *baseline* grammar, but current flagship models (X4800H, AV10) add
-commands this document doesn't list (Dolby Atmos/DTS:X specific `MS` values, HDMI-output
-selection, newer `PS` audyssey/DSP parameters). This is a completeness risk for Phase 3,
-not a Phase 1 blocker — and it is now largely *mitigated* for the homeowner-facing
-surface (power/volume/mute/transport/input/NowPlaying/queue) because HEOS covers all of
-that ground with a modern, fully-specified protocol; the Telnet protocol is only load-
-bearing now for install-time zone/tone/DSP control (§7).
+One document remains unsupplied: the separate **"YXC API Specification (Advanced)"**,
+referenced in the Basic spec's Preface as covering "MusicCast link function and
+others" in more depth. The Basic spec already exposes enough of Link (`link_control`,
+`link_audio_delay`, `distribution`/`dist` zone fields, per-zone `server_zone_list`) to
+implement single-device zone control end-to-end; the Advanced doc would only matter if
+cross-device MusicCast grouping becomes an actual requirement (§8, mirrors the
+identical open question already raised for HEOS groups).
+
+The attached Denon Telnet spec is from a 2012 entry-level model. Denon/Marantz have
+kept this command set essentially additive and backward-compatible across generations
+(confirmed by cross-referencing the shape already implemented in this repo — see
+§2.1), so it is usable as the *baseline* grammar, but current flagship models (X4800H,
+AV10) add commands this document doesn't list (Dolby Atmos/DTS:X specific `MS` values,
+HDMI-output selection, newer `PS` audyssey/DSP parameters). This is a completeness
+risk for Phase 3, not a Phase 1 blocker — and it is now largely *mitigated* for the
+homeowner-facing surface (power/volume/mute/transport/input/NowPlaying/queue) because
+HEOS covers all of that ground with a modern, fully-specified protocol; the Telnet
+protocol is only load-bearing now for install-time zone/tone/DSP control (§7).
+
+**All three vendor protocols are now fully spec'd. Nothing outstanding blocks Phase 2.**
 
 ---
 
@@ -310,6 +325,91 @@ thrown driver error, not silently dropped).
 numeric error-code enum (spec §6.2). Straightforward `HeosError` mapping, same shape
 as every other driver's typed error throw.
 
+### 2.12 Yamaha Extended Control (YXC) — read in full; here is the design it implies
+
+Transport: **plain HTTP GET** with query-string parameters, `<BaseURL>/v1/<zone-or-
+domain>/<method>?k=v`, `BaseURL = http://{host}/YamahaExtendedControl`, JSON responses
+(`{"response_code": 0, ...}`, non-zero = error, flat numeric enum, spec §10). This is
+architecturally the **simplest** of the three protocols — no persistent command
+socket at all, closer to the WiiM driver already in the repo (`fetchImpl`-injected
+HTTP calls) than to HEOS or Denon Telnet. `HttpCasambiTransport`/`WiimProtocolDriver`
+are the direct precedent for the request half of this driver.
+
+**`getFeatures` is exactly the dynamic-capability-detection endpoint proposed in §7 —
+confirmed, not just plausible.** Queried once at `bind()` time, it returns (per unit,
+and separately per zone): `func_list` (which of power/sleep/volume/mute/sound_program/
+tone_control/equalizer/balance/dialogue_level/dialogue_lift/clear_voice/
+subwoofer_volume/bass_extension/link_control/… this *specific* unit/zone actually
+has), `input_list` (with `distribution_enable`/`rename_enable` per input),
+`sound_program_list` (the DSP mode names — brand-specific strings like "munich",
+"vienna", "straight" — never enumerable in a shared Supreme enum), and `range_step`
+(min/max/step **per parameter, per zone** — critically, **volume is not a 0–100
+percentage on this protocol**: the spec's own example shows `{"id":"volume","min":0,
+"max":194,"step":1}` — an arbitrary device-specific integer scale that must be read
+from `getFeatures` and converted to/from Supreme's 0–100 percent, exactly the kind of
+per-model conversion `DeviceCapability.config` (§7) exists to carry).
+
+**Zones are first-class and fully self-described.** `zone_num` (1–4, Zone B folded
+into `zone2`) plus a `zone[]` array in `getFeatures`, each with its own `func_list`/
+`input_list`/`sound_program_list`/`range_step` — direct confirmation of the "each
+zone is its own Supreme device, sharing one connection" design in §2.4.
+
+**Command → Supreme capability mapping** (confirmed against the actual spec text):
+
+| Supreme | YXC command(s) |
+|---|---|
+| `onoff` (per zone) | `<zone>/setPower?power=on\|standby\|toggle` |
+| `media.volume` | `<zone>/setVolume?volume=<n>` — **device-specific integer range**, not 0–100 (see above) |
+| `media.muted` | `<zone>/setMute?enable=true\|false` |
+| `media.source` | `<zone>/setInput?input=<id>` — the valid id list is **per zone**, from `getFeatures` |
+| `media.playback` | `netusb/setPlayback?playback=play\|stop\|pause\|play_pause\|previous\|next\|fast_reverse_start\|fast_reverse_end\|fast_forward_start\|fast_forward_end` — richer than HEOS: has a toggle and explicit scrub start/end |
+| `media.title/album/artist/artworkUrl` | `netusb/getPlayInfo` → `track`/`album`/`artist`/`albumart_url` (relative path — resolve against `BaseURL`) |
+| `media.durationSec`/`positionSec` | `netusb/getPlayInfo` → `play_time`/`total_time`, **already in seconds** (unlike HEOS's ms) — but with a `-60000` "invalid" sentinel that must be normalized to `null`, not passed through as a real position |
+| `media` seek | `netusb/setPlayPosition?position=<sec>` |
+| `media.shuffle`/`repeat` | `netusb/getPlayInfo` → `repeat` (`off`/`one`/`all`, matches HEOS's 3-state shape — good cross-brand convergence for the shared field) and `shuffle` (**`off`/`on`/`songs`/`albums`** — more granular than HEOS's boolean; the codec maps `songs`/`albums` both to Supreme `shuffle: true` and the finer distinction is a Yamaha-only nuance, not worth forcing into the shared enum). **Toggle-only** (`netusb/toggleRepeat`, `netusb/toggleShuffle`) — no direct "set to this value," so the codec must track prior state to compute how many toggles reach the target, or simply always toggle-once per user action (matching what the physical remote does) |
+| Tone/EQ/DSP (Installer/Developer mode, §7) | `setToneControl` (bass/treble), `setEqualizer` (low/mid/high), `setBalance`, `setDialogueLevel`, `setDialogueLift`, `setClearVoice`, `setSubwooferVolume`, `setBassExtension`, `setSoundProgram`, `set3dSurround`, `setDirect`, `setPureDirect`, `setEnhancer` — all per-zone, all range-checked against `getFeatures`' `range_step` |
+| Sleep timer | `<zone>/setSleep?sleep=0\|30\|60\|90\|120` — fixed enum, not freeform minutes (unlike Denon's `SLP001`–`SLP120`) |
+| Bluetooth | `system/getBluetoothInfo`, `setBluetoothStandby`, `getBluetoothDeviceList`, `connectBluetoothDevice`/`disconnectBluetoothDevice` — full pairing/connect flow, confirms the "Bluetooth" item in the Phase 3 brief |
+| Presets | `netusb/recallPreset`/`storePreset`/`clearPreset`/`movePreset`, `tuner/recallPreset` etc. — separate preset namespaces for Net/USB vs. Tuner |
+
+**Events — a genuinely new pattern for this driver fleet: UDP push, not a persistent
+TCP socket.** Per spec §11: "Events are spread out as UDP unicast." A controller opts
+in by sending `X-AppName: MusicCast/<version>` and `X-AppPort: <local-udp-port>` HTTP
+headers on its requests to the device; the device then pushes JSON event datagrams to
+that port. **Registration expires after 10 minutes of inactivity** and is refreshed by
+any subsequent request carrying the headers — so the driver's normal polling/command
+traffic (as long as it includes the headers) keeps the subscription alive with no
+dedicated heartbeat needed. This means `YamahaProtocolDriver` needs a **locally bound
+UDP listener socket** for its lifetime — a new usage of Node's `dgram` module (already
+a repo dependency via `ssdp.ts`/`knx-discovery.ts`, but those only do short-lived
+multicast search-and-collect; this is a long-lived unicast *receive* server, the first
+of its kind among the protocol drivers). Not a blocker — `dgram.createSocket().bind()`
+is standard Node — just correctly flagged as new integration surface, not a copy-paste
+of an existing driver.
+
+Event payloads are a **hybrid**: some fields carry the fresh value directly (`main.
+power`/`input`/`volume`/`mute`, `zone2`/`zone3`/`zone4` mirror the same shape), while
+others are boolean "something changed, go re-fetch" flags (`status_updated` →
+re-`getStatus`, `play_info_updated` → re-`netusb/getPlayInfo`, `signal_info_updated`,
+`list_info_updated`, `account_updated`, …). The driver's event handler branches on
+which shape each field is, per the spec table — this is a routing table, not
+speculative design, since every field and its meaning is enumerated in spec §11.3.
+`netusb.play_time` (position) **is** pushed directly and frequently, avoiding a
+polling loop for the progress bar, matching HEOS's `player_now_playing_progress`
+in spirit if not in wire shape.
+
+**Discovery:** SSDP, search target `urn:schemas-upnp-org:device:MediaRenderer:1` —
+**identical** to the WiiM driver's existing search target in this repo. A positive hit
+is confirmed by fetching the `Location` URL's UPnP device-description XML and checking
+`<manufacturer>Yamaha Corporation</manufacturer>` plus the `<yamaha:X_device>` tag,
+which also carries `<yamaha:X_yxcControlURL>` (in practice a constant,
+`/YamahaExtendedControl/v1/`) and, usefully, `<friendlyName>` — Yamaha's MusicCast
+setup flow has the installer name each physical unit by room during setup, so
+`friendlyName` is a **stronger room-assignment hint than the generic caveat in §2.3**
+(still a hint to pass through as `suggestedName`/`raw.room`, not a guarantee — but
+worth calling out as brand-specific behavior rather than applying the fully generic
+"no signal" position from §2.3 uniformly).
+
 ---
 
 ## 3. What should be reused, unmodified
@@ -345,12 +445,16 @@ as every other driver's typed error throw.
 
 ## 5. What genuinely needs new modules — and why no existing extension point fits
 
-1. **`HeosProtocolDriver`, `YamahaExtendedControlDriver`, `MusicCastProtocolDriver`** —
-   new files in `services/protocols/src/`, one codec+driver pair per protocol,
-   identical shape to every existing driver. These are new *because* they're different
-   wire protocols (HEOS = JSON/pipe-delimited over TCP 1255; YXC = HTTP/JSON + a UPnP
-   event subscription; MusicCast = HTTP/JSON + UDP multicast events) — not because the
-   framework needs a new pattern.
+1. **`HeosProtocolDriver`, `YamahaProtocolDriver`** — new files in
+   `services/protocols/src/`, one codec+driver pair per protocol, identical shape to
+   every existing driver. **Two drivers, not three** — YXC and MusicCast are one
+   protocol (§2.12 correction), not two. These are new *because* they're different
+   wire protocols (HEOS = JSON over a persistent per-network Telnet socket, port 1255;
+   YXC = per-request HTTP/JSON with a UDP push-event side channel) — not because the
+   framework needs a new pattern. The one genuinely new *mechanism* either introduces
+   is `YamahaProtocolDriver`'s locally-bound UDP listener for events (§2.12) — built
+   from the same `dgram` primitive `ssdp.ts`/`knx-discovery.ts` already use, just a
+   long-lived receive server instead of a short burst-and-collect.
 2. **Artwork cache** (§2.8) — a small new in-process module (e.g.
    `services/gateway/src/artwork-cache.ts`), because none exists at any layer today.
 3. **A capability-detection helper shared across the AVR drivers** — see §7. New
@@ -361,10 +465,13 @@ as every other driver's typed error throw.
    queried, not hardcoded.
 4. **A reconnect/backoff helper**, likely shared (not per-driver copy-paste) —
    several drivers already hand-roll their own capped-backoff reconnect (Casambi
-   built this session, KNX has a simpler version); a small shared utility used by all
-   three new AVR drivers plus the extended `AvrProtocolDriver` avoids four copies of
-   the same loop. New because no shared version exists yet (each driver currently
-   reimplements it independently) — this is a genuine, worthwhile de-duplication.
+   built this session, KNX has a simpler version); a small shared utility used by
+   `HeosProtocolDriver`'s persistent socket plus the extended `AvrProtocolDriver`
+   avoids three copies of the same loop (`YamahaProtocolDriver`'s control path is
+   per-request HTTP with no persistent socket to reconnect — only its UDP event
+   listener needs a re-bind-on-failure path, a much smaller concern). New because no
+   shared version exists yet (each driver currently reimplements it independently) —
+   a genuine, worthwhile de-duplication.
 
 No new capability kind, no new database table, no new UI screen, no new event bus, no
 new DI mechanism, no new discovery transport.
@@ -389,33 +496,72 @@ new DI mechanism, no new discovery transport.
   persistent per-network connection (command socket + event socket), addressing every
   `pid` on the network, per §2.11 — not the "one link per bound host" shape
   `AvrProtocolDriver` uses for classic Telnet.
-- `services/protocols/src/yxc-codec.ts`, `yxc-driver.ts` (+ `.test.ts`) — Yamaha
-  Extended Control
-- `services/protocols/src/musiccast-codec.ts`, `musiccast-driver.ts` (+ `.test.ts`)
-- `services/protocols/src/avr-reconnect.ts` (shared backoff helper) — or folded into
-  an existing shared location if one is agreed in review
+- `services/protocols/src/yamaha-codec.ts`, `yamaha-driver.ts` (+ `.test.ts`) — one
+  driver for YXC/MusicCast (§2.12 correction: not two). Per-request HTTP for control
+  + a bound UDP listener for push events.
+- `services/protocols/src/avr-reconnect.ts` (shared backoff helper, used by HEOS +
+  the extended `AvrProtocolDriver`) — or folded into an existing shared location if
+  one is agreed in review
 - `services/protocols/src/avr-capabilities.ts` (shared dynamic-capability-detection
-  helper, §7)
+  helper, §7 — the concrete shape is now informed by both Denon's absence of a
+  feature-query endpoint, requiring installer-declared capabilities via config, and
+  Yamaha's `getFeatures`, which supplies exactly this data on the wire)
 - `services/gateway/src/artwork-cache.ts` (+ `.test.ts`)
 - `docs/architecture/adr/00XX-universal-avr-framework.md` (formal ADR once this
   review is accepted — Phase 4 deliverable)
 
-## 7. How dynamic capability detection actually works here (no hardcoding)
+## 7. How dynamic capability detection actually works here (no hardcoding) — corrected
+    with verified facts from all three specs, not assumption
 
-Every brand exposes a different discoverable surface (Denon: `SSINFOAISPARAM`/HEOS
-player info; Yamaces: `getFeatures`/`getDeviceInfo` on YXC, `getFeatures` on
-MusicCast). The pattern, consistent with how Casambi's codec derives capabilities from
-each unit's advertised `controls` rather than a hardcoded per-model table
-(`services/protocols/src/casambi-codec.ts` `capabilitiesFromUnit`):
+**This is not equally achievable across all three protocols, and it would be
+dishonest to imply otherwise. Verified per protocol:**
 
-- At `bind()` time, each driver queries the model's real feature/capability endpoint
-  once and derives (a) which Supreme capabilities apply (`onoff`, `media`, and — for
-  zone devices — the same, per zone) and (b) a **capability-config payload** (input
-  list, DSP/surround-mode list, tone-control range, zone count) stored on
-  `DeviceCapability.config` (already a free-form `z.record(z.unknown())` field,
-  `entities.ts:87-90` — built for exactly this).
+- **Yamaha YXC — fully self-describing.** `system/getFeatures` (§2.12) returns, per
+  zone, exactly the data needed: `func_list` (which controls this unit/zone has),
+  `input_list`, `sound_program_list` (DSP modes), and `range_step` (min/max/step for
+  volume/tone/EQ — including the device-specific volume scale, e.g. 0–194, not a fixed
+  0–100). This is a genuine wire-level capability query; the driver calls it once at
+  `bind()` and needs zero brand-specific hardcoding to know what a given RX-V679 vs. a
+  WXC-50 supports.
+- **HEOS — partially self-describing.** `player/get_player_info` (§2.11) returns
+  `model`, but **not** a feature/capability list. What *is* discoverable dynamically:
+  every core media action (play/pause/volume/mute/input/queue/shuffle/repeat) is
+  uniform across every HEOS-enabled unit by protocol design — there is nothing to
+  detect because HEOS guarantees the same surface everywhere. The one place capability
+  varies is AVR-only extras (QuickSelect, explicitly marked "LS AVR / HEOS BAR only"
+  in the spec) — detected by simply calling `get_quickselects` and treating a failure/
+  empty result as "not present," not by a dedicated feature query.
+- **Denon/Marantz classic Telnet — genuinely not self-describing, verified.** I
+  specifically checked: the attached spec has **no capability/feature-query command
+  anywhere in it.** Zone 2 support, for instance, is documented as a bare footnote —
+  "NOTE: Z2 COMMAND is valid at AVR-1913 NA model only" (spec p.17) — a fact the
+  *document* hardcodes, not something a receiver reports over the wire. There is no
+  honest way to detect Telnet-protocol zone/tone/DSP capability without either (a)
+  sending a command and inferring support from whether a response/echo comes back
+  within a timeout — fragile, and risks a side effect for non-idempotent commands —
+  or (b) the installer declaring it once at commissioning time (e.g. "this receiver
+  has Zone 2," a config toggle, not a Supreme-side per-model table). **Recommendation:
+  (b).** This is not a workaround for a design gap — it's the correct response to a
+  protocol that doesn't expose the information, and it still satisfies "never
+  hardcode a model's capabilities in the codebase" because the installer is declaring
+  *their* unit's config, not Supreme shipping a lookup table of Denon SKUs.
+
+**The mechanism, where detection is real (Yamaha; HEOS's core surface):**
+
+- At `bind()` time, the driver queries the real feature endpoint once and derives (a)
+  which Supreme capabilities apply (`onoff`, `media` — per zone, for multi-zone
+  devices) and (b) a **capability-config payload** (input list, DSP/surround-mode
+  list, tone-control range) stored on `DeviceCapability.config` (already a free-form
+  `z.record(z.unknown())` field, `entities.ts:87-90` — built for exactly this),
+  consistent with how Casambi's codec derives capabilities from each unit's
+  advertised `controls` rather than a hardcoded per-model table
+  (`services/protocols/src/casambi-codec.ts` `capabilitiesFromUnit`).
+- Where detection is genuinely not possible on the wire (Denon Telnet zones/tone/
+  DSP), the same `DeviceCapability.config` field is populated from installer input at
+  commissioning instead of a query response — same destination, different source,
+  and the homeowner-facing contract is identical either way.
 - The homeowner-facing UI never hardcodes a brand's input/DSP list; it renders
-  whatever `config` the device reports, the same way the Driver Manager already
+  whatever `config` the device carries, the same way the Driver Manager already
   renders any manifest's `configSchema` without knowing the driver in advance (ADR
   0014). This keeps DSP/tone/EQ — genuinely brand-specific, install-facing detail —
   out of the shared `CapabilityKind` enum (which every client's UI switches on) and
@@ -426,33 +572,38 @@ each unit's advertised `controls` rather than a hardcoded per-model table
 
 ## 8. Open items requiring your input before Phase 2 starts
 
-1. **Yamaha spec is still missing.** Please attach the YXC (HTTP/JSON) and MusicCast
-   API docs — Phase 3's Yamaha work cannot start without them. ~~HEOS spec is
-   missing~~ **— resolved: HEOS CLI v1.17 supplied and fully analyzed, §2.11.**
-2. **Tone/DSP/EQ modeling confirmation** — §7 proposes keeping these out of the core
+**All three vendor documents are now supplied and read in full.** ~~Yamaha spec
+missing~~, ~~HEOS spec missing~~ — both resolved (§2.11, §2.12). What's left is
+judgment calls, not missing information:
+
+1. **Tone/DSP/EQ modeling confirmation** — §7 proposes keeping these out of the core
    `media` capability and out of the shared `CapabilityKind` enum, surfaced instead as
-   a dynamically-rendered `DeviceCapability.config` payload in Installer/Developer
-   mode. Confirm this matches your intent before it's built, since it's the one
-   genuinely new architectural pattern in this plan (everything else is direct reuse).
-3. **Multi-room grouping (HEOS `group/*`)** — §2.11 proposes treating this as an
-   Installer/Developer-mode action rather than a new homeowner-facing Supreme
-   capability, since no media driver in this repo (Sonos/WiiM/AirPlay included) models
-   cross-device grouping today. Confirm, or say if HEOS grouping should be a
+   a `DeviceCapability.config` payload (populated from a real `getFeatures` query on
+   Yamaha; from installer input on Denon Telnet, which has no wire-level feature
+   query — verified, not assumed, §7) in Installer/Developer mode. Confirm this
+   matches your intent before it's built, since it's the one genuinely new
+   architectural pattern in this plan (everything else is direct reuse).
+2. **Multi-room grouping (HEOS `group/*`, MusicCast `distribution`/`link_control`)** —
+   proposed as an Installer/Developer-mode action rather than a new homeowner-facing
+   Supreme capability, since no media driver in this repo (Sonos/WiiM/AirPlay
+   included) models cross-device grouping today. Confirm, or say if this should be a
    fast-follow homeowner feature — that would be new ground affecting the media
-   capability model generally, worth deciding deliberately rather than bolting on.
-4. **Room assignment expectation** — confirm the honest position in §2.3 (SSDP/mDNS
+   capability model generally, worth deciding deliberately rather than bolting on. The
+   MusicCast "Advanced" API spec (referenced but not supplied, §0) would be needed
+   before building the Yamaha half of this regardless.
+3. **Room assignment expectation** — confirm the honest position in §2.3 (SSDP/mDNS
    give no reliable room signal; installer assigns rooms once, matching every existing
-   IP-discovered driver) is acceptable, rather than a heuristic that would occasionally
-   guess wrong.
-5. **Artwork cache eviction policy** — in-process LRU by default (simplest, matches
+   IP-discovered driver) is acceptable. One nuance from the Yamaha spec: MusicCast's
+   own setup flow has installers name each unit by room already, so its SSDP
+   `friendlyName` is a stronger hint than most — still passed through as a hint, not
+   auto-assigned.
+4. **Artwork cache eviction policy** — in-process LRU by default (simplest, matches
    the transient nature of album art); say if you want it disk-backed for a hub
    restart to preserve currently-playing artwork across a reboot.
 
 ---
 
-**This is Phase 1 only. No implementation code has been written.** HEOS is fully
-spec'd and ready to build against. Denon/Marantz (Telnet + HEOS) could start on your
-approval alone; **Yamaha is still blocked on its protocol documents.** Let me know
-whether to (a) wait for the Yamaha docs and start Phase 2 on everything together, or
-(b) begin Phase 2 (the shared framework) + Phase 3's Denon/Marantz driver now, and
-slot Yamaha in once its docs arrive.
+**This is Phase 1 only. No implementation code has been written.** Denon/Marantz
+(Telnet + HEOS) and Yamaha (YXC) are all fully spec'd and ready to build. Nothing is
+blocking Phase 2 anymore except your approval — say go whenever you're ready, and say
+whether items 1–2 above match your intent or need adjusting first.
