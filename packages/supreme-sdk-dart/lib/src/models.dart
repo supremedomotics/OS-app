@@ -41,6 +41,7 @@ class Device {
     required this.roomId,
     required this.capabilities,
     required this.state,
+    this.capabilityConfig = const {},
     this.manufacturer,
     this.model,
     this.driverId,
@@ -53,6 +54,12 @@ class Device {
   final String supremeType;
   final String? roomId;
   final List<String> capabilities;
+
+  /// Per-capability config keyed by capability kind (e.g. `media`'s
+  /// AudioCapabilityConfig: inputs/soundModes/toneControl/zones/transport). Free-form —
+  /// each capability defines its own shape; see the matching TS type in
+  /// @supreme/protocols for the media capability.
+  final Map<String, Map<String, dynamic>> capabilityConfig;
 
   /// Real device metadata (§ Device Manager). Nullable — a device may not declare a make/model or
   /// be bound to a driver. `status` is the platform's online/offline/unavailable enum.
@@ -88,6 +95,23 @@ class Device {
     return o?['on'] as bool? ?? false;
   }
 
+  /// This device's advertised media inputs (Universal AVR Framework §7 — dynamic
+  /// capability detection): read from its own AudioCapabilityConfig (device-reported
+  /// or installer-declared depending on the protocol), never a hardcoded brand list.
+  /// Empty for non-media devices or media devices with no configured inputs.
+  List<({String id, String label})> get mediaInputs {
+    final inputs = capabilityConfig['media']?['inputs'];
+    if (inputs is! List) return const [];
+    return inputs
+        .whereType<Map<String, dynamic>>()
+        .map((i) => (
+              id: i['id'] as String? ?? '',
+              label: (i['label'] as String?) ?? (i['id'] as String?) ?? '',
+            ))
+        .where((i) => i.id.isNotEmpty)
+        .toList();
+  }
+
   factory Device.fromJson(Map<String, dynamic> json) => Device(
         id: json['id'] as String,
         name: json['name'] as String,
@@ -96,6 +120,11 @@ class Device {
         capabilities: (json['capabilities'] as List<dynamic>)
             .map((c) => (c as Map<String, dynamic>)['kind'] as String)
             .toList(),
+        capabilityConfig: {
+          for (final c in (json['capabilities'] as List<dynamic>))
+            (c as Map<String, dynamic>)['kind'] as String:
+                (c['config'] as Map<String, dynamic>?) ?? const {},
+        },
         state: (json['state'] as Map<String, dynamic>?) ?? <String, dynamic>{},
         manufacturer: json['manufacturer'] as String?,
         model: json['model'] as String?,

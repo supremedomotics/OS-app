@@ -702,6 +702,12 @@ button.link {
 .media-transport { display: flex; align-items: center; justify-content: center; gap: 26px; margin-bottom: 20px; }
 .media-transport button { background: none; border: 0; color: inherit; font-size: 30px; cursor: pointer; }
 .media-transport .pp { width: 72px; height: 72px; border-radius: 20px; background: var(--aureon-color-gold-500); color: #15161b; }
+.media-artwork { width: 100%; aspect-ratio: 1; border-radius: 18px; object-fit: cover; margin-bottom: 20px; background: rgba(128,128,128,0.12); }
+.media-progress { margin-bottom: 20px; }
+.media-time { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--aureon-color-text-secondary); }
+.toggle-row { display: flex; gap: 12px; margin-bottom: 20px; }
+.toggle-chip { flex: 1; height: 52px; border-radius: 16px; border: 0; background: rgba(128,128,128,0.12); color: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.toggle-chip.on { background: var(--aureon-color-gold-500); color: #15161b; }
 /* Fan + vacuum presets */
 .preset-row { display: flex; gap: 12px; margin-bottom: 18px; }
 .preset { flex: 1; height: 60px; border-radius: 16px; border: 0; background: rgba(128,128,128,0.12); color: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }

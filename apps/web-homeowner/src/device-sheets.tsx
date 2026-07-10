@@ -212,44 +212,117 @@ function VacuumSheet({ device }: { device: Device }) {
 }
 
 // ── Media ───────────────────────────────────────────────────────────────────────
-const MEDIA_SOURCES = ["Arc", "One Left", "One Right", "Sub", "Era 300", "Sonance Left", "Sonance Right"];
+interface MediaCapState {
+  playback?: string;
+  title?: string | null;
+  artist?: string | null;
+  source?: string | null;
+  volume?: number;
+  artworkUrl?: string | null;
+  durationSec?: number | null;
+  positionSec?: number | null;
+  shuffle?: boolean | null;
+  repeat?: "off" | "all" | "one" | null;
+}
+interface MediaInput {
+  id: string;
+  label: string;
+}
+
+function formatTime(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+}
+
 function MediaSheet({ device }: { device: Device }) {
-  const m = (device.state as Record<string, { playback?: string; title?: string; artist?: string; source?: string; volume?: number }>).media ?? {};
-  const [playing, setPlaying] = useState<boolean>(m.playback === "playing");
-  const [vol, setVol] = useState<number>(m.volume ?? 30);
-  const [source, setSource] = useState<string | null>(m.source ?? null);
+  const { states, apply } = useLive();
+  const live = (states[device.id]?.media ?? (device.state as Record<string, MediaCapState>).media ?? {}) as MediaCapState;
   const [picker, setPicker] = useState(false);
+  const [seekPreview, setSeekPreview] = useState<number | null>(null);
+
+  // Dynamic capability detection (Universal AVR Framework §7): the input list comes
+  // from this device's own advertised AudioCapabilityConfig (device-reported or
+  // installer-declared, depending on the protocol) — never a hardcoded brand list.
+  const mediaCap = device.capabilities.find((c) => c.kind === "media");
+  const inputs = Array.isArray(mediaCap?.config.inputs) ? (mediaCap.config.inputs as MediaInput[]) : [];
+
   const a = (action: string, extra?: Record<string, unknown>) => cmd(device.id, { capability: "media", action, ...extra } as CapabilityCommand);
+  const applyMedia = (patch: Partial<MediaCapState>) => apply(device.id, "media", { ...live, ...patch });
+
+  const playing = live.playback === "playing";
+  const vol = live.volume ?? 0;
+  const duration = live.durationSec ?? null;
+  const position = seekPreview ?? live.positionSec ?? null;
 
   if (picker) {
     return (
       <>
-        <Title name="Home" status="Choose outputs" />
+        <Title name="Home" status="Choose inputs" />
         <div className="source-list">
-          {MEDIA_SOURCES.map((s) => (
-            <button key={s} className="source-row" onClick={() => { setSource(s); void a("source", { source: s }); setPicker(false); }}>
-              <span className="thumb" />
-              <span className="nm">{s}</span>
-              <span className={`radio${source === s ? " on" : ""}`} />
-            </button>
-          ))}
+          {inputs.length === 0 ? (
+            <p className="muted">No inputs configured for this device.</p>
+          ) : (
+            inputs.map((s) => (
+              <button key={s.id} className="source-row" onClick={() => { applyMedia({ source: s.id }); void a("source", { source: s.id }); setPicker(false); }}>
+                <span className="thumb" />
+                <span className="nm">{s.label}</span>
+                <span className={`radio${live.source === s.id ? " on" : ""}`} />
+              </button>
+            ))
+          )}
         </div>
       </>
     );
   }
+
+  const sourceLabel = inputs.find((i) => i.id === live.source)?.label ?? live.source ?? "Speakers";
+
   return (
     <>
       <div className="sheet-title with-badge">
-        <button className="src-badge" onClick={() => setPicker(true)}>{source ?? "Speakers"} ⌄</button>
+        <button className="src-badge" onClick={() => setPicker(true)}>{sourceLabel} ⌄</button>
         <h2>{device.name}</h2>
-        <p>{m.title ? `${m.title}${m.artist ? ` · ${m.artist}` : ""}` : "Idle"}</p>
+        <p>{live.title ? `${live.title}${live.artist ? ` · ${live.artist}` : ""}` : "Idle"}</p>
       </div>
+      {live.artworkUrl ? <img className="media-artwork" src={live.artworkUrl} alt="" /> : null}
+      {duration ? (
+        <div className="media-progress">
+          <input
+            className="cover-slider"
+            type="range"
+            min={0}
+            max={duration}
+            value={position ?? 0}
+            onChange={(e) => setSeekPreview(Number(e.target.value))}
+            onMouseUp={(e) => { const v = Number((e.target as HTMLInputElement).value); setSeekPreview(null); applyMedia({ positionSec: v }); void a("seek", { positionSec: v }); }}
+            onTouchEnd={(e) => { const v = Number((e.target as HTMLInputElement).value); setSeekPreview(null); applyMedia({ positionSec: v }); void a("seek", { positionSec: v }); }}
+          />
+          <div className="media-time">
+            <span>{formatTime(position ?? 0)}</span>
+            <span>{formatTime(duration)}</span>
+          </div>
+        </div>
+      ) : null}
       <div className="media-transport">
         <button onClick={() => void a("previous")}>⏮</button>
-        <button className="pp" onClick={() => { setPlaying((p) => !p); void a(playing ? "pause" : "play"); }}>{playing ? "⏸" : "▶"}</button>
+        <button className="pp" onClick={() => { applyMedia({ playback: playing ? "paused" : "playing" }); void a(playing ? "pause" : "play"); }}>{playing ? "⏸" : "▶"}</button>
         <button onClick={() => void a("next")}>⏭</button>
       </div>
-      <input className="cover-slider" type="range" min={0} max={100} value={vol} onChange={(e) => { const v = Number(e.target.value); setVol(v); void a("volume", { volume: v }); }} />
+      {live.shuffle !== null && live.shuffle !== undefined || live.repeat !== null && live.repeat !== undefined ? (
+        <div className="toggle-row">
+          {live.shuffle !== null && live.shuffle !== undefined ? (
+            <button className={`toggle-chip${live.shuffle ? " on" : ""}`} onClick={() => { const next = !live.shuffle; applyMedia({ shuffle: next }); void a("shuffle", { shuffle: next }); }}>
+              🔀 Shuffle
+            </button>
+          ) : null}
+          {live.repeat !== null && live.repeat !== undefined ? (
+            <button className={`toggle-chip${live.repeat !== "off" ? " on" : ""}`} onClick={() => { const next = live.repeat === "off" ? "all" : live.repeat === "all" ? "one" : "off"; applyMedia({ repeat: next }); void a("repeat", { repeat: next }); }}>
+              {live.repeat === "one" ? "🔂" : "🔁"} Repeat{live.repeat === "one" ? " One" : ""}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <input className="cover-slider" type="range" min={0} max={100} value={vol} onChange={(e) => { const v = Number(e.target.value); applyMedia({ volume: v }); void a("volume", { volume: v }); }} />
     </>
   );
 }

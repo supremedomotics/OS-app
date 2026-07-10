@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../tokens.g.dart';
 
-/// Media transport card (§11.1): artwork, title/artist, transport controls, and a
-/// volume slider. Source badge + queue depth are added with the full media model.
+/// Media transport card (§11.1): artwork, title/artist, progress/duration with seek,
+/// transport controls, shuffle/repeat toggles, a volume slider, and (when the device
+/// advertises any) a source/input picker. Shuffle/repeat/progress/inputs are all
+/// optional — a device whose protocol doesn't report them (e.g. a Denon Telnet zone
+/// with no Net/USB source active) simply omits that row rather than faking one.
 class MediaCard extends StatelessWidget {
   const MediaCard({
     super.key,
@@ -16,6 +19,16 @@ class MediaCard extends StatelessWidget {
     required this.onPrevious,
     required this.onVolume,
     this.artworkUrl,
+    this.durationSec,
+    this.positionSec,
+    this.onSeek,
+    this.shuffle,
+    this.onShuffle,
+    this.repeat,
+    this.onRepeat,
+    this.source,
+    this.inputs = const [],
+    this.onSelectInput,
   });
 
   final String? title;
@@ -28,8 +41,61 @@ class MediaCard extends StatelessWidget {
   final VoidCallback onPrevious;
   final ValueChanged<double> onVolume;
 
+  /// Track position/duration in seconds. Null (either) hides the progress row —
+  /// most true for live/streaming sources with no known length.
+  final double? durationSec;
+  final double? positionSec;
+  final ValueChanged<double>? onSeek;
+
+  /// Null hides the toggle — the device's protocol doesn't report shuffle/repeat at
+  /// all (verified per-protocol, never assumed).
+  final bool? shuffle;
+  final VoidCallback? onShuffle;
+  final String? repeat; // "off" | "all" | "one"
+  final VoidCallback? onRepeat;
+
+  /// Currently-selected input id + the device's own advertised input list (Universal
+  /// AVR Framework §7 — dynamic capability detection, never a hardcoded brand list).
+  final String? source;
+  final List<({String id, String label})> inputs;
+  final ValueChanged<String>? onSelectInput;
+
+  String _formatTime(double sec) {
+    final s = sec.round().clamp(0, 359999);
+    final m = s ~/ 60;
+    final r = s % 60;
+    return '$m:${r.toString().padLeft(2, '0')}';
+  }
+
+  void _pickInput(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final input in inputs)
+              ListTile(
+                title: Text(input.label),
+                trailing: source == input.id
+                    ? const Icon(Icons.check, color: AureonGold.c500)
+                    : null,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  onSelectInput?.call(input.id);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final matchingInputs = inputs.where((i) => i.id == source);
+    final sourceLabel =
+        matchingInputs.isEmpty ? source : matchingInputs.first.label;
     return Container(
       padding: const EdgeInsets.all(AureonSpacing.lg),
       decoration: BoxDecoration(
@@ -40,6 +106,22 @@ class MediaCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (inputs.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AureonSpacing.sm),
+              child: GestureDetector(
+                onTap: () => _pickInput(context),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(sourceLabel ?? 'Speakers',
+                        style: Theme.of(context).textTheme.labelMedium),
+                    const Icon(Icons.expand_more,
+                        size: 18, color: AureonText.muted),
+                  ],
+                ),
+              ),
+            ),
           Row(
             children: [
               ClipRRect(
@@ -72,6 +154,27 @@ class MediaCard extends StatelessWidget {
               ),
             ],
           ),
+          if (durationSec != null && durationSec! > 0) ...[
+            const SizedBox(height: AureonSpacing.sm),
+            Slider(
+              value: (positionSec ?? 0).clamp(0, durationSec!),
+              max: durationSec!,
+              activeColor: AureonGold.c500,
+              onChanged: onSeek,
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(_formatTime(positionSec ?? 0),
+                      style: Theme.of(context).textTheme.labelSmall),
+                  Text(_formatTime(durationSec!),
+                      style: Theme.of(context).textTheme.labelSmall),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: AureonSpacing.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -87,6 +190,27 @@ class MediaCard extends StatelessWidget {
               IconButton(onPressed: onNext, icon: const Icon(Icons.skip_next)),
             ],
           ),
+          if (shuffle != null || repeat != null) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (shuffle != null)
+                  IconButton(
+                    onPressed: onShuffle,
+                    icon: Icon(Icons.shuffle,
+                        color: shuffle! ? AureonGold.c500 : AureonText.muted),
+                  ),
+                if (repeat != null)
+                  IconButton(
+                    onPressed: onRepeat,
+                    icon: Icon(
+                      repeat == 'one' ? Icons.repeat_one : Icons.repeat,
+                      color: repeat != 'off' ? AureonGold.c500 : AureonText.muted,
+                    ),
+                  ),
+              ],
+            ),
+          ],
           Row(
             children: [
               const Icon(Icons.volume_down, color: AureonText.muted),

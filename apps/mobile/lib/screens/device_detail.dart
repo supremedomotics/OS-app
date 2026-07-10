@@ -48,12 +48,39 @@ class DeviceDetailScreen extends ConsumerWidget {
     if (device.capabilities.contains('media')) {
       final m = device.state['media'] as Map<String, dynamic>?;
       final playing = (m?['playback'] as String?) == 'playing';
+      final shuffle = m?['shuffle'] as bool?;
+      final repeat = m?['repeat'] as String?;
       return MediaCard(
         title: m?['title'] as String?,
         artist: m?['artist'] as String?,
         playing: playing,
         volume: ((m?['volume'] as num?) ?? 30).toDouble() / 100.0,
         artworkUrl: m?['artworkUrl'] as String?,
+        durationSec: (m?['durationSec'] as num?)?.toDouble(),
+        positionSec: (m?['positionSec'] as num?)?.toDouble(),
+        onSeek: (v) => _cmd(ref,
+            {'capability': 'media', 'action': 'seek', 'positionSec': v.round()}),
+        shuffle: shuffle,
+        onShuffle: shuffle == null
+            ? null
+            : () => _cmd(ref,
+                {'capability': 'media', 'action': 'shuffle', 'shuffle': !shuffle}),
+        repeat: repeat,
+        onRepeat: repeat == null
+            ? null
+            : () => _cmd(ref, {
+                  'capability': 'media',
+                  'action': 'repeat',
+                  'repeat': repeat == 'off'
+                      ? 'all'
+                      : repeat == 'all'
+                          ? 'one'
+                          : 'off',
+                }),
+        source: m?['source'] as String?,
+        inputs: device.mediaInputs,
+        onSelectInput: (id) =>
+            _cmd(ref, {'capability': 'media', 'action': 'source', 'source': id}),
         onPlayPause: () => _cmd(
             ref, {'capability': 'media', 'action': playing ? 'pause' : 'play'}),
         onNext: () => _cmd(ref, {'capability': 'media', 'action': 'next'}),
