@@ -20,7 +20,7 @@ function nowPlaying(d: Device): string {
   if (!m) return "Idle";
   const title = (m.title as string) ?? "";
   const artist = (m.artist as string) ?? "";
-  const playing = m.playing === true || m.state === "playing";
+  const playing = m.playback === "playing";
   if (title) return artist ? `${title} · ${artist}` : title;
   return playing ? "Playing" : "Idle";
 }

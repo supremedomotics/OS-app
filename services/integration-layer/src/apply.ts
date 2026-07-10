@@ -79,6 +79,11 @@ export function applyCommand(
         artist: base?.artist ?? null,
         source: command.action === "source" ? command.source ?? base?.source ?? null : base?.source ?? null,
         artworkUrl: base?.artworkUrl ?? null,
+        durationSec: base?.durationSec ?? null,
+        positionSec: command.action === "seek" ? command.positionSec ?? base?.positionSec ?? null : base?.positionSec ?? null,
+        shuffle: command.action === "shuffle" ? command.shuffle ?? base?.shuffle ?? null : base?.shuffle ?? null,
+        repeat: command.action === "repeat" ? command.repeat ?? base?.repeat ?? null : base?.repeat ?? null,
+        advanced: command.action === "advanced" ? { ...base?.advanced, ...command.advanced } : base?.advanced ?? null,
       };
     }
     case "fan": {

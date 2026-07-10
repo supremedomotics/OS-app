@@ -311,39 +311,73 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
   }
 
   // ── Media ──
-  static const _sources = ['Arc', 'One Left', 'One Right', 'Sub', 'Era 300', 'Sonance Left', 'Sonance Right'];
+  String _fmtTime(num sec) {
+    final s = sec.round().clamp(0, 1 << 30);
+    return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+  }
 
   List<Widget> _media() {
     final m = _s('media');
     bool playing = (m['playback'] as String?) == 'playing';
     double vol = ((m['volume'] as num?) ?? 30).toDouble();
     final title = m['title'] as String?;
+    final artist = m['artist'] as String?;
+    final artworkUrl = m['artworkUrl'] as String?;
+    final durationSec = (m['durationSec'] as num?)?.toDouble();
+    double? positionSec = (m['positionSec'] as num?)?.toDouble();
+    bool? shuffle = m['shuffle'] as bool?;
+    String? repeat = m['repeat'] as String?;
     String? source = m['source'] as String?;
     bool picker = false;
+    final inputs = widget.device.mediaInputs;
     final scheme = Theme.of(context).colorScheme;
     return [
       StatefulBuilder(builder: (context, set) {
         if (picker) {
           return Column(mainAxisSize: MainAxisSize.min, children: [
-            _title('Home', 'Choose outputs'),
-            for (final src in _sources)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Container(width: 48, height: 48, decoration: BoxDecoration(color: scheme.surfaceContainerHighest.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(12))),
-                title: Text(src, style: const TextStyle(fontWeight: FontWeight.w600)),
-                trailing: Icon(source == src ? Icons.radio_button_checked : Icons.radio_button_unchecked),
-                onTap: () { set(() { source = src; picker = false; }); _cmd({'capability': 'media', 'action': 'source', 'source': src}); },
-              ),
+            _title('Home', 'Choose inputs'),
+            if (inputs.isEmpty)
+              Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('No inputs configured for this device.', style: Theme.of(context).textTheme.bodyMedium))
+            else
+              for (final input in inputs)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Container(width: 48, height: 48, decoration: BoxDecoration(color: scheme.surfaceContainerHighest.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(12))),
+                  title: Text(input.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  trailing: Icon(source == input.id ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+                  onTap: () { set(() { source = input.id; picker = false; }); _cmd({'capability': 'media', 'action': 'source', 'source': input.id}); },
+                ),
           ]);
         }
+        final sourceLabel = inputs.where((i) => i.id == source).map((i) => i.label).firstOrNull ?? source ?? 'Speakers';
         return Column(children: [
           Row(children: [
-            Expanded(child: _title(widget.device.name, title ?? source ?? 'Idle')),
+            Expanded(child: _title(widget.device.name, title != null ? (artist != null ? '$title · $artist' : title) : 'Idle')),
           ]),
           Align(
             alignment: Alignment.centerRight,
-            child: TextButton.icon(onPressed: () => set(() => picker = true), icon: const Icon(Icons.speaker_outlined, size: 18), label: Text(source ?? 'Speakers')),
+            child: TextButton.icon(onPressed: () => set(() => picker = true), icon: const Icon(Icons.speaker_outlined, size: 18), label: Text(sourceLabel)),
           ),
+          if (artworkUrl != null) ...[
+            const SizedBox(height: 8),
+            ClipRRect(borderRadius: BorderRadius.circular(16), child: Image.network(artworkUrl, height: 160, width: 160, fit: BoxFit.cover)),
+            const SizedBox(height: 12),
+          ],
+          if (durationSec != null) ...[
+            Slider(
+              value: (positionSec ?? 0).clamp(0, durationSec),
+              max: durationSec,
+              onChanged: (v) => set(() => positionSec = v),
+              onChangeEnd: (v) => _cmd({'capability': 'media', 'action': 'seek', 'positionSec': v.round()}),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text(_fmtTime(positionSec ?? 0), style: Theme.of(context).textTheme.labelSmall),
+                Text(_fmtTime(durationSec), style: Theme.of(context).textTheme.labelSmall),
+              ]),
+            ),
+          ],
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             IconButton(iconSize: 34, onPressed: () => _cmd({'capability': 'media', 'action': 'previous'}), icon: const Icon(Icons.skip_previous)),
             const SizedBox(width: 16),
@@ -351,6 +385,40 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
             const SizedBox(width: 16),
             IconButton(iconSize: 34, onPressed: () => _cmd({'capability': 'media', 'action': 'next'}), icon: const Icon(Icons.skip_next)),
           ]),
+          if (shuffle != null || repeat != null) ...[
+            const SizedBox(height: 12),
+            Row(children: [
+              if (shuffle != null)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: OutlinedButton.icon(
+                      style: shuffle == true ? OutlinedButton.styleFrom(backgroundColor: scheme.primary, foregroundColor: scheme.onPrimary) : null,
+                      onPressed: () { final next = !shuffle!; set(() => shuffle = next); _cmd({'capability': 'media', 'action': 'shuffle', 'shuffle': next}); },
+                      icon: const Icon(Icons.shuffle, size: 18),
+                      label: const Text('Shuffle'),
+                    ),
+                  ),
+                ),
+              if (repeat != null)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: OutlinedButton.icon(
+                      style: repeat != 'off' ? OutlinedButton.styleFrom(backgroundColor: scheme.primary, foregroundColor: scheme.onPrimary) : null,
+                      onPressed: () {
+                        final next = repeat == 'off' ? 'all' : (repeat == 'all' ? 'one' : 'off');
+                        set(() => repeat = next);
+                        _cmd({'capability': 'media', 'action': 'repeat', 'repeat': next});
+                      },
+                      icon: Icon(repeat == 'one' ? Icons.repeat_one : Icons.repeat, size: 18),
+                      label: Text(repeat == 'one' ? 'Repeat One' : 'Repeat'),
+                    ),
+                  ),
+                ),
+            ]),
+          ],
+          const SizedBox(height: 12),
           Slider(value: vol.clamp(0, 100), max: 100, onChanged: (v) { set(() => vol = v); }, onChangeEnd: (v) => _cmd({'capability': 'media', 'action': 'volume', 'volume': v.round()})),
         ]);
       }),

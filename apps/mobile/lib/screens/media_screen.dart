@@ -20,7 +20,7 @@ class MediaScreen extends ConsumerWidget {
     if (m == null) return 'Idle';
     final title = m['title'] as String? ?? '';
     final artist = m['artist'] as String? ?? '';
-    final playing = m['playing'] == true || m['state'] == 'playing';
+    final playing = m['playback'] == 'playing';
     if (title.isNotEmpty) return artist.isNotEmpty ? '$title · $artist' : title;
     return playing ? 'Playing' : 'Idle';
   }
