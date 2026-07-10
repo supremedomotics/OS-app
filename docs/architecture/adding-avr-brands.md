@@ -100,10 +100,23 @@ per `avr-reconnect.test.ts`).
    `ProtocolKind` (additive, one line).
 2. `services/protocols/src/index.ts` — export the driver class + codec functions.
 3. `services/gateway/src/bootstrap.ts` + `config.ts` + `infra/hub-compose/.env.example`
-   — a `SUPREME_<BRAND>_ENABLED` boolean flag, following the AVR/HEOS/Yamaha
-   precedent exactly (§ ADR 0015 Consequences: no manifest entry — that file is for
-   single-host credential-configured drivers, not "many independent units added by IP
-   at commissioning").
+   (+ the matching block in `infra/hub-compose/docker-compose.yml`'s gateway service
+   environment) — a `SUPREME_<BRAND>_ENABLED` boolean flag, following the AVR/HEOS/
+   Yamaha precedent exactly.
+4. **`services/drivers/src/manifests.ts`** — add a manifest with **`configSchema: []`**
+   (there's nothing global to configure; each physical unit is still added by IP, and
+   each zone/pid by `ProtocolBinding.config`, through Bus Binding). This is required,
+   not optional: the Extension Center (`web-homeowner/extensions.tsx`) is populated
+   *entirely* from this registry — a driver with no manifest entry is invisible and
+   un-installable from the UI, discoverable only by editing `.env` directly. An
+   earlier pass on this framework shipped without this step (reasoning that
+   manifests.ts was only for single-host credential-configured drivers) and had to be
+   corrected once real usage surfaced the gap — see ADR 0015's Consequences.
+5. **`services/gateway/src/native-driver-factory.ts`** — add a factory entry that
+   always returns a live instance (`<protocol>: () => new <Brand>ProtocolDriver()`),
+   since there's no required config to check. `SupremeNativeAdapter.registerDriver`
+   replaces any same-protocol instance on register, so this coexists safely with the
+   `bootstrap.ts` env-wired path from step 3 — exactly like KNX/MQTT/Modbus/Casambi.
 
 ## 7. Verify
 

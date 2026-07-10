@@ -114,13 +114,21 @@ than a fabricated queue.
   feature-query command, no HEOS power command, no HEOS/Denon seek, toggle-only
   Yamaha repeat/shuffle) is preserved and commented in the code rather than
   papered over with a plausible-looking fake implementation.
-- **Trade-off / follow-ups:** HEOS/Yamaha have no manifest entry in
-  `services/drivers/src/manifests.ts` by design — that file is for single-host,
-  credential-configured drivers the Driver Manager UI provisions end-to-end; AVR-style
-  "many independent physical units, each added by IP at commissioning" drivers
-  (matching the pre-existing AVR/WiiM/Devialet/Sonos/Shelly/AirPlay/AppleTv/Tuya
-  precedent) are boolean env-gated and rely on the protocol-binding commissioning flow
-  for per-device config instead. Full Bluetooth-pairing management and browse/search
+- **Extension Center visibility (post-review correction):** an initial pass shipped
+  AVR/HEOS/Yamaha as boolean env-gated only (the WiiM/Devialet/Sonos precedent),
+  reasoning that manifests.ts was for single-host, credential-configured drivers. That
+  precedent turned out to be a pre-existing product gap, not a pattern worth
+  extending — the Extension Center is populated *entirely* from the manifest registry
+  ("any current or future extension appears automatically"), so a driver with no
+  manifest is invisible and un-installable from the UI, discoverable only by editing
+  `.env`. Fixed: `supreme-avr`/`supreme-heos`/`supreme-yamaha` manifests were added
+  with an **empty `configSchema`** (there's nothing global to set — each physical unit
+  is still added by IP, and each Zone 2+/pid by `ProtocolBinding.config`, through Bus
+  Binding after the extension is installed and enabled), plus matching
+  `native-driver-factory.ts` entries. `SupremeNativeAdapter.registerDriver` replaces
+  any same-protocol instance on register, so this coexists safely with the pre-existing
+  env-wired `bootstrap.ts` path — exactly like KNX/MQTT/Modbus/Casambi already do.
+- **Trade-off / follow-ups:** full Bluetooth-pairing management and browse/search
   (HEOS `browse/*`, Yamaha `netusb/getListInfo`) are out of scope — this framework
   covers the transport/zone/DSP/now-playing surface the brief asked for, not a full
   music-service browser. See `docs/architecture/adding-avr-brands.md` for how a future
