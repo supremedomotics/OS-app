@@ -15,7 +15,7 @@ import 'discover_devices_screen.dart';
 import 'driver_manager_screen.dart';
 import 'energy_screen.dart';
 import 'home_switcher.dart';
-import 'room_view.dart';
+import 'room_categories_screen.dart';
 import 'scenes_screen.dart';
 import 'security_screen.dart';
 import 'software_update_screen.dart';
@@ -188,7 +188,7 @@ class DashboardScreen extends ConsumerWidget {
                         child: _RoomTile(
                           name: r.name,
                           chips: roomChips(allDevices.where((d) => d.roomId == r.id).toList()),
-                          onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
+                          onTap: () { usage.record('room', r.id); _push(context, Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomCategoriesScreen(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))); },
                         ),
                       ),
                     ),

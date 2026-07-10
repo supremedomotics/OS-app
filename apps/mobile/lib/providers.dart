@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -146,6 +148,45 @@ Future<void> logOut(WidgetRef ref) async {
 
 /// Holds the live WSS stream once authenticated.
 final streamProvider = StateProvider<SupremeStream?>((ref) => null);
+
+/// deviceId → capability → latest normalized state (live deltas + optimistic writes). Mirrors the
+/// web app's `LiveContext`: ONE subscription to the whole stream (the app subscribes with the "*"
+/// wildcard on connect — see `_onAuthenticated`), so every screen just watches this instead of each
+/// setting up its own listener and merging deltas by hand. `apply()` writes a value immediately
+/// (a drag/tap feels instant) and the server's own echo naturally overwrites it moments later.
+class LiveStatesNotifier extends Notifier<Map<String, Map<String, dynamic>>> {
+  StreamSubscription<StateDelta>? _sub;
+  bool _initialized = false;
+
+  @override
+  Map<String, Map<String, dynamic>> build() {
+    ref.onDispose(() => _sub?.cancel());
+    final stream = ref.watch(streamProvider);
+    _sub?.cancel();
+    _sub = stream?.states.listen((delta) {
+      state = {
+        ...state,
+        delta.deviceId: {...?state[delta.deviceId], delta.state['kind'] as String: delta.state},
+      };
+    });
+    // Preserve accumulated state across a rebuild (e.g. the stream reconnecting) — only the very
+    // first build has no `state` to read yet.
+    final preserved = _initialized ? state : <String, Map<String, dynamic>>{};
+    _initialized = true;
+    return preserved;
+  }
+
+  void apply(String deviceId, String capability, Map<String, dynamic> value) {
+    state = {...state, deviceId: {...?state[deviceId], capability: value}};
+  }
+}
+
+final liveStatesProvider = NotifierProvider<LiveStatesNotifier, Map<String, Map<String, dynamic>>>(LiveStatesNotifier.new);
+
+/// Merge a device's stored state with any live overrides for it — the one-liner every screen uses.
+Map<String, dynamic> mergedDeviceState(Device device, Map<String, Map<String, dynamic>> live) {
+  return {...device.state, ...?live[device.id]};
+}
 
 /// The signed-in user (for a personal greeting). Shape: { user: { displayName, email, … } }.
 final meProvider = FutureProvider<Map<String, dynamic>>((ref) async {

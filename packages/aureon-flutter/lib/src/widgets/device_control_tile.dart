@@ -4,8 +4,15 @@ import '../tokens.g.dart';
 
 /// Ovio "tile-as-control" device row (§11.1): a horizontal tile with an icon + name on
 /// the left, a value on the right, and a background that fills proportionally to the
-/// value. Horizontal drag sets the value (lights, covers); a tap opens the detail. Theme
-/// aware (renders in Luxury Black + Luxury White).
+/// value. Three distinct, unambiguous gestures instead of overloading tap:
+///   - tap toggles on/off ([onToggle], falling back to [onTap] if unset, for callers that
+///     haven't migrated — a plain toggle-less tile with no natural on/off still works via [onTap]);
+///   - horizontal drag (when [slidable]) sets the value live, showing it as it moves;
+///   - a small trailing chevron (shown only when [onOpenDetail] is set) opens the full detail.
+/// The chevron is a genuine SIBLING outside the tile's own gesture region (not nested inside it) —
+/// nested `GestureDetector`s in Flutter don't reliably suppress the outer one's `onTap`, so nesting
+/// the chevron there would have fired both the toggle AND the detail-open on every chevron tap.
+/// Theme aware (renders in Luxury Black + Luxury White).
 class DeviceControlTile extends StatefulWidget {
   const DeviceControlTile({
     super.key,
@@ -17,6 +24,8 @@ class DeviceControlTile extends StatefulWidget {
     required this.slidable,
     this.onChanged,
     this.onTap,
+    this.onToggle,
+    this.onOpenDetail,
   });
 
   final IconData icon;
@@ -27,6 +36,8 @@ class DeviceControlTile extends StatefulWidget {
   final bool slidable;
   final ValueChanged<double>? onChanged;
   final VoidCallback? onTap;
+  final VoidCallback? onToggle;
+  final VoidCallback? onOpenDetail;
 
   @override
   State<DeviceControlTile> createState() => _DeviceControlTileState();
@@ -43,7 +54,9 @@ class _DeviceControlTileState extends State<DeviceControlTile> {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final surface = Theme.of(context).cardTheme.color ?? scheme.surface;
-    return LayoutBuilder(
+    final tapAction = widget.onToggle ?? widget.onTap;
+
+    final tile = LayoutBuilder(
       builder: (context, c) {
         final width = c.maxWidth;
         void setFromDx(double dx) {
@@ -52,13 +65,13 @@ class _DeviceControlTileState extends State<DeviceControlTile> {
         }
 
         return GestureDetector(
-          onTap: widget.onTap,
+          onTap: tapAction,
           onHorizontalDragStart: widget.slidable ? (d) { _moved = false; setFromDx(d.localPosition.dx); } : null,
           onHorizontalDragUpdate: widget.slidable ? (d) { _moved = true; setFromDx(d.localPosition.dx); } : null,
           onHorizontalDragEnd: widget.slidable
               ? (_) {
                   setState(() => _drag = null);
-                  if (!_moved) widget.onTap?.call();
+                  if (!_moved) tapAction?.call();
                 }
               : null,
           child: Container(
@@ -103,6 +116,23 @@ class _DeviceControlTileState extends State<DeviceControlTile> {
           ),
         );
       },
+    );
+
+    if (widget.onOpenDetail == null) return tile;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(child: tile),
+        const SizedBox(width: AureonSpacing.xs),
+        SizedBox(
+          width: 40,
+          child: IconButton(
+            onPressed: widget.onOpenDetail,
+            icon: Icon(Icons.chevron_right, color: scheme.onSurface.withValues(alpha: 0.5)),
+            tooltip: 'View details',
+          ),
+        ),
+      ],
     );
   }
 }

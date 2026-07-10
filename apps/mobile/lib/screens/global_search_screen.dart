@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers.dart';
 import 'automations_screen.dart';
 import 'device_manager_screen.dart';
-import 'room_view.dart';
+import 'room_categories_screen.dart';
 import 'scenes_screen.dart';
 
 /// Global search (§ Global Search) — mobile parity. Fuzzy-jump to any device, room, scene or
@@ -53,7 +53,7 @@ class _GlobalSearchScreenState extends ConsumerState<GlobalSearchScreen> {
 
     final all = <_Result>[
       for (final r in rooms)
-        _Result(r.name, 'Room', () => RoomView(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl)),
+        _Result(r.name, 'Room', () => Scaffold(appBar: AppBar(title: Text(r.name)), body: RoomCategoriesScreen(roomId: r.id, roomName: r.name, areaType: r.areaType, heroImageUrl: r.heroImageUrl))),
       for (final d in devices)
         _Result(d.name, 'Device · ${roomName[d.roomId] ?? 'Unassigned'}', () => const DeviceManagerScreen()),
       for (final s in scenes) _Result(s.name, 'Scene', () => const ScenesScreen()),

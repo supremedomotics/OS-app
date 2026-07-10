@@ -13,6 +13,7 @@ import type {
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
+  CapabilityKind,
   Device,
   DeviceId,
   RoomId,
@@ -23,22 +24,12 @@ import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
-import { TabletRoom } from "./tablet-room.js";
+import { DeviceTile } from "./device-tile.js";
+import { RoomLighting } from "./room-lighting.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
 import { Icon } from "./icons.js";
 
-/** True on tablet/desktop widths — switches the room to the Ovio bento layout. */
-function useWide(): boolean {
-  const [wide, setWide] = useState(typeof window !== "undefined" && window.innerWidth >= 900);
-  useEffect(() => {
-    const on = () => setWide(window.innerWidth >= 900);
-    window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
-  }, []);
-  return wide;
-}
-
-function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []): [T | null, () => void] {
+export function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []): [T | null, () => void] {
   const [value, setValue] = useState<T | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
@@ -154,7 +145,6 @@ export function RoomsScreen({
 }) {
   const [home, refresh] = useAsync<HomeView>(() => client.home());
   const [allDevices] = useAsync<Device[]>(async () => (await client.devices()).devices);
-  const wide = useWide();
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -185,9 +175,8 @@ export function RoomsScreen({
 
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
-    if (wide) return <TabletRoom roomId={selected} name={room?.name ?? "Room"} heroImageUrl={room?.heroImageUrl ?? null} heroOrigin={heroOrigin.current} onBack={() => onSelect(null)} />;
     return (
-      <RoomDevices
+      <RoomCategories
         roomId={selected}
         name={room?.name ?? "Room"}
         heroImageUrl={room?.heroImageUrl ?? null}
@@ -223,24 +212,108 @@ export function RoomsScreen({
   );
 }
 
-function RoomDevices({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void }) {
+// ── Room navigation (§11.1): Room → control-type category → device list → individual control.
+// A room is never a flat junk-drawer of every device type — you choose WHAT you're here to
+// control first, exactly like a wall keypad is laid out zone by zone.
+export type CategoryKind = "lighting" | "climate" | "media" | "curtains" | "security" | "fans" | "cleaning" | "other";
+interface CategoryDef { kind: CategoryKind; label: string; icon: string }
+const CATEGORY_DEFS: CategoryDef[] = [
+  { kind: "lighting", label: "Lighting", icon: "☀" },
+  { kind: "climate", label: "Climate", icon: "❄" },
+  { kind: "media", label: "Media", icon: "♫" },
+  { kind: "curtains", label: "Curtains & Blinds", icon: "▤" },
+  { kind: "security", label: "Security", icon: "🔒" },
+  { kind: "fans", label: "Fans", icon: "≋" },
+  { kind: "cleaning", label: "Cleaning", icon: "◌" },
+  { kind: "other", label: "Other", icon: "•" },
+];
+
+function categoryOf(caps: CapabilityKind[]): CategoryKind {
+  if (caps.includes("brightness") || caps.includes("color")) return "lighting";
+  if (caps.includes("temperature")) return "climate";
+  if (caps.includes("media")) return "media";
+  if (caps.includes("position")) return "curtains";
+  if (caps.includes("lock")) return "security";
+  if (caps.includes("fan")) return "fans";
+  if (caps.includes("vacuum")) return "cleaning";
+  return "other";
+}
+
+export function categorize(devices: Device[]): (CategoryDef & { devices: Device[] })[] {
+  const buckets = new Map<CategoryKind, Device[]>();
+  for (const d of devices) {
+    const k = categoryOf(d.capabilities.map((c) => c.kind));
+    buckets.set(k, [...(buckets.get(k) ?? []), d]);
+  }
+  return CATEGORY_DEFS.filter((c) => buckets.has(c.kind)).map((c) => ({ ...c, devices: buckets.get(c.kind)! }));
+}
+
+/** A short, live "what's happening" line per category — luxury communicates before you read further. */
+function categorySummary(kind: CategoryKind, devices: Device[], live: Record<string, Record<string, unknown>>): string {
+  const merged = (d: Device) => ({ ...d.state, ...live[d.id] }) as Record<string, Record<string, unknown> | undefined>;
+  switch (kind) {
+    case "lighting": {
+      const on = devices.filter((d) => {
+        const s = merged(d);
+        return (s.brightness?.on ?? s.color?.on ?? s.onoff?.on) === true;
+      }).length;
+      return on > 0 ? `${on} of ${devices.length} on` : "All off";
+    }
+    case "curtains": {
+      const open = devices.filter((d) => Number((merged(d).position as { position?: number } | undefined)?.position ?? 0) > 0).length;
+      return open > 0 ? `${open} of ${devices.length} open` : "All closed";
+    }
+    case "climate": {
+      if (devices.length === 1) {
+        const t = merged(devices[0]!).temperature as { targetC?: number; ambientC?: number } | undefined;
+        return t?.targetC != null ? `Set to ${Math.round(t.targetC)}°` : `${Math.round(t?.ambientC ?? 21)}° now`;
+      }
+      return `${devices.length} zones`;
+    }
+    case "media": {
+      const playing = devices.filter((d) => (merged(d).media as { playback?: string } | undefined)?.playback === "playing").length;
+      return playing > 0 ? `${playing} playing` : "Idle";
+    }
+    case "security": {
+      const locked = devices.filter((d) => (merged(d).lock as { locked?: boolean } | undefined)?.locked !== false).length;
+      return locked === devices.length ? "All locked" : `${devices.length - locked} unlocked`;
+    }
+    case "fans": {
+      const on = devices.filter((d) => (merged(d).fan as { on?: boolean } | undefined)?.on).length;
+      return on > 0 ? `${on} on` : "All off";
+    }
+    case "cleaning": {
+      const active = devices.filter((d) => (merged(d).vacuum as { status?: string } | undefined)?.status === "cleaning").length;
+      return active > 0 ? "Cleaning" : "Idle";
+    }
+    default: {
+      const on = devices.filter((d) => (merged(d).onoff as { on?: boolean } | undefined)?.on).length;
+      return on > 0 ? `${on} on` : "All off";
+    }
+  }
+}
+
+function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void }) {
   const heroRef = useHeroFlip<HTMLDivElement>(heroOrigin);
   const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
+  const { states } = useLive();
   const roomPhoto = useRoomPhoto({ id: roomId, name, heroImageUrl }, client);
-  const [detail, setDetail] = useState<Device | null>(null);
-  const [sheet, setSheet] = useState<Device | null>(null);
+  const [category, setCategory] = useState<CategoryKind | null>(null);
   const list = devices ?? [];
-  const open = (d: Device) => {
-    const caps = d.capabilities.map((c) => c.kind);
-    if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
-    else if (["temperature", "position", "lock", "fan", "vacuum", "onoff", "media"].some((k) => caps.includes(k as never))) setSheet(d);
-  };
-  if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
+  const cats = categorize(list);
+
+  if (category === "lighting") {
+    const lights = cats.find((c) => c.kind === "lighting")?.devices ?? [];
+    return <RoomLighting roomId={roomId} name={name} lights={lights} onBack={() => setCategory(null)} />;
+  }
+  if (category) {
+    const cat = cats.find((c) => c.kind === category);
+    if (cat) return <CategoryDeviceList roomName={name} category={cat} onBack={() => setCategory(null)} />;
+  }
+
   return (
     <div>
-      <button className="back" onClick={onBack}>
-        ‹ Rooms
-      </button>
+      <button className="back" onClick={onBack}>‹ Rooms</button>
       {/* Room hero — entering a room should feel like entering the space. */}
       {(() => {
         const { emoji, ...s } = styleForPhoto(roomPhoto, { name, heroImageUrl }, 0.66);
@@ -257,104 +330,49 @@ function RoomDevices({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomI
           </div>
         );
       })()}
-      <div className="dlist">
-        {list.map((d) => (
-          <DeviceTile key={d.id} device={d} onOpen={() => open(d)} />
+      <div className="cat-grid">
+        {cats.map((c) => (
+          <button key={c.kind} className="cat-card" onClick={() => setCategory(c.kind)}>
+            <span className="cat-ic" aria-hidden>{c.icon}</span>
+            <span className="cat-body">
+              <span className="cat-lbl">{c.label}</span>
+              <span className="cat-sub">{categorySummary(c.kind, c.devices, states)}</span>
+            </span>
+            <span className="cat-count">{c.devices.length}</span>
+          </button>
         ))}
       </div>
       {devices && list.length === 0 && (
         <EmptyState icon="◎" title="This room is empty"
           hint="Devices you assign to this room will appear here. Add one from Discover Devices or move an existing device into this room." />
       )}
+    </div>
+  );
+}
+
+/** The device list for a single category (Media, Curtains, Climate, …) — tap a card to open its
+ * full control. Lighting has its own richer page ({@link RoomLighting}); every other category
+ * reuses the same tile grammar as the rest of the app. */
+function CategoryDeviceList({ roomName, category, onBack }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void }) {
+  const [detail, setDetail] = useState<Device | null>(null);
+  const [sheet, setSheet] = useState<Device | null>(null);
+  const open = (d: Device) => {
+    const caps = d.capabilities.map((c) => c.kind);
+    if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
+    else setSheet(d);
+  };
+  if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
+  return (
+    <div>
+      <button className="back" onClick={onBack}>‹ {roomName}</button>
+      <h1 className="title">{category.label}</h1>
+      <div className="dlist">
+        {category.devices.map((d) => (
+          <DeviceTile key={d.id} device={d} onOpen={() => open(d)} />
+        ))}
+      </div>
       {sheet && <DeviceSheet device={sheet} onClose={() => setSheet(null)} />}
     </div>
-  );
-}
-
-// ── Device tile — Ovio "tile-as-control": horizontal, fill = value, drag to set ──
-function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => void }) {
-  const { states, apply } = useLive();
-  const ref = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-  const moved = useRef(false);
-  const live = states[device.id] ?? {};
-  const caps = device.capabilities.map((c) => c.kind);
-  const merged = { ...device.state, ...live } as Record<string, { on?: boolean; level?: number; value?: number; unit?: string; position?: number }>;
-  const isDimmer = caps.includes("brightness");
-  const isCover = !isDimmer && caps.includes("position");
-  const isSwitch = !isDimmer && !isCover && caps.includes("onoff");
-  const isSensor = !isDimmer && !isSwitch && !isCover && caps.includes("sensor");
-  const slidable = isDimmer || isCover;
-
-  const bright = merged.brightness;
-  const onoff = merged.onoff;
-  const cover = merged.position;
-  const on = bright?.on ?? onoff?.on ?? (cover?.position ?? 0) > 0;
-  const level = isDimmer ? bright?.level ?? (on ? 100 : 0) : isCover ? cover?.position ?? 0 : on ? 100 : 0;
-
-  async function toggle() {
-    const next = !on;
-    recordUse("device", device.id);
-    apply(device.id, isDimmer ? "brightness" : "onoff", isDimmer ? { kind: "brightness", on: next, level: next ? Math.max(level, 1) : 0 } : { kind: "onoff", on: next });
-    await client.command(device.id as DeviceId, { capability: "onoff", action: "toggle" } as CapabilityCommand);
-  }
-  async function setLevel(v: number) {
-    const val = Math.max(0, Math.min(100, Math.round(v)));
-    if (isDimmer) {
-      apply(device.id, "brightness", { kind: "brightness", on: val > 0, level: val });
-      await client.command(device.id as DeviceId, { capability: "brightness", action: "set", level: val } as CapabilityCommand);
-    } else {
-      apply(device.id, "position", { kind: "position", position: val, moving: false });
-      await client.command(device.id as DeviceId, { capability: "position", action: "set", position: val } as CapabilityCommand);
-    }
-  }
-  function fromClientX(clientX: number) {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    void setLevel(((clientX - r.left) / r.width) * 100);
-  }
-
-  if (isSensor) {
-    const s = merged.sensor;
-    return (
-      <div className="dtile sensor">
-        <DeviceIcon kind="sensor" on={false} />
-        <span className="nm">{device.name}</span>
-        <span className="rv">{s?.value ?? "—"} {s?.unit ?? ""}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      ref={ref}
-      className={`dtile${on ? " on" : ""}`}
-      onClick={slidable ? undefined : (onOpen ? () => onOpen() : toggle)}
-      onPointerDown={slidable ? (e) => { dragging.current = true; moved.current = false; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); } : undefined}
-      onPointerMove={slidable ? (e) => { if (dragging.current) { moved.current = true; fromClientX(e.clientX); } } : undefined}
-      onPointerUp={slidable ? () => { dragging.current = false; if (!moved.current) onOpen?.(); } : undefined}
-    >
-      <div className="fill" style={{ width: `${level}%` }} />
-      <DeviceIcon kind={isDimmer ? "light" : isCover ? "cover" : "switch"} on={on} />
-      <span className="nm">{device.name}</span>
-      <span className="rv">{slidable ? `${Math.round(level)}%` : on ? "On" : "Off"}</span>
-    </div>
-  );
-}
-
-/** Minimal Aureon line icons (monochrome, theme-aware via currentColor). */
-function DeviceIcon({ kind, on }: { kind: "light" | "cover" | "switch" | "sensor"; on: boolean }) {
-  const paths: Record<string, string> = {
-    light: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.6 1 1 1 2v.5h6V15c0-1 .3-1.4 1-2A6 6 0 0 0 12 3Z",
-    cover: "M4 4h16M5 4v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4M9 19v2M15 19v2",
-    switch: "M8 6h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 6Zm0 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
-    sensor: "M12 3v18M3 12h18",
-  };
-  return (
-    <svg className={`dic${on ? " on" : ""}`} width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d={paths[kind]} />
-    </svg>
   );
 }
 

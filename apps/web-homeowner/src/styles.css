@@ -486,6 +486,13 @@ button.link {
 .dtile .dic.on { color: var(--aureon-color-gold-400); }
 .dtile .nm { font-weight: 600; }
 .dtile .rv { margin-left: auto; color: var(--aureon-color-text-secondary); font-variant-numeric: tabular-nums; }
+.dtile-open {
+  position: relative; z-index: 1; flex: none; margin-left: 2px;
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: 50%; color: var(--aureon-color-text-secondary);
+  font-size: 18px; line-height: 1; cursor: pointer; touch-action: manipulation;
+}
+.dtile-open:hover { background: color-mix(in srgb, var(--aureon-color-text-primary) 8%, transparent); color: var(--aureon-color-text-primary); }
 
 /* Screen header with an edit action */
 .screen-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
@@ -609,67 +616,50 @@ button.link {
 .home-remove { border: 0; background: none; color: var(--aureon-color-text-muted); cursor: pointer; padding: 8px; border-radius: 10px; }
 .home-remove:hover { color: var(--aureon-color-status-critical); }
 
-.tr-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
-.tr-head.has-image { padding: 22px 24px; border-radius: 18px; background-size: cover; background-position: center; box-shadow: inset 0 0 0 1px var(--aureon-color-base-hairline); }
-.tr-head.has-image .title { color: #fff; text-shadow: 0 1px 12px rgba(0,0,0,0.55); }
-.tr-head.has-image .back { color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,0.6); }
-.tr-head .back { background: none; border: 0; color: var(--aureon-color-gold-400); font-size: 15px; cursor: pointer; }
-.tr-grid { display: grid; grid-template-columns: 230px 1fr 300px; gap: 16px; align-items: stretch; min-height: 560px; }
-.tr-col { display: flex; flex-direction: column; gap: 16px; }
-.bento {
-  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
-  border-radius: 22px; padding: 18px 20px; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px;
-  min-height: 96px; cursor: pointer; text-align: left; color: var(--aureon-color-text-primary);
+/* Room navigation (§11.1): Room → category cards → device list → detail. */
+.cat-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+.cat-card {
+  display: flex; align-items: center; gap: 16px; text-align: left; cursor: pointer;
+  padding: 18px 20px; border-radius: 18px; background: var(--aureon-color-base-surface-raised);
+  border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary);
+  transition: border-color 120ms ease, transform 120ms ease;
 }
-.bento.tall { flex: 1; }
-.bento.agg .big { font-size: 44px; font-weight: 600; line-height: 1; }
-.bento.agg .lbl { color: var(--aureon-color-text-secondary); }
-.bento .dot { width: 16px; height: 16px; border-radius: 50%; display: inline-block; }
-.bento .nm { font-weight: 600; }
-.bento.light { align-items: flex-start; }
-.bento.light.sel { border-color: var(--aureon-color-gold-400); box-shadow: 0 0 0 1px var(--aureon-color-gold-400); }
-.tr-centre { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
-.disc {
-  position: relative; width: min(440px, 38vw); aspect-ratio: 1; border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 18px 60px rgba(0,0,0,0.35);
+.cat-card:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, var(--aureon-color-base-hairline)); transform: translateY(-1px); }
+.cat-ic { font-size: 22px; color: var(--aureon-color-gold-400); flex: none; width: 28px; text-align: center; }
+.cat-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.cat-lbl { font-weight: 600; font-size: 16px; }
+.cat-sub { color: var(--aureon-color-text-secondary); font-size: 13px; }
+.cat-count { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--aureon-color-text-secondary); flex: none; }
+@media (min-width: 700px) { .cat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; } }
+
+/* Room Lighting page — master control + optional room-wide colour/temperature + individual lights. */
+.room-lighting { display: flex; flex-direction: column; gap: 22px; }
+.rl-master {
+  display: flex; align-items: center; gap: 16px; text-align: left; cursor: pointer;
+  padding: 20px 22px; border-radius: 20px; background: var(--aureon-color-base-surface-raised);
+  border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary);
 }
-.disc.colour {
-  background:
-    radial-gradient(circle at center, #fff 0%, rgba(255,255,255,0) 72%),
-    conic-gradient(from 0deg, hsl(0 90% 55%), hsl(60 90% 55%), hsl(120 90% 55%), hsl(180 90% 55%), hsl(240 90% 55%), hsl(300 90% 55%), hsl(360 90% 55%));
+.rl-master.on { border-color: color-mix(in srgb, var(--aureon-color-gold-500) 55%, var(--aureon-color-base-hairline)); }
+.rl-master-ic { font-size: 26px; color: var(--aureon-color-gold-400); flex: none; }
+.rl-master-body { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.rl-master-lbl { font-weight: 700; font-size: 18px; }
+.rl-master-sub { color: var(--aureon-color-text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.rl-master-sw {
+  flex: none; width: 50px; height: 30px; border-radius: 999px; position: relative;
+  background: var(--aureon-color-base-hairline); transition: background 140ms ease;
 }
-/* White/CCT disc: a true warm→cool colour-temperature spectrum (2700K → 6500K), not a flat fill. */
-.disc.white {
-  background:
-    radial-gradient(circle at center, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 70%),
-    linear-gradient(105deg, #ff9b3d 0%, #ffd9a8 28%, #fff4e8 50%, #dcebff 72%, #a9ceff 100%);
+.rl-master-sw.on { background: var(--aureon-color-gold-500); }
+.rl-master-knob {
+  position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35); transition: transform 140ms ease;
 }
-.disc .node {
-  position: absolute; width: 30px; height: 30px; border-radius: 50%; transform: translate(-50%, -50%);
-  border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 3px 8px rgba(0,0,0,0.35); cursor: grab; touch-action: none;
-}
-.disc .node.sel { width: 36px; height: 36px; box-shadow: 0 0 0 2px var(--aureon-color-gold-400), 0 3px 10px rgba(0,0,0,0.4); }
-.disc .node.off { border-color: rgba(255,255,255,0.7); }
-.disc-mode { background: none; border: 0; cursor: pointer; padding: 0; }
-.disc-mode .ring {
-  display: block; width: 30px; height: 30px; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-}
-/* The mode toggle's icon mirrors the active mode. */
-.disc-mode .ring.rgb { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
-.disc-mode .ring.cct { background: linear-gradient(90deg, #ff9b3d, #fff4e8, #a9ceff); }
-.tr-empty {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  width: min(440px, 38vw); aspect-ratio: 1; border-radius: 50%;
-  background: var(--aureon-color-base-surface-raised); border: 1px dashed var(--aureon-color-base-hairline);
-  color: var(--aureon-color-text-secondary); text-align: center; gap: 6px;
-}
-.tr-empty .big { font-size: 48px; font-weight: 700; color: var(--aureon-color-text-primary); }
-.tr-empty .lbl { font-size: 14px; padding: 0 16px; }
-.tr-mosaic { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: minmax(96px, 1fr); gap: 16px; }
-.ctx {
-  position: fixed; z-index: 30; background: #1b1d24; color: #fff; border-radius: 16px; padding: 8px; min-width: 200px;
-  box-shadow: 0 16px 50px rgba(0,0,0,0.5); display: flex; flex-direction: column;
-}
+.rl-master-sw.on .rl-master-knob { transform: translateX(20px); }
+.rl-group { display: flex; flex-direction: column; gap: 22px; }
+.rl-group-item { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.rl-group-lbl { align-self: flex-start; font-weight: 600; font-size: 14px; color: var(--aureon-color-text-secondary); }
+@media (min-width: 700px) { .rl-group { flex-direction: row; } .rl-group-item { flex: 1; } }
+.rl-grid { display: flex; flex-direction: column; gap: 10px; }
+@media (min-width: 700px) { .rl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; } }
 .ctx button { background: none; border: 0; color: #fff; text-align: left; padding: 12px 14px; border-radius: 10px; cursor: pointer; font-size: 15px; }
 .ctx button:hover { background: rgba(255,255,255,0.08); }
 

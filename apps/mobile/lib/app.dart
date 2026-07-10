@@ -64,6 +64,9 @@ class _RootState extends ConsumerState<_Root> {
       wsBaseUrl: ref.read(hubWsUrlProvider),
       accessToken: client.accessToken!,
     )..connect();
+    // The "*" wildcard subscribes to every room in one go — liveStatesProvider fans this out to
+    // every screen, so individual screens no longer need their own per-room subscribe/listener.
+    stream.subscribe(const ["*"]);
     ref.read(streamProvider.notifier).state = stream;
     ref.read(sessionActiveProvider.notifier).state = true;
   }

@@ -12,7 +12,7 @@ export 'src/widgets/category_tile.dart';
 export 'src/widgets/device_control_tile.dart';
 export 'src/widgets/room_hero.dart';
 export 'src/widgets/color_wheel.dart';
-export 'src/widgets/multi_light_disc.dart';
+export 'src/widgets/temperature_slider.dart';
 export 'src/widgets/slide_to_confirm.dart';
 export 'src/widgets/scene_button.dart';
 export 'src/widgets/climate_card.dart';

@@ -3,11 +3,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
+import '../color_mode.dart';
 import '../providers.dart';
 
 /// Purpose-built lighting control (§11.1): a large brightness dial, an HSV colour wheel,
 /// and a warm→cool temperature slider — shown per the light's capabilities. Drives the
 /// Supreme `brightness` + `color` commands; HA is never in view.
+///
+/// Live-fed: every value reads through [liveStatesProvider], so a change made elsewhere
+/// (another screen, a physical switch, Casambi's own app) shows up here immediately — and every
+/// local drag writes optimistically into the SAME live state via `apply`, so the two never diverge.
 class LightingDetail extends ConsumerStatefulWidget {
   const LightingDetail({super.key, required this.device});
 
@@ -20,95 +25,88 @@ class LightingDetail extends ConsumerStatefulWidget {
 enum _Mode { colour, white }
 
 class _LightingDetailState extends ConsumerState<LightingDetail> {
-  late bool _on = widget.device.isOn;
-  late double _level = widget.device.brightnessFraction; // 0..1
-  double _hue = 40;
-  double _sat = 0.6;
-  double _kelvin = 2700;
-  _Mode _mode = _Mode.colour;
+  _Mode? _modeOverride;
 
   bool get _hasColour => widget.device.capabilities.contains('color');
 
-  @override
-  void initState() {
-    super.initState();
-    final c = widget.device.state['color'] as Map<String, dynamic>?;
-    if (c != null) {
-      _hue = ((c['hue'] as num?) ?? _hue).toDouble();
-      _sat = ((c['saturation'] as num?) ?? (_sat * 100)).toDouble() / 100.0;
-      _kelvin = ((c['kelvin'] as num?) ?? _kelvin).toDouble();
-      if ((c['kelvin'] != null) && c['hue'] == null) _mode = _Mode.white;
-    }
-  }
-
   Future<void> _cmd(Map<String, dynamic> c) => ref.read(clientProvider).command(widget.device.id, c);
-
-  void _setLevel(double v) {
-    setState(() {
-      _level = v.clamp(0.0, 1.0);
-      _on = _level > 0;
-    });
-    _cmd({'capability': 'brightness', 'action': 'set', 'level': (_level * 100).round()});
-  }
-
-  void _setColour(double hue, double sat) {
-    setState(() {
-      _hue = hue;
-      _sat = sat;
-    });
-    _cmd({'capability': 'color', 'hue': hue.round(), 'saturation': (sat * 100).round()});
-  }
-
-  void _setKelvin(double k) {
-    setState(() => _kelvin = k);
-    _cmd({'capability': 'color', 'kelvin': k.round()});
-  }
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final live = ref.watch(liveStatesProvider);
+    final merged = mergedDeviceState(widget.device, live);
+    final apply = ref.read(liveStatesProvider.notifier).apply;
+
+    final brightness = merged['brightness'] as Map<String, dynamic>?;
+    final onoff = merged['onoff'] as Map<String, dynamic>?;
+    final color = merged['color'] as Map<String, dynamic>?;
+    final on = (brightness?['on'] as bool?) ?? (onoff?['on'] as bool?) ?? (color?['on'] as bool?) ?? false;
+    final level = ((brightness?['level'] as num?) ?? (color?['level'] as num?) ?? (on ? 100 : 0)).toDouble() / 100.0;
+    final hue = ((color?['hue'] as num?) ?? 40).toDouble();
+    final sat = ((color?['saturation'] as num?) ?? 60).toDouble() / 100.0;
+    final kelvin = ((color?['kelvin'] as num?) ?? 2700).toDouble();
+    final modes = colorModesOf(color);
+    final mode = _modeOverride ?? (!modes.rgb && modes.cct ? _Mode.white : _Mode.colour);
+
+    void setLevel(double v) {
+      final val = v.clamp(0.0, 1.0);
+      apply(widget.device.id, 'brightness', {'kind': 'brightness', 'on': val > 0, 'level': (val * 100).round()});
+      _cmd({'capability': 'brightness', 'action': 'set', 'level': (val * 100).round()});
+    }
+
+    void setColour(double h, double s) {
+      apply(widget.device.id, 'color', {'kind': 'color', 'on': true, 'level': level * 100, 'hue': h.round(), 'saturation': (s * 100).round(), 'kelvin': null});
+      _cmd({'capability': 'color', 'hue': h.round(), 'saturation': (s * 100).round()});
+    }
+
+    void setKelvin(double k) {
+      final kr = k.round();
+      apply(widget.device.id, 'color', {'kind': 'color', 'on': true, 'level': level * 100, 'hue': null, 'saturation': null, 'kelvin': kr});
+      _cmd({'capability': 'color', 'kelvin': kr});
+    }
+
+    void toggle(bool v) {
+      final hasBrightness = widget.device.capabilities.contains('brightness');
+      apply(widget.device.id, hasBrightness ? 'brightness' : 'onoff',
+          hasBrightness ? {'kind': 'brightness', 'on': v, 'level': v ? (level * 100).clamp(1, 100) : 0} : {'kind': 'onoff', 'on': v});
+      _cmd({'capability': hasBrightness ? 'brightness' : 'onoff', 'action': v ? 'on' : 'off'});
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.device.name),
-        actions: [
-          Switch(
-            value: _on,
-            onChanged: (v) {
-              setState(() => _on = v);
-              _cmd({'capability': widget.device.capabilities.contains('brightness') ? 'brightness' : 'onoff', 'action': v ? 'on' : 'off'});
-            },
-          ),
-        ],
+        actions: [Switch(value: on, onChanged: toggle)],
       ),
       body: ListView(
         padding: const EdgeInsets.all(AureonSpacing.lg),
         children: [
           // Brightness dial — a tall bar that fills bottom-up; drag to set.
           Center(
-            child: _BrightnessBar(value: _level, onChanged: _setLevel),
+            child: _BrightnessBar(value: level, onChanged: setLevel),
           ),
           const SizedBox(height: AureonSpacing.sm),
-          Center(child: Text('${(_level * 100).round()}%', style: text.headlineSmall)),
+          Center(child: Text('${(level * 100).round()}%', style: text.headlineSmall)),
           const SizedBox(height: AureonSpacing.xl),
 
-          if (_hasColour) ...[
+          if (_hasColour && modes.rgb && modes.cct) ...[
             Center(
               child: SegmentedButton<_Mode>(
                 segments: const [
                   ButtonSegment(value: _Mode.colour, label: Text('Colour'), icon: Icon(Icons.palette_outlined)),
                   ButtonSegment(value: _Mode.white, label: Text('White'), icon: Icon(Icons.wb_sunny_outlined)),
                 ],
-                selected: {_mode},
-                onSelectionChanged: (s) => setState(() => _mode = s.first),
+                selected: {mode},
+                onSelectionChanged: (s) => setState(() => _modeOverride = s.first),
                 showSelectedIcon: false,
               ),
             ),
             const SizedBox(height: AureonSpacing.xl),
-            if (_mode == _Mode.colour)
-              Center(child: ColorWheel(hue: _hue, saturation: _sat, onChanged: _setColour))
-            else
-              _TemperatureSlider(kelvin: _kelvin, onChanged: _setKelvin),
           ],
+          if (_hasColour && modes.rgb && mode == _Mode.colour)
+            Center(child: ColorWheel(hue: hue, saturation: sat, onChanged: setColour))
+          else if (_hasColour && modes.cct && mode == _Mode.white)
+            TemperatureSlider(kelvin: kelvin, onChanged: setKelvin),
         ],
       ),
     );
@@ -160,57 +158,6 @@ class _BrightnessBar extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Warm→cool colour-temperature slider (2200K..6500K).
-class _TemperatureSlider extends StatelessWidget {
-  const _TemperatureSlider({required this.kelvin, required this.onChanged});
-  final double kelvin;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    const min = 2200.0, max = 6500.0;
-    final t = ((kelvin - min) / (max - min)).clamp(0.0, 1.0);
-    return Column(
-      children: [
-        LayoutBuilder(
-          builder: (context, c) {
-            void setFromDx(double dx) => onChanged(min + (dx / c.maxWidth).clamp(0.0, 1.0) * (max - min));
-            return GestureDetector(
-              onPanDown: (d) => setFromDx(d.localPosition.dx),
-              onPanUpdate: (d) => setFromDx(d.localPosition.dx),
-              child: Container(
-                height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AureonRadius.pill),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFFFB867), Color(0xFFFFF1D6), Color(0xFFCFE5FF)],
-                  ),
-                ),
-                child: Align(
-                  alignment: Alignment(t * 2 - 1, 0),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    margin: const EdgeInsets.symmetric(horizontal: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.black.withValues(alpha: 0.15)),
-                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: AureonSpacing.sm),
-        Text('${kelvin.round()}K', style: Theme.of(context).textTheme.labelMedium),
-      ],
     );
   }
 }
