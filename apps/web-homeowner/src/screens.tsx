@@ -57,13 +57,20 @@ function greetingFor(d: Date): string {
   return "Good night";
 }
 
-/** A room tile: a real interior photo (hub-stored or fetched), else a designed motif gradient. */
-function RoomCard({ room, devices = [], onOpen }: { room: RoomLike; devices?: Device[]; onOpen: (rect: DOMRect) => void }) {
+/** A room tile: a real interior photo (hub-stored or fetched), else a designed motif gradient.
+ * `onDelete`, when supplied (only from the Rooms management screen, never the Dashboard), shows
+ * a small delete affordance in the corner — a room card is otherwise just a tap target. */
+function RoomCard({ room, devices = [], onOpen, onDelete }: { room: RoomLike; devices?: Device[]; onOpen: (rect: DOMRect) => void; onDelete?: () => void }) {
   const photo = useRoomPhoto(room, client);
   const { emoji, ...style } = styleForPhoto(photo, room);
   return (
     <div className="room-card has-image" style={style} onClick={(e) => onOpen((e.currentTarget as HTMLElement).getBoundingClientRect())}>
       {emoji && <span className="room-motif" aria-hidden>{emoji}</span>}
+      {onDelete && (
+        <button className="room-card-delete" onClick={(e) => { e.stopPropagation(); onDelete(); }} aria-label={`Delete ${room.name}`}>
+          ✕
+        </button>
+      )}
       <span className="name">{room.name}</span>
       <span className="room-card-sub"><RoomChips devices={devices} /></span>
     </div>
@@ -173,6 +180,19 @@ export function RoomsScreen({
     }
   }
 
+  async function deleteRoom(room: RoomLike & { id: string }) {
+    const count = (allDevices ?? []).filter((d) => d.roomId === room.id).length;
+    const warn = count > 0 ? ` Its ${count} device${count === 1 ? "" : "s"} will become unassigned.` : "";
+    if (!window.confirm(`Delete "${room.name}"?${warn}`)) return;
+    try {
+      await client.deleteRoom(room.id as never);
+      setErr(null);
+      refresh();
+    } catch (e) {
+      setErr(friendlyError(e, "Could not delete the room. Please try again."));
+    }
+  }
+
   if (selected) {
     const room = home?.rooms.find((r) => r.id === selected);
     return (
@@ -196,16 +216,17 @@ export function RoomsScreen({
       {adding && (
         <div className="card" style={{ marginBottom: 12 }}>
           <input placeholder="Room name (e.g. Home Gym)" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createRoom()} autoFocus />
-          {err && <p className="err">{err}</p>}
           <button className="primary" disabled={!newName.trim()} onClick={createRoom} style={{ marginTop: 8 }}>Create room</button>
         </div>
       )}
+      {err && <p className="err">{err}</p>}
       <div className="grid">
         {/* Frequently-used rooms move higher (§ Personalization) — a stable order until the home has
             usage history, then the rooms you open most float to the top. */}
         {byFrequency(home?.rooms ?? [], "room").map((r) => (
           <RoomCard key={r.id} room={r} devices={(allDevices ?? []).filter((d) => d.roomId === r.id)}
-            onOpen={(rect) => { heroOrigin.current = rect; recordUse("room", r.id); onSelect(r.id); }} />
+            onOpen={(rect) => { heroOrigin.current = rect; recordUse("room", r.id); onSelect(r.id); }}
+            onDelete={() => deleteRoom(r)} />
         ))}
       </div>
     </div>

@@ -133,4 +133,51 @@ describe("Device management — move / rename / delete", () => {
     });
     expect(res.status).toBe(422);
   });
+
+  it("deletes a room (owner); its devices survive, unassigned rather than deleted", async () => {
+    const token = await login();
+    const created = await fetch(`${baseUrl}/v1/rooms`, {
+      method: "POST",
+      headers: auth(token),
+      body: JSON.stringify({ name: "Temporary Room" }),
+    });
+    const { room } = (await created.json()) as { room: { id: string } };
+
+    // Move a real device into it so we can prove it survives the room's deletion.
+    const h = await home(token);
+    const device = (await roomDevices(token, h.rooms[0]!.id))[0]!;
+    await fetch(`${baseUrl}/v1/devices/${device.id}`, {
+      method: "PATCH",
+      headers: auth(token),
+      body: JSON.stringify({ roomId: room.id }),
+    });
+
+    const del = await fetch(`${baseUrl}/v1/rooms/${room.id}`, { method: "DELETE", headers: auth(token) });
+    expect(del.status).toBe(204);
+
+    const after = await home(token);
+    expect(after.rooms.some((r) => r.id === room.id)).toBe(false);
+
+    // The device itself survives, unassigned rather than deleted.
+    const all = (await (await fetch(`${baseUrl}/v1/devices`, { headers: auth(token) })).json()) as {
+      devices: { id: string; roomId: string | null }[];
+    };
+    const survived = all.devices.find((d) => d.id === device.id);
+    expect(survived).toBeTruthy();
+    expect(survived?.roomId).toBeNull();
+  });
+
+  it("rejects deleting a non-existent room (404)", async () => {
+    const token = await login();
+    const res = await fetch(`${baseUrl}/v1/rooms/room-does-not-exist`, { method: "DELETE", headers: auth(token) });
+    expect(res.status).toBe(404);
+  });
+
+  it("denies room deletion to a family member (403)", async () => {
+    const owner = await login();
+    const family = await login("family-dm@supreme.local", "family-demo-password");
+    const h = await home(owner);
+    const res = await fetch(`${baseUrl}/v1/rooms/${h.rooms[0]!.id}`, { method: "DELETE", headers: auth(family) });
+    expect(res.status).toBe(403);
+  });
 });

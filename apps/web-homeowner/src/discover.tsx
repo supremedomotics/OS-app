@@ -29,6 +29,18 @@ function roomLabel(r: Room): string {
   return parts.join(" · ");
 }
 
+/**
+ * Guess the room a discovered device belongs in from its own name (e.g. "Pantry DL-1" →
+ * the "Pantry" room) instead of making the installer pick every single time. Still just a
+ * default — the room picker stays fully editable, so a wrong or absent guess costs nothing.
+ * Prefers the longest (most specific) matching room name, e.g. "Master Bedroom" over "Bedroom".
+ */
+function matchRoomByName(deviceName: string, rooms: Room[]): Room | undefined {
+  const dn = deviceName.toLowerCase();
+  const matches = rooms.filter((r) => r.name.trim().length > 0 && dn.includes(r.name.trim().toLowerCase()));
+  return matches.sort((a, b) => b.name.length - a.name.length)[0];
+}
+
 export function DiscoverDevices() {
   const [registry, setRegistry] = useState<DriverEntry[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -128,10 +140,14 @@ function FoundDevice({
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(device.suggestedName);
+  // Assign directly to the room its own name points at (e.g. "Pantry DL-1" → Pantry) instead of
+  // defaulting to the first room in the list and making the installer pick every time — still
+  // just a pre-selection, changeable below like any other field.
+  const matchedRoom = matchRoomByName(device.suggestedName, rooms);
   // Location cascade. `mode` toggles between placing into an existing room and creating a new one
   // (Building → Floor → Room → Area) inline, so a device can be commissioned even in an empty home.
   const [mode, setMode] = useState<"existing" | "new">(rooms.length ? "existing" : "new");
-  const [roomId, setRoomId] = useState(rooms[0]?.id ?? "");
+  const [roomId, setRoomId] = useState(matchedRoom?.id ?? rooms[0]?.id ?? "");
   const [building, setBuilding] = useState(rooms[0]?.building ?? "");
   const [floor, setFloor] = useState(String(rooms[0]?.floor ?? 0));
   const [area, setArea] = useState("");
@@ -229,6 +245,9 @@ function FoundDevice({
                   <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
                     {rooms.map((r) => <option key={r.id} value={r.id}>{roomLabel(r)}</option>)}
                   </select>
+                  {matchedRoom && matchedRoom.id === roomId && (
+                    <span className="help">Matched from the device's name — change it above if that's wrong.</span>
+                  )}
                 </label>
               ) : (
                 // The location cascade — Building › Floor › Room › Area. Building/Area are optional

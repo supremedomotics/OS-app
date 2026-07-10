@@ -56,7 +56,7 @@ export function LightingDetail({ device, onClose }: { device: Device; onClose: (
   };
   const toggle = () => {
     const n = !on;
-    apply(device.id, hasColour || brightness ? "brightness" : "onoff", hasColour || brightness ? { kind: "brightness", on: n, level: n ? Math.max(level, 1) : 0 } : { kind: "onoff", on: n });
+    apply(device.id, hasColour || brightness ? "brightness" : "onoff", hasColour || brightness ? { kind: "brightness", on: n, level: n ? (level > 0 ? level : 100) : 0 } : { kind: "onoff", on: n });
     void cmd({ capability: hasColour || brightness ? "brightness" : "onoff", action: n ? "on" : "off" } as CapabilityCommand);
   };
 

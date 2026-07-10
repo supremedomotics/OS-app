@@ -28,6 +28,7 @@ export interface IHomeStore {
   listRooms(): Promise<Room[]>;
   getRoom(id: RoomId): Promise<Room | null>;
   putRoom(room: Room): Promise<void>;
+  deleteRoom(id: RoomId): Promise<void>;
 
   listDevices(): Promise<StoredDevice[]>;
   getDevice(id: DeviceId): Promise<StoredDevice | null>;
@@ -63,6 +64,9 @@ export class InMemoryHomeStore implements IHomeStore {
   }
   async putRoom(room: Room) {
     this.rooms.set(room.id, room);
+  }
+  async deleteRoom(id: RoomId) {
+    this.rooms.delete(id);
   }
   async listDevices() {
     return [...this.devices.values()];

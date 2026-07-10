@@ -156,6 +156,11 @@ export class SupremeClient {
     return this.request("PATCH", `/v1/rooms/${roomId}`, patch) as Promise<{ room: { id: string; name: string } }>;
   }
 
+  /** Delete a room (owner/admin/installer). Devices left in it are unassigned, never deleted. */
+  async deleteRoom(roomId: RoomId): Promise<void> {
+    await this.request("DELETE", `/v1/rooms/${roomId}`);
+  }
+
   /** Change the signed-in user's password (requires the current password). */
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await this.request("POST", "/v1/me/password", { currentPassword, newPassword });

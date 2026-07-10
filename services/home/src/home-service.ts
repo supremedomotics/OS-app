@@ -52,6 +52,21 @@ export class HomeService {
     return this.store.putRoom(room);
   }
 
+  /**
+   * Delete a room. Any devices left in it are unassigned (roomId → null) rather than deleted —
+   * a room disappearing must never take its devices with it; they simply become "unassigned"
+   * until moved elsewhere (matches the existing bulk-move device flow).
+   */
+  async removeRoom(roomId: RoomId): Promise<void> {
+    await this.requireRoom(roomId);
+    const inRoom = await this.listDevicesInRoom(roomId);
+    for (const d of inRoom) {
+      const stored = await this.store.getDevice(d.id);
+      if (stored) await this.store.putDevice({ ...stored.device, roomId: null }, stored.backendIds);
+    }
+    await this.store.deleteRoom(roomId);
+  }
+
   async getDevice(id: DeviceId): Promise<Device | null> {
     return (await this.store.getDevice(id))?.device ?? null;
   }

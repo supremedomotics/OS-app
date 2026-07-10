@@ -95,6 +95,29 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
     }
   });
 
+  // Delete a room (§8): DELETE /v1/rooms/:id. Devices left in it are unassigned, never deleted.
+  // Owner/admin/installer only (room:delete).
+  app.delete<{ Params: { id: string } }>("/v1/rooms/:id", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const roomId = req.params.id as RoomId;
+      await ctx.home.requireRoom(roomId);
+      await enforce(ctx, user, "room", roomId, "delete");
+
+      await ctx.home.removeRoom(roomId);
+      await ctx.audit?.record({
+        homeId: ctx.homeId,
+        actorUserId: user.id,
+        action: "room.delete",
+        resourceType: "room",
+        resourceId: roomId,
+      });
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Room hero imagery (§11) ──────────────────────────────────────────────────
   // The hub downloads ONE stock photo per room (by name) and stores the bytes locally, so every
   // client shows the identical image offline. Owners can replace it with a live photo (PUT).

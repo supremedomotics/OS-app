@@ -127,6 +127,9 @@ export class HomeRepo implements IHomeStore {
       [room.id, room.homeId, room.name, room.building, room.floor, room.area, room.areaType, room.sortOrder, room.icon, room.heroImageUrl, room.parentRoomId],
     );
   }
+  async deleteRoom(id: RoomId): Promise<void> {
+    await this.db.query("DELETE FROM rooms WHERE id=$1", [id]);
+  }
 
   async listDevices(): Promise<StoredDevice[]> {
     const { rows } = await this.db.query<DeviceRow>("SELECT * FROM devices");

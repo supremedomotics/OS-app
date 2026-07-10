@@ -35,7 +35,7 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
     const next = !on;
     recordUse("device", device.id);
     if (isDimmer) {
-      apply(device.id, "brightness", { kind: "brightness", on: next, level: next ? Math.max(level, 1) : 0 });
+      apply(device.id, "brightness", { kind: "brightness", on: next, level: next ? (level > 0 ? level : 100) : 0 });
       await client.command(device.id as DeviceId, { capability: "brightness", action: next ? "on" : "off" } as CapabilityCommand);
     } else if (isCover) {
       apply(device.id, "position", { kind: "position", position: next ? 100 : 0, moving: false });

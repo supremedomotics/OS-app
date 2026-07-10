@@ -139,6 +139,55 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect(moved?.floor).toBe(2);
   });
 
+  it("deletes a room against the real Postgres-backed store; its devices survive, unassigned", async () => {
+    const sil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
+    await sil.start();
+    const home = new HomeService(sil, stores.home);
+    const homeId = newId("home") as HomeId;
+    const roomId = newId("room") as RoomId;
+    await home.addRoom({
+      id: roomId,
+      homeId,
+      name: "Guest Suite",
+      building: null,
+      floor: 0,
+      area: null,
+      areaType: "bedroom",
+      sortOrder: 0,
+      icon: null,
+      heroImageUrl: null,
+      parentRoomId: null,
+    });
+    const deviceId = newId("device") as DeviceId;
+    await home.addDevice(
+      {
+        id: deviceId,
+        homeId,
+        roomId,
+        name: "Guest Lamp",
+        supremeType: "dimmer",
+        manufacturer: null,
+        model: null,
+        driverId: null,
+        status: "online",
+        capabilities: [{ kind: "onoff", config: {} }],
+        state: {},
+        metadata: {},
+      },
+      {},
+    );
+
+    await home.removeRoom(roomId);
+
+    // A fresh service over the same store confirms this survived a restart, not just the
+    // in-memory instance: the room is gone, but the device is untouched aside from roomId.
+    const fresh = new HomeService(sil, stores.home);
+    expect(await fresh.getRoom(roomId)).toBeNull();
+    const survived = await fresh.getDevice(deviceId);
+    expect(survived).not.toBeNull();
+    expect(survived?.roomId).toBeNull();
+  });
+
   it("persists scenes and grants", async () => {
     const sil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
     await sil.start();

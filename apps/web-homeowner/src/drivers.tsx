@@ -7,7 +7,10 @@ import {
   fetchDriverLogs,
   fetchDriverRegistry,
   getDriverConfig,
+  importKnx,
+  importKnxProject,
   installDriverByKey,
+  type KnxImportResult,
   setDriverConfig,
   setDriverEnabled,
   uninstallDriver,
@@ -177,6 +180,11 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
         </div>
       )}
 
+      {/* KNX ETS project import — the answer to "where do I add my group addresses" once the
+          bus is connected. Protocol-specific (KNX only), so it's a direct addition here rather
+          than a generic schema field. */}
+      {driver.installed && driver.protocols.includes("knx") && <KnxImportPanel />}
+
       {/* Health */}
       {health && (
         <div className="drv-health">
@@ -200,6 +208,105 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
       )}
 
       {msg && <p className="muted">{msg}</p>}
+      {err && <p className="err">{err}</p>}
+    </div>
+  );
+}
+
+/**
+ * KNX ETS project import (§4): upload a `.knxproj` (device cards placed in their ETS rooms) or
+ * paste an ETS group-address export (CSV/XML — capabilities inferred from each datapoint type).
+ * Lives directly on the connected KNX extension's own page, so "where do I bring in my group
+ * addresses" has one obvious answer instead of a separate hidden screen.
+ */
+function KnxImportPanel() {
+  const [text, setText] = useState("");
+  const [knxproj, setKnxproj] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  function report(out: KnxImportResult) {
+    setResult(`Imported ${out.devices} device${out.devices === 1 ? "" : "s"}${out.roomsCreated ? ` · ${out.roomsCreated} new room${out.roomsCreated === 1 ? "" : "s"}` : ""}.`);
+    setText("");
+    setKnxproj(null);
+    setPassword("");
+    setNeedsPassword(false);
+  }
+
+  async function runImport(fn: () => Promise<KnxImportResult>) {
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      report(await fn());
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Import failed.";
+      if (/password/i.test(message)) setNeedsPassword(true);
+      setErr(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onFile(file: File) {
+    setNeedsPassword(false);
+    setPassword("");
+    if (file.name.toLowerCase().endsWith(".knxproj")) {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
+      const base64 = btoa(bin);
+      setKnxproj(base64);
+      await runImport(() => importKnxProject(base64));
+    } else {
+      setText(await file.text());
+      setResult(null);
+      setErr(null);
+    }
+  }
+
+  return (
+    <div className="drv-config">
+      <h4>Import ETS project</h4>
+      <p className="muted">
+        Upload a <code>.knxproj</code> (device cards placed in their ETS rooms), or paste an ETS
+        group-address export (CSV/XML). Capabilities are inferred from each datapoint type.
+      </p>
+      <input
+        type="file"
+        accept=".knxproj,.csv,.xml,text/xml,text/csv"
+        disabled={busy}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
+        style={{ marginBottom: 10 }}
+      />
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
+        rows={5}
+        style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+      />
+      {needsPassword && knxproj && (
+        <label className="drv-field" style={{ marginTop: 8 }}>
+          <span className="lbl">Project password</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="ETS project password" />
+        </label>
+      )}
+      <div className="drv-actions" style={{ marginTop: 8 }}>
+        {needsPassword && knxproj ? (
+          <button className="primary" disabled={busy || !password} onClick={() => runImport(() => importKnxProject(knxproj, password))}>
+            {busy ? "Importing…" : "Import with password"}
+          </button>
+        ) : (
+          <button className="primary" disabled={busy || !text.trim()} onClick={() => runImport(() => importKnx(text))}>
+            {busy ? "Importing…" : "Import group addresses"}
+          </button>
+        )}
+      </div>
+      {result && <p className="muted">{result}</p>}
       {err && <p className="err">{err}</p>}
     </div>
   );

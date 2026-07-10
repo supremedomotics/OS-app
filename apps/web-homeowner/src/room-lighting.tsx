@@ -38,7 +38,11 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
   };
 
   const onCount = lights.filter(onOf).length;
-  const allOn = lights.length > 0 && onCount === lights.length;
+  // The master switch reflects "is anything on" (matches the room-summary convention used
+  // elsewhere in the app), not "is everything on" — a single light left on should still read
+  // as the room being on. Tapping mirrors the same rule: turns everything off from any partial
+  // or fully-on state, or everything on from fully off.
+  const anyOn = onCount > 0;
   const rgbLights = lights.filter((d) => colorModes(colorOf(d)).rgb);
   const cctLights = lights.filter((d) => colorModes(colorOf(d)).cct);
   // The group control's thumb position anchors on the room's first light in that mode — simplest
@@ -52,7 +56,7 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
     for (const d of lights) {
       const hasBrightness = d.capabilities.some((c) => c.kind === "brightness");
       if (hasBrightness) {
-        apply(d.id, "brightness", { kind: "brightness", on, level: on ? Math.max(levelOf(d), 1) : 0 });
+        apply(d.id, "brightness", { kind: "brightness", on, level: on ? (levelOf(d) > 0 ? levelOf(d) : 100) : 0 });
         void client.command(d.id as DeviceId, { capability: "brightness", action: on ? "on" : "off" } as CapabilityCommand);
       } else {
         apply(d.id, "onoff", { kind: "onoff", on });
@@ -80,13 +84,13 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
       <h1 className="title">Lighting</h1>
 
       {lights.length > 0 && (
-        <button className={`rl-master${allOn ? " on" : ""}`} onClick={() => setAll(!allOn)}>
+        <button className={`rl-master${anyOn ? " on" : ""}`} onClick={() => setAll(!anyOn)}>
           <span className="rl-master-ic" aria-hidden>☀</span>
           <span className="rl-master-body">
             <span className="rl-master-lbl">All lights</span>
             <span className="rl-master-sub">{onCount} of {lights.length} on</span>
           </span>
-          <span className={`rl-master-sw${allOn ? " on" : ""}`}><span className="rl-master-knob" /></span>
+          <span className={`rl-master-sw${anyOn ? " on" : ""}`}><span className="rl-master-knob" /></span>
         </button>
       )}
 

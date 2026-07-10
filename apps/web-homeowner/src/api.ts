@@ -196,6 +196,26 @@ export async function uninstallDriver(id: string): Promise<void> {
   await authed(`/v1/drivers/${id}`, { method: "DELETE" });
 }
 
+// ── KNX ETS project import (authenticated) ────────────────────────────────────────
+export interface KnxImportResult {
+  devices: number;
+  roomsCreated: number;
+  created: { name: string; room: string | null; capabilities: string[] }[];
+}
+async function postKnxImport(body: Record<string, string>): Promise<KnxImportResult> {
+  const res = await authed("/v1/commissioning/import/knx", { method: "POST", body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Import failed"));
+  return (await res.json()) as KnxImportResult;
+}
+/** Import an ETS group-address export (CSV/XML text) → auto-created device cards (§4). */
+export const importKnx = (content: string): Promise<KnxImportResult> => postKnxImport({ content });
+/**
+ * Import a `.knxproj` file (base64) → device cards placed in their ETS rooms (§4).
+ * `password` is required only for ETS6 password-protected projects (WinZip-AES).
+ */
+export const importKnxProject = (base64: string, password?: string): Promise<KnxImportResult> =>
+  postKnxImport(password ? { knxproj: base64, password } : { knxproj: base64 });
+
 // ── Licensing (authenticated) ────────────────────────────────────────────────────
 export interface LicenseService {
   active: boolean;
