@@ -91,7 +91,15 @@ export function DriverStore() {
 /** Commissioning: discover candidate devices and commission them into a room. */
 export function Commissioning() {
   const [discovered, setDiscovered] = useState<
-    { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string }[]
+    {
+      backendId: string;
+      suggestedName: string;
+      capabilities: string[];
+      source: string;
+      protocol?: string;
+      network?: { ip?: string; mac?: string; host?: string };
+      bindConfig?: Record<string, unknown>;
+    }[]
   >([]);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [roomId, setRoomId] = useState<string>("");
@@ -112,14 +120,23 @@ export function Commissioning() {
     suggestedName: string;
     capabilities: string[];
     protocol?: string;
+    network?: { ip?: string; mac?: string; host?: string };
+    bindConfig?: Record<string, unknown>;
   }) {
     await client.commission({
       backendId: d.backendId,
       name: d.suggestedName,
       roomId,
       capabilities: d.capabilities as never,
-      // A device discovered on a native bus is bound to it automatically on commission.
+      // A device discovered on a native bus is bound to it automatically on commission —
+      // the real address the driver resolved at discovery (its IP for AVR/HEOS/Yamaha;
+      // backendId itself for buses where that's already the native address) plus any
+      // binding config the driver already resolved (a HEOS player's pid, an AVR/Yamaha
+      // zone) — no manual IP/zone/pid entry required.
       protocol: d.protocol,
+      address: d.network?.ip ?? d.network?.host,
+      config: d.bindConfig,
+      network: d.network,
     });
     await scan();
   }
@@ -194,9 +211,12 @@ export function Commissioning() {
         <div className="card row" key={d.backendId}>
           <div>
             <strong>{d.suggestedName}</strong> <span className="tag">{d.source}</span>
+            {d.network?.ip && <span className="tag">{d.network.ip}</span>}
             <div className="muted">
               {d.capabilities.join(", ")}
               {d.protocol && ` · driver auto-installs & binds (${d.protocol.toUpperCase()})`}
+              {d.bindConfig?.zone ? ` · zone: ${String(d.bindConfig.zone)}` : ""}
+              {d.bindConfig?.pid ? ` · player id: ${String(d.bindConfig.pid)}` : ""}
             </div>
           </div>
           <button className="primary" onClick={() => commission(d)}>
