@@ -90,6 +90,24 @@ export {
   type AvrZoneInfo,
 } from "./avr-capabilities.js";
 export { ReconnectScheduler, type ReconnectSchedulerOptions } from "./avr-reconnect.js";
+export { HeosProtocolDriver, type HeosDriverOptions } from "./heos-driver.js";
+export {
+  buildHeosCommand,
+  commandToHeos,
+  parseHeosMessage,
+  parseHeosAttrs,
+  heosCapabilityConfig,
+  heosRepeatFromSupreme,
+  supremeRepeatFromHeos,
+  playbackFromHeosState,
+  buildHeosMediaState,
+  HEOS_INPUTS,
+  type HeosUpdate,
+  type HeosRequest,
+  type HeosPlayerInfo,
+  type HeosNowPlaying,
+  type HeosMediaCache,
+} from "./heos-codec.js";
 export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
 export {
   parseUnitLine,
