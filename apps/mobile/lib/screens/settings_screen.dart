@@ -124,6 +124,13 @@ class SettingsScreen extends ConsumerWidget {
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.logout),
+            title: const Text('Log out'),
+            subtitle: const Text('Sign out of this device'),
+            onTap: () => _logOut(context, ref),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.delete_outline, color: AureonStatus.critical),
             title: const Text('Delete account', style: TextStyle(color: AureonStatus.critical)),
             trailing: const Icon(Icons.chevron_right),
@@ -200,16 +207,29 @@ class SettingsScreen extends ConsumerWidget {
     );
     if (confirmed == true) {
       try {
-        final client = ref.read(clientProvider);
-        await client.deleteAccount(password.text);
-        client.accessToken = null;
-        // Account (and its sessions) are gone — return to the login screen.
-        ref.read(sessionActiveProvider.notifier).state = false;
+        await ref.read(clientProvider).deleteAccount(password.text);
+        // Account (and its sessions) are gone — clear the persisted session and return to login.
+        await logOut(ref);
       } catch (_) {
         messenger.showSnackBar(const SnackBar(content: Text('Could not delete account. Check your password.')));
       }
     }
     password.dispose();
+  }
+
+  Future<void> _logOut(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log out'),
+        content: const Text('You’ll need to sign in again on this device.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Log out')),
+        ],
+      ),
+    );
+    if (confirmed == true) await logOut(ref);
   }
 
   Future<void> _changePassword(BuildContext context, WidgetRef ref) async {

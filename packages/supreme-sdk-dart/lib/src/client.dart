@@ -6,27 +6,100 @@ import 'models.dart';
 
 /// Typed REST client for the Supreme API. Stores the access/refresh tokens in
 /// memory; the app layer persists them in secure storage.
+///
+/// The access token is short-lived (15 min) by design; refresh tokens last 30 days. Every request
+/// transparently routes through [_RefreshingClient], which silently refreshes-and-retries once on a
+/// 401 — so a homeowner mid-drag on a light slider never has to notice or re-login. It only surfaces
+/// [onSessionExpired] when the refresh token itself is rejected (revoked / truly expired).
 class SupremeClient {
-  SupremeClient({required this.baseUrl, http.Client? httpClient})
-      : _http = httpClient ?? http.Client();
+  SupremeClient({
+    required this.baseUrl,
+    http.Client? httpClient,
+    this.onSessionExpired,
+    this.onTokensChanged,
+  }) : _rawHttp = httpClient ?? http.Client() {
+    _http = _RefreshingClient(_rawHttp, getToken: () => _accessToken, doRefresh: _silentRefresh, onExpired: _handleExpired);
+  }
 
   final String baseUrl;
-  final http.Client _http;
+  final void Function()? onSessionExpired;
+  /// Called with the fresh (accessToken, refreshToken) pair every time login OR a silent refresh
+  /// succeeds. The refresh token is ROTATED server-side (single-use, with reuse-detection that
+  /// revokes the whole session on replay) — the app layer MUST persist the pair from every call, not
+  /// just at login, or a stale rotated-out token will get the session revoked the next time the app
+  /// opens. This is how "stay signed in until I explicitly log out" survives an app restart.
+  final void Function(String accessToken, String refreshToken)? onTokensChanged;
+  final http.Client _rawHttp;
+  late final http.Client _http;
 
   String? _accessToken;
   String? _refreshToken;
+  Future<bool>? _refreshing;
 
   String? get accessToken => _accessToken;
+  String? get refreshToken => _refreshToken;
 
   /// Apply an externally-obtained access token (e.g. a cloud identity-plane session reused
   /// across homes), so a client targeting a freshly-resolved hub base URL is authenticated
   /// without re-running [login]. The hub validates the token locally on each request.
   set accessToken(String? token) => _accessToken = token;
 
+  /// Restore a previously-persisted session (app relaunch) without hitting the network — the app
+  /// layer reads its stored pair and calls this before the first request. Does NOT fire
+  /// [onTokensChanged] (nothing new to persist; the app already has this exact pair).
+  void restoreTokens({required String accessToken, required String refreshToken}) {
+    _accessToken = accessToken;
+    _refreshToken = refreshToken;
+  }
+
+  /// Clear the in-memory session (does not touch any app-layer persisted storage — call this from
+  /// an explicit "Log Out" action alongside clearing your own storage).
+  void clearSession() {
+    _accessToken = null;
+    _refreshToken = null;
+  }
+
+  /// The session is genuinely over (refresh token rejected) — clear it and notify once, from
+  /// WHICHEVER path discovered it: a request's automatic 401-retry, or an explicit [refresh] call
+  /// (e.g. an app proactively refreshing a possibly-stale token after being relaunched).
+  void _handleExpired() {
+    _accessToken = null;
+    _refreshToken = null;
+    onSessionExpired?.call();
+  }
+
   Map<String, String> get _authHeaders => {
         'content-type': 'application/json',
         if (_accessToken != null) 'authorization': 'Bearer $_accessToken',
       };
+
+  /// Refresh the access token using the RAW (unwrapped) client, so this never recurses through
+  /// [_RefreshingClient]'s own 401 handling. Concurrent 401s share one in-flight refresh.
+  Future<bool> _silentRefresh() {
+    final inFlight = _refreshing;
+    if (inFlight != null) return inFlight;
+    final future = () async {
+      final token = _refreshToken;
+      if (token == null) return false;
+      try {
+        final res = await _rawHttp.post(
+          Uri.parse('$baseUrl/v1/auth/refresh'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'refreshToken': token}),
+        );
+        if (res.statusCode >= 400) return false;
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        _accessToken = body['accessToken'] as String;
+        _refreshToken = body['refreshToken'] as String;
+        onTokensChanged?.call(_accessToken!, _refreshToken!);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }();
+    _refreshing = future.whenComplete(() => _refreshing = null);
+    return _refreshing!;
+  }
 
   /// Returns true when login completed with tokens; false when MFA is required.
   Future<bool> login(String email, String password) async {
@@ -40,6 +113,7 @@ class SupremeClient {
     if (body['status'] == 'ok') {
       _accessToken = body['accessToken'] as String;
       _refreshToken = body['refreshToken'] as String;
+      onTokensChanged?.call(_accessToken!, _refreshToken!);
       return true;
     }
     return false; // mfa_required
@@ -193,19 +267,17 @@ class SupremeClient {
   }
 
   /// Exchange the stored refresh token for a fresh access/refresh pair.
+  /// Explicitly exchange the stored refresh token for a fresh access/refresh pair. Most callers
+  /// never need this — every request already refreshes-and-retries silently on a 401.
   Future<void> refresh() async {
     if (_refreshToken == null) {
+      _handleExpired();
       throw SupremeApiException(401, 'no refresh token');
     }
-    final res = await _http.post(
-      Uri.parse('$baseUrl/v1/auth/refresh'),
-      headers: {'content-type': 'application/json'},
-      body: jsonEncode({'refreshToken': _refreshToken}),
-    );
-    _ensureOk(res);
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    _accessToken = body['accessToken'] as String;
-    _refreshToken = body['refreshToken'] as String;
+    if (!await _silentRefresh()) {
+      _handleExpired();
+      throw SupremeApiException(401, 'refresh failed');
+    }
   }
 
   Future<List<Device>> devicesInRoom(String roomId) async {
@@ -1250,6 +1322,49 @@ class SupremeClient {
     if (res.statusCode >= 400) {
       throw SupremeApiException(res.statusCode, res.body);
     }
+  }
+}
+
+/// Wraps an [http.Client] and transparently refreshes-and-retries once on a 401 for any
+/// authenticated request. `http.BaseClient`'s `get/post/put/patch/delete` convenience methods all
+/// funnel through [send], so every existing [SupremeClient] call site gets this for free — no need
+/// to touch each of them individually.
+class _RefreshingClient extends http.BaseClient {
+  _RefreshingClient(this._inner, {required this.getToken, required this.doRefresh, required this.onExpired});
+
+  final http.Client _inner;
+  final String? Function() getToken;
+  final Future<bool> Function() doRefresh;
+  final void Function() onExpired;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final hadAuth = request.headers.containsKey('authorization');
+    final bodyBytes = request is http.Request ? request.bodyBytes : null;
+    final first = await _inner.send(request);
+    if (first.statusCode != 401 || !hadAuth) return first;
+
+    final originalBytes = await first.stream.toBytes();
+    final refreshed = await doRefresh();
+    if (!refreshed) {
+      onExpired();
+      return http.StreamedResponse(
+        Stream.value(originalBytes),
+        first.statusCode,
+        contentLength: originalBytes.length,
+        request: first.request,
+        headers: first.headers,
+        isRedirect: first.isRedirect,
+        persistentConnection: first.persistentConnection,
+        reasonPhrase: first.reasonPhrase,
+      );
+    }
+
+    final retry = http.Request(request.method, request.url)..headers.addAll(request.headers);
+    final token = getToken();
+    if (token != null) retry.headers['authorization'] = 'Bearer $token';
+    if (bodyBytes != null) retry.bodyBytes = bodyBytes;
+    return _inner.send(retry);
   }
 }
 

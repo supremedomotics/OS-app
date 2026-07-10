@@ -35,6 +35,29 @@ class _Root extends ConsumerStatefulWidget {
 }
 
 class _RootState extends ConsumerState<_Root> {
+  @override
+  void initState() {
+    super.initState();
+    // A restored session (persisted refresh token, app relaunch) skips LoginScreen entirely, so it
+    // never calls onAuthenticated — establish the WSS stream here instead, once, on first build.
+    if (ref.read(sessionActiveProvider)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _resumeSession());
+    }
+  }
+
+  /// The persisted access token may be stale (or expired) after however long the app was closed —
+  /// the HTTP interceptor refreshes-and-retries transparently, but the WSS handshake needs a good
+  /// token up front. Refresh proactively before opening the stream; if the refresh token is also
+  /// dead, `onSessionExpired` already dropped us to the login screen and this is a no-op.
+  Future<void> _resumeSession() async {
+    try {
+      await ref.read(clientProvider).refresh();
+    } catch (_) {
+      return; // onSessionExpired handled it
+    }
+    if (ref.read(sessionActiveProvider)) await _onAuthenticated();
+  }
+
   Future<void> _onAuthenticated() async {
     final client = ref.read(clientProvider);
     final stream = SupremeStream(

@@ -96,14 +96,53 @@ final connectionModeProvider = Provider<ConnectionMode>((ref) {
   return ref.watch(homeConnectionProvider)?.mode ?? ConnectionMode.offline;
 });
 
+/// Session persistence (§ "stay signed in"): the homeowner stays logged in across app restarts —
+/// closing/reopening the app must NOT sign them out — until they explicitly log out. The access
+/// token is short-lived (15 min) but the refresh token lasts 30 days and is what we persist; the SDK
+/// refreshes-and-retries silently on every request. Refresh tokens are ROTATED server-side (each use
+/// invalidates the old one), so [onTokensChanged] re-persists on every login AND every silent refresh
+/// — not just at login — or a stale rotated-out token would get the session revoked on next launch.
+const _kAccessTokenKey = 'auth.accessToken';
+const _kRefreshTokenKey = 'auth.refreshToken';
+
 final clientProvider = Provider<SupremeClient>((ref) {
-  final client = SupremeClient(baseUrl: ref.watch(hubBaseUrlProvider));
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final client = SupremeClient(
+    baseUrl: ref.watch(hubBaseUrlProvider),
+    onTokensChanged: (accessToken, refreshToken) {
+      prefs.setString(_kAccessTokenKey, accessToken);
+      prefs.setString(_kRefreshTokenKey, refreshToken);
+    },
+    onSessionExpired: () {
+      // The refresh token itself was rejected (revoked / truly expired) — the session is genuinely
+      // over; only now do we drop to the login screen and clear the stale persisted pair.
+      prefs.remove(_kAccessTokenKey);
+      prefs.remove(_kRefreshTokenKey);
+      ref.read(sessionActiveProvider.notifier).state = false;
+    },
+  );
+  final savedAccess = prefs.getString(_kAccessTokenKey);
+  final savedRefresh = prefs.getString(_kRefreshTokenKey);
+  if (savedAccess != null && savedRefresh != null) {
+    client.restoreTokens(accessToken: savedAccess, refreshToken: savedRefresh);
+  }
   // Reuse the cloud session token across homes: when present, a client pointed at a newly
   // resolved hub (local or cloud) is already authenticated — no re-login on a home switch.
   final session = ref.watch(cloudSessionProvider);
   if (session != null) client.accessToken = session.accessToken;
   return client;
 });
+
+/// Sign out of this device: clears the in-memory session, the persisted token pair, and drops to
+/// the login screen. The ONLY other way [sessionActiveProvider] goes false is a genuinely dead
+/// refresh token (see `onSessionExpired` above) — never a routine access-token rotation.
+Future<void> logOut(WidgetRef ref) async {
+  ref.read(clientProvider).clearSession();
+  final prefs = ref.read(sharedPreferencesProvider);
+  await prefs.remove(_kAccessTokenKey);
+  await prefs.remove(_kRefreshTokenKey);
+  ref.read(sessionActiveProvider.notifier).state = false;
+}
 
 /// Holds the live WSS stream once authenticated.
 final streamProvider = StateProvider<SupremeStream?>((ref) => null);
@@ -195,9 +234,14 @@ final energyDeviceWattsProvider =
 });
 
 /// Hub diagnostics (version, backend health, counts, offline devices) — powers the Dashboard overview.
-/// Whether a session is active (post-login). Flipped true on authentication and false on logout /
-/// account deletion, so the root routes between LoginScreen and HomeShell.
-final sessionActiveProvider = StateProvider<bool>((ref) => false);
+/// Whether a session is active. Flipped true on authentication and false on explicit logout / a
+/// genuinely dead refresh token / account deletion, so the root routes between LoginScreen and
+/// HomeShell. Initializes from a persisted session (see [clientProvider]) so an app relaunch with a
+/// live 30-day refresh token goes straight to HomeShell — never a forced re-login just because the
+/// app was closed.
+final sessionActiveProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString(_kRefreshTokenKey) != null;
+});
 
 final diagnosticsProvider = FutureProvider<Map<String, dynamic>>((ref) => ref.watch(clientProvider).diagnostics());
 
