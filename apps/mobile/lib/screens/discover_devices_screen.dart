@@ -127,6 +127,17 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
   @override
   void dispose() { _name.dispose(); _building.dispose(); _floor.dispose(); _roomName.dispose(); _area.dispose(); super.dispose(); }
 
+  /// Guess the room a discovered device belongs in from its own name (e.g. "Pantry DL-1" →
+  /// the "Pantry" room) instead of always defaulting to the first room in the list. Still
+  /// just a pre-selection — the dropdown below stays fully editable. Prefers the longest
+  /// (most specific) matching room name, e.g. "Master Bedroom" over "Bedroom".
+  Room? _matchRoomByName(String deviceName, List<Room> rooms) {
+    final dn = deviceName.toLowerCase();
+    final matches = rooms.where((r) => r.name.trim().isNotEmpty && dn.contains(r.name.trim().toLowerCase())).toList()
+      ..sort((a, b) => b.name.length.compareTo(a.name.length));
+    return matches.isEmpty ? null : matches.first;
+  }
+
   /// "Kitchen · Main House · Floor 1 · East Wing" for the picker.
   String _label(Room r) {
     final parts = <String>[r.name];
@@ -163,13 +174,16 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
       }
       // 3) Commission the device into its place.
       setState(() => _step = 'Pairing device…');
+      final network = widget.device['network'] as Map<String, dynamic>?;
       await client.commission(
         backendId: widget.device['backendId'] as String,
         name: _name.text.trim().isEmpty ? (widget.device['suggestedName'] as String? ?? 'Device') : _name.text.trim(),
         roomId: targetRoomId,
         capabilities: ((widget.device['capabilities'] as List?) ?? const []).cast<String>(),
         protocol: widget.device['protocol'] as String?,
-        network: widget.device['network'] as Map<String, dynamic>?,
+        network: network,
+        address: (network?['ip'] as String?) ?? (network?['host'] as String?),
+        config: widget.device['bindConfig'] as Map<String, dynamic>?,
       );
       ref.invalidate(homeProvider);
       widget.onPaired();
@@ -184,9 +198,11 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
   Widget build(BuildContext context) {
     final home = ref.watch(homeProvider).valueOrNull;
     final rooms = home?.rooms ?? const [];
-    _roomId ??= rooms.isNotEmpty ? rooms.first.id : null;
+    final suggestedName = widget.device['suggestedName'] as String? ?? '';
+    _roomId ??= (_matchRoomByName(suggestedName, rooms) ?? (rooms.isNotEmpty ? rooms.first : null))?.id;
     // With no rooms yet, force the create-room path.
     if (!_newRoomInit) { _newRoom = rooms.isEmpty; _newRoomInit = true; }
+    final matchedRoomId = _matchRoomByName(suggestedName, rooms)?.id;
     final d = widget.device;
     final caps = ((d['capabilities'] as List?) ?? const []).cast<String>();
     return Card(
@@ -217,15 +233,21 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
               onSelectionChanged: (s) => setState(() => _newRoom = s.first),
             ),
           const SizedBox(height: 8),
-          if (!_newRoom)
+          if (!_newRoom) ...[
             DropdownButtonFormField<String>(
               initialValue: _roomId,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Room'),
               items: [for (final r in rooms) DropdownMenuItem(value: r.id, child: Text(_label(r), overflow: TextOverflow.ellipsis))],
               onChanged: (v) => setState(() => _roomId = v),
-            )
-          else ...[
+            ),
+            if (matchedRoomId != null && matchedRoomId == _roomId)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text("Matched from the device's name — change it above if that's wrong.",
+                    style: Theme.of(context).textTheme.labelSmall),
+              ),
+          ] else ...[
             // The location cascade — Building › Floor › Room › Area. Building/Area optional.
             TextField(controller: _building, decoration: const InputDecoration(labelText: 'Building (optional)')),
             const SizedBox(height: 8),

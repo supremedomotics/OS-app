@@ -68,8 +68,12 @@ class _LightingDetailState extends ConsumerState<LightingDetail> {
 
     void toggle(bool v) {
       final hasBrightness = widget.device.capabilities.contains('brightness');
+      // 100 is a far more plausible guess than 1 for an unknown/zero cached level; a known
+      // level (the light was last dimmed to some real value) is preserved as-is.
+      final known = level * 100;
+      final lvl = v ? (known > 0 ? known : 100.0) : 0.0;
       apply(widget.device.id, hasBrightness ? 'brightness' : 'onoff',
-          hasBrightness ? {'kind': 'brightness', 'on': v, 'level': v ? (level * 100).clamp(1, 100) : 0} : {'kind': 'onoff', 'on': v});
+          hasBrightness ? {'kind': 'brightness', 'on': v, 'level': lvl} : {'kind': 'onoff', 'on': v});
       _cmd({'capability': hasBrightness ? 'brightness' : 'onoff', 'action': v ? 'on' : 'off'});
     }
 

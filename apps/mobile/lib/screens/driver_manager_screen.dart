@@ -283,6 +283,11 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
           ),
         ],
 
+        // KNX ETS group-address import — the answer to "where do I add my group addresses"
+        // once the bus is connected. Protocol-specific (KNX only), so it's a direct addition
+        // here rather than a generic schema field.
+        if (_installed && ((d['protocols'] as List?)?.contains('knx') ?? false)) const _KnxImportPanel(),
+
         // Health.
         if (_health != null) ...[
           const SizedBox(height: AureonSpacing.sm),
@@ -358,6 +363,88 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
         keyboardType: isNumber ? TextInputType.number : TextInputType.text,
         decoration: InputDecoration(labelText: label + (required ? ' *' : ''), helperText: f['help'] as String?, hintText: f['placeholder'] as String?),
         onChanged: (v) => setState(() => _values[key] = isNumber ? (num.tryParse(v) ?? v) : v),
+      ),
+    );
+  }
+}
+
+/// KNX ETS group-address import (§4): paste an ETS group-address export (CSV/XML —
+/// capabilities inferred from each datapoint type) to auto-create device cards in their
+/// exported rooms. Binary `.knxproj` upload needs a native file picker not yet wired into
+/// the mobile app — paste covers the common export path; the web app has both.
+class _KnxImportPanel extends ConsumerStatefulWidget {
+  const _KnxImportPanel();
+
+  @override
+  ConsumerState<_KnxImportPanel> createState() => _KnxImportPanelState();
+}
+
+class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
+  final _controller = TextEditingController();
+  bool _busy = false;
+  String? _result;
+  String? _err;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _import() async {
+    final content = _controller.text.trim();
+    if (content.isEmpty) return;
+    setState(() { _busy = true; _err = null; _result = null; });
+    try {
+      final out = await ref.read(clientProvider).importKnx(content);
+      final devices = (out['devices'] as num?)?.toInt() ?? 0;
+      final rooms = (out['roomsCreated'] as num?)?.toInt() ?? 0;
+      setState(() {
+        _result = 'Imported $devices device${devices == 1 ? '' : 's'}'
+            '${rooms > 0 ? ' · $rooms new room${rooms == 1 ? '' : 's'}' : ''}.';
+        _controller.clear();
+      });
+      ref.invalidate(homeProvider);
+    } catch (e) {
+      setState(() => _err = 'Import failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: AureonSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Import ETS project', style: text.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'Paste an ETS group-address export (CSV/XML). Capabilities are inferred from '
+            'each datapoint type.',
+            style: text.labelMedium,
+          ),
+          const SizedBox(height: AureonSpacing.sm),
+          TextField(
+            controller: _controller,
+            maxLines: 5,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              hintText: '<GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />',
+            ),
+          ),
+          const SizedBox(height: AureonSpacing.sm),
+          FilledButton(
+            onPressed: _busy ? null : _import,
+            child: Text(_busy ? 'Importing…' : 'Import group addresses'),
+          ),
+          if (_result != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_result!, style: text.labelMedium)),
+          if (_err != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_err!, style: TextStyle(color: AureonStatus.critical))),
+        ],
       ),
     );
   }

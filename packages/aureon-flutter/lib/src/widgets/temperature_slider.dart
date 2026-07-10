@@ -23,41 +23,50 @@ class TemperatureSlider extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = ((kelvin - min) / (max - min)).clamp(0.0, 1.0);
     return Column(
+      // Force the bar to the full available width regardless of what the parent's own
+      // cross-axis alignment would otherwise shrink-wrap it to — without this a Column with
+      // (the default) center alignment can leave the bar sized to its 28px thumb instead of
+      // spanning the row, exactly the "pathetic and hard to control" collapse the web version
+      // had for the same reason (a slider with no explicit width in a centering flex parent).
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        LayoutBuilder(
-          builder: (context, c) {
-            void setFromDx(double dx) => onChanged(min + (dx / c.maxWidth).clamp(0.0, 1.0) * (max - min));
-            return GestureDetector(
-              onPanDown: (d) => setFromDx(d.localPosition.dx),
-              onPanUpdate: (d) => setFromDx(d.localPosition.dx),
-              child: Container(
-                height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AureonRadius.pill),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFFFB867), Color(0xFFFFF1D6), Color(0xFFCFE5FF)],
+        SizedBox(
+          width: double.infinity,
+          child: LayoutBuilder(
+            builder: (context, c) {
+              void setFromDx(double dx) => onChanged(min + (dx / c.maxWidth).clamp(0.0, 1.0) * (max - min));
+              return GestureDetector(
+                onPanDown: (d) => setFromDx(d.localPosition.dx),
+                onPanUpdate: (d) => setFromDx(d.localPosition.dx),
+                child: Container(
+                  height: 56,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(AureonRadius.pill),
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFFFB867), Color(0xFFFFF1D6), Color(0xFFCFE5FF)],
+                    ),
                   ),
-                ),
-                child: Align(
-                  alignment: Alignment(t * 2 - 1, 0),
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    margin: const EdgeInsets.symmetric(horizontal: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.black.withValues(alpha: 0.15)),
-                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+                  child: Align(
+                    alignment: Alignment(t * 2 - 1, 0),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      margin: const EdgeInsets.symmetric(horizontal: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.black.withValues(alpha: 0.15)),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
         const SizedBox(height: AureonSpacing.sm),
-        Text('${kelvin.round()}K', style: Theme.of(context).textTheme.labelMedium),
+        Text('${kelvin.round()}K', textAlign: TextAlign.center, style: Theme.of(context).textTheme.labelMedium),
       ],
     );
   }

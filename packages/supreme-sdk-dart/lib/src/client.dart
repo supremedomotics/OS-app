@@ -332,6 +332,25 @@ class SupremeClient {
         as Map<String, dynamic>;
   }
 
+  /// Delete a room (owner/admin/installer). Devices left in it are unassigned, never deleted.
+  Future<void> deleteRoom(String roomId) async {
+    final res = await _http.delete(Uri.parse('$baseUrl/v1/rooms/$roomId'),
+        headers: _authHeaders);
+    _ensureOk(res);
+  }
+
+  /// Import an ETS group-address export (CSV/XML text) → auto-created device cards placed in
+  /// their exported rooms (§4). Returns how many devices/rooms were created.
+  Future<Map<String, dynamic>> importKnx(String content) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/import/knx'),
+      headers: _authHeaders,
+      body: jsonEncode({'content': content}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Ask the hub to download & store a stock hero photo for a room (by name) if it has none.
   /// Idempotent and best-effort — returns whether a photo is now stored. Clients call this
   /// fire-and-forget the first time they render a room card with no hero.
@@ -1089,6 +1108,12 @@ class SupremeClient {
     required List<String> capabilities,
     String? protocol,
     Map<String, dynamic>? network,
+    // The bus address to bind at (defaults server-side to backendId when omitted) and any
+    // protocol-specific binding config the discovery source already resolved (a HEOS
+    // player's pid, an AVR/Yamaha zone) — discover → commission → bind in one step with no
+    // manual IP/zone/pid entry.
+    String? address,
+    Map<String, dynamic>? config,
   }) async {
     final res = await _http.post(
       Uri.parse('$baseUrl/v1/commissioning/commission'),
@@ -1100,6 +1125,8 @@ class SupremeClient {
         'capabilities': capabilities,
         if (protocol != null) 'protocol': protocol,
         if (network != null && network.isNotEmpty) 'network': network,
+        if (address != null && address.isNotEmpty) 'address': address,
+        if (config != null && config.isNotEmpty) 'config': config,
       }),
     );
     _ensureOk(res);

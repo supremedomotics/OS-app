@@ -113,7 +113,7 @@ class _RoomTile extends ConsumerWidget {
           context: context,
           isScrollControlled: true,
           showDragHandle: true,
-          builder: (_) => _RoomLocationSheet(room: room),
+          builder: (_) => _RoomLocationSheet(room: room, deviceCount: count),
         ),
       ),
     );
@@ -121,9 +121,11 @@ class _RoomTile extends ConsumerWidget {
 }
 
 /// Inline location editor — name / building / floor / area / type, saved via updateRoom.
+/// Also the delete-room entry point (mobile parity with the web Rooms screen).
 class _RoomLocationSheet extends ConsumerStatefulWidget {
-  const _RoomLocationSheet({required this.room});
+  const _RoomLocationSheet({required this.room, required this.deviceCount});
   final Room room;
+  final int deviceCount;
 
   @override
   ConsumerState<_RoomLocationSheet> createState() => _RoomLocationSheetState();
@@ -161,6 +163,33 @@ class _RoomLocationSheetState extends ConsumerState<_RoomLocationSheet> {
     }
   }
 
+  Future<void> _delete() async {
+    final warn = widget.deviceCount > 0
+        ? ' Its ${widget.deviceCount} device${widget.deviceCount == 1 ? '' : 's'} will become unassigned.'
+        : '';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text('Delete "${widget.room.name}"?'),
+        content: Text('This cannot be undone.$warn'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() { _busy = true; _err = null; });
+    try {
+      await ref.read(clientProvider).deleteRoom(widget.room.id);
+      ref.invalidate(homeProvider);
+      ref.invalidate(allDevicesProvider);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      setState(() { _err = friendlyError(e, 'Could not delete the room. Please try again.'); _busy = false; });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -184,6 +213,12 @@ class _RoomLocationSheetState extends ConsumerState<_RoomLocationSheet> {
         ),
         const SizedBox(height: 12),
         FilledButton(onPressed: _busy ? null : _save, child: Text(_busy ? 'Saving…' : 'Save location')),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _busy ? null : _delete,
+          style: TextButton.styleFrom(foregroundColor: AureonStatus.critical),
+          child: const Text('Delete room'),
+        ),
         if (_err != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_err!, style: const TextStyle(color: AureonStatus.critical))),
       ]),
     );

@@ -47,7 +47,10 @@ class RoomLightingScreen extends ConsumerWidget {
     for (final d in lights) {
       final hasBrightness = d.capabilities.contains('brightness');
       if (hasBrightness) {
-        final lvl = on ? _levelOf(d, live).clamp(1, 100) : 0;
+        // 100 is a far more plausible guess than 1 for an unknown/zero cached level — the
+        // real device state corrects this within moments over the live stream regardless.
+        final known = _levelOf(d, live);
+        final lvl = on ? (known > 0 ? known : 100) : 0;
         apply(d.id, 'brightness', {'kind': 'brightness', 'on': on, 'level': lvl});
         client.command(d.id, {'capability': 'brightness', 'action': on ? 'on' : 'off'});
       } else {
@@ -84,7 +87,11 @@ class RoomLightingScreen extends ConsumerWidget {
     ref.read(usageProvider.notifier).record('device', d.id);
     final hasBrightness = d.capabilities.contains('brightness');
     if (hasBrightness) {
-      apply(d.id, 'brightness', {'kind': 'brightness', 'on': on, 'level': on ? 100 : 0});
+      // Preserve a known dim level rather than always jumping to 100 — a light last set to
+      // 30% should come back at 30%, not blow out to full brightness on every toggle-on.
+      final known = _levelOf(d, ref.read(liveStatesProvider));
+      final lvl = on ? (known > 0 ? known : 100) : 0;
+      apply(d.id, 'brightness', {'kind': 'brightness', 'on': on, 'level': lvl});
       await client.command(d.id, {'capability': 'brightness', 'action': on ? 'on' : 'off'});
     } else {
       apply(d.id, 'onoff', {'kind': 'onoff', 'on': on});
@@ -106,7 +113,10 @@ class RoomLightingScreen extends ConsumerWidget {
     final live = ref.watch(liveStatesProvider);
 
     final onCount = lights.where((d) => _onOf(d, live)).length;
-    final allOn = lights.isNotEmpty && onCount == lights.length;
+    // The master switch reflects "is anything on" (matches the "N of M on" convention used
+    // elsewhere), not "is everything on" — a single light left on should still read as the
+    // room being on. The tap action follows the same rule: off from any/all-on, on from none.
+    final anyOn = onCount > 0;
     final rgbLights = lights.where((d) => colorModesOf(_colorOf(d, live)).rgb).toList();
     final cctLights = lights.where((d) => colorModesOf(_colorOf(d, live)).cct).toList();
     final rgbAnchor = rgbLights.isNotEmpty ? _colorOf(rgbLights.first, live) : null;
@@ -119,13 +129,13 @@ class RoomLightingScreen extends ConsumerWidget {
         children: [
           if (lights.isNotEmpty)
             GestureDetector(
-              onTap: () => _setAll(ref, !allOn),
+              onTap: () => _setAll(ref, !anyOn),
               child: Container(
                 padding: const EdgeInsets.all(AureonSpacing.lg),
                 decoration: BoxDecoration(
                   color: Theme.of(context).cardTheme.color ?? scheme.surface,
                   borderRadius: BorderRadius.circular(AureonRadius.lg),
-                  border: Border.all(color: allOn ? scheme.primary.withValues(alpha: 0.55) : scheme.outlineVariant.withValues(alpha: 0.4)),
+                  border: Border.all(color: anyOn ? scheme.primary.withValues(alpha: 0.55) : scheme.outlineVariant.withValues(alpha: 0.4)),
                 ),
                 child: Row(
                   children: [
@@ -140,7 +150,7 @@ class RoomLightingScreen extends ConsumerWidget {
                         ],
                       ),
                     ),
-                    Switch(value: allOn, onChanged: (v) => _setAll(ref, v)),
+                    Switch(value: anyOn, onChanged: (v) => _setAll(ref, v)),
                   ],
                 ),
               ),
