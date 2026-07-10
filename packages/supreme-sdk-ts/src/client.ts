@@ -84,17 +84,28 @@ export interface SupremeClientOptions {
   baseUrl: string;
   tokenStore?: TokenStore;
   fetchImpl?: typeof fetch;
+  /**
+   * Called when a request 401s and the refresh token itself is also rejected (expired/revoked, or
+   * there was no session at all) — i.e. the session is genuinely over. Apps use this to drop back to
+   * the login screen. NOT called for an ordinary access-token expiry, which is refreshed silently.
+   */
+  onSessionExpired?: () => void;
 }
 
 export class SupremeClient {
   private readonly baseUrl: string;
   private readonly tokens: TokenStore;
   private readonly fetchImpl: typeof fetch;
+  private readonly onSessionExpired?: () => void;
+  /** In-flight refresh, so concurrent 401s (several device cards commanding at once) share one
+   * refresh call instead of each racing the refresh endpoint. */
+  private refreshing: Promise<TokenPair> | null = null;
 
   constructor(opts: SupremeClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.tokens = opts.tokenStore ?? new MemoryTokenStore();
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.onSessionExpired = opts.onSessionExpired;
   }
 
   // ── Auth ─────────────────────────────────────────────────────────────────────
@@ -108,12 +119,22 @@ export class SupremeClient {
   }
 
   async refresh(): Promise<TokenPair> {
+    // Concurrent 401s (e.g. several device commands in flight) share one in-flight refresh instead
+    // of each racing the refresh endpoint and invalidating each other's rotated refresh token.
+    if (this.refreshing) return this.refreshing;
     const current = this.tokens.get();
     if (!current) throw new SupremeError("unauthorized", "no refresh token");
-    const res = await this.request("POST", "/v1/auth/refresh", { refreshToken: current.refreshToken }, false);
-    const pair = TokenPair.parse(res);
-    this.tokens.set({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
-    return pair;
+    this.refreshing = (async () => {
+      try {
+        const res = await this.request("POST", "/v1/auth/refresh", { refreshToken: current.refreshToken }, false);
+        const pair = TokenPair.parse(res);
+        this.tokens.set({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+        return pair;
+      } finally {
+        this.refreshing = null;
+      }
+    })();
+    return this.refreshing;
   }
 
   // ── Queries & commands ─────────────────────────────────────────────────────
@@ -484,6 +505,7 @@ export class SupremeClient {
     path: string,
     body?: unknown,
     auth = true,
+    isRetry = false,
   ): Promise<unknown> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (auth) {
@@ -500,8 +522,24 @@ export class SupremeClient {
     const json = text ? JSON.parse(text) : undefined;
     if (!res.ok) {
       const err = ApiError.safeParse(json);
-      if (err.success) throw new SupremeError(err.data.code, err.data.message, err.data.details);
-      throw new SupremeError("internal", `request failed (${res.status})`);
+      const parsed = err.success
+        ? new SupremeError(err.data.code, err.data.message, err.data.details)
+        : new SupremeError("internal", `request failed (${res.status})`);
+      // The access token (15 min TTL) expired mid-session — refresh once (refresh tokens last 30
+      // days) and retry, so a homeowner mid-way through controlling a light never has to notice or
+      // re-login. A refresh-token request itself never retries (it's called with auth=false); if IT
+      // 401s, the session is genuinely over.
+      if (auth && res.status === 401 && !isRetry) {
+        try {
+          await this.refresh();
+        } catch {
+          this.tokens.set(null);
+          this.onSessionExpired?.();
+          throw parsed;
+        }
+        return this.request(method, path, body, auth, true);
+      }
+      throw parsed;
     }
     return json;
   }

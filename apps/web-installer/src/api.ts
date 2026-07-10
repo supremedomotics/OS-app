@@ -7,7 +7,20 @@ import { MemoryTokenStore, SupremeClient } from "@supreme/sdk";
  */
 const baseUrl = import.meta.env.VITE_SUPREME_API_URL ?? "http://127.0.0.1:8080";
 
-export const client = new SupremeClient({ baseUrl, tokenStore: new MemoryTokenStore() });
+// The SDK refreshes an expired access token silently and retries — a long commissioning session no
+// longer breaks at the 15-minute access-token TTL. This only fires when the refresh token itself is
+// dead (revoked / expired), i.e. the session is genuinely over.
+const sessionExpiredListeners = new Set<() => void>();
+export function onSessionExpired(listener: () => void): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+}
+
+export const client = new SupremeClient({
+  baseUrl,
+  tokenStore: new MemoryTokenStore(),
+  onSessionExpired: () => { for (const l of sessionExpiredListeners) l(); },
+});
 
 export interface KnxImportResult {
   devices: number;

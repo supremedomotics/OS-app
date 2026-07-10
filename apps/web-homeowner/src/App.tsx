@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SupremeStream } from "@supreme/sdk";
-import { client, fetchLicense, fetchSetupStatus, openStream, type SetupStatus } from "./api.js";
+import { client, fetchLicense, fetchSetupStatus, onSessionExpired, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
 import { Energy, RoomsScreen, Scenes, Security } from "./screens.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
@@ -56,7 +56,9 @@ function useWide(): boolean {
 }
 
 export function App() {
-  const [authed, setAuthed] = useState(false);
+  // A stored (non-expired-refresh) session survives a reload — the SDK silently refreshes the
+  // access token as needed, so there's no reason to force a re-login just because the tab reloaded.
+  const [authed, setAuthed] = useState(() => Boolean(client.accessToken));
   const [setup, setSetup] = useState<SetupStatus | null>(null);
   const [tab, setTab] = useState<Tab>("dashboard");
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
@@ -68,6 +70,9 @@ export function App() {
   const wide = useWide();
 
   useEffect(() => { void fetchSetupStatus().then(setSetup); }, []);
+  // Drop to the login screen only when the refresh token itself is dead (30-day expiry or revoked) —
+  // never for a routine access-token rotation, which the SDK already handled silently.
+  useEffect(() => onSessionExpired(() => setAuthed(false)), []);
   useEffect(() => { if (authed) void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode))); }, [authed]);
   // Global command palette: ⌘K / Ctrl-K toggles it from anywhere.
   useEffect(() => {

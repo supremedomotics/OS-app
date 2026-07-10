@@ -11,7 +11,19 @@ import { activeHome, homeTokenStore } from "./homes.js";
 export const baseUrl = activeHome().baseUrl;
 const wsBaseUrl = baseUrl.replace(/^http/, "ws");
 
-export const client = new SupremeClient({ baseUrl, tokenStore: homeTokenStore() });
+// The SDK refreshes an expired access token silently and retries — this only fires when the refresh
+// token itself is dead (30-day expiry, or revoked elsewhere), i.e. the session is genuinely over.
+const sessionExpiredListeners = new Set<() => void>();
+export function onSessionExpired(listener: () => void): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+}
+
+export const client = new SupremeClient({
+  baseUrl,
+  tokenStore: homeTokenStore(),
+  onSessionExpired: () => { for (const l of sessionExpiredListeners) l(); },
+});
 
 // ── Unauthenticated onboarding + account-recovery endpoints ─────────────────────
 // These are first-run / pre-login flows the SDK doesn't model; small fetch helpers

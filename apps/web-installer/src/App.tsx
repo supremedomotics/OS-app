@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AUREON_ACCENTS,
   AUREON_MODES,
@@ -6,7 +6,7 @@ import {
   loadAureonTheme,
   saveAureonTheme,
 } from "@supreme/aureon-web";
-import { client } from "./api.js";
+import { client, onSessionExpired } from "./api.js";
 import { PasswordInput } from "./password-input.js";
 import {
   BackupRestore,
@@ -55,6 +55,9 @@ const TABS: { id: Tab; label: string }[] = [
 export function App() {
   const [authed, setAuthed] = useState(false);
   const [tab, setTab] = useState<Tab>("commission");
+  // Drop to login only when the refresh token itself is dead — a routine access-token rotation
+  // mid-commissioning is already handled silently by the SDK.
+  useEffect(() => onSessionExpired(() => setAuthed(false)), []);
 
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
