@@ -26,6 +26,28 @@ describe("DriverManager", () => {
     expect(catalog.map((e) => e.bundle.manifest.key)).toContain("supreme-matter");
   });
 
+  it("lists the Universal AVR Framework extensions (AVR/HEOS/Yamaha) — they must appear in the Extension Center", async () => {
+    const m = manager({ licensed: ["pro"] });
+    const catalog = await m.browse();
+    const keys = catalog.map((e) => e.bundle.manifest.key);
+    expect(keys).toContain("supreme-avr");
+    expect(keys).toContain("supreme-heos");
+    expect(keys).toContain("supreme-yamaha");
+
+    // Each has nothing to configure (per-device host/zone/pid is set later via Bus
+    // Binding) — install + enable alone must be enough to bring the driver up.
+    for (const key of ["supreme-avr", "supreme-heos", "supreme-yamaha"]) {
+      const installed = await m.install(key);
+      const reg = (await m.registry()).find((r) => r.key === key)!;
+      expect(reg.configSchema).toEqual([]);
+      expect(reg.installed).toBe(true);
+      expect(reg.status).toBe("active"); // installed drivers are enabled by default
+      await m.setConfig(installed.id, {});
+      const after = (await m.registry()).find((r) => r.key === key)!;
+      expect(after.enabled).toBe(true);
+    }
+  });
+
   it("exposes a unified registry with config schema, operations and installed state", async () => {
     const m = manager({ licensed: ["pro"] });
     let reg = await m.registry();

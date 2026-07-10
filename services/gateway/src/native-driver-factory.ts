@@ -1,5 +1,13 @@
 import type { INativeProtocolDriver } from "@supreme/integration-layer";
-import { CasambiProtocolDriver, KnxProtocolDriver, ModbusProtocolDriver, MqttProtocolDriver } from "@supreme/protocols";
+import {
+  AvrProtocolDriver,
+  CasambiProtocolDriver,
+  HeosProtocolDriver,
+  KnxProtocolDriver,
+  ModbusProtocolDriver,
+  MqttProtocolDriver,
+  YamahaProtocolDriver,
+} from "@supreme/protocols";
 
 /**
  * Native driver factories — the manifest↔runtime bridge. Given a driver's PROTOCOL and its stored
@@ -39,6 +47,14 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
       credentials: { apiKey, email, password, ...(networkId ? { networkId } : {}) },
     });
   },
+  // AVR/HEOS/Yamaha have no global host/credentials to configure here — each physical
+  // unit is added by IP (and zone/pid) through a `ProtocolBinding` at commissioning
+  // (Installer → Bus Binding), same as the pre-existing env-wired instances in
+  // bootstrap.ts. The factory therefore always succeeds; installing + enabling the
+  // extension is what brings the driver up (§ ADR 0015).
+  avr: () => new AvrProtocolDriver(),
+  heos: () => new HeosProtocolDriver(),
+  yamaha: () => new YamahaProtocolDriver(),
 };
 
 /** Build a native driver instance for a protocol from stored config; null if unsupported/unconfigured. */
