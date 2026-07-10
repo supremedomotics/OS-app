@@ -13,26 +13,30 @@
 
 ## 0. Document-scope caveat (read first)
 
-Only **one** reference document was actually attached: `Denon_API.pdf`, the **Denon AVR
-control protocol, v8.6.0 (24-Feb-2012), application model AVR‑1713/AVR‑1613** — the
-classic ASCII-over-Telnet command set (`PW`, `MV`, `MU`, `SI`, `SD`, `DC`, `SV`, `SLP`,
-`MS`, `PS`, `Z2`). Two things follow from that:
+**Update:** the HEOS CLI Protocol Specification (v1.17) has now been supplied and fully
+read (44 pages, every command/event section) — see §2.11 for the resulting design. Two
+documents are in hand now:
 
-1. **No Yamaha document was attached** (YXC / MusicCast). Phase 3 cannot start on Yamaha
-   without it — flagged as an open item in §8.
-2. **No HEOS document was attached.** HEOS (Denon/Marantz's separate JSON-over-TCP
-   streaming/multi-room control layer, port 1255) is a different protocol from the
-   Telnet command set in the attached PDF and needs its own spec before Phase 3 can
-   implement it. The Telnet protocol alone is sufficient for power/volume/mute/input/
-   surround/zone-2/tone control; it does **not** give access to HEOS's queue/NowPlaying-
-   for-streaming-services surface.
-3. The attached Telnet spec is from a 2012 entry-level model. Denon/Marantz have kept
-   this command set essentially additive and backward-compatible across generations
-   (confirmed by cross-referencing the shape already implemented in this repo — see
-   §2.1), so it is usable as the *baseline* grammar, but current flagship models
-   (X4800H, AV10) add commands this document doesn't list (Dolby Atmos/DTS:X specific
-   `MS` values, HDMI-output selection, newer `PS` audyssey/DSP parameters). This is a
-   completeness risk for Phase 3, not a Phase 1 blocker.
+- `Denon_API.pdf` — Denon AVR Telnet control protocol, v8.6.0 (24-Feb-2012), application
+  model AVR‑1713/AVR‑1613 — the classic ASCII-over-Telnet command set (`PW`, `MV`, `MU`,
+  `SI`, `SD`, `DC`, `SV`, `SLP`, `MS`, `PS`, `Z2`).
+- `HEOS_CLI_ProtocolSpecificationVersion1.17.pdf` — the HEOS CLI protocol (Telnet port
+  1255, `heos://` command URIs, JSON responses) — Denon/Marantz/HEOS's streaming and
+  multi-room layer, fully independent of the Telnet protocol above.
+
+**Still outstanding: no Yamaha document (YXC / MusicCast) has been attached.** Phase 3
+cannot start on Yamaha without it — see §8.
+
+The attached Telnet spec is from a 2012 entry-level model. Denon/Marantz have kept this
+command set essentially additive and backward-compatible across generations (confirmed
+by cross-referencing the shape already implemented in this repo — see §2.1), so it is
+usable as the *baseline* grammar, but current flagship models (X4800H, AV10) add
+commands this document doesn't list (Dolby Atmos/DTS:X specific `MS` values, HDMI-output
+selection, newer `PS` audyssey/DSP parameters). This is a completeness risk for Phase 3,
+not a Phase 1 blocker — and it is now largely *mitigated* for the homeowner-facing
+surface (power/volume/mute/transport/input/NowPlaying/queue) because HEOS covers all of
+that ground with a modern, fully-specified protocol; the Telnet protocol is only load-
+bearing now for install-time zone/tone/DSP control (§7).
 
 ---
 
@@ -105,9 +109,9 @@ driver always routes there regardless of migration state
   multicast, used today by Sonos/WiiM) and `mdns.ts` (mDNS/Bonjour browse + resolve,
   used today by Shelly/AirPlay/Apple TV) are protocol-agnostic UDP libraries with
   injectable sockets for testing. Yamaha (SSDP `urn:schemas-upnp-org:device:
-  MediaRenderer:1`, matching the WiiM precedent almost exactly) and Denon/HEOS (SSDP +
-  mDNS `_heos-audio._tcp` / `_amzn-wplay._tcp` announce patterns) both fit this without
-  new infrastructure.
+  MediaRenderer:1`, matching the WiiM precedent almost exactly) and HEOS (SSDP, search
+  target `urn:schemas-denon-com:device:ACT-Denon:1`, confirmed in the HEOS CLI spec §2)
+  both fit `ssdp.ts` without new infrastructure.
 - **Discovery → commission → bind is one generic pipeline**, not per-protocol code:
   `CommissioningService` (`services/commissioning/src/index.ts`) aggregates
   `adapter.discover()` across every registered driver, tags each result with its
@@ -247,6 +251,65 @@ new table, no migration required for basic binding persistence.
   `build`/`typecheck`/`test`able; `services/protocols` is the home for every native
   protocol driver + its codec + its test, one file pair per protocol.
 
+### 2.11 HEOS CLI protocol (v1.17) — read in full; here is the design it implies
+
+Transport: Telnet, **port 1255**, commands are `heos://group/command?k=v&k2=v2\r\n`
+strings; responses are JSON with a `command`/`result`/`message` envelope plus an
+optional `payload`. The `message` field itself is a `&`-delimited `key=value` string
+(not nested JSON) — the codec needs a small `parseHeosMessage(str) →
+Record<string,string>` helper, the HEOS analogue of `parseAvrLine`.
+
+**Architecturally important — HEOS is not "one link per host."** Unlike the classic
+Denon Telnet protocol (§2.1, strictly one connection per receiver), a single HEOS
+socket connection to **any one** HEOS speaker on the network gives control over
+**every player in the whole HEOS ecosystem**, addressed by `pid` (player id) —
+confirmed in §2 of the spec ("recommended not to establish socket connection to each
+HEOS speaker... [use] one connection to listen for change events and one to handle
+user actions"). This means `HeosProtocolDriver` should hold **one persistent
+connection per network** (two sockets: one for commands, one for the event stream,
+per the spec's own recommendation), not one per bound device — a genuinely different
+connection topology from `AvrProtocolDriver`, and the concrete reason HEOS is its own
+driver file rather than a mode of the existing one (§5 in the main review already
+called this out; the spec confirms it precisely).
+
+**Driver init sequence** (spec §2.1.1, straightforward to follow exactly):
+un-register for change events → optional `sign_in` → snapshot via `get_players` /
+`get_groups` / `get_now_playing_media` / `get_volume` / `get_play_state` per player →
+`register_for_change_events?enable=on`. A `heart_beat` command exists for keep-alive,
+matching the heartbeat pattern already used by the Casambi driver built this session.
+
+**Command → Supreme capability mapping** (all confirmed against the actual spec text):
+
+| Supreme | HEOS command(s) |
+|---|---|
+| `onoff` | HEOS has no explicit power command — a player is "on" whenever it's part of the HEOS system; power for the underlying AVR is still the classic Telnet `PW` command (§2.1). HEOS augments, doesn't replace, power control. |
+| `media.playback` (play/pause/stop) | `player/set_play_state` (`state=play\|pause\|stop`) |
+| `media.volume` | `player/set_volume` (0–100 absolute) + `volume_up`/`volume_down` (relative step 1–10) |
+| `media.muted` | `player/set_mute`, `toggle_mute` |
+| `media.source` (input) | `browse/play_input?input=inputs/<name>` — a **fixed, protocol-defined enum** of ~35 input identifiers (`inputs/hdmi_in_1`, `inputs/optical_in_1`, `inputs/tv`, …, spec §4.4.9). The enum itself is a wire-protocol constant (safe to embed in the codec, same as Denon `SI` parameter names); *which* of those a specific physical unit exposes is installer configuration, not something to hardcode as "this model has these." |
+| `media.title/album/artist/artworkUrl` | `player/get_now_playing_media` (`song`, `album`, `artist`, `image_url`) — **no duration/position in this response** |
+| `media.durationSec`/`positionSec` (new, §4 of the main review) | **`event/player_now_playing_progress`** — `cur_pos=position_ms&duration=duration_ms`, pushed unsolicited. This is the confirming evidence for the `MediaState` extension already proposed in §4 — the field exists in the real protocol, not just a Denon/Marantz theory. |
+| `media` next/previous | `player/play_next`, `player/play_previous` |
+| `media.shuffle`/`repeat` (new command actions, §4) | `player/set_play_mode?repeat=on_all\|on_one\|off&shuffle=on\|off` — **repeat is 3-state, not boolean** (off / all / one-track-repeat). The `repeat` field proposed in §4 should be a 3-value enum, not `boolean`, to carry this losslessly. |
+| Queue (pull endpoint, §4) | `player/get_queue` (range-paginated, ≤100/response), `play_queue`, `remove_from_queue`, `clear_queue`, `move_queue_item`, `save_queue` — confirms the "pull on demand, not pushed in every state delta" design already recommended. |
+| Presets | `player/set_quickselect` / `play_quickselect` / `get_quickselects` — **explicitly "LS AVR / HEOS BAR only"** in the spec; not every HEOS-capable device supports this. Feeds directly into the dynamic-capability-detection design (§7): presence of QuickSelect is per-model, detected not assumed. |
+| Multi-room grouping | `group/get_groups`, `set_group`, `group/set_volume` — a HEOS-native concept with no Supreme domain-model equivalent today. Recommendation: **out of scope for the core unified `media` capability**; if wanted, expose as an Installer/Developer-mode action (same tier as tone/DSP, §7), not a homeowner capability, since Sonos/WiiM/AirPlay grouping isn't modeled in Supreme today either — this would be new ground for every media driver, not an AVR-specific gap. |
+
+**Change events** (`event/*`, spec §5) are exactly the shape needed to drive
+`onState()` reactively with zero polling: `player_state_changed`,
+`player_now_playing_changed` (triggers a `get_now_playing_media` refetch),
+`player_now_playing_progress` (duration/position, likely pushed ~1/sec while
+playing — the spec doesn't state an exact interval; to be confirmed empirically
+against real hardware in Phase 3), `player_volume_changed` (carries level **and**
+mute together), `repeat_mode_changed`, `shuffle_mode_changed`,
+`player_queue_changed`, `players_changed`/`groups_changed`/`sources_changed`
+(topology changes → re-run `get_players`), `player_playback_error` (surfaced as a
+thrown driver error, not silently dropped).
+
+**Error handling:** `{"result":"fail","message":"eid=<code>&text=<text>"}` — a flat
+numeric error-code enum (spec §6.2). Straightforward `HeosError` mapping, same shape
+as every other driver's typed error throw.
+
 ---
 
 ## 3. What should be reused, unmodified
@@ -322,7 +385,10 @@ new DI mechanism, no new discovery transport.
 - `infra/hub-compose/.env.example`
 
 **Added:**
-- `services/protocols/src/heos-codec.ts`, `heos-driver.ts` (+ `.test.ts`)
+- `services/protocols/src/heos-codec.ts`, `heos-driver.ts` (+ `.test.ts`) — one
+  persistent per-network connection (command socket + event socket), addressing every
+  `pid` on the network, per §2.11 — not the "one link per bound host" shape
+  `AvrProtocolDriver` uses for classic Telnet.
 - `services/protocols/src/yxc-codec.ts`, `yxc-driver.ts` (+ `.test.ts`) — Yamaha
   Extended Control
 - `services/protocols/src/musiccast-codec.ts`, `musiccast-driver.ts` (+ `.test.ts`)
@@ -360,16 +426,20 @@ each unit's advertised `controls` rather than a hardcoded per-model table
 
 ## 8. Open items requiring your input before Phase 2 starts
 
-1. **Yamaha spec is missing.** Please attach the YXC (HTTP/JSON) and MusicCast API
-   docs — Phase 3's Yamaha work cannot start without them.
-2. **HEOS spec is missing.** The attached PDF is the Telnet ASCII protocol only. HEOS
-   (needed for streaming-service NowPlaying/queue on Denon/Marantz) needs its own
-   document.
-3. **Tone/DSP/EQ modeling confirmation** — §7 proposes keeping these out of the core
+1. **Yamaha spec is still missing.** Please attach the YXC (HTTP/JSON) and MusicCast
+   API docs — Phase 3's Yamaha work cannot start without them. ~~HEOS spec is
+   missing~~ **— resolved: HEOS CLI v1.17 supplied and fully analyzed, §2.11.**
+2. **Tone/DSP/EQ modeling confirmation** — §7 proposes keeping these out of the core
    `media` capability and out of the shared `CapabilityKind` enum, surfaced instead as
    a dynamically-rendered `DeviceCapability.config` payload in Installer/Developer
    mode. Confirm this matches your intent before it's built, since it's the one
    genuinely new architectural pattern in this plan (everything else is direct reuse).
+3. **Multi-room grouping (HEOS `group/*`)** — §2.11 proposes treating this as an
+   Installer/Developer-mode action rather than a new homeowner-facing Supreme
+   capability, since no media driver in this repo (Sonos/WiiM/AirPlay included) models
+   cross-device grouping today. Confirm, or say if HEOS grouping should be a
+   fast-follow homeowner feature — that would be new ground affecting the media
+   capability model generally, worth deciding deliberately rather than bolting on.
 4. **Room assignment expectation** — confirm the honest position in §2.3 (SSDP/mDNS
    give no reliable room signal; installer assigns rooms once, matching every existing
    IP-discovered driver) is acceptable, rather than a heuristic that would occasionally
@@ -380,5 +450,9 @@ each unit's advertised `controls` rather than a hardcoded per-model table
 
 ---
 
-**This is Phase 1 only. No implementation code has been written.** Awaiting your
-approval (and the Yamaha/HEOS documents) before Phase 2 begins.
+**This is Phase 1 only. No implementation code has been written.** HEOS is fully
+spec'd and ready to build against. Denon/Marantz (Telnet + HEOS) could start on your
+approval alone; **Yamaha is still blocked on its protocol documents.** Let me know
+whether to (a) wait for the Yamaha docs and start Phase 2 on everything together, or
+(b) begin Phase 2 (the shared framework) + Phase 3's Denon/Marantz driver now, and
+slot Yamaha in once its docs arrive.
