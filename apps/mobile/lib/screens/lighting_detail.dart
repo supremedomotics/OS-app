@@ -26,10 +26,36 @@ enum _Mode { colour, white }
 
 class _LightingDetailState extends ConsumerState<LightingDetail> {
   _Mode? _modeOverride;
+  bool _removing = false;
 
   bool get _hasColour => widget.device.capabilities.contains('color');
 
   Future<void> _cmd(Map<String, dynamic> c) => ref.read(clientProvider).command(widget.device.id, c);
+
+  Future<void> _remove() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove device?'),
+        content: Text('Remove "${widget.device.name}"? This can\'t be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _removing = true);
+    try {
+      await ref.read(clientProvider).deleteDevice(widget.device.id);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _removing = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not remove ${widget.device.name}: $e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +106,15 @@ class _LightingDetailState extends ConsumerState<LightingDetail> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.device.name),
-        actions: [Switch(value: on, onChanged: toggle)],
+        actions: [
+          Switch(value: on, onChanged: toggle),
+          IconButton(
+            onPressed: _removing ? null : _remove,
+            icon: const Icon(Icons.delete_outline),
+            color: Theme.of(context).colorScheme.error,
+            tooltip: 'Remove ${widget.device.name}',
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(AureonSpacing.lg),

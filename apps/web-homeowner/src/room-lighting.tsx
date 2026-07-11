@@ -3,7 +3,7 @@ import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model"
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { colorModes } from "./colormode.js";
-import { RemovableDeviceTile } from "./device-tile.js";
+import { DeviceTile } from "./device-tile.js";
 import { LightingDetail, ColorWheel, TempSlider } from "./lighting.js";
 
 type ColorSt = { on?: boolean; level?: number; hue?: number | null; saturation?: number | null; kelvin?: number | null };
@@ -50,7 +50,15 @@ export function RoomLighting({ name, lights, onBack, onDeviceRemoved }: { roomId
   const rgbAnchor = rgbLights.length > 0 ? colorOf(rgbLights[0]!) : undefined;
   const cctAnchor = cctLights.length > 0 ? colorOf(cctLights[0]!) : undefined;
 
-  if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
+  if (detail) {
+    return (
+      <LightingDetail
+        device={detail}
+        onClose={() => setDetail(null)}
+        onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
+      />
+    );
+  }
 
   function setAll(on: boolean) {
     for (const d of lights) {
@@ -113,7 +121,7 @@ export function RoomLighting({ name, lights, onBack, onDeviceRemoved }: { roomId
 
       <div className="rl-grid">
         {lights.map((d) => (
-          <RemovableDeviceTile key={d.id} device={d} onOpen={() => setDetail(d)} onRemoved={onDeviceRemoved} />
+          <DeviceTile key={d.id} device={d} onOpen={() => setDetail(d)} />
         ))}
       </div>
     </div>

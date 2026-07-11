@@ -382,7 +382,15 @@ function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved }: { r
     if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
     else setSheet(d);
   };
-  if (detail) return <LightingDetail device={detail} onClose={() => setDetail(null)} />;
+  if (detail) {
+    return (
+      <LightingDetail
+        device={detail}
+        onClose={() => setDetail(null)}
+        onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
+      />
+    );
+  }
   return (
     <div>
       <button className="back" onClick={onBack}>‹ {roomName}</button>

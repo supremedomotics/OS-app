@@ -16,9 +16,8 @@ import 'lighting_detail.dart';
 /// is live: a change made anywhere else (another screen, a physical switch, the driver's own app)
 /// reflects immediately, because every value reads through [liveStatesProvider].
 ///
-/// Remove device (§ Room detail): every light here is slidable (drag-to-dim uses the same
-/// horizontal axis a swipe-to-delete gesture would), so removal is a small delete button
-/// alongside the tile rather than a competing swipe.
+/// Remove device (§ Room detail) lives on the Devices list and on [LightingDetail] itself, not
+/// here — this list is a fast toggle/dim surface, not a management one.
 class RoomLightingScreen extends ConsumerStatefulWidget {
   const RoomLightingScreen({super.key, required this.roomName, required this.lights});
 
@@ -124,32 +123,6 @@ class _RoomLightingScreenState extends ConsumerState<RoomLightingScreen> {
     await client.command(d.id, {'capability': 'brightness', 'action': 'set', 'level': val});
   }
 
-  Future<bool> _confirmRemove(Device d) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove device?'),
-        content: Text('Remove "${d.name}"? This can\'t be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    return ok ?? false;
-  }
-
-  Future<void> _remove(Device d) async {
-    try {
-      await ref.read(clientProvider).deleteDevice(d.id);
-      if (!mounted) return;
-      setState(() => _lights.removeWhere((x) => x.id == d.id));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not remove ${d.name}: $e')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -227,31 +200,21 @@ class _RoomLightingScreenState extends ConsumerState<RoomLightingScreen> {
               padding: const EdgeInsets.only(bottom: AureonSpacing.md),
               child: Builder(builder: (_) {
                 final spec = tileSpec(d, mergedDeviceState(d, live));
-                return Row(children: [
-                  Expanded(
-                    child: DeviceControlTile(
-                      icon: spec.icon,
-                      name: d.name,
-                      valueLabel: spec.value,
-                      fill: spec.fill,
-                      on: spec.on,
-                      slidable: true,
-                      onChanged: (v) => _drag(ref, d, v),
-                      onToggle: () => _toggle(ref, d, !spec.on),
-                      onOpenDetail: () async {
-                        ref.read(usageProvider.notifier).record('device', d.id);
-                        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LightingDetail(device: d)));
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: AureonSpacing.sm),
-                  IconButton(
-                    onPressed: () async { if (await _confirmRemove(d)) await _remove(d); },
-                    icon: const Icon(Icons.delete_outline),
-                    color: Theme.of(context).colorScheme.error,
-                    tooltip: 'Remove ${d.name}',
-                  ),
-                ]);
+                return DeviceControlTile(
+                  icon: spec.icon,
+                  name: d.name,
+                  valueLabel: spec.value,
+                  fill: spec.fill,
+                  on: spec.on,
+                  slidable: true,
+                  onChanged: (v) => _drag(ref, d, v),
+                  onToggle: () => _toggle(ref, d, !spec.on),
+                  onOpenDetail: () async {
+                    ref.read(usageProvider.notifier).record('device', d.id);
+                    final removed = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(builder: (_) => LightingDetail(device: d)));
+                    if (removed == true && mounted) setState(() => _lights.removeWhere((x) => x.id == d.id));
+                  },
+                );
               }),
             ),
         ],

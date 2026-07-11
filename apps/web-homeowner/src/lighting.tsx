@@ -16,8 +16,9 @@ import { colorModes } from "./colormode.js";
 type ColorSt = { on?: boolean; level?: number; hue?: number | null; saturation?: number | null; kelvin?: number | null };
 type BrightnessSt = { on?: boolean; level?: number };
 
-export function LightingDetail({ device, onClose }: { device: Device; onClose: () => void }) {
+export function LightingDetail({ device, onClose, onRemoved }: { device: Device; onClose: () => void; onRemoved?: () => void }) {
   const { states, apply } = useLive();
+  const [removing, setRemoving] = useState(false);
   const live = states[device.id] as Record<string, unknown> | undefined;
   const merged = { ...device.state, ...live } as Record<string, ColorSt | BrightnessSt | { on?: boolean } | undefined>;
   const hasColour = device.capabilities.some((c) => c.kind === "color");
@@ -59,6 +60,16 @@ export function LightingDetail({ device, onClose }: { device: Device; onClose: (
     apply(device.id, hasColour || brightness ? "brightness" : "onoff", hasColour || brightness ? { kind: "brightness", on: n, level: n ? (level > 0 ? level : 100) : 0 } : { kind: "onoff", on: n });
     void cmd({ capability: hasColour || brightness ? "brightness" : "onoff", action: n ? "on" : "off" } as CapabilityCommand);
   };
+  const remove = async () => {
+    if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
+    setRemoving(true);
+    try {
+      await client.deleteDevice(device.id as DeviceId);
+      onRemoved?.();
+    } finally {
+      setRemoving(false);
+    }
+  };
 
   return (
     <div className="light-detail">
@@ -67,6 +78,7 @@ export function LightingDetail({ device, onClose }: { device: Device; onClose: (
         <button className={`edit-btn${on ? " on" : ""}`} onClick={toggle}>
           {on ? "On" : "Off"}
         </button>
+        <button className="danger" disabled={removing} onClick={() => void remove()}>Remove device</button>
       </div>
       <h1 className="title">{device.name}</h1>
 
