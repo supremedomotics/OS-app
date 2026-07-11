@@ -58,6 +58,32 @@ import type {
   UserId,
 } from "@supreme/domain-model";
 
+/** One HVAC schedule event (§ HVAC Detail Page "Schedule") — mirrors
+ * @supreme/automations' ClimateScheduleEvent shape; not imported directly since the SDK
+ * doesn't otherwise depend on that package (same minimal-contract pattern the backend
+ * route itself uses — see services/gateway/src/routes/climate.ts). */
+export interface ClimateScheduleEventInput {
+  id?: string;
+  deviceId: string;
+  enabled?: boolean;
+  recurrence: "once" | "daily" | "weekly";
+  date?: string;
+  weekdays?: number[];
+  atMinutes: number;
+  targetC: number;
+  mode: "heat" | "cool" | "auto" | "fan_only";
+  fanSpeed?: string;
+  label?: string;
+}
+export interface ClimateScheduleEvent extends ClimateScheduleEventInput {
+  id: string;
+  enabled: boolean;
+}
+export interface ClimateScheduleResponse {
+  events: ClimateScheduleEvent[];
+  holidayDeviceIds: string[];
+}
+
 /**
  * Supreme TypeScript SDK (§6). Clients (web homeowner/installer) bind to this, not
  * to raw endpoints — and certainly never to HA. The SDK validates responses with
@@ -303,6 +329,17 @@ export class SupremeClient {
   /** The core control verb — tap a light, set a level, etc. */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<CommandResponse> {
     return this.request("POST", `/v1/devices/${deviceId}/command`, { command }) as Promise<CommandResponse>;
+  }
+
+  /** The home's full per-device HVAC schedule (§ HVAC Detail Page "Schedule") + which
+   * devices currently have holiday mode active. */
+  climateSchedule(): Promise<ClimateScheduleResponse> {
+    return this.request("GET", "/v1/climate/schedule") as Promise<ClimateScheduleResponse>;
+  }
+  /** Replaces the home's full HVAC schedule event list + holiday-mode device set —
+   * these events are executed by SupremeOS on the minute tick, never sent to the driver. */
+  setClimateSchedule(input: { events: ClimateScheduleEventInput[]; holidayDeviceIds: string[] }): Promise<ClimateScheduleResponse> {
+    return this.request("PUT", "/v1/climate/schedule", input) as Promise<ClimateScheduleResponse>;
   }
 
   /** Move a device to any room, rename it, and/or merge fields into its metadata bag

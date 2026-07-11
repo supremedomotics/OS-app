@@ -10,6 +10,7 @@ import { Automations } from "./automations.js";
 import { DiscoverDevices } from "./discover.js";
 import { DeviceManager } from "./devices.js";
 import { Media } from "./media.js";
+import { Climate } from "./climate.js";
 import { ExtensionCenter } from "./extensions.js";
 import { DashboardOverview } from "./dashboard.js";
 import { DeveloperTools } from "./developer.js";
@@ -20,8 +21,8 @@ import { Icon } from "./icons.js";
 
 export type Tab =
   | "dashboard" | "discover" | "devices" | "extensions"
-  | "automations" | "scenes" | "rooms" | "areas" | "media" | "security" | "energy" | "notifications" | "settings" | "developer";
-type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "areas" | "media" | "security" | "energy" | "notifications" | "settings" | "developer";
+  | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "security" | "energy" | "notifications" | "settings" | "developer";
+type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "security" | "energy" | "notifications" | "settings" | "developer";
 
 // The full platform navigation (§ Navigation). Nothing is hidden behind URLs — every backend area is
 // a first-class destination. "developer" appears only in Developer Mode.
@@ -35,6 +36,7 @@ const NAV: { id: Tab; label: string; icon: NavIcon; dev?: boolean }[] = [
   { id: "rooms", label: "Rooms", icon: "rooms" },
   { id: "areas", label: "Areas", icon: "areas" },
   { id: "media", label: "Media", icon: "media" },
+  { id: "climate", label: "Climate", icon: "climate" },
   { id: "security", label: "Security", icon: "security" },
   { id: "energy", label: "Energy", icon: "energy" },
   { id: "notifications", label: "Notifications", icon: "notifications" },
@@ -123,6 +125,7 @@ export function App() {
       {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} />}
       {tab === "areas" && <AreasScreen onNavigate={go} />}
       {tab === "media" && <Media onNavigate={go} />}
+      {tab === "climate" && <Climate onNavigate={go} />}
       {tab === "security" && <Security />}
       {tab === "energy" && <Energy />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}

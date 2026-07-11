@@ -10,6 +10,7 @@ import { registerSetupRoutes } from "./routes/setup.js";
 import { registerHomeRoutes } from "./routes/home.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerSceneRoutes } from "./routes/scenes.js";
+import { registerClimateRoutes } from "./routes/climate.js";
 import { registerUserRoutes } from "./routes/users.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerInstallerRoutes } from "./routes/installer.js";
@@ -101,6 +102,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerHomeRoutes(app, ctx);
   registerDeviceRoutes(app, ctx);
   registerSceneRoutes(app, ctx);
+  registerClimateRoutes(app, ctx);
   registerUserRoutes(app, ctx);
   registerNotificationRoutes(app, ctx);
   registerInstallerRoutes(app, ctx);

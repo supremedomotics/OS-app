@@ -426,6 +426,26 @@ class SupremeClient {
     return Device.fromJson((jsonDecode(res.body) as Map<String, dynamic>)['device'] as Map<String, dynamic>);
   }
 
+  /// The home's full per-device HVAC schedule (§ HVAC Detail Page "Schedule") + which
+  /// devices currently have holiday mode active. Returns {events, holidayDeviceIds}.
+  Future<Map<String, dynamic>> climateSchedule() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/climate/schedule'), headers: _authHeaders);
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Replaces the home's full HVAC schedule event list + holiday-mode device set — these
+  /// events are executed by SupremeOS on the minute tick, never sent to the driver.
+  Future<Map<String, dynamic>> setClimateSchedule({required List<Map<String, dynamic>> events, required List<String> holidayDeviceIds}) async {
+    final res = await _http.put(
+      Uri.parse('$baseUrl/v1/climate/schedule'),
+      headers: _authHeaders,
+      body: jsonEncode({'events': events, 'holidayDeviceIds': holidayDeviceIds}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Clone a device's configuration into a new device (§ Device Platform).
   Future<Device> cloneDevice(String deviceId) async {
     final res = await _http.post(Uri.parse('$baseUrl/v1/devices/$deviceId/clone'), headers: _authHeaders, body: '{}');

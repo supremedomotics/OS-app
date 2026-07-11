@@ -55,6 +55,7 @@ import type { CapabilityCommand } from "@supreme/domain-model";
 import { OccupancyRunner } from "./occupancy-runner.js";
 import { SceneScheduler } from "./scene-scheduler.js";
 import { ClimateProgramRunner } from "./climate-runner.js";
+import { ClimateScheduler } from "./climate-scheduler.js";
 import { AlertRuleRunner, type AlertRule } from "./alert-runner.js";
 import { LoadShiftRunner } from "./load-shift-runner.js";
 import { VentilationRunner, type VentilationConfig } from "./ventilation-runner.js";
@@ -63,7 +64,7 @@ import { BudgetMonitor, type EnergyBudget } from "./budget-monitor.js";
 import { SieRunner } from "./sie-runner.js";
 import type { AutoPilotSettings, DeviceIntel, SuggestionState, Zone } from "@supreme/intelligence";
 import { IntelligenceRepo } from "@supreme/persistence";
-import type { ClimateProgram } from "@supreme/automations";
+import type { ClimateProgram, ClimateScheduleEvent } from "@supreme/automations";
 import type { Tariff, RateFetcher } from "@supreme/analytics";
 import type { SceneSchedule } from "@supreme/scenes";
 import type { SceneId } from "@supreme/domain-model";
@@ -170,6 +171,8 @@ export class AppContext {
   readonly sceneScheduler: SceneScheduler;
   /** Applies the climate program's setpoint to thermostats on the minute tick. */
   readonly climateRunner: ClimateProgramRunner;
+  /** Fires per-device HVAC schedule events (§ HVAC Detail Page "Schedule") on the minute tick. */
+  readonly climateScheduler: ClimateScheduler;
   /** Evaluates duration-based alert rules (door left open / unlocked, light left on). */
   readonly alertRunner: AlertRuleRunner;
   /** Pauses/resumes deferrable loads to avoid peak-rate hours (§16). */
@@ -224,6 +227,18 @@ export class AppContext {
           }
         }
       },
+    });
+    this.climateScheduler = new ClimateScheduler({
+      getEvents: async () => ((await this.homeConfig.get(this.homeId, "climate_schedule_events")) as ClimateScheduleEvent[] | undefined) ?? [],
+      getHolidayDeviceIds: async () => ((await this.homeConfig.get(this.homeId, "climate_holiday_device_ids")) as string[] | undefined) ?? [],
+      onOnceFired: async (eventId) => {
+        const events = ((await this.homeConfig.get(this.homeId, "climate_schedule_events")) as ClimateScheduleEvent[] | undefined) ?? [];
+        await this.homeConfig.set(this.homeId, "climate_schedule_events", events.map((e) => (e.id === eventId ? { ...e, enabled: false } : e)));
+      },
+      apply: (deviceId, targetC, mode, fanSpeed) =>
+        this.sil
+          .command(deviceId as DeviceId, { capability: "temperature", targetC, mode, ...(fanSpeed ? { advanced: { fanSpeed } } : {}) })
+          .then(() => undefined),
     });
     this.alertRunner = new AlertRuleRunner({
       getRules: async () => ((await this.homeConfig.get(this.homeId, "alert_rules")) as AlertRule[] | undefined) ?? [],

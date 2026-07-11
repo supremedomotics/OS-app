@@ -1416,6 +1416,250 @@ button.link {
   .avr-mini-progress, .avr-mini-vol, .avr-mini-zone { display: flex; }
 }
 
+/* ── HVAC / Climate console (§ HVAC Detail Page) — identical visual language to the AVR
+   console above: same cards, shadows, gold accents, radius, typography, spacing. Only
+   the hero control and field set differ (a temperature dial instead of a volume knob;
+   mode/fan/swing instead of input/listening-mode/zone). ─────────────────────────────── */
+.climate-console {
+  display: grid; grid-template-columns: 380px 1fr 320px; grid-template-areas: "main fields info" "mini mini mini";
+  gap: 20px; padding-bottom: 100px; align-items: start; position: relative;
+}
+.climate-console::before {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  top: -40px; left: -40px; right: -40px; height: 520px;
+  background: radial-gradient(60% 100% at 22% 0%, color-mix(in srgb, var(--aureon-color-gold-400) 5%, transparent) 0%, transparent 70%);
+}
+.climate-main { grid-area: main; display: flex; flex-direction: column; gap: 18px; }
+.climate-fields-col { grid-area: fields; display: flex; flex-direction: column; gap: 18px; }
+@media (max-width: 1200px) {
+  .climate-console { grid-template-columns: 380px 1fr; grid-template-areas: "main fields" "info info" "mini mini"; }
+}
+@media (max-width: 900px) {
+  .climate-console { grid-template-columns: 1fr; grid-template-areas: "main" "fields" "info" "mini"; }
+}
+
+.climate-head-card {
+  display: flex; align-items: center; gap: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2%) 0%, var(--aureon-color-base-surface-raised) 100%);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 20px; padding: 16px 18px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 16px 32px -20px rgba(0,0,0,0.55);
+}
+.climate-back { background: none; border: 0; color: var(--aureon-color-text-secondary); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+.climate-back:hover { color: var(--aureon-color-text-primary); }
+.climate-head-ic { width: 56px; height: 56px; border-radius: 14px; background: var(--aureon-color-base-surface); display: flex; align-items: center; justify-content: center; font-size: 26px; flex: none; }
+.climate-head-meta { flex: 1; min-width: 0; }
+.climate-head-meta h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.climate-head-meta p { margin: 2px 0 0; color: var(--aureon-color-text-secondary); font-size: 13px; }
+.climate-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+.climate-icon-btn {
+  width: 44px; height: 44px; border-radius: 50%; border: 1px solid color-mix(in srgb, white 8%, var(--aureon-color-base-hairline) 60%);
+  background: color-mix(in srgb, var(--aureon-color-base-surface) 100%, white 2%); color: var(--aureon-color-text-primary); font-size: 18px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 6%, transparent) inset;
+  transition: background 0.15s ease, box-shadow 0.2s ease, transform 0.12s ease, border-color 0.2s ease;
+}
+.climate-icon-btn:hover { background: var(--aureon-color-base-hairline); }
+.climate-icon-btn:active { transform: scale(0.94); }
+.climate-icon-btn:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
+.climate-icon-btn.lg { width: 52px; height: 52px; font-size: 22px; }
+
+.climate-menu-wrap { position: relative; }
+.climate-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); background: var(--aureon-color-base-surface-raised);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 14px; padding: 6px; min-width: 170px;
+  display: flex; flex-direction: column; z-index: 5; box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+  animation: panel-up 0.16s ease;
+}
+.climate-menu button { background: none; border: 0; text-align: left; padding: 10px 12px; border-radius: 8px; color: var(--aureon-color-text-primary); font-size: 14px; cursor: pointer; }
+.climate-menu button:hover { background: var(--aureon-color-base-hairline); }
+.climate-menu button.danger { color: var(--aureon-color-status-critical); }
+
+.climate-hero {
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  background: linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2.5%) 0%, var(--aureon-color-base-surface-raised) 55%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, black 12%) 100%);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 24px; padding: 28px; position: relative; overflow: hidden;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 24px 48px -28px rgba(0,0,0,0.6);
+  transition: opacity 0.6s ease, filter 0.6s ease;
+}
+.climate-hero.offline { opacity: 0.55; filter: saturate(0.6); }
+
+.climate-dial-col { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.climate-dial {
+  --climate-dial-glow: 0;
+  position: relative; width: 208px; height: 208px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 3%) 0%, var(--aureon-color-base-surface) 62%, color-mix(in srgb, var(--aureon-color-base-void) 100%, black 8%) 100%);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 5%, transparent) inset,
+    0 -6px 14px color-mix(in srgb, black 35%, transparent) inset,
+    0 18px 36px -20px rgba(0,0,0,0.6),
+    0 0 calc(10px + var(--climate-dial-glow) * 30px) calc(var(--climate-dial-glow) * 1px) color-mix(in srgb, var(--aureon-color-gold-400) calc(var(--climate-dial-glow) * 35%), transparent);
+  transition: transform 0.15s ease, box-shadow 0.3s ease;
+}
+.climate-dial::before {
+  content: ""; position: absolute; inset: 10px; border-radius: 50%; pointer-events: none;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, white 3%, transparent) 0deg 1deg, transparent 1deg 3deg);
+  opacity: 0.5; mix-blend-mode: overlay;
+}
+.climate-dial::after {
+  content: ""; position: absolute; inset: 6px; border-radius: 50%; pointer-events: none;
+  background: linear-gradient(128deg, color-mix(in srgb, white calc(10% + var(--climate-dial-glow) * 6%), transparent) 0%, transparent 30%, transparent 100%);
+}
+.climate-dial:hover { box-shadow: 0 1px 0 color-mix(in srgb, white 7%, transparent) inset, 0 -6px 14px color-mix(in srgb, black 35%, transparent) inset, 0 20px 40px -18px color-mix(in srgb, var(--aureon-color-gold-400) 12%, rgba(0,0,0,0.6)); }
+.climate-dial:has(.climate-dial-input:active) { transform: scale(0.99); }
+.climate-dial-ticks { position: absolute; inset: 0; }
+.climate-dial-tick { position: absolute; left: 50%; top: 3px; width: 2px; height: 9px; margin-left: -1px; border-radius: 1px; background: var(--aureon-color-base-hairline); transform-origin: 50% 101px; transition: background 0.3s ease, box-shadow 0.3s ease; }
+.climate-dial-tick.on { background: var(--aureon-color-gold-400); box-shadow: 0 0 5px color-mix(in srgb, var(--aureon-color-gold-400) 65%, transparent); }
+.climate-dial-tick.major { height: 12px; width: 2.5px; margin-left: -1.25px; }
+.climate-dial-track { fill: none; stroke: color-mix(in srgb, var(--aureon-color-base-hairline) 70%, transparent); stroke-width: 3; }
+.climate-dial-fill { fill: none; stroke: var(--aureon-color-gold-400); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.2s ease; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--aureon-color-gold-400) 60%, transparent)); }
+.climate-dial-label { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.climate-dial-caption { font-size: 10px; letter-spacing: 0.14em; color: var(--aureon-color-text-secondary); margin-bottom: 6px; }
+.climate-dial-value { font-size: 36px; font-weight: 600; line-height: 1; font-family: "Aureon Display", Inter, sans-serif; letter-spacing: -0.01em; }
+.climate-dial-unit { font-size: 16px; color: var(--aureon-color-text-secondary); margin-left: 2px; font-weight: 500; }
+.climate-dial-mode { font-size: 12.5px; color: var(--aureon-color-gold-400); margin-top: 8px; font-weight: 600; }
+.climate-dial-input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; appearance: none; }
+.climate-dial-steppers { display: flex; align-items: center; gap: 22px; }
+
+.climate-power-btn {
+  display: flex; align-items: center; gap: 10px; padding: 12px 28px; border-radius: 999px; cursor: pointer;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary);
+  font-size: 14px; font-weight: 600; letter-spacing: 0.02em;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset;
+  transition: background 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease, transform 0.12s ease;
+}
+.climate-power-btn:hover { border-color: color-mix(in srgb, white 14%, var(--aureon-color-base-hairline) 40%); }
+.climate-power-btn:active { transform: scale(0.98); }
+.climate-power-btn.on {
+  background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
+  border-color: transparent; color: #15161b;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 25%, transparent) inset, 0 10px 24px -12px color-mix(in srgb, var(--aureon-color-gold-400) 55%, transparent);
+}
+.climate-power-ic { font-size: 16px; }
+
+.climate-status-row { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; padding-top: 6px; border-top: 1px solid var(--aureon-color-base-hairline); width: 100%; }
+.climate-status-cell { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--aureon-color-text-secondary); padding-top: 14px; }
+.climate-status-cell b { color: var(--aureon-color-text-primary); font-weight: 600; margin-left: 2px; }
+.climate-status-cell b.good { color: var(--aureon-color-status-good); }
+.climate-status-ic { font-size: 14px; }
+
+.climate-field { display: flex; flex-direction: column; gap: 9px; }
+.climate-field-label { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--aureon-color-text-secondary); font-weight: 600; }
+.climate-hw-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.climate-hw-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 76px;
+  padding: 10px 14px; border-radius: 12px; cursor: pointer; text-align: center;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--aureon-color-base-surface) 100%, white 3%) 0%, var(--aureon-color-base-surface) 100%);
+  border: 1px solid var(--aureon-color-base-hairline);
+  box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset, 0 1px 2px rgba(0,0,0,0.3);
+  transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.climate-hw-btn:hover { border-color: color-mix(in srgb, white 14%, var(--aureon-color-base-hairline) 40%); }
+.climate-hw-btn:active { transform: translateY(1px) scale(0.98); box-shadow: 0 1px 4px rgba(0,0,0,0.4) inset; }
+.climate-hw-btn:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
+.climate-hw-btn.on {
+  background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
+  border-color: transparent; color: #15161b;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 25%, transparent) inset, 0 6px 16px -8px color-mix(in srgb, var(--aureon-color-gold-400) 60%, transparent);
+}
+.climate-hw-ic { font-size: 17px; }
+.climate-hw-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+
+.climate-quick {
+  display: flex; flex-direction: column; gap: 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2%) 0%, var(--aureon-color-base-surface-raised) 100%);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 22px; padding: 18px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 20px 40px -26px rgba(0,0,0,0.55);
+}
+.climate-quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.climate-quick-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border-radius: 18px;
+  border: 1px solid color-mix(in srgb, white 8%, var(--aureon-color-base-hairline) 60%);
+  background: color-mix(in srgb, var(--aureon-color-base-surface-raised) 55%, transparent);
+  backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
+  color: var(--aureon-color-text-primary); cursor: pointer; font-size: 12.5px; width: 100%; min-height: 88px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 7%, transparent) inset, 0 10px 22px -14px rgba(0,0,0,0.5);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease;
+}
+.climate-quick-tile:hover { border-color: color-mix(in srgb, white 14%, var(--aureon-color-base-hairline) 40%); }
+.climate-quick-tile:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
+.climate-quick-tile:active { transform: scale(0.98); }
+.climate-quick-tile.on {
+  border-color: color-mix(in srgb, var(--aureon-color-gold-400) 55%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, white 10%, transparent) inset, 0 0 0 1px color-mix(in srgb, var(--aureon-color-gold-400) 25%, transparent), 0 10px 24px -12px color-mix(in srgb, var(--aureon-color-gold-400) 40%, transparent);
+}
+.climate-quick-tile.on .climate-quick-ic { color: var(--aureon-color-gold-400); }
+.climate-quick-ic { font-size: 24px; }
+
+.climate-info-card {
+  grid-area: info; display: flex; flex-direction: column; gap: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2%) 0%, var(--aureon-color-base-surface-raised) 100%);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 22px; padding: 18px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 20px 40px -26px rgba(0,0,0,0.55);
+}
+.climate-info-head { display: flex; align-items: center; justify-content: space-between; }
+.climate-info-title { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; }
+.climate-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--aureon-color-text-secondary); }
+.climate-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--aureon-color-text-secondary); display: inline-block; }
+.climate-status.good i { background: var(--aureon-color-status-good); animation: dot-pulse 2.4s ease-in-out infinite; }
+.climate-status.good { color: var(--aureon-color-status-good); }
+.climate-info-list { display: flex; flex-direction: column; gap: 2px; margin: 0; }
+.climate-info-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 4px; border-radius: 10px; cursor: default; transition: background 0.15s ease; }
+.climate-info-row[onclick] { cursor: pointer; }
+.climate-info-row:hover { background: var(--aureon-color-base-hairline); }
+.climate-info-row dt { margin: 0; font-size: 12.5px; color: var(--aureon-color-text-secondary); }
+.climate-info-row dd { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--aureon-color-text-primary); display: flex; align-items: center; gap: 6px; }
+.climate-info-edit { font-size: 11px; color: var(--aureon-color-text-secondary); opacity: 0.7; }
+.climate-advanced-btn {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 12px 14px; border-radius: 14px; cursor: pointer;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); font-size: 13px; font-weight: 600;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.climate-advanced-btn:hover { background: var(--aureon-color-base-hairline); }
+
+.climate-modal-veil {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: color-mix(in srgb, var(--aureon-color-base-void) 65%, transparent); backdrop-filter: blur(6px); animation: overlay-in 0.15s ease;
+}
+.climate-modal {
+  width: 100%; max-width: 420px; max-height: 80vh; overflow-y: auto;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); border-radius: 22px; padding: 20px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5); animation: panel-up 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.climate-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.climate-modal-head h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.climate-modal-body { display: flex; flex-direction: column; gap: 4px; }
+.climate-modal-empty { color: var(--aureon-color-text-secondary); font-size: 13px; margin: 0; }
+.climate-modal-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 4px; border-bottom: 1px solid var(--aureon-color-base-hairline); font-size: 13.5px; }
+.climate-modal-row:last-child { border-bottom: 0; }
+.climate-modal-action { background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); border-radius: 10px; padding: 7px 14px; font-size: 12.5px; cursor: pointer; }
+.climate-modal-action:hover { background: var(--aureon-color-base-hairline); }
+.climate-toggle { width: 44px; height: 26px; border-radius: 999px; border: 0; background: var(--aureon-color-base-hairline); position: relative; cursor: pointer; transition: background 0.2s ease; padding: 0; }
+.climate-toggle-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--aureon-color-text-secondary); transition: transform 0.2s ease, background 0.2s ease; }
+.climate-toggle.on { background: color-mix(in srgb, var(--aureon-color-gold-400) 35%, var(--aureon-color-base-hairline)); }
+.climate-toggle.on .climate-toggle-knob { transform: translateX(18px); background: var(--aureon-color-gold-400); }
+
+.climate-mini {
+  grid-area: mini; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; align-items: center; gap: 14px; padding: 12px 24px;
+  background: color-mix(in srgb, var(--aureon-color-base-surface-raised) 88%, transparent);
+  backdrop-filter: blur(22px) saturate(140%); -webkit-backdrop-filter: blur(22px) saturate(140%);
+  border-top: 1px solid color-mix(in srgb, white 6%, var(--aureon-color-base-hairline) 70%);
+  box-shadow: 0 -16px 32px -20px rgba(0,0,0,0.5);
+}
+.climate-mini-ic { width: 40px; height: 40px; border-radius: 10px; background: var(--aureon-color-base-surface); display: flex; align-items: center; justify-content: center; font-size: 18px; flex: none; }
+.climate-mini-meta { display: flex; flex-direction: column; min-width: 0; flex: 0 1 200px; }
+.climate-mini-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.climate-mini-sub { font-size: 11.5px; color: var(--aureon-color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.climate-mini-transport { display: flex; align-items: center; gap: 10px; flex: none; margin-left: auto; }
+.climate-mini-transport button { width: 30px; height: 30px; border-radius: 50%; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.climate-mini-pp { width: 34px !important; height: 34px !important; border-radius: 50%; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); }
+.climate-mini-pp.on { background: var(--aureon-color-gold-400) !important; border-color: transparent; color: #15161b; }
+.climate-mini-ambient { display: none; font-size: 12px; color: var(--aureon-color-text-secondary); flex: none; }
+@media (min-width: 900px) {
+  .climate-mini-ambient { display: flex; }
+}
+
 /* Settings — consistent building blocks (replaces per-element inline styles). */
 .sec-block { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--aureon-color-base-hairline); }
 .mono { font-family: ui-monospace, Menlo, monospace; }

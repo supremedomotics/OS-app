@@ -68,6 +68,7 @@ async function main(): Promise<void> {
     guard("automations", ctx.automations.tick());
     guard("scenes", ctx.sceneScheduler.tick());
     guard("climate", ctx.climateRunner.tick());
+    guard("climateSchedule", ctx.climateScheduler.tick());
     guard("alerts", ctx.alertRunner.tick());
     guard("loadShift", ctx.loadShiftRunner.tick());
     guard("ventilation", ctx.ventilationRunner.tick());

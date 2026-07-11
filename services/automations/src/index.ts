@@ -32,3 +32,11 @@ export {
   type ClimateProgram,
   type ClimateBlock,
 } from "./climate-program.js";
+export {
+  dueClimateEvents,
+  validateClimateScheduleEvent,
+  ClimateScheduleError,
+  type ClimateScheduleEvent,
+  type ClimateRecurrence,
+  type ClimateScheduleContext,
+} from "./climate-schedule.js";

@@ -8,6 +8,9 @@ export {
   MemoryTokenStore,
   type SupremeClientOptions,
   type TokenStore,
+  type ClimateScheduleEvent,
+  type ClimateScheduleEventInput,
+  type ClimateScheduleResponse,
 } from "./client.js";
 export {
   SupremeStream,
