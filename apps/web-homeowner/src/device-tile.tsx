@@ -4,6 +4,10 @@ import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { recordUse } from "./usage.js";
 
+function capitalize(s: string): string {
+  return s.length > 0 ? s[0]!.toUpperCase() + s.slice(1) : s;
+}
+
 /**
  * Ovio "tile-as-control" (§11.1): a horizontal tile whose fill = value. Tap toggles on/off (the
  * fast, primary gesture); drag sets the level live with the value shown; a small chevron opens
@@ -18,18 +22,34 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
   const moved = useRef(false);
   const live = states[device.id] ?? {};
   const caps = device.capabilities.map((c) => c.kind);
-  const merged = { ...device.state, ...live } as Record<string, { on?: boolean; level?: number; value?: number; unit?: string; position?: number }>;
+  const merged = { ...device.state, ...live } as Record<
+    string,
+    {
+      on?: boolean; level?: number; value?: number; unit?: string; position?: number;
+      locked?: boolean; status?: string; preset?: "auto" | "sleep" | "turbo"; direction?: "forward" | "reverse";
+      fanSpeed?: "quiet" | "normal" | "turbo";
+    }
+  >;
   const isDimmer = caps.includes("brightness");
   const isCover = !isDimmer && caps.includes("position");
-  const isSwitch = !isDimmer && !isCover && caps.includes("onoff");
-  const isSensor = !isDimmer && !isSwitch && !isCover && caps.includes("sensor");
+  const isLock = !isDimmer && !isCover && caps.includes("lock");
+  const isFan = !isDimmer && !isCover && !isLock && caps.includes("fan");
+  const isVacuum = !isDimmer && !isCover && !isLock && !isFan && caps.includes("vacuum");
+  const isSwitch = !isDimmer && !isCover && !isLock && !isFan && !isVacuum && caps.includes("onoff");
+  const isSensor = !isDimmer && !isSwitch && !isCover && !isLock && !isFan && !isVacuum && caps.includes("sensor");
   const slidable = isDimmer || isCover;
 
   const bright = merged.brightness;
   const onoff = merged.onoff;
   const cover = merged.position;
-  const on = bright?.on ?? onoff?.on ?? (cover?.position ?? 0) > 0;
+  const lock = merged.lock;
+  const fan = merged.fan;
+  const vacuum = merged.vacuum;
+  const locked = lock?.locked ?? true;
+  const cleaning = vacuum?.status === "cleaning";
+  const on = isLock ? !locked : isFan ? (fan?.on ?? false) : isVacuum ? cleaning : bright?.on ?? onoff?.on ?? (cover?.position ?? 0) > 0;
   const level = isDimmer ? bright?.level ?? (on ? 100 : 0) : isCover ? cover?.position ?? 0 : on ? 100 : 0;
+  const valueLabel = isLock ? (locked ? "Locked" : "Unlocked") : isVacuum ? capitalize(vacuum?.status ?? "idle") : slidable ? `${Math.round(level)}%` : on ? "On" : "Off";
 
   async function toggle() {
     const next = !on;
@@ -40,6 +60,16 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
     } else if (isCover) {
       apply(device.id, "position", { kind: "position", position: next ? 100 : 0, moving: false });
       await client.command(device.id as DeviceId, { capability: "position", action: next ? "open" : "close" } as CapabilityCommand);
+    } else if (isLock) {
+      // `on` here means "unlocked" — next=true unlocks, next=false locks.
+      apply(device.id, "lock", { kind: "lock", locked: !next, jammed: false });
+      await client.command(device.id as DeviceId, { capability: "lock", action: next ? "unlock" : "lock" } as CapabilityCommand);
+    } else if (isFan) {
+      apply(device.id, "fan", { kind: "fan", on: next, preset: fan?.preset ?? "auto", direction: fan?.direction ?? "forward" });
+      await client.command(device.id as DeviceId, { capability: "fan", action: next ? "on" : "off" } as CapabilityCommand);
+    } else if (isVacuum) {
+      apply(device.id, "vacuum", { kind: "vacuum", status: next ? "cleaning" : "idle", fanSpeed: vacuum?.fanSpeed ?? "normal" });
+      await client.command(device.id as DeviceId, { capability: "vacuum", action: next ? "start" : "stop" } as CapabilityCommand);
     } else {
       apply(device.id, "onoff", { kind: "onoff", on: next });
       await client.command(device.id as DeviceId, { capability: "onoff", action: "toggle" } as CapabilityCommand);
@@ -83,9 +113,9 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
       onPointerUp={slidable ? () => { dragging.current = false; if (!moved.current) void toggle(); } : undefined}
     >
       <div className="fill" style={{ width: `${level}%` }} />
-      <DeviceIcon kind={isDimmer ? "light" : isCover ? "cover" : "switch"} on={on} />
+      <DeviceIcon kind={isDimmer ? "light" : isCover ? "cover" : isLock ? "lock" : isFan ? "fan" : isVacuum ? "vacuum" : "switch"} on={on} />
       <span className="nm">{device.name}</span>
-      <span className="rv">{slidable ? `${Math.round(level)}%` : on ? "On" : "Off"}</span>
+      <span className="rv">{valueLabel}</span>
       {onOpen && (
         <button
           className="dtile-open"
@@ -185,11 +215,17 @@ export function RemovableDeviceTile({ device, onOpen, onRemoved }: { device: Dev
 }
 
 /** Minimal Aureon line icons (monochrome, theme-aware via currentColor). */
-export function DeviceIcon({ kind, on }: { kind: "light" | "cover" | "switch" | "sensor"; on: boolean }) {
+export function DeviceIcon({ kind, on }: { kind: "light" | "cover" | "switch" | "sensor" | "lock" | "fan" | "vacuum"; on: boolean }) {
   const paths: Record<string, string> = {
     light: "M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.6 1 1 1 2v.5h6V15c0-1 .3-1.4 1-2A6 6 0 0 0 12 3Z",
     cover: "M4 4h16M5 4v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4M9 19v2M15 19v2",
     switch: "M8 6h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 6Zm0 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    // "on" (unlocked) drops the shackle's right leg out of the strike, matching the mobile lock/lock-open pair.
+    lock: on
+      ? "M5 11h14v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-9ZM8 11V7a4 4 0 0 1 7.5-2.5"
+      : "M5 11h14v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-9ZM8 11V7a4 4 0 0 1 8 0v4",
+    fan: "M12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm0-9a3 3 0 0 0-3 3c0 1 .5 2 1 3M12 3a3 3 0 0 1 3 3c0 1-.5 2-1 3M9 15c-1 .5-2 1-3 1a3 3 0 1 1 0-6c1 0 2 .5 3 1M15 15c1 .5 2 1 3 1a3 3 0 1 0 0-6c-1 0-2 .5-3 1",
+    vacuum: "M12 3a9 9 0 1 0 .01 0M8 21h8M9 17v2M15 17v2",
     sensor: "M12 3v18M3 12h18",
   };
   return (

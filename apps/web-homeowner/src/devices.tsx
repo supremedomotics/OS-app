@@ -52,6 +52,11 @@ function stateSummary(d: Device): string {
   if (caps.includes("temperature")) return `${(s.temperature?.ambientC as number) ?? "—"}°`;
   if (caps.includes("position")) return `${(s.position?.position as number) ?? 0}%`;
   if (caps.includes("lock")) return s.lock?.locked ? "Locked" : "Unlocked";
+  if (caps.includes("fan")) return s.fan?.on ? "On" : "Off";
+  if (caps.includes("vacuum")) {
+    const status = (s.vacuum?.status as string) ?? "idle";
+    return status.length > 0 ? status[0]!.toUpperCase() + status.slice(1) : status;
+  }
   if (caps.includes("sensor")) return `${(s.sensor?.value as number) ?? "—"} ${(s.sensor?.unit as string) ?? ""}`.trim();
   return online(d) ? "Online" : "—";
 }
