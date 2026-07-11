@@ -58,6 +58,12 @@ export const TemperatureState = z.object({
   targetHighC: z.number().nullable().optional(),
   mode: z.enum(["off", "heat", "cool", "auto", "fan_only"]),
   humidity: Percent.nullable().optional(),
+  /** Current value of whichever "advanced" (installer/brand-specific) HVAC parameters
+   * this specific device supports — fan speed, swing position, filter/demand/fault
+   * flags, remote lock, installer inhibit, runtime hours, etc. Keys are device-declared
+   * (see ClimateCapabilityConfig in @supreme/protocols), never a fixed cross-brand enum
+   * — mirrors MediaState.advanced. Absent entirely for devices with no advanced state. */
+  advanced: z.record(z.unknown()).nullable().optional(),
 });
 
 export const PositionState = z.object({
@@ -152,6 +158,10 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
     targetLowC: z.number().optional(),
     targetHighC: z.number().optional(),
     mode: z.enum(["off", "heat", "cool", "auto", "fan_only"]).optional(),
+    /** Set one or more device-declared "advanced" parameters (fan speed, swing, remote
+     * lock, installer inhibit, …) — see TemperatureState.advanced and
+     * ClimateCapabilityConfig.advancedControls for which keys a device actually accepts. */
+    advanced: z.record(z.unknown()).optional(),
   }),
   z.object({
     capability: z.literal("position"),
