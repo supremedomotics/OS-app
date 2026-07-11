@@ -243,7 +243,7 @@ class _ClimateTemperatureDialState extends State<ClimateTemperatureDial> {
           Column(mainAxisSize: MainAxisSize.min, children: [
             const Text('SET TEMPERATURE', style: TextStyle(fontSize: 10, letterSpacing: 1.4, color: AureonText.secondary)),
             const SizedBox(height: 6),
-            RichText(text: TextSpan(children: [
+            Text.rich(TextSpan(children: [
               TextSpan(text: widget.targetC.toStringAsFixed(1), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w600, color: AureonText.primary, letterSpacing: -0.3)),
               const TextSpan(text: '°C', style: TextStyle(fontSize: 16, color: AureonText.secondary, fontWeight: FontWeight.w500)),
             ])),
