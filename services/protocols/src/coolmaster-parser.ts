@@ -179,7 +179,10 @@ export function parseUnitJsonList(rows: RawCoolMasterUnitJson[]): CoolMasterUnit
 export function parseKeyValueLines(lines: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of lines) {
-    const m = /^([A-Za-z0-9_.\-]+)\s*[:=]?\s+(.+)$/.exec(line.trim());
+    // The whitespace/separator lives in ONE alternation branch, not layered before it —
+    // "key=value" (no spaces at all) needs the [:=] branch to consume zero surrounding
+    // whitespace, while "key value" needs the plain-whitespace branch instead.
+    const m = /^([A-Za-z0-9_.\-]+)(?:\s*[:=]\s*|\s+)(.+)$/.exec(line.trim());
     if (m?.[1] && m[2] !== undefined) out[m[1].toLowerCase()] = m[2].trim();
   }
   return out;
@@ -222,9 +225,16 @@ export function parseLineInfo(lines: string[]): CoolMasterLineInfo[] {
  * already-parsed unit status from ls2/ls. Missing keys leave the base value untouched. */
 export function mergeQueryDetail(base: CoolMasterUnitStatus, queryLines: string[]): CoolMasterUnitStatus {
   const kv = parseKeyValueLines(queryLines);
+  // query's values are prose-like ("yes"/"no", "on"/"off", …), not the terser tokens
+  // truthy() handles for ls2/REST JSON — a self-contained word match here instead of
+  // reusing truthy(), which would otherwise return a definite `false` for an unrecognized
+  // word like "yes" and short-circuit past any fallback.
   const boolField = (...keys: string[]): boolean | null => {
     for (const k of keys) {
-      if (k in kv) return truthy(kv[k]) ?? /yes|on|true|1/i.test(kv[k] ?? "");
+      if (!(k in kv)) continue;
+      const v = (kv[k] ?? "").trim();
+      if (/^(yes|on|true|1)$/i.test(v)) return true;
+      if (/^(no|off|false|0)$/i.test(v)) return false;
     }
     return null;
   };
