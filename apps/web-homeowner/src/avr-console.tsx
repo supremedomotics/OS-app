@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
@@ -59,6 +59,17 @@ interface MediaStateView {
 
 const cmd = (id: string, c: CapabilityCommand) => client.command(id as DeviceId, c);
 
+/** Haptic feedback on the (mostly mobile-web) browsers that support it — a genuine
+ * physical cue on transport/mute/source taps, silently a no-op everywhere else
+ * (desktop Chrome/Safari have no Vibration API; this never throws or blocks). */
+function vibrate(ms: number): void {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    // unsupported — fine
+  }
+}
+
 function fmtTime(sec: number): string {
   const s = Math.max(0, Math.round(sec));
   return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
@@ -98,33 +109,94 @@ function zoneSiblings(device: Device, allDevices: Device[]): Device[] {
   });
 }
 
-// ── Ambient halo — a slow, subtle pulse behind the artwork; never flashes ────────────
-function AmbientHalo({ playing }: { playing: boolean }) {
-  return <div className={`avr-halo${playing ? " on" : ""}`} aria-hidden="true" />;
+/** Sample a real artwork image's dominant hue client-side (a downscaled canvas read —
+ * cheap, no network round-trip) so the ambient halo can carry a whisper of the actual
+ * cover art color instead of a fixed gold, the way a premium player's now-playing glow
+ * does. Falls back to null (→ the console's own gold) for art-less devices or any
+ * canvas/CORS failure — never blocks rendering on this. */
+function useDominantColor(url: string | null): string | null {
+  const [color, setColor] = useState<string | null>(null);
+  useEffect(() => {
+    setColor(null);
+    if (!url) return;
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const canvas = document.createElement("canvas");
+        const size = 16;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, size, size);
+        const { data } = ctx.getImageData(0, 0, size, size);
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const alpha = data[i + 3] ?? 0;
+          if (alpha < 32) continue;
+          r += data[i] ?? 0; g += data[i + 1] ?? 0; b += data[i + 2] ?? 0; n++;
+        }
+        if (n === 0 || cancelled) return;
+        r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+        // Lift dark/muddy averages toward a usable glow brightness rather than
+        // discarding them — a warm, present color reads better than none.
+        const max = Math.max(r, g, b);
+        if (max < 90 && max > 0) { const boost = 90 / max; r = Math.min(255, r * boost); g = Math.min(255, g * boost); b = Math.min(255, b * boost); }
+        setColor(`rgb(${r | 0}, ${g | 0}, ${b | 0})`);
+      } catch {
+        // Cross-origin canvas taint or decode failure — the gold fallback is fine.
+      }
+    };
+    img.src = url;
+    return () => { cancelled = true; };
+  }, [url]);
+  return color;
 }
 
-function AlbumArt({ url, name, playing }: { url: string | null; name: string; playing: boolean }) {
+// ── Ambient halo — SupremeOS's signature: a quiet, flowing glow that breathes with
+// playback and carries a whisper of the artwork's own color; never a flat colored disc. ─
+function AmbientHalo({ playing, tint }: { playing: boolean; tint: string | null }) {
+  const style = tint ? ({ "--avr-halo-tint": tint } as React.CSSProperties) : undefined;
   return (
-    <div className="avr-art-wrap">
-      <AmbientHalo playing={playing} />
-      {url ? (
-        <img className="avr-art" src={url} alt="" />
-      ) : (
-        <div className="avr-art avr-art-placeholder">{name.charAt(0).toUpperCase()}</div>
-      )}
+    <div className={`avr-halo${playing ? " on" : ""}`} style={style} aria-hidden="true">
+      <span className="avr-halo-particle p1" />
+      <span className="avr-halo-particle p2" />
+      <span className="avr-halo-particle p3" />
+      <span className="avr-halo-particle p4" />
     </div>
   );
 }
 
-/** A slim animated bar visualizer — only animates while genuinely playing (§ Animation:
- * "no flashing effects" — bars ease, they don't strobe). Purely decorative; the real
- * transport state is the progress bar below it. */
-function Waveform({ playing }: { playing: boolean }) {
-  const bars = 28;
+function AlbumArt({ url, name, playing }: { url: string | null; name: string; playing: boolean }) {
+  const tint = useDominantColor(url);
   return (
-    <div className={`avr-waveform${playing ? " on" : ""}`} aria-hidden="true">
+    <div className="avr-art-wrap">
+      <AmbientHalo playing={playing} tint={tint} />
+      <div className={`avr-art-float${playing ? " on" : ""}`}>
+        {url ? (
+          <img className="avr-art" src={url} alt="" />
+        ) : (
+          <div className="avr-art avr-art-placeholder">{name.charAt(0).toUpperCase()}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A full-width animated bar visualizer, fading softly into the card at both edges —
+ * only animates while genuinely playing (§ Animation: "no flashing effects", bars ease,
+ * never strobe). Purely decorative; the real transport state is the progress bar below
+ * it. Bar count is fixed (not measured), but each bar is flex-sized so the row always
+ * spans its container edge-to-edge regardless of card width. */
+function Waveform({ playing, muted }: { playing: boolean; muted: boolean }) {
+  const bars = 56;
+  return (
+    <div className={`avr-waveform${playing ? " on" : ""}${muted ? " muted" : ""}`} aria-hidden="true">
       {Array.from({ length: bars }, (_, i) => (
-        <span key={i} style={{ animationDelay: `${(i % 7) * 0.09}s` }} />
+        <span key={i} style={{ animationDelay: `${(i % 9) * 0.08}s` }} />
       ))}
     </div>
   );
@@ -140,6 +212,14 @@ function VolumeDial({
   const pct = Math.max(0, Math.min(100, volume));
   const offset = c - (pct / 100) * c;
   const litTicks = Math.round((pct / 100) * DIAL_TICK_COUNT);
+  // A tiny tick of haptic feedback each time the dial crosses a new whole tick mark —
+  // mirrors a real knob's detents — but only where the Vibration API actually exists.
+  const lastTickRef = useRef(litTicks);
+  const handleChange = (v: number) => {
+    const nextTicks = Math.round((Math.max(0, Math.min(100, v)) / 100) * DIAL_TICK_COUNT);
+    if (nextTicks !== lastTickRef.current) { vibrate(4); lastTickRef.current = nextTicks; }
+    onChange(v);
+  };
   return (
     <div className="avr-dial-col">
       <div className="avr-dial">
@@ -168,7 +248,7 @@ function VolumeDial({
         <input
           className="avr-dial-input"
           type="range" min={0} max={100} value={volume}
-          onChange={(e) => onChange(Number(e.target.value))}
+          onChange={(e) => handleChange(Number(e.target.value))}
           aria-label="Master volume"
         />
       </div>
@@ -212,17 +292,32 @@ function ZoneSelector({ current, siblings, onNavigate }: { current: Device; sibl
   );
 }
 
-function InputSelector({ inputs, active, onSelect }: { inputs: AvrInputCfg[]; active: string | null; onSelect: (id: string) => void }) {
+/** Premium input tiles (§ Input Selection) — icon, name, connection type, and an active
+ * glow, replacing a plain `<select>`. `pending` lights a brief loading ring on the tile
+ * that was just tapped while its command is in flight (a real receiver's input switch
+ * can take a second or two — this isn't decorative, it's the actual command state). */
+function InputSelector({
+  inputs, active, pending, onSelect,
+}: { inputs: AvrInputCfg[]; active: string | null; pending: string | null; onSelect: (id: string) => void }) {
   if (inputs.length === 0) return null;
   return (
     <div className="avr-field">
       <span className="avr-field-label">Input</span>
-      <select className="avr-select" value={active ?? ""} onChange={(e) => onSelect(e.target.value)}>
-        {!active && <option value="" disabled>Choose an input</option>}
+      <div className="avr-input-tiles">
         {inputs.map((i) => (
-          <option key={i.id} value={i.id}>{inputGlyph(i.type)} {i.label}</option>
+          <button
+            key={i.id}
+            className={`avr-input-tile${active === i.id ? " on" : ""}${pending === i.id ? " loading" : ""}`}
+            onClick={() => onSelect(i.id)}
+            disabled={pending === i.id}
+          >
+            <span className="avr-input-tile-ic">{inputGlyph(i.type)}</span>
+            <span className="avr-input-tile-name">{i.label}</span>
+            {i.type && <span className="avr-input-tile-type">{i.type.toUpperCase()}</span>}
+            {pending === i.id && <span className="avr-input-tile-spinner" aria-hidden="true" />}
+          </button>
         ))}
-      </select>
+      </div>
     </div>
   );
 }
@@ -280,20 +375,27 @@ function QuickActions({
   );
 }
 
-function SourceRail({ inputs, active, onSelect }: { inputs: AvrInputCfg[]; active: string | null; onSelect: (id: string) => void }) {
+function SourceRail({
+  inputs, active, pending, onSelect,
+}: { inputs: AvrInputCfg[]; active: string | null; pending: string | null; onSelect: (id: string) => void }) {
   if (inputs.length === 0) return null;
   return (
     <div className="avr-source-rail">
       <span className="avr-field-label">Source</span>
       <div className="avr-source-list">
         {inputs.map((i) => (
-          <button key={i.id} className={`avr-source-row${active === i.id ? " on" : ""}`} onClick={() => onSelect(i.id)}>
+          <button
+            key={i.id}
+            className={`avr-source-row${active === i.id ? " on" : ""}${pending === i.id ? " loading" : ""}`}
+            onClick={() => onSelect(i.id)}
+            disabled={pending === i.id}
+          >
             <span className="avr-source-ic">{inputGlyph(i.type)}</span>
             <span className="avr-source-meta">
               <span className="avr-source-name">{i.label}</span>
               {i.type && <span className="avr-source-type">{i.type.toUpperCase()}</span>}
             </span>
-            {active === i.id && <span className="avr-source-check">✓</span>}
+            {pending === i.id ? <span className="avr-source-spinner" aria-hidden="true" /> : active === i.id ? <span className="avr-source-check">✓</span> : null}
           </button>
         ))}
       </div>
@@ -354,6 +456,7 @@ export function AvrConsole({
   const power = (states[device.id]?.onoff ?? (device.state as Record<string, { on?: boolean }>).onoff) as { on?: boolean } | undefined;
   const [menuOpen, setMenuOpen] = useState(false);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
+  const [pendingSource, setPendingSource] = useState<string | null>(null);
 
   const siblings = useMemo(() => zoneSiblings(device, allDevices), [device, allDevices]);
   const inputs = config.inputs ?? [];
@@ -371,10 +474,17 @@ export function AvrConsole({
   const soundMode = typeof advanced.soundMode === "string" ? (advanced.soundMode as string) : null;
 
   const applyMedia = (patch: Partial<MediaStateView>) => apply(device.id, "media", { ...live, ...patch });
-  const toggle = () => { applyMedia({ playback: playing ? "paused" : "playing" }); void cmd(device.id, { capability: "media", action: playing ? "pause" : "play" }); };
+  const toggle = () => { vibrate(10); applyMedia({ playback: playing ? "paused" : "playing" }); void cmd(device.id, { capability: "media", action: playing ? "pause" : "play" }); };
   const setVolume = (v: number) => { applyMedia({ volume: v }); void cmd(device.id, { capability: "media", action: "volume", volume: v }); };
-  const setMuted = () => { applyMedia({ muted: !live.muted }); void cmd(device.id, { capability: "media", action: live.muted ? "unmute" : "mute" }); };
-  const setSource = (id: string) => { applyMedia({ source: id }); void cmd(device.id, { capability: "media", action: "source", source: id }); };
+  const setMuted = () => { vibrate(12); applyMedia({ muted: !live.muted }); void cmd(device.id, { capability: "media", action: live.muted ? "unmute" : "mute" }); };
+  // A real receiver's input switch can take a second or two — the `pending` state on
+  // both input pickers (the tile row and the sidebar list) is genuine, not decorative.
+  const setSource = (id: string) => {
+    vibrate(8);
+    setPendingSource(id);
+    applyMedia({ source: id });
+    void cmd(device.id, { capability: "media", action: "source", source: id }).finally(() => setPendingSource((p) => (p === id ? null : p)));
+  };
   const setSoundMode = (id: string) => {
     applyMedia({ advanced: { ...advanced, soundMode: id } });
     void cmd(device.id, { capability: "media", action: "advanced", advanced: { soundMode: id } });
@@ -437,7 +547,7 @@ export function AvrConsole({
               {typeof advanced.sampleRateKHz === "number" && <span className="avr-badge">{advanced.sampleRateKHz as number} kHz</span>}
               {typeof advanced.bitDepth === "number" && <span className="avr-badge">{advanced.bitDepth as number}-bit</span>}
             </div>
-            <Waveform playing={playing} />
+            <Waveform playing={playing} muted={live.muted ?? false} />
             {duration ? (
               <div className="avr-progress">
                 <input
@@ -461,7 +571,7 @@ export function AvrConsole({
         </div>
 
         <div className="avr-fields-row">
-          <InputSelector inputs={inputs} active={live.source ?? null} onSelect={setSource} />
+          <InputSelector inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
           <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
           <ZoneSelector current={device} siblings={siblings} onNavigate={onNavigateDevice} />
         </div>
@@ -470,7 +580,7 @@ export function AvrConsole({
       </div>
 
       <aside className="avr-sidebar">
-        <SourceRail inputs={inputs} active={live.source ?? null} onSelect={setSource} />
+        <SourceRail inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
         <QuickActions muted={live.muted ?? false} onMuteToggle={setMuted} controls={advancedControls} advanced={advanced} onSetAdvanced={setAdvanced} />
       </aside>
 

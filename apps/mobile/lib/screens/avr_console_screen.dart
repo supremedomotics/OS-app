@@ -97,11 +97,21 @@ class AvrConsoleScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: SafeArea(
-        child: AvrConsoleBody(
-          device: device,
-          layout: AvrConsoleLayout.wide,
-          onNavigateSibling: (ctx, d) => Navigator.of(ctx).pushReplacement(MaterialPageRoute<void>(builder: (_) => AvrConsoleScreen(device: d))),
+      // A whisper of a vignette so the console reads as intentionally composed rather
+      // than floating in dead black (§ Empty Space).
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: const Alignment(-0.5, -0.9), radius: 1.4,
+            colors: [AureonGold.c400.withValues(alpha: 0.04), Colors.transparent],
+          ),
+        ),
+        child: SafeArea(
+          child: AvrConsoleBody(
+            device: device,
+            layout: AvrConsoleLayout.wide,
+            onNavigateSibling: (ctx, d) => Navigator.of(ctx).pushReplacement(MaterialPageRoute<void>(builder: (_) => AvrConsoleScreen(device: d))),
+          ),
         ),
       ),
     );

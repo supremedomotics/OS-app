@@ -1017,7 +1017,14 @@ button.link {
 /* ── AVR / Receiver console (§ AVR Detail Page) ──────────────────────────────────── */
 .avr-console {
   display: grid; grid-template-columns: 1fr 320px; grid-template-areas: "main side" "mini mini";
-  gap: 20px; padding-bottom: 100px; align-items: start;
+  gap: 20px; padding-bottom: 100px; align-items: start; position: relative;
+}
+/* A whisper of a vignette behind the whole console so the empty space below a short
+   page reads as intentional breathing room, not dead black (§ Empty Space). */
+.avr-console::before {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  top: -40px; left: -40px; right: -40px; height: 520px;
+  background: radial-gradient(60% 100% at 22% 0%, color-mix(in srgb, var(--aureon-color-gold-400) 5%, transparent) 0%, transparent 70%);
 }
 .avr-main { grid-area: main; display: flex; flex-direction: column; gap: 18px; }
 .avr-sidebar { grid-area: side; display: flex; flex-direction: column; gap: 18px; }
@@ -1052,6 +1059,8 @@ button.link {
 }
 .avr-icon-btn:hover { background: var(--aureon-color-base-hairline); }
 .avr-icon-btn:active { transform: scale(0.94); }
+.avr-icon-btn:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
+.avr-icon-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 .avr-icon-btn.on {
   background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
   border-color: transparent; color: #15161b;
@@ -1086,29 +1095,60 @@ button.link {
 @media (max-width: 640px) { .avr-now { flex-direction: column; align-items: center; text-align: center; } }
 
 .avr-art-wrap { position: relative; width: 220px; height: 220px; flex: none; display: flex; align-items: center; justify-content: center; }
+/* Floating depth (§ Album Art): a slow, minute drift + a shadow that shifts with it —
+   the art reads as resting just above the card, not printed on it. Pauses when idle. */
+.avr-art-float { position: relative; z-index: 1; }
+.avr-art-float.on { animation: avr-art-float 7s ease-in-out infinite; }
+@keyframes avr-art-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 .avr-art {
-  width: 220px; height: 220px; border-radius: 20px; object-fit: cover; position: relative; z-index: 1;
+  width: 220px; height: 220px; border-radius: 20px; object-fit: cover; display: block;
   box-shadow: 0 20px 40px -16px rgba(0,0,0,0.65), 0 2px 0 color-mix(in srgb, white 6%, transparent) inset;
+  transition: box-shadow 0.4s ease;
 }
+.avr-art-float.on .avr-art { box-shadow: 0 30px 50px -18px rgba(0,0,0,0.7), 0 2px 0 color-mix(in srgb, white 6%, transparent) inset; }
 .avr-art-placeholder { display: flex; align-items: center; justify-content: center; background: linear-gradient(165deg, var(--aureon-color-base-surface) 0%, color-mix(in srgb, var(--aureon-color-base-surface) 100%, black 20%) 100%); color: var(--aureon-color-gold-400); font-size: 64px; font-weight: 600; font-family: "Aureon Display", Inter, sans-serif; }
 
-/* Ambient halo (§ Luxury pass): a quiet, always-present glow — barely visible at rest,
-   breathing slowly wider/brighter only while genuinely playing. Two soft layers (a wide
-   diffuse bloom + a tighter core) read as depth rather than a flat colored circle. */
-.avr-halo { position: absolute; inset: -46px; z-index: 0; pointer-events: none; opacity: 0.16; transition: opacity 0.6s ease; }
+/* Ambient halo (§ SupremeOS Signature): a quiet, always-present glow — barely visible at
+   rest, breathing slowly wider/brighter only while genuinely playing. Three soft layers
+   (a wide diffuse bloom, a tighter core, and a few drifting motes) read as depth and
+   flowing light rather than a flat colored circle. `--avr-halo-tint` is set inline from
+   the artwork's own sampled color when one is playing; falls back to gold. */
+.avr-halo {
+  --avr-halo-tint: var(--aureon-color-gold-400);
+  position: absolute; inset: -52px; z-index: 0; pointer-events: none; opacity: 0.14; transition: opacity 0.8s ease;
+}
 .avr-halo::before, .avr-halo::after { content: ""; position: absolute; inset: 0; border-radius: 50%; }
 .avr-halo::before {
   inset: 0;
-  background: radial-gradient(circle, color-mix(in srgb, var(--aureon-color-gold-400) 55%, transparent) 0%, transparent 68%);
-  filter: blur(6px);
+  background: radial-gradient(circle, color-mix(in srgb, var(--avr-halo-tint) 55%, transparent) 0%, transparent 68%);
+  filter: blur(8px);
 }
 .avr-halo::after {
-  inset: 30px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 70%, transparent) 0%, transparent 72%);
+  inset: 34px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--avr-halo-tint) 75%, white 15%) 0%, transparent 72%);
   filter: blur(2px);
 }
-.avr-halo.on { opacity: 0.55; animation: avr-halo-pulse 6s ease-in-out infinite; }
-@keyframes avr-halo-pulse { 0%, 100% { opacity: 0.45; transform: scale(0.97); } 50% { opacity: 0.72; transform: scale(1.04); } }
+.avr-halo.on { opacity: 0.6; animation: avr-halo-pulse 7s ease-in-out infinite; }
+@keyframes avr-halo-pulse { 0%, 100% { opacity: 0.48; transform: scale(0.97); } 50% { opacity: 0.75; transform: scale(1.05); } }
+
+/* Particles: a handful of soft, slow-drifting motes — barely-there, never a "confetti"
+   effect. Each only appears once genuinely playing. */
+.avr-halo-particle {
+  position: absolute; width: 5px; height: 5px; border-radius: 50%;
+  background: color-mix(in srgb, var(--avr-halo-tint) 80%, white 20%);
+  filter: blur(1px); opacity: 0; box-shadow: 0 0 6px color-mix(in srgb, var(--avr-halo-tint) 70%, transparent);
+}
+.avr-halo.on .avr-halo-particle { animation: avr-particle-drift 9s ease-in-out infinite; }
+.avr-halo-particle.p1 { top: 18%; left: 12%; animation-delay: 0s; }
+.avr-halo-particle.p2 { top: 68%; left: 82%; animation-delay: 2.2s; }
+.avr-halo-particle.p3 { top: 10%; left: 78%; animation-delay: 4.4s; }
+.avr-halo-particle.p4 { top: 80%; left: 20%; animation-delay: 6.6s; }
+@keyframes avr-particle-drift {
+  0%, 100% { opacity: 0; transform: translate(0, 0); }
+  15% { opacity: 0.5; }
+  50% { opacity: 0.7; transform: translate(6px, -10px); }
+  85% { opacity: 0.4; }
+}
 
 .avr-now-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
 .avr-now-label { font-size: 10.5px; letter-spacing: 0.16em; color: var(--aureon-color-gold-400); font-weight: 700; }
@@ -1119,10 +1159,17 @@ button.link {
 @media (max-width: 640px) { .avr-badges { justify-content: center; } }
 .avr-badge { font-size: 10.5px; letter-spacing: 0.04em; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); background: color-mix(in srgb, var(--aureon-color-base-void) 30%, transparent); }
 
-.avr-waveform { display: flex; align-items: flex-end; gap: 3px; height: 40px; margin: 10px 0; }
-@media (max-width: 640px) { .avr-waveform { justify-content: center; } }
-.avr-waveform span { width: 4px; height: 6px; border-radius: 2px; background: var(--aureon-color-base-hairline); transition: background 0.3s ease; }
+/* Full-width equalizer visualizer (§ Waveform): bars are flex-sized so the row always
+   spans the card edge-to-edge, and a mask fades both ends softly into the surface
+   rather than ending on a hard edge. */
+.avr-waveform {
+  display: flex; align-items: flex-end; gap: 3px; height: 40px; margin: 10px 0;
+  mask-image: linear-gradient(90deg, transparent 0%, black 8%, black 92%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 8%, black 92%, transparent 100%);
+}
+.avr-waveform span { flex: 1; min-width: 2px; max-width: 5px; height: 6px; border-radius: 2px; background: var(--aureon-color-base-hairline); transition: background 0.3s ease, opacity 0.4s ease; }
 .avr-waveform.on span { background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%); animation: avr-wave 1.15s ease-in-out infinite; box-shadow: 0 0 6px color-mix(in srgb, var(--aureon-color-gold-400) 45%, transparent); }
+.avr-waveform.muted span { opacity: 0.35; box-shadow: none; }
 @keyframes avr-wave { 0%, 100% { height: 6px; } 50% { height: 34px; } }
 
 .avr-progress input[type="range"] { width: 100%; accent-color: var(--aureon-color-gold-400); }
@@ -1138,16 +1185,46 @@ button.link {
 }
 .avr-field { display: flex; flex-direction: column; gap: 9px; }
 .avr-field-label { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--aureon-color-text-secondary); font-weight: 600; }
-.avr-select {
-  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); border-radius: 12px;
-  color: var(--aureon-color-text-primary); padding: 10px 12px; font-size: 14px;
+/* Premium input tiles (§ Input Selection): icon + name + connection type + an active
+   glow, replacing a plain <select>. A quick horizontal picker in the main flow; the
+   fuller Source list in the sidebar shows the same data with more detail. */
+.avr-input-tiles { display: flex; gap: 10px; flex-wrap: wrap; }
+.avr-input-tile {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  min-width: 92px; padding: 10px 14px; border-radius: 14px; cursor: pointer; text-align: left;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease, background 0.2s ease;
 }
+.avr-input-tile:hover { border-color: color-mix(in srgb, white 16%, var(--aureon-color-base-hairline) 40%); }
+.avr-input-tile:active { transform: scale(0.97); }
+.avr-input-tile:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
+.avr-input-tile:disabled { cursor: default; }
+.avr-input-tile-ic { font-size: 17px; }
+.avr-input-tile-name { font-size: 12.5px; font-weight: 600; }
+.avr-input-tile-type { font-size: 9px; letter-spacing: 0.08em; color: var(--aureon-color-text-secondary); }
+.avr-input-tile.on {
+  border-color: transparent;
+  background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--aureon-color-gold-400) 40%, transparent), 0 6px 18px -6px color-mix(in srgb, var(--aureon-color-gold-400) 55%, transparent);
+}
+.avr-input-tile.on .avr-input-tile-name { color: #15161b; }
+.avr-input-tile.on .avr-input-tile-type { color: color-mix(in srgb, #15161b 70%, transparent); }
+.avr-input-tile.loading { opacity: 0.75; }
+.avr-input-tile-spinner {
+  position: absolute; top: 8px; right: 8px; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor;
+  animation: avr-spin 0.7s linear infinite;
+}
+@keyframes avr-spin { to { transform: rotate(360deg); } }
+
 .avr-chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .avr-chip {
   border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary);
   border-radius: 999px; padding: 8px 15px; font-size: 12.5px; letter-spacing: 0.02em; cursor: pointer; transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .avr-chip:hover { background: var(--aureon-color-base-hairline); }
+.avr-chip:active { transform: scale(0.97); }
+.avr-chip:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
 .avr-chip.on {
   background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
   border-color: transparent; color: #15161b; font-weight: 600;
@@ -1164,7 +1241,23 @@ button.link {
   position: relative; width: 208px; height: 208px; border-radius: 50%;
   background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 3%) 0%, var(--aureon-color-base-surface) 62%, color-mix(in srgb, var(--aureon-color-base-void) 100%, black 8%) 100%);
   box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset, 0 -6px 14px color-mix(in srgb, black 35%, transparent) inset, 0 18px 36px -20px rgba(0,0,0,0.6);
+  transition: transform 0.15s ease, box-shadow 0.3s ease;
 }
+/* Brushed-metal texture: extremely fine radial striations, low-opacity so they read as
+   a material finish, not a pattern. */
+.avr-dial::before {
+  content: ""; position: absolute; inset: 10px; border-radius: 50%; pointer-events: none;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, white 3%, transparent) 0deg 1deg, transparent 1deg 3deg);
+  opacity: 0.5; mix-blend-mode: overlay;
+}
+/* Soft specular reflection — a single diagonal highlight arc, like glass/metal catching
+   light from the upper-left, not a hard glare. */
+.avr-dial::after {
+  content: ""; position: absolute; inset: 6px; border-radius: 50%; pointer-events: none;
+  background: linear-gradient(128deg, color-mix(in srgb, white 10%, transparent) 0%, transparent 30%, transparent 100%);
+}
+.avr-dial:hover { box-shadow: 0 1px 0 color-mix(in srgb, white 7%, transparent) inset, 0 -6px 14px color-mix(in srgb, black 35%, transparent) inset, 0 20px 40px -18px color-mix(in srgb, var(--aureon-color-gold-400) 12%, rgba(0,0,0,0.6)); }
+.avr-dial:has(.avr-dial-input:active) { transform: scale(0.99); }
 .avr-dial-ticks { position: absolute; inset: 0; }
 .avr-dial-tick { position: absolute; left: 50%; top: 3px; width: 2px; height: 9px; margin-left: -1px; border-radius: 1px; background: var(--aureon-color-base-hairline); transform-origin: 50% 101px; transition: background 0.3s ease, box-shadow 0.3s ease; }
 .avr-dial-tick.on { background: var(--aureon-color-gold-400); box-shadow: 0 0 5px color-mix(in srgb, var(--aureon-color-gold-400) 65%, transparent); }
@@ -1199,6 +1292,14 @@ button.link {
 .avr-source-name { font-size: 13.5px; font-weight: 600; }
 .avr-source-type { font-size: 9.5px; color: var(--aureon-color-text-secondary); letter-spacing: 0.08em; }
 .avr-source-check { color: var(--aureon-color-gold-400); font-weight: 700; }
+.avr-source-row:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: -2px; }
+.avr-source-row:disabled { cursor: default; }
+.avr-source-row.loading { opacity: 0.8; }
+.avr-source-spinner {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  border: 2px solid color-mix(in srgb, var(--aureon-color-gold-400) 30%, transparent); border-top-color: var(--aureon-color-gold-400);
+  animation: avr-spin 0.7s linear infinite;
+}
 
 .avr-quick {
   display: flex; flex-direction: column; gap: 10px;
@@ -1219,6 +1320,7 @@ button.link {
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease;
 }
 .avr-quick-tile:hover { border-color: color-mix(in srgb, white 14%, var(--aureon-color-base-hairline) 40%); }
+.avr-quick-tile:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
 .avr-quick-tile:active { transform: scale(0.98); }
 .avr-quick-tile.on {
   border-color: color-mix(in srgb, var(--aureon-color-gold-400) 55%, transparent);

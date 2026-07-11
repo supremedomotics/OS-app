@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_sdk/supreme_sdk.dart';
 
@@ -83,17 +85,200 @@ class AvrCard extends StatelessWidget {
   }
 }
 
-// ── Ambient halo — a slow pulse behind the artwork; never flashes ───────────────────
+/// Sample a real artwork image's dominant hue client-side (a downscaled pixel read, no
+/// extra network round-trip) so the ambient halo can carry a whisper of the actual cover
+/// art color instead of a fixed gold — the way a premium player's now-playing glow does.
+/// Returns null (→ the console's own gold) for art-less devices or any decode failure.
+Future<Color?> extractDominantColor(String url) async {
+  try {
+    final stream = NetworkImage(url).resolve(const ImageConfiguration());
+    final completer = Completer<ui.Image>();
+    late ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (info, _) { completer.complete(info.image); stream.removeListener(listener); },
+      onError: (err, st) { completer.completeError(err); stream.removeListener(listener); },
+    );
+    stream.addListener(listener);
+    final image = await completer.future.timeout(const Duration(seconds: 5));
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (bytes == null) return null;
+    final data = bytes.buffer.asUint8List();
+    int r = 0, g = 0, b = 0, n = 0;
+    for (var i = 0; i + 3 < data.length; i += 4 * 37) {
+      final a = data[i + 3];
+      if (a < 32) continue;
+      r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+    }
+    if (n == 0) return null;
+    r ~/= n; g ~/= n; b ~/= n;
+    final maxc = math.max(r, math.max(g, b));
+    if (maxc < 90 && maxc > 0) {
+      final boost = 90 / maxc;
+      r = (r * boost).clamp(0, 255).round();
+      g = (g * boost).clamp(0, 255).round();
+      b = (b * boost).clamp(0, 255).round();
+    }
+    return Color.fromARGB(255, r, g, b);
+  } catch (_) {
+    return null;
+  }
+}
+
+// ── Ambient halo (§ SupremeOS Signature) — a quiet, always-present glow that breathes
+// with playback and carries a whisper of the artwork's own sampled color; a few soft
+// drifting motes read as flowing light, never a "confetti" effect. ────────────────────
 class AvrAmbientHalo extends StatefulWidget {
-  const AvrAmbientHalo({super.key, required this.playing});
+  const AvrAmbientHalo({super.key, required this.playing, this.tint});
   final bool playing;
+  final Color? tint;
 
   @override
   State<AvrAmbientHalo> createState() => _AvrAmbientHaloState();
 }
 
 class _AvrAmbientHaloState extends State<AvrAmbientHalo> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 6000))..repeat(reverse: true);
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 7000))..repeat(reverse: true);
+  late final AnimationController _particles = AnimationController(vsync: this, duration: const Duration(milliseconds: 9000))..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    _particles.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tint = widget.tint ?? AureonGold.c400;
+    final tintLight = Color.lerp(tint, Colors.white, 0.2)!;
+    return AnimatedBuilder(
+      animation: Listenable.merge([_c, _particles]),
+      builder: (context, _) {
+        final t = widget.playing ? Curves.easeInOut.transform(_c.value) : 0.0;
+        final baseAlpha = widget.playing ? 0.32 : 0.07;
+        return Stack(alignment: Alignment.center, children: [
+          Container(
+            width: 260 + t * 30, height: 260 + t * 30,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [tint.withValues(alpha: baseAlpha + t * 0.15), tint.withValues(alpha: 0)]),
+            ),
+          ),
+          Container(
+            width: 196 + t * 16, height: 196 + t * 16,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [tintLight.withValues(alpha: (baseAlpha + t * 0.18) * 0.9), tintLight.withValues(alpha: 0)]),
+            ),
+          ),
+          if (widget.playing) ..._particlePositions.map((p) => _particle(p, tintLight)),
+        ]);
+      },
+    );
+  }
+
+  static const _particlePositions = [Offset(-70, -80), Offset(90, 60), Offset(75, -85), Offset(-85, 75)];
+
+  Widget _particle(Offset base, Color tint) {
+    final phase = (_particles.value + base.dx / 200) % 1.0;
+    final wave = math.sin(phase * 2 * math.pi);
+    final opacity = (0.15 + 0.35 * (0.5 + 0.5 * wave)).clamp(0.0, 0.6);
+    return Transform.translate(
+      offset: Offset(base.dx + wave * 6, base.dy - wave * 10),
+      child: Container(
+        width: 5, height: 5,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: tint.withValues(alpha: opacity), boxShadow: [BoxShadow(color: tint.withValues(alpha: opacity * 0.8), blurRadius: 6)]),
+      ),
+    );
+  }
+}
+
+class AvrAlbumArt extends StatefulWidget {
+  const AvrAlbumArt({super.key, required this.url, required this.name, required this.playing, this.size = 216});
+  final String? url;
+  final String name;
+  final bool playing;
+  final double size;
+
+  @override
+  State<AvrAlbumArt> createState() => _AvrAlbumArtState();
+}
+
+class _AvrAlbumArtState extends State<AvrAlbumArt> {
+  Color? _tint;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTint();
+  }
+
+  @override
+  void didUpdateWidget(covariant AvrAlbumArt old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) _loadTint();
+  }
+
+  void _loadTint() {
+    final url = widget.url;
+    if (url == null) { setState(() => _tint = null); return; }
+    extractDominantColor(url).then((c) { if (mounted) setState(() => _tint = c); });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = widget.size;
+    return SizedBox(
+      width: size + 40, height: size + 40,
+      child: Stack(alignment: Alignment.center, children: [
+        AvrAmbientHalo(playing: widget.playing, tint: _tint),
+        // Floating depth (§ Album Art): a slow, minute drift so the art reads as resting
+        // just above the card, not printed on it. Pauses when idle.
+        _FloatingArt(
+          playing: widget.playing,
+          child: Container(
+            width: size, height: size,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AureonRadius.lg),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 32, offset: const Offset(0, 18)),
+                BoxShadow(color: Colors.white.withValues(alpha: 0.05), blurRadius: 0, spreadRadius: 0.5),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AureonRadius.lg),
+              child: widget.url != null
+                  ? Image.network(widget.url!, width: size, height: size, fit: BoxFit.cover)
+                  : Container(
+                      width: size, height: size,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft, end: Alignment.bottomRight,
+                          colors: [AureonBase.surface, Color.lerp(AureonBase.surface, Colors.black, 0.25)!],
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '♪', style: TextStyle(fontSize: size * 0.30, fontWeight: FontWeight.w600, color: AureonGold.c400)),
+                    ),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _FloatingArt extends StatefulWidget {
+  const _FloatingArt({required this.playing, required this.child});
+  final bool playing;
+  final Widget child;
+
+  @override
+  State<_FloatingArt> createState() => _FloatingArtState();
+}
+
+class _FloatingArtState extends State<_FloatingArt> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 7000))..repeat(reverse: true);
 
   @override
   void dispose() {
@@ -103,84 +288,22 @@ class _AvrAmbientHaloState extends State<AvrAmbientHalo> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
-    // A quiet, always-present glow — barely visible at rest, breathing slowly
-    // wider/brighter only while genuinely playing. Two soft layers (a wide diffuse
-    // bloom + a tighter core) read as depth rather than a flat colored circle.
+    if (!widget.playing) return widget.child;
     return AnimatedBuilder(
       animation: _c,
-      builder: (context, _) {
-        final t = widget.playing ? Curves.easeInOut.transform(_c.value) : 0.0;
-        final baseAlpha = widget.playing ? 0.30 : 0.08;
-        return Stack(alignment: Alignment.center, children: [
-          Container(
-            width: 248 + t * 26, height: 248 + t * 26,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(colors: [AureonGold.c400.withValues(alpha: baseAlpha + t * 0.14), AureonGold.c400.withValues(alpha: 0)]),
-            ),
-          ),
-          Container(
-            width: 190 + t * 14, height: 190 + t * 14,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(colors: [AureonGold.c200.withValues(alpha: (baseAlpha + t * 0.16) * 0.9), AureonGold.c200.withValues(alpha: 0)]),
-            ),
-          ),
-        ]);
-      },
+      builder: (context, _) => Transform.translate(offset: Offset(0, -6 * Curves.easeInOut.transform(_c.value)), child: widget.child),
     );
   }
 }
 
-class AvrAlbumArt extends StatelessWidget {
-  const AvrAlbumArt({super.key, required this.url, required this.name, required this.playing, this.size = 216});
-  final String? url;
-  final String name;
-  final bool playing;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size + 32, height: size + 32,
-      child: Stack(alignment: Alignment.center, children: [
-        AvrAmbientHalo(playing: playing),
-        Container(
-          width: size, height: size,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AureonRadius.lg),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 32, offset: const Offset(0, 18)),
-              BoxShadow(color: Colors.white.withValues(alpha: 0.05), blurRadius: 0, spreadRadius: 0.5),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(AureonRadius.lg),
-            child: url != null
-                ? Image.network(url!, width: size, height: size, fit: BoxFit.cover)
-                : Container(
-                    width: size, height: size,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft, end: Alignment.bottomRight,
-                        colors: [AureonBase.surface, Color.lerp(AureonBase.surface, Colors.black, 0.25)!],
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(name.isNotEmpty ? name[0].toUpperCase() : '♪', style: TextStyle(fontSize: size * 0.30, fontWeight: FontWeight.w600, color: AureonGold.c400)),
-                  ),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-/// A slim animated bar visualizer — only animates while genuinely playing (§ Animation:
-/// no flashing, bars ease up/down). Purely decorative.
+/// A full-width animated bar visualizer, fading softly into the card at both edges —
+/// only animates while genuinely playing (§ Animation: no flashing, bars ease up/down).
+/// Purely decorative; the real transport state is the progress bar below it. Each bar
+/// is `Expanded` so the row always spans its container edge-to-edge.
 class AvrWaveform extends StatefulWidget {
-  const AvrWaveform({super.key, required this.playing});
+  const AvrWaveform({super.key, required this.playing, this.muted = false});
   final bool playing;
+  final bool muted;
 
   @override
   State<AvrWaveform> createState() => _AvrWaveformState();
@@ -188,7 +311,7 @@ class AvrWaveform extends StatefulWidget {
 
 class _AvrWaveformState extends State<AvrWaveform> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1150))..repeat();
-  static const _bars = 30;
+  static const _bars = 48;
   final _seeds = List.generate(_bars, (i) => (i * 0.13) % 1.0);
 
   @override
@@ -199,32 +322,43 @@ class _AvrWaveformState extends State<AvrWaveform> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 40,
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (context, _) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              for (var i = 0; i < _bars; i++)
-                Padding(
-                  padding: const EdgeInsets.only(right: 3),
-                  child: Container(
-                    width: 4,
-                    height: widget.playing ? 6 + 30 * (0.5 + 0.5 * math.sin((_c.value * 2 * math.pi) + _seeds[i] * 2 * math.pi)) : 4,
-                    decoration: BoxDecoration(
-                      gradient: widget.playing ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AureonGold.c200, AureonGold.c500]) : null,
-                      color: widget.playing ? null : AureonBase.hairline,
-                      borderRadius: BorderRadius.circular(2),
-                      boxShadow: widget.playing ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.4), blurRadius: 5)] : null,
+    return ShaderMask(
+      shaderCallback: (rect) => const LinearGradient(
+        colors: [Colors.transparent, Colors.black, Colors.black, Colors.transparent],
+        stops: [0, 0.08, 0.92, 1],
+      ).createShader(rect),
+      child: SizedBox(
+        height: 40,
+        width: double.infinity,
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (context, _) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (var i = 0; i < _bars; i++)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 300),
+                        opacity: widget.muted ? 0.35 : 1,
+                        child: Container(
+                          height: widget.playing ? 6 + 30 * (0.5 + 0.5 * math.sin((_c.value * 2 * math.pi) + _seeds[i] * 2 * math.pi)) : 4,
+                          decoration: BoxDecoration(
+                            gradient: widget.playing ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AureonGold.c200, AureonGold.c500]) : null,
+                            color: widget.playing ? null : AureonBase.hairline,
+                            borderRadius: BorderRadius.circular(2),
+                            boxShadow: widget.playing && !widget.muted ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.4), blurRadius: 5)] : null,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -269,13 +403,24 @@ class _DialPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.0);
     canvas.drawArc(Rect.fromCircle(center: center, radius: arcRadius), -math.pi / 2, 2 * math.pi * pct.clamp(0, 1), false, fill);
+
+    // Brushed-metal texture: extremely fine radial striations on the knob face, well
+    // inside the tick ring, low-opacity so they read as a material finish.
+    final faceRadius = arcRadius - 14;
+    final brush = Paint()..color = Colors.white.withValues(alpha: 0.025)..strokeWidth = 1;
+    for (var i = 0; i < 120; i++) {
+      final angle = (i / 120) * 2 * math.pi;
+      final p1 = center + Offset(math.cos(angle), math.sin(angle)) * (faceRadius * 0.15);
+      final p2 = center + Offset(math.cos(angle), math.sin(angle)) * faceRadius;
+      canvas.drawLine(p1, p2, brush);
+    }
   }
 
   @override
   bool shouldRepaint(covariant _DialPainter old) => old.pct != pct;
 }
 
-class AvrVolumeDial extends StatelessWidget {
+class AvrVolumeDial extends StatefulWidget {
   const AvrVolumeDial({super.key, required this.volume, required this.volumeDb, required this.muted, required this.onChanged, required this.onMuteToggle, this.size = 208});
   final double volume;
   final double? volumeDb;
@@ -285,57 +430,102 @@ class AvrVolumeDial extends StatelessWidget {
   final double size;
 
   @override
+  State<AvrVolumeDial> createState() => _AvrVolumeDialState();
+}
+
+class _AvrVolumeDialState extends State<AvrVolumeDial> {
+  static const _tickCount = 48;
+  bool _pressed = false;
+  int _lastTick = -1;
+
+  void _onChanged(double v) {
+    final tick = ((v.clamp(0, 100) / 100) * _tickCount).round();
+    if (tick != _lastTick) {
+      // A tiny detent click each time the dial crosses a new tick — mirrors a real
+      // knob's physical stops.
+      HapticFeedback.selectionClick();
+      _lastTick = tick;
+    }
+    widget.onChanged(v);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final size = widget.size;
     return Column(children: [
-      SizedBox(
-        width: size, height: size,
-        child: Stack(alignment: Alignment.center, children: [
-          // Recessed metal-toned knob face.
-          Container(
-            width: size - 16, height: size - 16,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
-                center: const Alignment(0, -0.2),
-                colors: [Color.lerp(AureonBase.surfaceRaised, Colors.white, 0.03)!, AureonBase.surface, Color.lerp(AureonBase.voidColor, Colors.black, 0.15)!],
-                stops: const [0, 0.6, 1],
-              ),
-              boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 26, offset: const Offset(0, 14)),
-                BoxShadow(color: Colors.white.withValues(alpha: 0.04), blurRadius: 0, spreadRadius: 0.5),
-              ],
-            ),
-          ),
-          CustomPaint(size: Size(size, size), painter: _DialPainter(volume / 100)),
-          Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(volumeDb != null ? volumeDb!.toStringAsFixed(1) : volume.round().toString(), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w600, color: AureonText.primary, letterSpacing: -0.3)),
-            Text(volumeDb != null ? 'dB' : '%', style: const TextStyle(fontSize: 12, color: AureonText.secondary)),
-            const SizedBox(height: 10),
-            const Text('MASTER VOLUME', style: TextStyle(fontSize: 10, letterSpacing: 1.6, color: AureonText.secondary)),
-          ]),
-          Positioned.fill(
-            child: RotatedBox(
-              quarterTurns: 3,
-              child: SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 0, thumbShape: SliderComponentShape.noThumb, overlayShape: SliderComponentShape.noOverlay,
+      AnimatedScale(
+        scale: _pressed ? 0.985 : 1,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: SizedBox(
+          width: size, height: size,
+          child: Stack(alignment: Alignment.center, children: [
+            // Recessed metal-toned knob face.
+            Container(
+              width: size - 16, height: size - 16,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  center: const Alignment(0, -0.2),
+                  colors: [Color.lerp(AureonBase.surfaceRaised, Colors.white, 0.03)!, AureonBase.surface, Color.lerp(AureonBase.voidColor, Colors.black, 0.15)!],
+                  stops: const [0, 0.6, 1],
                 ),
-                child: Slider(value: volume.clamp(0, 100), max: 100, onChanged: onChanged, activeColor: Colors.transparent, inactiveColor: Colors.transparent),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 26, offset: const Offset(0, 14)),
+                  BoxShadow(color: Colors.white.withValues(alpha: 0.04), blurRadius: 0, spreadRadius: 0.5),
+                  if (_pressed) BoxShadow(color: AureonGold.c400.withValues(alpha: 0.18), blurRadius: 30, spreadRadius: 2),
+                ],
               ),
             ),
-          ),
-        ]),
+            // Soft specular reflection — a single diagonal highlight, like glass/metal
+            // catching light from the upper-left, not a hard glare.
+            Container(
+              width: size - 24, height: size - 24,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft, end: const Alignment(0.2, 0.4),
+                  colors: [Colors.white.withValues(alpha: 0.08), Colors.white.withValues(alpha: 0)],
+                ),
+              ),
+            ),
+            CustomPaint(size: Size(size, size), painter: _DialPainter(widget.volume / 100)),
+            Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(widget.volumeDb != null ? widget.volumeDb!.toStringAsFixed(1) : widget.volume.round().toString(), style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w600, color: AureonText.primary, letterSpacing: -0.3)),
+              Text(widget.volumeDb != null ? 'dB' : '%', style: const TextStyle(fontSize: 12, color: AureonText.secondary)),
+              const SizedBox(height: 10),
+              const Text('MASTER VOLUME', style: TextStyle(fontSize: 10, letterSpacing: 1.6, color: AureonText.secondary)),
+            ]),
+            Positioned.fill(
+              child: RotatedBox(
+                quarterTurns: 3,
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 0, thumbShape: SliderComponentShape.noThumb, overlayShape: SliderComponentShape.noOverlay,
+                  ),
+                  child: Slider(
+                    value: widget.volume.clamp(0, 100), max: 100,
+                    onChangeStart: (_) => setState(() => _pressed = true),
+                    onChanged: _onChanged,
+                    onChangeEnd: (_) => setState(() => _pressed = false),
+                    activeColor: Colors.transparent, inactiveColor: Colors.transparent,
+                  ),
+                ),
+              ),
+            ),
+          ]),
+        ),
       ),
       const SizedBox(height: 16),
       IconButton.filled(
-        onPressed: onMuteToggle,
-        icon: Icon(muted ? Icons.volume_off : Icons.volume_up),
+        onPressed: () { HapticFeedback.lightImpact(); widget.onMuteToggle(); },
+        icon: Icon(widget.muted ? Icons.volume_off : Icons.volume_up),
         style: IconButton.styleFrom(
-          backgroundColor: muted ? AureonGold.c400 : AureonBase.surface,
-          foregroundColor: muted ? AureonText.inverse : AureonText.primary,
-          elevation: muted ? 6 : 0,
+          backgroundColor: widget.muted ? AureonGold.c400 : AureonBase.surface,
+          foregroundColor: widget.muted ? AureonText.inverse : AureonText.primary,
+          elevation: widget.muted ? 6 : 0,
           shadowColor: AureonGold.c400.withValues(alpha: 0.5),
-          side: muted ? null : BorderSide(color: AureonBase.hairline),
+          side: widget.muted ? null : BorderSide(color: AureonBase.hairline),
         ),
       ),
     ]);
@@ -377,7 +567,7 @@ class _AvrChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(AureonRadius.pill),
-        onTap: onTap,
+        onTap: () { HapticFeedback.selectionClick(); onTap(); },
         child: AnimatedContainer(
           duration: AureonMotion.base,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -395,10 +585,84 @@ class _AvrChip extends StatelessWidget {
   }
 }
 
-class AvrSourceList extends StatelessWidget {
-  const AvrSourceList({super.key, required this.inputs, required this.active, required this.onSelect});
+/// Premium input tiles (§ Input Selection): icon + name + connection type + an active
+/// glow, replacing plain chips for physical/streaming inputs specifically (as opposed to
+/// named listening modes, which stay simple pills). A quick horizontal picker in the
+/// main flow; the fuller [AvrSourceList] in the sidebar/below shows the same data with
+/// more detail. `pending` lights a brief loading ring on the tile just tapped while its
+/// command is in flight — a real receiver's input switch can take a second or two, this
+/// isn't decorative.
+class AvrInputTiles extends StatelessWidget {
+  const AvrInputTiles({super.key, required this.inputs, required this.active, required this.pending, required this.onSelect});
   final List<({String id, String label, String? type})> inputs;
   final String? active;
+  final String? pending;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    if (inputs.isEmpty) return const SizedBox.shrink();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('INPUT', style: TextStyle(fontSize: 10.5, letterSpacing: 1.4, color: AureonText.secondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 9),
+      SizedBox(
+        height: 66,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: inputs.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 10),
+          itemBuilder: (context, i) {
+            final input = inputs[i];
+            final selected = active == input.id;
+            final loading = pending == input.id;
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AureonRadius.md),
+                onTap: loading ? null : () { HapticFeedback.selectionClick(); onSelect(input.id); },
+                child: AnimatedContainer(
+                  duration: AureonMotion.base,
+                  width: 96,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(AureonRadius.md),
+                    gradient: selected ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AureonGold.c200, AureonGold.c500]) : null,
+                    color: selected ? null : AureonBase.surface,
+                    border: Border.all(color: selected ? Colors.transparent : AureonBase.hairline),
+                    boxShadow: selected ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 4))] : null,
+                  ),
+                  child: Stack(children: [
+                    Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Icon(inputIcon(input.type), size: 17, color: selected ? AureonText.inverse : AureonText.primary),
+                      const SizedBox(height: 4),
+                      Text(input.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: selected ? AureonText.inverse : AureonText.primary)),
+                      if (input.type != null)
+                        Text(input.type!.toUpperCase(), style: TextStyle(fontSize: 9, letterSpacing: 0.4, color: selected ? Color.lerp(AureonText.inverse, Colors.transparent, 0.3) : AureonText.secondary)),
+                    ]),
+                    if (loading)
+                      Positioned(
+                        top: 0, right: 0,
+                        child: SizedBox(
+                          width: 12, height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(selected ? AureonText.inverse : AureonGold.c400)),
+                        ),
+                      ),
+                  ]),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+}
+
+class AvrSourceList extends StatelessWidget {
+  const AvrSourceList({super.key, required this.inputs, required this.active, required this.pending, required this.onSelect});
+  final List<({String id, String label, String? type})> inputs;
+  final String? active;
+  final String? pending;
   final ValueChanged<String> onSelect;
 
   @override
@@ -415,7 +679,7 @@ class AvrSourceList extends StatelessWidget {
             borderRadius: BorderRadius.circular(AureonRadius.md),
             child: InkWell(
               borderRadius: BorderRadius.circular(AureonRadius.md),
-              onTap: () => onSelect(i.id),
+              onTap: pending == i.id ? null : () { HapticFeedback.selectionClick(); onSelect(i.id); },
               child: AnimatedContainer(
                 duration: AureonMotion.base,
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
@@ -431,7 +695,10 @@ class AvrSourceList extends StatelessWidget {
                     Text(i.label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
                     if (i.type != null) Text(i.type!.toUpperCase(), style: const TextStyle(fontSize: 9.5, letterSpacing: 0.4, color: AureonText.secondary)),
                   ])),
-                  if (active == i.id) const Icon(Icons.check, size: 18, color: AureonGold.c400),
+                  if (pending == i.id)
+                    SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(AureonGold.c400)))
+                  else if (active == i.id)
+                    const Icon(Icons.check, size: 18, color: AureonGold.c400),
                 ]),
               ),
             ),
@@ -506,13 +773,13 @@ class AvrQuickActions extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AureonRadius.lg),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
           child: Material(
             color: AureonBase.surfaceRaised.withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(AureonRadius.lg),
             child: InkWell(
               borderRadius: BorderRadius.circular(AureonRadius.lg),
-              onTap: onTap,
+              onTap: () { HapticFeedback.selectionClick(); onTap(); },
               child: Container(
                 padding: const EdgeInsets.all(13),
                 decoration: BoxDecoration(
@@ -553,7 +820,7 @@ class AvrTransportRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-      if (showPrevious) IconButton(iconSize: 30, onPressed: onPrevious, icon: const Icon(Icons.skip_previous)),
+      if (showPrevious) IconButton(iconSize: 30, onPressed: () { HapticFeedback.selectionClick(); onPrevious(); }, icon: const Icon(Icons.skip_previous)),
       if (showPrevious) const SizedBox(width: 12),
       if (showPlayPause)
         IconButton.filled(
@@ -563,7 +830,7 @@ class AvrTransportRow extends StatelessWidget {
           style: IconButton.styleFrom(backgroundColor: AureonGold.c400, foregroundColor: AureonText.inverse, minimumSize: const Size(64, 64)),
         ),
       if (showNext) const SizedBox(width: 12),
-      if (showNext) IconButton(iconSize: 30, onPressed: onNext, icon: const Icon(Icons.skip_next)),
+      if (showNext) IconButton(iconSize: 30, onPressed: () { HapticFeedback.selectionClick(); onNext(); }, icon: const Icon(Icons.skip_next)),
     ]);
   }
 }
@@ -591,6 +858,7 @@ class AvrConsoleBody extends ConsumerStatefulWidget {
 
 class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
   double? _seekPreview;
+  String? _pendingSource;
 
   Future<void> _cmd(Map<String, dynamic> c) => ref.read(clientProvider).command(widget.device.id, c);
   void _apply(String capability, Map<String, dynamic> value) => ref.read(liveStatesProvider.notifier).apply(widget.device.id, capability, value);
@@ -622,6 +890,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
     final siblings = zoneSiblings(widget.device, allDevices);
 
     void toggle() {
+      HapticFeedback.lightImpact();
       _apply('media', {...m, 'playback': playing ? 'paused' : 'playing'});
       _cmd({'capability': 'media', 'action': playing ? 'pause' : 'play'});
     }
@@ -636,9 +905,14 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
       _cmd({'capability': 'media', 'action': muted ? 'unmute' : 'mute'});
     }
 
+    // A real receiver's input switch can take a second or two — `_pendingSource` drives
+    // a genuine loading indicator on both input pickers, not a decorative one.
     void setSource(String id) {
+      setState(() => _pendingSource = id);
       _apply('media', {...m, 'source': id});
-      _cmd({'capability': 'media', 'action': 'source', 'source': id});
+      _cmd({'capability': 'media', 'action': 'source', 'source': id}).whenComplete(() {
+        if (mounted && _pendingSource == id) setState(() => _pendingSource = null);
+      });
     }
 
     void setSoundMode(String id) {
@@ -660,7 +934,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
       if (artist != null) Text(artist, style: const TextStyle(fontSize: 13.5, color: AureonText.primary), textAlign: TextAlign.center),
       if (album != null) Text(album, style: const TextStyle(fontSize: 12.5, color: AureonText.secondary), textAlign: TextAlign.center),
       const SizedBox(height: 12),
-      AvrWaveform(playing: playing),
+      AvrWaveform(playing: playing, muted: muted),
       if (durationSec != null) ...[
         const SizedBox(height: 6),
         Slider(
@@ -690,7 +964,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
 
     final fields = AvrCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
       if (inputs.isNotEmpty) ...[
-        AvrModeChips(label: 'Input', modes: [for (final i in inputs) (id: i.id, label: i.label)], active: source, onSelect: setSource),
+        AvrInputTiles(inputs: inputs, active: source, pending: _pendingSource, onSelect: setSource),
         const SizedBox(height: 16),
       ],
       AvrModeChips(label: 'Listening Mode', modes: soundModes, active: soundMode, onSelect: setSoundMode),
@@ -707,7 +981,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
     ]));
 
     final quickActions = AvrQuickActions(muted: muted, onMuteToggle: setMuted, controls: advancedControls, advanced: advanced, onSetAdvanced: setAdvanced);
-    final sourceList = AvrSourceList(inputs: inputs, active: source, onSelect: setSource);
+    final sourceList = AvrSourceList(inputs: inputs, active: source, pending: _pendingSource, onSelect: setSource);
 
     if (widget.layout == AvrConsoleLayout.wide) {
       return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
