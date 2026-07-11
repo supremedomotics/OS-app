@@ -111,8 +111,19 @@ export interface GatewayConfig {
   heosEnabled: boolean;
   /** Enable the Yamaha Extended Control driver (YXC/MusicCast); units are added by IP at bind time. */
   yamahaEnabled: boolean;
-  /** CoolMasterNet HVAC bridge host for the native CoolMaster driver; empty = not loaded. */
+  /** CoolMasterNet/CoolLinux HVAC gateway host for the native CoolMaster driver; empty =
+   * not loaded. See docs/coolmaster/README.md for the full config surface. */
   coolMasterHost: string;
+  /** "auto" (prefer REST v2, fall back to ASCII_IF) | "ascii" | "rest". */
+  coolMasterProtocol: string;
+  coolMasterAsciiPort: number;
+  coolMasterRestPort: number;
+  coolMasterPollMs: number;
+  coolMasterSlowPollMs: number;
+  coolMasterDiscoveryIntervalMs: number;
+  coolMasterTimeoutMs: number;
+  coolMasterRetryCount: number;
+  coolMasterDebug: boolean;
   /** SIP registrar/server for the door-station driver; empty = not loaded. */
   sipServer: string;
   /** Enable media/security drivers added by IP/account at bind time. */
@@ -230,6 +241,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     heosEnabled: env.SUPREME_HEOS_ENABLED === "1" || env.SUPREME_HEOS_ENABLED === "true",
     yamahaEnabled: env.SUPREME_YAMAHA_ENABLED === "1" || env.SUPREME_YAMAHA_ENABLED === "true",
     coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",
+    coolMasterProtocol: env.SUPREME_COOLMASTER_PROTOCOL ?? "auto",
+    coolMasterAsciiPort: Number(env.SUPREME_COOLMASTER_ASCII_PORT ?? 10102),
+    coolMasterRestPort: Number(env.SUPREME_COOLMASTER_REST_PORT ?? 10103),
+    coolMasterPollMs: Number(env.SUPREME_COOLMASTER_POLL_MS ?? 10_000),
+    coolMasterSlowPollMs: Number(env.SUPREME_COOLMASTER_SLOW_POLL_MS ?? 300_000),
+    coolMasterDiscoveryIntervalMs: Number(env.SUPREME_COOLMASTER_DISCOVERY_INTERVAL_MS ?? 1_800_000),
+    coolMasterTimeoutMs: Number(env.SUPREME_COOLMASTER_TIMEOUT_MS ?? 5_000),
+    coolMasterRetryCount: Number(env.SUPREME_COOLMASTER_RETRY_COUNT ?? 3),
+    coolMasterDebug: env.SUPREME_COOLMASTER_DEBUG === "1" || env.SUPREME_COOLMASTER_DEBUG === "true",
     sipServer: env.SUPREME_SIP_SERVER ?? "",
     wiimEnabled: env.SUPREME_WIIM_ENABLED === "1" || env.SUPREME_WIIM_ENABLED === "true",
     devialetEnabled: env.SUPREME_DEVIALET_ENABLED === "1" || env.SUPREME_DEVIALET_ENABLED === "true",

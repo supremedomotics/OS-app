@@ -23,6 +23,7 @@ import {
   AvrProtocolDriver,
   HeosProtocolDriver,
   YamahaProtocolDriver,
+  CoolMasterProtocolDriver,
   SipProtocolDriver,
   WiimProtocolDriver,
   DevialetProtocolDriver,
@@ -196,8 +197,24 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   if (config.yamahaEnabled) {
     nativeDrivers.push(new YamahaProtocolDriver());
   }
-  // CoolMasterNet HVAC bridge — VRF/VRV indoor units over the CoolAutomation gateway.
-  // TODO(coolmaster-rewrite): re-wire once the new native driver (docs/coolmaster/) lands.
+  // CoolMasterNet/CoolLinux HVAC gateway — VRF/VRV indoor units, groups, water heaters,
+  // and ventilation over ASCII_IF + REST v2 (see docs/coolmaster/README.md).
+  if (config.coolMasterHost) {
+    nativeDrivers.push(
+      new CoolMasterProtocolDriver({
+        host: config.coolMasterHost,
+        protocol: config.coolMasterProtocol as "auto" | "ascii" | "rest",
+        asciiPort: config.coolMasterAsciiPort,
+        restPort: config.coolMasterRestPort,
+        pollMs: config.coolMasterPollMs,
+        slowPollMs: config.coolMasterSlowPollMs,
+        discoveryIntervalMs: config.coolMasterDiscoveryIntervalMs,
+        timeoutMs: config.coolMasterTimeoutMs,
+        retryCount: config.coolMasterRetryCount,
+        debug: config.coolMasterDebug,
+      }),
+    );
+  }
   // SIP door stations — door release (lock) + ring (sensor). Needs a SIP UA subsystem;
   // until provisioned the driver stays disconnected and boot is unaffected.
   if (config.sipServer) {
