@@ -583,7 +583,11 @@ export function AvrConsole({
     applyMedia({ advanced: { ...advanced, [key]: value } });
     void cmd(device.id, { capability: "media", action: "advanced", advanced: { [key]: value } });
   };
-  const setPower = (on: boolean) => void cmd(device.id, { capability: "onoff", action: on ? "on" : "off" });
+  const setPower = (on: boolean) => {
+    vibrate(10);
+    apply(device.id, "onoff", { kind: "onoff", on });
+    void cmd(device.id, { capability: "onoff", action: on ? "on" : "off" });
+  };
   const rename = async () => {
     const name = window.prompt("Rename device", device.name);
     if (name && name.trim() && name !== device.name) await client.updateDevice(device.id, { name: name.trim() });

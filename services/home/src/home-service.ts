@@ -262,6 +262,13 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
   );
   await home.addDevice(
     device(hid, living.id, "Media", "media_player", [{
+      // Real Denon/Yamaha SSDP discovery reports ["onoff", "media"] (see avr-driver.ts /
+      // yamaha-driver.ts discover()) — a receiver's power state is a first-class capability,
+      // not folded into the media capability. Mirrored here so the demo seed matches what a
+      // real commissioned AVR actually exposes.
+      kind: "onoff",
+      config: {},
+    }, {
       kind: "media",
       // A representative AVR-shaped AudioCapabilityConfig (§ Universal AVR Framework) so
       // the seeded demo home exercises the same capability-driven console a real
@@ -301,6 +308,7 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
         }],
       },
     }], {
+      onoff: { kind: "onoff", on: true },
       media: {
         kind: "media",
         playback: "idle",
@@ -314,7 +322,7 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
         advanced: { soundMode: "PURE DIRECT", sleepMinutes: 0 },
       },
     }),
-    { media: "media_player.living_room" },
+    { onoff: "media_player.living_room", media: "media_player.living_room" },
   );
   // A set of colour lights so the room's lighting disc shows multiple draggable nodes
   // (the Ovio multi-light colour-field pattern, §11.1).

@@ -327,7 +327,29 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
   // presented here as the phone bottom sheet's single-column layout. Tablet width gets
   // the dedicated two-pane AvrConsoleScreen instead (see showDeviceSheet below). ──
   List<Widget> _media() {
+    final hasPower = widget.device.capabilities.contains('onoff');
     return [
+      if (hasPower)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(children: [
+            Expanded(
+              child: Text(widget.device.name, style: Theme.of(context).textTheme.titleMedium, overflow: TextOverflow.ellipsis),
+            ),
+            Consumer(builder: (context, ref, _) {
+              final live = ref.watch(liveStatesProvider);
+              final merged = mergedDeviceState(widget.device, live);
+              final on = ((merged['onoff'] as Map<String, dynamic>?)?['on'] as bool?) ?? false;
+              return IconButton(
+                icon: Icon(Icons.power_settings_new, color: on ? AureonGold.c400 : AureonText.secondary),
+                onPressed: () {
+                  ref.read(liveStatesProvider.notifier).apply(widget.device.id, 'onoff', {'kind': 'onoff', 'on': !on});
+                  ref.read(clientProvider).command(widget.device.id, {'capability': 'onoff', 'action': on ? 'off' : 'on'});
+                },
+              );
+            }),
+          ]),
+        ),
       Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: AvrConsoleBody(
