@@ -130,8 +130,8 @@ function ThemeBar() {
 }
 
 function Login({ onAuthed }: { onAuthed: () => void }) {
-  const [email, setEmail] = useState("owner@supreme.local");
-  const [password, setPassword] = useState("supreme-owner-demo-pass");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
