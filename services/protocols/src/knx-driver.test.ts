@@ -39,6 +39,17 @@ describe("KNX codec", () => {
     });
   });
 
+  it("maps lock (DPT1.xxx boolean, true = locked)", () => {
+    expect(valueFromCommand({ capability: "lock", action: "lock" }, null)).toBe(true);
+    expect(valueFromCommand({ capability: "lock", action: "unlock" }, null)).toBe(false);
+    expect(stateFromValue("lock", true)).toEqual({ kind: "lock", locked: true, jammed: false });
+  });
+
+  it("maps a single-GA temperature (DPT9.001), reflecting the one real value as both fields", () => {
+    expect(valueFromCommand({ capability: "temperature", targetC: 22.5 }, null)).toBe(22.5);
+    expect(stateFromValue("temperature", 21)).toEqual({ kind: "temperature", ambientC: 21, targetC: 21, mode: "auto" });
+  });
+
   it("round-trips RGB colour (DPT232.600)", () => {
     const value = valueFromCommand({ capability: "color", hue: 0, saturation: 100, level: 100 }, null, "DPT232.600");
     expect(value).toEqual({ red: 255, green: 0, blue: 0 });

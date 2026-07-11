@@ -16,6 +16,17 @@ import type { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
  *              → DPT7.600    absolute colour temperature in Kelvin (tunable-white
  *                fixtures with a dedicated colour-temp GA and a separate DPT5.001
  *                brightness GA bound as the device's "brightness" capability)
+ *   lock       → DPT1.xxx    boolean (1 = locked, matching the common KNX door-lock
+ *                actuator convention)
+ *   temperature → DPT9.001   2-byte float °C, single-GA. Real KNX thermostats split
+ *                setpoint/ambient/mode/fan/swing across separate group addresses that
+ *                Supreme's one-capability-one-binding model can't fuse into one telegram;
+ *                the KNX import engine binds the single writable setpoint GA when one is
+ *                identifiable (see services/commissioning/src/knx/entity-generator.ts) and
+ *                reports the rest as unbound in an import warning rather than fabricating
+ *                a fused multi-address state. Reads on the bound GA are reflected as BOTH
+ *                `ambientC` and `targetC` (the only real number available) — not a true
+ *                ambient/setpoint split.
  *
  * Byte-level DPT (de)serialization is handled by the KNXnet/IP transport; this codec
  * works in decoded values so the driver stays transport-agnostic and unit-testable.
@@ -47,6 +58,10 @@ export function defaultDpt(capability: CapabilityState["kind"]): string {
       return "DPT9.001";
     case "color":
       return "DPT232.600";
+    case "lock":
+      return "DPT1.001";
+    case "temperature":
+      return "DPT9.001";
     default:
       return "DPT1.001";
   }
@@ -90,8 +105,13 @@ export function valueFromCommand(
       if (major === 251) return { red, green, blue, white: 0, mR: 1, mG: 1, mB: 1, mW: 0 };
       return { red, green, blue };
     }
+    case "lock":
+      return command.action === "lock";
+    case "temperature":
+      if (typeof command.targetC === "number") return command.targetC;
+      return prev?.kind === "temperature" ? prev.targetC ?? prev.ambientC : 21;
     default:
-      return null; // temperature/lock/media not mapped to these KNX DPTs
+      return null; // media not mapped to a KNX DPT
   }
 }
 
@@ -128,6 +148,14 @@ export function stateFromValue(
         unit: typeof config.unit === "string" ? config.unit : "",
         measure: typeof config.measure === "string" ? config.measure : "value",
       };
+    case "lock":
+      return { kind: "lock", locked: toBool(value), jammed: false };
+    case "temperature": {
+      // Single-GA fidelity (see the module docstring): the one real number we have is
+      // reflected as both fields rather than fabricating a separate ambient reading.
+      const v = Number(value);
+      return { kind: "temperature", ambientC: v, targetC: v, mode: "auto" };
+    }
     default:
       return null;
   }

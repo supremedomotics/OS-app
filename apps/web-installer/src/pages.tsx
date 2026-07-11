@@ -11,9 +11,10 @@ import type { InstalledDriver } from "@supreme/domain-model";
 import {
   client,
   commitKnxImport,
+  KNX_DEVICE_TYPE_LABELS,
   previewKnx,
   previewKnxProject,
-  type KnxCircuitType,
+  type KnxImportWarning,
   type KnxPreviewDevice,
 } from "./api.js";
 import { fleetConfigured, listFleetHubs } from "./fleet.js";
@@ -95,17 +96,6 @@ export function DriverStore() {
   );
 }
 
-const KNX_CIRCUIT_LABELS: Record<KnxCircuitType, string> = {
-  onoff: "On/Off switch",
-  dimmable: "Dimmable",
-  tunable_white: "Tunable white",
-  rgbww: "RGB / RGBWW",
-  cover: "Curtain / blind",
-  scene: "Scene",
-  climate: "Climate",
-  other: "Other",
-};
-
 /** Commissioning: discover candidate devices and commission them into a room. */
 export function Commissioning() {
   const [discovered, setDiscovered] = useState<
@@ -166,19 +156,23 @@ export function Commissioning() {
   const [knxproj, setKnxproj] = useState<string | null>(null);
   const [knxPassword, setKnxPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
-  // The parsed-but-unsaved device list the installer reviews (room, circuit type,
+  // The parsed-but-unsaved device list the installer reviews (room, deviceType,
   // include/exclude) before committing — nothing is saved until "Save & Commission".
   const [preview, setPreview] = useState<(KnxPreviewDevice & { included: boolean })[] | null>(null);
+  const [knxWarnings, setKnxWarnings] = useState<KnxImportWarning[]>([]);
   const [committing, setCommitting] = useState(false);
 
-  function showPreview(devices: KnxPreviewDevice[]) {
-    setPreview(devices.map((d) => ({ ...d, included: true })));
-    setKnxResult(`Found ${devices.length} device(s) — review below, then Save & Commission.`);
+  function showPreview(result: { devices: KnxPreviewDevice[]; warnings: KnxImportWarning[]; stats: { groupAddressCount: number; recognizedDeviceCount: number; roomsFound: number; parseMs: number } }) {
+    setPreview(result.devices.map((d) => ({ ...d, included: true })));
+    setKnxWarnings(result.warnings);
+    setKnxResult(
+      `Parsed ${result.stats.groupAddressCount} group address(es) into ${result.devices.length} device(s) across ${result.stats.roomsFound} room(s) in ${result.stats.parseMs}ms — review below, then Save & Commission.`,
+    );
   }
   async function doPreviewKnxProject(base64: string, password?: string) {
     setKnxResult("Parsing…");
     try {
-      showPreview((await previewKnxProject(base64, password)).devices);
+      showPreview(await previewKnxProject(base64, password));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Import failed";
       // The gateway returns 401 with a "password" hint for encrypted/locked projects.
@@ -188,7 +182,7 @@ export function Commissioning() {
   }
   async function doPreviewKnx() {
     setKnxResult("Parsing…");
-    try { showPreview((await previewKnx(knx)).devices); } catch (e) { setKnxResult(e instanceof Error ? e.message : "Import failed"); }
+    try { showPreview(await previewKnx(knx)); } catch (e) { setKnxResult(e instanceof Error ? e.message : "Import failed"); }
   }
   async function onKnxFile(file: File) {
     setNeedsPassword(false);
@@ -214,6 +208,7 @@ export function Commissioning() {
       const out = await commitKnxImport(preview);
       setKnxResult(`Saved ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
       setPreview(null);
+      setKnxWarnings([]);
       setKnx("");
       setKnxproj(null);
       setKnxPassword("");
@@ -306,23 +301,40 @@ export function Commissioning() {
 
         {preview && (
           <div style={{ marginTop: 12 }}>
+            {knxWarnings.length > 0 && (
+              <div className="card" style={{ marginBottom: 12, borderColor: "var(--aureon-color-status-warning, #b8860b)" }}>
+                <strong>{knxWarnings.length} warning{knxWarnings.length === 1 ? "" : "s"}</strong>
+                <p className="muted" style={{ fontSize: 12 }}>Non-fatal — every device below still imports; these addresses need a closer look or manual binding afterward.</p>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                  {knxWarnings.map((w, i) => <li key={i} className="muted">{w.message}</li>)}
+                </ul>
+              </div>
+            )}
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr className="muted" style={{ textAlign: "left" }}>
                   <th style={{ width: 28 }} />
                   <th>Device</th>
                   <th>Room</th>
-                  <th>Circuit type</th>
+                  <th>Type</th>
                   <th>Group addresses</th>
                 </tr>
               </thead>
               <tbody>
                 {preview.map((d, i) => (
-                  <tr key={`${d.name}-${i}`} style={{ opacity: d.included ? 1 : 0.45, borderTop: "1px solid var(--aureon-color-border, #2a2a2a)" }}>
+                  <tr key={d.fingerprint} style={{ opacity: d.included ? 1 : 0.45, borderTop: "1px solid var(--aureon-color-border, #2a2a2a)" }}>
                     <td>
                       <input type="checkbox" checked={d.included} onChange={(e) => updatePreviewRow(i, { included: e.target.checked })} />
                     </td>
-                    <td>{d.name}</td>
+                    <td>
+                      <input
+                        value={d.name}
+                        disabled={!d.included}
+                        onChange={(e) => updatePreviewRow(i, { name: e.target.value })}
+                        style={{ width: 160, fontWeight: 600 }}
+                      />
+                      {d.confidence < 1 && <div className="muted" style={{ fontSize: 11 }}>guessed from name — no ETS device data</div>}
+                    </td>
                     <td>
                       <input
                         value={d.room ?? ""}
@@ -331,9 +343,12 @@ export function Commissioning() {
                         onChange={(e) => updatePreviewRow(i, { room: e.target.value || null })}
                         style={{ width: 140 }}
                       />
+                      {(d.floor || d.building) && (
+                        <div className="muted" style={{ fontSize: 11 }}>{[d.building, d.floor].filter(Boolean).join(" · ")}</div>
+                      )}
                     </td>
-                    <td><span className="tag">{KNX_CIRCUIT_LABELS[d.circuitType]}</span></td>
-                    <td className="muted">{d.bindings.map((b) => `${b.capability}: ${b.address}`).join(", ")}</td>
+                    <td><span className="tag">{KNX_DEVICE_TYPE_LABELS[d.deviceType]}</span></td>
+                    <td className="muted">{d.bindings.map((b) => `${b.capability}: ${b.address}${b.statusAddress ? ` (feedback ${b.statusAddress})` : ""}`).join(", ")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -346,7 +361,7 @@ export function Commissioning() {
               >
                 {committing ? "Saving…" : `Save & Commission (${preview.filter((d) => d.included).length})`}
               </button>
-              <button disabled={committing} onClick={() => { setPreview(null); setKnxResult(null); }}>Cancel</button>
+              <button disabled={committing} onClick={() => { setPreview(null); setKnxWarnings([]); setKnxResult(null); }}>Cancel</button>
             </div>
           </div>
         )}

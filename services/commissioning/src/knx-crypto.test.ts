@@ -2,7 +2,7 @@ import { createCipheriv, createHmac, pbkdf2Sync, randomBytes } from "node:crypto
 import { deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto.js";
-import { parseKnxProject, unzipKnxproj } from "./knx-project.js";
+import { runKnxImport, unzipKnxproj } from "./knx/index.js";
 
 /**
  * Independent WinZip-AES *encryptor* (mirrors knx-crypto's decryptor) so we can round-trip
@@ -140,7 +140,7 @@ describe("encrypted .knxproj (WinZip-AES)", () => {
 
   it("unzips and parses a password-protected project (AES-256)", () => {
     const zip = makeZip([{ name: "P-00AB/0.xml", data: PROJECT_XML, encrypt: { strength: 3, password: "villa-2026" } }]);
-    const { devices } = parseKnxProject(unzipKnxproj(zip, "villa-2026"));
+    const { devices } = runKnxImport({ kind: "knxproj", files: unzipKnxproj(zip, "villa-2026") });
     const ceiling = devices.find((d) => d.name === "Ceiling Light");
     expect(ceiling?.room).toBe("Living Room");
     expect(new Set(ceiling?.bindings.map((b) => b.capability))).toEqual(new Set(["onoff", "brightness"]));
@@ -155,7 +155,7 @@ describe("encrypted .knxproj (WinZip-AES)", () => {
     const inner = makeZip([{ name: "0.xml", data: PROJECT_XML }]);
     // Wrap the inner zip (as raw bytes) inside an encrypted outer entry.
     const outer = makeZip([{ name: "P-00AB.zip", data: inner, encrypt: { strength: 2, password: "pw" } }]);
-    const { devices } = parseKnxProject(unzipKnxproj(outer, "pw"));
+    const { devices } = runKnxImport({ kind: "knxproj", files: unzipKnxproj(outer, "pw") });
     expect(devices.find((d) => d.name === "Ceiling Light")?.room).toBe("Living Room");
   });
 });

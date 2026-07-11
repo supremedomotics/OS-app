@@ -370,22 +370,31 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
 
 /// Human-facing labels for the circuit type `classifyCircuit()` infers from a device's
 /// bindings — matches KNX_CIRCUIT_LABELS in the web installer (apps/web-installer/src/pages.tsx).
-const _kKnxCircuitLabels = {
-  'onoff': 'On/Off switch',
-  'dimmable': 'Dimmable',
-  'tunable_white': 'Tunable white',
-  'rgbww': 'RGB / RGBWW',
-  'cover': 'Curtain / blind',
-  'scene': 'Scene',
-  'climate': 'Climate',
-  'other': 'Other',
+/// Human-facing labels for the fine-grained device taxonomy the KNX Import Engine
+/// classifies against — mirrors KNX_DEVICE_TYPE_LABELS in the web installer
+/// (apps/web-installer/src/api.ts). Falls back to the raw key for any type not listed.
+const _kKnxDeviceTypeLabels = {
+  'light_switch': 'Light — On/Off', 'light_dimmable': 'Light — Dimmable',
+  'light_tunable_white': 'Light — Tunable White', 'light_rgb': 'Light — RGB',
+  'light_rgbw': 'Light — RGBW', 'light_rgbww': 'Light — RGBWW', 'light_color_temp': 'Light — Colour Temp',
+  'curtain': 'Curtain', 'blind': 'Blind', 'roller_shutter': 'Roller Shutter', 'garage_door': 'Garage Door',
+  'thermostat': 'Thermostat', 'hvac_vrf': 'HVAC — VRF', 'hvac_split_ac': 'HVAC — Split AC',
+  'hvac_cassette_ac': 'HVAC — Cassette AC', 'hvac_duct_ac': 'HVAC — Duct AC', 'fan_coil': 'Fan Coil', 'fan': 'Fan',
+  'sensor_temperature': 'Sensor — Temperature', 'sensor_humidity': 'Sensor — Humidity',
+  'sensor_motion': 'Sensor — Motion', 'sensor_presence': 'Sensor — Presence', 'sensor_lux': 'Sensor — Illuminance',
+  'sensor_pressure': 'Sensor — Pressure', 'sensor_co2': 'Sensor — CO₂', 'sensor_pm25': 'Sensor — PM2.5',
+  'sensor_leak': 'Sensor — Leak', 'sensor_smoke': 'Sensor — Smoke', 'sensor_door': 'Sensor — Door',
+  'sensor_window': 'Sensor — Window', 'energy_meter': 'Energy Meter', 'scene': 'Scene', 'audio': 'Audio',
+  'gate': 'Gate', 'door_lock': 'Door Lock', 'irrigation': 'Irrigation', 'pool': 'Pool',
+  'ventilation': 'Ventilation', 'custom_device': 'Custom Device',
 };
 
-/// KNX ETS group-address import (§4): paste an ETS group-address export (CSV/XML —
-/// capabilities inferred from each datapoint type, the ETS Main/Middle Group, and the
-/// address name) to preview the auto-discovered device cards, review room + circuit type,
-/// include/exclude devices, then save. Binary `.knxproj` upload needs a native file picker
-/// not yet wired into the mobile app — paste covers the common export path; the web app has both.
+/// KNX ETS group-address import (§4): paste an ETS group-address export (CSV/XML/`.esf` —
+/// capabilities and device type inferred from each datapoint type, the ETS Main/Middle
+/// Group, and the address name) to preview the auto-discovered device cards, review
+/// room/name/type, include/exclude devices, then save. Binary `.knxproj` upload needs a
+/// native file picker not yet wired into the mobile app — paste covers the common export
+/// path; the web app has both.
 class _KnxImportPanel extends ConsumerStatefulWidget {
   const _KnxImportPanel();
 
@@ -401,6 +410,7 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
   // Parsed-but-unsaved devices the installer reviews before committing. Each map is the
   // server's preview entry plus a local `included` toggle; nothing is saved until Commit.
   List<Map<String, dynamic>>? _preview;
+  List<Map<String, dynamic>> _warnings = const [];
 
   @override
   void dispose() {
@@ -413,10 +423,15 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
     if (content.isEmpty) return;
     setState(() { _busy = true; _err = null; _result = null; });
     try {
-      final devices = await ref.read(clientProvider).previewKnx(content);
+      final out = await ref.read(clientProvider).previewKnx(content);
+      final devices = ((out['devices'] as List?) ?? const []).cast<Map<String, dynamic>>();
+      final warnings = ((out['warnings'] as List?) ?? const []).cast<Map<String, dynamic>>();
+      final stats = (out['stats'] as Map?)?.cast<String, dynamic>() ?? const {};
       setState(() {
         _preview = devices.map((d) => {...d, 'included': true}).toList();
-        _result = 'Found ${devices.length} device${devices.length == 1 ? '' : 's'} — review below, then save.';
+        _warnings = warnings;
+        _result = 'Parsed ${stats['groupAddressCount'] ?? '?'} group address(es) into '
+            '${devices.length} device${devices.length == 1 ? '' : 's'} — review below, then save.';
       });
     } catch (e) {
       setState(() => _err = 'Preview failed: $e');
@@ -437,6 +452,7 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
         _result = 'Saved $devices device${devices == 1 ? '' : 's'}'
             '${rooms > 0 ? ' · $rooms new room${rooms == 1 ? '' : 's'}' : ''}.';
         _preview = null;
+        _warnings = const [];
         _controller.clear();
       });
       ref.invalidate(homeProvider);
@@ -460,8 +476,8 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
           const SizedBox(height: 4),
           if (preview == null) ...[
             Text(
-              'Paste an ETS group-address export (CSV/XML). Capabilities and circuit type are '
-              'inferred from each datapoint type — review before saving.',
+              'Paste an ETS group-address export (CSV/XML/.esf). Capabilities and device type '
+              'are inferred from each datapoint type — review before saving.',
               style: text.labelMedium,
             ),
             const SizedBox(height: AureonSpacing.sm),
@@ -480,6 +496,7 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
               child: Text(_busy ? 'Parsing…' : 'Preview group addresses'),
             ),
           ] else ...[
+            if (_warnings.isNotEmpty) _warningsPanel(context),
             for (var i = 0; i < preview.length; i++) _previewRow(context, i, preview[i]),
             const SizedBox(height: AureonSpacing.sm),
             Row(children: [
@@ -489,7 +506,7 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
               ),
               const SizedBox(width: AureonSpacing.sm),
               TextButton(
-                onPressed: _busy ? null : () => setState(() { _preview = null; _result = null; }),
+                onPressed: _busy ? null : () => setState(() { _preview = null; _warnings = const []; _result = null; }),
                 child: const Text('Cancel'),
               ),
             ]),
@@ -501,11 +518,30 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
     );
   }
 
+  Widget _warningsPanel(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: AureonSpacing.sm),
+      color: AureonStatus.warning.withValues(alpha: 0.08),
+      child: Padding(
+        padding: const EdgeInsets.all(AureonSpacing.sm),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${_warnings.length} warning${_warnings.length == 1 ? '' : 's'}', style: text.labelLarge?.copyWith(fontWeight: FontWeight.w600)),
+          Text('Non-fatal — every device below still imports; these addresses need a closer look or manual binding afterward.', style: text.labelSmall),
+          const SizedBox(height: 4),
+          for (final w in _warnings)
+            Text('• ${w['message'] as String? ?? ''}', style: text.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ]),
+      ),
+    );
+  }
+
   Widget _previewRow(BuildContext context, int i, Map<String, dynamic> d) {
     final text = Theme.of(context).textTheme;
     final included = d['included'] == true;
     final bindings = ((d['bindings'] as List?) ?? const []).cast<Map<String, dynamic>>();
-    final circuitType = d['circuitType'] as String? ?? 'other';
+    final deviceType = d['deviceType'] as String? ?? 'custom_device';
+    final confidence = (d['confidence'] as num?)?.toDouble() ?? 1.0;
     return Opacity(
       opacity: included ? 1 : 0.45,
       child: Card(
@@ -520,9 +556,19 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  Expanded(child: Text(d['name'] as String? ?? '', style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600))),
-                  Chip(label: Text(_kKnxCircuitLabels[circuitType] ?? circuitType), visualDensity: VisualDensity.compact),
+                  Expanded(
+                    child: TextFormField(
+                      enabled: included,
+                      initialValue: d['name'] as String? ?? '',
+                      style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                      decoration: const InputDecoration(isDense: true, border: InputBorder.none),
+                      onChanged: (v) => d['name'] = v,
+                    ),
+                  ),
+                  Chip(label: Text(_kKnxDeviceTypeLabels[deviceType] ?? deviceType), visualDensity: VisualDensity.compact),
                 ]),
+                if (confidence < 1)
+                  Text('guessed from name — no ETS device data', style: text.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                 const SizedBox(height: 4),
                 TextFormField(
                   enabled: included,
@@ -532,7 +578,10 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  bindings.map((b) => '${b['capability']}: ${b['address']}').join(', '),
+                  bindings.map((b) {
+                    final status = b['statusAddress'] as String?;
+                    return '${b['capability']}: ${b['address']}${status != null ? ' (feedback $status)' : ''}';
+                  }).join(', '),
                   style: text.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ]),

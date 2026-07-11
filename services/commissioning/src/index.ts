@@ -158,19 +158,8 @@ export class CommissioningService {
 }
 
 export { HttpProtocolScanner, type HttpScannerOptions } from "./http-scanner.js";
-export {
-  parseKnxGroupExport,
-  inferCapability,
-  groupIntoDevices,
-  normalizeDpt,
-  classifyCircuit,
-  type KnxGroupAddress,
-  type ImportedDevice,
-  type ImportedBinding,
-  type KnxCircuitType,
-} from "./knx-import.js";
-export { unzipKnxproj, parseKnxProject, addressFromInt } from "./knx-project.js";
 export { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto.js";
+export * from "./knx/index.js";
 
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;

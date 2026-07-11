@@ -367,22 +367,22 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
-  /// Parse an ETS group-address export WITHOUT saving anything, so the installer can review the
-  /// auto-discovered device list (room, detected circuit type) before {@link commitKnxImport}.
-  Future<List<Map<String, dynamic>>> previewKnx(String content) async {
+  /// Parse an ETS group-address export, `.esf`, or `.knxproj` WITHOUT saving anything —
+  /// runs the full KNX Import Engine (device recognition, automatic room assignment,
+  /// datapoint-driven device-type detection, learned-rename recall) and returns
+  /// `{devices, warnings, stats}` for the installer to review before [commitKnxImport].
+  Future<Map<String, dynamic>> previewKnx(String content) async {
     final res = await _http.post(
       Uri.parse('$baseUrl/v1/commissioning/import/knx/preview'),
       headers: _authHeaders,
       body: jsonEncode({'content': content}),
     );
     _ensureOk(res);
-    final devices = (jsonDecode(res.body)
-        as Map<String, dynamic>)['devices'] as List<dynamic>;
-    return devices.cast<Map<String, dynamic>>();
+    return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   /// `.knxproj` counterpart of [previewKnx].
-  Future<List<Map<String, dynamic>>> previewKnxProject(String base64,
+  Future<Map<String, dynamic>> previewKnxProject(String base64,
       {String? password}) async {
     final res = await _http.post(
       Uri.parse('$baseUrl/v1/commissioning/import/knx/preview'),
@@ -393,9 +393,7 @@ class SupremeClient {
       }),
     );
     _ensureOk(res);
-    final devices = (jsonDecode(res.body)
-        as Map<String, dynamic>)['devices'] as List<dynamic>;
-    return devices.cast<Map<String, dynamic>>();
+    return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   /// Save a (possibly installer-edited) preview list — the "Save & Commission" step. Each map

@@ -124,14 +124,17 @@ describe("KNX ETS import → device cards", () => {
     });
     expect(preview.status).toBe(200);
     const previewOut = (await preview.json()) as {
-      devices: { name: string; room: string | null; circuitType: string; bindings: { capability: string; address: string }[] }[];
+      devices: { name: string; room: string | null; deviceType: string; bindings: { capability: string; address: string }[] }[];
+      warnings: { code: string; message: string }[];
+      stats: { groupAddressCount: number; recognizedDeviceCount: number };
     };
     expect(previewOut.devices).toHaveLength(2);
+    expect(previewOut.stats.groupAddressCount).toBe(4);
     const downlight = previewOut.devices.find((d) => d.name.includes("Downlight"))!;
-    expect(downlight.circuitType).toBe("tunable_white");
+    expect(downlight.deviceType).toBe("light_tunable_white");
     expect(new Set(downlight.bindings.map((b) => b.capability))).toEqual(new Set(["onoff", "brightness", "color"]));
     const utility = previewOut.devices.find((d) => d.name.includes("Utility"))!;
-    expect(utility.circuitType).toBe("onoff");
+    expect(utility.deviceType).toBe("light_switch");
 
     // A preview must not create anything — neither room exists yet.
     const beforeHome = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as { rooms: { name: string }[] };

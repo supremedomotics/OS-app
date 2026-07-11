@@ -16,7 +16,7 @@ import type {
   StoredProtocolBinding,
   SupremeIntegrationLayer,
 } from "@supreme/integration-layer";
-import type { HomeService } from "@supreme/home";
+import type { HomeService, IConfigStore } from "@supreme/home";
 import type { SceneService } from "@supreme/scenes";
 import type { IdentityService } from "@supreme/identity";
 import {
@@ -30,16 +30,17 @@ import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type Li
 import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
 import { knxSearch, type KnxGateway } from "@supreme/protocols";
 import {
-  classifyCircuit,
   CommissioningService,
-  groupIntoDevices,
+  ConfigKnxLearningStore,
+  generateEntities,
   KnxDecryptError,
-  parseKnxGroupExport,
-  parseKnxProject,
+  learnRenames,
+  runKnxImport,
   unzipKnxproj,
-  type ImportedDevice,
+  type EntitySource,
   type IProtocolScanner,
-  type KnxCircuitType,
+  type KnxImportResultV2,
+  type RecognizedDevice,
 } from "@supreme/commissioning";
 import { issueLicense, validateLicense } from "@supreme/licensing";
 import {
@@ -66,16 +67,12 @@ function maskSecrets(config: Record<string, unknown>, schema: { key: string; sec
   return out;
 }
 
-/** Result of a KNX import (group-address export or .knxproj). */
+/** Result of a KNX import (group-address export or .knxproj), or any other native-bus
+ * auto-commission (§4). */
 export interface KnxImportResult {
   devices: number;
   roomsCreated: number;
   created: { name: string; room: string | null; capabilities: string[] }[];
-}
-
-/** A parsed-but-not-yet-committed device, for the installer to review before saving. */
-export interface KnxPreviewDevice extends ImportedDevice {
-  circuitType: KnxCircuitType;
 }
 
 export interface InstallerDeps {
@@ -93,6 +90,8 @@ export interface InstallerDeps {
   backupStore?: IBackupStore;
   /** Pending-device queue (§ Device Approval). When absent, staging is a no-op. */
   pendingDeviceStore?: IPendingDeviceStore;
+  /** Per-home settings store — backs the KNX import Learning Engine's remembered renames. */
+  configStore: IConfigStore;
 }
 
 /**
@@ -105,6 +104,8 @@ export interface InstallerDeps {
 export class InstallerServices {
   readonly drivers: DriverManager;
   readonly commissioning: CommissioningService;
+  /** KNX import Learning Engine — remembers installer renames across re-imports (§ Learning Engine). */
+  private readonly knxLearning: ConfigKnxLearningStore;
 
   private readonly d: InstallerDeps;
   private readonly backupKeys: KeyPairPem;
@@ -139,6 +140,7 @@ export class InstallerServices {
     });
 
     this.commissioning = new CommissioningService(deps.sil, deps.home, deps.scanners ?? []);
+    this.knxLearning = new ConfigKnxLearningStore(deps.configStore);
 
     // Licensing Service — the single source of truth. Developer Mode (SUPREME_DEV_MODE) unlocks every
     // SKU + feature; otherwise the offline (signed) license, if any, supplies the grant. Drivers ask
@@ -284,30 +286,47 @@ export class InstallerServices {
   }
 
   /**
-   * Import an ETS group-address export (§4): parse it, group the addresses into devices
-   * (capabilities inferred from the DPTs), resolve/create each device's room, then
-   * commission the device and bind every capability to its KNX group address. Turns a
-   * KNX project into ready-to-use device cards — no per-device manual entry.
+   * Import an ETS group-address export (§4, KNX Import Engine): parse it with the full
+   * recognition engine — device recognition, room assignment, entity generation — then
+   * commission every recognized device and bind every capability to its KNX group
+   * address. Turns a KNX project into ready-to-use device cards with almost zero manual
+   * configuration. Kept as a one-shot path for API compatibility; {@link previewKnx} +
+   * {@link commitKnxImport} is the installer-facing flow (review before saving).
    */
   async importKnx(content: string): Promise<KnxImportResult> {
-    const existing = await this.d.home.listRooms();
-    const addresses = parseKnxGroupExport(content);
-    if (addresses.length === 0) {
-      throw new SupremeError("validation_failed", "no group addresses found in the import");
-    }
-    return this.commissionImported(groupIntoDevices(addresses, existing.map((r) => r.name)));
+    const result = await this.runImport({ kind: "text", content });
+    return this.commissionImported(result.devices.map((d) => this.toEntitySource(d)));
+  }
+
+  /** `.knxproj` counterpart of {@link importKnx} — one-shot parse + commission. */
+  async importKnxProject(base64: string, password?: string): Promise<KnxImportResult> {
+    const result = await this.runImport(await this.knxProjectSource(base64, password));
+    return this.commissionImported(result.devices.map((d) => this.toEntitySource(d)));
   }
 
   /**
-   * Import a `.knxproj` file directly (base64-encoded). Reads the ETS project's
-   * building → room → function → group-address structure, so device cards land in their
-   * real ETS rooms. Falls back to name-based grouping when the project has no functions.
+   * Parse an ETS group-address export, `.esf`, or `.knxproj` WITHOUT committing anything —
+   * runs the full KNX Import Engine (device recognition, automatic room assignment,
+   * datapoint-driven circuit-type detection, learned-rename recall) and returns every
+   * recognized device plus any non-fatal warnings (duplicate/missing/unknown DPTs, orphan
+   * addresses, conflicting devices, …) for the installer to review before
+   * {@link commitKnxImport} saves anything.
    */
-  async importKnxProject(base64: string, password?: string): Promise<KnxImportResult> {
-    let devices: ImportedDevice[];
+  async previewKnx(content: string): Promise<KnxImportResultV2> {
+    return this.runImport({ kind: "text", content });
+  }
+
+  /** `.knxproj` counterpart of {@link previewKnx} — same parse-only, no-commit contract;
+   * also accepts a flat ETS group-address export or `.esf` inside the archive is NOT
+   * expected here (use {@link previewKnx} for those) — this is specifically the binary
+   * ETS project file path (base64-encoded, optionally WinZip-AES password-protected). */
+  async previewKnxProject(base64: string, password?: string): Promise<KnxImportResultV2> {
+    return this.runImport(await this.knxProjectSource(base64, password));
+  }
+
+  private async knxProjectSource(base64: string, password?: string): Promise<{ kind: "knxproj"; files: Map<string, Buffer> }> {
     try {
-      const { devices: parsed } = parseKnxProject(unzipKnxproj(Buffer.from(base64, "base64"), password));
-      devices = parsed;
+      return { kind: "knxproj", files: unzipKnxproj(Buffer.from(base64, "base64"), password) };
     } catch (err) {
       // A wrong/missing password on an encrypted project is a 401 so the UI can re-prompt.
       if (err instanceof KnxDecryptError) {
@@ -318,65 +337,62 @@ export class InstallerServices {
       }
       throw new SupremeError("validation_failed", `could not read .knxproj: ${(err as Error).message}`);
     }
-    if (devices.length === 0) {
-      throw new SupremeError("validation_failed", "no devices found in the project (is it password-protected?)");
-    }
-    return this.commissionImported(devices);
   }
 
-  /**
-   * Parse an ETS group-address export (or `.knxproj`) WITHOUT committing anything — lets the
-   * installer review the auto-discovered device cards (room assignment, detected circuit type)
-   * and include/exclude or re-room individual devices before {@link commitKnxImport} saves them.
-   */
-  async previewKnx(content: string): Promise<{ devices: KnxPreviewDevice[] }> {
-    const existing = await this.d.home.listRooms();
-    const addresses = parseKnxGroupExport(content);
-    if (addresses.length === 0) {
+  /** Runs the KNX Import Engine against an already-resolved source, applying the home's
+   * existing rooms + any previously-learned renames. Shared by every preview/import entry
+   * point so they all see identical recognition/room-assignment/learning behavior. */
+  private async runImport(source: Parameters<typeof runKnxImport>[0]): Promise<KnxImportResultV2> {
+    const [existingRooms, learnedNames] = await Promise.all([
+      this.d.home.listRooms(),
+      this.knxLearning.get(this.d.homeId),
+    ]);
+    const result = runKnxImport(source, {
+      existingRoomNames: existingRooms.map((r) => r.name),
+      learnedNames,
+    });
+    if (result.stats.groupAddressCount === 0) {
       throw new SupremeError("validation_failed", "no group addresses found in the import");
     }
-    const devices = groupIntoDevices(addresses, existing.map((r) => r.name));
-    return { devices: devices.map((d) => ({ ...d, circuitType: classifyCircuit(d.bindings) })) };
+    if (result.devices.length === 0) {
+      throw new SupremeError("validation_failed", "no devices could be recognized from this import (see warnings)");
+    }
+    return result;
   }
 
-  /** `.knxproj` counterpart of {@link previewKnx} — same parse-only, no-commit contract. */
-  async previewKnxProject(base64: string, password?: string): Promise<{ devices: KnxPreviewDevice[] }> {
-    let devices: ImportedDevice[];
-    try {
-      const { devices: parsed } = parseKnxProject(unzipKnxproj(Buffer.from(base64, "base64"), password));
-      devices = parsed;
-    } catch (err) {
-      if (err instanceof KnxDecryptError) {
-        const needsPassword = /password/i.test(err.message);
-        throw new SupremeError("unauthorized", needsPassword
-          ? "this .knxproj is password-protected — provide the ETS project password"
-          : `could not decrypt .knxproj: ${err.message}`);
-      }
-      throw new SupremeError("validation_failed", `could not read .knxproj: ${(err as Error).message}`);
-    }
-    if (devices.length === 0) {
-      throw new SupremeError("validation_failed", "no devices found in the project (is it password-protected?)");
-    }
-    return { devices: devices.map((d) => ({ ...d, circuitType: classifyCircuit(d.bindings) })) };
+  private toEntitySource(d: RecognizedDevice): EntitySource {
+    return { name: d.name, room: d.room, bindings: d.bindings };
   }
 
   /**
-   * Save a (possibly installer-edited) KNX preview: commission every device the installer left
-   * included, into the room they confirmed. This is the "save" step after {@link previewKnx} /
-   * {@link previewKnxProject} — it never re-parses the source file, only what the installer approved.
+   * Save a (possibly installer-edited) KNX preview: commission every device the installer
+   * left included, into the room they confirmed. This is the "save" step after
+   * {@link previewKnx} / {@link previewKnxProject} — it never re-parses the source file,
+   * only what the installer approved. Any name the installer typed that differs from the
+   * device's own ETS-derived default is remembered by the Learning Engine so a future
+   * re-import of an updated project preserves it.
    */
-  async commitKnxImport(devices: { name: string; room: string | null; included?: boolean; bindings: ImportedDevice["bindings"] }[]): Promise<KnxImportResult> {
-    const toCommit: ImportedDevice[] = devices
-      .filter((d) => d.included !== false)
-      .map((d) => ({ name: d.name, room: d.room, bindings: d.bindings }));
+  async commitKnxImport(devices: (RecognizedDevice & { included?: boolean })[]): Promise<KnxImportResult> {
+    const toCommit = devices.filter((d) => d.included !== false);
     if (toCommit.length === 0) {
       throw new SupremeError("validation_failed", "no devices selected to save");
     }
     for (const d of toCommit) {
-      if (!d.name.trim()) throw new SupremeError("validation_failed", "every device needs a name");
-      if (d.bindings.length === 0) throw new SupremeError("validation_failed", `${d.name}: no bindings`);
+      if (!d.name?.trim()) throw new SupremeError("validation_failed", "every device needs a name");
+      if (!d.bindings || d.bindings.length === 0) throw new SupremeError("validation_failed", `${d.name}: no bindings`);
     }
-    return this.commissionImported(toCommit);
+
+    const existingLearned = await this.knxLearning.get(this.d.homeId);
+    const learned = learnRenames(
+      toCommit.map((d) => ({ fingerprint: d.fingerprint, name: d.name, sourceName: d.sourceName ?? d.name })),
+      existingLearned,
+      new Date().toISOString(),
+    );
+    if (learned.length !== existingLearned.length || learned.some((l, i) => l.name !== existingLearned[i]?.name)) {
+      await this.knxLearning.set(this.d.homeId, learned);
+    }
+
+    return this.commissionImported(toCommit.map((d) => this.toEntitySource(d)));
   }
 
   /**
@@ -388,12 +404,12 @@ export class InstallerServices {
    */
   async autoCommission(protocol: string): Promise<KnxImportResult> {
     const discovered = await this.d.sil.discover();
-    const imported: ImportedDevice[] = discovered
+    const imported: EntitySource[] = discovered
       .filter((d) => (typeof d.raw?.protocol === "string" ? d.raw.protocol : "") === protocol)
       .map((d) => ({
         name: d.suggestedName,
         room: typeof d.raw?.room === "string" && d.raw.room.trim() ? d.raw.room : null,
-        bindings: d.capabilities.map((capability) => ({ capability, address: d.backendId })),
+        bindings: d.capabilities.map((capability) => ({ capability, address: d.backendId, statusAddress: null, role: "unknown", dpt: null })),
       }))
       .filter((d) => d.bindings.length > 0);
     if (imported.length === 0) {
@@ -408,15 +424,18 @@ export class InstallerServices {
     return knxSearch();
   }
 
-  /** Commission a parsed device list into rooms (creating rooms as needed) + bind each capability. */
-  private async commissionImported(imported: ImportedDevice[], protocol = "knx"): Promise<KnxImportResult> {
+  /** Commission a parsed device list into rooms (creating rooms as needed) + bind each
+   * capability, threading its recognized `config` (real DPT, a separate status address
+   * when the source declared one, sensor measure/unit) through to the native binding. */
+  private async commissionImported(imported: EntitySource[], protocol = "knx"): Promise<KnxImportResult> {
     const existing = await this.d.home.listRooms();
     const roomByName = new Map(existing.map((r) => [r.name.toLowerCase(), r] as const));
     let roomsCreated = 0;
     const created: { name: string; room: string | null; capabilities: string[] }[] = [];
 
     for (const dev of imported) {
-      const roomName = dev.room ?? "Unassigned";
+      const entity = generateEntities(dev);
+      const roomName = entity.room ?? "Unassigned";
       let room = roomByName.get(roomName.toLowerCase());
       if (!room) {
         const newRoom: Room = {
@@ -438,15 +457,15 @@ export class InstallerServices {
         roomsCreated++;
       }
       const device = await this.commissioning.commission({
-        backendId: dev.bindings[0]!.address,
-        name: dev.name,
+        backendId: entity.bindings[0]!.address,
+        name: entity.name,
         roomId: room.id,
-        capabilities: dev.bindings.map((b) => b.capability),
+        capabilities: entity.bindings.map((b) => b.capability as CapabilityKind),
       });
-      for (const b of dev.bindings) {
-        await this.bindProtocol({ deviceId: device.id, capability: b.capability, protocol, address: b.address });
+      for (const b of entity.bindings) {
+        await this.bindProtocol({ deviceId: device.id, capability: b.capability as CapabilityKind, protocol, address: b.address, config: b.config });
       }
-      created.push({ name: dev.name, room: dev.room, capabilities: dev.bindings.map((b) => b.capability) });
+      created.push({ name: entity.name, room: entity.room, capabilities: entity.bindings.map((b) => b.capability) });
     }
     return { devices: created.length, roomsCreated, created };
   }

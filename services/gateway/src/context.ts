@@ -489,6 +489,7 @@ export class AppContext {
       protocolBindingStore: deps.protocolBindingStore,
       backupStore: deps.backupStore,
       pendingDeviceStore: deps.pendingDeviceStore,
+      configStore: this.homeConfig,
     });
     await this.installer.init();
 
