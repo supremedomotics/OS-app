@@ -66,6 +66,9 @@ export function App() {
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [states, setStates] = useState<LiveStates>({});
   const [devMode, setDevMode] = useState(false);
+  // The signed-in user's role (§8) — drives which nav destinations and controls are
+  // visible, alongside the existing Developer Mode license flag (see NAV filtering below).
+  const [role, setRole] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const streamRef = useRef<SupremeStream | null>(null);
@@ -75,7 +78,11 @@ export function App() {
   // Drop to the login screen only when the refresh token itself is dead (30-day expiry or revoked) —
   // never for a routine access-token rotation, which the SDK already handled silently.
   useEffect(() => onSessionExpired(() => setAuthed(false)), []);
-  useEffect(() => { if (authed) void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode))); }, [authed]);
+  useEffect(() => {
+    if (!authed) return;
+    void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode)));
+    void client.me().then((m) => setRole(m.user.userType)).catch(() => setRole(null));
+  }, [authed]);
   // Global command palette: ⌘K / Ctrl-K toggles it from anywhere.
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -103,7 +110,12 @@ export function App() {
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
   const go = (t: Tab) => { if (t === "rooms") setSelectedRoom(null); setTab(t); setMoreOpen(false); };
-  const items = NAV.filter((n) => !n.dev || devMode);
+  // The Developer tab shows for either the home-wide Developer Mode license flag OR an
+  // account whose role is specifically "Developer" — either is a legitimate reason to see it.
+  const items = NAV.filter((n) => !n.dev || devMode || role === "developer");
+  // An Installer-role account sees the same installer-facing diagnostics Developer Mode
+  // already reveals in the device list (driver/protocol/IP/MAC) — see devices.tsx.
+  const showInstallerDiagnostics = devMode || role === "installer" || role === "developer";
   const palette = paletteOpen ? (
     <CommandPalette
       navItems={items.map((n) => ({ id: n.id, label: n.label }))}
@@ -116,9 +128,9 @@ export function App() {
   // Keyed on the active tab so switching destinations replays the enter transition (§ Animation).
   const page = (
     <div className="page-anim" key={tab}>
-      {tab === "dashboard" && <DashboardOverview onNavigate={go} onOpenRoom={(id) => { setSelectedRoom(id); setTab("rooms"); }} devMode={devMode} />}
+      {tab === "dashboard" && <DashboardOverview onNavigate={go} onOpenRoom={(id) => { setSelectedRoom(id); setTab("rooms"); }} devMode={showInstallerDiagnostics} />}
       {tab === "discover" && <DiscoverDevices />}
-      {tab === "devices" && <DeviceManager onNavigate={go} devMode={devMode} />}
+      {tab === "devices" && <DeviceManager onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "extensions" && <ExtensionCenter />}
       {tab === "automations" && <Automations />}
       {tab === "scenes" && <Scenes />}
@@ -129,8 +141,8 @@ export function App() {
       {tab === "security" && <Security />}
       {tab === "energy" && <Energy />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}
-      {tab === "settings" && <ThemeSettings />}
-      {tab === "developer" && devMode && <DeveloperTools />}
+      {tab === "settings" && <ThemeSettings role={role} />}
+      {tab === "developer" && (devMode || role === "developer") && <DeveloperTools />}
     </div>
   );
 

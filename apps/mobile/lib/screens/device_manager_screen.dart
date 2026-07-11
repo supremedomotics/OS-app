@@ -174,8 +174,10 @@ class _DeviceTileState extends ConsumerState<_DeviceTile> {
     final scenes = ref.watch(scenesProvider).valueOrNull ?? const [];
     final sceneCount = scenes.where((s) => s.deviceIds.contains(d.id)).length;
     // Technical plumbing (driver / protocol / network) is for Installer & Developer mode only — a
-    // homeowner never needs to see it (§ Homeowner Experience).
-    final devMode = ref.watch(devModeProvider).valueOrNull ?? false;
+    // homeowner never needs to see it (§ Homeowner Experience). Shows for the home-wide Developer
+    // Mode flag OR an Installer/Developer-role account (§8 role-driven UI).
+    final role = ref.watch(userRoleProvider).valueOrNull;
+    final devMode = (ref.watch(devModeProvider).valueOrNull ?? false) || role == 'installer' || role == 'developer';
     return Card(
       child: ExpansionTile(
         leading: Container(width: 10, height: 10, decoration: BoxDecoration(

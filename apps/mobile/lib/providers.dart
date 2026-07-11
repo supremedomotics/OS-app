@@ -296,6 +296,20 @@ final devModeProvider = FutureProvider<bool>((ref) async {
   return service?['devMode'] == true;
 });
 
+/// The signed-in user's role (§8) — Installer, Developer, Homeowner, etc. Drives which
+/// destinations/controls are visible, alongside the Developer Mode license flag above.
+final userRoleProvider = FutureProvider<String?>((ref) async {
+  final me = await ref.watch(meProvider.future);
+  return me['userType'] as String?;
+});
+
+/// True for the home's Super Administrator / Administrator — the only roles that manage
+/// other accounts (§8 "Settings → People").
+final isAdminProvider = FutureProvider<bool>((ref) async {
+  final role = await ref.watch(userRoleProvider.future);
+  return role == 'master' || role == 'admin';
+});
+
 /// The unified driver registry (every driver + install state + config schema).
 final driverRegistryProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {

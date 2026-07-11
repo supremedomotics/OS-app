@@ -83,8 +83,10 @@ class DashboardScreen extends ConsumerWidget {
       score = sc < 0 ? 0 : sc;
     }
     // "My Home", not a system dashboard (§ Project Aurelia): operational telemetry is gated to
-    // Developer/Installer mode; the homeowner sees a calm home screen.
-    final devMode = ref.watch(devModeProvider).valueOrNull ?? false;
+    // Developer/Installer mode (the home-wide license flag) OR an account whose role is
+    // specifically Installer/Developer (§8 role-driven UI); the homeowner sees a calm home screen.
+    final role = ref.watch(userRoleProvider).valueOrNull;
+    final devMode = (ref.watch(devModeProvider).valueOrNull ?? false) || role == 'installer' || role == 'developer';
     final usage = ref.read(usageProvider.notifier);
     final allRooms = ref.watch(homeProvider).valueOrNull?.rooms ?? const <Room>[];
     final rooms = [...allRooms]..sort((a, b) => usage.count('room', b.id).compareTo(usage.count('room', a.id)));

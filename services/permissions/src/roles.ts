@@ -1,9 +1,9 @@
 import type { Action, ResourceType, UserType } from "@supreme/domain-model";
 
 /**
- * RBAC baseline (§8). Each of the 7 user types seeds a baseline set of allowed
- * (resourceType, action) pairs. Fine-grained, per-resource and time-bound rules
- * are layered on top as ABAC grants (see policy.ts).
+ * RBAC baseline (§8). Each user type seeds a baseline set of allowed (resourceType,
+ * action) pairs. Fine-grained, per-resource and time-bound rules are layered on top as
+ * ABAC grants (see policy.ts).
  *
  * Baselines are intentionally coarse: they answer "can this kind of user ever do
  * this kind of thing?". Narrowing to specific rooms/devices/time windows is the
@@ -90,11 +90,23 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     integration: ["view"],
     camera: ["view"],
   },
+  developer: {
+    // Same shape as installer (full build/debug access to everything except home
+    // settings and user administration) — a developer needs to create/inspect/tear
+    // down devices, scenes, automations and integrations while building or diagnosing
+    // drivers, but never manages other accounts.
+    room: ALL,
+    device: ALL,
+    scene: ALL,
+    automation: ALL,
+    integration: ALL,
+    camera: ALL,
+  },
 };
 
 /**
- * The roles offered in the "Create New User" UI (spec's 7), in presentation order, with
- * display labels mapped onto the internal {@link UserType} keys. Drives GET /v1/roles.
+ * The roles offered in the "Create New User" UI, in presentation order, with display
+ * labels mapped onto the internal {@link UserType} keys. Drives GET /v1/roles.
  */
 export const ASSIGNABLE_ROLES = [
   { key: "master", label: "Super Administrator", description: "Full control of the entire system." },
@@ -103,6 +115,7 @@ export const ASSIGNABLE_ROLES = [
   { key: "family", label: "Family Member", description: "Control rooms and devices; create scenes." },
   { key: "guest", label: "Guest", description: "Limited, often time-bound access to shared spaces." },
   { key: "installer", label: "Installer", description: "Commission devices and integrations; no user administration." },
+  { key: "developer", label: "Developer", description: "Diagnostics and protocol/driver tooling; no user administration." },
   { key: "service_engineer", label: "Service Engineer", description: "Diagnostics and maintenance access." },
 ] as const satisfies ReadonlyArray<{ key: UserType; label: string; description: string }>;
 

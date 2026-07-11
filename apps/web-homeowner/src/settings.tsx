@@ -29,15 +29,19 @@ import {
  */
 type SettingsPage = { id: string; label: string; icon: string; hint: string; el: React.ReactNode };
 
-export function ThemeSettings() {
+export function ThemeSettings({ role }: { role?: string | null } = {}) {
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState("");
+
+  // Only the home's Super Administrator / Administrator manage other accounts.
+  const isAdmin = role === "master" || role === "admin";
 
   // Extensions, Developer & Notifications are now top-level navigation destinations, so they're no
   // longer here.
   const pages: SettingsPage[] = [
     { id: "appearance", label: "Appearance", icon: "◐", hint: "Theme & accent", el: <AppearanceSettings /> },
     { id: "homes", label: "Homes", icon: "⌂", hint: "Switch or add a home", el: <HomesSettings /> },
+    ...(isAdmin ? [{ id: "people", label: "People", icon: "◈", hint: "Add users & assign roles", el: <PeopleSettings /> }] : []),
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
     { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
@@ -394,6 +398,199 @@ function AccountSettings() {
 
       <DeleteAccount />
     </section>
+  );
+}
+
+type PersonRole = { key: string; label: string; description: string };
+type Person = {
+  id: string;
+  email: string;
+  displayName: string;
+  userType: string;
+  status: "active" | "suspended" | "expired";
+  emailVerified: boolean;
+};
+
+/** Human label for a role key, falling back to the raw key if the roles list hasn't loaded yet. */
+function roleLabel(roles: PersonRole[], key: string): string {
+  return roles.find((r) => r.key === key)?.label ?? key;
+}
+
+/**
+ * Settings → People (§8 "admin account settings"): the master/admin's user-management
+ * screen — list every account in the home, create a new one, and assign its role
+ * (Installer, Developer, Homeowner, …). Role changes here are what drive the rest of the
+ * app's role-adaptive UI (see App.tsx) for that account's next sign-in.
+ */
+function PeopleSettings() {
+  const [people, setPeople] = useState<Person[] | null>(null);
+  const [roles, setRoles] = useState<PersonRole[]>([]);
+  const [selfId, setSelfId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  async function load() {
+    try {
+      const [userList, roleList, me] = await Promise.all([client.listUsers(), client.roles(), client.me()]);
+      setPeople(userList.users as Person[]);
+      setRoles(roleList.roles);
+      setSelfId(me.user.id);
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not load users." });
+    }
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function changeRole(id: string, userType: string) {
+    setBusyId(id); setMsg(null);
+    try {
+      await client.updateUserRole(id as never, userType as never);
+      await load();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not change the role." });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function toggleStatus(p: Person) {
+    setBusyId(p.id); setMsg(null);
+    try {
+      if (p.status === "suspended") await client.reactivateUser(p.id as never);
+      else await client.suspendUser(p.id as never);
+      await load();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not update the account." });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(p: Person) {
+    if (!confirm(`Remove ${p.displayName} (${p.email})? This can't be undone.`)) return;
+    setBusyId(p.id); setMsg(null);
+    try {
+      await client.deleteUser(p.id as never);
+      await load();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not remove the user." });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">People</h2>
+      <p className="muted">Everyone with access to this home, and what they can do. Assign a role to change what
+        someone sees and controls across web, tablet and mobile.</p>
+
+      {!showCreate ? (
+        <button className="primary" onClick={() => setShowCreate(true)} style={{ marginTop: 10 }}>+ Create user</button>
+      ) : (
+        <CreateUserForm
+          roles={roles}
+          onDone={() => { setShowCreate(false); void load(); }}
+          onCancel={() => setShowCreate(false)}
+        />
+      )}
+
+      {msg && <p className={msg.ok ? "muted" : "err"} style={{ marginTop: 10 }}>{msg.text}</p>}
+
+      <div className="sess-list" style={{ marginTop: 14 }}>
+        {people === null && <p className="muted">Loading…</p>}
+        {people?.length === 0 && <p className="muted">No other users yet.</p>}
+        {people?.map((p) => {
+          const isSelf = p.id === selfId;
+          const isMaster = p.userType === "master";
+          const busy = busyId === p.id;
+          return (
+            <div key={p.id} className="sess-row">
+              <span className="sess-ic">{isMaster ? "★" : "◇"}</span>
+              <span className="sess-meta">
+                <span className="sess-name">
+                  {p.displayName}
+                  {isSelf && <span className="chip"> You</span>}
+                  {p.status === "suspended" && <span className="tag" style={{ color: "var(--aureon-color-status-warning)", borderColor: "color-mix(in srgb, var(--aureon-color-status-warning) 45%, transparent)" }}> Suspended</span>}
+                  {p.status === "expired" && <span className="tag soft"> Expired</span>}
+                </span>
+                <span className="sess-sub">{p.email}{!p.emailVerified ? " · unverified" : ""}</span>
+              </span>
+              <select
+                aria-label={`Role for ${p.displayName}`}
+                value={p.userType}
+                disabled={isMaster || isSelf || busy}
+                onChange={(e) => void changeRole(p.id, e.target.value)}
+                title={isMaster ? "The Super Administrator's role can't be changed" : isSelf ? "You can't change your own role" : `Assign a role — ${roleLabel(roles, p.userType)}`}
+              >
+                {(isMaster ? [{ key: "master", label: "Super Administrator", description: "" }] : roles.filter((r) => r.key !== "master")).map((r) => (
+                  <option key={r.key} value={r.key}>{r.label}</option>
+                ))}
+              </select>
+              {!isMaster && !isSelf && (
+                <>
+                  <button disabled={busy} onClick={() => void toggleStatus(p)}>
+                    {p.status === "suspended" ? "Reactivate" : "Suspend"}
+                  </button>
+                  <button className="danger" disabled={busy} onClick={() => void remove(p)}>Remove</button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** The "Create User" form (§8): sets an initial password and role directly — no separate
+ * invite/accept step. The new user must still verify their email. */
+function CreateUserForm({ roles, onDone, onCancel }: { roles: PersonRole[]; onDone: () => void; onCancel: () => void }) {
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [userType, setUserType] = useState("homeowner");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const assignable = roles.filter((r) => r.key !== "master");
+
+  async function create() {
+    setErr(null);
+    if (!email.trim() || !displayName.trim()) return setErr("Name and email are required.");
+    if (password.length < 8) return setErr("Password must be at least 8 characters.");
+    setBusy(true);
+    try {
+      await client.createUser({ email: email.trim(), password, displayName: displayName.trim(), userType: userType as never, expiresAt: null });
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not create the user.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card-section" style={{ marginTop: 10, padding: 14 }}>
+      <p className="opt-label" style={{ marginTop: 0 }}>New user</p>
+      <input placeholder="Full name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+      <div className="field-gap" />
+      <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <div className="field-gap" />
+      <PasswordInput value={password} onChange={setPassword} placeholder="Initial password (min 8 characters)" />
+      <div className="field-gap" />
+      <label className="opt-label" htmlFor="new-user-role">Role</label>
+      <select id="new-user-role" value={userType} onChange={(e) => setUserType(e.target.value)}>
+        {assignable.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+      </select>
+      {userType && <p className="muted" style={{ fontSize: 12 }}>{assignable.find((r) => r.key === userType)?.description}</p>}
+      {err && <p className="err">{err}</p>}
+      <div className="dev-row2" style={{ marginTop: 10 }}>
+        <button className="primary" disabled={busy} onClick={create}>{busy ? "Creating…" : "Create user"}</button>
+        <button disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
   );
 }
 

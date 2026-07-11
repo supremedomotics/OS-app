@@ -55,6 +55,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   void _showMore() {
     final devMode = ref.read(devModeProvider).valueOrNull ?? false;
+    // The Developer destination shows for either the home-wide Developer Mode license
+    // flag OR an account whose role is specifically "Developer" (§8 role-driven UI).
+    final role = ref.read(userRoleProvider).valueOrNull;
+    final showDeveloper = devMode || role == 'developer';
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -72,7 +76,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             (Icons.insights_outlined, 'Smart', const IntelligenceScreen()),
             (Icons.bolt_outlined, 'Energy', const EnergyScreen()),
             (Icons.notifications_outlined, 'Alerts', const AlertsScreen()),
-            if (devMode) (Icons.code, 'Developer', const DeveloperScreen()),
+            if (showDeveloper) (Icons.code, 'Developer', const DeveloperScreen()),
           ])
             ListTile(
               leading: Icon(icon),

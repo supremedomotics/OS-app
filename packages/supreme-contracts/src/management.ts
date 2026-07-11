@@ -57,6 +57,13 @@ export type CreateUserRequest = z.infer<typeof CreateUserRequest>;
 export const UserResponse = z.object({ user: User });
 export type UserResponse = z.infer<typeof UserResponse>;
 
+/** Change an existing user's role (master/admin flow) — "master" is rejected here since
+ * it can never be assigned or reassigned, only set once at commissioning. */
+export const UpdateUserRoleRequest = z.object({
+  userType: UserType.exclude(["master"]),
+});
+export type UpdateUserRoleRequest = z.infer<typeof UpdateUserRoleRequest>;
+
 // ── Account self-service (§ Authentication / Security Center) ─────────────────
 
 /** Change the signed-in user's email/username. Requires the current password (re-auth). */

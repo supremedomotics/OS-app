@@ -10,6 +10,7 @@ import 'add_home_screen.dart';
 import 'advanced_settings_screen.dart';
 import 'audit_screen.dart';
 import 'backup_screen.dart';
+import 'people_screen.dart';
 import 'security_sessions_screen.dart';
 import 'software_update_screen.dart';
 
@@ -23,6 +24,8 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(themeModeProvider);
     final accent = ref.watch(accentProvider);
+    // Only the home's Super Administrator / Administrator manage other accounts (§8).
+    final isAdmin = ref.watch(isAdminProvider).valueOrNull ?? false;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -60,6 +63,17 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: AureonSpacing.xl),
           Text('System', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: AureonSpacing.sm),
+          if (isAdmin)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.people_outline),
+              title: const Text('People'),
+              subtitle: const Text('Add users & assign roles'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const PeopleScreen()),
+              ),
+            ),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.tune_outlined),

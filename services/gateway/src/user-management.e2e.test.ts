@@ -42,7 +42,7 @@ describe("User management + password reset", () => {
       body: JSON.stringify(body),
     });
 
-  it("exposes the 7 assignable roles for the create-user form", async () => {
+  it("exposes the assignable roles for the create-user form", async () => {
     const res = await fetch(`${baseUrl}/v1/roles`, { headers: { authorization: `Bearer ${ownerToken}` } });
     expect(res.status).toBe(200);
     const keys = ((await res.json()) as { roles: { key: string; label: string }[] }).roles.map((r) => r.key);
@@ -53,6 +53,7 @@ describe("User management + password reset", () => {
       "family",
       "guest",
       "installer",
+      "developer",
       "service_engineer",
     ]);
   });
@@ -70,6 +71,39 @@ describe("User management + password reset", () => {
     );
     expect(res.status).toBe(201);
     expect(((await res.json()) as { user: { userType: string } }).user.userType).toBe("homeowner");
+  });
+
+  it("changes a user's role (e.g. to Installer or Developer) via PATCH /v1/users/:id/role", async () => {
+    const created = await post(
+      "/v1/users",
+      { email: "role-target@supreme.local", password: "initial-pass-123", displayName: "Role Target", userType: "homeowner" },
+      ownerToken,
+    );
+    const userId = ((await created.json()) as { user: { id: string } }).user.id;
+
+    const toInstaller = await fetch(`${baseUrl}/v1/users/${userId}/role`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ userType: "installer" }),
+    });
+    expect(toInstaller.status).toBe(200);
+    expect(((await toInstaller.json()) as { user: { userType: string } }).user.userType).toBe("installer");
+
+    const toDeveloper = await fetch(`${baseUrl}/v1/users/${userId}/role`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ userType: "developer" }),
+    });
+    expect(toDeveloper.status).toBe(200);
+    expect(((await toDeveloper.json()) as { user: { userType: string } }).user.userType).toBe("developer");
+
+    // Promotion to master is rejected by the request schema itself.
+    const toMaster = await fetch(`${baseUrl}/v1/users/${userId}/role`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ userType: "master" }),
+    });
+    expect(toMaster.status).toBe(422);
   });
 
   it("resets only the Supreme password via forgot → reset", async () => {

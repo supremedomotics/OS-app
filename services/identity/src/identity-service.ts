@@ -739,6 +739,25 @@ export class IdentityService {
   }
 
   /**
+   * Change a user's role (master/admin flow, §8) — whether they sign in as an Installer,
+   * a Developer, a Homeowner, etc. The master (home owner) account can never be
+   * re-typed away from "master" (there must always be exactly one, set at
+   * commissioning), and no other account can be promoted TO "master" through this path.
+   */
+  async updateUserRole(id: UserId, userType: UserType): Promise<User> {
+    const user = await this.getUser(id);
+    if (user.userType === "master") {
+      throw new SupremeError("conflict", "the master account's role cannot be changed");
+    }
+    if (userType === "master") {
+      throw new SupremeError("validation_failed", "a user cannot be promoted to master — there can only be one");
+    }
+    const next: User = { ...user, userType };
+    await this.store.putUser(next);
+    return next;
+  }
+
+  /**
    * Proactively expire time-limited users whose `expiresAt` has passed (§8). The policy engine
    * already DENIES their actions, but until their status flips they can still authenticate and hold
    * a session — so flipping `active → expired` moves enforcement to the auth layer (their tokens

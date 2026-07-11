@@ -45,6 +45,9 @@ import {
   type BackupList,
   type BackupHistoryEntry,
   type BackupScheduleResponse,
+  type CreateUserRequest,
+  type UserList,
+  type UserResponse,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -56,6 +59,7 @@ import type {
   ProtocolKind,
   RoomId,
   UserId,
+  UserType,
 } from "@supreme/domain-model";
 
 /** One HVAC schedule event (§ HVAC Detail Page "Schedule") — mirrors
@@ -209,6 +213,37 @@ export class SupremeClient {
   /** Delete the signed-in user's own account (re-auth with the current password). */
   async deleteAccount(currentPassword: string): Promise<void> {
     await this.request("DELETE", "/v1/me", { currentPassword });
+  }
+
+  // ── User management (master/admin — §8 "Settings → People") ─────────────────
+  /** The roles offered in the "Create New User" form, with display labels/descriptions. */
+  async roles(): Promise<{ roles: { key: UserType; label: string; description: string }[] }> {
+    return this.request("GET", "/v1/roles") as Promise<{ roles: { key: UserType; label: string; description: string }[] }>;
+  }
+
+  /** List every user in the home (master/admin). */
+  async listUsers(): Promise<UserList> {
+    return this.request("GET", "/v1/users") as Promise<UserList>;
+  }
+
+  /** Create a new user with an initial password + role (master/admin). */
+  async createUser(input: CreateUserRequest): Promise<UserResponse> {
+    return this.request("POST", "/v1/users", input) as Promise<UserResponse>;
+  }
+
+  /** Change an existing user's role — Installer, Developer, Homeowner, etc. (master/admin). */
+  async updateUserRole(userId: UserId, userType: UserType): Promise<UserResponse> {
+    return this.request("PATCH", `/v1/users/${userId}/role`, { userType }) as Promise<UserResponse>;
+  }
+
+  /** Suspend a user, immediately revoking their access (master/admin). */
+  async suspendUser(userId: UserId): Promise<UserResponse> {
+    return this.request("POST", `/v1/users/${userId}/suspend`) as Promise<UserResponse>;
+  }
+
+  /** Reactivate a suspended user (master/admin). */
+  async reactivateUser(userId: UserId): Promise<UserResponse> {
+    return this.request("POST", `/v1/users/${userId}/reactivate`) as Promise<UserResponse>;
   }
 
   /** Delete another user by id (admin/owner). The master account is protected server-side. */

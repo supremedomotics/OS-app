@@ -2,6 +2,7 @@ import {
   CreateGrantRequest,
   CreateUserRequest,
   SupremeError,
+  UpdateUserRoleRequest,
   type GrantList,
   type GrantResponse,
   type UserList,
@@ -68,6 +69,22 @@ export function registerUserRoutes(app: FastifyInstance, ctx: AppContext): void 
       const actor = await authenticate(ctx, req);
       await enforce(ctx, actor, "user", req.params.id, "admin");
       const user = await ctx.identity.setUserStatus(req.params.id as UserId, "active");
+      const body: UserResponse = { user };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Change a user's role (admin) — Installer, Developer, Homeowner, etc. The master
+  // account can't be re-typed, and no one can be promoted TO master (enforced in the
+  // service + the request schema, respectively).
+  app.patch<{ Params: { id: string } }>("/v1/users/:id/role", async (req, reply) => {
+    try {
+      const actor = await authenticate(ctx, req);
+      await enforce(ctx, actor, "user", req.params.id, "admin");
+      const input = UpdateUserRoleRequest.parse(req.body);
+      const user = await ctx.identity.updateUserRole(req.params.id as UserId, input.userType);
       const body: UserResponse = { user };
       reply.send(body);
     } catch (err) {

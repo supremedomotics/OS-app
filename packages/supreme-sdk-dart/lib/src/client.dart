@@ -195,6 +195,72 @@ class SupremeClient {
     _ensureOk(res);
   }
 
+  // ── User management (master/admin — §8 "Settings → People") ─────────────────
+
+  /// The roles offered in the "Create New User" form, with display labels/descriptions.
+  Future<List<Map<String, dynamic>>> roles() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/roles'), headers: _authHeaders);
+    _ensureOk(res);
+    final roles = (jsonDecode(res.body) as Map<String, dynamic>)['roles'] as List<dynamic>;
+    return roles.cast<Map<String, dynamic>>();
+  }
+
+  /// List every user in the home (master/admin).
+  Future<List<Map<String, dynamic>>> listUsers() async {
+    final res = await _http.get(Uri.parse('$baseUrl/v1/users'), headers: _authHeaders);
+    _ensureOk(res);
+    final users = (jsonDecode(res.body) as Map<String, dynamic>)['users'] as List<dynamic>;
+    return users.cast<Map<String, dynamic>>();
+  }
+
+  /// Create a new user with an initial password + role (master/admin).
+  Future<Map<String, dynamic>> createUser({
+    required String email,
+    required String password,
+    required String displayName,
+    required String userType,
+    String? expiresAt,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/users'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'email': email,
+        'password': password,
+        'displayName': displayName,
+        'userType': userType,
+        'expiresAt': expiresAt,
+      }),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
+  /// Change an existing user's role — Installer, Developer, Homeowner, etc. (master/admin).
+  Future<Map<String, dynamic>> updateUserRole(String userId, String userType) async {
+    final res = await _http.patch(
+      Uri.parse('$baseUrl/v1/users/$userId/role'),
+      headers: _authHeaders,
+      body: jsonEncode({'userType': userType}),
+    );
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
+  /// Suspend a user, immediately revoking their access (master/admin).
+  Future<Map<String, dynamic>> suspendUser(String userId) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/users/$userId/suspend'), headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
+  /// Reactivate a suspended user (master/admin).
+  Future<Map<String, dynamic>> reactivateUser(String userId) async {
+    final res = await _http.post(Uri.parse('$baseUrl/v1/users/$userId/reactivate'), headers: _authHeaders);
+    _ensureOk(res);
+    return (jsonDecode(res.body) as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+  }
+
   /// Delete another user by id (admin/owner). The master account is protected server-side.
   Future<void> deleteUser(String userId) async {
     final res = await _http.delete(Uri.parse('$baseUrl/v1/users/$userId'), headers: _authHeaders);

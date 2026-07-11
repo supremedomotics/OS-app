@@ -18,7 +18,7 @@ import { PolicyEngine } from "./policy.js";
  * action, and pins critical privilege-escalation negatives.
  */
 const engine = new PolicyEngine();
-const USER_TYPES: UserType[] = ["master", "admin", "family", "child", "guest", "staff", "installer"];
+const USER_TYPES: UserType[] = ["master", "admin", "family", "child", "guest", "staff", "installer", "developer"];
 const RESOURCES: ResourceType[] = ["room", "device", "scene", "automation", "camera", "integration", "user", "home"];
 const ACTIONS: Action[] = ["view", "control", "create", "update", "delete", "admin"];
 
@@ -67,7 +67,7 @@ describe("Authorization matrix — baseline RBAC", () => {
       expect(engine.decide({ user: user(ut), resourceType: resource, resourceId: null, action }, []).allowed, `${ut} !${action} ${resource}`).toBe(false);
 
     // Non-admins cannot administer users or the home.
-    for (const ut of ["family", "child", "guest", "staff", "installer"] as UserType[]) {
+    for (const ut of ["family", "child", "guest", "staff", "installer", "developer"] as UserType[]) {
       deny(ut, "user", "admin");
       deny(ut, "user", "create");
       deny(ut, "home", "admin");
@@ -78,6 +78,8 @@ describe("Authorization matrix — baseline RBAC", () => {
     deny("staff", "scene", "delete");
     // Installers manage integrations but are not user admins.
     deny("installer", "user", "admin");
+    // Developers get full build/debug access but are not user admins either.
+    deny("developer", "user", "admin");
   });
 
   it("confirms the intended positives for each tier", () => {
@@ -87,6 +89,7 @@ describe("Authorization matrix — baseline RBAC", () => {
     allow("master", "user", "admin");
     allow("admin", "device", "delete");
     allow("installer", "integration", "admin");
+    allow("developer", "integration", "admin");
     allow("family", "scene", "create");
     allow("guest", "device", "control");
     allow("child", "room", "view");

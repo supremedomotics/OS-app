@@ -5,7 +5,7 @@ import { GrantId, HomeId, UserId } from "./ids.js";
  * Supreme identity & permission model (§8).
  *
  * HA users are NOT the user model. The hub provisions a single internal HA service
- * account; every Supreme user maps through the permission layer. The 7 user types
+ * account; every Supreme user maps through the permission layer. The user types below
  * seed baseline roles, and fine-grained grants overlay via an ABAC model
  * (resource + action + time window + schedule).
  */
@@ -20,6 +20,7 @@ export const UserType = z.enum([
   "staff",
   "installer", // Installer — commissioning, no user administration
   "service_engineer", // Service Engineer — diagnostics / maintenance
+  "developer", // Developer — diagnostics + protocol/driver tooling, no user administration
 ]);
 export type UserType = z.infer<typeof UserType>;
 

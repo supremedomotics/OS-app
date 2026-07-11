@@ -361,6 +361,27 @@ describe("account self-service (change email + delete)", () => {
   });
 });
 
+describe("role assignment (master/admin flow)", () => {
+  it("changes a non-master user's role, protects the master, and rejects promotion to master", async () => {
+    const s = svc();
+    const { home, master } = await s.commission({ homeName: "Penthouse", email: "owner@example.com", password: "owner-password-123", displayName: "Owner" });
+    const user = await s.createUser({ homeId: home.id, email: "u@example.com", password: "user-password-123", displayName: "U", userType: "homeowner", expiresAt: null });
+
+    const updated = await s.updateUserRole(user.id, "installer");
+    expect(updated.userType).toBe("installer");
+    const reRead = await s.getUser(user.id);
+    expect(reRead.userType).toBe("installer");
+
+    // A user can be re-typed to developer too — the new role.
+    const asDeveloper = await s.updateUserRole(user.id, "developer");
+    expect(asDeveloper.userType).toBe("developer");
+
+    // The master's role can never be changed, and no one can be promoted to master.
+    await expect(s.updateUserRole(master.id, "admin")).rejects.toThrow(/master account's role cannot be changed/);
+    await expect(s.updateUserRole(user.id, "master")).rejects.toThrow(/cannot be promoted to master/);
+  });
+});
+
 describe("Security Center — sessions & remote logout", () => {
   it("lists sessions with capture metadata, flags the current one, and revokes remotely", async () => {
     const s = svc();
