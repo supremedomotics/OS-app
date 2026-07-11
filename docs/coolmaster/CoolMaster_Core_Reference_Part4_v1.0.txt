@@ -1,0 +1,257 @@
+CoolMaster_Core_Reference_Part4_v1.0
+
+HVAC Commands Reference
+
+Purpose: This document defines the HVAC control commands exposed by the
+CoolMaster ASCII_IF protocol and their recommended implementation in
+Supreme OS.
+
+  NOTE: Populate every section with the official PRM syntax, parameters,
+  examples, return values, and restrictions during implementation
+  review. This document provides the implementation framework.
+
+------------------------------------------------------------------------
+
+Command Template
+
+Each command should be documented using:
+
+-   Purpose
+-   Syntax
+-   Parameters
+-   Supported HVAC brands
+-   Success response
+-   Error responses
+-   Related REST endpoint
+-   Supreme OS mapping
+-   TypeScript implementation notes
+
+------------------------------------------------------------------------
+
+1. on
+
+Turn a specific indoor unit ON.
+
+Supreme OS: - climate.turn_on()
+
+------------------------------------------------------------------------
+
+2. allon
+
+Turn all matching indoor units ON.
+
+Supreme OS: - Bulk action
+
+------------------------------------------------------------------------
+
+3. off
+
+Turn indoor unit OFF.
+
+Supreme OS: - climate.turn_off()
+
+------------------------------------------------------------------------
+
+4. alloff
+
+Turn all matching indoor units OFF.
+
+------------------------------------------------------------------------
+
+5. cool
+
+Set cooling mode.
+
+Entity: HVACMode.COOL
+
+------------------------------------------------------------------------
+
+6. heat
+
+Set heating mode.
+
+Entity: HVACMode.HEAT
+
+------------------------------------------------------------------------
+
+7. fan
+
+Fan only mode.
+
+Entity: HVACMode.FAN_ONLY
+
+------------------------------------------------------------------------
+
+8. dry
+
+Dry / Dehumidify mode.
+
+Entity: HVACMode.DRY
+
+------------------------------------------------------------------------
+
+9. auto
+
+Automatic operating mode.
+
+Entity: HVACMode.AUTO
+
+------------------------------------------------------------------------
+
+10. temp
+
+Target temperature.
+
+Validation: - Honor supported range. - Honor Celsius/Fahrenheit.
+
+------------------------------------------------------------------------
+
+11. feed
+
+Ambient temperature feed.
+
+Implementation: Only expose if supported.
+
+------------------------------------------------------------------------
+
+12. fspeed
+
+Fan speed.
+
+Map: Auto Low Medium High Turbo (where supported)
+
+------------------------------------------------------------------------
+
+13. swing
+
+Support: - Auto - Vertical - Horizontal - Fixed positions -
+Manufacturer-specific values
+
+------------------------------------------------------------------------
+
+14. filt
+
+Filter state.
+
+Expose: - Binary Sensor - Maintenance indicator
+
+------------------------------------------------------------------------
+
+15. stat
+
+Immediate status query.
+
+Should refresh entity state.
+
+------------------------------------------------------------------------
+
+16. ls
+
+Basic indoor unit listing.
+
+Use for discovery and polling.
+
+------------------------------------------------------------------------
+
+17. ls2
+
+Extended JSON status.
+
+Preferred for REST polling.
+
+Expose: - UID - Power - Setpoint - Room temperature - Fan speed - Mode -
+Filter - Demand - Fault
+
+------------------------------------------------------------------------
+
+18. query
+
+Retrieve detailed information.
+
+------------------------------------------------------------------------
+
+19. wh
+
+Water heater.
+
+Expose separate climate/water-heater entity.
+
+------------------------------------------------------------------------
+
+20. main
+
+Main controller command.
+
+Implement if supported by installation.
+
+------------------------------------------------------------------------
+
+21. vam
+
+Ventilation unit.
+
+Create dedicated ventilation entity.
+
+------------------------------------------------------------------------
+
+22. lock
+
+Lock indoor controls.
+
+Binary feature.
+
+------------------------------------------------------------------------
+
+23. inhibit
+
+Inhibit user operation.
+
+Installer feature.
+
+------------------------------------------------------------------------
+
+24. group
+
+Create and control indoor unit groups.
+
+Support: - Discovery - Commands - State aggregation
+
+------------------------------------------------------------------------
+
+25. va
+
+Virtual Address support.
+
+Maintain persistent mapping.
+
+------------------------------------------------------------------------
+
+Polling Strategy
+
+High priority: - ls2 - stat - fault - demand
+
+Medium: - filter - group
+
+Low: - configuration
+
+------------------------------------------------------------------------
+
+Supreme OS Entity Mapping
+
+Climate Target Temperature Current Temperature Mode Fan Speed Swing
+Demand Filter Fault Online Status Runtime Water Heater Ventilation
+
+------------------------------------------------------------------------
+
+Driver Notes
+
+-   Queue commands.
+-   Debounce repeated writes.
+-   Cache unchanged state.
+-   Retry transient failures.
+-   Reconnect automatically.
+-   Log protocol errors.
+-   Validate every command before transmission.
+-   Preserve manufacturer-specific capabilities.
+
+End of Part 4.

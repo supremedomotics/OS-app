@@ -1,0 +1,76 @@
+CoolMaster_Core_Reference_v1.0
+
+Part 2 – Detailed Command Coverage & Driver Mapping
+
+This companion document expands the protocol reference with
+implementation-oriented details.
+
+1. Driver Initialization Sequence
+
+1.  Open TCP connection (ASCII_IF) or REST session.
+2.  Verify device connectivity.
+3.  Read firmware, serial number and configuration.
+4.  Read HVAC line configuration.
+5.  Discover all indoor units.
+6.  Build Supreme OS entity database.
+7.  Start state synchronization.
+8.  Enter normal polling/event loop.
+
+2. Discovery Workflow
+
+Collect: - Device serial number - Firmware version - HVAC line type -
+Indoor Unit UID - Manufacturer - Group membership - Water heater
+capability - Ventilation capability - Available operating modes
+
+3. Recommended Entity Model
+
+Gateway ├── HVAC Line │ ├── Indoor Unit │ │ ├── Climate │ │ ├──
+Temperature │ │ ├── Demand │ │ ├── Filter │ │ ├── Fault │ │ └──
+Connectivity
+
+4. HVAC Command Mapping
+
+Each command should expose: - Purpose - Required parameters - Optional
+parameters - Validation - Expected response - Retry behaviour - Supreme
+OS service mapping
+
+Commands include: on, off, allon, alloff, cool, heat, fan, dry, auto,
+temp, feed, fspeed, swing, filt, stat, ls, ls2, query, group, lock,
+inhibit, main, vam, wh, va.
+
+5. Polling Recommendations
+
+Fast-changing: - Operating state - Temperature - Faults
+
+Slow-changing: - Configuration - Line information - Firmware
+
+Avoid unnecessary polling when state is unchanged.
+
+6. Error Recovery
+
+Recover automatically from: - TCP disconnect - REST timeout - Invalid
+responses - Unsupported command - HVAC communication errors - Temporary
+gateway restart
+
+7. Logging
+
+Log: - Discovery - Commands - Responses - Errors - Recovery - Reconnects
+
+8. Testing Matrix
+
+Verify: - Discovery - Every HVAC command - Every supported mode - Fan
+speeds - Swing - Filter warnings - Fault reporting - Gateway reconnect -
+Multi-line systems - Multi-manufacturer systems
+
+9. Future Extensions
+
+-   Event-driven updates
+-   Energy meter association
+-   Runtime analytics
+-   Multi-gateway support
+-   Diagnostics dashboard
+-   AI fault analysis
+
+NOTE: Populate this document with every command-specific implementation
+note extracted from the official PRM and REST specification as
+development progresses.

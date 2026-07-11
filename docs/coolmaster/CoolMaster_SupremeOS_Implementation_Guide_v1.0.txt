@@ -1,0 +1,35 @@
+CoolMaster_SupremeOS_Implementation_Guide_v1.0
+
+Implementation guide for a native Supreme OS CoolMaster driver.
+
+Table of Contents
+
+1.  Driver Goals
+2.  Folder Structure
+3.  Driver Lifecycle
+4.  Configuration
+5.  Authentication / Connection
+6.  Discovery Engine
+7.  Entity Mapping
+8.  Command Queue
+9.  Polling Strategy
+10. State Cache
+11. Event System
+12. Climate Entity Implementation
+13. Sensors
+14. Error Handling
+15. Retry / Reconnect
+16. Logging
+17. Performance
+18. Testing
+19. Deployment
+20. Future Enhancements
+
+Suggested folders:
+
+drivers/ coolmaster/ index.ts client.ts connection.ts discovery.ts
+parser.ts commands.ts entities.ts polling.ts mapper.ts cache.ts
+events.ts errors.ts types.ts constants.ts utils.ts
+
+Each chapter should map the official CoolMaster protocol into Supreme OS
+entities and services.

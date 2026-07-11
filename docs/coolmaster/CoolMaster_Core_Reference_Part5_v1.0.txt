@@ -1,0 +1,153 @@
+CoolMaster_Core_Reference_Part5_v1.0
+
+REST API & JSON Reference
+
+Purpose: Reference for implementing the local CoolMaster REST API in
+Supreme OS.
+
+------------------------------------------------------------------------
+
+1. REST Overview
+
+Communication: - HTTP - JSON - Local LAN - Stateless requests
+
+Default REST Port: 10103
+
+Primary API Versions: - v1.0 - v2.0
+
+Preferred: v2.0 (JSON native)
+
+------------------------------------------------------------------------
+
+2. URL Structure
+
+//device//
+
+Examples: - /v2.0/device//ls - /v2.0/device//ls2
+
+Implementation: - Build URLs dynamically. - Validate serial number. -
+Encode parameters.
+
+------------------------------------------------------------------------
+
+3. V1 API
+
+Purpose: Execute ASCII_IF commands through REST.
+
+Typical flow: Request → ASCII_IF → CoolMaster → JSON response
+
+Document: - Request URI - Query parameters - Response object - Exit code
+
+------------------------------------------------------------------------
+
+4. V2 API
+
+Purpose: Native JSON responses.
+
+Primary endpoints: - ls - ls2
+
+Use V2 whenever available.
+
+------------------------------------------------------------------------
+
+5. JSON Objects
+
+Gateway - serial - firmware - version
+
+Indoor Unit - uid - onoff - mode - st - rt - fspeed - filt - dmnd -
+fault
+
+Future revisions should document every field from the official
+specification.
+
+------------------------------------------------------------------------
+
+6. Response Parsing
+
+Validate: - HTTP status - JSON syntax - Exit code - Missing fields -
+Unknown fields
+
+Gracefully ignore unsupported properties.
+
+------------------------------------------------------------------------
+
+7. HTTP Status Codes
+
+Handle: 200 400 403 404 405 413 500 501
+
+Retry only transient failures.
+
+------------------------------------------------------------------------
+
+8. Error Handling
+
+Map: REST Error → Driver Error → Supreme OS Event
+
+Include: - Invalid request - Wrong device - Unsupported API -
+Unsupported command - Timeout - Offline gateway
+
+------------------------------------------------------------------------
+
+9. REST ↔ ASCII Mapping
+
+REST endpoint ↓
+
+ASCII_IF command ↓
+
+Supreme OS service
+
+Maintain a lookup table instead of hardcoded logic.
+
+------------------------------------------------------------------------
+
+10. Polling
+
+Fast: - ls2
+
+Medium: - ls
+
+Slow: - Configuration
+
+Cache unchanged values.
+
+------------------------------------------------------------------------
+
+11. JSON to Entity Mapping
+
+uid -> entity id onoff -> power mode -> hvac mode st -> target
+temperature rt -> current temperature fspeed -> fan speed filt -> filter
+dmnd -> demand fault -> diagnostic entity
+
+------------------------------------------------------------------------
+
+12. TypeScript Models
+
+Create interfaces for: GatewayResponse IndoorUnit ClimateState
+CommandResult ErrorResponse
+
+Avoid using ‘any’.
+
+------------------------------------------------------------------------
+
+13. Driver Recommendations
+
+-   Async/await
+-   Typed models
+-   Connection abstraction
+-   Retry queue
+-   Request timeout
+-   State cache
+-   Structured logging
+-   Automatic recovery
+
+------------------------------------------------------------------------
+
+14. Future Enhancements
+
+-   Batch requests
+-   Event subscriptions (if available)
+-   WebSocket support (if added by vendor)
+-   Metrics collection
+-   Performance profiling
+
+End of Part 5.

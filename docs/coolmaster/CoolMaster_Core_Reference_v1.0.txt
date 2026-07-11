@@ -1,0 +1,74 @@
+CoolMaster_Core_Reference_v1.0
+
+This document is the protocol reference for developing a native
+CoolMaster driver.
+
+Table of Contents
+
+1.  Product Overview
+2.  Supported Products
+3.  Supported HVAC Brands
+4.  Hardware Architecture
+5.  Connectivity
+    -   HVAC Lines
+    -   Ethernet
+    -   RS232
+    -   RS485
+    -   USB
+    -   GPIO
+6.  ASCII_IF Protocol
+    -   Messaging
+    -   Exit Codes
+    -   UID
+    -   UID Strict
+    -   4-Digit UID
+7.  REST API
+    -   Server Configuration
+    -   V1 API
+    -   V2 API
+    -   JSON Models
+8.  Configuration Commands
+    -   set
+    -   line
+    -   ifconfig
+    -   boot
+    -   sddp
+    -   knx
+    -   props
+    -   link
+    -   plug
+    -   ad
+    -   hdl
+    -   gpio
+    -   info
+    -   modbus
+9.  HVAC Commands
+    -   on/off
+    -   allon/alloff
+    -   cool/heat/fan/dry/auto
+    -   temp
+    -   feed
+    -   fspeed
+    -   swing
+    -   filt
+    -   stat
+    -   ls
+    -   ls2
+    -   query
+    -   wh
+    -   main
+    -   vam
+    -   lock
+    -   inhibit
+    -   group
+    -   va
+10. REST ↔ ASCII Mapping
+11. Error Codes
+12. Enumerations
+13. JSON Schemas
+14. Examples
+15. Appendix
+
+NOTE: Populate each chapter from the official PRM and REST specification
+without omitting any command, parameter, example, response field, or
+implementation note.

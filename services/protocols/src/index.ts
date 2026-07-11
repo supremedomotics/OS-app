@@ -143,13 +143,8 @@ export {
   type YamahaZoneEvent,
   type YamahaRequest,
 } from "./yamaha-codec.js";
-export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
-export {
-  parseUnitLine,
-  commandToCoolMaster,
-  temperatureStateFromUnit,
-  type CoolMasterUnit,
-} from "./coolmaster-codec.js";
+// CoolMaster driver export intentionally omitted here — restored once the new native
+// driver (docs/coolmaster/) is built later in this same change.
 export {
   SipProtocolDriver,
   type SipDriverOptions,

@@ -1,0 +1,141 @@
+CoolMaster_Core_Reference_Part3_v1.0
+
+Complete Configuration Commands
+
+Purpose: This document is dedicated to the configuration commands
+documented in the CoolMaster PRM. Each command should eventually
+include: - Purpose - Syntax - Parameters - Valid values - Examples -
+Return values - Error conditions - Supreme OS implementation notes
+
+------------------------------------------------------------------------
+
+Commands Covered
+
+1. set
+
+Configure and query global device settings.
+
+Document: - Firmware version - Serial number - Application string - Baud
+rate - Echo - Verbose mode - ASCII server port - Prompt - Temperature
+units - Melody - Filter visibility - HVAC line limits - MMI lock
+
+Implementation: - Read configuration at startup. - Validate writable
+settings before applying. - Cache read-only properties.
+
+------------------------------------------------------------------------
+
+2. line
+
+Manage HVAC line configuration.
+
+Include: - Line type - Master/slave - Simulation - myID - UART baud -
+Scan - DC Output - SuperLink mode - Statistics - Counters
+
+Implementation: - Discover every active HVAC line. - Ignore unused
+lines. - Store line capabilities.
+
+------------------------------------------------------------------------
+
+3. ifconfig
+
+Network configuration.
+
+Document: - MAC - Link - IP - DHCP - Netmask - Gateway - DNS -
+Enable/Disable Ethernet
+
+Implementation: - Normally read-only from Supreme OS. - Use only during
+commissioning.
+
+------------------------------------------------------------------------
+
+4. boot
+
+Functions: - Reboot - Boot mode
+
+Implementation: - Expose as maintenance action only.
+
+------------------------------------------------------------------------
+
+5. sddp
+
+Control4 discovery.
+
+Functions: - Enable - Disable - Identify - Offline - Alive
+
+------------------------------------------------------------------------
+
+6. knx
+
+KNX configuration.
+
+Document: - Physical address - Groups - Functions - Database allocation
+
+------------------------------------------------------------------------
+
+7. props
+
+Property management.
+
+Document every supported property. Explain visibility behaviour.
+
+------------------------------------------------------------------------
+
+8. link
+
+CoolPlug linking.
+
+Document: - Create - Delete - Update - Validation
+
+------------------------------------------------------------------------
+
+9. plug
+
+CoolPlug management.
+
+------------------------------------------------------------------------
+
+10. ad
+
+Auto-discovery configuration.
+
+------------------------------------------------------------------------
+
+11. hdl
+
+HDL buspro configuration.
+
+------------------------------------------------------------------------
+
+12. gpio
+
+GPIO configuration.
+
+Document: - Inputs - Outputs - ADC - Modes
+
+------------------------------------------------------------------------
+
+13. info
+
+System information.
+
+Collect: - Firmware - Hardware - Device identifiers - Runtime
+information
+
+------------------------------------------------------------------------
+
+14. modbus
+
+Document: - Modbus RTU - Modbus TCP - Addresses - Parameters
+
+------------------------------------------------------------------------
+
+Supreme OS Notes
+
+Configuration commands should be grouped under:
+
+Settings Maintenance Network Diagnostics
+
+End users should never see installer-only commands by default.
+
+Future revisions should expand every command using the official PRM
+examples and parameter tables without omitting any documented option.
