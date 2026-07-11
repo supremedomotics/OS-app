@@ -1425,8 +1425,8 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
    the hero control and field set differ (a temperature dial instead of a volume knob;
    mode/fan/swing instead of input/listening-mode/zone). ─────────────────────────────── */
 .climate-console {
-  display: grid; grid-template-columns: 380px 1fr 320px; grid-template-areas: "main fields info" "mini mini mini";
-  gap: 20px; padding-bottom: 100px; align-items: start; position: relative;
+  display: grid; grid-template-columns: 380px 1fr 320px; grid-template-areas: "main fields info";
+  gap: 20px; padding-bottom: 32px; align-items: start; position: relative;
 }
 .climate-console::before {
   content: ""; position: absolute; z-index: -1; pointer-events: none;
@@ -1436,10 +1436,10 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .climate-main { grid-area: main; display: flex; flex-direction: column; gap: 18px; }
 .climate-fields-col { grid-area: fields; display: flex; flex-direction: column; gap: 18px; }
 @media (max-width: 1200px) {
-  .climate-console { grid-template-columns: 380px 1fr; grid-template-areas: "main fields" "info info" "mini mini"; }
+  .climate-console { grid-template-columns: 380px 1fr; grid-template-areas: "main fields" "info info"; }
 }
 @media (max-width: 900px) {
-  .climate-console { grid-template-columns: 1fr; grid-template-areas: "main" "fields" "info" "mini"; }
+  .climate-console { grid-template-columns: 1fr; grid-template-areas: "main" "fields" "info"; }
 }
 
 .climate-head-card {
@@ -1642,27 +1642,6 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .climate-toggle-knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--aureon-color-text-secondary); transition: transform 0.2s ease, background 0.2s ease; }
 .climate-toggle.on { background: color-mix(in srgb, var(--aureon-color-gold-400) 35%, var(--aureon-color-base-hairline)); }
 .climate-toggle.on .climate-toggle-knob { transform: translateX(18px); background: var(--aureon-color-gold-400); }
-
-.climate-mini {
-  grid-area: mini; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: flex; align-items: center; gap: 14px; padding: 12px 24px;
-  background: color-mix(in srgb, var(--aureon-color-base-surface-raised) 88%, transparent);
-  backdrop-filter: blur(22px) saturate(140%); -webkit-backdrop-filter: blur(22px) saturate(140%);
-  border-top: 1px solid color-mix(in srgb, white 6%, var(--aureon-color-base-hairline) 70%);
-  box-shadow: 0 -16px 32px -20px rgba(0,0,0,0.5);
-}
-.climate-mini-ic { width: 40px; height: 40px; border-radius: 10px; background: var(--aureon-color-base-surface); display: flex; align-items: center; justify-content: center; font-size: 18px; flex: none; }
-.climate-mini-meta { display: flex; flex-direction: column; min-width: 0; flex: 0 1 200px; }
-.climate-mini-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.climate-mini-sub { font-size: 11.5px; color: var(--aureon-color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.climate-mini-transport { display: flex; align-items: center; gap: 10px; flex: none; margin-left: auto; }
-.climate-mini-transport button { width: 30px; height: 30px; border-radius: 50%; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.climate-mini-pp { width: 34px !important; height: 34px !important; border-radius: 50%; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); }
-.climate-mini-pp.on { background: var(--aureon-color-gold-400) !important; border-color: transparent; color: #15161b; }
-.climate-mini-ambient { display: none; font-size: 12px; color: var(--aureon-color-text-secondary); flex: none; }
-@media (min-width: 900px) {
-  .climate-mini-ambient { display: flex; }
-}
 
 /* Settings — consistent building blocks (replaces per-element inline styles). */
 .sec-block { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--aureon-color-base-hairline); }

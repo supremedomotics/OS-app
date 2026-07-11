@@ -313,27 +313,6 @@ function AcInfoCard({
   );
 }
 
-function MiniBar({
-  device, live, onPower, powerOn, onStep,
-}: { device: Device; live: TemperatureStateView; onPower: () => void; powerOn: boolean; onStep: (delta: number) => void }) {
-  const modeMeta = live.mode !== "off" ? MODE_META[live.mode] : null;
-  return (
-    <div className="climate-mini">
-      <div className="climate-mini-ic">{modeMeta?.icon ?? "❄"}</div>
-      <div className="climate-mini-meta">
-        <span className="climate-mini-title">{device.name}</span>
-        <span className="climate-mini-sub">{powerOn ? `${(live.targetC ?? live.ambientC).toFixed(1)}°C · ${modeMeta?.label ?? "Off"}` : "Off"}</span>
-      </div>
-      <div className="climate-mini-transport">
-        <button onClick={() => onStep(-STEP_C)} aria-label="Lower temperature">−</button>
-        <button className={`climate-mini-pp${powerOn ? " on" : ""}`} onClick={onPower}>⏻</button>
-        <button onClick={() => onStep(STEP_C)} aria-label="Raise temperature">+</button>
-      </div>
-      <span className="climate-mini-ambient">{live.ambientC.toFixed(1)}°C room</span>
-    </div>
-  );
-}
-
 export function ClimateConsole({
   device, roomName, onBack, onNavigateDevice, onRemoved, onDeviceUpdated, onOpenSchedule,
 }: {
@@ -502,8 +481,6 @@ export function ClimateConsole({
           onClose={() => setAdvancedOpen(false)}
         />
       )}
-
-      <MiniBar device={device} live={live} powerOn={powerOn} onPower={() => setPower(!powerOn)} onStep={(d) => setTarget(clampC((live.targetC ?? live.ambientC) + d))} />
     </div>
   );
 }

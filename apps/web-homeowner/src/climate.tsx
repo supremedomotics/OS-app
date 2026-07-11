@@ -6,6 +6,7 @@ import { ClimateConsole } from "./climate-console.js";
 import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
+import { useLive } from "./live.js";
 
 /**
  * Climate (§ Navigation → Climate) — the whole-home view of HVAC units: every device the home
@@ -18,8 +19,8 @@ import { EmptyState } from "./empty.js";
  */
 type Room = { id: string; name: string };
 
-function climateSummary(d: Device): string {
-  const s = d.state as Record<string, Record<string, unknown>> | undefined;
+function climateSummary(d: Device, live: Record<string, unknown>): string {
+  const s = { ...d.state, ...live } as Record<string, Record<string, unknown>>;
   const power = s?.onoff as { on?: boolean } | undefined;
   const t = s?.temperature as { targetC?: number | null; mode?: string } | undefined;
   if (!power?.on || !t || t.mode === "off") return "Off";
@@ -39,6 +40,7 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scheduleId, setScheduleId] = useState<string | null>(null);
   const fav = useFavorites();
+  const { states } = useLive();
 
   async function load() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
@@ -100,7 +102,7 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
           <h2 className="section">{room} <span className="chip-n">{list.length}</span></h2>
           <div className="grid">
             {list.map((d) => {
-              const summary = climateSummary(d);
+              const summary = climateSummary(d, states[d.id] ?? {});
               return (
                 <button key={d.id} className="media-card" onClick={() => setSelectedId(d.id)}>
                   <span className="media-ic">❄</span>

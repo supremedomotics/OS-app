@@ -23,9 +23,10 @@ class ClimateScreen extends ConsumerWidget {
     return d.climateModes.isNotEmpty;
   }
 
-  String _summary(Device d) {
-    final onoff = d.state['onoff'] as Map<String, dynamic>?;
-    final t = d.state['temperature'] as Map<String, dynamic>?;
+  String _summary(Device d, Map<String, Map<String, dynamic>> live) {
+    final state = mergedDeviceState(d, live);
+    final onoff = state['onoff'] as Map<String, dynamic>?;
+    final t = state['temperature'] as Map<String, dynamic>?;
     final mode = t?['mode'] as String?;
     if (onoff?['on'] != true || t == null || mode == 'off') return 'Off';
     final targetC = t['targetC'] as num?;
@@ -36,6 +37,7 @@ class ClimateScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(allDevicesProvider);
+    final live = ref.watch(liveStatesProvider);
     final rooms = ref.watch(homeProvider).valueOrNull?.rooms ?? const <Room>[];
     String roomName(String? id) => rooms.where((r) => r.id == id).map((r) => r.name).firstOrNull ?? 'Other';
 
@@ -72,7 +74,7 @@ class ClimateScreen extends ConsumerWidget {
                       child: ListTile(
                         leading: const Icon(Icons.ac_unit, color: AureonGold.c400),
                         title: Text(d.name),
-                        subtitle: Text(_summary(d), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(_summary(d, live), maxLines: 1, overflow: TextOverflow.ellipsis),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => showDeviceSheet(context, d),
                       ),
