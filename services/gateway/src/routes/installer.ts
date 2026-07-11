@@ -182,6 +182,20 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Settings → Logs (§ Diagnostics): every driver install/enable/connect/native-connection
+  // event plus device control operation outcomes, in one unified stream — not scattered
+  // across each Extension Center card.
+  app.get<{ Querystring: { limit?: string } }>("/v1/system/logs", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const limit = req.query.limit ? Number.parseInt(req.query.limit, 10) : undefined;
+      reply.send({ entries: i().systemLogs(Number.isFinite(limit) ? limit : undefined) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post<{ Params: { id: string } }>("/v1/drivers/:id/connect", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);

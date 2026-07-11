@@ -17,6 +17,7 @@ import {
   type MigrateDomainResponse,
   type MigrationStatus,
   type ProjectExport,
+  type SystemLogEntry,
   type BindProtocolRequest,
   type ProtocolBindingList,
   type ProtocolBindingView,
@@ -524,6 +525,12 @@ export class SupremeClient {
 
   diagnostics(): Promise<DiagnosticsReport> {
     return this.request("GET", "/v1/diagnostics") as Promise<DiagnosticsReport>;
+  }
+  /** Settings → Logs: every driver install/enable/connect/native-connection event plus device
+   * control operation outcomes, newest first — one place to see "what's SupremeOS actually
+   * doing" across every protocol, not scattered per-driver panels. */
+  systemLogs(limit = 300): Promise<{ entries: SystemLogEntry[] }> {
+    return this.request("GET", `/v1/system/logs?limit=${limit}`) as Promise<{ entries: SystemLogEntry[] }>;
   }
   projectExport(): Promise<ProjectExport> {
     return this.request("GET", "/v1/project/export") as Promise<ProjectExport>;

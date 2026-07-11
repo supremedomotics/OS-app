@@ -26,6 +26,9 @@ export interface AvrDriverOptions {
   reconnectMaxMs?: number;
   /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
   ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
+  /** Surfaces connection lifecycle events (connect/error) to the Extension Center's driver
+   * log / system log — without this a socket that never connects fails completely silently. */
+  onLog?: (level: "info" | "warn" | "error", message: string) => void;
 }
 
 interface AvrBinding {
@@ -43,6 +46,10 @@ interface AvrBinding {
 
 interface AvrLink {
   socket: net.Socket | null;
+  /** True only once THIS socket's "connect" event has actually fired — a freshly-created
+   * socket is non-null but not yet connected, so `socket !== null` alone isn't a safe
+   * "can I write to this" check (see command()). */
+  ready: boolean;
   buffer: string;
   reconnect: ReconnectScheduler;
 }
@@ -132,7 +139,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const tokens = commandToAvr(command, prev, b.zone);
     if (!tokens) throw new Error(`avr: unsupported command for ${command.capability} (zone ${b.zone})`);
     const link = this.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
-    for (const t of tokens) link.socket?.write(`${t}\r`);
+    // A dropped/never-established/still-connecting socket must fail LOUDLY — silently
+    // swallowing the write (the previous behavior) reports "success" for a command the
+    // receiver never saw. `ready` (not just `socket !== null`) matters: ensureLink() may have
+    // just started a brand-new connection attempt that hasn't finished yet.
+    if (!link.ready || !link.socket || link.socket.destroyed) {
+      throw new Error(`avr: not connected to ${b.host}:${b.port} — check the receiver's IP and that Network Control/Telnet is enabled`);
+    }
+    for (const t of tokens) link.socket.write(`${t}\r`);
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -187,18 +201,21 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         if (l) this.openSocket(l, host, port);
       },
     });
-    link = { socket: null, buffer: "", reconnect };
+    link = { socket: null, ready: false, buffer: "", reconnect };
     this.links.set(key, link);
     this.openSocket(link, host, port);
     return link;
   }
 
   private openSocket(link: AvrLink, host: string, port: number): void {
+    link.ready = false;
     const socket = this.opts.createSocket ? this.opts.createSocket(host, port) : net.connect(port, host);
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.onData(`${host}:${port}`, host, port, chunk));
     socket.on("connect", () => {
+      link.ready = true;
       link.reconnect.reset();
+      this.opts.onLog?.("info", `Connected to ${host}:${port}`);
       // Query current state so we start in sync (main zone + zone 2 if bound).
       socket.write("PW?\rMV?\rMU?\rSI?\rPSTONE CTRL ?\rPSBAS ?\rPSTRE ?\rMS?\r");
       if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
@@ -209,11 +226,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       const l = this.links.get(`${host}:${port}`);
       if (l) {
         l.socket = null;
+        l.ready = false;
         l.reconnect.notifyDisconnected();
       }
     });
-    socket.on("error", () => {
-      // Surfaced via "close"; the reconnect scheduler picks it up from there.
+    socket.on("error", (err) => {
+      // The "close" handler still runs right after this (Node always fires close following
+      // error) and drives reconnection — this just makes the failure visible instead of silent.
+      this.opts.onLog?.("error", `${host}:${port}: ${err.message}`);
     });
     link.socket = socket;
   }

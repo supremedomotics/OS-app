@@ -10,6 +10,7 @@ import 'add_home_screen.dart';
 import 'advanced_settings_screen.dart';
 import 'audit_screen.dart';
 import 'backup_screen.dart';
+import 'logs_screen.dart';
 import 'people_screen.dart';
 import 'security_sessions_screen.dart';
 import 'software_update_screen.dart';
@@ -26,6 +27,9 @@ class SettingsScreen extends ConsumerWidget {
     final accent = ref.watch(accentProvider);
     // Only the home's Super Administrator / Administrator manage other accounts (§8).
     final isAdmin = ref.watch(isAdminProvider).valueOrNull ?? false;
+    final role = ref.watch(userRoleProvider).valueOrNull;
+    // Logs is a diagnostic surface — same audience as installer diagnostics/driver management.
+    final canSeeLogs = isAdmin || role == 'installer' || role == 'developer';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -94,6 +98,17 @@ class SettingsScreen extends ConsumerWidget {
               MaterialPageRoute<void>(builder: (_) => const AuditScreen()),
             ),
           ),
+          if (canSeeLogs)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.article_outlined),
+              title: const Text('Logs'),
+              subtitle: const Text('Driver, connection & command diagnostics'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const LogsScreen()),
+              ),
+            ),
           const SizedBox(height: AureonSpacing.lg),
           Text('Account', style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: AureonSpacing.sm),

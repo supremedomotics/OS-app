@@ -99,6 +99,9 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     await driver.connect();
     await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
     await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    // Wait for the link to actually finish connecting (the init query round-trip) before
+    // issuing commands — command() now correctly rejects a write to a still-connecting link.
+    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
   });
   afterAll(async () => {
     await driver.disconnect();
@@ -148,6 +151,9 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
     await driver.bind({ deviceId: mainDev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
     await driver.bind({ deviceId: zone2Dev, capability: "onoff", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
     await driver.bind({ deviceId: zone2Dev, capability: "media", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
+    // Wait for the link to actually finish connecting before issuing commands — command()
+    // now correctly rejects a write to a still-connecting link.
+    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
   });
   afterAll(async () => {
     await driver.disconnect();
@@ -206,6 +212,29 @@ describe("AvrProtocolDriver — auto-reconnect on drop", () => {
 
     await driver.disconnect();
     await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+});
+
+describe("AvrProtocolDriver — connection failure is never silent", () => {
+  it("throws instead of silently no-op'ing a command when the socket never connected, and reports the error via onLog", async () => {
+    // Bind to a port nothing is listening on (a server we immediately close) so the connect
+    // attempt fails fast with ECONNREFUSED rather than timing out.
+    const probe = await startFakeAvr();
+    const deadPort = probe.port;
+    await new Promise<void>((r) => probe.server.close(() => r()));
+
+    const logs: { level: string; message: string }[] = [];
+    const driver = new AvrProtocolDriver({ onLog: (level, message) => logs.push({ level, message }) });
+    const dev = "device-avr-unreachable" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${deadPort}` });
+
+    await vi.waitFor(() => expect(logs.some((l) => l.level === "error")).toBe(true));
+    // "error" and the socket-nulling "close" handler both fire off the same failed connect
+    // attempt, but not necessarily on the same tick — retry until the socket is genuinely gone.
+    await vi.waitFor(async () => {
+      await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not connected/);
+    });
   });
 });
 

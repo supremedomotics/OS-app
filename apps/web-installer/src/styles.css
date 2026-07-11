@@ -11,6 +11,7 @@
   --aureon-color-text-primary: #f4f1ea;
   --aureon-color-text-secondary: #b6b2a8;
   --aureon-color-status-good: #6fbf8b;
+  --aureon-color-status-warning: #d6a94f;
   --aureon-color-status-critical: #cf6b5a;
 }
 
@@ -71,3 +72,24 @@ button.primary {
 }
 .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); }
 .muted { color: var(--aureon-color-text-secondary); font-size: 13px; }
+/* System Logs (Diagnostics tab) */
+.log-filter-btn {
+  background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 999px; padding: 5px 12px;
+  font-size: 12px; cursor: pointer;
+}
+.log-filter-btn.active { background: var(--aureon-color-gold-500); color: #0a0a0c; border-color: transparent; }
+.log-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; max-height: 60vh; overflow-y: auto; }
+.log-row {
+  display: grid; grid-template-columns: 84px 60px 150px 1fr; gap: 10px; align-items: baseline;
+  padding: 6px 8px; border-radius: 6px; font-size: 12px;
+}
+.log-row:nth-child(odd) { background: color-mix(in srgb, var(--aureon-color-base-surface) 60%, transparent); }
+.log-ts { color: var(--aureon-color-text-secondary); font-variant-numeric: tabular-nums; opacity: 0.8; }
+.log-badge { text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; }
+.log-badge.info { color: var(--aureon-color-text-secondary); }
+.log-badge.warn { color: var(--aureon-color-status-warning); }
+.log-badge.error { color: var(--aureon-color-status-critical); }
+.log-source { color: var(--aureon-color-gold-400); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-row.error .log-msg { color: var(--aureon-color-status-critical); }
+.log-row.warn .log-msg { color: var(--aureon-color-status-warning); }

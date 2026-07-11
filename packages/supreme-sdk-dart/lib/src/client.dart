@@ -1162,6 +1162,18 @@ class SupremeClient {
     return list.cast<Map<String, dynamic>>();
   }
 
+  /// The unified system log (Settings → Logs): every driver install/enable/connect/native-
+  /// connection event plus device control operation outcomes, newest first.
+  Future<List<Map<String, dynamic>>> systemLogs({int? limit}) async {
+    final uri = Uri.parse('$baseUrl/v1/system/logs').replace(
+      queryParameters: limit != null ? {'limit': '$limit'} : null,
+    );
+    final res = await _http.get(uri, headers: _authHeaders);
+    _ensureOk(res);
+    final list = (jsonDecode(res.body) as Map<String, dynamic>)['entries'] as List<dynamic>? ?? [];
+    return list.cast<Map<String, dynamic>>();
+  }
+
   /// Install a driver by its catalog key.
   Future<void> installDriver(String key) async {
     final res = await _http.post(Uri.parse('$baseUrl/v1/drivers/install'),

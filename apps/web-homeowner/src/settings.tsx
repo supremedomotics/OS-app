@@ -8,7 +8,7 @@ import {
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
-import { activateLicense, client, devIssueLicense, fetchLicense, logOut, setDevMode, type LicenseInfo } from "./api.js";
+import { activateLicense, client, devIssueLicense, fetchLicense, fetchSystemLogs, logOut, setDevMode, type LicenseInfo, type SystemLogEntry } from "./api.js";
 import { PasskeysSection } from "./passkeys.js";
 import { PasswordInput } from "./password-input.js";
 import { AdvancedSettings } from "./advanced.js";
@@ -35,6 +35,8 @@ export function ThemeSettings({ role }: { role?: string | null } = {}) {
 
   // Only the home's Super Administrator / Administrator manage other accounts.
   const isAdmin = role === "master" || role === "admin";
+  // Logs is a diagnostic surface — same audience as installer diagnostics/driver management.
+  const canSeeLogs = isAdmin || role === "installer" || role === "developer";
 
   // Extensions, Developer & Notifications are now top-level navigation destinations, so they're no
   // longer here.
@@ -44,6 +46,7 @@ export function ThemeSettings({ role }: { role?: string | null } = {}) {
     ...(isAdmin ? [{ id: "people", label: "People", icon: "◈", hint: "Add users & assign roles", el: <PeopleSettings /> }] : []),
     { id: "license", label: "Licensing", icon: "◆", hint: "Plan, features & activation", el: <LicensingSettings /> },
     { id: "advanced", label: "Advanced", icon: "⚙", hint: "Circadian, climate, energy", el: <AdvancedSettings /> },
+    ...(canSeeLogs ? [{ id: "logs", label: "Logs", icon: "▤", hint: "Driver, connection & command diagnostics", el: <LogsSettings /> }] : []),
     { id: "account", label: "Account", icon: "○", hint: "Email, password & account", el: <AccountSettings /> },
     { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
     { id: "backup", label: "Backup & restore", icon: "❖", hint: "Backups, schedule & restore", el: <BackupCenter /> },
@@ -146,6 +149,78 @@ function AppearanceSettings() {
         <span><span className="set-label">Increase contrast</span><span className="set-hint">Stronger text & borders for readability</span></span>
         <input type="checkbox" checked={a11y.highContrast} onChange={(e) => updateA11y({ highContrast: e.target.checked })} />
       </label>
+    </section>
+  );
+}
+
+const LOG_LEVELS = ["all", "error", "warn", "info"] as const;
+type LogLevelFilter = (typeof LOG_LEVELS)[number];
+const LOG_LEVEL_LABEL: Record<LogLevelFilter, string> = { all: "All", error: "Errors", warn: "Warnings", info: "Info" };
+
+/**
+ * Logs (§ Diagnostics): one unified, live-refreshing stream of everything SupremeOS is doing —
+ * driver install/enable/connect/native-connection events (from the Extension Center) and every
+ * device control operation's real outcome (not just "the request was accepted", but whether the
+ * command actually reached the device). A silent failure anywhere in the stack — a receiver that
+ * never connects, a command dropped because the socket was never open — becomes a visible,
+ * timestamped line here instead of nothing at all.
+ */
+function LogsSettings() {
+  const [entries, setEntries] = useState<SystemLogEntry[] | null>(null);
+  const [level, setLevel] = useState<LogLevelFilter>("all");
+  const [auto, setAuto] = useState(true);
+
+  async function load() {
+    setEntries(await fetchSystemLogs(300));
+  }
+  useEffect(() => {
+    void load();
+    if (!auto) return;
+    const id = setInterval(() => void load(), 5000);
+    return () => clearInterval(id);
+  }, [auto]);
+
+  const shown = (entries ?? []).filter((e) => level === "all" || e.level === level);
+  const counts = { all: entries?.length ?? 0, error: 0, warn: 0, info: 0 };
+  for (const e of entries ?? []) counts[e.level]++;
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Logs</h2>
+      <p className="sub">
+        Driver install/connect events and device control feedback, across every protocol —
+        whether a command actually reached the device, not just that it was accepted.
+      </p>
+
+      <div className="chip-row">
+        {LOG_LEVELS.map((l) => (
+          <button key={l} className={`chip${level === l ? " active" : ""}`} onClick={() => setLevel(l)}>
+            {LOG_LEVEL_LABEL[l]}<span className="chip-n">{counts[l]}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", margin: "10px 0" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--aureon-color-text-secondary)" }}>
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          Auto-refresh
+        </label>
+        <button onClick={() => void load()}>Refresh</button>
+      </div>
+
+      {entries === null && <p className="muted">Loading…</p>}
+      {entries && shown.length === 0 && <p className="muted">No log entries{level !== "all" ? ` at level "${LOG_LEVEL_LABEL[level]}"` : ""} yet.</p>}
+
+      <div className="log-list">
+        {shown.map((e, i) => (
+          <div key={i} className={`log-row ${e.level}`}>
+            <span className="log-ts">{new Date(e.ts).toLocaleTimeString()}</span>
+            <span className={`log-badge ${e.level}`}>{e.level}</span>
+            <span className="log-source">{e.source}</span>
+            <span className="log-msg">{e.message}</span>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

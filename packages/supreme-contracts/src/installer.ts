@@ -167,6 +167,22 @@ export const DiagnosticsReport = z.object({
 });
 export type DiagnosticsReport = z.infer<typeof DiagnosticsReport>;
 
+// ── System log (§ Settings → Logs) ────────────────────────────────────────────
+
+/** One entry in the unified system log: driver lifecycle events (install/enable/connect/
+ * native-connection) and device control operation outcomes, all in one stream. */
+export const SystemLogEntry = z.object({
+  ts: z.string().datetime(),
+  level: z.enum(["info", "warn", "error"]),
+  /** A driver key (e.g. "supreme-avr") or a human-readable device label (e.g. "Device: Living Room AC"). */
+  source: z.string(),
+  message: z.string(),
+});
+export type SystemLogEntry = z.infer<typeof SystemLogEntry>;
+
+export const SystemLogList = z.object({ entries: z.array(SystemLogEntry) });
+export type SystemLogList = z.infer<typeof SystemLogList>;
+
 /**
  * Real host telemetry (§ Installer Dashboard). Every field is measured from the OS the hub runs on;
  * the optional fields (`utilizationPct`, `storage`, `temperatureC`) are ABSENT when the platform

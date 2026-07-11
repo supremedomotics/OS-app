@@ -1,4 +1,6 @@
 import { SupremeClient, SupremeStream } from "@supreme/sdk";
+import type { SystemLogEntry } from "@supreme/contracts";
+export type { SystemLogEntry } from "@supreme/contracts";
 import { activeHome, homeTokenStore } from "./homes.js";
 
 /**
@@ -181,6 +183,16 @@ export async function fetchDriverLogs(id: string): Promise<{ ts: string; level: 
   try {
     const res = await authed(`/v1/drivers/${id}/logs`);
     return res.ok ? ((await res.json()) as { entries: { ts: string; level: string; message: string }[] }).entries : [];
+  } catch {
+    return [];
+  }
+}
+/** Settings → Logs: every driver install/enable/connect/native-connection event plus device
+ * control operation outcomes, in one unified stream. */
+export async function fetchSystemLogs(limit = 300): Promise<SystemLogEntry[]> {
+  try {
+    const res = await authed(`/v1/system/logs?limit=${limit}`);
+    return res.ok ? ((await res.json()) as { entries: SystemLogEntry[] }).entries : [];
   } catch {
     return [];
   }

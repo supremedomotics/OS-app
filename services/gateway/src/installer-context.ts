@@ -517,7 +517,7 @@ export class InstallerServices {
     }
     for (const [protocol, { config, key }] of desired) {
       if (this.manifestManaged.has(protocol)) continue; // already ours (config edits go via reregister)
-      const driver = buildNativeDriver(protocol, config);
+      const driver = buildNativeDriver(protocol, config, (level, message) => this.appendLog(key, level, message));
       if (driver && (await this.d.sil.registerNativeDriver(driver))) {
         this.manifestManaged.add(protocol);
         this.appendLog(key, "info", `Native ${protocol} driver started`);
@@ -538,7 +538,7 @@ export class InstallerServices {
     for (const protocol of entry.protocols) {
       if (!hasNativeFactory(protocol)) continue;
       const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config).complete;
-      const driver = runnable ? buildNativeDriver(protocol, entry.config) : null;
+      const driver = runnable ? buildNativeDriver(protocol, entry.config, (level, message) => this.appendLog(key, level, message)) : null;
       if (driver) {
         if (await this.d.sil.registerNativeDriver(driver)) this.manifestManaged.add(protocol);
       } else if (this.manifestManaged.has(protocol)) {
@@ -555,6 +555,7 @@ export class InstallerServices {
     arr.push({ ts: new Date().toISOString(), level, message });
     if (arr.length > 200) arr.shift();
     this.driverLogEntries.set(key, arr);
+    this.pushSystemLog(key, level, message);
   }
 
   /** Recent log entries for an installed driver. */
@@ -562,6 +563,29 @@ export class InstallerServices {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
     return { key: entry.key, entries: this.driverLogEntries.get(entry.key) ?? [] };
+  }
+
+  /**
+   * The unified system log (§ Settings → Logs): every driver lifecycle event (install/
+   * enable/connect/disconnect/native-connection), plus device control operation outcomes —
+   * one place to see "what's SupremeOS actually doing", not scattered per-driver panels.
+   * In-memory ring buffer; a hub restart clears it, same tradeoff `driverLogEntries` already
+   * makes (this is diagnostics, not the tamper-evident audit trail — see @supreme/audit for that).
+   */
+  private readonly systemLog: Array<{ ts: string; level: "info" | "warn" | "error"; source: string; message: string }> = [];
+  private pushSystemLog(source: string, level: "info" | "warn" | "error", message: string): void {
+    this.systemLog.push({ ts: new Date().toISOString(), level, source, message });
+    if (this.systemLog.length > 1000) this.systemLog.shift();
+  }
+
+  /** Log a non-driver-scoped system event (e.g. a device control operation) into the unified log. */
+  logEvent(source: string, level: "info" | "warn" | "error", message: string): void {
+    this.pushSystemLog(source, level, message);
+  }
+
+  /** Recent system log entries, newest first. */
+  systemLogs(limit = 300): Array<{ ts: string; level: "info" | "warn" | "error"; source: string; message: string }> {
+    return this.systemLog.slice(-limit).reverse();
   }
 
   /** Per-driver health: install/enable state, config completeness, and native connectivity. */

@@ -39,6 +39,9 @@ export interface HeosDriverOptions {
   /** How long discovery waits for a candidate host's `get_players` reply before
    * giving up on it (ms). Default 3000. */
   discoverTimeoutMs?: number;
+  /** Surfaces connection lifecycle events (connect/error) to the Extension Center's driver
+   * log / system log — without this a socket that never connects fails completely silently. */
+  onLog?: (level: "info" | "warn" | "error", message: string) => void;
 }
 
 interface HeosBinding {
@@ -54,6 +57,10 @@ interface HeosBinding {
 
 interface HeosLink {
   socket: net.Socket | null;
+  /** True only once THIS socket's "connect" event has actually fired — a freshly-created
+   * socket is non-null but not yet connected, so `socket !== null` alone isn't a safe
+   * "can I write to this" check (see command()). */
+  ready: boolean;
   buffer: string;
   reconnect: ReconnectScheduler;
 }
@@ -146,7 +153,14 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     const req = commandToHeos(command, b.pid, { repeat: cache?.repeat ?? "off", shuffle: cache?.shuffle ?? false });
     if (!req) throw new Error(`heos: unsupported command for ${command.capability}/${"action" in command ? command.action : "?"}`);
     const link = this.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
-    link.socket?.write(`${buildHeosCommand(req.group, req.command, req.params)}\r\n`);
+    // A dropped/never-established/still-connecting socket must fail LOUDLY — silently
+    // swallowing the write (the previous behavior) reports "success" for a command the
+    // player never saw. `ready` (not just `socket !== null`) matters: ensureLink() may have
+    // just started a brand-new connection attempt that hasn't finished yet.
+    if (!link.ready || !link.socket || link.socket.destroyed) {
+      throw new Error(`heos: not connected to ${b.host}:${b.port} — check the player's IP is reachable`);
+    }
+    link.socket.write(`${buildHeosCommand(req.group, req.command, req.params)}\r\n`);
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -268,18 +282,21 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
         if (l) this.openSocket(l, host, port);
       },
     });
-    link = { socket: null, buffer: "", reconnect };
+    link = { socket: null, ready: false, buffer: "", reconnect };
     this.links.set(key, link);
     this.openSocket(link, host, port);
     return link;
   }
 
   private openSocket(link: HeosLink, host: string, port: number): void {
+    link.ready = false;
     const socket = this.opts.createSocket ? this.opts.createSocket(host, port) : net.connect(port, host);
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.onData(`${host}:${port}`, chunk));
     socket.on("connect", () => {
+      link.ready = true;
       link.reconnect.reset();
+      this.opts.onLog?.("info", `Connected to ${host}:${port}`);
       // Driver-init sequence per spec §2.1.1: un-register events, sync every bound
       // player's current state, then register for change events.
       socket.write(`${buildHeosCommand("system", "register_for_change_events", { enable: "off" })}\r\n`);
@@ -290,11 +307,14 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       const l = this.links.get(`${host}:${port}`);
       if (l) {
         l.socket = null;
+        l.ready = false;
         l.reconnect.notifyDisconnected();
       }
     });
-    socket.on("error", () => {
-      // Surfaced via "close"; the reconnect scheduler picks it up from there.
+    socket.on("error", (err) => {
+      // The "close" handler still runs right after this (Node always fires close following
+      // error) and drives reconnection — this just makes the failure visible instead of silent.
+      this.opts.onLog?.("error", `${host}:${port}: ${err.message}`);
     });
     link.socket = socket;
   }

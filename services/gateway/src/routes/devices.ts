@@ -27,7 +27,17 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "device", deviceId, "control");
 
       const { command } = CommandRequest.parse(req.body);
-      await ctx.sil.command(deviceId, command);
+      const source = `Device: ${device.name}`;
+      try {
+        await ctx.sil.command(deviceId, command);
+      } catch (err) {
+        // A native driver command that never reached the device (not connected, wire error,
+        // unsupported for this unit, …) must be visible — the Settings → Logs page is the
+        // one place to see "did my command actually work" across every device/protocol.
+        ctx.installer.logEvent(source, "error", `${command.capability} command failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+      ctx.installer.logEvent(source, "info", `${command.capability} command sent`);
       await ctx.audit?.record({
         homeId: ctx.homeId,
         actorUserId: user.id,

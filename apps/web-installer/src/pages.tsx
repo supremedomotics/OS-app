@@ -6,6 +6,7 @@ import type {
   FleetHub,
   LicenseStatus,
   MigrationStatus,
+  SystemLogEntry,
 } from "@supreme/contracts";
 import type { InstalledDriver } from "@supreme/domain-model";
 import {
@@ -540,6 +541,62 @@ export function Devices() {
 }
 
 /** Diagnostics: hub + backend health, counts, drivers, offline devices. */
+const LOG_LEVELS = ["all", "error", "warn", "info"] as const;
+type LogLevelFilter = (typeof LOG_LEVELS)[number];
+
+/** Every driver install/enable/connect/native-connection event plus device control operation
+ * outcomes, in one live-refreshing stream — whether a command actually reached the device, not
+ * just that the request was accepted. */
+function SystemLogs() {
+  const [entries, setEntries] = useState<SystemLogEntry[] | null>(null);
+  const [level, setLevel] = useState<LogLevelFilter>("all");
+  const [auto, setAuto] = useState(true);
+
+  async function load() {
+    setEntries((await client.systemLogs(300)).entries);
+  }
+  useEffect(() => {
+    void load();
+    if (!auto) return;
+    const id = setInterval(() => void load(), 5000);
+    return () => clearInterval(id);
+  }, [auto]);
+
+  const shown = (entries ?? []).filter((e) => level === "all" || e.level === level);
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <strong>System Logs</strong>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+          Auto-refresh
+        </label>
+      </div>
+      <div className="row" style={{ gap: 6, marginTop: 8, justifyContent: "flex-start" }}>
+        {LOG_LEVELS.map((l) => (
+          <button key={l} className={`log-filter-btn${l === level ? " active" : ""}`} onClick={() => setLevel(l)}>
+            {l === "all" ? "All" : l === "error" ? "Errors" : l === "warn" ? "Warnings" : "Info"}
+          </button>
+        ))}
+        <button className="log-filter-btn" onClick={() => void load()}>Refresh</button>
+      </div>
+      {entries === null && <p className="muted">Loading…</p>}
+      {entries && shown.length === 0 && <p className="muted">No log entries yet.</p>}
+      <div className="log-list">
+        {shown.map((e, i) => (
+          <div key={i} className={`log-row ${e.level}`}>
+            <span className="log-ts">{new Date(e.ts).toLocaleTimeString()}</span>
+            <span className={`log-badge ${e.level}`}>{e.level}</span>
+            <span className="log-source">{e.source}</span>
+            <span className="log-msg">{e.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function Diagnostics() {
   const [report, setReport] = useState<DiagnosticsReport | null>(null);
   useEffect(() => {
@@ -587,6 +644,7 @@ export function Diagnostics() {
           ))}
         </div>
       )}
+      <SystemLogs />
     </section>
   );
 }

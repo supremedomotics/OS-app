@@ -17,7 +17,8 @@ import {
  * env-only wiring in bootstrap.ts. A protocol with no factory (or missing required config) yields
  * null and simply isn't brought up at runtime.
  */
-export type NativeDriverFactory = (config: Record<string, unknown>) => INativeProtocolDriver | null;
+export type DriverLogFn = (level: "info" | "warn" | "error", message: string) => void;
+export type NativeDriverFactory = (config: Record<string, unknown>, onLog?: DriverLogFn) => INativeProtocolDriver | null;
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 const int = (v: unknown, fallback: number): number => {
@@ -68,15 +69,18 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   // (Installer → Bus Binding), same as the pre-existing env-wired instances in
   // bootstrap.ts. The factory therefore always succeeds; installing + enabling the
   // extension is what brings the driver up (§ ADR 0015).
-  avr: () => new AvrProtocolDriver(),
-  heos: () => new HeosProtocolDriver(),
+  avr: (_c, onLog) => new AvrProtocolDriver({ onLog }),
+  heos: (_c, onLog) => new HeosProtocolDriver({ onLog }),
   yamaha: () => new YamahaProtocolDriver(),
 };
 
-/** Build a native driver instance for a protocol from stored config; null if unsupported/unconfigured. */
-export function buildNativeDriver(protocol: string, config: Record<string, unknown>): INativeProtocolDriver | null {
+/** Build a native driver instance for a protocol from stored config; null if unsupported/unconfigured.
+ * `onLog`, when given, surfaces the driver's connection lifecycle (connect/error) into the Extension
+ * Center's per-driver log and the system-wide Logs page — without it a socket that never connects to
+ * a bound device (a real Denon/HEOS/Yamaha unit, say) fails completely silently. */
+export function buildNativeDriver(protocol: string, config: Record<string, unknown>, onLog?: DriverLogFn): INativeProtocolDriver | null {
   const factory = NATIVE_DRIVER_FACTORIES[protocol];
-  return factory ? factory(config) : null;
+  return factory ? factory(config, onLog) : null;
 }
 
 /** Protocols that CAN be instantiated at runtime from a manifest (the rest are managed by the backend). */
