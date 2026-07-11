@@ -86,6 +86,26 @@ describe("CommissioningService", () => {
     expect((await home.listDevicesInRoom(roomId as never)).map((d) => d.id)).toContain(device.id);
   });
 
+  it("stops re-surfacing an already-commissioned device as a new find on a rescan", async () => {
+    // Polling discovery sources (CoolMaster indoor units, AVR/HEOS/Yamaha SSDP, mDNS…)
+    // report the same stable backendId on every scan — without filtering, a rescan shows
+    // the same physical unit again and re-pairing it creates a duplicate Supreme device
+    // for the same hardware ("multiple cards for one AC").
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home);
+    expect((await svc.discover()).map((f) => f.backendId)).toContain("light.studio");
+
+    await svc.commission({
+      backendId: "light.studio",
+      name: "Studio Light",
+      roomId: roomId as never,
+      capabilities: ["onoff", "brightness"],
+    });
+
+    const rescan = await svc.discover();
+    expect(rescan.map((f) => f.backendId)).not.toContain("light.studio");
+  });
+
   it("filters discovery by protocol", async () => {
     const { sil, home } = await setup();
     const svc = new CommissioningService(sil, home, [knxScanner]);

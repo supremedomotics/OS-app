@@ -99,7 +99,13 @@ export class CommissioningService {
     // De-duplicate by backendId; backend-sourced entries win.
     const seen = new Map<string, DiscoveredView>();
     for (const v of out) if (!seen.has(v.backendId)) seen.set(v.backendId, v);
-    return [...seen.values()];
+
+    // Never re-surface an already-commissioned device as a "new find". Discovery sources
+    // that poll (CoolMaster indoor units, AVR/HEOS/Yamaha SSDP, Shelly/mDNS…) report the
+    // same stable backendId on every scan; without this a rescan shows the same physical
+    // unit again and pairing it a second time silently creates a duplicate Supreme device
+    // for the same hardware — "why are there multiple cards for one AC/light/curtain".
+    return [...seen.values()].filter((v) => !this.sil.registry.reverseLookup(v.backendId));
   }
 
   /**

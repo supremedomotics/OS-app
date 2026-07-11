@@ -52,7 +52,7 @@ import type {
 const FUNCTION_WORDS = new Set([
   "switch", "toggle", "on/off", "onoff", "on off", "status", "state", "feedback",
   "dim", "dimming", "brightness", "value", "level", "relative", "absolute",
-  "position", "move", "up/down", "stop",
+  "position", "move", "up/down", "up", "down", "stop",
   "temperature", "temp", "setpoint", "current", "actual", "ambient", "mode", "swing",
   "lock", "unlock", "scene", "recall", "colour", "color", "rgb", "rgbw", "rgbww", "white",
 ]);
@@ -66,11 +66,16 @@ function looksLikeDimmableLight(text: string): boolean {
 
 /** Normalize a raw comm-object/GA function label into a stable role tag used both for
  * capability inference and for the review-facing binding label. */
-function classifyRole(dptCategory: DptCategory, roleText: string, mainGroup: string, gaName: string): string {
+function classifyRole(dptCategory: DptCategory, roleText: string, mainGroup: string, middleGroup: string, gaName: string): string {
   const t = roleText.toLowerCase();
   const mg = mainGroup.toLowerCase();
+  const mid = middleGroup.toLowerCase();
   const n = gaName.toLowerCase();
-  const context = `${t} ${mg} ${n}`;
+  // The Middle Group carries the device-type word (e.g. "Curtain", "Living Room Light") in
+  // ETS's common Main = room / Middle = circuit / Sub = parameter convention, where the leaf
+  // GA's own name is often just a bare parameter word ("Up", "Status") with no type hint of
+  // its own — without it, e.g. a bare "Up"/"Down" pair never resolves to a cover role.
+  const context = `${t} ${mg} ${mid} ${n}`;
 
   if (/\bred\b/.test(t)) return "red_channel";
   if (/\bgreen\b/.test(t)) return "green_channel";
@@ -292,7 +297,7 @@ function buildSignals(model: KnxProjectModel): GaSignal[] {
     // deviceBaseName() below and defeat clustering. Function grouping is instead used
     // directly as an authoritative cluster key in clusterSignals().
     const roleText = co?.text || trailingFunctionWords(splitNameSegments(ga.name).at(-1) ?? ga.name);
-    const role = classifyRole(dptClass.category, roleText, ga.mainGroup ?? "", ga.name);
+    const role = classifyRole(dptClass.category, roleText, ga.mainGroup ?? "", ga.middleGroup ?? "", ga.name);
     signals.push({
       ga,
       category: dptClass.category,
@@ -317,6 +322,18 @@ function clusterSignals(signals: GaSignal[], knownRoomNames: string[]): Map<stri
     let key: string;
     if (sig.functionId) {
       key = `fn:${sig.functionId}`;
+    } else if (sig.ga.middleGroup?.trim()) {
+      // No <Function> to lean on (a flat GA export, not a full .knxproj) — ETS's own
+      // Main/Middle/Sub group-address hierarchy is itself a device-boundary signal in the
+      // common convention (Main = room/zone, Middle = one physical circuit/device, Sub =
+      // the individual parameter: "Up"/"Down"/"Switch"/"Status"/"Dimming"…). The Middle
+      // Group IS the device identity there, and far more reliable than the leaf GA's own
+      // name, which is often just a bare parameter word carrying no identity of its own
+      // once the function word is stripped — clustering on that alone previously split a
+      // single curtain's Up/Down/Status (or a light's Switch/Status/Dimming) into one
+      // device PER group address instead of one device total.
+      const room = findRoomHint(sig.ga.name, rooms) ?? findRoomHint(sig.ga.mainGroup ?? "", rooms);
+      key = `mg:${room ?? sig.ga.mainGroup ?? ""}::${sig.ga.middleGroup.trim().toLowerCase()}`;
     } else {
       const base = deviceBaseName(sig.ga.name, sig.roleText);
       const room = findRoomHint(sig.ga.name, rooms);
@@ -332,13 +349,14 @@ function clusterSignals(signals: GaSignal[], knownRoomNames: string[]): Map<stri
 // ── Device type classification ────────────────────────────────────────────────────
 
 /** Classify a cluster's device type from the SET of roles present, following the
- * documented priority: comm-object/DPT-derived roles first, then Main Group, then
+ * documented priority: comm-object/DPT-derived roles first, then Main/Middle Group, then
  * product, then the raw name — each tier only breaks ties the previous tier left open. */
-function classifyDeviceType(roles: Set<string>, mainGroups: Set<string>, product: string | null, baseName: string): KnxDeviceType {
+function classifyDeviceType(roles: Set<string>, mainGroups: Set<string>, middleGroups: Set<string>, product: string | null, baseName: string): KnxDeviceType {
   const mg = [...mainGroups].join(" ").toLowerCase();
+  const midg = [...middleGroups].join(" ").toLowerCase();
   const name = baseName.toLowerCase();
   const prod = (product ?? "").toLowerCase();
-  const context = `${mg} ${name} ${prod}`;
+  const context = `${mg} ${midg} ${name} ${prod}`;
 
   // Lighting
   if (roles.has("rgbw") || (roles.has("red_channel") && roles.has("white_channel"))) return "light_rgbww";
@@ -488,6 +506,7 @@ export function recognizeDevices(model: KnxProjectModel, knownRoomNames: string[
   for (const sigs of clusters.values()) {
     const roles = new Set(sigs.map((s) => s.role));
     const mainGroups = new Set(sigs.map((s) => s.ga.mainGroup).filter((v): v is string => !!v));
+    const middleGroups = new Set(sigs.map((s) => s.ga.middleGroup).filter((v): v is string => !!v));
     const deviceInstanceIds = new Set(sigs.map((s) => s.deviceInstanceId).filter((v): v is string => !!v));
     const soleDeviceInstance = deviceInstanceIds.size === 1 ? model.deviceInstances.get([...deviceInstanceIds][0]!) ?? null : null;
     const product = soleDeviceInstance?.product ?? null;
@@ -498,7 +517,7 @@ export function recognizeDevices(model: KnxProjectModel, knownRoomNames: string[
     const rawBaseName = sigs.find((s) => s.functionName)?.functionName ?? deviceBaseName(sigs[0]!.ga.name, sigs[0]!.roleText);
     const humanBaseName = humanizeName(rawBaseName);
 
-    const deviceType = classifyDeviceType(roles, mainGroups, product, rawBaseName);
+    const deviceType = classifyDeviceType(roles, mainGroups, middleGroups, product, rawBaseName);
     const sourceDeviceInstanceId = deviceInstanceIds.size === 1 ? [...deviceInstanceIds][0]! : null;
     const confidence = sourceDeviceInstanceId ? 1 : deviceInstanceIds.size > 0 ? 0.8 : 0.6;
 

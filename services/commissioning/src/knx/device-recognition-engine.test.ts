@@ -162,6 +162,40 @@ describe("device recognition engine", () => {
     expect(warnings.some((w) => w.code === "missing_dpt")).toBe(true);
   });
 
+  it("clusters a CSV export's bare Main/Middle/Sub leaf names (Up/Down) into ONE curtain, not one device per address", () => {
+    // ETS's own "Export Group Addresses" CSV: the Middle Group carries the device identity
+    // ("Main Curtain"), while each leaf's own name (the Sub column) is often just a bare
+    // parameter word with no identity of its own — clustering on the leaf name alone
+    // previously split every Up/Down/Position address into its own separate device.
+    const csv = [
+      `"Main";"Middle";"Sub";"Address";"Central";"Unfiltered";"Description";"DatapointType"`,
+      `"Living Room";"Main Curtain";"";"1/1/-";"";"";"";""`,
+      `"";"";"Up";"1/1/1";"";"";"";"DPST-1-8"`,
+      `"";"";"Down";"1/1/2";"";"";"";"DPST-1-8"`,
+      `"";"";"Position";"1/1/3";"";"";"";"DPST-5-1"`,
+    ].join("\n");
+    const model = parseGaExport(csv);
+    const { devices } = recognizeDevices(model, ["Living Room"]);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.deviceType).toBe("curtain");
+    expect(devices[0]?.bindings.some((b) => b.capability === "position")).toBe(true);
+  });
+
+  it("clusters a CSV export's bare Switch/Status/Dimming leaf names into ONE dimmable light", () => {
+    const csv = [
+      `"Main";"Middle";"Sub";"Address";"Central";"Unfiltered";"Description";"DatapointType"`,
+      `"All Lights";"Master Control";"";"0/0/-";"";"";"";""`,
+      `"";"";"SW";"0/0/1";"";"";"";"DPST-1-1"`,
+      `"";"";"SW Status";"0/0/2";"";"";"";"DPST-1-1"`,
+      `"";"";"Dimm";"0/0/3";"";"";"";"DPST-5-1"`,
+    ].join("\n");
+    const model = parseGaExport(csv);
+    const { devices } = recognizeDevices(model);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.deviceType).toBe("light_dimmable");
+    expect(new Set(devices[0]?.bindings.map((b) => b.capability))).toEqual(new Set(["onoff", "brightness"]));
+  });
+
   it("does not create independent devices from a single multi-channel DeviceInstance", () => {
     // An 8-fold actuator: one DeviceInstance owns 2 unrelated circuits (2 comm objects
     // each) — must NOT collapse into one device just because they share a DeviceInstance.
