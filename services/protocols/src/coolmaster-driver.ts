@@ -191,56 +191,88 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
 
   // ── Command execution ────────────────────────────────────────────────────────
 
+  /** Sends a command's ASCII_IF line(s), then CONFIRMS the result with an immediate
+   * follow-up read rather than an optimistic guess (§ Feedback: "State changes should
+   * immediately update Supreme OS entities"). A guessed post-command state could be
+   * wrong (the unit might clamp an out-of-range setpoint, ignore an unsupported fan
+   * speed, etc.) — an immediate real read is both faster to implement correctly and
+   * more honest than assuming the command did exactly what was asked. This runs inside
+   * the same command-queue item as the command itself, so it can't create extra,
+   * unbounded traffic beyond one confirming read per user action. */
   private async executeCommand(b: CmBinding, command: CapabilityCommand): Promise<void> {
     switch (b.deviceKind) {
       case "indoor_unit": {
         const lines = indoorUnitCommandLines(b.uid, command);
         if (!lines) throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
         for (const line of lines) await this.connection.executeAscii(line);
+        await this.fastPoll();
         return;
       }
       case "water_heater": {
         if (command.capability === "onoff") {
           await this.connection.executeAscii(cmdWaterHeaterPower(b.uid, command.action === "on"));
-          return;
-        }
-        if (command.capability === "temperature" && typeof command.targetC === "number") {
+        } else if (command.capability === "temperature" && typeof command.targetC === "number") {
           await this.connection.executeAscii(cmdWaterHeaterTemp(b.uid, command.targetC));
-          return;
+        } else {
+          throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
         }
-        throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
+        await this.refreshSecondaryDevices();
+        return;
       }
       case "ventilation": {
-        if (command.capability === "fan") {
-          if (command.action === "on" || command.action === "off") {
-            await this.connection.executeAscii(cmdVentilationPower(b.uid, command.action === "on"));
-            return;
-          }
+        if (command.capability === "fan" && (command.action === "on" || command.action === "off")) {
+          await this.connection.executeAscii(cmdVentilationPower(b.uid, command.action === "on"));
+        } else {
+          throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
         }
-        throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
+        await this.refreshSecondaryDevices();
+        return;
       }
       case "main_controller": {
         if (command.capability === "onoff") {
           await this.connection.executeAscii(cmdMainControllerPower(b.uid, command.action === "on"));
-          return;
+        } else {
+          throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
         }
-        throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
+        await this.refreshSecondaryDevices();
+        return;
       }
       case "group": {
         if (command.capability === "onoff") {
           await this.connection.executeAscii(cmdGroupPower(b.uid, command.action === "on"));
-          return;
-        }
-        if (command.capability === "temperature" && b.groupMembers) {
+        } else if (command.capability === "temperature" && b.groupMembers) {
           // No native group-level temperature/mode/fan-speed command is documented or
           // safely inferable (unlike on/off) — fan out to every member unit instead.
           for (const memberUid of b.groupMembers) {
             const lines = indoorUnitCommandLines(memberUid, command);
             if (lines) for (const line of lines) await this.connection.executeAscii(line);
           }
-          return;
+        } else {
+          throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
         }
-        throw new CoolMasterUnsupportedCommandError(command.capability, b.uid);
+        // Group state is aggregated FROM member indoor units (see publishGroupAggregate)
+        // — refreshing them via fastPoll cascades into a fresh group aggregate too, via
+        // the same unit-updated event every regular poll already publishes through.
+        await this.fastPoll();
+        return;
+      }
+    }
+  }
+
+  /** Targeted confirming refresh for water heater / ventilation / main controller
+   * commands — these device kinds have no bulk ls2-equivalent read, so re-running their
+   * specific discovery list (cheap: these are always small counts, unlike "hundreds of
+   * indoor units") and re-publishing is both correct and inexpensive. */
+  private async refreshSecondaryDevices(): Promise<void> {
+    const result = await discoverAll(this.connection, this.logger.child("discovery"), { enrichWithQuery: false });
+    if (this.discoveryResult) {
+      this.discoveryResult = { ...this.discoveryResult, waterHeaters: result.waterHeaters, ventilation: result.ventilation, mainControllers: result.mainControllers };
+    } else {
+      this.discoveryResult = result;
+    }
+    for (const b of this.bindings) {
+      if (b.deviceKind === "water_heater" || b.deviceKind === "ventilation" || b.deviceKind === "main_controller") {
+        this.publishFromCache(b.deviceId, b.capability, b.uid, b.deviceKind);
       }
     }
   }
