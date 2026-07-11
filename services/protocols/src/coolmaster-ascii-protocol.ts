@@ -27,6 +27,10 @@ export interface CoolMasterAsciiTransportOptions {
   timeoutMs: number;
   createSocket?: (host: string, port: number) => net.Socket;
   logger?: CoolMasterScopedLogger;
+  /** Called when the socket closes AFTER a successful connect (not on an initial
+   * connect failure, which the connect() promise itself rejects) — the owning
+   * CoolMasterConnection uses this to trigger reconnect-with-backoff. */
+  onUnexpectedClose?: () => void;
 }
 
 export class CoolMasterAsciiTransport {
@@ -155,9 +159,13 @@ export class CoolMasterAsciiTransport {
   }
 
   private onClose(): void {
+    const wasGreeted = this.greeted;
     this.socket = null;
     this.greeted = false;
     this.failAll(new CoolMasterConnectionError("coolmaster: ASCII_IF connection closed", "ascii"));
+    // Only notify for a close AFTER a successful connect — a close during the initial
+    // handshake is surfaced by connect()'s own rejection instead, not this hook.
+    if (wasGreeted) this.opts.onUnexpectedClose?.();
   }
 
   private failAll(err: Error): void {
