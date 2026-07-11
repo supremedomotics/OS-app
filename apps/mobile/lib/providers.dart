@@ -139,7 +139,7 @@ final clientProvider = Provider<SupremeClient>((ref) {
 /// the login screen. The ONLY other way [sessionActiveProvider] goes false is a genuinely dead
 /// refresh token (see `onSessionExpired` above) — never a routine access-token rotation.
 Future<void> logOut(WidgetRef ref) async {
-  ref.read(clientProvider).clearSession();
+  await ref.read(clientProvider).logout();
   final prefs = ref.read(sharedPreferencesProvider);
   await prefs.remove(_kAccessTokenKey);
   await prefs.remove(_kRefreshTokenKey);

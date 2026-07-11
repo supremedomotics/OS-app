@@ -577,6 +577,25 @@ export class SupremeClient {
     return this.tokens.get()?.accessToken ?? null;
   }
 
+  /** Clear the in-memory/persisted session without contacting the hub — the refresh token
+   * stays valid server-side until it naturally expires. Prefer {@link logout} for an
+   * explicit "Log Out" action; this is the lower-level primitive it (and a session-expiry
+   * handler) builds on. Mirrors the Dart SDK's `clearSession()`. */
+  clearSession(): void {
+    this.tokens.set(null);
+  }
+
+  /** Log out (§ Authentication): revoke the current session server-side, then clear the
+   * local session regardless of whether the network call succeeds — the user should never
+   * be stuck "logged in" locally just because the hub was unreachable. */
+  async logout(): Promise<void> {
+    try {
+      await this.request("POST", "/v1/auth/logout");
+    } finally {
+      this.clearSession();
+    }
+  }
+
   // ── transport ────────────────────────────────────────────────────────────────
   private async request(
     method: string,

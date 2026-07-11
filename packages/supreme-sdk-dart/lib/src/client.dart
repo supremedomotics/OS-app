@@ -52,11 +52,26 @@ class SupremeClient {
     _refreshToken = refreshToken;
   }
 
-  /// Clear the in-memory session (does not touch any app-layer persisted storage — call this from
-  /// an explicit "Log Out" action alongside clearing your own storage).
+  /// Clear the in-memory session (does not touch any app-layer persisted storage) without
+  /// contacting the hub — the refresh token stays valid server-side until it naturally expires.
+  /// Prefer [logout] for an explicit "Log Out" action; this is the lower-level primitive it (and
+  /// session-expiry handling) builds on.
   void clearSession() {
     _accessToken = null;
     _refreshToken = null;
+  }
+
+  /// Log out: revoke the current session server-side, then clear the local session regardless of
+  /// whether the network call succeeds — the user should never be stuck "logged in" locally just
+  /// because the hub was unreachable. Callers should still clear their own persisted storage.
+  Future<void> logout() async {
+    try {
+      await _http.post(Uri.parse('$baseUrl/v1/auth/logout'), headers: _authHeaders);
+    } catch (_) {
+      // best-effort — always fall through to the local clear below
+    } finally {
+      clearSession();
+    }
   }
 
   /// The session is genuinely over (refresh token rejected) — clear it and notify once, from

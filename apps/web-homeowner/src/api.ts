@@ -25,6 +25,14 @@ export const client = new SupremeClient({
   onSessionExpired: () => { for (const l of sessionExpiredListeners) l(); },
 });
 
+/** Explicit "Log Out": revokes the session server-side (best-effort — still logs out
+ * locally even if the hub is unreachable), then drops the app back to the login screen
+ * via the same listeners a session-expiry uses. */
+export async function logOut(): Promise<void> {
+  await client.logout().catch(() => {});
+  for (const l of sessionExpiredListeners) l();
+}
+
 // ── Unauthenticated onboarding + account-recovery endpoints ─────────────────────
 // These are first-run / pre-login flows the SDK doesn't model; small fetch helpers
 // keep the app bound to the Supreme contract (still zero Home Assistant awareness).

@@ -22,6 +22,14 @@ export const client = new SupremeClient({
   onSessionExpired: () => { for (const l of sessionExpiredListeners) l(); },
 });
 
+/** Explicit "Log Out": revokes the session server-side (best-effort — still logs out
+ * locally even if the hub is unreachable), then drops the portal back to the login screen
+ * via the same listeners a session-expiry uses. */
+export async function logOut(): Promise<void> {
+  await client.logout().catch(() => {});
+  for (const l of sessionExpiredListeners) l();
+}
+
 export interface KnxImportResult {
   devices: number;
   roomsCreated: number;

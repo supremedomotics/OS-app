@@ -6,7 +6,7 @@ import {
   loadAureonTheme,
   saveAureonTheme,
 } from "@supreme/aureon-web";
-import { client, onSessionExpired } from "./api.js";
+import { client, logOut, onSessionExpired } from "./api.js";
 import { PasswordInput } from "./password-input.js";
 import {
   BackupRestore,
@@ -75,6 +75,12 @@ export function App() {
           </button>
         ))}
         <ThemeBar />
+        <button
+          className="logout-button"
+          onClick={() => { if (window.confirm("Log out of this device? You'll need to sign in again.")) void logOut(); }}
+        >
+          Log out
+        </button>
       </nav>
       <main>
         {tab === "drivers" && <DriverStore />}

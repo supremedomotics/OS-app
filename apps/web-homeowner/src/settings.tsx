@@ -8,7 +8,7 @@ import {
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
-import { activateLicense, client, devIssueLicense, fetchLicense, setDevMode, type LicenseInfo } from "./api.js";
+import { activateLicense, client, devIssueLicense, fetchLicense, logOut, setDevMode, type LicenseInfo } from "./api.js";
 import { PasskeysSection } from "./passkeys.js";
 import { PasswordInput } from "./password-input.js";
 import { AdvancedSettings } from "./advanced.js";
@@ -394,6 +394,11 @@ function AccountSettings() {
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
       <button className="primary" disabled={busy || !current || !next} onClick={change} style={{ marginTop: 10 }}>
         {busy ? "Updating…" : "Update password"}
+      </button>
+
+      <p className="opt-label" style={{ marginTop: 18 }}>Session</p>
+      <button onClick={() => { if (window.confirm("Log out of this device? You'll need to sign in again.")) void logOut(); }}>
+        Log out
       </button>
 
       <DeleteAccount />

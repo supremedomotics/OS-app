@@ -39,6 +39,7 @@ body {
 .theme-bar-label { font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; color: var(--aureon-color-text-secondary); }
 .theme-bar-row { display: flex; gap: 6px; margin-top: 8px; }
 .theme-bar-row button { flex: 1; padding: 7px 4px; font-size: 12px; }
+.logout-button { margin-top: 8px !important; color: var(--aureon-color-status-critical) !important; }
 .app { display: flex; min-height: 100vh; }
 nav {
   width: 220px;
