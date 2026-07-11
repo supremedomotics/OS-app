@@ -10,12 +10,13 @@ import { useLive } from "./live.js";
 
 /**
  * Climate (§ Navigation → Climate) — the whole-home view of HVAC units: every device the home
- * exposes with a `temperature` capability driven by a real, capability-driven ClimateCapabilityConfig
- * (i.e. genuinely bound to a native driver like CoolMaster — `config.source` is populated), grouped by
- * room. A plain thermostat with no rich config (nothing declared beyond a bare setpoint) isn't listed
- * here; it's still reachable through Rooms/Devices with its existing simple controls — this page is
- * specifically the rich HVAC console, not a second generic-thermostat UI. Selecting a unit opens the
- * rich console as this page's main content — not a modal — matching the Media page's own pattern.
+ * exposes with a `temperature` capability, grouped by room. The console (ClimateConsole)
+ * already degrades gracefully when a unit's capability config is bare (no modes/fan speeds/
+ * swing positions declared) — it just hides the sections it has nothing to show, rather than
+ * requiring a rich, driver-reported config up front — so this list shouldn't gate on that
+ * either: any commissioned AC/thermostat belongs here once it's added, full parity with a
+ * CoolMaster-bound unit or not. Selecting a unit opens the rich console as this page's main
+ * content — not a modal — matching the Media page's own pattern.
  */
 type Room = { id: string; name: string };
 
@@ -29,9 +30,7 @@ function climateSummary(d: Device, live: Record<string, unknown>): string {
 }
 
 function hasClimateConfig(d: Device): boolean {
-  const cap = d.capabilities.find((c) => c.kind === "temperature");
-  const config = cap?.config as { source?: string } | undefined;
-  return Boolean(config?.source);
+  return d.capabilities.some((c) => c.kind === "temperature");
 }
 
 export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {

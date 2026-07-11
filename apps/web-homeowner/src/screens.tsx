@@ -24,7 +24,7 @@ import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
-import { DeviceTile } from "./device-tile.js";
+import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
 import { Icon } from "./icons.js";
@@ -316,7 +316,7 @@ function categorySummary(kind: CategoryKind, devices: Device[], live: Record<str
 
 function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void }) {
   const heroRef = useHeroFlip<HTMLDivElement>(heroOrigin);
-  const [devices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
+  const [devices, reloadDevices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
   const { states } = useLive();
   const roomPhoto = useRoomPhoto({ id: roomId, name, heroImageUrl }, client);
   const [category, setCategory] = useState<CategoryKind | null>(null);
@@ -325,11 +325,11 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { ro
 
   if (category === "lighting") {
     const lights = cats.find((c) => c.kind === "lighting")?.devices ?? [];
-    return <RoomLighting roomId={roomId} name={name} lights={lights} onBack={() => setCategory(null)} />;
+    return <RoomLighting roomId={roomId} name={name} lights={lights} onBack={() => setCategory(null)} onDeviceRemoved={reloadDevices} />;
   }
   if (category) {
     const cat = cats.find((c) => c.kind === category);
-    if (cat) return <CategoryDeviceList roomName={name} category={cat} onBack={() => setCategory(null)} />;
+    if (cat) return <CategoryDeviceList roomName={name} category={cat} onBack={() => setCategory(null)} onDeviceRemoved={reloadDevices} />;
   }
 
   return (
@@ -374,7 +374,7 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { ro
 /** The device list for a single category (Media, Curtains, Climate, …) — tap a card to open its
  * full control. Lighting has its own richer page ({@link RoomLighting}); every other category
  * reuses the same tile grammar as the rest of the app. */
-function CategoryDeviceList({ roomName, category, onBack }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void }) {
+function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void }) {
   const [detail, setDetail] = useState<Device | null>(null);
   const [sheet, setSheet] = useState<Device | null>(null);
   const open = (d: Device) => {
@@ -389,7 +389,7 @@ function CategoryDeviceList({ roomName, category, onBack }: { roomName: string; 
       <h1 className="title">{category.label}</h1>
       <div className="dlist">
         {category.devices.map((d) => (
-          <DeviceTile key={d.id} device={d} onOpen={() => open(d)} />
+          <RemovableDeviceTile key={d.id} device={d} onOpen={() => open(d)} onRemoved={onDeviceRemoved} />
         ))}
       </div>
       {sheet && <DeviceSheet device={sheet} onClose={() => setSheet(null)} />}

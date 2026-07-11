@@ -15,11 +15,28 @@ import 'lighting_detail.dart';
 /// drag-to-dim tile. Tapping a light's chevron opens its own full [LightingDetail]. Everything here
 /// is live: a change made anywhere else (another screen, a physical switch, the driver's own app)
 /// reflects immediately, because every value reads through [liveStatesProvider].
-class RoomLightingScreen extends ConsumerWidget {
+///
+/// Remove device (§ Room detail): every light here is slidable (drag-to-dim uses the same
+/// horizontal axis a swipe-to-delete gesture would), so removal is a small delete button
+/// alongside the tile rather than a competing swipe.
+class RoomLightingScreen extends ConsumerStatefulWidget {
   const RoomLightingScreen({super.key, required this.roomName, required this.lights});
 
   final String roomName;
   final List<Device> lights;
+
+  @override
+  ConsumerState<RoomLightingScreen> createState() => _RoomLightingScreenState();
+}
+
+class _RoomLightingScreenState extends ConsumerState<RoomLightingScreen> {
+  final List<Device> _lights = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _lights.addAll(widget.lights);
+  }
 
   Map<String, dynamic>? _colorOf(Device d, Map<String, Map<String, dynamic>> live) => mergedDeviceState(d, live)['color'] as Map<String, dynamic>?;
 
@@ -44,7 +61,7 @@ class RoomLightingScreen extends ConsumerWidget {
     final client = ref.read(clientProvider);
     final apply = ref.read(liveStatesProvider.notifier).apply;
     final live = ref.read(liveStatesProvider);
-    for (final d in lights) {
+    for (final d in _lights) {
       final hasBrightness = d.capabilities.contains('brightness');
       if (hasBrightness) {
         // 100 is a far more plausible guess than 1 for an unknown/zero cached level — the
@@ -107,18 +124,44 @@ class RoomLightingScreen extends ConsumerWidget {
     await client.command(d.id, {'capability': 'brightness', 'action': 'set', 'level': val});
   }
 
+  Future<bool> _confirmRemove(Device d) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove device?'),
+        content: Text('Remove "${d.name}"? This can\'t be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<void> _remove(Device d) async {
+    try {
+      await ref.read(clientProvider).deleteDevice(d.id);
+      if (!mounted) return;
+      setState(() => _lights.removeWhere((x) => x.id == d.id));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not remove ${d.name}: $e')));
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final live = ref.watch(liveStatesProvider);
 
-    final onCount = lights.where((d) => _onOf(d, live)).length;
+    final onCount = _lights.where((d) => _onOf(d, live)).length;
     // The master switch reflects "is anything on" (matches the "N of M on" convention used
     // elsewhere), not "is everything on" — a single light left on should still read as the
     // room being on. The tap action follows the same rule: off from any/all-on, on from none.
     final anyOn = onCount > 0;
-    final rgbLights = lights.where((d) => colorModesOf(_colorOf(d, live)).rgb).toList();
-    final cctLights = lights.where((d) => colorModesOf(_colorOf(d, live)).cct).toList();
+    final rgbLights = _lights.where((d) => colorModesOf(_colorOf(d, live)).rgb).toList();
+    final cctLights = _lights.where((d) => colorModesOf(_colorOf(d, live)).cct).toList();
     final rgbAnchor = rgbLights.isNotEmpty ? _colorOf(rgbLights.first, live) : null;
     final cctAnchor = cctLights.isNotEmpty ? _colorOf(cctLights.first, live) : null;
 
@@ -127,7 +170,7 @@ class RoomLightingScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(AureonSpacing.lg),
         children: [
-          if (lights.isNotEmpty)
+          if (_lights.isNotEmpty)
             GestureDetector(
               onTap: () => _setAll(ref, !anyOn),
               child: Container(
@@ -146,7 +189,7 @@ class RoomLightingScreen extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text('All lights', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17)),
-                          Text('$onCount of ${lights.length} on', style: Theme.of(context).textTheme.labelMedium),
+                          Text('$onCount of ${_lights.length} on', style: Theme.of(context).textTheme.labelMedium),
                         ],
                       ),
                     ),
@@ -179,25 +222,36 @@ class RoomLightingScreen extends ConsumerWidget {
             ],
           ],
           const SizedBox(height: AureonSpacing.xl),
-          for (final d in lights)
+          for (final d in _lights)
             Padding(
               padding: const EdgeInsets.only(bottom: AureonSpacing.md),
               child: Builder(builder: (_) {
                 final spec = tileSpec(d, mergedDeviceState(d, live));
-                return DeviceControlTile(
-                  icon: spec.icon,
-                  name: d.name,
-                  valueLabel: spec.value,
-                  fill: spec.fill,
-                  on: spec.on,
-                  slidable: true,
-                  onChanged: (v) => _drag(ref, d, v),
-                  onToggle: () => _toggle(ref, d, !spec.on),
-                  onOpenDetail: () async {
-                    ref.read(usageProvider.notifier).record('device', d.id);
-                    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LightingDetail(device: d)));
-                  },
-                );
+                return Row(children: [
+                  Expanded(
+                    child: DeviceControlTile(
+                      icon: spec.icon,
+                      name: d.name,
+                      valueLabel: spec.value,
+                      fill: spec.fill,
+                      on: spec.on,
+                      slidable: true,
+                      onChanged: (v) => _drag(ref, d, v),
+                      onToggle: () => _toggle(ref, d, !spec.on),
+                      onOpenDetail: () async {
+                        ref.read(usageProvider.notifier).record('device', d.id);
+                        await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LightingDetail(device: d)));
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: AureonSpacing.sm),
+                  IconButton(
+                    onPressed: () async { if (await _confirmRemove(d)) await _remove(d); },
+                    icon: const Icon(Icons.delete_outline),
+                    color: Theme.of(context).colorScheme.error,
+                    tooltip: 'Remove ${d.name}',
+                  ),
+                ]);
               }),
             ),
         ],

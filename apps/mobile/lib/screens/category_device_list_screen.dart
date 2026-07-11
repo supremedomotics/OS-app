@@ -14,13 +14,31 @@ import 'device_sheet.dart';
 /// tap toggles on/off (slidable ones) or opens its sheet (everything else), drag sets the level
 /// live, and a chevron opens the full detail. Lighting has its own richer page
 /// ([RoomLightingScreen](room_lighting_screen.dart)).
-class CategoryDeviceListScreen extends ConsumerWidget {
+///
+/// Remove device (§ Room detail): a non-slidable tile (switch/sensor/lock) left-swipes to reveal
+/// Remove, the standard mobile list-delete gesture. A slidable tile (dimmer/cover) already uses
+/// horizontal drag on the same axis to set brightness/position, so it gets a small delete button
+/// alongside instead rather than a competing swipe gesture.
+class CategoryDeviceListScreen extends ConsumerStatefulWidget {
   const CategoryDeviceListScreen({super.key, required this.roomName, required this.category});
 
   final String roomName;
   final Category category;
 
-  Future<void> _toggle(WidgetRef ref, Device d, TileSpec spec) async {
+  @override
+  ConsumerState<CategoryDeviceListScreen> createState() => _CategoryDeviceListScreenState();
+}
+
+class _CategoryDeviceListScreenState extends ConsumerState<CategoryDeviceListScreen> {
+  final List<Device> _devices = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _devices.addAll(widget.category.devices);
+  }
+
+  Future<void> _toggle(Device d, TileSpec spec) async {
     final client = ref.read(clientProvider);
     final apply = ref.read(liveStatesProvider.notifier).apply;
     ref.read(usageProvider.notifier).record('device', d.id);
@@ -34,7 +52,7 @@ class CategoryDeviceListScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _drag(WidgetRef ref, Device d, double v) async {
+  Future<void> _drag(Device d, double v) async {
     final client = ref.read(clientProvider);
     final apply = ref.read(liveStatesProvider.notifier).apply;
     final val = (v * 100).round();
@@ -42,7 +60,7 @@ class CategoryDeviceListScreen extends ConsumerWidget {
     await client.command(d.id, {'capability': 'position', 'action': 'set', 'position': val});
   }
 
-  Future<void> _open(BuildContext context, WidgetRef ref, Device d) async {
+  Future<void> _open(Device d) async {
     ref.read(usageProvider.notifier).record('device', d.id);
     if (d.capabilities.contains('brightness') || d.capabilities.contains('color')) {
       await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => DeviceDetailScreen(device: d)));
@@ -51,30 +69,87 @@ class CategoryDeviceListScreen extends ConsumerWidget {
     }
   }
 
+  Future<bool> _confirmRemove(Device d) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove device?'),
+        content: Text('Remove "${d.name}"? This can\'t be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<void> _remove(Device d) async {
+    try {
+      await ref.read(clientProvider).deleteDevice(d.id);
+      if (!mounted) return;
+      setState(() => _devices.removeWhere((x) => x.id == d.id));
+    } catch (e) {
+      if (!mounted) return;
+      // The Dismissible has already animated the tile away — put it back rather than leave
+      // the list silently missing a device the removal actually failed for.
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not remove ${d.name}: $e')));
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final live = ref.watch(liveStatesProvider);
     return Scaffold(
-      appBar: AppBar(title: Text(category.def.label)),
+      appBar: AppBar(title: Text(widget.category.def.label)),
       body: ListView(
         padding: const EdgeInsets.all(AureonSpacing.lg),
         children: [
-          for (final d in category.devices)
+          for (final d in _devices)
             Padding(
               padding: const EdgeInsets.only(bottom: AureonSpacing.md),
               child: Builder(builder: (_) {
                 final spec = tileSpec(d, mergedDeviceState(d, live));
-                return DeviceControlTile(
+                final tile = DeviceControlTile(
                   icon: spec.icon,
                   name: d.name,
                   valueLabel: spec.value,
                   fill: spec.fill,
                   on: spec.on,
                   slidable: spec.slidable,
-                  onChanged: spec.slidable ? (v) => _drag(ref, d, v) : null,
-                  onToggle: spec.slidable ? () => _toggle(ref, d, spec) : null,
-                  onTap: spec.slidable ? null : () => _open(context, ref, d),
-                  onOpenDetail: spec.slidable ? () => _open(context, ref, d) : null,
+                  onChanged: spec.slidable ? (v) => _drag(d, v) : null,
+                  onToggle: spec.slidable ? () => _toggle(d, spec) : null,
+                  onTap: spec.slidable ? null : () => _open(d),
+                  onOpenDetail: spec.slidable ? () => _open(d) : null,
+                );
+                if (spec.slidable) {
+                  return Row(children: [
+                    Expanded(child: tile),
+                    const SizedBox(width: AureonSpacing.sm),
+                    IconButton(
+                      onPressed: () async { if (await _confirmRemove(d)) await _remove(d); },
+                      icon: const Icon(Icons.delete_outline),
+                      color: Theme.of(context).colorScheme.error,
+                      tooltip: 'Remove ${d.name}',
+                    ),
+                  ]);
+                }
+                return Dismissible(
+                  key: ValueKey(d.id),
+                  direction: DismissDirection.endToStart,
+                  confirmDismiss: (_) => _confirmRemove(d),
+                  onDismissed: (_) => _remove(d),
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.symmetric(horizontal: AureonSpacing.lg),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.error,
+                      borderRadius: BorderRadius.circular(AureonRadius.lg),
+                    ),
+                    child: const Icon(Icons.delete_outline, color: Colors.white),
+                  ),
+                  child: tile,
                 );
               }),
             ),

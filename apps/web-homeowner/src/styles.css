@@ -501,6 +501,27 @@ button.link {
 }
 .dtile-open:hover { background: color-mix(in srgb, var(--aureon-color-text-primary) 8%, transparent); color: var(--aureon-color-text-primary); }
 
+/* Removable device tile (§ Room detail "remove device") — left-swipe reveals a delete action
+   behind the tile; a dimmer/cover tile keeps its drag-to-set gesture and gets a plain button
+   alongside instead, since both use the same horizontal axis. */
+.swipe-remove { position: relative; border-radius: 18px; overflow: hidden; }
+.swipe-remove-content { touch-action: pan-y; transition: transform 160ms ease; }
+.swipe-remove-content .dtile { border-radius: 18px; }
+.swipe-remove-action {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 76px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--aureon-color-status-critical); color: #fff; border: 0; font-size: 20px; cursor: pointer;
+}
+.dtile-row { display: flex; align-items: center; gap: 8px; }
+.dtile-row .dtile { flex: 1; }
+.dtile-remove-btn {
+  flex: none; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  color: var(--aureon-color-status-critical); font-size: 16px; cursor: pointer;
+}
+.dtile-remove-btn:hover { background: color-mix(in srgb, var(--aureon-color-status-critical) 12%, var(--aureon-color-base-surface-raised)); }
+
 /* Screen header with an edit action */
 .screen-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
 .edit-btn {

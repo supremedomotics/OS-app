@@ -10,18 +10,15 @@ import 'device_sheet.dart';
 
 /// Climate (§ Navigation → Climate) — mobile parity with the web Climate view. The
 /// whole-home list of HVAC units: every device the home exposes with a `temperature`
-/// capability driven by a real, capability-driven ClimateCapabilityConfig (i.e.
-/// genuinely bound to a native driver like CoolMaster), grouped by room. A plain
-/// thermostat with no rich config isn't listed here — it's still reachable through
-/// Rooms/Devices with its existing simple dual-setpoint controls; this page is
-/// specifically the rich HVAC console. Mirrors media_screen.dart's exact structure.
+/// capability, grouped by room. The console (ClimateConsoleScreen) already degrades
+/// gracefully when a unit's capability config is bare (no modes/fan speeds/swing
+/// positions declared) — it just hides the sections it has nothing to show — so this
+/// list doesn't gate on that either; any commissioned AC/thermostat belongs here.
+/// Mirrors media_screen.dart's exact structure.
 class ClimateScreen extends ConsumerWidget {
   const ClimateScreen({super.key});
 
-  bool _hasClimateConfig(Device d) {
-    if (!d.capabilities.contains('temperature')) return false;
-    return d.climateModes.isNotEmpty;
-  }
+  bool _hasClimateConfig(Device d) => d.capabilities.contains('temperature');
 
   String _summary(Device d, Map<String, Map<String, dynamic>> live) {
     final state = mergedDeviceState(d, live);

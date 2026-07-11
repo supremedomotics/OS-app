@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
@@ -96,6 +96,90 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
           ›
         </button>
       )}
+    </div>
+  );
+}
+
+const SWIPE_REVEAL = 76;
+
+/**
+ * A {@link DeviceTile} with a "Remove device" action reachable from the room detail device
+ * list — left-swipe reveals it, matching the standard mobile list-delete gesture. A dimmer/
+ * cover tile already uses horizontal drag on this same axis to set brightness/position, so a
+ * competing swipe-to-reveal there would be ambiguous — those get a small always-visible remove
+ * button alongside the tile instead, keeping the drag-to-set gesture intact.
+ */
+export function RemovableDeviceTile({ device, onOpen, onRemoved }: { device: Device; onOpen?: () => void; onRemoved?: () => void }) {
+  const caps = device.capabilities.map((c) => c.kind);
+  const isDimmer = caps.includes("brightness");
+  const isCover = !isDimmer && caps.includes("position");
+  const slidable = isDimmer || isCover;
+  const [busy, setBusy] = useState(false);
+  const [dragX, setDragX] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const startX = useRef<number | null>(null);
+  const dragging = useRef(false);
+
+  async function remove() {
+    if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) {
+      setRevealed(false);
+      setDragX(0);
+      return;
+    }
+    setBusy(true);
+    try {
+      await client.deleteDevice(device.id as DeviceId);
+      onRemoved?.();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (slidable) {
+    return (
+      <div className="dtile-row">
+        <DeviceTile device={device} onOpen={onOpen} />
+        <button className="dtile-remove-btn" disabled={busy} onClick={() => void remove()} aria-label={`Remove ${device.name}`}>
+          🗑
+        </button>
+      </div>
+    );
+  }
+
+  function onPointerDown(e: ReactPointerEvent) {
+    startX.current = e.clientX;
+    dragging.current = true;
+  }
+  function onPointerMove(e: ReactPointerEvent) {
+    if (!dragging.current || startX.current === null) return;
+    const delta = e.clientX - startX.current;
+    const base = revealed ? -SWIPE_REVEAL : 0;
+    setDragX(Math.max(-SWIPE_REVEAL, Math.min(0, base + delta)));
+  }
+  function onPointerUp() {
+    if (!dragging.current) return;
+    dragging.current = false;
+    startX.current = null;
+    const shouldReveal = dragX < -SWIPE_REVEAL / 2;
+    setRevealed(shouldReveal);
+    setDragX(shouldReveal ? -SWIPE_REVEAL : 0);
+  }
+
+  return (
+    <div className="swipe-remove">
+      <button className="swipe-remove-action" disabled={busy} onClick={() => void remove()} aria-label={`Remove ${device.name}`}>
+        🗑
+      </button>
+      <div
+        className="swipe-remove-content"
+        style={{ transform: `translateX(${dragX}px)` }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <DeviceTile device={device} onOpen={onOpen} />
+      </div>
     </div>
   );
 }

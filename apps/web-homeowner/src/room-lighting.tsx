@@ -3,7 +3,7 @@ import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model"
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { colorModes } from "./colormode.js";
-import { DeviceTile } from "./device-tile.js";
+import { RemovableDeviceTile } from "./device-tile.js";
 import { LightingDetail, ColorWheel, TempSlider } from "./lighting.js";
 
 type ColorSt = { on?: boolean; level?: number; hue?: number | null; saturation?: number | null; kelvin?: number | null };
@@ -17,7 +17,7 @@ type BrightnessSt = { on?: boolean; level?: number };
  * here is live: a change made anywhere else (another screen, a physical switch, the driver's own
  * app) reflects immediately, because every value reads through {@link useLive}.
  */
-export function RoomLighting({ name, lights, onBack }: { roomId: string; name: string; lights: Device[]; onBack: () => void }) {
+export function RoomLighting({ name, lights, onBack, onDeviceRemoved }: { roomId: string; name: string; lights: Device[]; onBack: () => void; onDeviceRemoved?: () => void }) {
   const { states, apply } = useLive();
   const [detail, setDetail] = useState<Device | null>(null);
 
@@ -113,7 +113,7 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
 
       <div className="rl-grid">
         {lights.map((d) => (
-          <DeviceTile key={d.id} device={d} onOpen={() => setDetail(d)} />
+          <RemovableDeviceTile key={d.id} device={d} onOpen={() => setDetail(d)} onRemoved={onDeviceRemoved} />
         ))}
       </div>
     </div>
