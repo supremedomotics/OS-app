@@ -797,6 +797,10 @@ button.link {
   cursor: pointer; padding: 6px; border-radius: 8px;
 }
 .pw-toggle:hover { color: var(--aureon-color-gold-400); }
+/* Edge/IE inject their own built-in reveal/clear icon inside password inputs, which sits on
+   top of our custom eye toggle and makes it look off-center rather than flush with the right
+   edge — hide the browser's own icon so only ours shows. */
+input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display: none; }
 /* Licensing */
 .dev-banner {
   background: linear-gradient(90deg, #5a3d00, #a06f00); color: #fff; font-weight: 700; letter-spacing: 0.04em;

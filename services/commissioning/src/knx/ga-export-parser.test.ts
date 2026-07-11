@@ -25,4 +25,24 @@ describe("flat GA export parser", () => {
     const ga = [...model.groupAddresses.values()][0]!;
     expect(ga).toMatchObject({ mainGroup: "Lighting", middleGroup: "Switching", address: "1/1/1", dpt: "1.001" });
   });
+
+  it("parses ETS5/6's native 'Export Group Addresses' CSV — Main/Middle/Sub columns, group " +
+    "names printed once on a non-leaf summary row then left blank on every following row", () => {
+    const csv = [
+      `"Main";"Middle";"Sub";"Address";"Central";"Unfiltered";"Description";"DatapointType"`,
+      `"All Lights";"Master Control";"";"0/-/-";"";"";"";""`,
+      `"";"";"SW";"0/0/1";"";"";"";"DPST-1-1"`,
+      `"";"";"SW Status";"0/0/2";"";"";"";"DPST-1-1"`,
+      `"";"";"Dimm";"0/0/3";"";"";"";"DPST-1-7"`,
+    ].join("\n");
+    const model = parseGaExport(csv);
+    // The "0/-/-" summary row isn't a leaf group address — only the three real ones parse.
+    expect(model.groupAddresses.size).toBe(3);
+    const sw = model.groupAddresses.get("ga:0/0/1")!;
+    expect(sw).toMatchObject({ name: "SW", mainGroup: "All Lights", middleGroup: "Master Control", dpt: "1.001" });
+    const status = model.groupAddresses.get("ga:0/0/2")!;
+    expect(status).toMatchObject({ name: "SW Status", mainGroup: "All Lights", middleGroup: "Master Control" });
+    const dimm = model.groupAddresses.get("ga:0/0/3")!;
+    expect(dimm).toMatchObject({ name: "Dimm", mainGroup: "All Lights", middleGroup: "Master Control", dpt: "1.007" });
+  });
 });

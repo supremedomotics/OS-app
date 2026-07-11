@@ -40,6 +40,10 @@ body {
 .theme-bar-row { display: flex; gap: 6px; margin-top: 8px; }
 .theme-bar-row button { flex: 1; padding: 7px 4px; font-size: 12px; }
 .logout-button { margin-top: 8px !important; color: var(--aureon-color-status-critical) !important; }
+/* Edge/IE inject their own built-in reveal/clear icon inside password inputs, which sits on
+   top of our custom eye toggle (password-input.tsx) and makes it look off-center rather than
+   flush with the right edge — hide the browser's own icon so only ours shows. */
+input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display: none; }
 .app { display: flex; min-height: 100vh; }
 nav {
   width: 220px;

@@ -76,7 +76,10 @@ function parseGaExportCsv(text: string): KnxProjectModel {
   if (lines.length === 0) return model;
   const sep = pickSeparator(lines[0]!);
   const header = lines[0]!.split(sep).map((h) => stripQuotes(h).toLowerCase());
-  const nameCol = header.findIndex((h) => h === "group name" || h === "name");
+  // ETS5/6's own "Export Group Addresses" CSV names the leaf address's own name column
+  // "Sub" (the third tier of its Main/Middle/Sub group hierarchy) rather than "Name" —
+  // recognize it too, or every row silently loses its real name.
+  const nameCol = header.findIndex((h) => h === "group name" || h === "name" || h === "sub" || h === "sub group");
   const addrCol = header.findIndex((h) => h === "address" || h === "group address");
   const dptCol = header.findIndex((h) => h.includes("datapoint") || h === "dpt" || h.includes("data type"));
   const descCol = header.findIndex((h) => h.startsWith("description"));
@@ -86,10 +89,21 @@ function parseGaExportCsv(text: string): KnxProjectModel {
   const hasHeader = addrCol >= 0;
   const rows = hasHeader ? lines.slice(1) : lines;
 
+  // ETS prints each Main/Middle group's name once, on its own summary row (a non-leaf
+  // address like "0/-/-" or "0/1/-"), then leaves the cell blank on every subsequent row
+  // belonging to that same group — carry the last-seen name forward, the same way the
+  // .knxproj/XML path tracks a nested <GroupRange> stack.
+  let currentMain: string | null = null;
+  let currentMiddle: string | null = null;
+
   for (const line of rows) {
     const cells = line.split(sep).map(stripQuotes);
     const address = (addrCol >= 0 ? cells[addrCol] : cells[1]) ?? "";
-    if (!/^\d+\/\d+\/\d+$/.test(address)) continue; // only 3-level group addresses
+
+    if (mainCol >= 0 && cells[mainCol]) currentMain = cells[mainCol]!;
+    if (middleCol >= 0 && cells[middleCol]) currentMiddle = cells[middleCol]!;
+
+    if (!/^\d+\/\d+\/\d+$/.test(address)) continue; // a Main/Middle summary row, not a leaf GA
     // The address itself is the stable id (see the XML path's comment above) — CSV
     // exports never carry a native ETS Id.
     const id = `ga:${address}`;
@@ -100,8 +114,8 @@ function parseGaExportCsv(text: string): KnxProjectModel {
       description: descCol >= 0 ? cells[descCol] || null : null,
       comment: commentCol >= 0 ? cells[commentCol] || null : null,
       dpt: normalizeDpt(dptCol >= 0 ? cells[dptCol] ?? null : null),
-      mainGroup: mainCol >= 0 ? cells[mainCol] || null : null,
-      middleGroup: middleCol >= 0 ? cells[middleCol] || null : null,
+      mainGroup: mainCol >= 0 ? currentMain : null,
+      middleGroup: middleCol >= 0 ? currentMiddle : null,
       comObjectIds: [],
     });
   }

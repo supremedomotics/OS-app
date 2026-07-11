@@ -2,6 +2,7 @@ import type { INativeProtocolDriver } from "@supreme/integration-layer";
 import {
   AvrProtocolDriver,
   CasambiProtocolDriver,
+  CoolMasterProtocolDriver,
   HeosProtocolDriver,
   KnxProtocolDriver,
   ModbusProtocolDriver,
@@ -45,6 +46,21 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
     const networkId = str(c.networkId);
     return new CasambiProtocolDriver({
       credentials: { apiKey, email, password, ...(networkId ? { networkId } : {}) },
+    });
+  },
+  coolmaster: (c) => {
+    const host = str(c.host);
+    if (!host) return null;
+    const protocol = str(c.protocol);
+    return new CoolMasterProtocolDriver({
+      host,
+      ...(protocol === "auto" || protocol === "ascii" || protocol === "rest" ? { protocol } : {}),
+      asciiPort: int(c.asciiPort, 10102),
+      restPort: int(c.restPort, 10103),
+      pollMs: int(c.pollMs, 10_000),
+      timeoutMs: int(c.timeoutMs, 5_000),
+      retryCount: int(c.retryCount, 3),
+      debug: c.debug === true,
     });
   },
   // AVR/HEOS/Yamaha have no global host/credentials to configure here — each physical

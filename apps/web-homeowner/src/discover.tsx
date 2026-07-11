@@ -14,6 +14,35 @@ import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } fro
 type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string } };
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 
+/**
+ * Protocols whose devices are added one at a time by IP address rather than found by a
+ * broadcast scan — either because the technology has no discovery protocol at all (AVR/HEOS/
+ * Yamaha are Telnet/CLI/HTTP-only), or because a scan can't reach it (SSDP/mDNS don't cross
+ * the hub's network boundary on every deployment). Manual entry uses the exact same
+ * commission-with-protocol-binding call a scan hit would, so it's a first-class path, not a
+ * fallback. KNX/Modbus/MQTT devices are usually better added via the ETS import / Bus Binding
+ * power-user tools, but a single manual bind works the same way here too.
+ */
+const MANUAL_PROTOCOLS = ["avr", "heos", "yamaha", "knx", "modbus", "mqtt"] as const;
+const MANUAL_ADDRESS_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string> = {
+  avr: "Receiver IP e.g. 192.168.1.50 (Telnet, port 23)",
+  heos: "Any one HEOS player's IP e.g. 192.168.1.51 (port 1255)",
+  yamaha: "Unit IP e.g. 192.168.1.52 (HTTP, port 80)",
+  knx: "Group address e.g. 1/2/0",
+  modbus: "Register e.g. 100",
+  mqtt: "Base topic e.g. z2m/lamp",
+};
+// AVR/Yamaha zones default to "main" if omitted; HEOS's player id (pid) is required — get it
+// from the HEOS app's "About This Device" screen for that player.
+const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | null> = {
+  avr: '{"zone":"main"}',
+  heos: '{"pid":"<player id>"}',
+  yamaha: '{"zone":"main"}',
+  knx: null,
+  modbus: '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
+  mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
+};
+
 /** The extension that drives a given protocol, from registry metadata. */
 function recommend(registry: DriverEntry[], protocol?: string): DriverEntry | undefined {
   if (!protocol) return undefined;
@@ -99,6 +128,8 @@ export function DiscoverDevices() {
           {error && <p className="err">{error}</p>}
         </div>
       )}
+
+      <ManualAddDevice registry={registry} rooms={rooms} onRoomCreated={loadRooms} />
 
       {phase === "results" && (
         <>
@@ -284,6 +315,183 @@ function FoundDevice({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * "Add device manually" (§ Automatic Device Discovery — the manual counterpart): for a device
+ * whose technology can't be broadcast-scanned (AVR/HEOS/Yamaha are Telnet/CLI/HTTP-only) or
+ * that a scan simply didn't reach, the installer types in the protocol + address themselves.
+ * Uses the exact same commission-with-protocol-binding call a scan hit's "Pair device" button
+ * does — this is the *answer* to "where do I enter the IP and pick a room", not a separate
+ * lesser tool.
+ */
+function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverEntry[]; rooms: Room[]; onRoomCreated: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [protocol, setProtocol] = useState<(typeof MANUAL_PROTOCOLS)[number]>("avr");
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [configText, setConfigText] = useState("");
+  const [mode, setMode] = useState<"existing" | "new">(rooms.length ? "existing" : "new");
+  const [roomId, setRoomId] = useState(rooms[0]?.id ?? "");
+  const [building, setBuilding] = useState("");
+  const [floor, setFloor] = useState("0");
+  const [area, setArea] = useState("");
+  const [roomName, setRoomName] = useState("");
+  const [step, setStep] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const driver = registry.find((d) => d.protocols.includes(protocol as never));
+  const capabilities = driver?.capabilities ?? [];
+
+  function reset() {
+    setName("");
+    setAddress("");
+    setConfigText("");
+    setDone(false);
+    setStep(null);
+    setErr(null);
+  }
+
+  async function submit() {
+    setErr(null);
+    if (!address.trim()) { setErr("Enter the device's address."); return; }
+    if (capabilities.length === 0) { setErr(`No installed extension declares capabilities for ${protocol.toUpperCase()} yet.`); return; }
+    setBusy(true);
+    try {
+      let targetRoomId = roomId;
+      if (mode === "new") {
+        if (!roomName.trim()) { setErr("Name the room."); setBusy(false); return; }
+        setStep("Creating room…");
+        const created = await client.createRoom({
+          name: roomName.trim(),
+          building: building.trim() || null,
+          floor: Number.parseInt(floor, 10) || 0,
+          area: area.trim() || null,
+        });
+        targetRoomId = created.room.id;
+        await onRoomCreated();
+      }
+      if (!targetRoomId) { setErr("Pick or create a room."); setBusy(false); return; }
+
+      if (driver && !driver.installed) {
+        setStep(`Installing ${driver.name}…`);
+        await installDriverByKey(driver.key);
+      }
+
+      let config: Record<string, unknown> | undefined;
+      if (configText.trim()) {
+        try { config = JSON.parse(configText) as Record<string, unknown>; }
+        catch { setErr("Config must be valid JSON."); setBusy(false); return; }
+      }
+
+      setStep("Adding device…");
+      await client.commission({
+        backendId: `manual:${protocol}:${address.trim()}`,
+        name: name.trim() || `${driver?.name ?? protocol.toUpperCase()} — ${address.trim()}`,
+        roomId: targetRoomId,
+        capabilities: capabilities as never,
+        protocol,
+        address: address.trim(),
+        ...(config ? { config } : {}),
+      });
+      setDone(true);
+      setStep(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Adding the device failed.");
+      setStep(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <p className="muted" style={{ margin: "16px 0" }}>
+        Can't find your device? <button className="link" onClick={() => setOpen(true)}>Add it manually by IP address</button>.
+      </p>
+    );
+  }
+
+  return (
+    <div className="ext-card disc-card open" style={{ margin: "16px 0" }}>
+      <div className="drv-detail">
+        <h3 style={{ marginTop: 0 }}>Add device manually</h3>
+        <p className="muted">
+          For devices with no broadcast discovery (AVR/HEOS/Yamaha receivers) — or a scan that
+          hasn't reached them yet — enter the protocol and address directly.
+        </p>
+
+        {done ? (
+          <>
+            <p className="muted">✓ Device added.</p>
+            <button onClick={() => { reset(); }}>Add another</button>
+          </>
+        ) : (
+          <>
+            <label className="drv-field"><span className="lbl">Protocol</span>
+              <select value={protocol} onChange={(e) => setProtocol(e.target.value as (typeof MANUAL_PROTOCOLS)[number])}>
+                {MANUAL_PROTOCOLS.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
+              </select>
+              {!driver && <span className="help">No installed extension covers {protocol.toUpperCase()} yet — install it from the Extension Center first.</span>}
+              {driver && capabilities.length > 0 && <span className="help">Will add with capabilities: {capabilities.join(", ")}</span>}
+            </label>
+
+            <label className="drv-field"><span className="lbl">Name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder={driver ? `${driver.name} — ${address || "…"}` : "Device name"} />
+            </label>
+
+            <label className="drv-field"><span className="lbl">Address</span>
+              <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder={MANUAL_ADDRESS_HINT[protocol]} />
+            </label>
+
+            {MANUAL_CONFIG_HINT[protocol] && (
+              <label className="drv-field"><span className="lbl">Config (optional)</span>
+                <input value={configText} onChange={(e) => setConfigText(e.target.value)} placeholder={`e.g. ${MANUAL_CONFIG_HINT[protocol]}`} />
+              </label>
+            )}
+
+            {rooms.length > 0 && (
+              <div className="seg">
+                <button className={mode === "existing" ? "on" : ""} onClick={() => setMode("existing")}>Existing room</button>
+                <button className={mode === "new" ? "on" : ""} onClick={() => setMode("new")}>New room</button>
+              </div>
+            )}
+
+            {mode === "existing" ? (
+              <label className="drv-field"><span className="lbl">Room</span>
+                <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                  {rooms.map((r) => <option key={r.id} value={r.id}>{roomLabel(r)}</option>)}
+                </select>
+              </label>
+            ) : (
+              <>
+                <label className="drv-field"><span className="lbl">Building</span>
+                  <input value={building} onChange={(e) => setBuilding(e.target.value)} placeholder="Main House (optional)" />
+                </label>
+                <label className="drv-field"><span className="lbl">Floor</span>
+                  <input type="number" value={floor} onChange={(e) => setFloor(e.target.value)} />
+                </label>
+                <label className="drv-field"><span className="lbl">Room</span>
+                  <input value={roomName} onChange={(e) => setRoomName(e.target.value)} placeholder="e.g. Media Room" />
+                </label>
+                <label className="drv-field"><span className="lbl">Area</span>
+                  <input value={area} onChange={(e) => setArea(e.target.value)} placeholder="e.g. East Wing (optional)" />
+                </label>
+              </>
+            )}
+
+            <div className="drv-actions">
+              <button className="primary" disabled={busy} onClick={submit}>{busy ? (step ?? "Adding…") : "Add device"}</button>
+              <button disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+            </div>
+            {err && <p className="err">{err}</p>}
+          </>
+        )}
+      </div>
     </div>
   );
 }

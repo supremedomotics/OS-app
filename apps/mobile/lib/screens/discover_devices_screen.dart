@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:aureon_flutter/aureon_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -85,6 +87,8 @@ class _DiscoverDevicesScreenState extends ConsumerState<DiscoverDevicesScreen> {
                 onPaired: () => setState(() => _found = _found.where((x) => x['backendId'] != d['backendId']).toList()),
               ),
           ],
+          const SizedBox(height: AureonSpacing.lg),
+          _ManualAddDevice(registry: registry),
         ],
       ),
     );
@@ -266,6 +270,176 @@ class _FoundDeviceState extends ConsumerState<_FoundDevice> {
           if (_step != null && _err == null) Text(_step!, style: Theme.of(context).textTheme.labelSmall),
           if (_err != null) Text(_err!, style: const TextStyle(color: AureonStatus.critical)),
         ],
+      ),
+    );
+  }
+}
+
+// Protocols with no broadcast discovery (AVR/HEOS/Yamaha are Telnet/CLI/HTTP-only) or that a
+// scan simply hasn't reached — added one at a time by address instead. Excludes coolmaster: its
+// indoor units auto-discover once the gateway host is set in the Extension Center.
+const _manualProtocols = ['avr', 'heos', 'yamaha', 'knx', 'modbus', 'mqtt'];
+const _manualAddressHint = {
+  'avr': "Receiver IP e.g. 192.168.1.50 (Telnet, port 23)",
+  'heos': "Any one HEOS player's IP e.g. 192.168.1.51 (port 1255)",
+  'yamaha': "Unit IP e.g. 192.168.1.52 (HTTP, port 80)",
+  'knx': "Group address e.g. 1/2/0",
+  'modbus': "Register e.g. 100",
+  'mqtt': "Base topic e.g. z2m/lamp",
+};
+const _manualConfigHint = {
+  'avr': '{"zone":"main"}',
+  'heos': '{"pid":"<player id>"}',
+  'yamaha': '{"zone":"main"}',
+  'modbus': '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
+  'mqtt': '{"field":"temperature","unit":"°C","measure":"temperature"}',
+};
+
+/// "Add device manually" (§ Automatic Device Discovery — the manual counterpart): for a device
+/// whose technology can't be broadcast-scanned, or that a scan didn't reach, the installer types
+/// in the protocol + address themselves. Uses the exact same commission-with-protocol-binding
+/// call a scan hit's "Pair device" button does.
+class _ManualAddDevice extends ConsumerStatefulWidget {
+  const _ManualAddDevice({required this.registry});
+  final List<Map<String, dynamic>> registry;
+
+  @override
+  ConsumerState<_ManualAddDevice> createState() => _ManualAddDeviceState();
+}
+
+class _ManualAddDeviceState extends ConsumerState<_ManualAddDevice> {
+  bool _open = false;
+  String _protocol = 'avr';
+  final TextEditingController _name = TextEditingController();
+  final TextEditingController _address = TextEditingController();
+  final TextEditingController _config = TextEditingController();
+  String? _roomId;
+  bool _busy = false;
+  String? _step;
+  String? _err;
+  bool _done = false;
+
+  @override
+  void dispose() { _name.dispose(); _address.dispose(); _config.dispose(); super.dispose(); }
+
+  Map<String, dynamic>? get _driver {
+    for (final d in widget.registry) {
+      if (((d['protocols'] as List?) ?? const []).contains(_protocol)) return d;
+    }
+    return null;
+  }
+
+  Future<void> _submit(List<Room> rooms) async {
+    setState(() { _err = null; });
+    if (_address.text.trim().isEmpty) { setState(() => _err = "Enter the device's address."); return; }
+    final roomId = _roomId ?? (rooms.isNotEmpty ? rooms.first.id : null);
+    if (roomId == null) { setState(() => _err = 'Pick a room.'); return; }
+    final caps = ((_driver?['capabilities'] as List?) ?? const []).cast<String>();
+    if (caps.isEmpty) { setState(() => _err = 'No installed extension covers ${_protocol.toUpperCase()} yet — install it from the Extension Center first.'); return; }
+    Map<String, dynamic>? config;
+    if (_config.text.trim().isNotEmpty) {
+      try { config = jsonDecode(_config.text.trim()) as Map<String, dynamic>; }
+      catch (_) { setState(() => _err = 'Config must be valid JSON.'); return; }
+    }
+    setState(() { _busy = true; });
+    final client = ref.read(clientProvider);
+    try {
+      final driver = _driver;
+      if (driver != null && driver['installed'] != true) {
+        setState(() => _step = 'Installing ${driver['name']}…');
+        await client.installDriver(driver['key'] as String);
+      }
+      setState(() => _step = 'Adding device…');
+      await client.commission(
+        backendId: 'manual:$_protocol:${_address.text.trim()}',
+        name: _name.text.trim().isEmpty ? '${driver?['name'] ?? _protocol.toUpperCase()} — ${_address.text.trim()}' : _name.text.trim(),
+        roomId: roomId,
+        capabilities: caps,
+        protocol: _protocol,
+        address: _address.text.trim(),
+        config: config,
+      );
+      ref.invalidate(homeProvider);
+      setState(() { _done = true; _step = null; });
+    } catch (e) {
+      setState(() { _err = 'Adding the device failed: $e'; _step = null; });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final home = ref.watch(homeProvider).valueOrNull;
+    final rooms = home?.rooms ?? const [];
+    _roomId ??= rooms.isNotEmpty ? rooms.first.id : null;
+    final driver = _driver;
+    final hint = _manualConfigHint[_protocol];
+
+    if (!_open) {
+      return Center(
+        child: TextButton(
+          onPressed: () => setState(() => _open = true),
+          child: const Text("Can't find your device? Add it manually by IP address"),
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AureonSpacing.md),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Add device manually', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text('For devices with no broadcast discovery (AVR/HEOS/Yamaha receivers) — or a scan that hasn\'t reached them yet.',
+              style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: AureonSpacing.sm),
+          if (_done) ...[
+            const Text('✓ Device added.'),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => setState(() { _done = false; _name.clear(); _address.clear(); _config.clear(); }),
+              child: const Text('Add another'),
+            ),
+          ] else ...[
+            DropdownButtonFormField<String>(
+              initialValue: _protocol,
+              decoration: const InputDecoration(labelText: 'Protocol'),
+              items: [for (final p in _manualProtocols) DropdownMenuItem(value: p, child: Text(p.toUpperCase()))],
+              onChanged: (v) => setState(() => _protocol = v ?? _protocol),
+            ),
+            if (driver == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('No installed extension covers ${_protocol.toUpperCase()} yet — install it from the Extension Center first.',
+                    style: Theme.of(context).textTheme.labelSmall),
+              ),
+            const SizedBox(height: 8),
+            TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name (optional)')),
+            const SizedBox(height: 8),
+            TextField(controller: _address, decoration: InputDecoration(labelText: 'Address', hintText: _manualAddressHint[_protocol])),
+            if (hint != null) ...[
+              const SizedBox(height: 8),
+              TextField(controller: _config, decoration: InputDecoration(labelText: 'Config (optional)', hintText: 'e.g. $hint')),
+            ],
+            const SizedBox(height: 8),
+            if (rooms.isNotEmpty)
+              DropdownButtonFormField<String>(
+                initialValue: _roomId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Room'),
+                items: [for (final r in rooms) DropdownMenuItem(value: r.id, child: Text(r.name, overflow: TextOverflow.ellipsis))],
+                onChanged: (v) => setState(() => _roomId = v),
+              ),
+            const SizedBox(height: 8),
+            Row(children: [
+              FilledButton(onPressed: _busy ? null : () => _submit(rooms), child: Text(_busy ? (_step ?? 'Adding…') : 'Add device')),
+              const SizedBox(width: 8),
+              TextButton(onPressed: _busy ? null : () => setState(() => _open = false), child: const Text('Cancel')),
+            ]),
+            if (_err != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(_err!, style: const TextStyle(color: AureonStatus.critical))),
+          ],
+        ]),
       ),
     );
   }

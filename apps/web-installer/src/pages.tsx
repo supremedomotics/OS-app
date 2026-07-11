@@ -96,6 +96,27 @@ export function DriverStore() {
   );
 }
 
+// Protocols with no broadcast discovery (AVR/HEOS/Yamaha are Telnet/CLI/HTTP-only) or that a
+// scan simply hasn't reached — added one at a time by address instead. Mirrors PROTOCOLS below
+// minus coolmaster (its units auto-discover once the gateway host is set in Extension Center).
+const MANUAL_PROTOCOLS = ["avr", "heos", "yamaha", "knx", "modbus", "mqtt"] as const;
+const MANUAL_ADDRESS_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string> = {
+  avr: "Receiver IP e.g. 192.168.1.50 (Telnet, port 23)",
+  heos: "Any one HEOS player's IP e.g. 192.168.1.51 (port 1255)",
+  yamaha: "Unit IP e.g. 192.168.1.52 (HTTP, port 80)",
+  knx: "Group address e.g. 1/2/0",
+  modbus: "Register e.g. 100",
+  mqtt: "Base topic e.g. z2m/lamp",
+};
+const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | null> = {
+  avr: '{"zone":"main"}',
+  heos: '{"pid":"<player id>"}',
+  yamaha: '{"zone":"main"}',
+  knx: null,
+  modbus: '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
+  mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
+};
+
 /** Commissioning: discover candidate devices and commission them into a room. */
 export function Commissioning() {
   const [discovered, setDiscovered] = useState<
@@ -111,13 +132,56 @@ export function Commissioning() {
   >([]);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [roomId, setRoomId] = useState<string>("");
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
 
   useEffect(() => {
     void client.home().then((h) => {
       setRooms(h.rooms);
       if (h.rooms[0]) setRoomId(h.rooms[0].id);
     });
+    void client.driversCatalog().then((c) => setCatalog(c.catalog));
   }, []);
+
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualProtocol, setManualProtocol] = useState<(typeof MANUAL_PROTOCOLS)[number]>("avr");
+  const [manualName, setManualName] = useState("");
+  const [manualAddress, setManualAddress] = useState("");
+  const [manualConfig, setManualConfig] = useState("");
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualErr, setManualErr] = useState<string | null>(null);
+  const manualDriver = catalog.find((c) => c.manifest.protocols.includes(manualProtocol as never))?.manifest;
+
+  async function addManually() {
+    setManualErr(null);
+    if (!manualAddress.trim()) { setManualErr("Enter the device's address."); return; }
+    if (!roomId) { setManualErr("Pick a room above first."); return; }
+    const capabilities = manualDriver?.capabilities ?? [];
+    if (capabilities.length === 0) { setManualErr(`No installed extension covers ${manualProtocol.toUpperCase()} yet — install it from the Driver Store first.`); return; }
+    let config: Record<string, unknown> | undefined;
+    if (manualConfig.trim()) {
+      try { config = JSON.parse(manualConfig) as Record<string, unknown>; }
+      catch { setManualErr("Config must be valid JSON."); return; }
+    }
+    setManualBusy(true);
+    try {
+      await client.commission({
+        backendId: `manual:${manualProtocol}:${manualAddress.trim()}`,
+        name: manualName.trim() || `${manualDriver?.name ?? manualProtocol.toUpperCase()} — ${manualAddress.trim()}`,
+        roomId,
+        capabilities: capabilities as never,
+        protocol: manualProtocol,
+        address: manualAddress.trim(),
+        ...(config ? { config } : {}),
+      });
+      setManualName("");
+      setManualAddress("");
+      setManualConfig("");
+    } catch (e) {
+      setManualErr(e instanceof Error ? e.message : "Adding the device failed.");
+    } finally {
+      setManualBusy(false);
+    }
+  }
 
   async function scan() {
     setDiscovered((await client.discover()).discovered);
@@ -260,6 +324,50 @@ export function Commissioning() {
           </button>
         </div>
       ))}
+
+      {/* Manual add (§ Automatic Device Discovery — the manual counterpart): AVR/HEOS/Yamaha
+          receivers have no broadcast discovery (Telnet/CLI/HTTP-only), and a scan may simply not
+          reach a device on some networks — enter its protocol + address directly instead. Binds
+          to the room picked above, via the exact same commission-with-protocol call a scan hit's
+          "Add to room" button uses. */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <strong>Add device manually</strong>
+          <button onClick={() => setManualOpen((v) => !v)}>{manualOpen ? "Hide" : "Show"}</button>
+        </div>
+        {manualOpen && (
+          <>
+            <p className="muted">For devices with no broadcast discovery — enter the protocol and address directly. Adds to the room selected above.</p>
+            <div className="row" style={{ marginTop: 8 }}>
+              <select value={manualProtocol} onChange={(e) => setManualProtocol(e.target.value as (typeof MANUAL_PROTOCOLS)[number])}>
+                {MANUAL_PROTOCOLS.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
+              </select>
+              <input value={manualName} onChange={(e) => setManualName(e.target.value)} placeholder={manualDriver ? `${manualDriver.name} — name (optional)` : "Name (optional)"} />
+            </div>
+            <input
+              value={manualAddress}
+              onChange={(e) => setManualAddress(e.target.value)}
+              placeholder={MANUAL_ADDRESS_HINT[manualProtocol]}
+              style={{ marginTop: 8 }}
+            />
+            {MANUAL_CONFIG_HINT[manualProtocol] && (
+              <input
+                value={manualConfig}
+                onChange={(e) => setManualConfig(e.target.value)}
+                placeholder={`Config JSON (optional) — e.g. ${MANUAL_CONFIG_HINT[manualProtocol]}`}
+                style={{ marginTop: 8 }}
+              />
+            )}
+            {!manualDriver && (
+              <p className="muted">No installed extension covers {manualProtocol.toUpperCase()} yet — install it from the Driver Store first.</p>
+            )}
+            <button className="primary" style={{ marginTop: 8 }} disabled={manualBusy || !manualAddress.trim() || !roomId} onClick={addManually}>
+              {manualBusy ? "Adding…" : `Add to ${rooms.find((r) => r.id === roomId)?.name ?? "room"}`}
+            </button>
+            {manualErr && <p style={{ color: "var(--aureon-color-status-critical)" }}>{manualErr}</p>}
+          </>
+        )}
+      </div>
 
       {/* KNX has no live discovery — parse the ETS group-address export, review the auto-detected
           device cards (room, circuit type), then save. A secondary path, below the primary scan. */}

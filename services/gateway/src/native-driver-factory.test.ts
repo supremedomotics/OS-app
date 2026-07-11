@@ -28,3 +28,18 @@ describe("native-driver-factory — AVR/HEOS/Yamaha", () => {
     expect(buildNativeDriver("not-a-real-protocol", {})).toBeNull();
   });
 });
+
+describe("native-driver-factory — CoolMaster", () => {
+  it("reports a factory for coolmaster", () => {
+    expect(hasNativeFactory("coolmaster")).toBe(true);
+  });
+
+  it("requires a host — null without one", () => {
+    expect(buildNativeDriver("coolmaster", {})).toBeNull();
+  });
+
+  it("builds a live driver instance once a gateway host is configured", () => {
+    const driver = buildNativeDriver("coolmaster", { host: "192.168.0.21", protocol: "auto" });
+    expect(driver?.protocol).toBe("coolmaster");
+  });
+});
