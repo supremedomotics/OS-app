@@ -17,6 +17,15 @@ export interface KnxGroupAddress {
   address: string; // "1/1/3"
   name: string; // "Living Room Ceiling — Switch"
   dpt: string | null; // "1.001"
+  /** The ETS Main Group name this address lives under, e.g. "Lighting" | "Curtain" |
+   * "Scene" — the device-TYPE classification, read from the project's GroupRange tree
+   * (or a "Main"/"Main Group" CSV column). Null when the source has no group hierarchy
+   * (e.g. a flat GA list with only a combined Name column). */
+  mainGroup?: string | null;
+  /** The ETS Middle Group name, e.g. "Switching" | "Relative Dimming" | "Switching
+   * Feedback" — the OPERATION classification (command vs. status/feedback, dimming
+   * style, …). Same nullability as mainGroup. */
+  middleGroup?: string | null;
 }
 
 export interface ImportedBinding {
@@ -39,16 +48,41 @@ export function parseKnxGroupExport(content: string): KnxGroupAddress[] {
   return parseCsv(text);
 }
 
-/** ETS GA XML export: `<GroupAddress Name="…" Address="1/1/3" DPTs="DPST-1-1" />`. */
+/**
+ * ETS GA XML export: `<GroupAddress Name="…" Address="1/1/3" DPTs="DPST-1-1" />`, usually
+ * nested inside `<GroupRange Name="…">` (Main Group) > `<GroupRange Name="…">` (Middle
+ * Group) — the same hierarchy `.knxproj` files carry, so this tracks it the same way.
+ */
 function parseXml(text: string): KnxGroupAddress[] {
   const out: KnxGroupAddress[] = [];
-  const re = /<GroupAddress\b([^>]*?)\/?>/g;
+  const groupRangeStack: string[] = [];
+  const re = /<(\/?)(GroupRange|GroupAddress)\b([^>]*?)(\/?)>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    const attrs = m[1] ?? "";
+    const close = m[1] === "/";
+    const tag = m[2]!;
+    const attrs = m[3] ?? "";
+    const selfClose = m[4] === "/";
+
+    if (tag === "GroupRange") {
+      if (close) {
+        if (groupRangeStack.length) groupRangeStack.pop();
+      } else {
+        groupRangeStack.push(attr(attrs, "Name") ?? "");
+        if (selfClose) groupRangeStack.pop();
+      }
+      continue;
+    }
+
     const address = attr(attrs, "Address");
     if (!address) continue;
-    out.push({ address, name: attr(attrs, "Name") ?? address, dpt: normalizeDpt(attr(attrs, "DPTs") ?? attr(attrs, "DatapointType")) });
+    out.push({
+      address,
+      name: attr(attrs, "Name") ?? address,
+      dpt: normalizeDpt(attr(attrs, "DPTs") ?? attr(attrs, "DatapointType")),
+      mainGroup: groupRangeStack[0] || null,
+      middleGroup: groupRangeStack[1] || null,
+    });
   }
   return out;
 }
@@ -67,6 +101,10 @@ function parseCsv(text: string): KnxGroupAddress[] {
   const nameCol = header.findIndex((h) => h === "group name" || h === "name");
   const addrCol = header.findIndex((h) => h === "address" || h === "group address");
   const dptCol = header.findIndex((h) => h.includes("datapoint") || h === "dpt" || h.includes("data type"));
+  // Some ETS CSV exports carry the Main/Middle group as their own columns instead of (or in
+  // addition to) a combined path in the Name column.
+  const mainCol = header.findIndex((h) => h === "main" || h === "main group");
+  const middleCol = header.findIndex((h) => h === "middle" || h === "middle group");
   const hasHeader = addrCol >= 0;
   const rows = hasHeader ? lines.slice(1) : lines;
   const out: KnxGroupAddress[] = [];
@@ -78,6 +116,8 @@ function parseCsv(text: string): KnxGroupAddress[] {
       address,
       name: (nameCol >= 0 ? cells[nameCol] : cells[0]) || address,
       dpt: normalizeDpt(dptCol >= 0 ? cells[dptCol] ?? null : null),
+      mainGroup: mainCol >= 0 ? cells[mainCol] || null : null,
+      middleGroup: middleCol >= 0 ? cells[middleCol] || null : null,
     });
   }
   return out;
@@ -113,19 +153,33 @@ const FUNCTION_WORDS = [
   "blind", "blinds", "shutter", "shade", "shades", "cover", "covers", "position", "move", "up/down", "awning",
   "temperature", "temp", "setpoint", "set point", "current temp", "actual",
   "lock", "unlock",
+  "rgb", "rgbw", "rgbww", "colour", "color", "colour temp", "color temp", "colour temperature",
+  "color temperature", "cct", "tunable white", "warm white", "cool white",
 ];
 
-/** Infer the Supreme capability for a group address from its DPT (and name for the % case). */
-export function inferCapability(dpt: string | null, name: string): CapabilityKind | null {
+/**
+ * Infer the Supreme capability for a group address from its DPT (refined by the name, and
+ * the ETS Main Group, for ambiguous DPTs). `mainGroup` is the address's ETS Main Group name
+ * (e.g. "Lighting" | "Curtain" | "HVAC") when known — it disambiguates a bare DPT5.001
+ * (used for both dimming % and cover position) more reliably than the name alone.
+ */
+export function inferCapability(dpt: string | null, name: string, mainGroup?: string | null): CapabilityKind | null {
   const major = dpt ? Number(dpt.split(".")[0]) : null;
+  const minor = dpt?.includes(".") ? Number(dpt.split(".")[1]) : null;
   const n = name.toLowerCase();
-  const looksCover = /(blind|shutter|shade|cover|position|awning|curtain)/.test(n);
-  const looksDim = /(dim|brightness|light|lamp|spot)/.test(n);
+  const g = (mainGroup ?? "").toLowerCase();
+  const looksCover = /(blind|shutter|shade|cover|position|awning|curtain)/.test(n) || /(blind|shutter|shade|cover|curtain)/.test(g);
+  const looksDim = /(dim|brightness|light|lamp|spot)/.test(n) || /(light|lighting|dim)/.test(g);
 
   switch (major) {
+    case 232: // 232.600 RGB
+    case 251: // 251.600 RGBW/RGBWW
+      return "color";
+    case 7: // 7.600 absolute colour temperature (Kelvin) — tunable white
+      return minor === 600 ? "color" : "sensor";
     case 3: // 3.007/3.008 dimming control
       return "brightness";
-    case 5: // 5.001 scaling 0..100% — brightness or position by name
+    case 5: // 5.001 scaling 0..100% — brightness or position by name/group
       return looksCover ? "position" : "brightness";
     case 9: // 9.001 2-byte float (temperature etc.)
       return "temperature";
@@ -138,12 +192,30 @@ export function inferCapability(dpt: string | null, name: string): CapabilityKin
     case 14:
       return "sensor";
     default:
-      // No/!unknown DPT: fall back to the name.
+      // No/unknown DPT: fall back to the name and Main Group.
       if (looksCover) return "position";
+      if (/(rgbw|rgb|tunable|colou?r temp|cct|warm white|cool white)/.test(n)) return "color";
       if (looksDim) return "brightness";
       if (/(temp|climate|heating)/.test(n)) return "temperature";
       return major === null ? null : "onoff";
   }
+}
+
+/**
+ * Classify the physical circuit a device's inferred bindings represent — purely a
+ * human-facing label for the import review UI; it doesn't affect commissioning, which
+ * only cares about the `bindings` capability list.
+ */
+export type KnxCircuitType = "onoff" | "dimmable" | "tunable_white" | "rgbww" | "cover" | "scene" | "climate" | "other";
+
+export function classifyCircuit(bindings: ImportedBinding[]): KnxCircuitType {
+  const caps = new Set(bindings.map((b) => b.capability));
+  if (caps.has("color")) return caps.has("brightness") ? "tunable_white" : "rgbww";
+  if (caps.has("position")) return "cover";
+  if (caps.has("temperature")) return "climate";
+  if (caps.has("brightness")) return "dimmable";
+  if (caps.has("onoff")) return "onoff";
+  return "other";
 }
 
 // ── Grouping into devices ───────────────────────────────────────────────────────
@@ -159,7 +231,7 @@ export function groupIntoDevices(addresses: KnxGroupAddress[], knownRooms: strin
   const byKey = new Map<string, ImportedDevice>();
 
   for (const ga of addresses) {
-    const cap = inferCapability(ga.dpt, ga.name);
+    const cap = inferCapability(ga.dpt, ga.name, ga.mainGroup);
     if (!cap) continue;
     const { device, room } = splitName(ga.name, rooms);
     const key = `${room ?? ""}::${device.toLowerCase()}`;

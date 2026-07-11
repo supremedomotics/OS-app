@@ -163,9 +163,11 @@ export {
   inferCapability,
   groupIntoDevices,
   normalizeDpt,
+  classifyCircuit,
   type KnxGroupAddress,
   type ImportedDevice,
   type ImportedBinding,
+  type KnxCircuitType,
 } from "./knx-import.js";
 export { unzipKnxproj, parseKnxProject, addressFromInt } from "./knx-project.js";
 export { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto.js";

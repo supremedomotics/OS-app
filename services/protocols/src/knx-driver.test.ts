@@ -38,6 +38,37 @@ describe("KNX codec", () => {
       measure: "temperature",
     });
   });
+
+  it("round-trips RGB colour (DPT232.600)", () => {
+    const value = valueFromCommand({ capability: "color", hue: 0, saturation: 100, level: 100 }, null, "DPT232.600");
+    expect(value).toEqual({ red: 255, green: 0, blue: 0 });
+    expect(stateFromValue("color", value!)).toEqual({
+      kind: "color",
+      on: true,
+      level: 100,
+      hue: 0,
+      saturation: 100,
+      kelvin: null,
+    });
+  });
+
+  it("round-trips RGBW colour (DPT251.600), leaving the white channel unset", () => {
+    const value = valueFromCommand({ capability: "color", hue: 120, saturation: 100, level: 100 }, null, "DPT251.600");
+    expect(value).toEqual({ red: 0, green: 255, blue: 0, white: 0, mR: 1, mG: 1, mB: 1, mW: 0 });
+  });
+
+  it("maps tunable-white colour temperature (DPT7.600) as a plain Kelvin passthrough", () => {
+    const value = valueFromCommand({ capability: "color", kelvin: 3000 }, null, "DPT7.600");
+    expect(value).toBe(3000);
+    expect(stateFromValue("color", value!)).toEqual({
+      kind: "color",
+      on: true,
+      level: 100,
+      hue: null,
+      saturation: null,
+      kelvin: 3000,
+    });
+  });
 });
 
 describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
@@ -66,6 +97,31 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
     // Actuator reports final position on the status GA → bubbles up.
     bus.push("1/2/1", 100);
     expect(events.at(-1)?.state).toEqual({ kind: "position", position: 100, moving: false });
+  });
+
+  it("group-writes a colour command using the binding's own DPT", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+
+    const dev = "device-knx-rgb" as DeviceId;
+    await driver.bind({
+      deviceId: dev,
+      capability: "color",
+      address: "1/5/0",
+      config: { dpt: "DPT232.600" },
+    });
+
+    await driver.command(dev, { capability: "color", hue: 240, saturation: 100, level: 100 });
+    expect(bus.writes).toEqual([{ ga: "1/5/0", value: { red: 0, green: 0, blue: 255 }, dpt: "DPT232.600" }]);
+    expect(driver.getState(dev, "color")).toEqual({
+      kind: "color",
+      on: true,
+      level: 100,
+      hue: 240,
+      saturation: 100,
+      kelvin: null,
+    });
   });
 
   it("rejects a command for an unbound device", async () => {

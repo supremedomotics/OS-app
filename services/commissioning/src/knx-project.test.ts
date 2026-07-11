@@ -81,6 +81,7 @@ describe("KNX .knxproj import", () => {
     ]);
     const { devices, addresses } = parseKnxProject(unzipKnxproj(zip));
     expect(addresses).toHaveLength(3);
+    expect(addresses.every((a) => a.mainGroup === "Lighting")).toBe(true);
 
     const ceiling = devices.find((d) => d.name === "Ceiling Light");
     expect(ceiling?.room).toBe("Living Room");
@@ -90,5 +91,42 @@ describe("KNX .knxproj import", () => {
     const blind = devices.find((d) => d.name === "Blind");
     expect(blind?.room).toBe("Study");
     expect(blind?.bindings[0]?.capability).toBe("position");
+  });
+
+  it("captures nested Main + Middle Group names and infers a tunable-white colour circuit", () => {
+    const xml = `<?xml version="1.0"?>
+<KNX>
+  <GroupAddresses>
+    <GroupRange Name="Lighting">
+      <GroupRange Name="Switching">
+        <GroupAddress Id="GA-10" Address="1/4/1" Name="Study Downlight" DatapointType="DPST-1-1" />
+      </GroupRange>
+      <GroupRange Name="Relative Dimming">
+        <GroupAddress Id="GA-11" Address="1/4/2" Name="Study Downlight" DatapointType="DPST-5-1" />
+      </GroupRange>
+      <GroupRange Name="Colour Temperature">
+        <GroupAddress Id="GA-12" Address="1/4/3" Name="Study Downlight" DatapointType="DPST-7-600" />
+      </GroupRange>
+    </GroupRange>
+  </GroupAddresses>
+  <Locations>
+    <Space Type="Building" Name="Villa">
+      <Space Type="Room" Name="Study">
+        <Function Type="FT-0" Name="Study Downlight">
+          <GroupAddressRef RefId="GA-10" />
+          <GroupAddressRef RefId="GA-11" />
+          <GroupAddressRef RefId="GA-12" />
+        </Function>
+      </Space>
+    </Space>
+  </Locations>
+</KNX>`;
+    const zip = makeZip([{ name: "P-00CD/0.xml", data: xml }]);
+    const { devices, addresses } = parseKnxProject(unzipKnxproj(zip));
+    expect(addresses.find((a) => a.address === "1/4/3")).toMatchObject({ mainGroup: "Lighting", middleGroup: "Colour Temperature" });
+
+    const downlight = devices.find((d) => d.name === "Study Downlight");
+    expect(downlight?.room).toBe("Study");
+    expect(new Set(downlight?.bindings.map((b) => b.capability))).toEqual(new Set(["onoff", "brightness", "color"]));
   });
 });

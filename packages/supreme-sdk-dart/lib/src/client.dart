@@ -351,6 +351,66 @@ class SupremeClient {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Import a `.knxproj` file (base64) → device cards placed in their real ETS rooms (§4).
+  /// `password` is required only for ETS6 password-protected projects (WinZip-AES).
+  Future<Map<String, dynamic>> importKnxProject(String base64,
+      {String? password}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/import/knx'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'knxproj': base64,
+        if (password != null) 'password': password,
+      }),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Parse an ETS group-address export WITHOUT saving anything, so the installer can review the
+  /// auto-discovered device list (room, detected circuit type) before {@link commitKnxImport}.
+  Future<List<Map<String, dynamic>>> previewKnx(String content) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/import/knx/preview'),
+      headers: _authHeaders,
+      body: jsonEncode({'content': content}),
+    );
+    _ensureOk(res);
+    final devices = (jsonDecode(res.body)
+        as Map<String, dynamic>)['devices'] as List<dynamic>;
+    return devices.cast<Map<String, dynamic>>();
+  }
+
+  /// `.knxproj` counterpart of [previewKnx].
+  Future<List<Map<String, dynamic>>> previewKnxProject(String base64,
+      {String? password}) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/import/knx/preview'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'knxproj': base64,
+        if (password != null) 'password': password,
+      }),
+    );
+    _ensureOk(res);
+    final devices = (jsonDecode(res.body)
+        as Map<String, dynamic>)['devices'] as List<dynamic>;
+    return devices.cast<Map<String, dynamic>>();
+  }
+
+  /// Save a (possibly installer-edited) preview list — the "Save & Commission" step. Each map
+  /// is one previewed device, optionally with `included: false` to drop it from the save.
+  Future<Map<String, dynamic>> commitKnxImport(
+      List<Map<String, dynamic>> devices) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/v1/commissioning/import/knx/commit'),
+      headers: _authHeaders,
+      body: jsonEncode({'devices': devices}),
+    );
+    _ensureOk(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Ask the hub to download & store a stock hero photo for a room (by name) if it has none.
   /// Idempotent and best-effort — returns whether a photo is now stored. Clients call this
   /// fire-and-forget the first time they render a room card with no hero.

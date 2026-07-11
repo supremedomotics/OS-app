@@ -5,16 +5,35 @@ import type { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
  * **group address** (e.g. "1/1/3") and typed by **DPT** (datapoint type). This maps
  * Supreme capabilities to the decoded JS values KNXnet/IP carries:
  *
- *   onoff      → DPT1.001  boolean
- *   brightness → DPT5.001  scaling 0..100 (%)         (on/off derived from level)
- *   position   → DPT5.001  scaling 0..100 (% open)
- *   sensor     → DPT9.001  2-byte float (e.g. °C)     (read-only)
+ *   onoff      → DPT1.001    boolean
+ *   brightness → DPT5.001    scaling 0..100 (%)          (on/off derived from level)
+ *   position   → DPT5.001    scaling 0..100 (% open)
+ *   sensor     → DPT9.001    2-byte float (e.g. °C)      (read-only)
+ *   color      → DPT232.600  RGB triplet {red,green,blue} 0..255 each
+ *              → DPT251.600  RGBW {red,green,blue,white,mR,mG,mB,mW} — white channel is
+ *                left unset (mW: 0) since Supreme's ColorState has no dedicated white
+ *                channel; only RGB is driven.
+ *              → DPT7.600    absolute colour temperature in Kelvin (tunable-white
+ *                fixtures with a dedicated colour-temp GA and a separate DPT5.001
+ *                brightness GA bound as the device's "brightness" capability)
  *
  * Byte-level DPT (de)serialization is handled by the KNXnet/IP transport; this codec
  * works in decoded values so the driver stays transport-agnostic and unit-testable.
  */
 
-export type KnxValue = boolean | number;
+export interface KnxRgb {
+  red: number;
+  green: number;
+  blue: number;
+}
+export interface KnxRgbw extends KnxRgb {
+  white: number;
+  mR: number;
+  mG: number;
+  mB: number;
+  mW: number;
+}
+export type KnxValue = boolean | number | KnxRgb | KnxRgbw;
 
 /** Default DPT for a capability when a binding doesn't specify one. */
 export function defaultDpt(capability: CapabilityState["kind"]): string {
@@ -26,6 +45,8 @@ export function defaultDpt(capability: CapabilityState["kind"]): string {
       return "DPT5.001";
     case "sensor":
       return "DPT9.001";
+    case "color":
+      return "DPT232.600";
     default:
       return "DPT1.001";
   }
@@ -35,6 +56,7 @@ export function defaultDpt(capability: CapabilityState["kind"]): string {
 export function valueFromCommand(
   command: CapabilityCommand,
   prev: CapabilityState | null,
+  dpt?: string,
 ): KnxValue | null {
   switch (command.capability) {
     case "onoff": {
@@ -53,8 +75,23 @@ export function valueFromCommand(
       if (typeof command.position === "number") return clampPct(command.position);
       return prev?.kind === "position" ? prev.position : 0;
     }
+    case "color": {
+      const { major } = dptParts(dpt);
+      if (major === 7) {
+        // Colour-temperature-only DPT (tunable white): plain Kelvin passthrough.
+        if (typeof command.kelvin === "number") return clampKelvin(command.kelvin);
+        return prev?.kind === "color" && prev.kelvin !== null ? prev.kelvin : 4000;
+      }
+      const prevColor = prev?.kind === "color" ? prev : null;
+      const hue = command.hue ?? prevColor?.hue ?? 0;
+      const saturation = command.saturation ?? prevColor?.saturation ?? 100;
+      const level = command.level ?? prevColor?.level ?? 100;
+      const { red, green, blue } = hsvToRgb(hue, saturation, level);
+      if (major === 251) return { red, green, blue, white: 0, mR: 1, mG: 1, mB: 1, mW: 0 };
+      return { red, green, blue };
+    }
     default:
-      return null; // color/temperature/lock/media not mapped to these KNX DPTs
+      return null; // temperature/lock/media not mapped to these KNX DPTs
   }
 }
 
@@ -73,6 +110,17 @@ export function stateFromValue(
     }
     case "position":
       return { kind: "position", position: clampPct(Number(value)), moving: false };
+    case "color": {
+      if (typeof value === "number") {
+        // DPT7.600: colour-temperature-only telegram (tunable white).
+        return { kind: "color", on: true, level: 100, hue: null, saturation: null, kelvin: clampKelvin(value) };
+      }
+      if (typeof value === "object" && value !== null && "red" in value) {
+        const { hue, saturation, level } = rgbToHsv(value.red, value.green, value.blue);
+        return { kind: "color", on: level > 0, level, hue, saturation, kelvin: null };
+      }
+      return null;
+    }
     case "sensor":
       return {
         kind: "sensor",
@@ -88,6 +136,59 @@ export function stateFromValue(
 function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
+function clampKelvin(n: number): number {
+  return Math.max(1000, Math.min(10000, Math.round(n)));
+}
 function toBool(v: KnxValue): boolean {
   return typeof v === "boolean" ? v : v !== 0;
+}
+
+/** Parse "DPT232.600" / "232.600" / "232" → { major, minor }. */
+function dptParts(dpt: string | undefined): { major: number; minor: number | null } {
+  const m = dpt ? /(\d+)(?:\.(\d+))?/.exec(dpt) : null;
+  if (!m) return { major: 232, minor: null }; // default: full-colour RGB
+  return { major: Number(m[1]), minor: m[2] ? Number(m[2]) : null };
+}
+
+/** Hue 0..360, saturation 0..100, value(level) 0..100 → 0..255 RGB bytes. */
+function hsvToRgb(h: number, s: number, v: number): KnxRgb {
+  const sat = s / 100;
+  const val = v / 100;
+  const c = val * sat;
+  const hp = ((h % 360) + 360) % 360 / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let [r, g, b] = [0, 0, 0];
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = val - c;
+  return {
+    red: Math.round((r + m) * 255),
+    green: Math.round((g + m) * 255),
+    blue: Math.round((b + m) * 255),
+  };
+}
+
+/** 0..255 RGB bytes → hue 0..360, saturation 0..100, level(value) 0..100. */
+function rgbToHsv(red: number, green: number, blue: number): { hue: number; saturation: number; level: number } {
+  const r = red / 255;
+  const g = green / 255;
+  const b = blue / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  let hue = 0;
+  if (d !== 0) {
+    if (max === r) hue = ((g - b) / d) % 6;
+    else if (max === g) hue = (b - r) / d + 2;
+    else hue = (r - g) / d + 4;
+    hue *= 60;
+    if (hue < 0) hue += 360;
+  }
+  const saturation = max === 0 ? 0 : (d / max) * 100;
+  const level = max * 100;
+  return { hue: Math.round(hue), saturation: Math.round(saturation), level: Math.round(level) };
 }

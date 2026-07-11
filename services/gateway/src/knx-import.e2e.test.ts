@@ -108,4 +108,59 @@ describe("KNX ETS import → device cards", () => {
     const shutter = devices.devices.find((d) => d.name.includes("Shutter"));
     expect(shutter?.capabilities.map((c) => c.kind)).toContain("position");
   });
+
+  const TUNABLE_WHITE_EXPORT = `<GroupAddress-Export>
+    <GroupAddress Name="Study - Downlight - Switch" Address="5/1/1" DPTs="DPST-1-1" />
+    <GroupAddress Name="Study - Downlight - Brightness" Address="5/1/2" DPTs="DPST-5-1" />
+    <GroupAddress Name="Study - Downlight - Colour Temperature" Address="5/1/3" DPTs="DPST-7-600" />
+    <GroupAddress Name="Pantry - Utility Switch" Address="5/2/1" DPTs="DPST-1-1" />
+  </GroupAddress-Export>`;
+
+  it("previews without committing, then saves only the installer-included/edited devices", async () => {
+    const preview = await fetch(`${baseUrl}/v1/commissioning/import/knx/preview`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ content: TUNABLE_WHITE_EXPORT }),
+    });
+    expect(preview.status).toBe(200);
+    const previewOut = (await preview.json()) as {
+      devices: { name: string; room: string | null; circuitType: string; bindings: { capability: string; address: string }[] }[];
+    };
+    expect(previewOut.devices).toHaveLength(2);
+    const downlight = previewOut.devices.find((d) => d.name.includes("Downlight"))!;
+    expect(downlight.circuitType).toBe("tunable_white");
+    expect(new Set(downlight.bindings.map((b) => b.capability))).toEqual(new Set(["onoff", "brightness", "color"]));
+    const utility = previewOut.devices.find((d) => d.name.includes("Utility"))!;
+    expect(utility.circuitType).toBe("onoff");
+
+    // A preview must not create anything — neither room exists yet.
+    const beforeHome = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as { rooms: { name: string }[] };
+    expect(beforeHome.rooms.some((r) => r.name === "Study" || r.name === "Reading Nook" || r.name === "Pantry")).toBe(false);
+
+    // The installer excludes "Utility Switch" and re-rooms the downlight before saving.
+    const commit = await fetch(`${baseUrl}/v1/commissioning/import/knx/commit`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({
+        devices: [
+          { ...downlight, room: "Reading Nook", included: true },
+          { ...utility, included: false },
+        ],
+      }),
+    });
+    expect(commit.status).toBe(201);
+    const commitOut = (await commit.json()) as { devices: number; roomsCreated: number; created: { name: string; room: string | null }[] };
+    expect(commitOut.devices).toBe(1);
+    expect(commitOut.roomsCreated).toBe(1);
+    expect(commitOut.created[0]?.room).toBe("Reading Nook");
+
+    const afterHome = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as { rooms: { id: string; name: string }[] };
+    expect(afterHome.rooms.some((r) => r.name === "Pantry")).toBe(false); // excluded device's room was never created
+    const nook = afterHome.rooms.find((r) => r.name === "Reading Nook");
+    expect(nook).toBeTruthy();
+    const nookDevices = (await (await fetch(`${baseUrl}/v1/rooms/${nook!.id}/devices`, { headers: auth() })).json()) as {
+      devices: { name: string; capabilities: { kind: string }[] }[];
+    };
+    expect(new Set(nookDevices.devices[0]?.capabilities.map((c) => c.kind))).toEqual(new Set(["onoff", "brightness", "color"]));
+  });
 });

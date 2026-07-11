@@ -305,6 +305,39 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Parse-only preview: same inputs as the import route, but nothing is committed — the
+  // installer reviews the device list (room, detected circuit type) before saving.
+  app.post("/v1/commissioning/import/knx/preview", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { content?: unknown; knxproj?: unknown; password?: unknown };
+      if (typeof body?.knxproj === "string" && body.knxproj.length > 0) {
+        const password = typeof body.password === "string" ? body.password : undefined;
+        reply.send(await i().previewKnxProject(body.knxproj, password));
+        return;
+      }
+      const content = typeof body?.content === "string" ? body.content : typeof req.body === "string" ? req.body : "";
+      if (!content) throw new SupremeError("validation_failed", "provide the ETS export as `content`, or a .knxproj as base64 `knxproj`");
+      reply.send(await i().previewKnx(content));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Save a (possibly edited) preview: commissions every included device, no re-parsing.
+  app.post("/v1/commissioning/import/knx/commit", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { devices?: unknown };
+      if (!Array.isArray(body?.devices)) throw new SupremeError("validation_failed", "provide `devices` (the reviewed preview list)");
+      reply.code(201).send(await i().commitKnxImport(body.devices));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Auto-commission a live native bus (e.g. Casambi): discover → create rooms from the bus's
   // group names → commission + bind every device in one step.
   app.post("/v1/commissioning/auto", async (req, reply) => {

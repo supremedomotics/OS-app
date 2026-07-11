@@ -8,7 +8,14 @@ import type {
   MigrationStatus,
 } from "@supreme/contracts";
 import type { InstalledDriver } from "@supreme/domain-model";
-import { client, importKnx, importKnxProject, type KnxImportResult } from "./api.js";
+import {
+  client,
+  commitKnxImport,
+  previewKnx,
+  previewKnxProject,
+  type KnxCircuitType,
+  type KnxPreviewDevice,
+} from "./api.js";
 import { fleetConfigured, listFleetHubs } from "./fleet.js";
 import {
   activateDealerLicense,
@@ -88,6 +95,17 @@ export function DriverStore() {
   );
 }
 
+const KNX_CIRCUIT_LABELS: Record<KnxCircuitType, string> = {
+  onoff: "On/Off switch",
+  dimmable: "Dimmable",
+  tunable_white: "Tunable white",
+  rgbww: "RGB / RGBWW",
+  cover: "Curtain / blind",
+  scene: "Scene",
+  climate: "Climate",
+  other: "Other",
+};
+
 /** Commissioning: discover candidate devices and commission them into a room. */
 export function Commissioning() {
   const [discovered, setDiscovered] = useState<
@@ -148,18 +166,19 @@ export function Commissioning() {
   const [knxproj, setKnxproj] = useState<string | null>(null);
   const [knxPassword, setKnxPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
-  function report(out: KnxImportResult) {
-    setKnxResult(`Imported ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
-    setKnx("");
-    setKnxproj(null);
-    setKnxPassword("");
-    setNeedsPassword(false);
-    void client.home().then((h) => setRooms(h.rooms));
+  // The parsed-but-unsaved device list the installer reviews (room, circuit type,
+  // include/exclude) before committing — nothing is saved until "Save & Commission".
+  const [preview, setPreview] = useState<(KnxPreviewDevice & { included: boolean })[] | null>(null);
+  const [committing, setCommitting] = useState(false);
+
+  function showPreview(devices: KnxPreviewDevice[]) {
+    setPreview(devices.map((d) => ({ ...d, included: true })));
+    setKnxResult(`Found ${devices.length} device(s) — review below, then Save & Commission.`);
   }
-  async function importProject(base64: string, password?: string) {
-    setKnxResult("Importing…");
+  async function doPreviewKnxProject(base64: string, password?: string) {
+    setKnxResult("Parsing…");
     try {
-      report(await importKnxProject(base64, password));
+      showPreview((await previewKnxProject(base64, password)).devices);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Import failed";
       // The gateway returns 401 with a "password" hint for encrypted/locked projects.
@@ -167,9 +186,9 @@ export function Commissioning() {
       setKnxResult(msg);
     }
   }
-  async function doImportKnx() {
-    setKnxResult("Importing…");
-    try { report(await importKnx(knx)); } catch (e) { setKnxResult(e instanceof Error ? e.message : "Import failed"); }
+  async function doPreviewKnx() {
+    setKnxResult("Parsing…");
+    try { showPreview((await previewKnx(knx)).devices); } catch (e) { setKnxResult(e instanceof Error ? e.message : "Import failed"); }
   }
   async function onKnxFile(file: File) {
     setNeedsPassword(false);
@@ -178,10 +197,32 @@ export function Commissioning() {
       const buf = new Uint8Array(await file.arrayBuffer());
       let bin = "";
       for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
-      await importProject(btoa(bin));
+      await doPreviewKnxProject(btoa(bin));
     } else {
       setKnx(await file.text());
       setKnxResult(null);
+    }
+  }
+  function updatePreviewRow(i: number, patch: Partial<KnxPreviewDevice & { included: boolean }>) {
+    setPreview((cur) => cur?.map((d, idx) => (idx === i ? { ...d, ...patch } : d)) ?? cur);
+  }
+  async function saveAndCommission() {
+    if (!preview) return;
+    setCommitting(true);
+    setKnxResult("Saving…");
+    try {
+      const out = await commitKnxImport(preview);
+      setKnxResult(`Saved ${out.devices} device(s); ${out.roomsCreated} new room(s).`);
+      setPreview(null);
+      setKnx("");
+      setKnxproj(null);
+      setKnxPassword("");
+      setNeedsPassword(false);
+      void client.home().then((h) => setRooms(h.rooms));
+    } catch (e) {
+      setKnxResult(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setCommitting(false);
     }
   }
 
@@ -225,37 +266,88 @@ export function Commissioning() {
         </div>
       ))}
 
-      {/* KNX has no live discovery — import the ETS group-address export to auto-create cards. A
-          secondary path, below the primary scan. */}
+      {/* KNX has no live discovery — parse the ETS group-address export, review the auto-detected
+          device cards (room, circuit type), then save. A secondary path, below the primary scan. */}
       <div className="card" style={{ marginTop: 24 }}>
         <strong>Import KNX project</strong>
-        <p className="muted">Upload a <code>.knxproj</code> (device cards placed in their ETS rooms), or paste an ETS group-address export (CSV/XML). Capabilities are inferred from each datapoint type.</p>
-        <textarea
-          value={knx}
-          onChange={(e) => setKnx(e.target.value)}
-          placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
-          rows={5}
-          style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
-        />
-        <div className="row" style={{ marginTop: 8 }}>
-          <input
-            type="file"
-            accept=".knxproj,.csv,.xml,text/plain"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onKnxFile(f); }}
-          />
-          <button className="primary" disabled={!knx.trim()} onClick={doImportKnx}>Import pasted text</button>
-        </div>
-        {needsPassword && (
-          <div className="row" style={{ marginTop: 8 }}>
-            <input
-              type="password"
-              value={knxPassword}
-              placeholder="ETS project password"
-              onChange={(e) => setKnxPassword(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && knxPassword && knxproj) void importProject(knxproj, knxPassword); }}
-              style={{ flex: 1 }}
+        <p className="muted">Upload a <code>.knxproj</code> (device cards placed in their ETS rooms), or paste an ETS group-address export (CSV/XML). Capabilities and circuit type (on/off, dimmable, tunable white, RGB/RGBWW, curtain…) are inferred from each datapoint type, the ETS Main/Middle Group, and the address name — review before saving.</p>
+        {!preview && (
+          <>
+            <textarea
+              value={knx}
+              onChange={(e) => setKnx(e.target.value)}
+              placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
+              rows={5}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
             />
-            <button className="primary" disabled={!knxPassword || !knxproj} onClick={() => knxproj && importProject(knxproj, knxPassword)}>Unlock & import</button>
+            <div className="row" style={{ marginTop: 8 }}>
+              <input
+                type="file"
+                accept=".knxproj,.csv,.xml,text/plain"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void onKnxFile(f); }}
+              />
+              <button className="primary" disabled={!knx.trim()} onClick={doPreviewKnx}>Preview</button>
+            </div>
+            {needsPassword && (
+              <div className="row" style={{ marginTop: 8 }}>
+                <input
+                  type="password"
+                  value={knxPassword}
+                  placeholder="ETS project password"
+                  onChange={(e) => setKnxPassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && knxPassword && knxproj) void doPreviewKnxProject(knxproj, knxPassword); }}
+                  style={{ flex: 1 }}
+                />
+                <button className="primary" disabled={!knxPassword || !knxproj} onClick={() => knxproj && doPreviewKnxProject(knxproj, knxPassword)}>Unlock & preview</button>
+              </div>
+            )}
+          </>
+        )}
+
+        {preview && (
+          <div style={{ marginTop: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr className="muted" style={{ textAlign: "left" }}>
+                  <th style={{ width: 28 }} />
+                  <th>Device</th>
+                  <th>Room</th>
+                  <th>Circuit type</th>
+                  <th>Group addresses</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((d, i) => (
+                  <tr key={`${d.name}-${i}`} style={{ opacity: d.included ? 1 : 0.45, borderTop: "1px solid var(--aureon-color-border, #2a2a2a)" }}>
+                    <td>
+                      <input type="checkbox" checked={d.included} onChange={(e) => updatePreviewRow(i, { included: e.target.checked })} />
+                    </td>
+                    <td>{d.name}</td>
+                    <td>
+                      <input
+                        value={d.room ?? ""}
+                        placeholder="Unassigned"
+                        disabled={!d.included}
+                        onChange={(e) => updatePreviewRow(i, { room: e.target.value || null })}
+                        style={{ width: 140 }}
+                      />
+                    </td>
+                    <td><span className="tag">{KNX_CIRCUIT_LABELS[d.circuitType]}</span></td>
+                    <td className="muted">{d.bindings.map((b) => `${b.capability}: ${b.address}`).join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className="primary"
+                disabled={committing || preview.every((d) => !d.included)}
+                onClick={saveAndCommission}
+              >
+                {committing ? "Saving…" : `Save & Commission (${preview.filter((d) => d.included).length})`}
+              </button>
+              <button disabled={committing} onClick={() => { setPreview(null); setKnxResult(null); }}>Cancel</button>
+            </div>
           </div>
         )}
         {knxResult && <p className="muted">{knxResult}</p>}

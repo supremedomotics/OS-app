@@ -115,17 +115,40 @@ export function parseKnxProject(files: Map<string, Buffer>): {
   let xml = "";
   for (const [name, buf] of files) if (name.toLowerCase().endsWith(".xml")) xml += `${buf.toString("utf8")}\n`;
 
-  // 1. Group addresses by their Id.
+  // 1. Group addresses by their Id, tracking the enclosing <GroupRange> names (the ETS
+  // Main Group / Middle Group hierarchy, e.g. "Lighting" > "Switching") so each address
+  // carries its device-type + operation classification, not just its raw name.
   const gaById = new Map<string, KnxGroupAddress>();
-  const gaRe = /<GroupAddress\b([^>]*?)\/?>/g;
+  const groupRangeStack: string[] = [];
+  const gaRe = /<(\/?)(GroupRange|GroupAddress)\b([^>]*?)(\/?)>/g;
   let m: RegExpExecArray | null;
   while ((m = gaRe.exec(xml))) {
-    const a = m[1] ?? "";
+    const close = m[1] === "/";
+    const tag = m[2]!;
+    const a = m[3] ?? "";
+    const selfClose = m[4] === "/";
+
+    if (tag === "GroupRange") {
+      if (close) {
+        if (groupRangeStack.length) groupRangeStack.pop();
+      } else {
+        groupRangeStack.push(attr(a, "Name") ?? "");
+        if (selfClose) groupRangeStack.pop();
+      }
+      continue;
+    }
+
     const id = attr(a, "Id");
     const addrRaw = attr(a, "Address");
     if (!id || !addrRaw) continue;
     const address = /^\d+\/\d+\/\d+$/.test(addrRaw) ? addrRaw : addressFromInt(Number(addrRaw));
-    gaById.set(id, { address, name: attr(a, "Name") ?? address, dpt: normalizeDpt(attr(a, "DatapointType") ?? attr(a, "DPTs")) });
+    gaById.set(id, {
+      address,
+      name: attr(a, "Name") ?? address,
+      dpt: normalizeDpt(attr(a, "DatapointType") ?? attr(a, "DPTs")),
+      mainGroup: groupRangeStack[0] || null,
+      middleGroup: groupRangeStack[1] || null,
+    });
   }
   const addresses = [...gaById.values()];
 
@@ -178,7 +201,7 @@ function emitFunction(
   for (const id of fn.gaIds) {
     const ga = gaById.get(id);
     if (!ga) continue;
-    const cap = inferCapability(ga.dpt, `${fn.name} ${ga.name}`);
+    const cap = inferCapability(ga.dpt, `${fn.name} ${ga.name}`, ga.mainGroup);
     if (cap && !bindings.some((b) => b.capability === cap)) bindings.push({ capability: cap, address: ga.address });
   }
   if (bindings.length > 0) out.push({ name: fn.name, room, bindings });

@@ -368,10 +368,24 @@ class _DriverDetailState extends ConsumerState<_DriverDetail> {
   }
 }
 
+/// Human-facing labels for the circuit type `classifyCircuit()` infers from a device's
+/// bindings — matches KNX_CIRCUIT_LABELS in the web installer (apps/web-installer/src/pages.tsx).
+const _kKnxCircuitLabels = {
+  'onoff': 'On/Off switch',
+  'dimmable': 'Dimmable',
+  'tunable_white': 'Tunable white',
+  'rgbww': 'RGB / RGBWW',
+  'cover': 'Curtain / blind',
+  'scene': 'Scene',
+  'climate': 'Climate',
+  'other': 'Other',
+};
+
 /// KNX ETS group-address import (§4): paste an ETS group-address export (CSV/XML —
-/// capabilities inferred from each datapoint type) to auto-create device cards in their
-/// exported rooms. Binary `.knxproj` upload needs a native file picker not yet wired into
-/// the mobile app — paste covers the common export path; the web app has both.
+/// capabilities inferred from each datapoint type, the ETS Main/Middle Group, and the
+/// address name) to preview the auto-discovered device cards, review room + circuit type,
+/// include/exclude devices, then save. Binary `.knxproj` upload needs a native file picker
+/// not yet wired into the mobile app — paste covers the common export path; the web app has both.
 class _KnxImportPanel extends ConsumerStatefulWidget {
   const _KnxImportPanel();
 
@@ -384,6 +398,9 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
   bool _busy = false;
   String? _result;
   String? _err;
+  // Parsed-but-unsaved devices the installer reviews before committing. Each map is the
+  // server's preview entry plus a local `included` toggle; nothing is saved until Commit.
+  List<Map<String, dynamic>>? _preview;
 
   @override
   void dispose() {
@@ -391,22 +408,40 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
     super.dispose();
   }
 
-  Future<void> _import() async {
+  Future<void> _doPreview() async {
     final content = _controller.text.trim();
     if (content.isEmpty) return;
     setState(() { _busy = true; _err = null; _result = null; });
     try {
-      final out = await ref.read(clientProvider).importKnx(content);
+      final devices = await ref.read(clientProvider).previewKnx(content);
+      setState(() {
+        _preview = devices.map((d) => {...d, 'included': true}).toList();
+        _result = 'Found ${devices.length} device${devices.length == 1 ? '' : 's'} — review below, then save.';
+      });
+    } catch (e) {
+      setState(() => _err = 'Preview failed: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _commit() async {
+    final preview = _preview;
+    if (preview == null) return;
+    setState(() { _busy = true; _err = null; _result = null; });
+    try {
+      final out = await ref.read(clientProvider).commitKnxImport(preview);
       final devices = (out['devices'] as num?)?.toInt() ?? 0;
       final rooms = (out['roomsCreated'] as num?)?.toInt() ?? 0;
       setState(() {
-        _result = 'Imported $devices device${devices == 1 ? '' : 's'}'
+        _result = 'Saved $devices device${devices == 1 ? '' : 's'}'
             '${rooms > 0 ? ' · $rooms new room${rooms == 1 ? '' : 's'}' : ''}.';
+        _preview = null;
         _controller.clear();
       });
       ref.invalidate(homeProvider);
     } catch (e) {
-      setState(() => _err = 'Import failed: $e');
+      setState(() => _err = 'Save failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -415,6 +450,7 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final preview = _preview;
     return Padding(
       padding: const EdgeInsets.only(top: AureonSpacing.md),
       child: Column(
@@ -422,29 +458,87 @@ class _KnxImportPanelState extends ConsumerState<_KnxImportPanel> {
         children: [
           Text('Import ETS project', style: text.titleSmall),
           const SizedBox(height: 4),
-          Text(
-            'Paste an ETS group-address export (CSV/XML). Capabilities are inferred from '
-            'each datapoint type.',
-            style: text.labelMedium,
-          ),
-          const SizedBox(height: AureonSpacing.sm),
-          TextField(
-            controller: _controller,
-            maxLines: 5,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              hintText: '<GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />',
+          if (preview == null) ...[
+            Text(
+              'Paste an ETS group-address export (CSV/XML). Capabilities and circuit type are '
+              'inferred from each datapoint type — review before saving.',
+              style: text.labelMedium,
             ),
-          ),
-          const SizedBox(height: AureonSpacing.sm),
-          FilledButton(
-            onPressed: _busy ? null : _import,
-            child: Text(_busy ? 'Importing…' : 'Import group addresses'),
-          ),
+            const SizedBox(height: AureonSpacing.sm),
+            TextField(
+              controller: _controller,
+              maxLines: 5,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                hintText: '<GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />',
+              ),
+            ),
+            const SizedBox(height: AureonSpacing.sm),
+            FilledButton(
+              onPressed: _busy ? null : _doPreview,
+              child: Text(_busy ? 'Parsing…' : 'Preview group addresses'),
+            ),
+          ] else ...[
+            for (var i = 0; i < preview.length; i++) _previewRow(context, i, preview[i]),
+            const SizedBox(height: AureonSpacing.sm),
+            Row(children: [
+              FilledButton(
+                onPressed: _busy || !preview.any((d) => d['included'] == true) ? null : _commit,
+                child: Text(_busy ? 'Saving…' : 'Save & Commission (${preview.where((d) => d['included'] == true).length})'),
+              ),
+              const SizedBox(width: AureonSpacing.sm),
+              TextButton(
+                onPressed: _busy ? null : () => setState(() { _preview = null; _result = null; }),
+                child: const Text('Cancel'),
+              ),
+            ]),
+          ],
           if (_result != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_result!, style: text.labelMedium)),
           if (_err != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_err!, style: TextStyle(color: AureonStatus.critical))),
         ],
+      ),
+    );
+  }
+
+  Widget _previewRow(BuildContext context, int i, Map<String, dynamic> d) {
+    final text = Theme.of(context).textTheme;
+    final included = d['included'] == true;
+    final bindings = ((d['bindings'] as List?) ?? const []).cast<Map<String, dynamic>>();
+    final circuitType = d['circuitType'] as String? ?? 'other';
+    return Opacity(
+      opacity: included ? 1 : 0.45,
+      child: Card(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        child: Padding(
+          padding: const EdgeInsets.all(AureonSpacing.sm),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Checkbox(
+              value: included,
+              onChanged: (v) => setState(() => d['included'] = v ?? false),
+            ),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(child: Text(d['name'] as String? ?? '', style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600))),
+                  Chip(label: Text(_kKnxCircuitLabels[circuitType] ?? circuitType), visualDensity: VisualDensity.compact),
+                ]),
+                const SizedBox(height: 4),
+                TextFormField(
+                  enabled: included,
+                  initialValue: d['room'] as String? ?? '',
+                  decoration: const InputDecoration(labelText: 'Room', isDense: true, border: OutlineInputBorder()),
+                  onChanged: (v) => d['room'] = v.isEmpty ? null : v,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  bindings.map((b) => '${b['capability']}: ${b['address']}').join(', '),
+                  style: text.labelSmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
+              ]),
+            ),
+          ]),
+        ),
       ),
     );
   }

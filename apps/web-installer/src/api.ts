@@ -28,25 +28,54 @@ export interface KnxImportResult {
   created: { name: string; room: string | null; capabilities: string[] }[];
 }
 
-async function postImport(body: Record<string, string>): Promise<KnxImportResult> {
-  const res = await fetch(`${baseUrl}/v1/commissioning/import/knx`, {
+export interface KnxImportBinding {
+  capability: string;
+  address: string;
+}
+
+/** Circuit type detected from a device's inferred capability bindings — for the review table. */
+export type KnxCircuitType = "onoff" | "dimmable" | "tunable_white" | "rgbww" | "cover" | "scene" | "climate" | "other";
+
+/** A parsed-but-not-yet-saved device the installer reviews before {@link commitKnxImport}. */
+export interface KnxPreviewDevice {
+  name: string;
+  room: string | null;
+  bindings: KnxImportBinding[];
+  circuitType: KnxCircuitType;
+}
+
+async function postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${client.accessToken ?? ""}` },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const msg = await res.json().catch(() => ({ message: `${res.status}` }));
-    throw new Error((msg as { message?: string }).message ?? "Import failed");
+    throw new Error((msg as { message?: string }).message ?? "Request failed");
   }
-  return res.json() as Promise<KnxImportResult>;
+  return res.json() as Promise<T>;
 }
 
 /** Import an ETS group-address export (CSV/XML text) → auto-created device cards (§4). */
-export const importKnx = (content: string): Promise<KnxImportResult> => postImport({ content });
+export const importKnx = (content: string): Promise<KnxImportResult> =>
+  postJson("/v1/commissioning/import/knx", { content });
 
 /**
  * Import a `.knxproj` file (base64) → device cards placed in their ETS rooms (§4).
  * `password` is required only for ETS6 password-protected projects (WinZip-AES).
  */
 export const importKnxProject = (base64: string, password?: string): Promise<KnxImportResult> =>
-  postImport(password ? { knxproj: base64, password } : { knxproj: base64 });
+  postJson("/v1/commissioning/import/knx", password ? { knxproj: base64, password } : { knxproj: base64 });
+
+/** Parse an ETS export WITHOUT saving anything — review room/circuit-type before committing. */
+export const previewKnx = (content: string): Promise<{ devices: KnxPreviewDevice[] }> =>
+  postJson("/v1/commissioning/import/knx/preview", { content });
+
+/** `.knxproj` counterpart of {@link previewKnx}. */
+export const previewKnxProject = (base64: string, password?: string): Promise<{ devices: KnxPreviewDevice[] }> =>
+  postJson("/v1/commissioning/import/knx/preview", password ? { knxproj: base64, password } : { knxproj: base64 });
+
+/** Save a (possibly installer-edited) preview list — the "Save & Commission" step. */
+export const commitKnxImport = (devices: (KnxPreviewDevice & { included?: boolean })[]): Promise<KnxImportResult> =>
+  postJson("/v1/commissioning/import/knx/commit", { devices });

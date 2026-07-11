@@ -30,6 +30,7 @@ import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type Li
 import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
 import { knxSearch, type KnxGateway } from "@supreme/protocols";
 import {
+  classifyCircuit,
   CommissioningService,
   groupIntoDevices,
   KnxDecryptError,
@@ -38,6 +39,7 @@ import {
   unzipKnxproj,
   type ImportedDevice,
   type IProtocolScanner,
+  type KnxCircuitType,
 } from "@supreme/commissioning";
 import { issueLicense, validateLicense } from "@supreme/licensing";
 import {
@@ -69,6 +71,11 @@ export interface KnxImportResult {
   devices: number;
   roomsCreated: number;
   created: { name: string; room: string | null; capabilities: string[] }[];
+}
+
+/** A parsed-but-not-yet-committed device, for the installer to review before saving. */
+export interface KnxPreviewDevice extends ImportedDevice {
+  circuitType: KnxCircuitType;
 }
 
 export interface InstallerDeps {
@@ -315,6 +322,61 @@ export class InstallerServices {
       throw new SupremeError("validation_failed", "no devices found in the project (is it password-protected?)");
     }
     return this.commissionImported(devices);
+  }
+
+  /**
+   * Parse an ETS group-address export (or `.knxproj`) WITHOUT committing anything — lets the
+   * installer review the auto-discovered device cards (room assignment, detected circuit type)
+   * and include/exclude or re-room individual devices before {@link commitKnxImport} saves them.
+   */
+  async previewKnx(content: string): Promise<{ devices: KnxPreviewDevice[] }> {
+    const existing = await this.d.home.listRooms();
+    const addresses = parseKnxGroupExport(content);
+    if (addresses.length === 0) {
+      throw new SupremeError("validation_failed", "no group addresses found in the import");
+    }
+    const devices = groupIntoDevices(addresses, existing.map((r) => r.name));
+    return { devices: devices.map((d) => ({ ...d, circuitType: classifyCircuit(d.bindings) })) };
+  }
+
+  /** `.knxproj` counterpart of {@link previewKnx} — same parse-only, no-commit contract. */
+  async previewKnxProject(base64: string, password?: string): Promise<{ devices: KnxPreviewDevice[] }> {
+    let devices: ImportedDevice[];
+    try {
+      const { devices: parsed } = parseKnxProject(unzipKnxproj(Buffer.from(base64, "base64"), password));
+      devices = parsed;
+    } catch (err) {
+      if (err instanceof KnxDecryptError) {
+        const needsPassword = /password/i.test(err.message);
+        throw new SupremeError("unauthorized", needsPassword
+          ? "this .knxproj is password-protected — provide the ETS project password"
+          : `could not decrypt .knxproj: ${err.message}`);
+      }
+      throw new SupremeError("validation_failed", `could not read .knxproj: ${(err as Error).message}`);
+    }
+    if (devices.length === 0) {
+      throw new SupremeError("validation_failed", "no devices found in the project (is it password-protected?)");
+    }
+    return { devices: devices.map((d) => ({ ...d, circuitType: classifyCircuit(d.bindings) })) };
+  }
+
+  /**
+   * Save a (possibly installer-edited) KNX preview: commission every device the installer left
+   * included, into the room they confirmed. This is the "save" step after {@link previewKnx} /
+   * {@link previewKnxProject} — it never re-parses the source file, only what the installer approved.
+   */
+  async commitKnxImport(devices: { name: string; room: string | null; included?: boolean; bindings: ImportedDevice["bindings"] }[]): Promise<KnxImportResult> {
+    const toCommit: ImportedDevice[] = devices
+      .filter((d) => d.included !== false)
+      .map((d) => ({ name: d.name, room: d.room, bindings: d.bindings }));
+    if (toCommit.length === 0) {
+      throw new SupremeError("validation_failed", "no devices selected to save");
+    }
+    for (const d of toCommit) {
+      if (!d.name.trim()) throw new SupremeError("validation_failed", "every device needs a name");
+      if (d.bindings.length === 0) throw new SupremeError("validation_failed", `${d.name}: no bindings`);
+    }
+    return this.commissionImported(toCommit);
   }
 
   /**

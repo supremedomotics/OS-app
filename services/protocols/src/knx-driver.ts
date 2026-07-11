@@ -106,7 +106,7 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`knx: ${deviceId} not bound for ${command.capability}`);
     const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
-    const value = valueFromCommand(command, prev);
+    const value = valueFromCommand(command, prev, b.dpt);
     if (value === null) throw new Error(`knx: unsupported command for ${command.capability}`);
     await this.conn.write(b.writeGa, value, b.dpt);
     // Optimistically reflect the command; a status telegram will confirm/correct it.
