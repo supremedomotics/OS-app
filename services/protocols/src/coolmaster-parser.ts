@@ -2,10 +2,14 @@ import type { RawCoolMasterUnitJson } from "./coolmaster-rest-protocol.js";
 import { SUPREME_MODE_FROM_COOLMASTER } from "./coolmaster-constants.js";
 import type {
   CoolMasterGatewayInfo,
+  CoolMasterGroupInfo,
   CoolMasterLineInfo,
+  CoolMasterMainControllerStatus,
   CoolMasterModeWord,
   CoolMasterTransportKind,
   CoolMasterUnitStatus,
+  CoolMasterVentilationStatus,
+  CoolMasterWaterHeaterStatus,
 } from "./coolmaster-types.js";
 
 /**
@@ -233,4 +237,59 @@ export function mergeQueryDetail(base: CoolMasterUnitStatus, queryLines: string[
     locked: boolField("lock", "locked") ?? base.locked,
     inhibited: boolField("inhibit", "inhibited") ?? base.inhibited,
   };
+}
+
+// ── Secondary device types (water heater / ventilation / main controller / group) ──
+//
+// LOW confidence (see coolmaster-commands.ts's matching note): the reference docs name
+// these commands without a bare-word "list" form being documented either way. These
+// parsers assume a bare `wh`/`vam`/`main`/`group` response follows the SAME per-line
+// shape as `ls`/`ls2` (uid first, then on/off, then type-specific fields) — the
+// protocol's one consistent listing pattern — and are used ONLY inside try/catch'd
+// discovery calls (coolmaster-discovery.ts) that treat any failure as "this gateway has
+// none of this device type" rather than a driver error.
+
+export function parseWaterHeaterLine(line: string): CoolMasterWaterHeaterStatus | null {
+  const t = line.trim().split(/[\s,]+/).filter(Boolean);
+  if (t.length < 2 || !isCoolMasterUid(t[0] ?? "")) return null;
+  return {
+    uid: t[0]!,
+    on: (t[1] ?? "").toUpperCase() === "ON",
+    setpointC: parseTemperatureToken(t[2] ?? ""),
+    roomC: parseTemperatureToken(t[3] ?? ""),
+    faultCode: t[4] && t[4].toUpperCase() !== "OK" ? t[4] : null,
+  };
+}
+
+export function parseVentilationLine(line: string): CoolMasterVentilationStatus | null {
+  const t = line.trim().split(/[\s,]+/).filter(Boolean);
+  if (t.length < 2 || !isCoolMasterUid(t[0] ?? "")) return null;
+  return {
+    uid: t[0]!,
+    on: (t[1] ?? "").toUpperCase() === "ON",
+    fanSpeed: t[2] ?? null,
+    faultCode: t[3] && t[3].toUpperCase() !== "OK" ? t[3] : null,
+  };
+}
+
+export function parseMainControllerLine(line: string): CoolMasterMainControllerStatus | null {
+  const t = line.trim().split(/[\s,]+/).filter(Boolean);
+  if (t.length < 2 || !isCoolMasterUid(t[0] ?? "")) return null;
+  return {
+    uid: t[0]!,
+    on: (t[1] ?? "").toUpperCase() === "ON",
+    faultCode: t[2] && t[2].toUpperCase() !== "OK" ? t[2] : null,
+  };
+}
+
+/** `<groupId> <label?> <memberUid> [memberUid...]` — inferred shape; a gateway that puts
+ * the label elsewhere or omits it entirely still yields a usable group (id + members). */
+export function parseGroupLine(line: string): CoolMasterGroupInfo | null {
+  const t = line.trim().split(/[\s,]+/).filter(Boolean);
+  if (t.length < 2) return null;
+  const id = t[0]!;
+  const memberUids = t.slice(1).filter(isCoolMasterUid);
+  if (memberUids.length === 0) return null;
+  const labelTokens = t.slice(1, t.length - memberUids.length);
+  return { id, label: labelTokens.join(" ") || id, memberUids };
 }
