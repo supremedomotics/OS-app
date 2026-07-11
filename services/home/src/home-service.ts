@@ -103,7 +103,7 @@ export class HomeService {
    * the target room exists. Capability bindings are unaffected (the device keeps its backend
    * mappings), so it stays controllable after the move.
    */
-  async updateDevice(deviceId: DeviceId, patch: { name?: string; roomId?: RoomId }): Promise<Device> {
+  async updateDevice(deviceId: DeviceId, patch: { name?: string; roomId?: RoomId; metadata?: Record<string, unknown> }): Promise<Device> {
     const stored = await this.store.getDevice(deviceId);
     if (!stored) throw new SupremeError("not_found", "device not found");
     if (patch.roomId !== undefined) await this.requireRoom(patch.roomId);
@@ -111,6 +111,9 @@ export class HomeService {
       ...stored.device,
       ...(patch.name !== undefined ? { name: patch.name } : {}),
       ...(patch.roomId !== undefined ? { roomId: patch.roomId } : {}),
+      // Shallow merge, never replace — other features may already have their own keys
+      // in this device's metadata bag (e.g. a driver-populated field elsewhere).
+      ...(patch.metadata !== undefined ? { metadata: { ...stored.device.metadata, ...patch.metadata } } : {}),
     };
     await this.store.putDevice(device, stored.backendIds);
     return device;
@@ -330,6 +333,57 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
     }),
     { onoff: "media_player.living_room", media: "media_player.living_room" },
   );
+  await home.addDevice(
+    device(hid, living.id, "Living Room AC", "thermostat", [
+      { kind: "onoff", config: {} },
+      {
+        kind: "temperature",
+        // A representative ClimateCapabilityConfig — hand-written to match EXACTLY what
+        // CoolMasterProtocolDriver.getCapabilityConfig() really produces for a bound
+        // indoor unit (indoorUnitCapabilityConfig() in @supreme/protocols), not imported
+        // from it (this package doesn't otherwise depend on @supreme/protocols): source
+        // "device_reported", the fixed 4-mode set (no "dry" — Supreme's temperature
+        // command has no dry value to send, see coolmaster-parser.ts's mode mapping
+        // notes), fan speeds/swing positions/filter/demand/lock/inhibit support exactly
+        // as CoolMaster reports them, so the demo home exercises the same capability-
+        // driven climate console a real commissioned CoolMasterNet unit renders.
+        config: {
+          source: "device_reported",
+          modes: ["heat", "cool", "auto", "fan_only"],
+          fanSpeeds: ["Auto", "Low", "Med", "High", "Top"],
+          swingPositions: ["Auto", "Up", "Down", "Left", "Right"],
+          filterSupported: true,
+          demandSupported: true,
+          faultSupported: true,
+          lockSupported: true,
+          inhibitSupported: true,
+          line: "L1",
+          manufacturer: null,
+          advancedControls: [
+            { key: "fanSpeed", label: "Fan Speed", kind: "select", icon: "fan" },
+            { key: "swing", label: "Swing", kind: "select", icon: "swing" },
+            { key: "locked", label: "Remote Lock", kind: "toggle", icon: "lock" },
+            { key: "inhibited", label: "Inhibit", kind: "toggle", icon: "block" },
+            { key: "filterReset", label: "Reset Filter Warning", kind: "action", icon: "filter" },
+          ],
+        },
+      },
+    ], {
+      onoff: { kind: "onoff", on: true },
+      temperature: {
+        kind: "temperature",
+        ambientC: 24.5,
+        targetC: 24,
+        mode: "cool",
+        advanced: { fanSpeed: "Top", swing: "Auto", filterWarning: false, demand: true, faultCode: null, locked: false, inhibited: false },
+      },
+    }, {
+      // Installer-entered fields (§ AC Unit info card) — never driver-reported (CoolMaster's
+      // own capability config always leaves `manufacturer` null, see coolmaster-mapper.ts).
+      hvac: { brand: "Daikin", unitType: "4-Way Cassette" },
+    }),
+    { onoff: "coolmaster.living_room_ac", temperature: "coolmaster.living_room_ac" },
+  );
   // A set of colour lights so the room's lighting disc shows multiple draggable nodes
   // (the Ovio multi-light colour-field pattern, §11.1).
   for (const [lname, hue, on] of [
@@ -411,6 +465,7 @@ function device(
   supremeType: Device["supremeType"],
   capabilities: Device["capabilities"],
   state: Device["state"],
+  metadata: Record<string, unknown> = {},
 ): Device {
   return {
     id: newId("device") as DeviceId,
@@ -424,6 +479,6 @@ function device(
     status: "online",
     capabilities,
     state,
-    metadata: {},
+    metadata,
   };
 }

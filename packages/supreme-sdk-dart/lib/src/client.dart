@@ -410,14 +410,16 @@ class SupremeClient {
     _ensureOk(res);
   }
 
-  /// Move a device to any room and/or rename it (owner/admin/installer).
-  Future<Device> updateDevice(String deviceId, {String? name, String? roomId}) async {
+  /// Move a device to any room, rename it, and/or merge fields into its metadata bag
+  /// (e.g. an installer-entered HVAC brand/type) — owner/admin/installer only.
+  Future<Device> updateDevice(String deviceId, {String? name, String? roomId, Map<String, dynamic>? metadata}) async {
     final res = await _http.patch(
       Uri.parse('$baseUrl/v1/devices/$deviceId'),
       headers: _authHeaders,
       body: jsonEncode({
         if (name != null) 'name': name,
         if (roomId != null) 'roomId': roomId,
+        if (metadata != null) 'metadata': metadata,
       }),
     );
     _ensureOk(res);

@@ -83,14 +83,18 @@ export type HomeView = z.infer<typeof HomeView>;
 export const CommandRequest = z.object({ command: CapabilityCommand });
 export type CommandRequest = z.infer<typeof CommandRequest>;
 
-/** Move and/or rename a device: PATCH /v1/devices/{id}. At least one field is required. */
+/** Move and/or rename a device: PATCH /v1/devices/{id}. At least one field is required.
+ * `metadata` is a shallow MERGE into the device's existing metadata bag (e.g. installer-
+ * entered fields like an HVAC unit's brand/type, never a driver-reported value) — never a
+ * full replace, so unrelated keys another feature stored there survive untouched. */
 export const UpdateDeviceRequest = z
   .object({
     name: z.string().min(1).max(120).optional(),
     roomId: z.string().min(1).optional(),
+    metadata: z.record(z.unknown()).optional(),
   })
-  .refine((v) => v.name !== undefined || v.roomId !== undefined, {
-    message: "provide name and/or roomId",
+  .refine((v) => v.name !== undefined || v.roomId !== undefined || v.metadata !== undefined, {
+    message: "provide name, roomId, and/or metadata",
   });
 export type UpdateDeviceRequest = z.infer<typeof UpdateDeviceRequest>;
 

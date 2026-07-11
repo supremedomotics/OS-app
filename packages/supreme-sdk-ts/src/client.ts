@@ -305,8 +305,9 @@ export class SupremeClient {
     return this.request("POST", `/v1/devices/${deviceId}/command`, { command }) as Promise<CommandResponse>;
   }
 
-  /** Move a device to any room and/or rename it (owner/admin/installer). */
-  async updateDevice(deviceId: DeviceId, patch: { name?: string; roomId?: string }): Promise<{ device: Device }> {
+  /** Move a device to any room, rename it, and/or merge fields into its metadata bag
+   * (e.g. an installer-entered HVAC brand/type) — owner/admin/installer only. */
+  async updateDevice(deviceId: DeviceId, patch: { name?: string; roomId?: string; metadata?: Record<string, unknown> }): Promise<{ device: Device }> {
     return this.request("PATCH", `/v1/devices/${deviceId}`, patch) as Promise<{ device: Device }>;
   }
 

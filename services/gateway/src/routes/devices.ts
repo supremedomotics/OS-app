@@ -59,6 +59,7 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       const device = await ctx.home.updateDevice(deviceId, {
         name: patch.name,
         roomId: patch.roomId as RoomId | undefined,
+        metadata: patch.metadata,
       });
       await ctx.audit?.record({
         homeId: ctx.homeId,
@@ -66,7 +67,7 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
         action: "device.update",
         resourceType: "device",
         resourceId: deviceId,
-        metadata: { name: patch.name, roomId: patch.roomId },
+        metadata: { name: patch.name, roomId: patch.roomId, metadataKeys: patch.metadata ? Object.keys(patch.metadata) : undefined },
       });
       reply.send({ device } satisfies DeviceResponse);
     } catch (err) {
