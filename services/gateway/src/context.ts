@@ -586,6 +586,12 @@ export class AppContext {
       password: input.password,
       displayName: input.displayName?.trim() || input.username,
     });
+    // identity.commission() persists the home via the IDENTITY store; HomeService (which
+    // /v1/home, /v1/rooms, /v1/devices all read from) has its own store and never learns
+    // about it otherwise. In production both stores happen to share one Postgres `homes`
+    // table, masking this — but dev/test's in-memory stores are genuinely separate, so
+    // every home-scoped endpoint 404s "home not commissioned" forever without this.
+    await this.home.setHome(home);
     await this.initWithHome(home);
     this.setupRequired = false;
     const login = await this.identity.login(loginEmail, input.password);

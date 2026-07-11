@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RoomId } from "@supreme/domain-model";
 import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } from "./api.js";
 
@@ -78,9 +78,12 @@ export function DiscoverDevices() {
   const [error, setError] = useState<string | null>(null);
 
   const loadRooms = () =>
-    client.home().then((h) =>
-      setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name, building: r.building ?? null, floor: r.floor ?? 0, area: r.area ?? null }))),
-    );
+    client
+      .home()
+      .then((h) =>
+        setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name, building: r.building ?? null, floor: r.floor ?? 0, area: r.area ?? null }))),
+      )
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load rooms."));
 
   useEffect(() => {
     void fetchDriverRegistry().then(setRegistry);
@@ -188,6 +191,17 @@ function FoundDevice({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [placedIn, setPlacedIn] = useState("");
+  // `rooms` loads asynchronously and can go from empty to populated after this card has already
+  // mounted — the useState() initializers above only run once, so without this sync the <select>
+  // visually falls back to showing the first room (a bare browser default for a value that no
+  // longer matches any <option>) while `roomId` state silently stays "", and "Add device" fails
+  // with "Pick or create a room." even though a room is clearly shown as selected.
+  const touchedRoom = useRef(false);
+  useEffect(() => {
+    if (touchedRoom.current || rooms.length === 0 || roomId) return;
+    setMode("existing");
+    setRoomId(matchedRoom?.id ?? rooms[0]!.id);
+  }, [rooms, roomId, matchedRoom]);
 
   async function pair() {
     setBusy(true); setErr(null);
@@ -266,14 +280,14 @@ function FoundDevice({
 
               {rooms.length > 0 && (
                 <div className="seg">
-                  <button className={mode === "existing" ? "on" : ""} onClick={() => setMode("existing")}>Existing room</button>
-                  <button className={mode === "new" ? "on" : ""} onClick={() => setMode("new")}>New room</button>
+                  <button className={mode === "existing" ? "on" : ""} onClick={() => { touchedRoom.current = true; setMode("existing"); }}>Existing room</button>
+                  <button className={mode === "new" ? "on" : ""} onClick={() => { touchedRoom.current = true; setMode("new"); }}>New room</button>
                 </div>
               )}
 
               {mode === "existing" ? (
                 <label className="drv-field"><span className="lbl">Room</span>
-                  <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                  <select value={roomId} onChange={(e) => { touchedRoom.current = true; setRoomId(e.target.value); }}>
                     {rooms.map((r) => <option key={r.id} value={r.id}>{roomLabel(r)}</option>)}
                   </select>
                   {matchedRoom && matchedRoom.id === roomId && (
@@ -343,6 +357,15 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  // Same async-rooms-load race as FoundDevice above: without this, opening this form before the
+  // room list has finished loading leaves mode="new"/roomId="" stuck forever even once rooms
+  // arrive, while the <select> visually (but not in state) shows the first room selected.
+  const touchedRoom = useRef(false);
+  useEffect(() => {
+    if (touchedRoom.current || rooms.length === 0 || roomId) return;
+    setMode("existing");
+    setRoomId(rooms[0]!.id);
+  }, [rooms, roomId]);
 
   const driver = registry.find((d) => d.protocols.includes(protocol as never));
   const capabilities = driver?.capabilities ?? [];
@@ -456,14 +479,14 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
 
             {rooms.length > 0 && (
               <div className="seg">
-                <button className={mode === "existing" ? "on" : ""} onClick={() => setMode("existing")}>Existing room</button>
-                <button className={mode === "new" ? "on" : ""} onClick={() => setMode("new")}>New room</button>
+                <button className={mode === "existing" ? "on" : ""} onClick={() => { touchedRoom.current = true; setMode("existing"); }}>Existing room</button>
+                <button className={mode === "new" ? "on" : ""} onClick={() => { touchedRoom.current = true; setMode("new"); }}>New room</button>
               </div>
             )}
 
             {mode === "existing" ? (
               <label className="drv-field"><span className="lbl">Room</span>
-                <select value={roomId} onChange={(e) => setRoomId(e.target.value)}>
+                <select value={roomId} onChange={(e) => { touchedRoom.current = true; setRoomId(e.target.value); }}>
                   {rooms.map((r) => <option key={r.id} value={r.id}>{roomLabel(r)}</option>)}
                 </select>
               </label>

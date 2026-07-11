@@ -1,3 +1,4 @@
+import { SupremeError } from "@supreme/contracts";
 import type {
   CapabilityCommand,
   CapabilityKind,
@@ -158,7 +159,16 @@ export class SupremeNativeAdapter implements IBackendAdapter {
    */
   async bind(binding: ProtocolBinding, protocol: string): Promise<void> {
     const driver = this.drivers.find((d) => d.protocol === protocol);
-    if (!driver) throw new Error(`no native protocol driver for "${protocol}"`);
+    // A driver package can be installed (its manifest has no license requirement) without its
+    // native protocol actually being wired up at boot — e.g. MQTT needs SUPREME_MQTT_URL set.
+    // Surfacing this as a plain Error made every one of these a bare, unhelpful "internal error"
+    // (§6 error model) instead of the client seeing why the device can't be commissioned yet.
+    if (!driver) {
+      throw new SupremeError(
+        "backend_unavailable",
+        `"${protocol}" isn't configured on this hub yet — check its connection settings (e.g. broker URL, host) before adding devices.`,
+      );
+    }
     await driver.bind(binding);
     this.managed.add(binding.deviceId);
     this.ownerByDevice.set(binding.deviceId, driver);
@@ -169,7 +179,7 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
-    if (!this.connected) throw new Error("supreme-native engine not connected");
+    if (!this.connected) throw new SupremeError("backend_unavailable", "supreme-native engine not connected");
     // Bound to a real bus → translate + write through the protocol driver. The driver
     // emits the resulting state asynchronously via its onState stream.
     const owner = this.ownerByDevice.get(deviceId);

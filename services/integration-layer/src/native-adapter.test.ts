@@ -99,6 +99,18 @@ describe("SupremeNativeAdapter with protocol drivers", () => {
     const found = await adapter.discover();
     expect(found.map((d) => d.backendId)).toContain("fake.1");
   });
+
+  // A driver's manifest can be installed (no license required) without its native protocol
+  // actually being wired up at boot — e.g. MQTT needs SUPREME_MQTT_URL configured. Binding a
+  // device to that protocol must fail with a clear, client-visible reason, not a bare Error
+  // that http-errors.ts's sendError() would otherwise flatten into an opaque "internal error".
+  it("fails to bind a device to an unconfigured protocol with a clear, typed error", async () => {
+    const adapter = new SupremeNativeAdapter({ drivers: [new FakeDriver()] });
+    await adapter.connect();
+    await expect(
+      adapter.bind({ deviceId: "device-1" as DeviceId, capability: "onoff", address: "z2m/lamp" }, "mqtt"),
+    ).rejects.toMatchObject({ code: "backend_unavailable", message: expect.stringContaining("mqtt") });
+  });
 });
 
 describe("runtime driver registration (manifest↔runtime bridge)", () => {

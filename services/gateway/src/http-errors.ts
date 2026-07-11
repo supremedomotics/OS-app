@@ -22,6 +22,10 @@ export function sendError(reply: FastifyReply, err: unknown, traceId?: string): 
     reply.code(422).send(body);
     return;
   }
+  // Anything that isn't a SupremeError/ZodError is a genuine bug, not an expected client-facing
+  // failure — the client only ever sees the generic "internal error" (§6 error model doesn't leak
+  // internals), so without logging it here, the real cause is lost entirely, server-side included.
+  reply.log.error({ err }, "unhandled error");
   const body: ApiError = { code: "internal", message: "internal error", traceId };
   reply.code(500).send(body);
 }

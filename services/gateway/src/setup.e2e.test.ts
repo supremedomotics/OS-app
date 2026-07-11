@@ -78,6 +78,16 @@ describe("Setup Wizard (first-run admin creation)", () => {
     // The new admin can authenticate normally.
     const login = await json("/v1/auth/login", { email: "installer@supreme.local", password: "supreme-admin-pass" });
     expect(login.status).toBe(200);
-    expect((await login.json()).accessToken).toBeTruthy();
+    const { accessToken } = await login.json();
+    expect(accessToken).toBeTruthy();
+
+    // The home the wizard just commissioned must actually be visible through HomeService —
+    // identity.commission() and HomeService keep separate stores, so a missing wire-up here
+    // makes every home-scoped route (/v1/home, /v1/rooms, /v1/devices, …) 404 forever for any
+    // installation that went through the real wizard, even though login succeeds.
+    const home = await fetch(`${baseUrl}/v1/home`, { headers: { authorization: `Bearer ${accessToken}` } });
+    expect(home.status).toBe(200);
+    const homeBody = await home.json();
+    expect(homeBody.home.name).toBe("The Penthouse");
   });
 });
