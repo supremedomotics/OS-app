@@ -1678,3 +1678,59 @@ button.link {
 .fav-name { font-size: 14px; font-weight: 600; }
 .fav-sub { font-size: 11.5px; color: var(--aureon-color-text-secondary); }
 .scene-card .fav-heart { position: absolute; top: 6px; right: 6px; }
+
+/* ── HVAC scheduler (§ HVAC Detail Page "Schedule") — reuses the climate console's card
+   system entirely; only new here are the event-list rows, weekday picker, and editor
+   form fields. ─────────────────────────────────────────────────────────────────────── */
+.sched-page { grid-template-columns: 1fr; grid-template-areas: "main"; max-width: 640px; margin: 0 auto; }
+.sched-holiday-card { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px; }
+.sched-holiday-card .climate-info-head { flex: 1; }
+.sched-holiday-copy { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--aureon-color-text-secondary); flex: 1; }
+.sched-holiday-toggle { flex: none; }
+
+.sched-list-card { gap: 14px; }
+.sched-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sched-list-actions { display: flex; gap: 8px; }
+.sched-add-btn { width: auto; padding: 9px 16px; font-size: 12.5px; }
+
+.sched-event-list { display: flex; flex-direction: column; gap: 8px; }
+.sched-event-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline);
+  transition: opacity 0.2s ease;
+}
+.sched-event-row.off { opacity: 0.5; }
+.sched-event-meta { display: flex; flex-direction: column; flex: 1; min-width: 0; cursor: pointer; gap: 2px; }
+.sched-event-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sched-event-sub { font-size: 11.5px; color: var(--aureon-color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.sched-editor { max-width: 460px; }
+.sched-editor-body { display: flex; flex-direction: column; gap: 16px; max-height: 55vh; overflow-y: auto; padding-right: 2px; }
+.sched-field { display: flex; flex-direction: column; gap: 8px; }
+.sched-field > span:first-child { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--aureon-color-text-secondary); font-weight: 600; }
+.sched-field input[type="text"], .sched-field input[type="date"], .sched-field input[type="time"] {
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); border-radius: 12px;
+  padding: 10px 12px; color: var(--aureon-color-text-primary); font-size: 13.5px; color-scheme: dark;
+}
+.sched-weekday-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.sched-weekday {
+  width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--aureon-color-base-hairline);
+  background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); font-size: 11.5px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.sched-weekday:hover { border-color: color-mix(in srgb, white 14%, var(--aureon-color-base-hairline) 40%); }
+.sched-weekday:disabled { opacity: 0.35; cursor: default; }
+.sched-weekday.on {
+  background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
+  border-color: transparent; color: #15161b;
+}
+.sched-temp-row { display: flex; align-items: center; gap: 16px; }
+.sched-temp-value { font-size: 22px; font-weight: 600; font-family: "Aureon Display", Inter, sans-serif; min-width: 84px; text-align: center; }
+.sched-editor-actions { display: flex; gap: 10px; margin-top: 16px; }
+.sched-editor-actions .climate-modal-action { flex: 1; }
+.sched-save { flex: 2; text-align: center; justify-content: center; }
+.sched-save:disabled { opacity: 0.5; cursor: default; }
+
+@media (max-width: 900px) {
+  .sched-page { padding-bottom: 40px; }
+}

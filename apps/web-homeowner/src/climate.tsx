@@ -3,6 +3,7 @@ import type { Device } from "@supreme/domain-model";
 import type { Tab } from "./App.js";
 import { client } from "./api.js";
 import { ClimateConsole } from "./climate-console.js";
+import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 
@@ -36,6 +37,7 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [scheduleId, setScheduleId] = useState<string | null>(null);
   const fav = useFavorites();
 
   async function load() {
@@ -48,6 +50,19 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const units = (devices ?? []).filter(hasClimateConfig);
   const selected = selectedId ? units.find((d) => d.id === selectedId) ?? null : null;
+  const scheduling = scheduleId ? units.find((d) => d.id === scheduleId) ?? null : null;
+
+  if (scheduling) {
+    const config = (scheduling.capabilities.find((c) => c.kind === "temperature")?.config ?? {}) as { modes?: string[]; fanSpeeds?: string[] };
+    return (
+      <ClimateSchedulerPage
+        device={scheduling}
+        modes={config.modes ?? []}
+        fanSpeeds={config.fanSpeeds ?? []}
+        onBack={() => setScheduleId(null)}
+      />
+    );
+  }
 
   if (selected) {
     return (
@@ -58,6 +73,7 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
         onNavigateDevice={(d) => setSelectedId(d.id)}
         onRemoved={() => { setSelectedId(null); void load(); }}
         onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
+        onOpenSchedule={(d) => setScheduleId(d.id)}
       />
     );
   }
