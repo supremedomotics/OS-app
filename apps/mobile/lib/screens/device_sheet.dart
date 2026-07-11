@@ -5,19 +5,30 @@ import 'package:supreme_sdk/supreme_sdk.dart';
 
 import '../providers.dart';
 import '../widgets/avr_console.dart';
+import '../widgets/climate_console.dart';
 import 'avr_console_screen.dart';
+import 'climate_console_screen.dart';
+import 'climate_scheduler_screen.dart';
 
 /// Ovio device-detail BOTTOM SHEETS (§11.1) — capability-routed controls (climate dual
 /// setpoint, cover up/stop/down, lock unlatch/unlock, fan presets, vacuum, switch, media)
 /// presented as a modal sheet over the dimmed room. Mirrors the web experience.
 ///
-/// Media devices are the one exception (§ AVR Detail Page "Tablet Layout: a dedicated
-/// tablet layout, not a stretched desktop/mobile UI"): on a tablet-sized screen they get
-/// a full-page two-pane console instead of a bottom sheet — everything else, on every
-/// screen size, keeps the sheet.
+/// Media devices and rich HVAC units (§ HVAC Detail Page) are the exceptions (§ AVR
+/// Detail Page "Tablet Layout: a dedicated tablet layout, not a stretched desktop/mobile
+/// UI"): on a tablet-sized screen they get a full-page console instead of a bottom sheet
+/// — everything else, on every screen size, keeps the sheet. A "rich" HVAC unit is one
+/// whose temperature capability carries a real, driver-reported ClimateCapabilityConfig
+/// (climateModes non-empty) — a plain thermostat with no such config keeps the existing
+/// simple dual-setpoint sheet unchanged.
+bool hasRichClimateConfig(Device device) => device.capabilities.contains('temperature') && device.climateModes.isNotEmpty;
+
 Future<void> showDeviceSheet(BuildContext context, Device device) {
   if (device.capabilities.contains('media') && isTabletWidth(context)) {
     return Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AvrConsoleScreen(device: device)));
+  }
+  if (hasRichClimateConfig(device) && isTabletWidth(context)) {
+    return Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ClimateConsoleScreen(device: device)));
   }
   return showModalBottomSheet<void>(
     context: context,
@@ -55,7 +66,8 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(width: 44, height: 5, margin: const EdgeInsets.only(bottom: 18), decoration: BoxDecoration(color: scheme.outlineVariant, borderRadius: BorderRadius.circular(3))),
-            if (caps.contains('temperature')) ..._climate()
+            if (hasRichClimateConfig(widget.device)) ..._richClimate()
+            else if (caps.contains('temperature')) ..._climate()
             else if (caps.contains('position')) ..._cover()
             else if (caps.contains('lock')) ..._lock()
             else if (caps.contains('fan')) ..._fan()
@@ -184,6 +196,27 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
       );
 
   // ── Climate ──
+  // ── Rich HVAC (§ HVAC Detail Page) — the shared, capability-driven console content;
+  // presented here as the phone bottom sheet's single-column layout. Tablet width gets
+  // the dedicated ClimateConsoleScreen instead (see showDeviceSheet above). ──
+  List<Widget> _richClimate() {
+    return [
+      Consumer(builder: (context, ref, _) {
+        final rooms = ref.watch(homeProvider).maybeWhen(data: (h) => h.rooms, orElse: () => const <Room>[]);
+        final roomName = rooms.where((r) => r.id == widget.device.roomId).map((r) => r.name).firstOrNull ?? 'Home';
+        return ClimateConsoleBody(
+          device: widget.device,
+          roomName: roomName,
+          layout: ClimateConsoleLayout.compact,
+          onOpenSchedule: () {
+            Navigator.of(context).pop();
+            Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ClimateSchedulerScreen(device: widget.device)));
+          },
+        );
+      }),
+    ];
+  }
+
   List<Widget> _climate() {
     final t = _s('temperature');
     final ambient = ((t['ambientC'] as num?) ?? 20).toDouble();

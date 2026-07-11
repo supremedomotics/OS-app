@@ -138,6 +138,41 @@ class Device {
     return controls.whereType<Map<String, dynamic>>().map(MediaAdvancedControl.fromJson).toList();
   }
 
+  /// This device's supported HVAC modes (ClimateCapabilityConfig `modes`) — driver-
+  /// reported, never assumed. Empty for non-climate devices.
+  List<String> get climateModes {
+    final modes = capabilityConfig['temperature']?['modes'];
+    if (modes is! List) return const [];
+    return modes.whereType<String>().toList();
+  }
+
+  /// This device's supported fan speeds (ClimateCapabilityConfig `fanSpeeds`) — empty
+  /// when the unit reports none, so the Fan Speed row simply doesn't render.
+  List<String> get climateFanSpeeds {
+    final speeds = capabilityConfig['temperature']?['fanSpeeds'];
+    if (speeds is! List) return const [];
+    return speeds.whereType<String>().toList();
+  }
+
+  /// This device's supported swing positions (ClimateCapabilityConfig
+  /// `swingPositions`) — brand-variant strings, passed through verbatim. Empty when
+  /// unsupported, so the Swing row auto-hides (§ "adapt if Swing is unsupported").
+  List<String> get climateSwingPositions {
+    final positions = capabilityConfig['temperature']?['swingPositions'];
+    if (positions is! List) return const [];
+    return positions.whereType<String>().toList();
+  }
+
+  /// This device's extra installer/secondary controls (ClimateCapabilityConfig
+  /// `advancedControls` — lock/inhibit/filter-reset) — same shape as
+  /// mediaAdvancedControls, reused rather than duplicated since the wire format is
+  /// identical (key/label/kind/icon/options).
+  List<MediaAdvancedControl> get climateAdvancedControls {
+    final controls = capabilityConfig['temperature']?['advancedControls'];
+    if (controls is! List) return const [];
+    return controls.whereType<Map<String, dynamic>>().map(MediaAdvancedControl.fromJson).toList();
+  }
+
   factory Device.fromJson(Map<String, dynamic> json) => Device(
         id: json['id'] as String,
         name: json['name'] as String,

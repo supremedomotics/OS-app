@@ -6,6 +6,7 @@ import 'alerts_screen.dart';
 import 'areas_screen.dart';
 import 'assistant_screen.dart';
 import 'automations_screen.dart';
+import 'climate_screen.dart';
 import 'dashboard.dart';
 import 'developer_screen.dart';
 import 'global_search_screen.dart';
@@ -65,6 +66,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             (Icons.devices_other_outlined, 'Devices', const DeviceManagerScreen()),
             (Icons.layers_outlined, 'Areas', const AreasScreen()),
             (Icons.play_circle_outline, 'Media', const MediaScreen()),
+            (Icons.ac_unit_outlined, 'Climate', const ClimateScreen()),
             (Icons.extension_outlined, 'Extension Center', const ExtensionCenterScreen()),
             (Icons.account_tree_outlined, 'Automations', const AutomationsScreen()),
             (Icons.insights_outlined, 'Smart', const IntelligenceScreen()),
