@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
@@ -92,6 +92,22 @@ function inputGlyph(type?: string): string {
   }
 }
 
+/** Loose, unvalidated icon hint for a listening-mode/sound-program name — matches common
+ * substrings across brands' DSP vocabularies (Denon's "MOVIE"/"PURE DIRECT", Yamaha's
+ * "sci-fi"/"straight", …) so hardware-style mode buttons get a sensible glyph without
+ * ever hardcoding a specific brand's mode list. Falls back to a generic equalizer glyph. */
+function soundModeGlyph(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes("movie") || l.includes("cinema") || l.includes("theater")) return "🎬";
+  if (l.includes("music") || l.includes("concert")) return "🎵";
+  if (l.includes("game")) return "🎮";
+  if (l.includes("direct") || l.includes("pure") || l.includes("straight")) return "◎";
+  if (l.includes("dolby") || l.includes("dts") || l.includes("atmos") || l.includes("surround")) return "🌐";
+  if (l.includes("stereo")) return "🎚️";
+  if (l.includes("night")) return "🌙";
+  return "🎛️";
+}
+
 /** Sibling zone devices of the SAME physical unit (§ Zone selector) — computed
  * client-side from discovery-captured network metadata (`metadata.network.ip/host`),
  * not a driver-level runtime zone switch (no protocol here has one — see the AVR
@@ -107,6 +123,70 @@ function zoneSiblings(device: Device, allDevices: Device[]): Device[] {
     const dn = (d.metadata as Record<string, unknown> | undefined)?.network as { ip?: string; host?: string } | undefined;
     return (dn?.ip ?? dn?.host) === key;
   });
+}
+
+interface RoomStatusItem { icon: string; label: string; good: boolean }
+
+/** Whole-Home Intelligence (§ Entertainment Status) — a slim, contextual read of the
+ * room this receiver lives in, built entirely from real sibling devices' live state
+ * (never fabricated): covers/curtains, lights, climate, plus the AVR's own zone/format.
+ * A device this home doesn't have in the room (e.g. no covers) simply contributes no
+ * pill — this is never a fixed checklist, it reflects whatever's actually installed. */
+function roomStatus(device: Device, live: MediaStateView, roomDevices: Device[]): RoomStatusItem[] {
+  const items: RoomStatusItem[] = [];
+  const mates = roomDevices.filter((d) => d.id !== device.id && !d.capabilities.some((c) => c.kind === "media"));
+
+  const covers = mates.filter((d) => d.capabilities.some((c) => c.kind === "position"));
+  if (covers.length > 0) {
+    const positions = covers.map((d) => ((d.state as Record<string, { position?: number }>).position?.position ?? 0));
+    const avg = positions.reduce((a, b) => a + b, 0) / positions.length;
+    items.push(avg < 15
+      ? { icon: "🪟", label: "Curtains Closed", good: true }
+      : { icon: "🪟", label: `Curtains ${Math.round(avg)}% Open`, good: false });
+  }
+
+  const lights = mates.filter((d) => d.capabilities.some((c) => c.kind === "brightness" || c.kind === "onoff") && !d.capabilities.some((c) => c.kind === "position"));
+  if (lights.length > 0) {
+    const on = lights.filter((d) => {
+      const s = d.state as Record<string, { on?: boolean; level?: number }>;
+      return (s.brightness?.on ?? s.onoff?.on) === true;
+    });
+    if (on.length === 0) {
+      items.push({ icon: "💡", label: "Lights Off", good: true });
+    } else {
+      const levels = on.map((d) => (d.state as Record<string, { level?: number }>).brightness?.level).filter((v): v is number => typeof v === "number");
+      const avg = levels.length > 0 ? Math.round(levels.reduce((a, b) => a + b, 0) / levels.length) : null;
+      items.push({ icon: "💡", label: avg !== null ? `Lights ${avg}%` : `${on.length} Light${on.length === 1 ? "" : "s"} On`, good: avg !== null && avg <= 25 });
+    }
+  }
+
+  const climate = mates.find((d) => d.capabilities.some((c) => c.kind === "temperature"));
+  if (climate) {
+    const ambient = (climate.state as Record<string, { ambientC?: number }>).temperature?.ambientC;
+    if (typeof ambient === "number") items.push({ icon: "🌡️", label: `${ambient.toFixed(0)}°C`, good: true });
+  }
+
+  items.push({ icon: "📡", label: device.status === "online" ? "AVR Online" : "AVR Offline", good: device.status === "online" });
+
+  const soundMode = typeof live.advanced?.soundMode === "string" ? (live.advanced.soundMode as string) : null;
+  if (soundMode) items.push({ icon: soundModeGlyph(soundMode), label: soundMode, good: true });
+
+  return items;
+}
+
+/** A slim, elegant context strip — never a checklist. Read-only (this reflects other
+ * devices' state; changing them belongs on their own cards). */
+function EntertainmentStatus({ items }: { items: RoomStatusItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="avr-context">
+      {items.map((it, i) => (
+        <span key={i} className={`avr-context-item${it.good ? " good" : ""}`}>
+          <span className="avr-context-ic">{it.icon}</span>{it.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /** Sample a real artwork image's dominant hue client-side (a downscaled canvas read —
@@ -222,7 +302,10 @@ function VolumeDial({
   };
   return (
     <div className="avr-dial-col">
-      <div className="avr-dial">
+      {/* Rotation-reactive lighting (§ Volume Knob: "lighting reacts while rotating") —
+          the knob's specular glow genuinely brightens with the real volume level, not a
+          fixed decoration. */}
+      <div className="avr-dial" style={{ "--avr-dial-glow": (pct / 100).toFixed(2) } as CSSProperties}>
         <div className="avr-dial-ticks">
           {Array.from({ length: DIAL_TICK_COUNT }, (_, i) => (
             <span
@@ -261,15 +344,19 @@ function VolumeDial({
   );
 }
 
+/** Hardware-style mode buttons (§ Listening Modes: "resemble luxury hardware buttons
+ * rather than software chips") — a real icon per mode (matched generically, never a
+ * fixed per-brand list) and a more dimensional pressed/engraved look than a pill chip. */
 function ListeningModeSelector({ modes, active, onSelect }: { modes: AvrSoundModeCfg[]; active: string | null; onSelect: (id: string) => void }) {
   if (modes.length === 0) return null;
   return (
     <div className="avr-field">
       <span className="avr-field-label">Listening Mode</span>
-      <div className="avr-chip-row">
+      <div className="avr-hw-row">
         {modes.map((m) => (
-          <button key={m.id} className={`avr-chip${active === m.id ? " on" : ""}`} onClick={() => onSelect(m.id)}>
-            {m.label}
+          <button key={m.id} className={`avr-hw-btn${active === m.id ? " on" : ""}`} onClick={() => onSelect(m.id)}>
+            <span className="avr-hw-ic">{soundModeGlyph(m.label)}</span>
+            <span className="avr-hw-label">{m.label}</span>
           </button>
         ))}
       </div>
@@ -439,10 +526,11 @@ function MiniPlayer({
 }
 
 export function AvrConsole({
-  device, allDevices, roomName, onBack, onNavigateDevice, onRemoved,
+  device, allDevices, homeDevices, roomName, onBack, onNavigateDevice, onRemoved,
 }: {
   device: Device;
   allDevices: Device[];
+  homeDevices: Device[];
   roomName: string;
   onBack: () => void;
   onNavigateDevice: (d: Device) => void;
@@ -459,6 +547,7 @@ export function AvrConsole({
   const [pendingSource, setPendingSource] = useState<string | null>(null);
 
   const siblings = useMemo(() => zoneSiblings(device, allDevices), [device, allDevices]);
+  const roomMates = useMemo(() => homeDevices.filter((d) => d.roomId === device.roomId), [homeDevices, device.roomId]);
   const inputs = config.inputs ?? [];
   const soundModes = config.soundModes ?? [];
   const advancedControls = config.advancedControls ?? [];
@@ -472,6 +561,7 @@ export function AvrConsole({
   const duration = live.durationSec ?? null;
   const position = seekPreview ?? live.positionSec ?? null;
   const soundMode = typeof advanced.soundMode === "string" ? (advanced.soundMode as string) : null;
+  const contextItems = useMemo(() => roomStatus(device, live, roomMates), [device, live, roomMates]);
 
   const applyMedia = (patch: Partial<MediaStateView>) => apply(device.id, "media", { ...live, ...patch });
   const toggle = () => { vibrate(10); applyMedia({ playback: playing ? "paused" : "playing" }); void cmd(device.id, { capability: "media", action: playing ? "pause" : "play" }); };
@@ -534,7 +624,12 @@ export function AvrConsole({
           </div>
         </div>
 
-        <div className="avr-now">
+        <EntertainmentStatus items={contextItems} />
+
+        {/* One luxury surface (§ Hero Moment): art, now-playing info, waveform, and
+            transport all live inside this single card so they visually belong together,
+            instead of reading as several stacked panels. */}
+        <div className={`avr-now${device.status !== "online" ? " offline" : ""}`}>
           <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} />
           <div className="avr-now-meta">
             <span className="avr-now-label">NOW PLAYING</span>
@@ -559,15 +654,14 @@ export function AvrConsole({
                 <div className="avr-progress-time"><span>{fmtTime(position ?? 0)}</span><span>{fmtTime(duration)}</span></div>
               </div>
             ) : null}
+            <div className="avr-transport-row">
+              {transportShown("previous") && <button className="avr-icon-btn lg" onClick={() => void cmd(device.id, { capability: "media", action: "previous" })}>⏮</button>}
+              {(transportShown("play") || transportShown("pause")) && (
+                <button className="avr-icon-btn xl on" onClick={toggle}>{playing ? "⏸" : "▶"}</button>
+              )}
+              {transportShown("next") && <button className="avr-icon-btn lg" onClick={() => void cmd(device.id, { capability: "media", action: "next" })}>⏭</button>}
+            </div>
           </div>
-        </div>
-
-        <div className="avr-transport-row">
-          {transportShown("previous") && <button className="avr-icon-btn lg" onClick={() => void cmd(device.id, { capability: "media", action: "previous" })}>⏮</button>}
-          {(transportShown("play") || transportShown("pause")) && (
-            <button className="avr-icon-btn xl on" onClick={toggle}>{playing ? "⏸" : "▶"}</button>
-          )}
-          {transportShown("next") && <button className="avr-icon-btn lg" onClick={() => void cmd(device.id, { capability: "media", action: "next" })}>⏭</button>}
         </div>
 
         <div className="avr-fields-row">

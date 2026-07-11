@@ -48,6 +48,7 @@ export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
       <AvrConsole
         device={selected}
         allDevices={media}
+        homeDevices={devices ?? []}
         roomName={roomName(selected.roomId)}
         onBack={() => setSelectedId(null)}
         onNavigateDevice={(d) => setSelectedId(d.id)}

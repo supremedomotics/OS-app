@@ -1050,6 +1050,20 @@ button.link {
 .avr-status.good { color: var(--aureon-color-status-good); }
 .avr-head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 
+/* Whole-Home Intelligence (§ Entertainment Status) — a slim, read-only context strip,
+   never a checklist: whatever the room actually has (covers/lights/climate) plus the
+   receiver's own zone/format, each item a quiet pill, a soft green glow only when that
+   item is in a "ready" state. Absent entirely when there's nothing to report. */
+.avr-context { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 2px; }
+.avr-context-item {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; letter-spacing: 0.02em;
+  padding: 6px 12px; border-radius: 999px; color: var(--aureon-color-text-secondary);
+  background: color-mix(in srgb, var(--aureon-color-base-surface-raised) 70%, transparent);
+  border: 1px solid var(--aureon-color-base-hairline);
+}
+.avr-context-item.good { color: var(--aureon-color-status-good); border-color: color-mix(in srgb, var(--aureon-color-status-good) 30%, transparent); }
+.avr-context-ic { font-size: 12px; }
+
 .avr-icon-btn {
   width: 44px; height: 44px; border-radius: 50%; border: 1px solid color-mix(in srgb, white 8%, var(--aureon-color-base-hairline) 60%);
   background: color-mix(in srgb, var(--aureon-color-base-surface) 100%, white 2%); color: var(--aureon-color-text-primary); font-size: 18px;
@@ -1089,10 +1103,17 @@ button.link {
 .avr-now {
   display: flex; gap: 28px;
   background: linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2.5%) 0%, var(--aureon-color-base-surface-raised) 55%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, black 12%) 100%);
-  border: 1px solid var(--aureon-color-base-hairline); border-radius: 24px; padding: 26px; position: relative; overflow: hidden;
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 24px; padding: 28px; position: relative; overflow: hidden;
   box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 24px 48px -28px rgba(0,0,0,0.6);
+  transition: opacity 0.6s ease, filter 0.6s ease;
 }
 @media (max-width: 640px) { .avr-now { flex-direction: column; align-items: center; text-align: center; } }
+/* Dynamic context (§ Offline): the hero surface itself reads as quiet/unavailable
+   rather than pretending controls still work when the receiver isn't reachable. */
+.avr-now.offline { opacity: 0.55; filter: saturate(0.6); }
+
+.avr-now-meta .avr-transport-row { justify-content: flex-start; margin-top: 18px; }
+@media (max-width: 640px) { .avr-now-meta .avr-transport-row { justify-content: center; } }
 
 .avr-art-wrap { position: relative; width: 220px; height: 220px; flex: none; display: flex; align-items: center; justify-content: center; }
 /* Floating depth (§ Album Art): a slow, minute drift + a shadow that shifts with it —
@@ -1232,15 +1253,43 @@ button.link {
 }
 .avr-chip:disabled { cursor: default; opacity: 0.9; }
 
+/* Listening-mode hardware buttons (§ Listening Modes: "resemble luxury hardware
+   buttons rather than software chips") — rectangular, a real icon, a pressed/engraved
+   look via layered insets rather than a flat pill. */
+.avr-hw-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.avr-hw-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 76px;
+  padding: 10px 14px; border-radius: 12px; cursor: pointer; text-align: center;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--aureon-color-base-surface) 100%, white 3%) 0%, var(--aureon-color-base-surface) 100%);
+  border: 1px solid var(--aureon-color-base-hairline);
+  box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset, 0 1px 2px rgba(0,0,0,0.3);
+  transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+.avr-hw-btn:hover { border-color: color-mix(in srgb, white 14%, var(--aureon-color-base-hairline) 40%); }
+.avr-hw-btn:active { transform: translateY(1px) scale(0.98); box-shadow: 0 1px 4px rgba(0,0,0,0.4) inset; }
+.avr-hw-btn:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
+.avr-hw-btn.on {
+  background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
+  border-color: transparent; color: #15161b;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 25%, transparent) inset, 0 6px 16px -8px color-mix(in srgb, var(--aureon-color-gold-400) 60%, transparent);
+}
+.avr-hw-ic { font-size: 17px; }
+.avr-hw-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+
 /* Master volume dial (§ Luxury pass): styled after a physical AVR/preamp knob — a
    recessed metal-toned face, a ring of tick marks (lit gold up to the current level,
    dim otherwise), and a soft glow that only appears once volume is actually up, so an
    idle receiver reads as quiet, not decorative. */
 .avr-dial-col { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 14px 0 4px; }
 .avr-dial {
+  --avr-dial-glow: 0;
   position: relative; width: 208px; height: 208px; border-radius: 50%;
   background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 3%) 0%, var(--aureon-color-base-surface) 62%, color-mix(in srgb, var(--aureon-color-base-void) 100%, black 8%) 100%);
-  box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset, 0 -6px 14px color-mix(in srgb, black 35%, transparent) inset, 0 18px 36px -20px rgba(0,0,0,0.6);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 5%, transparent) inset,
+    0 -6px 14px color-mix(in srgb, black 35%, transparent) inset,
+    0 18px 36px -20px rgba(0,0,0,0.6),
+    0 0 calc(10px + var(--avr-dial-glow) * 30px) calc(var(--avr-dial-glow) * 1px) color-mix(in srgb, var(--aureon-color-gold-400) calc(var(--avr-dial-glow) * 35%), transparent);
   transition: transform 0.15s ease, box-shadow 0.3s ease;
 }
 /* Brushed-metal texture: extremely fine radial striations, low-opacity so they read as
@@ -1251,10 +1300,11 @@ button.link {
   opacity: 0.5; mix-blend-mode: overlay;
 }
 /* Soft specular reflection — a single diagonal highlight arc, like glass/metal catching
-   light from the upper-left, not a hard glare. */
+   light from the upper-left. Its warmth increases slightly with volume (§ Volume Knob:
+   "lighting reacts while rotating"), never a hard glare. */
 .avr-dial::after {
   content: ""; position: absolute; inset: 6px; border-radius: 50%; pointer-events: none;
-  background: linear-gradient(128deg, color-mix(in srgb, white 10%, transparent) 0%, transparent 30%, transparent 100%);
+  background: linear-gradient(128deg, color-mix(in srgb, white calc(10% + var(--avr-dial-glow) * 6%), transparent) 0%, transparent 30%, transparent 100%);
 }
 .avr-dial:hover { box-shadow: 0 1px 0 color-mix(in srgb, white 7%, transparent) inset, 0 -6px 14px color-mix(in srgb, black 35%, transparent) inset, 0 20px 40px -18px color-mix(in srgb, var(--aureon-color-gold-400) 12%, rgba(0,0,0,0.6)); }
 .avr-dial:has(.avr-dial-input:active) { transform: scale(0.99); }
@@ -1311,11 +1361,11 @@ button.link {
 /* Glass quick-action buttons: translucent + blurred, a hairline top highlight to catch
    light like brushed metal, gold reserved strictly for the "on" state. */
 .avr-quick-tile {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 13px; border-radius: 16px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border-radius: 18px;
   border: 1px solid color-mix(in srgb, white 8%, var(--aureon-color-base-hairline) 60%);
   background: color-mix(in srgb, var(--aureon-color-base-surface-raised) 55%, transparent);
   backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
-  color: var(--aureon-color-text-primary); cursor: pointer; font-size: 12.5px; width: 100%;
+  color: var(--aureon-color-text-primary); cursor: pointer; font-size: 12.5px; width: 100%; min-height: 88px;
   box-shadow: 0 1px 0 color-mix(in srgb, white 7%, transparent) inset, 0 10px 22px -14px rgba(0,0,0,0.5);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease;
 }
@@ -1327,7 +1377,7 @@ button.link {
   box-shadow: 0 1px 0 color-mix(in srgb, white 10%, transparent) inset, 0 0 0 1px color-mix(in srgb, var(--aureon-color-gold-400) 25%, transparent), 0 10px 24px -12px color-mix(in srgb, var(--aureon-color-gold-400) 40%, transparent);
 }
 .avr-quick-tile.on .avr-quick-ic { color: var(--aureon-color-gold-400); }
-.avr-quick-ic { font-size: 18px; }
+.avr-quick-ic { font-size: 24px; }
 .avr-quick-val { color: var(--aureon-color-text-secondary); font-size: 11px; }
 .avr-quick-pop-wrap { position: relative; }
 .avr-quick-pop {

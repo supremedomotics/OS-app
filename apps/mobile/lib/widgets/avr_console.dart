@@ -56,6 +56,96 @@ List<Device> zoneSiblings(Device device, List<Device> allDevices) {
   }).toList();
 }
 
+/// Loose, unvalidated icon hint for a listening-mode/sound-program name — matches common
+/// substrings across brands' DSP vocabularies so hardware-style mode buttons get a
+/// sensible glyph without ever hardcoding a specific brand's mode list.
+IconData soundModeIcon(String label) {
+  final l = label.toLowerCase();
+  if (l.contains('movie') || l.contains('cinema') || l.contains('theater')) return Icons.theaters_outlined;
+  if (l.contains('music') || l.contains('concert')) return Icons.music_note_outlined;
+  if (l.contains('game')) return Icons.sports_esports_outlined;
+  if (l.contains('direct') || l.contains('pure') || l.contains('straight')) return Icons.radio_button_unchecked;
+  if (l.contains('dolby') || l.contains('dts') || l.contains('atmos') || l.contains('surround')) return Icons.surround_sound_outlined;
+  if (l.contains('stereo')) return Icons.equalizer;
+  if (l.contains('night')) return Icons.bedtime_outlined;
+  return Icons.tune;
+}
+
+typedef RoomStatusItem = ({IconData icon, String label, bool good});
+
+/// Whole-Home Intelligence (§ Entertainment Status) — a slim, contextual read of the
+/// room this receiver lives in, built entirely from real sibling devices' live state:
+/// covers/curtains, lights, climate, plus the AVR's own status/format. A device this
+/// home doesn't have in the room simply contributes no pill — never a fixed checklist.
+List<RoomStatusItem> roomStatus(Device device, Map<String, dynamic> media, List<Device> roomDevices) {
+  final items = <RoomStatusItem>[];
+  final mates = roomDevices.where((d) => d.id != device.id && !d.capabilities.contains('media')).toList();
+
+  final covers = mates.where((d) => d.capabilities.contains('position')).toList();
+  if (covers.isNotEmpty) {
+    final positions = covers.map((d) => ((d.state['position'] as Map<String, dynamic>?)?['position'] as num?)?.toDouble() ?? 0).toList();
+    final avg = positions.reduce((a, b) => a + b) / positions.length;
+    items.add(avg < 15 ? (icon: Icons.curtains_closed_outlined, label: 'Curtains Closed', good: true) : (icon: Icons.curtains_outlined, label: 'Curtains ${avg.round()}% Open', good: false));
+  }
+
+  final lights = mates.where((d) => (d.capabilities.contains('brightness') || d.capabilities.contains('onoff')) && !d.capabilities.contains('position')).toList();
+  if (lights.isNotEmpty) {
+    final on = lights.where((d) {
+      final b = d.state['brightness'] as Map<String, dynamic>?;
+      final o = d.state['onoff'] as Map<String, dynamic>?;
+      return (b?['on'] ?? o?['on']) == true;
+    }).toList();
+    if (on.isEmpty) {
+      items.add((icon: Icons.lightbulb_outline, label: 'Lights Off', good: true));
+    } else {
+      final levels = on.map((d) => (d.state['brightness'] as Map<String, dynamic>?)?['level']).whereType<num>().toList();
+      final avg = levels.isNotEmpty ? (levels.reduce((a, b) => a + b) / levels.length).round() : null;
+      items.add((icon: Icons.lightbulb_outline, label: avg != null ? 'Lights $avg%' : '${on.length} Light${on.length == 1 ? '' : 's'} On', good: avg != null && avg <= 25));
+    }
+  }
+
+  final climate = mates.where((d) => d.capabilities.contains('temperature')).firstOrNull;
+  if (climate != null) {
+    final ambient = (climate.state['temperature'] as Map<String, dynamic>?)?['ambientC'];
+    if (ambient is num) items.add((icon: Icons.thermostat_outlined, label: '${ambient.toStringAsFixed(0)}°C', good: true));
+  }
+
+  items.add((icon: Icons.podcasts, label: device.status == 'online' ? 'AVR Online' : 'AVR Offline', good: device.status == 'online'));
+
+  final soundMode = media['advanced'] is Map ? (media['advanced'] as Map)['soundMode'] as String? : null;
+  if (soundMode != null) items.add((icon: soundModeIcon(soundMode), label: soundMode, good: true));
+
+  return items;
+}
+
+/// A slim, elegant context strip — never a checklist. Read-only (this reflects other
+/// devices' state; changing them belongs on their own cards).
+class EntertainmentStatus extends StatelessWidget {
+  const EntertainmentStatus({super.key, required this.items});
+  final List<RoomStatusItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Wrap(spacing: 8, runSpacing: 8, children: [
+      for (final it in items)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AureonRadius.pill),
+            color: AureonBase.surfaceRaised.withValues(alpha: 0.7),
+            border: Border.all(color: it.good ? AureonStatus.good.withValues(alpha: 0.3) : AureonBase.hairline),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(it.icon, size: 13, color: it.good ? AureonStatus.good : AureonText.secondary),
+            const SizedBox(width: 6),
+            Text(it.label, style: TextStyle(fontSize: 11.5, color: it.good ? AureonStatus.good : AureonText.secondary)),
+          ]),
+        ),
+    ]);
+  }
+}
+
 /// A layered surface — a subtle top-lit gradient + soft ambient shadow — used for every
 /// grouped section (now playing, selectors, source list, quick actions) so the console
 /// reads as sculpted panels rather than flat rectangles.
@@ -473,6 +563,10 @@ class _AvrVolumeDialState extends State<AvrVolumeDial> {
                 boxShadow: [
                   BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 26, offset: const Offset(0, 14)),
                   BoxShadow(color: Colors.white.withValues(alpha: 0.04), blurRadius: 0, spreadRadius: 0.5),
+                  // Rotation-reactive lighting (§ Volume Knob: "lighting reacts while
+                  // rotating") — the glow genuinely brightens with the real volume
+                  // level, not a fixed decoration.
+                  BoxShadow(color: AureonGold.c400.withValues(alpha: 0.05 + (widget.volume / 100) * 0.22), blurRadius: 14 + (widget.volume / 100) * 22),
                   if (_pressed) BoxShadow(color: AureonGold.c400.withValues(alpha: 0.18), blurRadius: 30, spreadRadius: 2),
                 ],
               ),
@@ -547,6 +641,53 @@ class AvrModeChips extends StatelessWidget {
       const SizedBox(height: 9),
       Wrap(spacing: 8, runSpacing: 8, children: [
         for (final m in modes) _AvrChip(label: m.label, selected: active == m.id, onTap: () => onSelect(m.id)),
+      ]),
+    ]);
+  }
+}
+
+/// Hardware-style listening-mode buttons (§ Listening Modes: "resemble luxury hardware
+/// buttons rather than software chips") — a real icon per mode (matched generically),
+/// rectangular with a pressed/engraved look, instead of a pill chip.
+class AvrListeningModeButtons extends StatelessWidget {
+  const AvrListeningModeButtons({super.key, required this.modes, required this.active, required this.onSelect});
+  final List<({String id, String label})> modes;
+  final String? active;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    if (modes.isEmpty) return const SizedBox.shrink();
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('LISTENING MODE', style: TextStyle(fontSize: 10.5, letterSpacing: 1.4, color: AureonText.secondary, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 9),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final m in modes)
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AureonRadius.sm + 2),
+              onTap: () { HapticFeedback.selectionClick(); onSelect(m.id); },
+              child: AnimatedContainer(
+                duration: AureonMotion.base,
+                width: 78,
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AureonRadius.sm + 2),
+                  gradient: active == m.id ? LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [AureonGold.c200, AureonGold.c500]) : LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color.lerp(AureonBase.surface, Colors.white, 0.03)!, AureonBase.surface]),
+                  border: Border.all(color: active == m.id ? Colors.transparent : AureonBase.hairline),
+                  boxShadow: active == m.id
+                      ? [BoxShadow(color: AureonGold.c400.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 5))]
+                      : [BoxShadow(color: Colors.white.withValues(alpha: 0.04), blurRadius: 0, spreadRadius: 0.5), const BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1))],
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(soundModeIcon(m.label), size: 18, color: active == m.id ? AureonText.inverse : AureonText.primary),
+                  const SizedBox(height: 4),
+                  Text(m.label.toUpperCase(), textAlign: TextAlign.center, style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.2, color: active == m.id ? AureonText.inverse : AureonText.primary)),
+                ]),
+              ),
+            ),
+          ),
       ]),
     ]);
   }
@@ -781,7 +922,8 @@ class AvrQuickActions extends StatelessWidget {
               borderRadius: BorderRadius.circular(AureonRadius.lg),
               onTap: () { HapticFeedback.selectionClick(); onTap(); },
               child: Container(
-                padding: const EdgeInsets.all(13),
+                padding: const EdgeInsets.all(16),
+                constraints: const BoxConstraints(minHeight: 92),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(AureonRadius.lg),
                   border: Border.all(color: on ? AureonGold.c400.withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.08)),
@@ -790,8 +932,8 @@ class AvrQuickActions extends StatelessWidget {
                       : [BoxShadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 14, offset: const Offset(0, 6))],
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                  Icon(icon, size: 18, color: on ? AureonGold.c400 : AureonText.primary),
-                  const SizedBox(height: 5),
+                  Icon(icon, size: 24, color: on ? AureonGold.c400 : AureonText.primary),
+                  const SizedBox(height: 8),
                   Text(label, style: const TextStyle(fontSize: 12.5)),
                   if (value != null) Text(value, style: const TextStyle(fontSize: 11, color: AureonText.secondary)),
                 ]),
@@ -888,6 +1030,8 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
     final soundModes = widget.device.mediaSoundModes;
     final advancedControls = widget.device.mediaAdvancedControls;
     final siblings = zoneSiblings(widget.device, allDevices);
+    final roomDevices = allDevices.where((d) => d.roomId == widget.device.roomId).toList();
+    final contextItems = roomStatus(widget.device, m, roomDevices);
 
     void toggle() {
       HapticFeedback.lightImpact();
@@ -927,7 +1071,12 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
 
     void goToDevice(Device d) => widget.onNavigateSibling?.call(context, d);
 
-    final nowPlaying = AvrCard(padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20), child: Column(crossAxisAlignment: CrossAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+    // Dynamic context (§ Offline): the hero surface itself reads as quiet/unavailable
+    // rather than pretending controls still work when the receiver isn't reachable.
+    final nowPlaying = AnimatedOpacity(
+      opacity: widget.device.status == 'online' ? 1 : 0.55,
+      duration: const Duration(milliseconds: 600),
+      child: AvrCard(padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20), child: Column(crossAxisAlignment: CrossAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
       AvrAlbumArt(url: artworkUrl, name: widget.device.name, playing: playing),
       const SizedBox(height: 18),
       Text(title ?? 'Idle', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600, letterSpacing: -0.2), textAlign: TextAlign.center),
@@ -958,7 +1107,8 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
         onPrevious: () => _cmd({'capability': 'media', 'action': 'previous'}),
         onNext: () => _cmd({'capability': 'media', 'action': 'next'}),
       ),
-    ]));
+    ])),
+    );
 
     final volumeSection = AvrVolumeDial(volume: volume, volumeDb: volumeDb, muted: muted, onChanged: setVolume, onMuteToggle: setMuted);
 
@@ -967,7 +1117,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
         AvrInputTiles(inputs: inputs, active: source, pending: _pendingSource, onSelect: setSource),
         const SizedBox(height: 16),
       ],
-      AvrModeChips(label: 'Listening Mode', modes: soundModes, active: soundMode, onSelect: setSoundMode),
+      AvrListeningModeButtons(modes: soundModes, active: soundMode, onSelect: setSoundMode),
       if (soundModes.isNotEmpty) const SizedBox(height: 16),
       if (siblings.isNotEmpty) ...[
         AvrModeChips(
@@ -984,10 +1134,15 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
     final sourceList = AvrSourceList(inputs: inputs, active: source, pending: _pendingSource, onSelect: setSource);
 
     if (widget.layout == AvrConsoleLayout.wide) {
-      return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Expanded(flex: 3, child: Padding(padding: const EdgeInsets.all(AureonSpacing.lg), child: SingleChildScrollView(child: Column(children: [nowPlaying, const SizedBox(height: 20), sourceList])))),
-        Container(width: 1, color: AureonBase.hairline),
-        Expanded(flex: 2, child: Padding(padding: const EdgeInsets.all(AureonSpacing.lg), child: SingleChildScrollView(child: Column(children: [volumeSection, const SizedBox(height: 24), fields, const SizedBox(height: 24), quickActions])))),
+      return Column(children: [
+        if (contextItems.isNotEmpty) Padding(padding: const EdgeInsets.fromLTRB(AureonSpacing.lg, AureonSpacing.md, AureonSpacing.lg, 0), child: EntertainmentStatus(items: contextItems)),
+        Expanded(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(flex: 3, child: Padding(padding: const EdgeInsets.all(AureonSpacing.lg), child: SingleChildScrollView(child: Column(children: [nowPlaying, const SizedBox(height: 20), sourceList])))),
+            Container(width: 1, color: AureonBase.hairline),
+            Expanded(flex: 2, child: Padding(padding: const EdgeInsets.all(AureonSpacing.lg), child: SingleChildScrollView(child: Column(children: [volumeSection, const SizedBox(height: 24), fields, const SizedBox(height: 24), quickActions])))),
+          ]),
+        ),
       ]);
     }
 
@@ -997,6 +1152,7 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Column(children: [
+        if (contextItems.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 16), child: EntertainmentStatus(items: contextItems)),
         nowPlaying,
         const SizedBox(height: 20),
         volumeSection,
