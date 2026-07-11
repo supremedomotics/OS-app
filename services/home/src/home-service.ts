@@ -311,14 +311,20 @@ export async function seedDemoHome(home: HomeService, homeRecord: Home): Promise
       onoff: { kind: "onoff", on: true },
       media: {
         kind: "media",
-        playback: "idle",
+        // A track already "loaded" (paused, mid-way through) rather than a blank idle
+        // state — so the console's Now Playing hero, progress bar, and position ticking
+        // (§ AVR Detail Page "Live Data") all have something real to render out of the box,
+        // the same way a receiver reports whatever was last playing after a reboot.
+        playback: "paused",
         volume: 30,
         muted: false,
-        title: null,
-        artist: null,
-        album: null,
+        title: "Nocturne in Blue",
+        artist: "Aureon Session",
+        album: "Late Reflections",
         source: "NET",
         artworkUrl: null,
+        durationSec: 243,
+        positionSec: 86,
         advanced: { soundMode: "PURE DIRECT", sleepMinutes: 0 },
       },
     }),

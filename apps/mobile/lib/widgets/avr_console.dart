@@ -1002,8 +1002,34 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
   double? _seekPreview;
   String? _pendingSource;
 
+  // A real receiver only reports positionSec on its own cadence (HEOS pushes progress
+  // every few seconds; Yamaha/Denon only on poll) — ticking it forward locally between
+  // those updates is what makes the progress bar read as "live" rather than jumpy. The
+  // anchor resets to the server's true value whenever a fresh one arrives; the tick
+  // timer only ever advances the DISPLAYED estimate, never the value sent to the device.
+  double? _positionAnchorValue;
+  DateTime? _positionAnchorAt;
+  double? _lastRawPositionSec;
+  Timer? _positionTicker;
+
   Future<void> _cmd(Map<String, dynamic> c) => ref.read(clientProvider).command(widget.device.id, c);
   void _apply(String capability, Map<String, dynamic> value) => ref.read(liveStatesProvider.notifier).apply(widget.device.id, capability, value);
+
+  void _syncPositionTicker(bool playing) {
+    final wantsTicking = playing && mounted;
+    if (wantsTicking && _positionTicker == null) {
+      _positionTicker = Timer.periodic(const Duration(seconds: 1), (_) { if (mounted) setState(() {}); });
+    } else if (!wantsTicking && _positionTicker != null) {
+      _positionTicker!.cancel();
+      _positionTicker = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _positionTicker?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1021,7 +1047,21 @@ class _AvrConsoleBodyState extends ConsumerState<AvrConsoleBody> {
     final album = m['album'] as String?;
     final artworkUrl = m['artworkUrl'] as String?;
     final durationSec = (m['durationSec'] as num?)?.toDouble();
-    final positionSec = _seekPreview ?? (m['positionSec'] as num?)?.toDouble();
+    final rawPositionSec = (m['positionSec'] as num?)?.toDouble();
+    if (rawPositionSec != _lastRawPositionSec) {
+      _lastRawPositionSec = rawPositionSec;
+      _positionAnchorValue = rawPositionSec;
+      _positionAnchorAt = DateTime.now();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncPositionTicker(playing));
+    final double? livePositionSec = _positionAnchorValue == null
+        ? null
+        : !playing
+            ? _positionAnchorValue
+            : (durationSec != null
+                ? math.min(_positionAnchorValue! + DateTime.now().difference(_positionAnchorAt!).inMilliseconds / 1000, durationSec)
+                : _positionAnchorValue! + DateTime.now().difference(_positionAnchorAt!).inMilliseconds / 1000);
+    final positionSec = _seekPreview ?? livePositionSec;
     final source = m['source'] as String?;
     final volumeDb = advanced['volumeDb'] is num ? (advanced['volumeDb'] as num).toDouble() : null;
     final soundMode = advanced['soundMode'] as String?;

@@ -491,8 +491,8 @@ function SourceRail({
 }
 
 function MiniPlayer({
-  device, media, transportShown, onToggle, onVolume,
-}: { device: Device; media: MediaStateView; transportShown: (a: "previous" | "next") => boolean; onToggle: () => void; onVolume: (v: number) => void }) {
+  device, media, position, transportShown, onToggle, onVolume,
+}: { device: Device; media: MediaStateView; position: number | null; transportShown: (a: "previous" | "next") => boolean; onToggle: () => void; onVolume: (v: number) => void }) {
   const playing = media.playback === "playing";
   return (
     <div className="avr-mini">
@@ -510,8 +510,8 @@ function MiniPlayer({
       </div>
       {media.durationSec ? (
         <div className="avr-mini-progress">
-          <span>{fmtTime(media.positionSec ?? 0)}</span>
-          <div className="avr-mini-bar"><div style={{ width: `${((media.positionSec ?? 0) / media.durationSec) * 100}%` }} /></div>
+          <span>{fmtTime(position ?? 0)}</span>
+          <div className="avr-mini-bar"><div style={{ width: `${((position ?? 0) / media.durationSec) * 100}%` }} /></div>
           <span>{fmtTime(media.durationSec)}</span>
         </div>
       ) : null}
@@ -559,8 +559,33 @@ export function AvrConsole({
   const playing = live.playback === "playing";
   const volumeDb = typeof advanced.volumeDb === "number" ? (advanced.volumeDb as number) : null;
   const duration = live.durationSec ?? null;
-  const position = seekPreview ?? live.positionSec ?? null;
   const soundMode = typeof advanced.soundMode === "string" ? (advanced.soundMode as string) : null;
+
+  // A real receiver only reports positionSec on its own cadence (HEOS pushes progress
+  // every few seconds; Yamaha/Denon only on poll) — ticking it forward locally between
+  // those updates is what makes the progress bar read as "live" rather than jumpy. The
+  // anchor resets to the server's true value on every real update; the tick timer only
+  // ever advances the DISPLAYED estimate, never the value sent back to the device.
+  const [positionAnchor, setPositionAnchor] = useState<{ value: number; at: number } | null>(null);
+  useEffect(() => {
+    setPositionAnchor(typeof live.positionSec === "number" ? { value: live.positionSec, at: Date.now() } : null);
+  }, [live.positionSec, device.id]);
+  const [positionTick, setPositionTick] = useState(0);
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => setPositionTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [playing]);
+  const livePosition = useMemo(() => {
+    if (!positionAnchor) return null;
+    if (!playing) return positionAnchor.value;
+    const elapsed = positionAnchor.value + (Date.now() - positionAnchor.at) / 1000;
+    return duration != null ? Math.min(elapsed, duration) : elapsed;
+    // positionTick is a deliberate no-op dependency — its only job is to force this
+    // memo to recompute once a second while playing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, duration, positionTick, positionAnchor]);
+  const position = seekPreview ?? livePosition;
   const contextItems = useMemo(() => roomStatus(device, live, roomMates), [device, live, roomMates]);
 
   const applyMedia = (patch: Partial<MediaStateView>) => apply(device.id, "media", { ...live, ...patch });
@@ -682,7 +707,7 @@ export function AvrConsole({
         <QuickActions muted={live.muted ?? false} onMuteToggle={setMuted} controls={advancedControls} advanced={advanced} onSetAdvanced={setAdvanced} />
       </aside>
 
-      <MiniPlayer device={device} media={live} transportShown={(a) => transportShown(a)} onToggle={toggle} onVolume={setVolume} />
+      <MiniPlayer device={device} media={live} position={livePosition} transportShown={(a) => transportShown(a)} onToggle={toggle} onVolume={setVolume} />
     </div>
   );
 }

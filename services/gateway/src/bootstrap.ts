@@ -275,5 +275,25 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.voicePublisher = new VoiceStatePublisher({ baseUrl: config.voiceCloudUrl, hubKey: config.voiceHubKey });
   }
 
-  return AppContext.create(config, deps);
+  const ctx = await AppContext.create(config, deps);
+
+  // The mock backend computes each command's result from ITS OWN in-memory cache of the
+  // device's previous state (see MockAdapter.apply → applyCommand), which starts empty on
+  // every process boot. Any device whose current state lives only in HomeService (seeded
+  // demo devices, or any mock-backed device on a persisted home) would otherwise have that
+  // richer state silently discarded — reset to applyCommand's bare defaults — the moment
+  // its FIRST command after boot arrives, because the mock adapter didn't know it existed.
+  // Priming the cache from HomeService's already-persisted truth keeps the two in sync from
+  // boot, so a demo device's seeded title/artwork/etc. survives the first play/pause/volume
+  // command instead of vanishing. No-op for real HA/native-bound devices, which never route
+  // through this cache in the first place.
+  if (haSide instanceof MockAdapter) {
+    for (const device of await ctx.home.listDevices()) {
+      for (const state of Object.values(device.state ?? {})) {
+        haSide.seedState(device.id, state);
+      }
+    }
+  }
+
+  return ctx;
 }
