@@ -33,6 +33,7 @@ import { LockDetail } from "./features/security/lock-detail.js";
 import { CameraCard } from "./features/security/camera-card.js";
 import { CameraDetail } from "./features/security/camera-detail.js";
 import { NvrDetail } from "./features/security/nvr-detail.js";
+import { AlarmPanel } from "./features/security/alarm-panel.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -666,22 +667,11 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
   return (
     <div>
       <h1 className="title">Security</h1>
-      <div className={`card${state?.triggered ? " alarm" : ""}`}>
-        <strong>{state?.triggered ? "ALARM TRIGGERED" : label(state?.mode ?? "disarmed")}</strong>
-        <p className="muted">Current mode: {state?.mode ?? "—"}</p>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          {(["armed_home", "armed_away", "armed_night"] as const).map((m) => (
-            <button key={m} className={`chip${state?.mode === m ? " active" : ""}`} onClick={() => void arm(m)}>
-              {label(m)}
-            </button>
-          ))}
-          {state && state.mode !== "disarmed" && (
-            <button className="chip" onClick={async () => { await client.disarm(); reload(); }}>
-              Disarm
-            </button>
-          )}
-        </div>
-      </div>
+      <AlarmPanel
+        state={state}
+        onArm={(m) => void arm(m)}
+        onDisarm={() => { void client.disarm().then(reload); }}
+      />
 
       {locks.length > 0 && <h2 className="section">Locks</h2>}
       {locks.length > 0 && (
@@ -714,16 +704,6 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
       </Grid>
     </div>
   );
-}
-
-function label(mode: string): string {
-  return mode === "armed_home"
-    ? "Armed · Home"
-    : mode === "armed_away"
-      ? "Armed · Away"
-      : mode === "armed_night"
-        ? "Armed · Night"
-        : "Disarmed";
 }
 
 // ── Energy ───────────────────────────────────────────────────────────────────
