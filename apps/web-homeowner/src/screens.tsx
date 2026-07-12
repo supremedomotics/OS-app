@@ -8,7 +8,6 @@ import { friendlyError } from "./errors.js";
 import { RoomChips } from "./roomchips.js";
 import { EmptyState } from "./empty.js";
 import type {
-  CameraStreamResponse,
   EnergySummaryResponse,
   HomeView,
   SecurityStateResponse,
@@ -28,10 +27,11 @@ import { LightingDetail } from "./lighting.js";
 import { DeviceSheet } from "./device-sheets.js";
 import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
-import { HlsPlayer, WebRtcPlayer } from "./players.js";
 import { Icon } from "./icons.js";
 import { LockCard } from "./features/security/card.js";
 import { LockDetail } from "./features/security/lock-detail.js";
+import { CameraCard } from "./features/security/camera-card.js";
+import { CameraDetail } from "./features/security/camera-detail.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -613,11 +613,11 @@ function SceneQuickActions({ scene, isFav, onClose, onRun, onFav, onChanged }: {
 export function Security({ devMode = false }: { devMode?: boolean } = {}) {
   const [state, reload] = useAsync<SecurityStateResponse>(() => client.securityState());
   const [cameras] = useAsync(async () => (await client.cameras()).cameras);
-  const [active, setActive] = useState<{ webrtc: string | null; hls: string | null; mode: "webrtc" | "hls" } | null>(null);
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [registry] = useAsync(() => fetchDriverRegistry());
   const [selectedLockId, setSelectedLockId] = useState<string | null>(null);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
 
   async function loadDevices() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
@@ -629,6 +629,7 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
   const locks = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "lock"));
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const selectedLock = selectedLockId ? locks.find((d) => d.id === selectedLockId) ?? null : null;
+  const selectedCamera = selectedCameraId ? (cameras ?? []).find((c) => c.id === selectedCameraId) ?? null : null;
 
   if (selectedLock) {
     return (
@@ -642,17 +643,19 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
       />
     );
   }
+  if (selectedCamera) {
+    return (
+      <CameraDetail
+        camera={selectedCamera}
+        roomName={roomName(selectedCamera.roomId)}
+        onBack={() => setSelectedCameraId(null)}
+      />
+    );
+  }
 
   async function arm(mode: "armed_home" | "armed_away" | "armed_night") {
     await client.arm(mode);
     reload();
-  }
-
-  async function play(id: string) {
-    const { streams } = (await client.cameraStream(id)) as CameraStreamResponse;
-    const webrtc = streams.find((s) => s.kind === "webrtc")?.url ?? null;
-    const hls = streams.find((s) => s.kind === "hls")?.url ?? null;
-    setActive({ webrtc, hls, mode: webrtc ? "webrtc" : "hls" });
   }
 
   return (
@@ -696,31 +699,9 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
       )}
 
       {(cameras ?? []).length > 0 && <h2 className="section">Cameras</h2>}
-      {active && (
-        <div className="card">
-          {active.mode === "webrtc" && active.webrtc ? (
-            <WebRtcPlayer url={active.webrtc} onError={() => setActive((a) => (a ? { ...a, mode: "hls" } : a))} />
-          ) : active.hls ? (
-            <HlsPlayer url={active.hls} />
-          ) : (
-            <p className="muted">No playable stream.</p>
-          )}
-        </div>
-      )}
       <Grid>
         {(cameras ?? []).map((c) => (
-          <div key={c.id} className="tile" onClick={() => c.streamUrl && void play(c.id)} style={{ minHeight: 110 }}>
-            {c.snapshotUrl && (
-              <img
-                src={c.snapshotUrl}
-                alt={c.name}
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }}
-              />
-            )}
-            <div className="label" style={{ position: "relative" }}>
-              ▶ {c.name}
-            </div>
-          </div>
+          <CameraCard key={c.id} camera={c} onOpen={() => setSelectedCameraId(c.id)} />
         ))}
       </Grid>
     </div>
