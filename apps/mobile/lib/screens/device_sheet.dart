@@ -136,21 +136,9 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
   }
 
   Future<void> _renameDialog() async {
-    final ctrl = TextEditingController(text: widget.device.name);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename device'),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Name')),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('Save')),
-        ],
-      ),
-    );
-    if (name != null && name.isNotEmpty && name != widget.device.name) {
-      await _apply(() => ref.read(clientProvider).updateDevice(widget.device.id, name: name));
-    }
+    final name = await promptRenameDevice(context, widget.device.name);
+    if (name == null) return;
+    await _apply(() => ref.read(clientProvider).updateDevice(widget.device.id, name: name));
   }
 
   Future<void> _moveDialog(List<Room> rooms) async {
@@ -170,20 +158,9 @@ class _DeviceSheetState extends ConsumerState<DeviceSheet> {
   }
 
   Future<void> _removeConfirm() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove device?'),
-        content: Text('"${widget.device.name}" will be removed. This cannot be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await _apply(() => ref.read(clientProvider).deleteDevice(widget.device.id));
-    }
+    final ok = await confirmRemoveDevice(context, widget.device.name);
+    if (!ok) return;
+    await _apply(() => ref.read(clientProvider).deleteDevice(widget.device.id));
   }
 
   Widget _title(String name, String status) => Padding(

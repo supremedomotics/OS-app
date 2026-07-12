@@ -33,18 +33,8 @@ class _LightingDetailState extends ConsumerState<LightingDetail> {
   Future<void> _cmd(Map<String, dynamic> c) => ref.read(clientProvider).command(widget.device.id, c);
 
   Future<void> _remove() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove device?'),
-        content: Text('Remove "${widget.device.name}"? This can\'t be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    if (ok != true) return;
+    final ok = await confirmRemoveDevice(context, widget.device.name);
+    if (!ok) return;
     setState(() => _removing = true);
     try {
       await ref.read(clientProvider).deleteDevice(widget.device.id);

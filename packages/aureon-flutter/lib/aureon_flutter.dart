@@ -7,6 +7,7 @@ library;
 
 export 'src/tokens.g.dart';
 export 'src/theme.dart';
+export 'src/dialogs.dart';
 export 'src/widgets/fill_tile.dart';
 export 'src/widgets/category_tile.dart';
 export 'src/widgets/device_control_tile.dart';

@@ -69,20 +69,7 @@ class _CategoryDeviceListScreenState extends ConsumerState<CategoryDeviceListScr
     }
   }
 
-  Future<bool> _confirmRemove(Device d) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove device?'),
-        content: Text('Remove "${d.name}"? This can\'t be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    return ok ?? false;
-  }
+  Future<bool> _confirmRemove(Device d) => confirmRemoveDevice(context, d.name);
 
   Future<void> _remove(Device d) async {
     try {

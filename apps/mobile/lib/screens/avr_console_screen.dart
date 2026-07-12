@@ -16,43 +16,20 @@ class AvrConsoleScreen extends ConsumerWidget {
   final Device device;
 
   Future<void> _rename(BuildContext context, WidgetRef ref) async {
-    final ctrl = TextEditingController(text: device.name);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename device'),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Name')),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('Save')),
-        ],
-      ),
-    );
-    if (name != null && name.isNotEmpty && name != device.name) {
-      await ref.read(clientProvider).updateDevice(device.id, name: name);
-      ref.invalidate(homeProvider);
-      ref.invalidate(allDevicesProvider);
-    }
+    final name = await promptRenameDevice(context, device.name);
+    if (name == null) return;
+    await ref.read(clientProvider).updateDevice(device.id, name: name);
+    ref.invalidate(homeProvider);
+    ref.invalidate(allDevicesProvider);
   }
 
   Future<void> _remove(BuildContext context, WidgetRef ref) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove device?'),
-        content: Text('"${device.name}" will be removed. This cannot be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Remove')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await ref.read(clientProvider).deleteDevice(device.id);
-      ref.invalidate(homeProvider);
-      ref.invalidate(allDevicesProvider);
-      if (context.mounted) Navigator.of(context).pop();
-    }
+    final ok = await confirmRemoveDevice(context, device.name);
+    if (!ok) return;
+    await ref.read(clientProvider).deleteDevice(device.id);
+    ref.invalidate(homeProvider);
+    ref.invalidate(allDevicesProvider);
+    if (context.mounted) Navigator.of(context).pop();
   }
 
   @override
