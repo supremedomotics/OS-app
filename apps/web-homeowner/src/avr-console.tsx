@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { OverflowMenu } from "@supreme/aureon-web";
+import { DeviceFacts, OverflowMenu, type DeviceFactRow } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
+import { friendlyType } from "./devices.js";
 
 /**
  * The AVR/Receiver console (§ AVR Detail Page) — a rich, capability-driven control
@@ -623,6 +624,14 @@ export function AvrConsole({
     onRemoved();
   };
 
+  // Information (§ Design System — Universal Page Structure): only fields the platform
+  // actually has for this device, same "don't fake it" policy as the Devices list.
+  const infoRows: DeviceFactRow[] = [{ label: "Type", value: friendlyType(device) }];
+  if (device.manufacturer) infoRows.push({ label: "Manufacturer", value: device.manufacturer });
+  if (device.model) infoRows.push({ label: "Model", value: device.model });
+  infoRows.push({ label: "Room", value: roomName });
+  infoRows.push({ label: "Status", value: device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable" });
+
   return (
     <div className="avr-console">
       <div className="avr-main">
@@ -702,6 +711,10 @@ export function AvrConsole({
       <aside className="avr-sidebar">
         <SourceRail inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
         <QuickActions muted={live.muted ?? false} onMuteToggle={setMuted} controls={advancedControls} advanced={advanced} onSetAdvanced={setAdvanced} />
+        <div className="card">
+          <div className="avr-field-label" style={{ marginBottom: 10 }}>Information</div>
+          <DeviceFacts rows={infoRows} />
+        </div>
       </aside>
 
       <MiniPlayer device={device} media={live} position={livePosition} transportShown={(a) => transportShown(a)} onToggle={toggle} onVolume={setVolume} />
