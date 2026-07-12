@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { Button, CapabilityGate, Card, Grid, QuickActions } from "@supreme/aureon-web";
+import { Button, CapabilityGate, CapabilityGrid, Card, Grid, QuickActions } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry } from "../../api.js";
 import { useLive } from "../../live.js";
 import {
@@ -109,13 +109,13 @@ export function SimpleMediaDetail({
 
       <div className="aureon-detail-grid">
         <div className="aureon-detail-main">
-          <div className={`avr-now${!on ? " offline" : ""}`}>
-            <div className="avr-art-wrap" style={{ width: 190, height: 107 }}>
+          <div className={`avr-now avr-now--wash${!on ? " offline" : ""}`} style={{ "--hero-wash-tint": "var(--aureon-color-gold-400)" } as CSSProperties}>
+            <div className="avr-art-wrap" style={{ width: 228, height: 128 }}>
               <div className={`avr-halo${on ? " on" : ""}`} style={{ "--avr-halo-tint": "var(--aureon-color-gold-400)" } as CSSProperties} />
               <div className={`avr-art-float${on ? " on" : ""}`}>
                 <div
                   className={`avr-art avr-art-placeholder hero-ic-plate${busy ? " busy" : ""}`}
-                  style={{ width: 190, height: 107, borderRadius: 14, fontSize: 42 }}
+                  style={{ width: 228, height: 128, borderRadius: 16, fontSize: 48 }}
                 >
                   {on ? kindMeta.icon : "⏻"}
                 </div>
@@ -163,31 +163,23 @@ export function SimpleMediaDetail({
             actions={[
               { key: "mute", icon: live.muted ? "🔇" : "🔊", label: live.muted ? "Unmute" : "Mute", onClick: toggleMute, active: live.muted, disabled: !volumeAvail.available },
             ]}
-          >
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🎬 Watch Movie</button></CapabilityGate>
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🎮 Gaming</button></CapabilityGate>
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🎵 Music</button></CapabilityGate>
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>⏲️ Sleep Timer</button></CapabilityGate>
-          </QuickActions>
+          />
 
           <h2 className="section">More controls</h2>
-          <Grid minItemWidth={130} gap="sm">
-            <CapabilityGate available={appsAvail.available} reason={appsAvail.available ? undefined : appsAvail.reason}>
-              <Card interactive>📱 Apps</Card>
-            </CapabilityGate>
-            <CapabilityGate available={pictureModeAvail.available} reason={pictureModeAvail.available ? undefined : pictureModeAvail.reason}>
-              <Card interactive>🖼️ Picture Mode</Card>
-            </CapabilityGate>
-            <CapabilityGate available={audioOutputAvail.available} reason={audioOutputAvail.available ? undefined : audioOutputAvail.reason}>
-              <Card interactive>🔈 Audio Output</Card>
-            </CapabilityGate>
-            <CapabilityGate available={channelAvail.available} reason={channelAvail.available ? undefined : channelAvail.reason}>
-              <Card interactive>📡 Channel</Card>
-            </CapabilityGate>
-            <CapabilityGate available={remoteAvail.available} reason={remoteAvail.available ? undefined : remoteAvail.reason}>
-              <Card interactive>🎛️ Remote Control</Card>
-            </CapabilityGate>
-          </Grid>
+          <CapabilityGrid
+            minItemWidth={130}
+            items={[
+              { key: "apps", icon: "📱", label: "Apps", available: appsAvail.available, reason: appsAvail.available ? undefined : appsAvail.reason },
+              { key: "picture-mode", icon: "🖼️", label: "Picture Mode", available: pictureModeAvail.available, reason: pictureModeAvail.available ? undefined : pictureModeAvail.reason },
+              { key: "audio-output", icon: "🔈", label: "Audio Output", available: audioOutputAvail.available, reason: audioOutputAvail.available ? undefined : audioOutputAvail.reason },
+              { key: "channel", icon: "📡", label: "Channel", available: channelAvail.available, reason: channelAvail.available ? undefined : channelAvail.reason },
+              { key: "remote", icon: "🎛️", label: "Remote Control", available: remoteAvail.available, reason: remoteAvail.available ? undefined : remoteAvail.reason },
+              { key: "watch-movie", icon: "🎬", label: "Watch Movie", available: false, reason: NOT_YET.reason },
+              { key: "gaming", icon: "🎮", label: "Gaming", available: false, reason: NOT_YET.reason },
+              { key: "music", icon: "🎵", label: "Music", available: false, reason: NOT_YET.reason },
+              { key: "sleep-timer", icon: "⏲️", label: "Sleep Timer", available: false, reason: NOT_YET.reason },
+            ]}
+          />
         </div>
 
         {/* § Design System — Universal Page Structure: same sections every device detail page

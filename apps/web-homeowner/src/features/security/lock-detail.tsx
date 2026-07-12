@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { Card, CapabilityGate, Grid, QuickActions } from "@supreme/aureon-web";
+import { Card, CapabilityGate, CapabilityGrid, QuickActions } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry } from "../../api.js";
 import { useLive } from "../../live.js";
 import {
@@ -106,13 +106,13 @@ export function LockDetail({
 
       <div className="aureon-detail-grid">
         <div className="aureon-detail-main">
-          <div className={`avr-now${jammed ? " offline" : ""}`}>
-            <div className="avr-art-wrap" style={{ width: 150, height: 150 }}>
+          <div className={`avr-now avr-now--wash${jammed ? " offline" : ""}`} style={{ "--hero-wash-tint": heroTint } as CSSProperties}>
+            <div className="avr-art-wrap" style={{ width: 176, height: 176 }}>
               <div className={`avr-halo${!locked ? " on" : ""}`} style={{ "--avr-halo-tint": heroTint } as CSSProperties} />
               <div className={`avr-art-float${!locked ? " on" : ""}`}>
                 <div
                   className={`avr-art avr-art-placeholder hero-ic-plate${busy ? " busy" : ""}`}
-                  style={{ width: 150, height: 150, fontSize: 56, color: heroTint }}
+                  style={{ width: 176, height: 176, fontSize: 62, color: heroTint }}
                 >
                   {jammed ? "⚠️" : locked ? "🔒" : "🔓"}
                 </div>
@@ -126,12 +126,17 @@ export function LockDetail({
                 <span className="avr-badge">{kindMeta.icon} {kindMeta.label}</span>
                 {jammed && <span className="avr-badge" style={{ color: "var(--aureon-color-status-critical)" }}>Jammed</span>}
               </div>
-              <Grid minItemWidth={110} gap="sm" style={{ marginTop: 14 }}>
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>🔋 Battery</Card></CapabilityGate>
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>👤 Last user</Card></CapabilityGate>
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>🕐 Last unlock</Card></CapabilityGate>
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>📶 Connection</Card></CapabilityGate>
-              </Grid>
+              <div style={{ marginTop: 14 }}>
+                <CapabilityGrid
+                  minItemWidth={110}
+                  items={[
+                    { key: "battery", icon: "🔋", label: "Battery", available: false, reason: NOT_YET.reason },
+                    { key: "last-user", icon: "👤", label: "Last user", available: false, reason: NOT_YET.reason },
+                    { key: "last-unlock", icon: "🕐", label: "Last unlock", available: false, reason: NOT_YET.reason },
+                    { key: "connection", icon: "📶", label: "Connection", available: false, reason: NOT_YET.reason },
+                  ]}
+                />
+              </div>
             </div>
           </div>
 
@@ -166,27 +171,20 @@ export function LockDetail({
               { key: "unlock", icon: "🔓", label: "Unlock", onClick: () => setLock(false), active: !locked, disabled: !locked },
               { key: "lock-all", icon: "🔒", label: "Lock All", onClick: lockAll },
             ]}
-          >
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🕓 Temporary Access</button></CapabilityGate>
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🔢 Guest PIN</button></CapabilityGate>
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🏖️ Vacation Mode</button></CapabilityGate>
-          </QuickActions>
+          />
 
           <h2 className="section">More controls</h2>
-          <Grid minItemWidth={150} gap="sm">
-            <CapabilityGate available={accessCodesAvail.available} reason={accessCodesAvail.available ? undefined : accessCodesAvail.reason}>
-              <Card interactive>🔢 Access Codes</Card>
-            </CapabilityGate>
-            <CapabilityGate available={autoLockAvail.available} reason={autoLockAvail.available ? undefined : autoLockAvail.reason}>
-              <Card interactive>⏱️ Auto-Lock Timer</Card>
-            </CapabilityGate>
-            <CapabilityGate available={doorSensorAvail.available} reason={doorSensorAvail.available ? undefined : doorSensorAvail.reason}>
-              <Card interactive>🚪 Door Sensor</Card>
-            </CapabilityGate>
-            <CapabilityGate available={guestAccessAvail.available} reason={guestAccessAvail.available ? undefined : guestAccessAvail.reason}>
-              <Card interactive>👤 Guest Access</Card>
-            </CapabilityGate>
-          </Grid>
+          <CapabilityGrid
+            minItemWidth={150}
+            items={[
+              { key: "access-codes", icon: "🔢", label: "Access Codes", available: accessCodesAvail.available, reason: accessCodesAvail.available ? undefined : accessCodesAvail.reason },
+              { key: "auto-lock", icon: "⏱️", label: "Auto-Lock Timer", available: autoLockAvail.available, reason: autoLockAvail.available ? undefined : autoLockAvail.reason },
+              { key: "door-sensor", icon: "🚪", label: "Door Sensor", available: doorSensorAvail.available, reason: doorSensorAvail.available ? undefined : doorSensorAvail.reason },
+              { key: "guest-access", icon: "👤", label: "Guest Access", available: guestAccessAvail.available, reason: guestAccessAvail.available ? undefined : guestAccessAvail.reason },
+              { key: "temporary-access", icon: "🕓", label: "Temporary Access", available: false, reason: NOT_YET.reason },
+              { key: "vacation-mode", icon: "🏖️", label: "Vacation Mode", available: false, reason: NOT_YET.reason },
+            ]}
+          />
         </div>
 
         {/* § Design System — Universal Page Structure: same sections every device detail page

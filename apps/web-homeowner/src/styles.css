@@ -96,7 +96,10 @@ h2.section { font-size: var(--aureon-text-caption, 12px); font-weight: 600; lett
 .rail-item:hover { color: var(--aureon-color-text-primary); background: var(--aureon-color-base-surface); }
 .rail-item.active { background: var(--aureon-color-gold-400); color: #15161b; font-weight: 600; }
 .rail-dev { margin-top: auto; font-size: 10px; letter-spacing: .12em; color: var(--aureon-color-gold-400); padding: 10px 14px; opacity: .8; }
-.wide-content { flex: 1; padding: 30px 34px 60px; max-width: 1100px; }
+/* Curated, not stretched (§ Premium Polish — "large screens should feel curated"): the content
+ * column grows gently with the viewport instead of sitting pinned to the left edge with a wall
+ * of empty space beside it on a large desktop/ultrawide display, but never runs edge-to-edge. */
+.wide-content { flex: 1; padding: 30px 34px 60px; max-width: min(1360px, 92vw); margin: 0 auto; }
 
 /* ── "More" sheet (phone overflow nav) ─────────────────────────────────────────── */
 .more-sheet { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 40; display: flex; align-items: flex-end; }
@@ -741,6 +744,19 @@ button.link {
 @keyframes hero-ic-pulse { 0% { transform: scale(1); } 40% { transform: scale(1.12); } 100% { transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .hero-ic-plate.busy { animation: none; } }
 
+/* Hero ambient wash (§ Premium Polish — "hero glow... every hero should feel alive") — an
+ * opt-in modifier (not applied to .avr-now by default, so the AVR/Speaker hero's own
+ * already-tuned halo/particle system is untouched) that bleeds a soft radial tint from the
+ * card's own top-left across the whole hero, not just behind the icon plate. Every non-AVR
+ * hero (Lock, Alarm, NVR, Television) opts in with its own `--hero-wash-tint`. */
+.avr-now--wash { position: relative; overflow: hidden; }
+.avr-now--wash::before {
+  content: ""; position: absolute; inset: -30% -10% auto -10%; height: 75%; pointer-events: none; z-index: 0;
+  background: radial-gradient(55% 100% at 18% 0%, color-mix(in srgb, var(--hero-wash-tint, var(--aureon-color-gold-400)) 16%, transparent) 0%, transparent 72%);
+  transition: opacity 0.6s ease;
+}
+.avr-now--wash > * { position: relative; z-index: 1; }
+
 /* Alarm hero (§ Premium Device Experience Library — "large security shield... countdown
  * timers"): a genuinely urgent state, not just another status label — the whole hero card
  * pulses a critical-red border while triggered. */
@@ -1263,7 +1279,7 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 
 .avr-now-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
 .avr-now-label { font-size: 10.5px; letter-spacing: 0.16em; color: var(--aureon-color-gold-400); font-weight: 700; }
-.avr-now-meta h3 { margin: 3px 0 0; font-size: 25px; font-weight: 600; letter-spacing: -0.01em; font-family: "Aureon Display", Inter, sans-serif; }
+.avr-now-meta h3 { margin: 3px 0 0; font-size: var(--aureon-text-title, 28px); font-weight: 600; letter-spacing: -0.01em; font-family: "Aureon Display", Inter, sans-serif; }
 .avr-now-artist { margin: 0; color: var(--aureon-color-text-primary); font-size: 14.5px; }
 .avr-now-album { margin: 0; color: var(--aureon-color-text-secondary); font-size: 13px; }
 .avr-badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }

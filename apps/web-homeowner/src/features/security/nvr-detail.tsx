@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { CameraList } from "@supreme/contracts";
-import { Card, CapabilityGate, Grid } from "@supreme/aureon-web";
+import { Card, CapabilityGrid, Grid } from "@supreme/aureon-web";
 
 type CameraView = CameraList["cameras"][number];
 
@@ -30,15 +30,15 @@ export function NvrDetail({ cameras, onBack }: { cameras: CameraView[]; onBack: 
 
       <div className="aureon-detail-grid">
         <div className="aureon-detail-main">
-          <div className="avr-now offline">
-            <div className="avr-art-wrap" style={{ width: 130, height: 130 }}>
+          <div className="avr-now avr-now--wash offline" style={{ "--hero-wash-tint": "var(--aureon-color-gold-400)" } as CSSProperties}>
+            <div className="avr-art-wrap" style={{ width: 160, height: 160 }}>
               <div className="avr-halo" style={{ "--avr-halo-tint": "var(--aureon-color-gold-400)" } as CSSProperties} />
               <div className="avr-art-float">
-                <div className="avr-art avr-art-placeholder" style={{ width: 130, height: 130, fontSize: 52 }}>🖥️</div>
+                <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160, fontSize: 58 }}>🖥️</div>
               </div>
             </div>
             <div className="avr-now-meta">
-              <span className="avr-now-label">DRIVER REQUIRED</span>
+              <span className="avr-now-label">NETWORK VIDEO RECORDER</span>
               <h3>NVR</h3>
               <p className="avr-now-album">{cameras.length} channel{cameras.length === 1 ? "" : "s"} · {live} live</p>
             </div>
@@ -65,23 +65,16 @@ export function NvrDetail({ cameras, onBack }: { cameras: CameraView[]; onBack: 
           )}
 
           <h2 className="section">More controls</h2>
-          <Grid minItemWidth={150} gap="sm">
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>💾 Storage</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>🗓️ Recording Schedule</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>🎯 Motion-Triggered Recording</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>❤️ Channel Health</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>⬇️ Export</Card>
-            </CapabilityGate>
-          </Grid>
+          <CapabilityGrid
+            minItemWidth={150}
+            items={[
+              { key: "storage", icon: "💾", label: "Storage", available: false, reason: NOT_YET.reason },
+              { key: "recording-schedule", icon: "🗓️", label: "Recording Schedule", available: false, reason: NOT_YET.reason },
+              { key: "motion-recording", icon: "🎯", label: "Motion-Triggered Recording", available: false, reason: NOT_YET.reason },
+              { key: "channel-health", icon: "❤️", label: "Channel Health", available: false, reason: NOT_YET.reason },
+              { key: "export", icon: "⬇️", label: "Export", available: false, reason: NOT_YET.reason },
+            ]}
+          />
         </div>
 
         <div className="aureon-detail-side">

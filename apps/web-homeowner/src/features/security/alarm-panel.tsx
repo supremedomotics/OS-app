@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { SecurityStateResponse } from "@supreme/contracts";
-import { Card, CapabilityGate, Grid, QuickActions } from "@supreme/aureon-web";
+import { Card, CapabilityGrid, QuickActions } from "@supreme/aureon-web";
 
 const NOT_YET = { available: false as const, reason: "Driver required" };
 
@@ -38,11 +38,11 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
   return (
     <div className="aureon-detail-grid">
       <div className="aureon-detail-main">
-        <div className={`avr-now${triggered ? " alarm-triggered" : ""}`}>
-          <div className="avr-art-wrap" style={{ width: 130, height: 130 }}>
+        <div className={`avr-now avr-now--wash${triggered ? " alarm-triggered" : ""}`} style={{ "--hero-wash-tint": heroTint } as CSSProperties}>
+          <div className="avr-art-wrap" style={{ width: 160, height: 160 }}>
             <div className={`avr-halo${armed ? " on" : ""}`} style={{ "--avr-halo-tint": heroTint } as CSSProperties} />
             <div className={`avr-art-float${armed ? " on" : ""}`}>
-              <div className="avr-art avr-art-placeholder" style={{ width: 130, height: 130, fontSize: 52, color: heroTint }}>
+              <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160, fontSize: 58, color: heroTint }}>
                 {triggered ? "⚠️" : "🛡️"}
               </div>
             </div>
@@ -51,11 +51,16 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
             <span className="avr-now-label">{triggered ? "ALARM TRIGGERED" : label(state?.mode ?? "disarmed")}</span>
             <h3>Alarm System</h3>
             <p className="avr-now-album">Home security</p>
-            <Grid minItemWidth={130} gap="sm" style={{ marginTop: 14 }}>
-              <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>📡 Active zones</Card></CapabilityGate>
-              <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>⏱️ Entry delay</Card></CapabilityGate>
-              <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>📋 Recent events</Card></CapabilityGate>
-            </Grid>
+            <div style={{ marginTop: 14 }}>
+              <CapabilityGrid
+                minItemWidth={130}
+                items={[
+                  { key: "zones", icon: "📡", label: "Active zones", available: false, reason: NOT_YET.reason },
+                  { key: "entry-delay", icon: "⏱️", label: "Entry delay", available: false, reason: NOT_YET.reason },
+                  { key: "recent-events", icon: "📋", label: "Recent events", available: false, reason: NOT_YET.reason },
+                ]}
+              />
+            </div>
           </div>
         </div>
 
@@ -66,19 +71,17 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
             { key: "night", icon: "🌙", label: "Night", onClick: () => onArm("armed_night"), active: state?.mode === "armed_night" },
             ...(armed ? [{ key: "disarm", icon: "🔓", label: "Disarm", onClick: onDisarm }] : []),
           ]}
-        >
-          <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🆘 Panic</button></CapabilityGate>
-        </QuickActions>
+        />
 
         <h2 className="section">More controls</h2>
-        <Grid minItemWidth={150} gap="sm">
-          <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-            <Card interactive>📡 Zones &amp; Sensors</Card>
-          </CapabilityGate>
-          <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-            <Card interactive>🔊 Siren</Card>
-          </CapabilityGate>
-        </Grid>
+        <CapabilityGrid
+          minItemWidth={150}
+          items={[
+            { key: "zones-sensors", icon: "📡", label: "Zones & Sensors", available: false, reason: NOT_YET.reason },
+            { key: "siren", icon: "🔊", label: "Siren", available: false, reason: NOT_YET.reason },
+            { key: "panic", icon: "🆘", label: "Panic Button", available: false, reason: NOT_YET.reason },
+          ]}
+        />
       </div>
 
       <div className="aureon-detail-side">

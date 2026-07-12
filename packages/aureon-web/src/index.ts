@@ -38,6 +38,7 @@ export { Grid, type GridProps } from "./components/Grid.js";
 export { Container, type ContainerProps } from "./components/Container.js";
 export { Stack, type StackProps, type StackGap } from "./components/Stack.js";
 export { CapabilityGate, type CapabilityGateProps } from "./components/CapabilityGate.js";
+export { CapabilityGrid, type CapabilityGridProps, type CapabilityGridItem } from "./components/CapabilityGrid.js";
 export { QuickActions, type QuickActionsProps, type QuickAction } from "./components/QuickActions.js";
 export { Timeline, type TimelineProps, type TimelineEntry } from "./components/Timeline.js";
 export { AUREON_BREAKPOINT, densityForWidth, useAureonDensity, applyAureonDensity, initAureonDensity, type AureonDensity } from "./responsive.js";

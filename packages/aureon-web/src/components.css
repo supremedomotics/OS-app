@@ -69,7 +69,8 @@
 /* Any scrollable region — sheets, panels, lists — must never force horizontal scrolling. */
 .aureon-no-x-scroll { max-width: 100%; overflow-x: hidden; }
 
-/* ── Button ──────────────────────────────────────────────────────────────────── */
+/* ── Button (§ Premium Polish — "buttons need personality: hover, pressed, focus, disabled,
+ * loading, soft glow, micro interactions") ─────────────────────────────────────────────────── */
 
 .aureon-btn {
   font: inherit;
@@ -83,23 +84,26 @@
   border: 1px solid var(--aureon-color-base-hairline);
   background: var(--aureon-color-base-surface);
   color: var(--aureon-color-text-primary);
-  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+  transition: border-color 0.18s ease, background 0.18s ease, opacity 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
 }
-.aureon-btn:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
-.aureon-btn:disabled { opacity: 0.5; cursor: default; }
+.aureon-btn:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, var(--aureon-color-base-hairline)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--aureon-color-gold-400) 12%, transparent), 0 6px 16px -8px color-mix(in srgb, var(--aureon-color-gold-400) 30%, transparent); }
+.aureon-btn:active { transform: scale(0.97); }
+.aureon-btn:disabled { opacity: 0.45; cursor: default; transform: none; box-shadow: none; }
 .aureon-btn:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
 
 .aureon-btn--secondary { /* the base .aureon-btn IS the secondary/outline style already */ }
 
 .aureon-btn--primary {
-  background: var(--aureon-color-gold-500);
+  background: linear-gradient(160deg, var(--aureon-color-gold-400) 0%, var(--aureon-color-gold-500) 100%);
   color: #0a0a0c;
   border: 0;
   border-radius: 999px;
   padding: 10px 18px;
   font-weight: 600;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 30%, transparent) inset, 0 8px 20px -10px color-mix(in srgb, var(--aureon-color-gold-400) 65%, transparent);
 }
-.aureon-btn--primary:hover { border-color: transparent; opacity: 0.92; }
+.aureon-btn--primary:hover { border-color: transparent; filter: brightness(1.06); box-shadow: 0 1px 0 color-mix(in srgb, white 35%, transparent) inset, 0 10px 26px -10px color-mix(in srgb, var(--aureon-color-gold-400) 75%, transparent); }
+.aureon-btn--primary:active { transform: scale(0.97); filter: brightness(0.98); }
 
 .aureon-btn--ghost {
   background: none;
@@ -107,13 +111,27 @@
   color: var(--aureon-color-gold-400);
   padding: 0;
   font-size: 14px;
+  box-shadow: none;
 }
-.aureon-btn--ghost:hover { border-color: transparent; opacity: 0.85; }
+.aureon-btn--ghost:hover { border-color: transparent; opacity: 0.85; box-shadow: none; }
+.aureon-btn--ghost:active { transform: scale(0.97); }
 
 .aureon-btn--danger { color: var(--aureon-color-status-critical); border-color: color-mix(in srgb, var(--aureon-color-status-critical) 40%, transparent); }
+.aureon-btn--danger:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--aureon-color-status-critical) 18%, transparent), 0 6px 16px -8px color-mix(in srgb, var(--aureon-color-status-critical) 35%, transparent); }
 
 .aureon-btn--sm { padding: 6px 12px; font-size: 13px; }
 .aureon-btn--lg.aureon-btn--primary { padding: 14px 28px; font-size: 16px; }
+
+/* A quiet three-dot pulse for a button mid-action — opt in via aria-busy so no call site needs
+ * a new prop; the button keeps its label in the DOM (still announced) while it visually settles. */
+.aureon-btn[aria-busy="true"] { position: relative; color: transparent !important; pointer-events: none; }
+.aureon-btn[aria-busy="true"]::after {
+  content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: var(--aureon-color-gold-200, #fff);
+  animation: aureon-btn-spin 0.7s linear infinite;
+}
+@keyframes aureon-btn-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .aureon-btn[aria-busy="true"]::after { animation-duration: 1.4s; } }
 
 .aureon-icon-btn {
   display: inline-flex;
@@ -127,25 +145,47 @@
   background: var(--aureon-color-base-surface);
   color: var(--aureon-color-text-primary);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
 }
-.aureon-icon-btn:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
-.aureon-icon-btn:disabled { opacity: 0.5; cursor: default; }
+.aureon-icon-btn:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 45%, var(--aureon-color-base-hairline)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--aureon-color-gold-400) 12%, transparent), 0 6px 16px -8px color-mix(in srgb, var(--aureon-color-gold-400) 30%, transparent); }
+.aureon-icon-btn:active { transform: scale(0.93); }
+.aureon-icon-btn:disabled { opacity: 0.45; cursor: default; transform: none; box-shadow: none; }
+.aureon-icon-btn:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
 .aureon-icon-btn--danger { color: var(--aureon-color-status-critical); }
+@media (prefers-reduced-motion: reduce) { .aureon-btn, .aureon-icon-btn { transition: none; } .aureon-btn:active, .aureon-icon-btn:active { transform: none; } }
 
-/* ── Card ────────────────────────────────────────────────────────────────────── */
+/* ── Card (§ Premium Polish — "soft elevation, gradient borders, inner shadows, subtle
+ * highlights, depth, premium corners... luxury, not flashy") ──────────────────────────────── */
+/* A two-layer background (padding-box surface gradient + border-box edge gradient) gives every
+ * standard/expanded card a quiet gold-tinted border and a faint top highlight without a single
+ * extra DOM node — restrained on purpose; `compact` (dense repeated tiles: fact grids, gated
+ * placeholder grids) stays flatter so a busy grid of them doesn't turn into visual noise. */
 
 .aureon-card {
-  background: var(--aureon-color-base-surface-raised);
-  border: 1px solid var(--aureon-color-base-hairline);
+  position: relative;
+  background:
+    linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 3%) 0%, var(--aureon-color-base-surface-raised) 55%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, black 10%) 100%) padding-box,
+    linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-gold-400) 24%, var(--aureon-color-base-hairline)) 0%, var(--aureon-color-base-hairline) 45%, var(--aureon-color-base-hairline) 100%) border-box;
+  border: 1px solid transparent;
   border-radius: 18px;
   padding: 16px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset, 0 14px 28px -18px rgba(0, 0, 0, 0.55);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
-.aureon-card--compact { border-radius: 14px; padding: 10px 12px; }
-.aureon-card--expanded { border-radius: 20px; padding: 22px; }
-.aureon-card--interactive { cursor: pointer; transition: box-shadow 0.15s ease, border-color 0.15s ease; }
-.aureon-card--interactive:hover { box-shadow: 0 7px 22px rgba(0, 0, 0, 0.24); }
-.aureon-card--selected { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 50%, var(--aureon-color-base-hairline)); box-shadow: 0 8px 26px rgba(0, 0, 0, 0.28); }
+.aureon-card--compact {
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline);
+  border-radius: 14px; padding: 10px 12px; box-shadow: none;
+}
+.aureon-card--expanded { border-radius: 22px; padding: 24px; box-shadow: 0 1px 0 color-mix(in srgb, white 5%, transparent) inset, 0 22px 44px -22px rgba(0, 0, 0, 0.6); }
+.aureon-card--interactive { cursor: pointer; }
+.aureon-card--interactive:hover { transform: translateY(-2px); box-shadow: 0 1px 0 color-mix(in srgb, white 6%, transparent) inset, 0 18px 34px -16px rgba(0, 0, 0, 0.55); }
+.aureon-card--interactive:active { transform: translateY(0); }
+.aureon-card--selected {
+  background:
+    linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 3%) 0%, var(--aureon-color-base-surface-raised) 55%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, black 10%) 100%) padding-box,
+    linear-gradient(165deg, var(--aureon-color-gold-400) 0%, var(--aureon-color-gold-600) 100%) border-box;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 6%, transparent) inset, 0 16px 32px -16px rgba(0, 0, 0, 0.6), 0 0 0 1px color-mix(in srgb, var(--aureon-color-gold-400) 30%, transparent);
+}
 
 /* ── Chip / Badge / Status dot ──────────────────────────────────────────────── */
 
@@ -443,6 +483,20 @@
 
 .aureon-sparkline { display: flex; align-items: flex-end; gap: 3px; height: 32px; flex: none; }
 .aureon-sparkline-bar { display: block; width: 5px; min-height: 3px; border-radius: 2px; background: var(--aureon-color-gold-500); opacity: 0.85; }
+
+/* ── Unavailable features strip (§ Premium Polish — "remove Driver Required clutter... one
+ * elegant capability section... explain once, never spam the UI") ─────────────────────────── */
+
+.aureon-unavailable { margin-top: var(--aureon-space-sm); }
+.aureon-unavailable-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.aureon-unavailable-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px;
+  background: color-mix(in srgb, var(--aureon-color-base-surface) 70%, transparent);
+  border: 1px dashed var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary);
+  font-size: 12.5px; cursor: default;
+}
+.aureon-unavailable-chip-ic { opacity: 0.6; filter: grayscale(0.6); }
+.aureon-unavailable-note { margin: 8px 2px 0; font-size: 11.5px; color: var(--aureon-color-text-secondary); font-style: italic; }
 
 /* ── Capability gate (§ Premium Device Experience Library — "the UI is the contract") ──────── */
 /* A control the design calls for but no driver backs yet: still visible, never interactive,

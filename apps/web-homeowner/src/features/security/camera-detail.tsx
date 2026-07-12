@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CameraList, CameraStreamResponse } from "@supreme/contracts";
-import { Card, CapabilityGate, Grid, QuickActions } from "@supreme/aureon-web";
+import { Card, CapabilityGrid, QuickActions } from "@supreme/aureon-web";
 import { client } from "../../api.js";
 import { HlsPlayer, WebRtcPlayer } from "../../players.js";
 
@@ -84,11 +84,6 @@ export function CameraDetail({ camera, roomName, onBack }: {
               )}
               <div className="camera-hero-overlay-top">
                 <span className={`avr-badge${isLive ? " live" : ""}`}>{isLive ? "● LIVE" : camera.streamUrl ? "CONNECTING" : "OFFLINE"}</span>
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><span className="avr-badge">● REC</span></CapabilityGate>
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><span className="avr-badge">AI detections</span></CapabilityGate>
-              </div>
-              <div className="camera-hero-overlay-bottom">
-                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><span className="avr-badge">Stream quality</span></CapabilityGate>
               </div>
             </div>
             <div className="camera-hero-meta">
@@ -102,26 +97,22 @@ export function CameraDetail({ camera, roomName, onBack }: {
               { key: "snapshot", icon: "📸", label: "Snapshot", onClick: () => downloadSnapshot(camera), disabled: !camera.snapshotUrl },
               { key: "fullscreen", icon: "⛶", label: "Fullscreen", onClick: () => void previewRef.current?.requestFullscreen?.(), disabled: !isLive && !camera.snapshotUrl },
             ]}
-          >
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>⏺️ Record</button></CapabilityGate>
-            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🎙️ Talk</button></CapabilityGate>
-          </QuickActions>
+          />
 
           <h2 className="section">More controls</h2>
-          <Grid minItemWidth={150} gap="sm">
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>🕹️ Pan / Tilt / Zoom</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>▦ Motion Zones</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>⏺️ Recording Schedule</Card>
-            </CapabilityGate>
-            <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}>
-              <Card interactive>🌙 Night Vision</Card>
-            </CapabilityGate>
-          </Grid>
+          <CapabilityGrid
+            minItemWidth={150}
+            items={[
+              { key: "record", icon: "⏺️", label: "Record", available: false, reason: NOT_YET.reason },
+              { key: "talk", icon: "🎙️", label: "Talk", available: false, reason: NOT_YET.reason },
+              { key: "ai-detections", icon: "🤖", label: "AI Detections", available: false, reason: NOT_YET.reason },
+              { key: "stream-quality", icon: "📶", label: "Stream Quality", available: false, reason: NOT_YET.reason },
+              { key: "ptz", icon: "🕹️", label: "Pan / Tilt / Zoom", available: false, reason: NOT_YET.reason },
+              { key: "motion-zones", icon: "▦", label: "Motion Zones", available: false, reason: NOT_YET.reason },
+              { key: "recording-schedule", icon: "🗓️", label: "Recording Schedule", available: false, reason: NOT_YET.reason },
+              { key: "night-vision", icon: "🌙", label: "Night Vision", available: false, reason: NOT_YET.reason },
+            ]}
+          />
         </div>
 
         <div className="aureon-detail-side sheet-sections">
