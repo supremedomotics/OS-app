@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
+import { Button, StatusDot } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { PendingApproval } from "./pending.js";
@@ -131,7 +132,7 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
           <p className="sub">{devices ? `${filtered.length} devices · ${onlineCount} online` : "Loading…"}</p>
         </div>
         {(devices?.length ?? 0) > 0 && (
-          <button onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}>{selectMode ? "Done" : "Select"}</button>
+          <Button onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}>{selectMode ? "Done" : "Select"}</Button>
         )}
       </div>
       <PendingApproval rooms={rooms} onChanged={load} />
@@ -143,8 +144,8 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
             <option value="">Move to room…</option>
             {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
-          <button disabled={busy || selected.size === 0 || !bulkRoom} onClick={() => applyBulk("move")}>Move</button>
-          <button className="danger" disabled={busy || selected.size === 0} onClick={() => applyBulk("remove")}>Remove</button>
+          <Button disabled={busy || selected.size === 0 || !bulkRoom} onClick={() => applyBulk("move")}>Move</Button>
+          <Button variant="danger" disabled={busy || selected.size === 0} onClick={() => applyBulk("remove")}>Remove</Button>
         </div>
       )}
 
@@ -214,7 +215,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
     <div className={`ext-card${expanded ? " open" : ""}${selected ? " selected" : ""}`}>
       <button className="ext-head" onClick={selectMode ? onSelect : onToggle}>
         {selectMode && <input type="checkbox" checked={selected} readOnly style={{ marginRight: 4 }} />}
-        <span className={`dev-dot${isOnline ? " on" : ""}`} />
+        <StatusDot tone={isOnline ? "good" : "neutral"} label={isOnline ? "Online" : "Offline"} />
         <span className="ext-meta">
           <span className="ext-name">{device.name}</span>
           <span className="ext-sub">{friendlyType(device)}{devMode ? ` · ${device.supremeType} · ${device.capabilities.map((c) => c.kind).join(", ")}` : ""}</span>
@@ -248,9 +249,9 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
             </select>
           </label>
           <div className="drv-actions">
-            <button className="primary" disabled={busy} onClick={save}>Save</button>
-            <button disabled={busy} onClick={clone}>Clone</button>
-            <button className="danger" disabled={busy} onClick={remove}>Remove device</button>
+            <Button variant="primary" disabled={busy} onClick={save}>Save</Button>
+            <Button disabled={busy} onClick={clone}>Clone</Button>
+            <Button variant="danger" disabled={busy} onClick={remove}>Remove device</Button>
           </div>
           {msg && <p className="muted">{msg}</p>}
           {err && <p className="err">{err}</p>}
