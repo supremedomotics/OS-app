@@ -33,7 +33,7 @@ function hasClimateConfig(d: Device): boolean {
   return d.capabilities.some((c) => c.kind === "temperature");
 }
 
-export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
+export function Climate({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -75,6 +75,7 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
         onRemoved={() => { setSelectedId(null); void load(); }}
         onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
         onOpenSchedule={(d) => setScheduleId(d.id)}
+        devMode={devMode}
       />
     );
   }

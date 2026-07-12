@@ -1,8 +1,13 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { OverflowMenu } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
+import {
+  AutomationsSection,
+  DeviceManageActions,
+  DiagnosticsSection,
+  HistorySection,
+} from "./device-detail-sections.js";
 
 /**
  * The HVAC/Climate console (§ HVAC Detail Page) — a rich, capability-driven control
@@ -236,12 +241,15 @@ function QuickActions({
  * reference mockup's own "Advanced Settings ›" affordance. Each row only renders when
  * this specific unit's config actually declares support (never a fixed set). */
 function AdvancedSettingsModal({
-  controls, advanced, onSetAdvanced, onClose,
+  device, controls, advanced, onSetAdvanced, onClose, onRemoved, onRenamed,
 }: {
+  device: Device;
   controls: ClimateAdvancedControlCfg[];
   advanced: Record<string, unknown>;
   onSetAdvanced: (key: string, value: unknown) => void;
   onClose: () => void;
+  onRemoved: () => void;
+  onRenamed?: (device: Device) => void;
 }) {
   return (
     <div className="climate-modal-veil" onClick={onClose}>
@@ -274,6 +282,11 @@ function AdvancedSettingsModal({
             }
             return null;
           })}
+          {/* § Design System — Universal Page Structure: rename/remove live here, the same
+              device-management actions every other detail page's Advanced Settings offers. */}
+          <div style={{ borderTop: "1px solid var(--aureon-color-base-hairline)", paddingTop: 14, marginTop: 4 }}>
+            <DeviceManageActions device={device} onRemoved={onRemoved} onRenamed={onRenamed} />
+          </div>
         </div>
       </div>
     </div>
@@ -315,7 +328,7 @@ function AcInfoCard({
 }
 
 export function ClimateConsole({
-  device, roomName, onBack, onNavigateDevice, onRemoved, onDeviceUpdated, onOpenSchedule,
+  device, roomName, onBack, onNavigateDevice, onRemoved, onDeviceUpdated, onOpenSchedule, devMode = false,
 }: {
   device: Device;
   roomName: string;
@@ -324,6 +337,7 @@ export function ClimateConsole({
   onRemoved: () => void;
   onDeviceUpdated?: (d: Device) => void;
   onOpenSchedule?: (device: Device) => void;
+  devMode?: boolean;
 }) {
   void onNavigateDevice; // reserved for a future multi-zone AC selector, unused today (single unit per device)
   const { states, apply } = useLive();
@@ -407,19 +421,6 @@ export function ClimateConsole({
     onDeviceUpdated?.(res.device);
   };
 
-  const rename = async () => {
-    const name = window.prompt("Rename device", device.name);
-    if (name && name.trim() && name !== device.name) {
-      const res = await client.updateDevice(device.id, { name: name.trim() });
-      onDeviceUpdated?.(res.device);
-    }
-  };
-  const remove = async () => {
-    if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
-    await client.deleteDevice(device.id);
-    onRemoved();
-  };
-
   return (
     <div className="climate-console">
       <div className="climate-main">
@@ -429,15 +430,6 @@ export function ClimateConsole({
           <div className="climate-head-meta">
             <h2>{device.name}</h2>
             <p>{hvacMeta?.brand ? `${hvacMeta.brand} HVAC` : "HVAC"}</p>
-          </div>
-          <div className="climate-head-actions">
-            <OverflowMenu
-              aria-label="More"
-              actions={[
-                { label: "Rename", onClick: () => void rename() },
-                { label: "Remove device", onClick: () => void remove(), danger: true },
-              ]}
-            />
           </div>
         </div>
 
@@ -470,12 +462,24 @@ export function ClimateConsole({
         onOpenAdvanced={() => setAdvancedOpen(true)}
       />
 
+      {/* § Design System — Universal Page Structure: same sections every device detail page
+          shows, capability- and data-driven, never protocol-driven. AcInfoCard above already
+          serves as this device's Information section (richer — editable brand/unit type). */}
+      <div className="sheet-sections">
+        {devMode && <DiagnosticsSection device={device} />}
+        <AutomationsSection device={device} />
+        <HistorySection device={device} />
+      </div>
+
       {advancedOpen && (
         <AdvancedSettingsModal
+          device={device}
           controls={advancedControls}
           advanced={advanced}
           onSetAdvanced={setAdvanced}
           onClose={() => setAdvancedOpen(false)}
+          onRemoved={onRemoved}
+          onRenamed={onDeviceUpdated}
         />
       )}
     </div>

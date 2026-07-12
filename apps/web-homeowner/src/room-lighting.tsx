@@ -17,7 +17,7 @@ type BrightnessSt = { on?: boolean; level?: number };
  * here is live: a change made anywhere else (another screen, a physical switch, the driver's own
  * app) reflects immediately, because every value reads through {@link useLive}.
  */
-export function RoomLighting({ name, lights, onBack, onDeviceRemoved }: { roomId: string; name: string; lights: Device[]; onBack: () => void; onDeviceRemoved?: () => void }) {
+export function RoomLighting({ name, lights, onBack, onDeviceRemoved, devMode = false }: { roomId: string; name: string; lights: Device[]; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
   const { states, apply } = useLive();
   const [detail, setDetail] = useState<Device | null>(null);
 
@@ -57,6 +57,7 @@ export function RoomLighting({ name, lights, onBack, onDeviceRemoved }: { roomId
         onClose={() => setDetail(null)}
         onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
         roomName={name}
+        devMode={devMode}
       />
     );
   }

@@ -26,7 +26,7 @@ function nowPlaying(d: Device): string {
   return playing ? "Playing" : "Idle";
 }
 
-export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
+export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -53,6 +53,7 @@ export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void }) {
         onBack={() => setSelectedId(null)}
         onNavigateDevice={(d) => setSelectedId(d.id)}
         onRemoved={() => { setSelectedId(null); void load(); }}
+        devMode={devMode}
       />
     );
   }

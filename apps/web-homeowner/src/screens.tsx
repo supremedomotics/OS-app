@@ -313,7 +313,7 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack, devMod
 
   if (category === "lighting") {
     const lights = cats.find((c) => c.kind === "lighting")?.devices ?? [];
-    return <RoomLighting roomId={roomId} name={name} lights={lights} onBack={() => setCategory(null)} onDeviceRemoved={reloadDevices} />;
+    return <RoomLighting roomId={roomId} name={name} lights={lights} onBack={() => setCategory(null)} onDeviceRemoved={reloadDevices} devMode={devMode} />;
   }
   if (category) {
     const cat = cats.find((c) => c.kind === category);
@@ -377,6 +377,7 @@ function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved, devMo
         onClose={() => setDetail(null)}
         onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
         roomName={roomName}
+        devMode={devMode}
       />
     );
   }

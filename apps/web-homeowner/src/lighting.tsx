@@ -1,10 +1,15 @@
 import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { DeviceFacts, OverflowMenu, type DeviceFactRow } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { colorModes } from "./colormode.js";
-import { friendlyType } from "./devices.js";
+import {
+  AdvancedSettingsSection,
+  AutomationsSection,
+  DiagnosticsSection,
+  HistorySection,
+  InformationSection,
+} from "./device-detail-sections.js";
 
 /**
  * Purpose-built lighting control (§11.1) — a large brightness dial, an HSV colour wheel,
@@ -18,7 +23,7 @@ import { friendlyType } from "./devices.js";
 type ColorSt = { on?: boolean; level?: number; hue?: number | null; saturation?: number | null; kelvin?: number | null };
 type BrightnessSt = { on?: boolean; level?: number };
 
-export function LightingDetail({ device, onClose, onRemoved, roomName }: { device: Device; onClose: () => void; onRemoved?: () => void; roomName?: string }) {
+export function LightingDetail({ device, onClose, onRemoved, roomName, devMode = false }: { device: Device; onClose: () => void; onRemoved?: () => void; roomName?: string; devMode?: boolean }) {
   const { states, apply } = useLive();
   const live = states[device.id] as Record<string, unknown> | undefined;
   const merged = { ...device.state, ...live } as Record<string, ColorSt | BrightnessSt | { on?: boolean } | undefined>;
@@ -61,19 +66,6 @@ export function LightingDetail({ device, onClose, onRemoved, roomName }: { devic
     apply(device.id, hasColour || brightness ? "brightness" : "onoff", hasColour || brightness ? { kind: "brightness", on: n, level: n ? (level > 0 ? level : 100) : 0 } : { kind: "onoff", on: n });
     void cmd({ capability: hasColour || brightness ? "brightness" : "onoff", action: n ? "on" : "off" } as CapabilityCommand);
   };
-  const remove = async () => {
-    if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
-    await client.deleteDevice(device.id as DeviceId);
-    onRemoved?.();
-  };
-
-  // Information (§ Design System — Universal Page Structure): only fields the platform
-  // actually has for this device, same "don't fake it" policy as the Devices list.
-  const infoRows: DeviceFactRow[] = [{ label: "Type", value: friendlyType(device) }];
-  if (device.manufacturer) infoRows.push({ label: "Manufacturer", value: device.manufacturer });
-  if (device.model) infoRows.push({ label: "Model", value: device.model });
-  if (roomName) infoRows.push({ label: "Room", value: roomName });
-  infoRows.push({ label: "Status", value: `${device.status}${Object.keys(device.state ?? {}).length > 0 ? " · live" : ""}` });
 
   return (
     <div className="light-detail">
@@ -82,7 +74,6 @@ export function LightingDetail({ device, onClose, onRemoved, roomName }: { devic
         <button className={`edit-btn${on ? " on" : ""}`} onClick={toggle}>
           {on ? "On" : "Off"}
         </button>
-        <OverflowMenu aria-label="More" actions={[{ label: "Remove device", onClick: () => void remove(), danger: true }]} />
       </div>
       <h1 className="title">{device.name}</h1>
 
@@ -102,8 +93,15 @@ export function LightingDetail({ device, onClose, onRemoved, roomName }: { devic
       {hasColour && modes.rgb && mode === "colour" && <ColorWheel hue={hue} sat={sat} onChange={setColour} />}
       {hasColour && modes.cct && mode === "white" && <TempSlider kelvin={kelvin} onChange={setTemp} />}
 
-      <h2 className="section">Information</h2>
-      <DeviceFacts rows={infoRows} />
+      {/* § Design System — Universal Page Structure: same five sections every device detail
+          page shows, capability- and data-driven, never protocol-driven. */}
+      <div className="sheet-sections">
+        <InformationSection device={device} roomName={roomName} />
+        {devMode && <DiagnosticsSection device={device} />}
+        <AutomationsSection device={device} />
+        <HistorySection device={device} />
+        <AdvancedSettingsSection device={device} onRemoved={onRemoved} />
+      </div>
     </div>
   );
 }

@@ -1,16 +1,14 @@
 import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { CollapsibleSection, DeviceFacts, Sheet, type DeviceFactRow } from "@supreme/aureon-web";
+import { Sheet } from "@supreme/aureon-web";
+import { client } from "./api.js";
 import {
-  automationsForDevice,
-  client,
-  fetchAutomations,
-  fetchDriverRegistry,
-  fetchEnergyHistory,
-  fetchIntelligenceHistory,
-} from "./api.js";
-import { friendlyType } from "./devices.js";
-import { useAsync } from "./use-async.js";
+  AdvancedSettingsSection,
+  AutomationsSection,
+  DiagnosticsSection,
+  HistorySection,
+  InformationSection,
+} from "./device-detail-sections.js";
 import { useLive } from "./live.js";
 
 /**
@@ -56,155 +54,6 @@ export function DeviceSheet({ device, onClose, roomName, devMode = false, onRemo
         <AdvancedSettingsSection device={device} onRemoved={onRemoved} />
       </div>
     </Sheet>
-  );
-}
-
-// ── Information (§ Universal Page Structure) — same "only real fields" facts every other
-// device detail page shows; only difference here is it lives inside a collapsible section
-// since the sheet is already dense with capability controls. ──────────────────────────────
-function InformationSection({ device, roomName }: { device: Device; roomName?: string }) {
-  const rows: DeviceFactRow[] = [{ label: "Type", value: friendlyType(device) }];
-  if (device.manufacturer) rows.push({ label: "Manufacturer", value: device.manufacturer });
-  if (device.model) rows.push({ label: "Model", value: device.model });
-  if (roomName) rows.push({ label: "Room", value: roomName });
-  rows.push({ label: "Status", value: device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable" });
-  return (
-    <CollapsibleSection title="Information">
-      <DeviceFacts rows={rows} />
-    </CollapsibleSection>
-  );
-}
-
-// ── Diagnostics (§ Integrator/Developer Mode) — driver/protocol/network plus each protocol
-// binding's own address (KNX group address, Matter node/endpoint, Zigbee IEEE, DALI short
-// address, Casambi fixture, …). Rendered generically off whatever `protocolBindings()` returns
-// for this device — the SAME code shows every protocol's diagnostics; nothing here is a
-// per-protocol branch. Only ever mounted when the caller has already gated on devMode. ────────
-function DiagnosticsSection({ device }: { device: Device }) {
-  const [registry] = useAsync(() => fetchDriverRegistry());
-  const [bindings] = useAsync(() => client.protocolBindings());
-  const driver = device.driverId
-    ? registry?.find((r) => r.installedId === device.driverId || r.key === device.driverId) ?? null
-    : null;
-  const net = (device.metadata as { network?: { ip?: string; mac?: string; host?: string } } | undefined)?.network;
-  const myBindings = (bindings?.bindings ?? []).filter((b) => b.deviceId === device.id);
-
-  const rows: DeviceFactRow[] = [];
-  if (driver) rows.push({ label: "Driver", value: driver.name });
-  if (driver?.protocols[0]) rows.push({ label: "Protocol", value: driver.protocols[0].toUpperCase() });
-  if (net?.ip) rows.push({ label: "IP address", value: net.ip });
-  if (net?.mac) rows.push({ label: "MAC", value: net.mac });
-  rows.push({ label: "Capabilities", value: device.capabilities.map((c) => c.kind).join(", ") });
-  for (const b of myBindings) rows.push({ label: `${b.protocol.toUpperCase()} · ${b.capability}`, value: b.address });
-
-  return (
-    <CollapsibleSection title="Diagnostics">
-      <DeviceFacts rows={rows} />
-    </CollapsibleSection>
-  );
-}
-
-// ── Automations (§ Universal Page Structure) — every automation or scene that references this
-// device, found by fetching the home's automations/scenes and filtering client-side (there's no
-// server-side "automations for device X" index). Hidden entirely until both have loaded, then
-// hidden for good if neither references this device. ───────────────────────────────────────────
-function AutomationsSection({ device }: { device: Device }) {
-  const [automations] = useAsync(() => fetchAutomations());
-  const [scenesRes] = useAsync(() => client.scenes());
-  if (automations === null || scenesRes === null) return null;
-  const matchingAutomations = automationsForDevice(automations, device.id);
-  const matchingScenes = scenesRes.scenes.filter((s) => s.steps.some((st) => st.deviceId === device.id));
-  const total = matchingAutomations.length + matchingScenes.length;
-  if (total === 0) return null;
-  return (
-    <CollapsibleSection title="Automations" badge={total}>
-      {matchingAutomations.map((a) => (
-        <div key={a.id} className="sheet-list-row">
-          <span>{a.name}</span>
-          <span className="sheet-list-sub">{a.enabled ? "Enabled" : "Disabled"}</span>
-        </div>
-      ))}
-      {matchingScenes.map((s) => (
-        <div key={s.id} className="sheet-list-row">
-          <span>{s.name}</span>
-          <span className="sheet-list-sub">Scene</span>
-        </div>
-      ))}
-    </CollapsibleSection>
-  );
-}
-
-// ── History (§ Universal Page Structure) — the Supreme Intelligence Engine's own decision log
-// for this device (why it turned something on/off automatically) plus its metered energy cost,
-// when the home has one configured. Two independently-optional sources; hidden entirely until
-// both resolve, then hidden for good if neither has anything to show. ──────────────────────────
-function HistorySection({ device }: { device: Device }) {
-  const [intel] = useAsync(() => fetchIntelligenceHistory(device.id), [device.id]);
-  const [energy] = useAsync(() => fetchEnergyHistory(device.id), [device.id]);
-  if (intel === null || energy === null) return null;
-  const totalKwh = energy.points.reduce((s, p) => s + p.kwh, 0);
-  const totalCost = energy.points.reduce((s, p) => s + p.cost, 0);
-  if (intel.length === 0 && totalKwh <= 0) return null;
-  return (
-    <CollapsibleSection title="History">
-      {intel.map((h) => (
-        <div key={h.id} className="sheet-list-row">
-          <span>{h.reason ?? h.action}</span>
-          <span className="sheet-list-sub">{new Date(h.ts).toLocaleString()}</span>
-        </div>
-      ))}
-      {totalKwh > 0 && (
-        <div className="sheet-list-row">
-          <span>Energy, last {energy.points.length} day{energy.points.length === 1 ? "" : "s"}</span>
-          <span className="sheet-list-sub">{totalKwh.toFixed(1)} kWh · {energy.currency}{totalCost.toFixed(2)}</span>
-        </div>
-      )}
-    </CollapsibleSection>
-  );
-}
-
-// ── Advanced Settings (§ Universal Page Structure) — rename / remove, same actions every other
-// device detail page offers, just living in a collapsible section here since this sheet already
-// leads with capability controls. ───────────────────────────────────────────────────────────────
-function AdvancedSettingsSection({ device, onRemoved }: { device: Device; onRemoved?: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function rename() {
-    const name = window.prompt("Rename device", device.name);
-    if (!name || !name.trim() || name === device.name) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await client.updateDevice(device.id as DeviceId, { name: name.trim() });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not rename this device.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove() {
-    if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await client.deleteDevice(device.id as DeviceId);
-      onRemoved?.();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not remove this device.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <CollapsibleSection title="Advanced Settings">
-      <div className="drv-actions">
-        <button disabled={busy} onClick={() => void rename()}>Rename</button>
-        <button className="danger" disabled={busy} onClick={() => void remove()}>Remove device</button>
-      </div>
-      {err && <p className="err">{err}</p>}
-    </CollapsibleSection>
   );
 }
 

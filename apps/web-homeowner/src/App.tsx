@@ -136,8 +136,8 @@ export function App() {
       {tab === "scenes" && <Scenes />}
       {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} devMode={showInstallerDiagnostics} />}
       {tab === "areas" && <AreasScreen onNavigate={go} />}
-      {tab === "media" && <Media onNavigate={go} />}
-      {tab === "climate" && <Climate onNavigate={go} />}
+      {tab === "media" && <Media onNavigate={go} devMode={showInstallerDiagnostics} />}
+      {tab === "climate" && <Climate onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "security" && <Security />}
       {tab === "energy" && <Energy />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}

@@ -1062,7 +1062,7 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 /* ── AVR / Receiver console (§ AVR Detail Page) ──────────────────────────────────── */
 .avr-console {
   display: grid; grid-template-columns: 1fr 320px; grid-template-areas: "main side" "mini mini";
-  gap: 20px; padding-bottom: 100px; align-items: start; position: relative;
+  gap: 20px; padding-bottom: 160px; align-items: start; position: relative;
 }
 /* A whisper of a vignette behind the whole console so the empty space below a short
    page reads as intentional breathing room, not dead black (§ Empty Space). */
