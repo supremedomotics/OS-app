@@ -379,3 +379,16 @@
 @media (max-width: 480px) {
   .aureon-stack--responsive { flex-direction: column; align-items: stretch; }
 }
+
+/* ── Capability gate (§ Premium Device Experience Library — "the UI is the contract") ──────── */
+/* A control the design calls for but no driver backs yet: still visible, never interactive,
+ * always labeled with why — never hidden, never faked. */
+
+.aureon-cap-gate { position: relative; }
+.aureon-cap-gate-content { pointer-events: none; opacity: 0.38; filter: grayscale(0.6); user-select: none; }
+.aureon-cap-gate-badge {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 4px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em;
+  color: var(--aureon-color-text-secondary); background: color-mix(in srgb, var(--aureon-color-base-void) 55%, transparent);
+  border-radius: inherit; pointer-events: none;
+}

@@ -37,6 +37,7 @@ export { CollapsibleSection, type CollapsibleSectionProps } from "./components/C
 export { Grid, type GridProps } from "./components/Grid.js";
 export { Container, type ContainerProps } from "./components/Container.js";
 export { Stack, type StackProps, type StackGap } from "./components/Stack.js";
+export { CapabilityGate, type CapabilityGateProps } from "./components/CapabilityGate.js";
 export { AUREON_BREAKPOINT, densityForWidth, useAureonDensity, applyAureonDensity, initAureonDensity, type AureonDensity } from "./responsive.js";
 
 /** Flatten the token tree into CSS-variable name/value pairs. */

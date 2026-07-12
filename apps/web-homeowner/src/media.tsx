@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import type { Device } from "@supreme/domain-model";
 import { Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
-import { client } from "./api.js";
+import { client, fetchDriverRegistry } from "./api.js";
 import { AvrConsole } from "./features/media/detail.js";
+import { SimpleMediaDetail } from "./features/media/simple-detail.js";
 import { MediaDeviceCard } from "./features/media/card.js";
+import { mediaDeviceKind, usesSimpleMediaDetail } from "./features/media/capability-mapper.js";
+import { useAsync } from "./use-async.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 
@@ -45,7 +48,26 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
   const media = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "media"));
   const selected = selectedId ? media.find((d) => d.id === selectedId) ?? null : null;
 
+  // Television/Projector get the Media module's consumer-shaped premium page instead of the
+  // AVR console's receiver UI (§ capability-mapper.ts) — the classification needs the driver
+  // registry (for the one real distinguishing protocol signal), fetched once here.
+  const [registry] = useAsync(() => fetchDriverRegistry());
   if (selected) {
+    const driver = selected.driverId ? registry?.find((r) => r.installedId === selected.driverId || r.key === selected.driverId) ?? null : null;
+    const kind = mediaDeviceKind(selected, driver?.protocols[0] ?? null);
+    const onDeviceUpdated = (d: Device) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev);
+    if (usesSimpleMediaDetail(kind)) {
+      return (
+        <SimpleMediaDetail
+          device={selected}
+          roomName={roomName(selected.roomId)}
+          onBack={() => setSelectedId(null)}
+          onRemoved={() => { setSelectedId(null); void load(); }}
+          onDeviceUpdated={onDeviceUpdated}
+          devMode={devMode}
+        />
+      );
+    }
     return (
       <AvrConsole
         device={selected}
@@ -55,7 +77,7 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
         onBack={() => setSelectedId(null)}
         onNavigateDevice={(d) => setSelectedId(d.id)}
         onRemoved={() => { setSelectedId(null); void load(); }}
-        onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
+        onDeviceUpdated={onDeviceUpdated}
         devMode={devMode}
       />
     );
