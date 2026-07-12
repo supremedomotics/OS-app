@@ -8,6 +8,7 @@ import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 import { friendlyError } from "./errors.js";
 import { mediaDeviceKind, mediaKindMeta } from "./features/media/capability-mapper.js";
+import { securityLockKind, securityLockKindMeta } from "./features/security/capability-mapper.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -31,7 +32,7 @@ export function friendlyType(d: Device): string {
   }
   if (t.includes("thermostat") || caps.includes("temperature")) return "Climate";
   if (t.includes("cover") || caps.includes("position")) return "Blinds";
-  if (t.includes("lock") || caps.includes("lock")) return "Lock";
+  if (t.includes("lock") || caps.includes("lock")) return securityLockKindMeta(securityLockKind(d)).label;
   if (t.includes("fan") || caps.includes("fan")) return "Fan";
   if (t.includes("vacuum") || caps.includes("vacuum")) return "Vacuum";
   if (t.includes("media") || caps.includes("media")) return mediaKindMeta(mediaDeviceKind(d)).label;

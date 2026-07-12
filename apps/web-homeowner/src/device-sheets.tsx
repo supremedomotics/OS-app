@@ -141,7 +141,9 @@ function LockSheet({ device }: { device: Device }) {
   );
 }
 
-function SlideUnlock({ onUnlock, relock, locked }: { onUnlock: () => void; relock: () => void; locked: boolean }) {
+/** Shared by the Lock Expanded Sheet above and the Security module's Premium Detail Page
+ * ({@link ../features/security/lock-detail.js}) — one slide-to-unlock gesture, not two. */
+export function SlideUnlock({ onUnlock, relock, locked }: { onUnlock: () => void; relock: () => void; locked: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [x, setX] = useState(0);
   const drag = useRef(false);

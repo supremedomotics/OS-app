@@ -21,7 +21,7 @@ import type {
   RoomId,
   Scene,
 } from "@supreme/domain-model";
-import { client } from "./api.js";
+import { client, fetchDriverRegistry } from "./api.js";
 import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./room-image.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
@@ -30,6 +30,8 @@ import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
 import { Icon } from "./icons.js";
+import { LockCard } from "./features/security/card.js";
+import { LockDetail } from "./features/security/lock-detail.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -601,10 +603,45 @@ function SceneQuickActions({ scene, isFav, onClose, onRun, onFav, onChanged }: {
 }
 
 // ── Security + Cameras ─────────────────────────────────────────────────────────
-export function Security() {
+/**
+ * The Security module's home (§ Premium Device Experience Library — Security Module: Lock,
+ * Furniture Lock, Alarm, Camera, NVR, SIP Door Phone, Access Control). Alarm arm/disarm and
+ * the camera grid were already here; Locks joins them as this module's third real, backend-
+ * grounded slice — tapping a lock opens its Premium Detail Page ({@link LockDetail}), not a
+ * quick sheet, matching how the Media tab opens AvrConsole/SimpleMediaDetail directly.
+ */
+export function Security({ devMode = false }: { devMode?: boolean } = {}) {
   const [state, reload] = useAsync<SecurityStateResponse>(() => client.securityState());
   const [cameras] = useAsync(async () => (await client.cameras()).cameras);
   const [active, setActive] = useState<{ webrtc: string | null; hls: string | null; mode: "webrtc" | "hls" } | null>(null);
+  const [devices, setDevices] = useState<Device[] | null>(null);
+  const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
+  const [registry] = useAsync(() => fetchDriverRegistry());
+  const [selectedLockId, setSelectedLockId] = useState<string | null>(null);
+
+  async function loadDevices() {
+    const [devs, home] = await Promise.all([client.devices(), client.home()]);
+    setDevices(devs.devices);
+    setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
+  }
+  useEffect(() => { void loadDevices(); }, []);
+
+  const locks = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "lock"));
+  const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
+  const selectedLock = selectedLockId ? locks.find((d) => d.id === selectedLockId) ?? null : null;
+
+  if (selectedLock) {
+    return (
+      <LockDetail
+        device={selectedLock}
+        roomName={roomName(selectedLock.roomId)}
+        onBack={() => setSelectedLockId(null)}
+        onRemoved={() => { setSelectedLockId(null); void loadDevices(); }}
+        onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
+        devMode={devMode}
+      />
+    );
+  }
 
   async function arm(mode: "armed_home" | "armed_away" | "armed_night") {
     await client.arm(mode);
@@ -637,6 +674,26 @@ export function Security() {
           )}
         </div>
       </div>
+
+      {locks.length > 0 && <h2 className="section">Locks</h2>}
+      {locks.length > 0 && (
+        <Grid minItemWidth={260}>
+          {locks.map((d) => {
+            const driver = d.driverId ? registry?.find((r) => r.installedId === d.driverId || r.key === d.driverId) ?? null : null;
+            const s = (d.state as Record<string, { locked?: boolean; jammed?: boolean }>).lock ?? {};
+            const status = s.jammed ? "Jammed" : s.locked === false ? "Unlocked" : "Locked";
+            return (
+              <LockCard
+                key={d.id}
+                device={d}
+                status={status}
+                driverProtocol={driver?.protocols[0] ?? null}
+                onOpen={() => setSelectedLockId(d.id)}
+              />
+            );
+          })}
+        </Grid>
+      )}
 
       {(cameras ?? []).length > 0 && <h2 className="section">Cameras</h2>}
       {active && (

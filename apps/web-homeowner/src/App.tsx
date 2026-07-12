@@ -138,7 +138,7 @@ export function App() {
       {tab === "areas" && <AreasScreen onNavigate={go} />}
       {tab === "media" && <Media onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "climate" && <Climate onNavigate={go} devMode={showInstallerDiagnostics} />}
-      {tab === "security" && <Security />}
+      {tab === "security" && <Security devMode={showInstallerDiagnostics} />}
       {tab === "energy" && <Energy />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}
       {tab === "settings" && <ThemeSettings role={role} />}
