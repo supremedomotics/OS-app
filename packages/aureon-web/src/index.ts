@@ -24,6 +24,15 @@ export {
   type AureonThemeChoice,
 } from "./theme.js";
 
+// ── Component library (§ Design System Phase 0) ──────────────────────────────
+// Import "@supreme/aureon-web/components.css" once at the app root alongside these.
+export { Button, IconButton, type ButtonProps, type ButtonVariant, type ButtonSize, type IconButtonProps } from "./components/Button.js";
+export { Card, type CardProps, type CardVariant } from "./components/Card.js";
+export { Chip, Badge, StatusDot, SegmentedControl, type ChipProps, type BadgeProps, type StatusDotProps, type StatusTone, type SegmentedControlProps, type SegmentedControlOption } from "./components/Chip.js";
+export { Sheet, type SheetProps, type SheetPresentation } from "./components/Sheet.js";
+export { Icon, iconForCapabilities, type IconName, type IconProps } from "./components/Icon.js";
+export { AUREON_BREAKPOINT, layoutForWidth, useAureonLayout, type AureonLayout } from "./responsive.js";
+
 /** Flatten the token tree into CSS-variable name/value pairs. */
 function flatten(obj: Record<string, unknown>, prefix: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];

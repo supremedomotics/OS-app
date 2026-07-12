@@ -2,25 +2,31 @@
   "name": "@supreme/aureon-web",
   "version": "0.0.0",
   "private": true,
-  "description": "Aureon design tokens (canonical source) + web CSS mirror.",
+  "description": "Aureon design tokens (canonical source) + web CSS mirror + shared React component library.",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./tokens.json": "./tokens/aureon.tokens.json"
+    "./tokens.json": "./tokens/aureon.tokens.json",
+    "./components.css": "./src/components.css"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "tokens"],
+  "files": ["dist", "tokens", "src/components.css"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
+  "peerDependencies": {
+    "react": "^18.3.1"
+  },
   "devDependencies": {
+    "@types/react": "^18.3.18",
+    "react": "^18.3.1",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }

@@ -563,6 +563,12 @@ importers:
 
   packages/aureon-web:
     devDependencies:
+      '@types/react':
+        specifier: ^18.3.18
+        version: 18.3.30
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
