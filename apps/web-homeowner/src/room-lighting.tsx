@@ -56,6 +56,7 @@ export function RoomLighting({ name, lights, onBack, onDeviceRemoved }: { roomId
         device={detail}
         onClose={() => setDetail(null)}
         onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
+        roomName={name}
       />
     );
   }

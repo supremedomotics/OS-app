@@ -222,11 +222,6 @@ button.primary.lg { padding: 14px 28px; font-size: 16px; border-radius: 999px; }
 
 /* ── Device manager ────────────────────────────────────────────────────────────── */
 .dev-group { margin-bottom: 18px; }
-.dev-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--aureon-color-base-hairline); flex-shrink: 0; }
-.dev-dot.on { background: var(--aureon-color-status-good); box-shadow: 0 0 8px color-mix(in srgb, var(--aureon-color-status-good) 60%, transparent); }
-.dev-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-bottom: 12px; }
-.dev-facts .k { display: block; font-size: 11px; color: var(--aureon-color-text-secondary); }
-.dev-facts .v { display: block; font-size: 13.5px; }
 button.danger { color: var(--aureon-color-status-critical); border-color: color-mix(in srgb, var(--aureon-color-status-critical) 40%, transparent); }
 
 /* ── Dashboard overview ────────────────────────────────────────────────────────── */

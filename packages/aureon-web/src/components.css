@@ -262,3 +262,12 @@
 
 @keyframes aureon-panel-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .aureon-overflow-menu { animation: none; } }
+
+/* ── Device facts (§ Design System — Information / Diagnostics sections) ───────── */
+/* Values copied from devices.tsx's .dev-facts/.k/.v, which already implemented the
+ * "only show fields that exist" Information grid — now shared so every device detail
+ * page can show the same section. */
+
+.aureon-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-bottom: 12px; }
+.aureon-facts-k { display: block; font-size: 11px; color: var(--aureon-color-text-secondary); }
+.aureon-facts-v { display: block; font-size: 13.5px; }

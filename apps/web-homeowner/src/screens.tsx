@@ -388,6 +388,7 @@ function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved }: { r
         device={detail}
         onClose={() => setDetail(null)}
         onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
+        roomName={roomName}
       />
     );
   }

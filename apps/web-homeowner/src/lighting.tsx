@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { OverflowMenu } from "@supreme/aureon-web";
+import { DeviceFacts, OverflowMenu, type DeviceFactRow } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { colorModes } from "./colormode.js";
+import { friendlyType } from "./devices.js";
 
 /**
  * Purpose-built lighting control (§11.1) — a large brightness dial, an HSV colour wheel,
@@ -17,7 +18,7 @@ import { colorModes } from "./colormode.js";
 type ColorSt = { on?: boolean; level?: number; hue?: number | null; saturation?: number | null; kelvin?: number | null };
 type BrightnessSt = { on?: boolean; level?: number };
 
-export function LightingDetail({ device, onClose, onRemoved }: { device: Device; onClose: () => void; onRemoved?: () => void }) {
+export function LightingDetail({ device, onClose, onRemoved, roomName }: { device: Device; onClose: () => void; onRemoved?: () => void; roomName?: string }) {
   const { states, apply } = useLive();
   const live = states[device.id] as Record<string, unknown> | undefined;
   const merged = { ...device.state, ...live } as Record<string, ColorSt | BrightnessSt | { on?: boolean } | undefined>;
@@ -66,6 +67,14 @@ export function LightingDetail({ device, onClose, onRemoved }: { device: Device;
     onRemoved?.();
   };
 
+  // Information (§ Design System — Universal Page Structure): only fields the platform
+  // actually has for this device, same "don't fake it" policy as the Devices list.
+  const infoRows: DeviceFactRow[] = [{ label: "Type", value: friendlyType(device) }];
+  if (device.manufacturer) infoRows.push({ label: "Manufacturer", value: device.manufacturer });
+  if (device.model) infoRows.push({ label: "Model", value: device.model });
+  if (roomName) infoRows.push({ label: "Room", value: roomName });
+  infoRows.push({ label: "Status", value: `${device.status}${Object.keys(device.state ?? {}).length > 0 ? " · live" : ""}` });
+
   return (
     <div className="light-detail">
       <div className="screen-head">
@@ -92,6 +101,9 @@ export function LightingDetail({ device, onClose, onRemoved }: { device: Device;
 
       {hasColour && modes.rgb && mode === "colour" && <ColorWheel hue={hue} sat={sat} onChange={setColour} />}
       {hasColour && modes.cct && mode === "white" && <TempSlider kelvin={kelvin} onChange={setTemp} />}
+
+      <h2 className="section">Information</h2>
+      <DeviceFacts rows={infoRows} />
     </div>
   );
 }

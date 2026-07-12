@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { Button, StatusDot } from "@supreme/aureon-web";
+import { Button, DeviceFacts, StatusDot, type DeviceFactRow } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { PendingApproval } from "./pending.js";
@@ -21,7 +21,7 @@ type Room = { id: string; name: string };
 type DriverInfo = { name: string; protocol: string | null };
 
 /** A homeowner-friendly name for what a device IS — never its type slug or capability kinds. */
-function friendlyType(d: Device): string {
+export function friendlyType(d: Device): string {
   const t = d.supremeType.toLowerCase();
   const caps = d.capabilities.map((c) => c.kind);
   if (t.includes("dimmer") || (caps.includes("brightness"))) return caps.includes("color") ? "Colour light" : "Dimmable light";
@@ -38,6 +38,27 @@ function friendlyType(d: Device): string {
   if (t.includes("camera")) return "Camera";
   if (caps.includes("onoff")) return "Switch";
   return "Device";
+}
+
+/** The Information rows for a device's expanded row (§ Design System — Information section).
+ * Technical plumbing (driver / protocol / network) is for Installer & Developer mode only —
+ * a homeowner never needs to see it (§ Homeowner Experience). */
+function deviceFactRows({ device, devMode, driver, net, roomName, sceneCount }: {
+  device: Device; devMode: boolean; driver: DriverInfo | null; net: { ip?: string; mac?: string } | undefined;
+  roomName: string; sceneCount: number;
+}): DeviceFactRow[] {
+  const rows: DeviceFactRow[] = [{ label: "Type", value: devMode ? device.supremeType : friendlyType(device) }];
+  if (device.manufacturer) rows.push({ label: "Manufacturer", value: device.manufacturer });
+  if (device.model) rows.push({ label: "Model", value: device.model });
+  if (devMode && driver) rows.push({ label: "Driver", value: driver.name });
+  if (devMode && driver?.protocol) rows.push({ label: "Protocol", value: driver.protocol.toUpperCase() });
+  if (devMode && net?.ip) rows.push({ label: "IP address", value: net.ip });
+  if (devMode && net?.mac) rows.push({ label: "MAC", value: net.mac });
+  rows.push({ label: "Room", value: roomName });
+  rows.push({ label: "Status", value: `${device.status}${online(device) ? " · live" : ""}` });
+  if (devMode) rows.push({ label: "Capabilities", value: device.capabilities.map((c) => c.kind).join(", ") });
+  rows.push({ label: "In scenes", value: String(sceneCount) });
+  return rows;
 }
 
 function online(d: Device): boolean {
@@ -225,21 +246,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
       </button>
       {expanded && (
         <div className="drv-detail">
-          <div className="dev-facts">
-            <div><span className="k">Type</span><span className="v">{devMode ? device.supremeType : friendlyType(device)}</span></div>
-            {device.manufacturer && <div><span className="k">Manufacturer</span><span className="v">{device.manufacturer}</span></div>}
-            {device.model && <div><span className="k">Model</span><span className="v">{device.model}</span></div>}
-            {/* Technical plumbing (driver / protocol / network) is for Installer & Developer mode only —
-                a homeowner never needs to see it (§ Homeowner Experience). */}
-            {devMode && driver && <div><span className="k">Driver</span><span className="v">{driver.name}</span></div>}
-            {devMode && driver?.protocol && <div><span className="k">Protocol</span><span className="v">{driver.protocol.toUpperCase()}</span></div>}
-            {devMode && net?.ip && <div><span className="k">IP address</span><span className="v">{net.ip}</span></div>}
-            {devMode && net?.mac && <div><span className="k">MAC</span><span className="v">{net.mac}</span></div>}
-            <div><span className="k">Room</span><span className="v">{roomName(device.roomId)}</span></div>
-            <div><span className="k">Status</span><span className="v">{device.status}{isOnline ? " · live" : ""}</span></div>
-            {devMode && <div><span className="k">Capabilities</span><span className="v">{device.capabilities.map((c) => c.kind).join(", ")}</span></div>}
-            <div><span className="k">In scenes</span><span className="v">{sceneCount}</span></div>
-          </div>
+          <DeviceFacts rows={deviceFactRows({ device, devMode, driver, net, roomName: roomName(device.roomId), sceneCount })} />
           <label className="drv-field"><span className="lbl">Name</span>
             <input value={name} onChange={(e) => setName(e.target.value)} />
           </label>
