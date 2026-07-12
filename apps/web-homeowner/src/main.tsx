@@ -4,6 +4,7 @@ import "@fontsource-variable/inter";
 import { initAureonTheme } from "@supreme/aureon-web";
 import { App } from "./App.js";
 import { applyA11y } from "./settings.js";
+import "@supreme/aureon-web/components.css";
 import "./styles.css";
 
 // Apply the saved Light/Dark/Auto + accent theme + accessibility prefs before first paint.

@@ -30,6 +30,7 @@ export { Button, IconButton, type ButtonProps, type ButtonVariant, type ButtonSi
 export { Card, type CardProps, type CardVariant } from "./components/Card.js";
 export { Chip, Badge, StatusDot, SegmentedControl, type ChipProps, type BadgeProps, type StatusDotProps, type StatusTone, type SegmentedControlProps, type SegmentedControlOption } from "./components/Chip.js";
 export { Sheet, type SheetProps, type SheetPresentation } from "./components/Sheet.js";
+export { OverflowMenu, type OverflowMenuProps, type OverflowMenuAction } from "./components/OverflowMenu.js";
 export { Icon, iconForCapabilities, type IconName, type IconProps } from "./components/Icon.js";
 export { AUREON_BREAKPOINT, layoutForWidth, useAureonLayout, type AureonLayout } from "./responsive.js";
 

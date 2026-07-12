@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import { OverflowMenu } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { colorModes } from "./colormode.js";
@@ -18,7 +19,6 @@ type BrightnessSt = { on?: boolean; level?: number };
 
 export function LightingDetail({ device, onClose, onRemoved }: { device: Device; onClose: () => void; onRemoved?: () => void }) {
   const { states, apply } = useLive();
-  const [removing, setRemoving] = useState(false);
   const live = states[device.id] as Record<string, unknown> | undefined;
   const merged = { ...device.state, ...live } as Record<string, ColorSt | BrightnessSt | { on?: boolean } | undefined>;
   const hasColour = device.capabilities.some((c) => c.kind === "color");
@@ -62,13 +62,8 @@ export function LightingDetail({ device, onClose, onRemoved }: { device: Device;
   };
   const remove = async () => {
     if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
-    setRemoving(true);
-    try {
-      await client.deleteDevice(device.id as DeviceId);
-      onRemoved?.();
-    } finally {
-      setRemoving(false);
-    }
+    await client.deleteDevice(device.id as DeviceId);
+    onRemoved?.();
   };
 
   return (
@@ -78,7 +73,7 @@ export function LightingDetail({ device, onClose, onRemoved }: { device: Device;
         <button className={`edit-btn${on ? " on" : ""}`} onClick={toggle}>
           {on ? "On" : "Off"}
         </button>
-        <button className="danger" disabled={removing} onClick={() => void remove()}>Remove device</button>
+        <OverflowMenu aria-label="More" actions={[{ label: "Remove device", onClick: () => void remove(), danger: true }]} />
       </div>
       <h1 className="title">{device.name}</h1>
 

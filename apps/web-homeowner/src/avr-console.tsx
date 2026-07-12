@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import { OverflowMenu } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 
@@ -542,7 +543,6 @@ export function AvrConsole({
   const onoff = device.capabilities.some((c) => c.kind === "onoff");
   const live = (states[device.id]?.media ?? (device.state as Record<string, MediaStateView>).media ?? {}) as MediaStateView;
   const power = (states[device.id]?.onoff ?? (device.state as Record<string, { on?: boolean }>).onoff) as { on?: boolean } | undefined;
-  const [menuOpen, setMenuOpen] = useState(false);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const [pendingSource, setPendingSource] = useState<string | null>(null);
 
@@ -616,7 +616,6 @@ export function AvrConsole({
   const rename = async () => {
     const name = window.prompt("Rename device", device.name);
     if (name && name.trim() && name !== device.name) await client.updateDevice(device.id, { name: name.trim() });
-    setMenuOpen(false);
   };
   const remove = async () => {
     if (!window.confirm(`Remove "${device.name}"? This can't be undone.`)) return;
@@ -641,15 +640,13 @@ export function AvrConsole({
             {onoff && (
               <button className={`avr-icon-btn${power?.on ? " on" : ""}`} onClick={() => setPower(!power?.on)} aria-label="Power">⏻</button>
             )}
-            <div className="avr-menu-wrap">
-              <button className="avr-icon-btn" onClick={() => setMenuOpen((v) => !v)} aria-label="More">⋮</button>
-              {menuOpen && (
-                <div className="avr-menu">
-                  <button onClick={() => void rename()}>Rename</button>
-                  <button className="danger" onClick={() => void remove()}>Remove device</button>
-                </div>
-              )}
-            </div>
+            <OverflowMenu
+              aria-label="More"
+              actions={[
+                { label: "Rename", onClick: () => void rename() },
+                { label: "Remove device", onClick: () => void remove(), danger: true },
+              ]}
+            />
           </div>
         </div>
 

@@ -241,3 +241,24 @@
 
 .aureon-icon { display: inline-block; flex-shrink: 0; color: currentColor; }
 .aureon-icon--on { color: var(--aureon-color-gold-400); }
+
+/* ── Overflow menu ───────────────────────────────────────────────────────────── */
+/* Values copied from .avr-menu/.climate-menu, which were byte-for-byte identical —
+ * confirming a shared component here removes real duplication, not just theoretical. */
+
+.aureon-overflow-wrap { position: relative; display: inline-block; }
+.aureon-overflow-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); background: var(--aureon-color-base-surface-raised);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 14px; padding: 6px; min-width: 170px;
+  display: flex; flex-direction: column; z-index: 5; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  animation: aureon-panel-up 0.16s ease;
+}
+.aureon-overflow-menu button {
+  background: none; border: 0; text-align: left; padding: 10px 12px; border-radius: 8px;
+  color: var(--aureon-color-text-primary); font-size: 14px; font: inherit; cursor: pointer;
+}
+.aureon-overflow-menu button:hover { background: var(--aureon-color-base-hairline); }
+.aureon-overflow-menu button.aureon-overflow-item--danger { color: var(--aureon-color-status-critical); }
+
+@keyframes aureon-panel-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .aureon-overflow-menu { animation: none; } }
