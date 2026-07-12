@@ -24,6 +24,34 @@ the Supreme Integration Layer). Full detail: `PROJECT_CONTEXT.md`.
 6. Preserve existing architecture unless there's a compelling, stated reason to change it.
 7. Keep documentation synchronized with implementation as you go, not just at the end.
 
+## AI Operating Instructions
+
+Permanent workflow rules for every future Claude Code session on SupremeOS — these apply on top
+of, not instead of, the Workflow steps above.
+
+- **Read before acting.** Read `CLAUDE.md`, `PROJECT_CONTEXT.md`, `SESSION_HANDOFF.md`, and
+  `TODO.md` before making any changes.
+- **Inspect before creating.** Read the existing implementation of the area you're touching
+  before creating new files or components — these docs summarize, they don't replace reading the
+  actual code.
+- **Reuse over rebuild.** Reuse existing components, services, utilities, hooks, types, and
+  design tokens whenever possible rather than writing a new one that duplicates existing
+  behavior.
+- **Extend, don't fork.** Prefer extending the current architecture over creating a parallel
+  implementation of something that already exists.
+- **Backward compatibility by default.** Maintain backward compatibility unless explicitly
+  instructed otherwise.
+- **Docs track code.** Keep documentation synchronized with implementation as you go.
+- **Verify, never fabricate.** Never fabricate repository facts — capabilities, file locations,
+  architecture, status — verify by inspecting the actual code first.
+- **Before ending every development session:**
+  - Update `SESSION_HANDOFF.md`.
+  - Update `TODO.md`.
+  - Record completed work.
+  - Record architecture decisions made.
+  - Record known issues and blockers.
+  - Record recommended next steps.
+
 ## Development principles
 
 - **Production-quality only.** No placeholder logic, no "TODO: implement later" left in a path
