@@ -1231,6 +1231,26 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
   85% { opacity: 0.4; }
 }
 
+/* Camera hero (§ Premium Device Experience Library — "live preview beside controls"): the same
+ * premium card shell as .avr-now, sized for a widescreen feed instead of a square art plate,
+ * with real overlay badges (LIVE / gated REC / gated AI detections / gated stream quality)
+ * exactly like a commercial NVR client's live view. */
+.camera-hero {
+  background: linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2.5%) 0%, var(--aureon-color-base-surface-raised) 55%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, black 12%) 100%);
+  border: 1px solid var(--aureon-color-base-hairline); border-radius: 24px; padding: 14px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 24px 48px -28px rgba(0,0,0,0.6);
+}
+.camera-hero-preview {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 16px; overflow: hidden;
+  background: #000; display: flex; align-items: center; justify-content: center;
+}
+.camera-hero-preview img, .camera-hero-preview video.player { width: 100%; height: 100%; object-fit: cover; border-radius: 0; margin: 0; }
+.camera-hero-overlay-top { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.camera-hero-overlay-bottom { position: absolute; bottom: 10px; right: 10px; display: flex; gap: 6px; }
+.camera-hero-meta { padding: 12px 6px 4px; }
+.camera-hero .avr-badge { background: color-mix(in srgb, var(--aureon-color-base-void) 55%, transparent); backdrop-filter: blur(6px); }
+.camera-hero .avr-badge.live { color: var(--aureon-color-status-good); border-color: color-mix(in srgb, var(--aureon-color-status-good) 50%, var(--aureon-color-base-hairline)); }
+
 .avr-now-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
 .avr-now-label { font-size: 10.5px; letter-spacing: 0.16em; color: var(--aureon-color-gold-400); font-weight: 700; }
 .avr-now-meta h3 { margin: 3px 0 0; font-size: 25px; font-weight: 600; letter-spacing: -0.01em; font-family: "Aureon Display", Inter, sans-serif; }
