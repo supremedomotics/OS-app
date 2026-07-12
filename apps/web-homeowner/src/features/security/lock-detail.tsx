@@ -1,5 +1,6 @@
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { Button, Card, CapabilityGate, Grid, Stack } from "@supreme/aureon-web";
+import { Card, CapabilityGate, Grid, QuickActions } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry } from "../../api.js";
 import { useLive } from "../../live.js";
 import {
@@ -19,24 +20,29 @@ interface LockState {
   jammed?: boolean;
 }
 
+const NOT_YET = { available: false as const, reason: "Driver required" };
+
 /**
  * Door Lock / Furniture Lock premium detail page (§ Premium Device Experience Library). The
- * real `lock` capability today is just locked/jammed — this page shows that honestly (a live
- * slide-to-unlock, real jam indicator) plus the rest of a premium smart-lock's expected
- * control set (Access Codes, Auto-Lock Timer, Battery Level, Door Sensor, Guest Access) as
- * capability-gated placeholders, exactly as Television/Projector did for media (§ "the UI is
- * the contract"). SIP Video Door Phone reuses this same page shape — its `lock` capability
- * really is a door-release relay (`services/protocols/src/sip-driver.ts`) — with a Live Video
+ * real `lock` capability today is just locked/jammed — the hero shows that honestly (a live
+ * illustration that glows when unlocked, a genuine jam state, a slide-to-unlock gesture) plus
+ * the rest of a premium smart-lock's expected surface (Battery, Last User, Last Unlock,
+ * Connection Quality, Access Codes, Auto-Lock Timer, Door Sensor, Guest Access) as capability-
+ * gated placeholders — exactly as Television/Projector did for media (§ "the UI is the
+ * contract"). SIP Video Door Phone reuses this same page shape — its `lock` capability really
+ * is a door-release relay (`services/protocols/src/sip-driver.ts`) — with a Live Video
  * placeholder up top, since the SIP driver carries no video capability yet.
  */
 export function LockDetail({
-  device, roomName, onBack, onRemoved, onDeviceUpdated, devMode = false,
+  device, roomName, onBack, onRemoved, onDeviceUpdated, allLocks = [], devMode = false,
 }: {
   device: Device;
   roomName: string;
   onBack: () => void;
   onRemoved: () => void;
   onDeviceUpdated?: (d: Device) => void;
+  /** Every other lock-capable device in the home, for the real "Lock All" quick action. */
+  allLocks?: Device[];
   devMode?: boolean;
 }) {
   const { states, apply } = useLive();
@@ -50,100 +56,156 @@ export function LockDetail({
   const locked = live.locked ?? true;
   const jammed = live.jammed ?? false;
 
+  // A brief pulse on the hero icon while a lock/unlock command is genuinely in flight — not a
+  // fake "loading" state, just visual follow-through on the real command that was just sent.
+  const [busy, setBusy] = useState(false);
+  const busyTimer = useRef<number | undefined>(undefined);
+
   const videoAvail = capabilityAvailability(device, "media");
   const ringAvail = capabilityAvailability(device, "sensor");
   const accessCodesAvail = capabilityAvailability(device, "lock", "accessCodes");
   const autoLockAvail = capabilityAvailability(device, "lock", "autoLockSeconds");
-  const batteryAvail = capabilityAvailability(device, "sensor");
   const doorSensorAvail = capabilityAvailability(device, "sensor");
   const guestAccessAvail = capabilityAvailability(device, "lock", "guestCodes");
 
   const setLock = (next: boolean) => {
     apply(device.id, "lock", { kind: "lock", locked: next, jammed: false });
     void client.command(device.id as DeviceId, { capability: "lock", action: next ? "lock" : "unlock" });
+    setBusy(true);
+    window.clearTimeout(busyTimer.current);
+    busyTimer.current = window.setTimeout(() => setBusy(false), 600);
   };
+  useEffect(() => () => window.clearTimeout(busyTimer.current), []);
+
+  const lockAll = () => {
+    for (const d of allLocks) {
+      apply(d.id, "lock", { kind: "lock", locked: true, jammed: false });
+      void client.command(d.id as DeviceId, { capability: "lock", action: "lock" });
+    }
+    setLock(true);
+  };
+
   const setKind = async (next: SecurityLockKind) => {
     const res = await client.updateDevice(device.id as DeviceId, { metadata: { ...device.metadata, security: { kind: next } } });
     onDeviceUpdated?.(res.device);
   };
 
+  const heroTint = jammed
+    ? "var(--aureon-color-status-critical)"
+    : !locked
+      ? "var(--aureon-color-status-good)"
+      : "var(--aureon-color-gold-400)";
+  const heroLabel = jammed ? "JAMMED" : locked ? "SECURED" : "UNLOCKED";
+
   return (
     <div className="page">
-      <div className="avr-head-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
         <button className="avr-back" onClick={onBack} aria-label="Back">←</button>
-        <div className="avr-head-ic">{kindMeta.icon}</div>
-        <div className="avr-head-meta">
-          <h2>{device.name}</h2>
-          <p>{roomName}</p>
-          <span className={`avr-status${device.status === "online" ? " good" : ""}`}>
-            <i /> {device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable"}
-          </span>
-          {jammed && <span className="avr-status" style={{ color: "var(--aureon-danger, #e5484d)" }}><i /> Jammed</span>}
-        </div>
+        <span className="muted">{roomName}</span>
       </div>
 
-      <Stack gap="lg" style={{ marginTop: 20 }}>
-        {isDoorPhone && (
-          <CapabilityGate available={videoAvail.available} reason={videoAvail.available ? undefined : videoAvail.reason}>
-            <Card style={{ minHeight: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span className="muted">Live video</span>
-            </Card>
-          </CapabilityGate>
-        )}
-        {isDoorPhone && (
-          <CapabilityGate available={ringAvail.available} reason={ringAvail.available ? undefined : ringAvail.reason}>
-            <Card>
-              <span className="avr-field-label">Doorbell</span>
-              <p className="muted" style={{ marginTop: 6 }}>No ring events yet.</p>
-            </Card>
-          </CapabilityGate>
-        )}
-
-        <Card>
-          <span className="avr-field-label">{isDoorPhone ? "Door release" : "Lock"}</span>
-          <div style={{ marginTop: 12 }}>
-            <div className="lock-actions">
-              <button className="lock-secondary" onClick={() => setLock(false)}>Unlatch</button>
-              <SlideUnlock locked={locked} onUnlock={() => setLock(false)} relock={() => setLock(true)} />
+      <div className="aureon-detail-grid">
+        <div className="aureon-detail-main">
+          <div className={`avr-now${jammed ? " offline" : ""}`}>
+            <div className="avr-art-wrap" style={{ width: 150, height: 150 }}>
+              <div className={`avr-halo${!locked ? " on" : ""}`} style={{ "--avr-halo-tint": heroTint } as CSSProperties} />
+              <div className={`avr-art-float${!locked ? " on" : ""}`}>
+                <div
+                  className={`avr-art avr-art-placeholder hero-ic-plate${busy ? " busy" : ""}`}
+                  style={{ width: 150, height: 150, fontSize: 56, color: heroTint }}
+                >
+                  {jammed ? "⚠️" : locked ? "🔒" : "🔓"}
+                </div>
+              </div>
+            </div>
+            <div className="avr-now-meta">
+              <span className="avr-now-label">{heroLabel}</span>
+              <h3>{device.name}</h3>
+              <p className="avr-now-album">{kindMeta.label} · {device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable"}</p>
+              <div className="avr-badges">
+                <span className="avr-badge">{kindMeta.icon} {kindMeta.label}</span>
+                {jammed && <span className="avr-badge" style={{ color: "var(--aureon-color-status-critical)" }}>Jammed</span>}
+              </div>
+              <Grid minItemWidth={110} gap="sm" style={{ marginTop: 14 }}>
+                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>🔋 Battery</Card></CapabilityGate>
+                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>👤 Last user</Card></CapabilityGate>
+                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>🕐 Last unlock</Card></CapabilityGate>
+                <CapabilityGate available={NOT_YET.available} reason={NOT_YET.reason}><Card>📶 Connection</Card></CapabilityGate>
+              </Grid>
             </div>
           </div>
-        </Card>
-      </Stack>
 
-      <h2 className="section">More controls</h2>
-      <Grid minItemWidth={150} gap="sm">
-        <CapabilityGate available={accessCodesAvail.available} reason={accessCodesAvail.available ? undefined : accessCodesAvail.reason}>
-          <Card interactive>🔢 Access Codes</Card>
-        </CapabilityGate>
-        <CapabilityGate available={autoLockAvail.available} reason={autoLockAvail.available ? undefined : autoLockAvail.reason}>
-          <Card interactive>⏱️ Auto-Lock Timer</Card>
-        </CapabilityGate>
-        <CapabilityGate available={batteryAvail.available} reason={batteryAvail.available ? undefined : batteryAvail.reason}>
-          <Card interactive>🔋 Battery Level</Card>
-        </CapabilityGate>
-        <CapabilityGate available={doorSensorAvail.available} reason={doorSensorAvail.available ? undefined : doorSensorAvail.reason}>
-          <Card interactive>🚪 Door Sensor</Card>
-        </CapabilityGate>
-        <CapabilityGate available={guestAccessAvail.available} reason={guestAccessAvail.available ? undefined : guestAccessAvail.reason}>
-          <Card interactive>👤 Guest Access</Card>
-        </CapabilityGate>
-      </Grid>
+          {isDoorPhone && (
+            <CapabilityGate available={videoAvail.available} reason={videoAvail.available ? undefined : videoAvail.reason}>
+              <Card style={{ minHeight: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span className="muted">Live video</span>
+              </Card>
+            </CapabilityGate>
+          )}
+          {isDoorPhone && (
+            <CapabilityGate available={ringAvail.available} reason={ringAvail.available ? undefined : ringAvail.reason}>
+              <Card>
+                <span className="avr-field-label">Doorbell</span>
+                <p className="muted" style={{ marginTop: 6 }}>No ring events yet.</p>
+              </Card>
+            </CapabilityGate>
+          )}
 
-      {/* § Design System — Universal Page Structure: same sections every device detail page
-          shows, capability- and data-driven, never protocol-driven. */}
-      <div className="sheet-sections">
-        <InformationSection device={device} roomName={roomName} />
-        {devMode && <DiagnosticsSection device={device} />}
-        <AutomationsSection device={device} />
-        <HistorySection device={device} />
-        <AdvancedSettingsSection device={device} onRemoved={onRemoved}>
-          <label className="drv-field" style={{ marginBottom: 10 }}>
-            <span className="lbl">Device type</span>
-            <select value={kind} onChange={(e) => void setKind(e.target.value as SecurityLockKind)}>
-              {SECURITY_LOCK_KIND_OPTIONS.map((o) => <option key={o.kind} value={o.kind}>{o.icon} {o.label}</option>)}
-            </select>
-          </label>
-        </AdvancedSettingsSection>
+          <Card>
+            <span className="avr-field-label">{isDoorPhone ? "Door release" : "Lock"}</span>
+            <div style={{ marginTop: 12 }}>
+              <div className="lock-actions">
+                <button className="lock-secondary" onClick={() => setLock(false)}>Unlatch</button>
+                <SlideUnlock locked={locked} onUnlock={() => setLock(false)} relock={() => setLock(true)} />
+              </div>
+            </div>
+          </Card>
+
+          <QuickActions
+            actions={[
+              { key: "unlock", icon: "🔓", label: "Unlock", onClick: () => setLock(false), active: !locked, disabled: !locked },
+              { key: "lock-all", icon: "🔒", label: "Lock All", onClick: lockAll },
+            ]}
+          >
+            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🕓 Temporary Access</button></CapabilityGate>
+            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🔢 Guest PIN</button></CapabilityGate>
+            <CapabilityGate available={false} reason={NOT_YET.reason}><button className="aureon-quick-action" disabled>🏖️ Vacation Mode</button></CapabilityGate>
+          </QuickActions>
+
+          <h2 className="section">More controls</h2>
+          <Grid minItemWidth={150} gap="sm">
+            <CapabilityGate available={accessCodesAvail.available} reason={accessCodesAvail.available ? undefined : accessCodesAvail.reason}>
+              <Card interactive>🔢 Access Codes</Card>
+            </CapabilityGate>
+            <CapabilityGate available={autoLockAvail.available} reason={autoLockAvail.available ? undefined : autoLockAvail.reason}>
+              <Card interactive>⏱️ Auto-Lock Timer</Card>
+            </CapabilityGate>
+            <CapabilityGate available={doorSensorAvail.available} reason={doorSensorAvail.available ? undefined : doorSensorAvail.reason}>
+              <Card interactive>🚪 Door Sensor</Card>
+            </CapabilityGate>
+            <CapabilityGate available={guestAccessAvail.available} reason={guestAccessAvail.available ? undefined : guestAccessAvail.reason}>
+              <Card interactive>👤 Guest Access</Card>
+            </CapabilityGate>
+          </Grid>
+        </div>
+
+        {/* § Design System — Universal Page Structure: same sections every device detail page
+            shows, capability- and data-driven, never protocol-driven. Beside the hero/controls
+            on wide displays instead of stacking below them (§ "eliminate empty space"). */}
+        <div className="aureon-detail-side sheet-sections">
+          <InformationSection device={device} roomName={roomName} />
+          {devMode && <DiagnosticsSection device={device} />}
+          <AutomationsSection device={device} />
+          <HistorySection device={device} />
+          <AdvancedSettingsSection device={device} onRemoved={onRemoved}>
+            <label className="drv-field" style={{ marginBottom: 10 }}>
+              <span className="lbl">Device type</span>
+              <select value={kind} onChange={(e) => void setKind(e.target.value as SecurityLockKind)}>
+                {SECURITY_LOCK_KIND_OPTIONS.map((o) => <option key={o.kind} value={o.kind}>{o.icon} {o.label}</option>)}
+              </select>
+            </label>
+          </AdvancedSettingsSection>
+        </div>
       </div>
     </div>
   );

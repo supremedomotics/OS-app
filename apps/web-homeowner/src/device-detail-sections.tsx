@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { CollapsibleSection, DeviceFacts, type DeviceFactRow } from "@supreme/aureon-web";
+import { Badge, CollapsibleSection, DeviceFacts, StatusDot, Timeline, type DeviceFactRow, type TimelineEntry } from "@supreme/aureon-web";
 import {
   automationsForDevice,
   client,
@@ -23,14 +23,36 @@ import { useAsync } from "./use-async.js";
  * down is identical everywhere.
  */
 
+/** Same capability→glyph priority as the Room→Category grammar (§11.1 CATEGORY_DEFS) — one
+ * icon vocabulary for "what kind of thing is this" everywhere in the app. */
+function deviceGlyph(device: Device): string {
+  const caps = device.capabilities.map((c) => c.kind);
+  if (caps.includes("brightness") || caps.includes("color")) return "☀";
+  if (caps.includes("temperature")) return "❄";
+  if (caps.includes("media")) return "♫";
+  if (caps.includes("position")) return "▤";
+  if (caps.includes("lock")) return "🔒";
+  if (caps.includes("fan")) return "≋";
+  if (caps.includes("vacuum")) return "◌";
+  return "•";
+}
+
+function statusTone(status: Device["status"]): "good" | "neutral" | "warning" {
+  return status === "online" ? "good" : status === "offline" ? "neutral" : "warning";
+}
+function statusLabel(status: Device["status"]): string {
+  return status === "online" ? "Online" : status === "offline" ? "Offline" : "Unavailable";
+}
+
 // ── Information — only fields the platform actually has for this device, same "don't fake it"
-// policy as the Devices list. ─────────────────────────────────────────────────────────────────
+// policy as the Devices list. Premium fact tiles, not a table (§ Premium Device Experience
+// Library — "rich Information cards"). ───────────────────────────────────────────────────────
 export function InformationSection({ device, roomName }: { device: Device; roomName?: string }) {
-  const rows: DeviceFactRow[] = [{ label: "Type", value: friendlyType(device) }];
-  if (device.manufacturer) rows.push({ label: "Manufacturer", value: device.manufacturer });
-  if (device.model) rows.push({ label: "Model", value: device.model });
-  if (roomName) rows.push({ label: "Room", value: roomName });
-  rows.push({ label: "Status", value: device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable" });
+  const rows: DeviceFactRow[] = [{ label: "Type", value: friendlyType(device), icon: deviceGlyph(device) }];
+  if (device.manufacturer) rows.push({ label: "Manufacturer", value: device.manufacturer, icon: "🏷️" });
+  if (device.model) rows.push({ label: "Model", value: device.model, icon: "🔧" });
+  if (roomName) rows.push({ label: "Room", value: roomName, icon: "🏠" });
+  rows.push({ label: "Status", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) });
   return (
     <CollapsibleSection title="Information">
       <DeviceFacts rows={rows} />
@@ -44,6 +66,31 @@ export function InformationSection({ device, roomName }: { device: Device; roomN
 // protocolBindings() returns for this device — ONE code path for every integration, nothing
 // here branches per protocol. Only ever mount this when the caller has already gated on
 // devMode — it is never reachable by a homeowner account. ───────────────────────────────────────
+/** A protocol badge glyph — every real protocol Supreme speaks gets a distinct icon so the
+ * installer/developer diagnostics list reads at a glance, matched to the driver names actually
+ * registered by services/protocols; unknown/future protocols fall back to a generic plug. */
+function protocolGlyph(protocol: string): string {
+  const p = protocol.toLowerCase();
+  if (p === "knx") return "🏗️";
+  if (p === "matter") return "⬡";
+  if (p === "zigbee") return "🐝";
+  if (p === "dali") return "💡";
+  if (p === "casambi") return "📱";
+  if (p === "modbus" || p === "coolmaster") return "🌡️";
+  if (p === "mqtt") return "📨";
+  if (p === "sip") return "☎️";
+  if (p === "rti" || p === "avr" || p === "heos" || p === "yamaha" || p === "sonos" || p === "wiim" || p === "devialet" || p === "airplay" || p === "appletv") return "🎚️";
+  if (p === "lutron" || p === "tuya" || p === "shelly") return "🔌";
+  return "🔗";
+}
+
+// ── Diagnostics (§ Integrator/Developer Mode) — driver/protocol/network plus each protocol
+// binding's own address (KNX group address, Matter node/endpoint, Zigbee IEEE, DALI short
+// address, Casambi fixture, MQTT topic, Modbus register, …). Rendered generically off whatever
+// protocolBindings() returns for this device — ONE code path for every integration, nothing
+// here branches per protocol. Only ever mount this when the caller has already gated on
+// devMode — it is never reachable by a homeowner account. Premium fact tiles, same as
+// Information (§ "diagnostics should feel like a professional installer page"). ────────────────
 export function DiagnosticsSection({ device }: { device: Device }) {
   const [registry] = useAsync(() => fetchDriverRegistry());
   const [bindings] = useAsync(() => client.protocolBindings());
@@ -53,13 +100,15 @@ export function DiagnosticsSection({ device }: { device: Device }) {
   const net = (device.metadata as { network?: { ip?: string; mac?: string; host?: string } } | undefined)?.network;
   const myBindings = (bindings?.bindings ?? []).filter((b) => b.deviceId === device.id);
 
-  const rows: DeviceFactRow[] = [];
-  if (driver) rows.push({ label: "Driver", value: driver.name });
-  if (driver?.protocols[0]) rows.push({ label: "Protocol", value: driver.protocols[0].toUpperCase() });
-  if (net?.ip) rows.push({ label: "IP address", value: net.ip });
-  if (net?.mac) rows.push({ label: "MAC", value: net.mac });
-  rows.push({ label: "Capabilities", value: device.capabilities.map((c) => c.kind).join(", ") });
-  for (const b of myBindings) rows.push({ label: `${b.protocol.toUpperCase()} · ${b.capability}`, value: b.address });
+  const rows: DeviceFactRow[] = [
+    { label: "Connection", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) },
+  ];
+  if (driver) rows.push({ label: "Driver", value: driver.name, icon: "🧩" });
+  if (driver?.protocols[0]) rows.push({ label: "Protocol", value: driver.protocols[0].toUpperCase(), icon: protocolGlyph(driver.protocols[0]) });
+  if (net?.ip) rows.push({ label: "IP address", value: net.ip, icon: "🌐" });
+  if (net?.mac) rows.push({ label: "MAC", value: net.mac, icon: "🔗" });
+  rows.push({ label: "Capabilities", value: device.capabilities.map((c) => c.kind).join(", "), icon: "⚙️" });
+  for (const b of myBindings) rows.push({ label: `${b.protocol.toUpperCase()} · ${b.capability}`, value: b.address, icon: protocolGlyph(b.protocol) });
 
   return (
     <CollapsibleSection title="Diagnostics">
@@ -84,14 +133,16 @@ export function AutomationsSection({ device }: { device: Device }) {
     <CollapsibleSection title="Automations" badge={total}>
       {matchingAutomations.map((a) => (
         <div key={a.id} className="sheet-list-row">
+          <StatusDot tone={a.enabled ? "good" : "neutral"} />
           <span>{a.name}</span>
-          <span className="sheet-list-sub">{a.enabled ? "Enabled" : "Disabled"}</span>
+          <Badge>{a.enabled ? "Enabled" : "Disabled"}</Badge>
         </div>
       ))}
       {matchingScenes.map((s) => (
         <div key={s.id} className="sheet-list-row">
+          <StatusDot tone="neutral" />
           <span>{s.name}</span>
-          <span className="sheet-list-sub">Scene</span>
+          <Badge>Scene</Badge>
         </div>
       ))}
     </CollapsibleSection>
@@ -102,6 +153,20 @@ export function AutomationsSection({ device }: { device: Device }) {
 // something on/off automatically) plus its metered energy cost, when the home has one
 // configured. Two independently-optional sources; hidden entirely until both resolve, then
 // hidden for good if neither has anything to show. ───────────────────────────────────────────────
+/** A real, minimal energy trend — bar height from each day's actual metered kWh, nothing
+ * interpolated or invented (§ Premium Device Experience Library — "better history: mini
+ * charts, energy trend"). Pure CSS bars, no charting dependency for five numbers. */
+function EnergySparkline({ points }: { points: { period: string; kwh: number }[] }) {
+  const max = Math.max(...points.map((p) => p.kwh), 0.001);
+  return (
+    <div className="aureon-sparkline" role="img" aria-label="Daily energy use trend">
+      {points.map((p) => (
+        <span key={p.period} className="aureon-sparkline-bar" style={{ height: `${Math.max(6, (p.kwh / max) * 100)}%` }} title={`${p.period}: ${p.kwh.toFixed(2)} kWh`} />
+      ))}
+    </div>
+  );
+}
+
 export function HistorySection({ device }: { device: Device }) {
   const [intel] = useAsync(() => fetchIntelligenceHistory(device.id), [device.id]);
   const [energy] = useAsync(() => fetchEnergyHistory(device.id), [device.id]);
@@ -109,20 +174,28 @@ export function HistorySection({ device }: { device: Device }) {
   const totalKwh = energy.points.reduce((s, p) => s + p.kwh, 0);
   const totalCost = energy.points.reduce((s, p) => s + p.cost, 0);
   if (intel.length === 0 && totalKwh <= 0) return null;
+
+  const entries: TimelineEntry[] = intel.map((h) => ({
+    key: h.id,
+    icon: "🤖",
+    title: h.reason ?? h.action,
+    meta: new Date(h.ts).toLocaleString(),
+    tone: "good",
+  }));
+
   return (
     <CollapsibleSection title="History">
-      {intel.map((h) => (
-        <div key={h.id} className="sheet-list-row">
-          <span>{h.reason ?? h.action}</span>
-          <span className="sheet-list-sub">{new Date(h.ts).toLocaleString()}</span>
-        </div>
-      ))}
       {totalKwh > 0 && (
-        <div className="sheet-list-row">
-          <span>Energy, last {energy.points.length} day{energy.points.length === 1 ? "" : "s"}</span>
-          <span className="sheet-list-sub">{totalKwh.toFixed(1)} kWh · {energy.currency}{totalCost.toFixed(2)}</span>
+        <div className="aureon-fact-tile" style={{ marginBottom: 14, alignItems: "center" }}>
+          <span className="aureon-fact-ic" aria-hidden>⚡</span>
+          <span className="aureon-fact-body" style={{ flex: 1 }}>
+            <span className="aureon-facts-k">Energy, last {energy.points.length} day{energy.points.length === 1 ? "" : "s"}</span>
+            <span className="aureon-facts-v">{totalKwh.toFixed(1)} kWh · {energy.currency}{totalCost.toFixed(2)}</span>
+          </span>
+          <EnergySparkline points={energy.points} />
         </div>
       )}
+      <Timeline entries={entries} />
     </CollapsibleSection>
   );
 }

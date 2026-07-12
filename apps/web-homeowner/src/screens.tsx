@@ -642,6 +642,7 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
         onBack={() => setSelectedLockId(null)}
         onRemoved={() => { setSelectedLockId(null); void loadDevices(); }}
         onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
+        allLocks={locks.filter((d) => d.id !== selectedLock.id)}
         devMode={devMode}
       />
     );

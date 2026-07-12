@@ -334,13 +334,22 @@
 @media (prefers-reduced-motion: reduce) { .aureon-collapsible-body { animation: none; } }
 
 /* ── Device facts (§ Design System — Information / Diagnostics sections) ───────── */
-/* Values copied from devices.tsx's .dev-facts/.k/.v, which already implemented the
- * "only show fields that exist" Information grid — now shared so every device detail
- * page can show the same section. */
+/* A grid of premium fact tiles — icon badge, label, value, optional status dot — replacing
+ * the plain key/value table every device detail page's Information/Diagnostics used to render. */
 
-.aureon-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-bottom: 12px; }
+.aureon-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.aureon-fact-tile {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 12px;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline);
+  min-width: 0;
+}
+.aureon-fact-ic {
+  flex: none; width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center;
+  justify-content: center; font-size: 15px; background: var(--aureon-color-base-surface-raised);
+}
+.aureon-fact-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .aureon-facts-k { display: block; font-size: 11px; color: var(--aureon-color-text-secondary); }
-.aureon-facts-v { display: block; font-size: 13.5px; }
+.aureon-facts-v { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
 
 /* ── Grid (§ Design System — Responsive Framework: Responsive Grid) ─────────────── */
 
@@ -380,15 +389,71 @@
   .aureon-stack--responsive { flex-direction: column; align-items: stretch; }
 }
 
+/* ── Detail shell (§ Premium Device Experience Library — "eliminate empty space") ──────────── */
+/* A device detail page's adaptive layout: single column below the expanded density tier (phones,
+ * tablets, most touch panels — no room to spare), reflowing to a primary/secondary two-column
+ * layout at 1200px+ (desktop, ultrawide, 15" panels) so Information/Diagnostics/History/
+ * Automations sit BESIDE the hero and controls instead of stacking below them into a long,
+ * sparse scroll. Reuses the density engine's own `expanded` breakpoint — not a new one. */
+
+.aureon-detail-grid { display: flex; flex-direction: column; gap: var(--aureon-space-xl); align-items: start; }
+.aureon-detail-main { display: flex; flex-direction: column; gap: var(--aureon-space-lg); min-width: 0; }
+.aureon-detail-side { display: flex; flex-direction: column; gap: var(--aureon-space-md); min-width: 0; }
+:root[data-density="expanded"] .aureon-detail-grid {
+  flex-direction: row;
+}
+:root[data-density="expanded"] .aureon-detail-main { flex: 1 1 60%; }
+:root[data-density="expanded"] .aureon-detail-side { flex: 1 1 36%; max-width: 420px; }
+
+/* ── Quick actions (§ Premium Device Experience Library — "context-aware quick actions") ────── */
+
+.aureon-quick-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.aureon-quick-action {
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px;
+  border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface);
+  color: var(--aureon-color-text-primary); font: inherit; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.aureon-quick-action:hover { border-color: color-mix(in srgb, var(--aureon-color-gold-400) 40%, var(--aureon-color-base-hairline)); }
+.aureon-quick-action:active { transform: scale(0.97); }
+.aureon-quick-action:disabled { opacity: 0.5; cursor: default; transform: none; }
+.aureon-quick-action--active { background: var(--aureon-color-gold-500); color: #0a0a0c; border-color: transparent; }
+.aureon-quick-action-ic { font-size: 15px; line-height: 1; }
+
+/* ── Timeline / activity feed (§ Premium Device Experience Library — "better history") ──────── */
+
+.aureon-timeline { display: flex; flex-direction: column; }
+.aureon-timeline-row { display: flex; gap: 12px; }
+.aureon-timeline-rail { display: flex; flex-direction: column; align-items: center; flex: none; }
+.aureon-timeline-dot {
+  width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline);
+  flex: none;
+}
+.aureon-timeline-dot--good { border-color: color-mix(in srgb, var(--aureon-color-status-good) 55%, var(--aureon-color-base-hairline)); }
+.aureon-timeline-dot--warning { border-color: color-mix(in srgb, var(--aureon-color-status-warning) 55%, var(--aureon-color-base-hairline)); }
+.aureon-timeline-dot--critical { border-color: color-mix(in srgb, var(--aureon-color-status-critical) 55%, var(--aureon-color-base-hairline)); }
+.aureon-timeline-line { width: 1px; flex: 1; min-height: 14px; background: var(--aureon-color-base-hairline); margin: 2px 0; }
+.aureon-timeline-body { flex: 1; min-width: 0; padding-bottom: 16px; }
+.aureon-timeline-title { display: block; font-size: 13.5px; }
+.aureon-timeline-meta { display: block; font-size: 11.5px; color: var(--aureon-color-text-secondary); margin-top: 2px; }
+
+/* ── Sparkline (§ Premium Device Experience Library — "better history: mini charts") ────────── */
+/* A handful of real metered values as bars — never a charting library for five numbers. */
+
+.aureon-sparkline { display: flex; align-items: flex-end; gap: 3px; height: 32px; flex: none; }
+.aureon-sparkline-bar { display: block; width: 5px; min-height: 3px; border-radius: 2px; background: var(--aureon-color-gold-500); opacity: 0.85; }
+
 /* ── Capability gate (§ Premium Device Experience Library — "the UI is the contract") ──────── */
 /* A control the design calls for but no driver backs yet: still visible, never interactive,
  * always labeled with why — never hidden, never faked. */
 
-.aureon-cap-gate { position: relative; }
-.aureon-cap-gate-content { pointer-events: none; opacity: 0.38; filter: grayscale(0.6); user-select: none; }
+.aureon-cap-gate { position: relative; display: inline-flex; }
+.aureon-cap-gate-content { pointer-events: none; opacity: 0.22; filter: grayscale(0.7); user-select: none; }
 .aureon-cap-gate-badge {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   text-align: center; padding: 4px 8px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em;
-  color: var(--aureon-color-text-secondary); background: color-mix(in srgb, var(--aureon-color-base-void) 55%, transparent);
+  line-height: 1.25; color: var(--aureon-color-text-secondary);
+  background: color-mix(in srgb, var(--aureon-color-base-void) 88%, transparent);
   border-radius: inherit; pointer-events: none;
 }
