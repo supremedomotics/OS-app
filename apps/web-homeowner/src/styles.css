@@ -1257,6 +1257,17 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
   85% { opacity: 0.4; }
 }
 
+/* A genuinely urgent state deserves genuine motion, not just a color change — a small, sharp
+ * shudder on the alarm shield itself while triggered (§ Premium Motion — "alarm pulse"). Tiny
+ * amplitude on purpose: this reads as "alert", not as a broken/glitching UI. */
+.avr-art-float.shake { animation: avr-shield-shake 0.5s ease-in-out infinite; }
+@keyframes avr-shield-shake {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  25% { transform: translateX(-1.5px) rotate(-1deg); }
+  75% { transform: translateX(1.5px) rotate(1deg); }
+}
+@media (prefers-reduced-motion: reduce) { .avr-art-float.shake { animation: none; } }
+
 /* Camera hero (§ Premium Device Experience Library — "live preview beside controls"): the same
  * premium card shell as .avr-now, sized for a widescreen feed instead of a square art plate,
  * with real overlay badges (LIVE / gated REC / gated AI detections / gated stream quality)
@@ -1276,6 +1287,14 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .camera-hero-meta { padding: 12px 6px 4px; }
 .camera-hero .avr-badge { background: color-mix(in srgb, var(--aureon-color-base-void) 55%, transparent); backdrop-filter: blur(6px); }
 .camera-hero .avr-badge.live { color: var(--aureon-color-status-good); border-color: color-mix(in srgb, var(--aureon-color-status-good) 50%, var(--aureon-color-base-hairline)); }
+/* The LIVE pulse (§ Premium Motion — "camera LIVE pulse"): a genuine heartbeat, not a static
+ * dot — this is the one signal a security camera's whole job depends on reading as alive. */
+.camera-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--aureon-color-status-good); display: inline-block; margin-right: 5px; box-shadow: 0 0 0 0 color-mix(in srgb, var(--aureon-color-status-good) 60%, transparent); animation: camera-live-pulse 1.8s ease-in-out infinite; }
+@keyframes camera-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--aureon-color-status-good) 55%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--aureon-color-status-good) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .camera-live-dot { animation: none; } }
 
 .avr-now-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
 .avr-now-label { font-size: 10.5px; letter-spacing: 0.16em; color: var(--aureon-color-gold-400); font-weight: 700; }

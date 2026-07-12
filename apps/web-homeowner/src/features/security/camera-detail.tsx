@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CameraList, CameraStreamResponse } from "@supreme/contracts";
-import { Card, CapabilityGrid, QuickActions } from "@supreme/aureon-web";
+import { Card, CapabilityGrid, Icon, QuickActions } from "@supreme/aureon-web";
 import { client } from "../../api.js";
 import { HlsPlayer, WebRtcPlayer } from "../../players.js";
 
@@ -83,7 +83,10 @@ export function CameraDetail({ camera, roomName, onBack }: {
                 <span className="muted">{failed ? "No playable stream." : camera.streamUrl ? "Connecting…" : "No live feed configured for this camera."}</span>
               )}
               <div className="camera-hero-overlay-top">
-                <span className={`avr-badge${isLive ? " live" : ""}`}>{isLive ? "● LIVE" : camera.streamUrl ? "CONNECTING" : "OFFLINE"}</span>
+                <span className={`avr-badge${isLive ? " live" : ""}`}>
+                  {isLive && <span className="camera-live-dot" aria-hidden />}
+                  {isLive ? "LIVE" : camera.streamUrl ? "CONNECTING" : "OFFLINE"}
+                </span>
               </div>
             </div>
             <div className="camera-hero-meta">
@@ -94,8 +97,8 @@ export function CameraDetail({ camera, roomName, onBack }: {
 
           <QuickActions
             actions={[
-              { key: "snapshot", icon: "📸", label: "Snapshot", onClick: () => downloadSnapshot(camera), disabled: !camera.snapshotUrl },
-              { key: "fullscreen", icon: "⛶", label: "Fullscreen", onClick: () => void previewRef.current?.requestFullscreen?.(), disabled: !isLive && !camera.snapshotUrl },
+              { key: "snapshot", icon: <Icon name="camera" size={16} />, label: "Snapshot", onClick: () => downloadSnapshot(camera), disabled: !camera.snapshotUrl },
+              { key: "fullscreen", icon: <Icon name="expand" size={16} />, label: "Fullscreen", onClick: () => void previewRef.current?.requestFullscreen?.(), disabled: !isLive && !camera.snapshotUrl },
             ]}
           />
 
@@ -103,14 +106,14 @@ export function CameraDetail({ camera, roomName, onBack }: {
           <CapabilityGrid
             minItemWidth={150}
             items={[
-              { key: "record", icon: "⏺️", label: "Record", available: false, reason: NOT_YET.reason },
-              { key: "talk", icon: "🎙️", label: "Talk", available: false, reason: NOT_YET.reason },
-              { key: "ai-detections", icon: "🤖", label: "AI Detections", available: false, reason: NOT_YET.reason },
-              { key: "stream-quality", icon: "📶", label: "Stream Quality", available: false, reason: NOT_YET.reason },
-              { key: "ptz", icon: "🕹️", label: "Pan / Tilt / Zoom", available: false, reason: NOT_YET.reason },
-              { key: "motion-zones", icon: "▦", label: "Motion Zones", available: false, reason: NOT_YET.reason },
-              { key: "recording-schedule", icon: "🗓️", label: "Recording Schedule", available: false, reason: NOT_YET.reason },
-              { key: "night-vision", icon: "🌙", label: "Night Vision", available: false, reason: NOT_YET.reason },
+              { key: "record", icon: <Icon name="record" size={16} />, label: "Record", available: false, reason: NOT_YET.reason },
+              { key: "talk", icon: <Icon name="mic" size={16} />, label: "Talk", available: false, reason: NOT_YET.reason },
+              { key: "ai-detections", icon: <Icon name="sparkle" size={16} />, label: "AI Detections", available: false, reason: NOT_YET.reason },
+              { key: "stream-quality", icon: <Icon name="wifi" size={16} />, label: "Stream Quality", available: false, reason: NOT_YET.reason },
+              { key: "ptz", icon: <Icon name="joystick" size={16} />, label: "Pan / Tilt / Zoom", available: false, reason: NOT_YET.reason },
+              { key: "motion-zones", icon: <Icon name="grid" size={16} />, label: "Motion Zones", available: false, reason: NOT_YET.reason },
+              { key: "recording-schedule", icon: <Icon name="calendar" size={16} />, label: "Recording Schedule", available: false, reason: NOT_YET.reason },
+              { key: "night-vision", icon: <Icon name="moon" size={16} />, label: "Night Vision", available: false, reason: NOT_YET.reason },
             ]}
           />
         </div>

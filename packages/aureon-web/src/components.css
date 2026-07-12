@@ -458,7 +458,7 @@
 .aureon-quick-action:active { transform: scale(0.97); }
 .aureon-quick-action:disabled { opacity: 0.5; cursor: default; transform: none; }
 .aureon-quick-action--active { background: var(--aureon-color-gold-500); color: #0a0a0c; border-color: transparent; }
-.aureon-quick-action-ic { font-size: 15px; line-height: 1; }
+.aureon-quick-action-ic { display: inline-flex; line-height: 1; }
 
 /* ── Timeline / activity feed (§ Premium Device Experience Library — "better history") ──────── */
 
@@ -495,8 +495,11 @@
   border: 1px dashed var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary);
   font-size: 12.5px; cursor: default;
 }
-.aureon-unavailable-chip-ic { opacity: 0.6; filter: grayscale(0.6); }
+.aureon-unavailable-chip-ic { display: inline-flex; opacity: 0.6; }
 .aureon-unavailable-note { margin: 8px 2px 0; font-size: 11.5px; color: var(--aureon-color-text-secondary); font-style: italic; }
+
+.aureon-cap-item { display: inline-flex; align-items: center; gap: 8px; }
+.aureon-cap-item-ic { display: inline-flex; color: var(--aureon-color-gold-400); flex: none; }
 
 /* ── Capability gate (§ Premium Device Experience Library — "the UI is the contract") ──────── */
 /* A control the design calls for but no driver backs yet: still visible, never interactive,

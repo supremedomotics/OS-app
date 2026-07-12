@@ -19,7 +19,15 @@ export type IconName =
   | "dashboard" | "discover" | "devices" | "extensions" | "areas" | "notifications" | "media"
   // Device / capability glyphs
   | "light" | "climate" | "fan" | "cover" | "power"
-  | "switch" | "sensor" | "lock-locked" | "lock-unlocked" | "vacuum";
+  | "switch" | "sensor" | "lock-locked" | "lock-unlocked" | "vacuum"
+  // § Premium Device Experience Library — one line-art family replacing emoji everywhere
+  // (Security: Lock / Alarm / Camera / NVR; Media: Television / Projector / AVR / Speaker).
+  | "shield-alert" | "lock-jammed" | "battery" | "user" | "clock" | "wifi" | "key" | "timer"
+  | "door" | "briefcase" | "moon" | "siren" | "alert-triangle" | "clipboard" | "antenna"
+  | "camera" | "expand" | "record" | "mic" | "sparkle" | "joystick" | "grid" | "calendar"
+  | "monitor" | "database" | "target" | "heart" | "download" | "tv" | "projector" | "receiver"
+  | "speaker" | "gamepad" | "volume" | "volume-mute" | "image" | "remote" | "film" | "music-note"
+  | "apple-tv" | "cabinet";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <><path d="M3 10.7 12 3.5l9 7.2" /><path d="M5.6 9.6V20h12.8V9.6" /><path d="M10 20v-5h4v5" /></>,
@@ -49,6 +57,53 @@ const PATHS: Record<IconName, JSX.Element> = {
   "lock-locked": <><path d="M5 11h14v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-9Z" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
   "lock-unlocked": <><path d="M5 11h14v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-9Z" /><path d="M8 11V7a4 4 0 0 1 7.5-2.5" /></>,
   vacuum: <><circle cx="12" cy="12" r="9" /><path d="M8 21h8M9 17v2M15 17v2" /></>,
+
+  // § Premium Device Experience Library icon family — Security -----------------------------
+  "shield-alert": <><path d="M12 3.4l7 2.6v4.9c0 4.4-2.9 7.4-7 8.7-4.1-1.3-7-4.3-7-8.7V6z" /><path d="M12 8.4v4.2" /><circle cx="12" cy="15.6" r="0.9" fill="currentColor" stroke="none" /></>,
+  "lock-jammed": <><path d="M5 11h14v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-9Z" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /><path d="M9.3 14.3l5.4 5.4M14.7 14.3l-5.4 5.4" /></>,
+  battery: <><rect x="2.5" y="8" width="16" height="8" rx="1.6" /><path d="M21 10.5v3" /><rect x="5" y="10.2" width="6" height="3.6" rx="0.6" fill="currentColor" stroke="none" /></>,
+  user: <><circle cx="12" cy="8" r="3.4" /><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" /></>,
+  clock: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>,
+  wifi: <><path d="M4.5 9.3a11 11 0 0 1 15 0" /><path d="M7.4 12.8a7 7 0 0 1 9.2 0" /><path d="M10.2 16.2a3 3 0 0 1 3.6 0" /><circle cx="12" cy="19" r="0.9" fill="currentColor" stroke="none" /></>,
+  key: <><circle cx="8" cy="15" r="3.6" /><path d="M10.4 12.6 18 5l1.6 1.6M16 7.4 18 9.4" /></>,
+  timer: <><circle cx="12" cy="13" r="7.5" /><path d="M12 13V9M9.5 3.5h5" /></>,
+  door: <><rect x="5.5" y="3" width="12" height="18" rx="1.2" /><circle cx="14.3" cy="12" r="0.9" fill="currentColor" stroke="none" /></>,
+  briefcase: <><rect x="3" y="8" width="18" height="11.5" rx="1.6" /><path d="M8.5 8V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v2" /><path d="M3 13.2h18" /></>,
+  moon: <path d="M19 13.5a7.5 7.5 0 1 1-8.5-9 6 6 0 0 0 8.5 9z" />,
+  siren: <><path d="M6 13a6 6 0 0 1 12 0v5H6z" /><path d="M12 4.5V3M6.5 5.5l-1-1M17.5 5.5l1-1" /><path d="M4 21h16" /></>,
+  "alert-triangle": <><path d="M12 3.5 21 19H3z" /><path d="M12 9.5V14" /><circle cx="12" cy="16.8" r="0.9" fill="currentColor" stroke="none" /></>,
+  clipboard: <><rect x="5.5" y="4.5" width="13" height="16" rx="1.6" /><rect x="9" y="3" width="6" height="3" rx="1" /><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4.5" /></>,
+  antenna: <><path d="M12 21V9" /><path d="M8 6.5a5.7 5.7 0 0 1 8 0M5.3 3.8a9.6 9.6 0 0 1 13.4 0" /><circle cx="12" cy="9" r="1.6" /></>,
+
+  // § Premium Device Experience Library icon family — Camera / NVR --------------------------
+  camera: <><rect x="3" y="7" width="14" height="11" rx="1.8" /><path d="M17 10.5 21 8v8l-4-2.5" /><circle cx="10" cy="12.5" r="2.6" /></>,
+  expand: <path d="M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5" />,
+  record: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" /></>,
+  mic: <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0" /><path d="M12 17v4M9 21h6" /></>,
+  sparkle: <><path d="M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6z" /><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z" /></>,
+  joystick: <><circle cx="12" cy="8" r="3.4" /><path d="M12 11.4V16" /><path d="M7 20.5h10" /><path d="M9.5 20.5 12 16l2.5 4.5" /></>,
+  grid: <><circle cx="6" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="12" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="18" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="18" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="6" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="12" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="18" cy="18" r="1.3" fill="currentColor" stroke="none" /></>,
+  calendar: <><rect x="3.5" y="5" width="17" height="15" rx="1.8" /><path d="M3.5 9.5h17" /><path d="M8 3v4M16 3v4" /></>,
+  monitor: <><rect x="3" y="4.5" width="18" height="12" rx="1.6" /><path d="M9 20.5h6M12 16.5v4" /></>,
+  database: <><ellipse cx="12" cy="5.5" rx="7.5" ry="2.5" /><path d="M4.5 5.5v13c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-13" /><path d="M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5" /></>,
+  target: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4.2" /><circle cx="12" cy="12" r="0.8" fill="currentColor" stroke="none" /></>,
+  heart: <path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z" />,
+  download: <><path d="M12 3v12M8 11l4 4 4-4" /><path d="M4.5 17v2.5A1.5 1.5 0 0 0 6 21h12a1.5 1.5 0 0 0 1.5-1.5V17" /></>,
+
+  // § Premium Device Experience Library icon family — Media ----------------------------------
+  tv: <><rect x="3" y="5" width="18" height="12.5" rx="1.8" /><path d="M9 21h6M12 17.5V21" /></>,
+  projector: <><rect x="2.5" y="8" width="13" height="8" rx="1.8" /><circle cx="9" cy="12" r="2.6" /><path d="M15.5 10.5 21 8v8l-5.5-2.5" /><path d="M6 16v2M12 16v2" /></>,
+  receiver: <><rect x="2.5" y="6" width="19" height="12" rx="1.8" /><circle cx="7.5" cy="12" r="2.1" /><path d="M12.5 9.5h6M12.5 12h6M12.5 14.5h4" /></>,
+  speaker: <><rect x="6" y="2.5" width="12" height="19" rx="2.4" /><circle cx="12" cy="8" r="1.8" /><circle cx="12" cy="15" r="3.4" /></>,
+  "apple-tv": <><rect x="4" y="7" width="16" height="10" rx="2.2" /><path d="M10.5 10.2v3.6l3-1.8Z" fill="currentColor" stroke="none" /></>,
+  gamepad: <><path d="M7 8.5h10a4.5 4.5 0 0 1 4.4 5.5l-.6 2.4a2.4 2.4 0 0 1-4.3.8L15 15.5H9l-1.5 1.7a2.4 2.4 0 0 1-4.3-.8l-.6-2.4A4.5 4.5 0 0 1 7 8.5Z" /><path d="M8 11v3M6.5 12.5h3" /><circle cx="16" cy="11.5" r="0.7" fill="currentColor" stroke="none" /><circle cx="18" cy="13.5" r="0.7" fill="currentColor" stroke="none" /></>,
+  volume: <><path d="M4 10v4h3.5L12 17.5v-11L7.5 10Z" /><path d="M16 9.5a4 4 0 0 1 0 5.6M18.5 7a7.5 7.5 0 0 1 0 10.6" /></>,
+  "volume-mute": <><path d="M4 10v4h3.5L12 17.5v-11L7.5 10Z" /><path d="M16.5 10.5 20.5 14.5M20.5 10.5 16.5 14.5" /></>,
+  image: <><rect x="3" y="4.5" width="18" height="15" rx="1.8" /><circle cx="8.3" cy="9.3" r="1.6" /><path d="M4 17l5.5-5.5L13 15l3-3 4 4.5" /></>,
+  remote: <><rect x="7" y="2.5" width="10" height="19" rx="3.5" /><circle cx="12" cy="8" r="1.6" /><path d="M9.5 13h5M9.5 16.5h5" /></>,
+  film: <><rect x="3" y="4.5" width="18" height="15" rx="1.6" /><path d="M8 4.5v15M16 4.5v15" /><path d="M3 9h5M16 9h5M3 15h5M16 15h5" /></>,
+  "music-note": <><path d="M9 18a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" /><path d="M12 15V4.5l7-1.5v11" /></>,
+  cabinet: <><rect x="5" y="2.5" width="14" height="19" rx="1.4" /><path d="M5 12h14" /><circle cx="9.5" cy="7.2" r="0.8" fill="currentColor" stroke="none" /><circle cx="9.5" cy="16.8" r="0.8" fill="currentColor" stroke="none" /></>,
 };
 
 export interface IconProps {

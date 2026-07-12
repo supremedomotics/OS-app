@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { SecurityStateResponse } from "@supreme/contracts";
-import { Card, CapabilityGrid, QuickActions } from "@supreme/aureon-web";
+import { Card, CapabilityGrid, Icon, QuickActions } from "@supreme/aureon-web";
 
 const NOT_YET = { available: false as const, reason: "Driver required" };
 
@@ -41,9 +41,9 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
         <div className={`avr-now avr-now--wash${triggered ? " alarm-triggered" : ""}`} style={{ "--hero-wash-tint": heroTint } as CSSProperties}>
           <div className="avr-art-wrap" style={{ width: 160, height: 160 }}>
             <div className={`avr-halo${armed ? " on" : ""}`} style={{ "--avr-halo-tint": heroTint } as CSSProperties} />
-            <div className={`avr-art-float${armed ? " on" : ""}`}>
-              <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160, fontSize: 58, color: heroTint }}>
-                {triggered ? "⚠️" : "🛡️"}
+            <div className={`avr-art-float${armed ? " on" : ""}${triggered ? " shake" : ""}`}>
+              <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160, color: heroTint }}>
+                <Icon name={triggered ? "shield-alert" : "security"} size={72} />
               </div>
             </div>
           </div>
@@ -55,9 +55,9 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
               <CapabilityGrid
                 minItemWidth={130}
                 items={[
-                  { key: "zones", icon: "📡", label: "Active zones", available: false, reason: NOT_YET.reason },
-                  { key: "entry-delay", icon: "⏱️", label: "Entry delay", available: false, reason: NOT_YET.reason },
-                  { key: "recent-events", icon: "📋", label: "Recent events", available: false, reason: NOT_YET.reason },
+                  { key: "zones", icon: <Icon name="antenna" size={16} />, label: "Active zones", available: false, reason: NOT_YET.reason },
+                  { key: "entry-delay", icon: <Icon name="timer" size={16} />, label: "Entry delay", available: false, reason: NOT_YET.reason },
+                  { key: "recent-events", icon: <Icon name="clipboard" size={16} />, label: "Recent events", available: false, reason: NOT_YET.reason },
                 ]}
               />
             </div>
@@ -66,10 +66,10 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
 
         <QuickActions
           actions={[
-            { key: "home", icon: "🏠", label: "Home", onClick: () => onArm("armed_home"), active: state?.mode === "armed_home" },
-            { key: "away", icon: "🚪", label: "Away", onClick: () => onArm("armed_away"), active: state?.mode === "armed_away" },
-            { key: "night", icon: "🌙", label: "Night", onClick: () => onArm("armed_night"), active: state?.mode === "armed_night" },
-            ...(armed ? [{ key: "disarm", icon: "🔓", label: "Disarm", onClick: onDisarm }] : []),
+            { key: "home", icon: <Icon name="home" size={16} />, label: "Home", onClick: () => onArm("armed_home"), active: state?.mode === "armed_home" },
+            { key: "away", icon: <Icon name="door" size={16} />, label: "Away", onClick: () => onArm("armed_away"), active: state?.mode === "armed_away" },
+            { key: "night", icon: <Icon name="moon" size={16} />, label: "Night", onClick: () => onArm("armed_night"), active: state?.mode === "armed_night" },
+            ...(armed ? [{ key: "disarm", icon: <Icon name="lock-unlocked" size={16} />, label: "Disarm", onClick: onDisarm }] : []),
           ]}
         />
 
@@ -77,9 +77,9 @@ export function AlarmPanel({ state, onArm, onDisarm }: {
         <CapabilityGrid
           minItemWidth={150}
           items={[
-            { key: "zones-sensors", icon: "📡", label: "Zones & Sensors", available: false, reason: NOT_YET.reason },
-            { key: "siren", icon: "🔊", label: "Siren", available: false, reason: NOT_YET.reason },
-            { key: "panic", icon: "🆘", label: "Panic Button", available: false, reason: NOT_YET.reason },
+            { key: "zones-sensors", icon: <Icon name="antenna" size={16} />, label: "Zones & Sensors", available: false, reason: NOT_YET.reason },
+            { key: "siren", icon: <Icon name="siren" size={16} />, label: "Siren", available: false, reason: NOT_YET.reason },
+            { key: "panic", icon: <Icon name="alert-triangle" size={16} />, label: "Panic Button", available: false, reason: NOT_YET.reason },
           ]}
         />
       </div>

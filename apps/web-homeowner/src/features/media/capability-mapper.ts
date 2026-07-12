@@ -1,4 +1,5 @@
 import type { Device } from "@supreme/domain-model";
+import type { IconName } from "@supreme/aureon-web";
 
 /**
  * The Media module's capability mapper (§ Premium Device Experience Library — Capability
@@ -23,17 +24,22 @@ export type MediaDeviceKind = "television" | "projector" | "avr" | "speaker" | "
 export interface MediaKindMeta {
   kind: MediaDeviceKind;
   label: string;
+  /** A plain-text glyph — the ONLY context this is for is a native `<select><option>`, which
+   * cannot render SVG. Every other surface (hero, badges, cards) uses {@link iconName}. */
   icon: string;
+  /** The premium SVG icon (§ Design Polish — "replace every emoji with proper SVG
+   * illustrations") for the hero plate, badges, and cards. */
+  iconName: IconName;
 }
 
 const KIND_META: Record<MediaDeviceKind, MediaKindMeta> = {
-  television: { kind: "television", label: "Television", icon: "📺" },
-  projector: { kind: "projector", label: "Projector", icon: "📽️" },
-  avr: { kind: "avr", label: "AVR", icon: "📻" },
-  speaker: { kind: "speaker", label: "Speaker", icon: "🔊" },
-  media_player: { kind: "media_player", label: "Media Player", icon: "▶️" },
-  apple_tv: { kind: "apple_tv", label: "Apple TV", icon: "🍎" },
-  nvidia_shield: { kind: "nvidia_shield", label: "Nvidia Shield", icon: "🎮" },
+  television: { kind: "television", label: "Television", icon: "📺", iconName: "tv" },
+  projector: { kind: "projector", label: "Projector", icon: "📽️", iconName: "projector" },
+  avr: { kind: "avr", label: "AVR", icon: "📻", iconName: "receiver" },
+  speaker: { kind: "speaker", label: "Speaker", icon: "🔊", iconName: "speaker" },
+  media_player: { kind: "media_player", label: "Media Player", icon: "▶️", iconName: "play" },
+  apple_tv: { kind: "apple_tv", label: "Apple TV", icon: "🍎", iconName: "apple-tv" },
+  nvidia_shield: { kind: "nvidia_shield", label: "Nvidia Shield", icon: "🎮", iconName: "gamepad" },
 };
 
 function isMediaDeviceKind(v: unknown): v is MediaDeviceKind {

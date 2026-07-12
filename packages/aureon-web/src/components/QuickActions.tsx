@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 
 export interface QuickAction {
   key: string;
-  icon: string;
+  /** An {@link Icon} element (preferred) or any other node — never a raw emoji character
+   * (§ Premium Design Polish — "replace every emoji with proper SVG illustrations"). */
+  icon: ReactNode;
   label: string;
   onClick: () => void;
   active?: boolean;

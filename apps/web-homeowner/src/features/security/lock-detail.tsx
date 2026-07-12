@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { Card, CapabilityGate, CapabilityGrid, QuickActions } from "@supreme/aureon-web";
+import { Card, CapabilityGate, CapabilityGrid, Icon, QuickActions } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry } from "../../api.js";
 import { useLive } from "../../live.js";
 import {
@@ -112,9 +112,9 @@ export function LockDetail({
               <div className={`avr-art-float${!locked ? " on" : ""}`}>
                 <div
                   className={`avr-art avr-art-placeholder hero-ic-plate${busy ? " busy" : ""}`}
-                  style={{ width: 176, height: 176, fontSize: 62, color: heroTint }}
+                  style={{ width: 176, height: 176, color: heroTint }}
                 >
-                  {jammed ? "⚠️" : locked ? "🔒" : "🔓"}
+                  <Icon name={jammed ? "lock-jammed" : locked ? "lock-locked" : "lock-unlocked"} size={80} />
                 </div>
               </div>
             </div>
@@ -123,17 +123,17 @@ export function LockDetail({
               <h3>{device.name}</h3>
               <p className="avr-now-album">{kindMeta.label} · {device.status === "online" ? "Online" : device.status === "offline" ? "Offline" : "Unavailable"}</p>
               <div className="avr-badges">
-                <span className="avr-badge">{kindMeta.icon} {kindMeta.label}</span>
+                <span className="avr-badge"><Icon name={kindMeta.iconName} size={13} /> {kindMeta.label}</span>
                 {jammed && <span className="avr-badge" style={{ color: "var(--aureon-color-status-critical)" }}>Jammed</span>}
               </div>
               <div style={{ marginTop: 14 }}>
                 <CapabilityGrid
                   minItemWidth={110}
                   items={[
-                    { key: "battery", icon: "🔋", label: "Battery", available: false, reason: NOT_YET.reason },
-                    { key: "last-user", icon: "👤", label: "Last user", available: false, reason: NOT_YET.reason },
-                    { key: "last-unlock", icon: "🕐", label: "Last unlock", available: false, reason: NOT_YET.reason },
-                    { key: "connection", icon: "📶", label: "Connection", available: false, reason: NOT_YET.reason },
+                    { key: "battery", icon: <Icon name="battery" size={16} />, label: "Battery", available: false, reason: NOT_YET.reason },
+                    { key: "last-user", icon: <Icon name="user" size={16} />, label: "Last user", available: false, reason: NOT_YET.reason },
+                    { key: "last-unlock", icon: <Icon name="clock" size={16} />, label: "Last unlock", available: false, reason: NOT_YET.reason },
+                    { key: "connection", icon: <Icon name="wifi" size={16} />, label: "Connection", available: false, reason: NOT_YET.reason },
                   ]}
                 />
               </div>
@@ -168,8 +168,8 @@ export function LockDetail({
 
           <QuickActions
             actions={[
-              { key: "unlock", icon: "🔓", label: "Unlock", onClick: () => setLock(false), active: !locked, disabled: !locked },
-              { key: "lock-all", icon: "🔒", label: "Lock All", onClick: lockAll },
+              { key: "unlock", icon: <Icon name="lock-unlocked" size={16} />, label: "Unlock", onClick: () => setLock(false), active: !locked, disabled: !locked },
+              { key: "lock-all", icon: <Icon name="lock-locked" size={16} />, label: "Lock All", onClick: lockAll },
             ]}
           />
 
@@ -177,12 +177,12 @@ export function LockDetail({
           <CapabilityGrid
             minItemWidth={150}
             items={[
-              { key: "access-codes", icon: "🔢", label: "Access Codes", available: accessCodesAvail.available, reason: accessCodesAvail.available ? undefined : accessCodesAvail.reason },
-              { key: "auto-lock", icon: "⏱️", label: "Auto-Lock Timer", available: autoLockAvail.available, reason: autoLockAvail.available ? undefined : autoLockAvail.reason },
-              { key: "door-sensor", icon: "🚪", label: "Door Sensor", available: doorSensorAvail.available, reason: doorSensorAvail.available ? undefined : doorSensorAvail.reason },
-              { key: "guest-access", icon: "👤", label: "Guest Access", available: guestAccessAvail.available, reason: guestAccessAvail.available ? undefined : guestAccessAvail.reason },
-              { key: "temporary-access", icon: "🕓", label: "Temporary Access", available: false, reason: NOT_YET.reason },
-              { key: "vacation-mode", icon: "🏖️", label: "Vacation Mode", available: false, reason: NOT_YET.reason },
+              { key: "access-codes", icon: <Icon name="key" size={16} />, label: "Access Codes", available: accessCodesAvail.available, reason: accessCodesAvail.available ? undefined : accessCodesAvail.reason },
+              { key: "auto-lock", icon: <Icon name="timer" size={16} />, label: "Auto-Lock Timer", available: autoLockAvail.available, reason: autoLockAvail.available ? undefined : autoLockAvail.reason },
+              { key: "door-sensor", icon: <Icon name="door" size={16} />, label: "Door Sensor", available: doorSensorAvail.available, reason: doorSensorAvail.available ? undefined : doorSensorAvail.reason },
+              { key: "guest-access", icon: <Icon name="user" size={16} />, label: "Guest Access", available: guestAccessAvail.available, reason: guestAccessAvail.available ? undefined : guestAccessAvail.reason },
+              { key: "temporary-access", icon: <Icon name="clock" size={16} />, label: "Temporary Access", available: false, reason: NOT_YET.reason },
+              { key: "vacation-mode", icon: <Icon name="briefcase" size={16} />, label: "Vacation Mode", available: false, reason: NOT_YET.reason },
             ]}
           />
         </div>

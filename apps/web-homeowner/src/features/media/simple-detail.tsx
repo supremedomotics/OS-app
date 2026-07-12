@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Device, DeviceId } from "@supreme/domain-model";
-import { Button, CapabilityGate, CapabilityGrid, Card, Grid, QuickActions } from "@supreme/aureon-web";
+import { Button, CapabilityGate, CapabilityGrid, Card, Grid, Icon, QuickActions } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry } from "../../api.js";
 import { useLive } from "../../live.js";
 import {
@@ -115,9 +115,9 @@ export function SimpleMediaDetail({
               <div className={`avr-art-float${on ? " on" : ""}`}>
                 <div
                   className={`avr-art avr-art-placeholder hero-ic-plate${busy ? " busy" : ""}`}
-                  style={{ width: 228, height: 128, borderRadius: 16, fontSize: 48 }}
+                  style={{ width: 228, height: 128, borderRadius: 16 }}
                 >
-                  {on ? kindMeta.icon : "⏻"}
+                  <Icon name={on ? kindMeta.iconName : "power"} size={56} />
                 </div>
               </div>
             </div>
@@ -126,14 +126,16 @@ export function SimpleMediaDetail({
               <h3>{device.name}</h3>
               <p className="avr-now-album">{sourceLabel ?? kindMeta.label} · {roomName}</p>
               <div className="avr-badges">
-                <span className="avr-badge">{kindMeta.icon} {kindMeta.label}</span>
+                <span className="avr-badge"><Icon name={kindMeta.iconName} size={13} /> {kindMeta.label}</span>
                 {device.status === "online" && <span className="avr-badge">Online</span>}
               </div>
             </div>
           </div>
 
           <CapabilityGate available={powerAvail.available} reason={powerAvail.available ? undefined : powerAvail.reason}>
-            <Button variant={on ? "primary" : "secondary"} size="lg" onClick={() => setPower(!on)}>⏻ {on ? "On" : "Off"}</Button>
+            <Button variant={on ? "primary" : "secondary"} size="lg" onClick={() => setPower(!on)}>
+              <Icon name="power" size={17} /> {on ? "On" : "Off"}
+            </Button>
           </CapabilityGate>
 
           <CapabilityGate available={volumeAvail.available} reason={volumeAvail.available ? undefined : volumeAvail.reason}>
@@ -161,7 +163,7 @@ export function SimpleMediaDetail({
 
           <QuickActions
             actions={[
-              { key: "mute", icon: live.muted ? "🔇" : "🔊", label: live.muted ? "Unmute" : "Mute", onClick: toggleMute, active: live.muted, disabled: !volumeAvail.available },
+              { key: "mute", icon: <Icon name={live.muted ? "volume-mute" : "volume"} size={16} />, label: live.muted ? "Unmute" : "Mute", onClick: toggleMute, active: live.muted, disabled: !volumeAvail.available },
             ]}
           />
 
@@ -169,15 +171,15 @@ export function SimpleMediaDetail({
           <CapabilityGrid
             minItemWidth={130}
             items={[
-              { key: "apps", icon: "📱", label: "Apps", available: appsAvail.available, reason: appsAvail.available ? undefined : appsAvail.reason },
-              { key: "picture-mode", icon: "🖼️", label: "Picture Mode", available: pictureModeAvail.available, reason: pictureModeAvail.available ? undefined : pictureModeAvail.reason },
-              { key: "audio-output", icon: "🔈", label: "Audio Output", available: audioOutputAvail.available, reason: audioOutputAvail.available ? undefined : audioOutputAvail.reason },
-              { key: "channel", icon: "📡", label: "Channel", available: channelAvail.available, reason: channelAvail.available ? undefined : channelAvail.reason },
-              { key: "remote", icon: "🎛️", label: "Remote Control", available: remoteAvail.available, reason: remoteAvail.available ? undefined : remoteAvail.reason },
-              { key: "watch-movie", icon: "🎬", label: "Watch Movie", available: false, reason: NOT_YET.reason },
-              { key: "gaming", icon: "🎮", label: "Gaming", available: false, reason: NOT_YET.reason },
-              { key: "music", icon: "🎵", label: "Music", available: false, reason: NOT_YET.reason },
-              { key: "sleep-timer", icon: "⏲️", label: "Sleep Timer", available: false, reason: NOT_YET.reason },
+              { key: "apps", icon: <Icon name="grid" size={16} />, label: "Apps", available: appsAvail.available, reason: appsAvail.available ? undefined : appsAvail.reason },
+              { key: "picture-mode", icon: <Icon name="image" size={16} />, label: "Picture Mode", available: pictureModeAvail.available, reason: pictureModeAvail.available ? undefined : pictureModeAvail.reason },
+              { key: "audio-output", icon: <Icon name="speaker" size={16} />, label: "Audio Output", available: audioOutputAvail.available, reason: audioOutputAvail.available ? undefined : audioOutputAvail.reason },
+              { key: "channel", icon: <Icon name="antenna" size={16} />, label: "Channel", available: channelAvail.available, reason: channelAvail.available ? undefined : channelAvail.reason },
+              { key: "remote", icon: <Icon name="remote" size={16} />, label: "Remote Control", available: remoteAvail.available, reason: remoteAvail.available ? undefined : remoteAvail.reason },
+              { key: "watch-movie", icon: <Icon name="film" size={16} />, label: "Watch Movie", available: false, reason: NOT_YET.reason },
+              { key: "gaming", icon: <Icon name="gamepad" size={16} />, label: "Gaming", available: false, reason: NOT_YET.reason },
+              { key: "music", icon: <Icon name="music-note" size={16} />, label: "Music", available: false, reason: NOT_YET.reason },
+              { key: "sleep-timer", icon: <Icon name="timer" size={16} />, label: "Sleep Timer", available: false, reason: NOT_YET.reason },
             ]}
           />
         </div>

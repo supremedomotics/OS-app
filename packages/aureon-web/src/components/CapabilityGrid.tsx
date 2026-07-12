@@ -1,9 +1,12 @@
+import type { ReactNode } from "react";
 import { Card } from "./Card.js";
 import { Grid } from "./Grid.js";
 
 export interface CapabilityGridItem {
   key: string;
-  icon: string;
+  /** An {@link Icon} element (preferred) — never a raw emoji character (§ Premium Design
+   * Polish — "replace every emoji with proper SVG illustrations"). */
+  icon: ReactNode;
   label: string;
   available: boolean;
   onClick?: () => void;
@@ -37,7 +40,9 @@ export function CapabilityGrid({ items, minItemWidth = 140 }: CapabilityGridProp
       {available.length > 0 && (
         <Grid minItemWidth={minItemWidth} gap="sm">
           {available.map((i) => (
-            <Card key={i.key} interactive onClick={i.onClick}>{i.icon} {i.label}</Card>
+            <Card key={i.key} interactive onClick={i.onClick}>
+              <span className="aureon-cap-item"><span className="aureon-cap-item-ic" aria-hidden>{i.icon}</span>{i.label}</span>
+            </Card>
           ))}
         </Grid>
       )}

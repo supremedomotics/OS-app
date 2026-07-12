@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { CameraList } from "@supreme/contracts";
-import { Card, CapabilityGrid, Grid } from "@supreme/aureon-web";
+import { Card, CapabilityGrid, Grid, Icon } from "@supreme/aureon-web";
 
 type CameraView = CameraList["cameras"][number];
 
@@ -34,7 +34,7 @@ export function NvrDetail({ cameras, onBack }: { cameras: CameraView[]; onBack: 
             <div className="avr-art-wrap" style={{ width: 160, height: 160 }}>
               <div className="avr-halo" style={{ "--avr-halo-tint": "var(--aureon-color-gold-400)" } as CSSProperties} />
               <div className="avr-art-float">
-                <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160, fontSize: 58 }}>🖥️</div>
+                <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160 }}><Icon name="monitor" size={72} /></div>
               </div>
             </div>
             <div className="avr-now-meta">
@@ -68,11 +68,11 @@ export function NvrDetail({ cameras, onBack }: { cameras: CameraView[]; onBack: 
           <CapabilityGrid
             minItemWidth={150}
             items={[
-              { key: "storage", icon: "💾", label: "Storage", available: false, reason: NOT_YET.reason },
-              { key: "recording-schedule", icon: "🗓️", label: "Recording Schedule", available: false, reason: NOT_YET.reason },
-              { key: "motion-recording", icon: "🎯", label: "Motion-Triggered Recording", available: false, reason: NOT_YET.reason },
-              { key: "channel-health", icon: "❤️", label: "Channel Health", available: false, reason: NOT_YET.reason },
-              { key: "export", icon: "⬇️", label: "Export", available: false, reason: NOT_YET.reason },
+              { key: "storage", icon: <Icon name="database" size={16} />, label: "Storage", available: false, reason: NOT_YET.reason },
+              { key: "recording-schedule", icon: <Icon name="calendar" size={16} />, label: "Recording Schedule", available: false, reason: NOT_YET.reason },
+              { key: "motion-recording", icon: <Icon name="target" size={16} />, label: "Motion-Triggered Recording", available: false, reason: NOT_YET.reason },
+              { key: "channel-health", icon: <Icon name="heart" size={16} />, label: "Channel Health", available: false, reason: NOT_YET.reason },
+              { key: "export", icon: <Icon name="download" size={16} />, label: "Export", available: false, reason: NOT_YET.reason },
             ]}
           />
         </div>

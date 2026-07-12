@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { Sheet } from "@supreme/aureon-web";
+import { Icon, Sheet } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import {
   AdvancedSettingsSection,
@@ -167,7 +167,7 @@ export function SlideUnlock({ onUnlock, relock, locked }: { onUnlock: () => void
       onPointerMove={(e) => { if (drag.current) move(e.clientX); }}
       onPointerUp={end}
     >
-      <span className="knob" style={{ left: x }}>{locked ? "🔓" : "🔒"}</span>
+      <span className="knob" style={{ left: x }}><Icon name={locked ? "lock-unlocked" : "lock-locked"} size={20} /></span>
       <span className="label">{locked ? "Slide to unlock" : "Unlocked — slide to lock"}</span>
       {!locked && <button className="relock" onClick={relock}>Lock</button>}
     </div>

@@ -1,5 +1,6 @@
 import type { Device } from "@supreme/domain-model";
 import type { ReactNode } from "react";
+import { Icon } from "@supreme/aureon-web";
 import { securityLockKind, securityLockKindMeta } from "./capability-mapper.js";
 
 export interface LockCardProps {
@@ -22,7 +23,7 @@ export function LockCard({ device, status, driverProtocol, onOpen, trailing }: L
   const meta = securityLockKindMeta(securityLockKind(device, driverProtocol));
   return (
     <button className="media-card" onClick={onOpen}>
-      <span className="media-ic">{meta.icon}</span>
+      <span className="media-ic"><Icon name={meta.iconName} size={22} /></span>
       <span className="media-meta">
         <span className="media-name">{device.name}</span>
         <span className="media-now">{status}</span>

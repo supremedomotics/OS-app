@@ -1,4 +1,5 @@
 import type { CameraList } from "@supreme/contracts";
+import { Icon } from "@supreme/aureon-web";
 
 type CameraView = CameraList["cameras"][number];
 
@@ -18,8 +19,8 @@ export function CameraCard({ camera, onOpen }: { camera: CameraView; onOpen: () 
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.7 }}
         />
       )}
-      <div className="label" style={{ position: "relative" }}>
-        ▶ {camera.name}
+      <div className="label" style={{ position: "relative", display: "flex", alignItems: "center", gap: 6 }}>
+        <Icon name="play" size={13} /> {camera.name}
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import type { Device } from "@supreme/domain-model";
+import type { IconName } from "@supreme/aureon-web";
 
 /**
  * The Security module's capability mapper (§ Premium Device Experience Library — Capability
@@ -19,13 +20,18 @@ export type SecurityLockKind = "door_lock" | "furniture_lock" | "sip_door_phone"
 export interface SecurityLockKindMeta {
   kind: SecurityLockKind;
   label: string;
+  /** A plain-text glyph — the ONLY context this is for is a native `<select><option>`, which
+   * cannot render SVG. Every other surface (hero, badges, cards) uses {@link iconName}. */
   icon: string;
+  /** The premium SVG icon (§ Design Polish — "replace every emoji with proper SVG
+   * illustrations") for the hero plate, badges, and cards. */
+  iconName: IconName;
 }
 
 const KIND_META: Record<SecurityLockKind, SecurityLockKindMeta> = {
-  door_lock: { kind: "door_lock", label: "Door Lock", icon: "🔒" },
-  furniture_lock: { kind: "furniture_lock", label: "Furniture Lock", icon: "🗄️" },
-  sip_door_phone: { kind: "sip_door_phone", label: "Video Door Phone", icon: "🔔" },
+  door_lock: { kind: "door_lock", label: "Door Lock", icon: "🔒", iconName: "lock-locked" },
+  furniture_lock: { kind: "furniture_lock", label: "Furniture Lock", icon: "🗄️", iconName: "cabinet" },
+  sip_door_phone: { kind: "sip_door_phone", label: "Video Door Phone", icon: "🔔", iconName: "notifications" },
 };
 
 function isSecurityLockKind(v: unknown): v is SecurityLockKind {
