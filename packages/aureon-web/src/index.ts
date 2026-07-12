@@ -34,7 +34,10 @@ export { OverflowMenu, type OverflowMenuProps, type OverflowMenuAction } from ".
 export { Icon, iconForCapabilities, type IconName, type IconProps } from "./components/Icon.js";
 export { DeviceFacts, type DeviceFactsProps, type DeviceFactRow } from "./components/DeviceFacts.js";
 export { CollapsibleSection, type CollapsibleSectionProps } from "./components/CollapsibleSection.js";
-export { AUREON_BREAKPOINT, layoutForWidth, useAureonLayout, type AureonLayout } from "./responsive.js";
+export { Grid, type GridProps } from "./components/Grid.js";
+export { Container, type ContainerProps } from "./components/Container.js";
+export { Stack, type StackProps, type StackGap } from "./components/Stack.js";
+export { AUREON_BREAKPOINT, densityForWidth, useAureonDensity, applyAureonDensity, initAureonDensity, type AureonDensity } from "./responsive.js";
 
 /** Flatten the token tree into CSS-variable name/value pairs. */
 function flatten(obj: Record<string, unknown>, prefix: string): Array<[string, string]> {

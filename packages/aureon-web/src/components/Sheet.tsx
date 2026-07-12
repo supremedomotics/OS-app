@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { useAureonLayout } from "../responsive.js";
+import { useAureonDensity } from "../responsive.js";
 
 export type SheetPresentation = "bottom" | "panel" | "dialog";
 
@@ -8,24 +8,25 @@ export interface SheetProps {
   onClose: () => void;
   children: ReactNode;
   /** Force a presentation regardless of viewport — a confirmation ("Remove device?") should
-   * always be a centered `dialog` even on mobile, for example. Omit to let viewport width
-   * decide: `mobile` → bottom sheet, `tablet`/`desktop` → right-docked panel (the Inspector). */
+   * always be a centered `dialog` even on a phone, for example. Omit to let density decide:
+   * `compact` → bottom sheet, `comfortable`/`expanded` → right-docked panel (the Inspector /
+   * Drawer — the same surface serves both roles). */
   presentation?: SheetPresentation;
   "aria-label": string;
 }
 
 /**
  * The one overlay primitive for controls, quick settings, and confirmations (§ Design System —
- * Bottom Sheets, Drawer Styles, Inspector Panel Styles). Replaces the app's three previously
- * independent overlay implementations (`DeviceSheet`'s bespoke sheet, `climate-console`'s inline
- * modal duplicated verbatim in `climate-scheduler-ui`, and `screens.tsx`'s own sheet block) with
- * one component whose *presentation* — not its API — changes with viewport: the same `<Sheet>`
- * call becomes a mobile bottom sheet, a tablet/desktop right-docked Inspector panel, or (when
- * forced) a centered dialog, per §Responsive Breakpoints.
+ * Responsive Framework: Bottom Sheets, Drawer, Inspector Panel, Dialog). Replaces the app's three
+ * previously independent overlay implementations (`DeviceSheet`'s bespoke sheet, `climate-
+ * console`'s inline modal duplicated verbatim in `climate-scheduler-ui`, and `screens.tsx`'s own
+ * sheet block) with one component whose *presentation* — not its API — changes with density: the
+ * same `<Sheet>` call becomes a compact-density bottom sheet, a comfortable/expanded-density
+ * right-docked Inspector panel, or (when forced) a centered dialog.
  */
 export function Sheet({ open, onClose, children, presentation, "aria-label": ariaLabel }: SheetProps) {
-  const layout = useAureonLayout();
-  const resolved: SheetPresentation = presentation ?? (layout === "mobile" ? "bottom" : "panel");
+  const density = useAureonDensity();
+  const resolved: SheetPresentation = presentation ?? (density === "compact" ? "bottom" : "panel");
 
   useEffect(() => {
     if (!open) return;

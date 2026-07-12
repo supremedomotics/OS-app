@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SupremeStream } from "@supreme/sdk";
+import { useAureonDensity } from "@supreme/aureon-web";
 import { client, fetchLicense, fetchSetupStatus, onSessionExpired, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
 import { Energy, RoomsScreen, Scenes, Security } from "./screens.js";
@@ -47,14 +48,13 @@ const NAV: { id: Tab; label: string; icon: NavIcon; dev?: boolean }[] = [
 // visible menu, never hidden functionality.
 const PRIMARY: Tab[] = ["dashboard", "rooms", "scenes", "security", "settings"];
 
+/** The persistent labelled rail (§ Design System — Responsive Navigation) appears only at
+ * `expanded` density (desktop/laptop/ultrawide/15" panels) — everywhere else, including
+ * comfortable-density tablets, gets the same icon tabbar + "More" sheet already proven at
+ * every narrower width, so a tablet's modest width never has to share space with a 232px
+ * rail. One density read instead of a page-local breakpoint. */
 function useWide(): boolean {
-  const [wide, setWide] = useState(typeof window !== "undefined" && window.innerWidth >= 900);
-  useEffect(() => {
-    const on = () => setWide(window.innerWidth >= 900);
-    window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
-  }, []);
-  return wide;
+  return useAureonDensity() === "expanded";
 }
 
 export function App() {

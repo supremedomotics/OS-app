@@ -34,11 +34,16 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; }
+/* § Design System — Responsive Framework: no screen may ever require horizontal scrolling.
+   Decorative absolutely-positioned effects (halos, glows, floating shadows) are allowed to
+   bleed past their own box for visual richness, but must never be able to widen the page's
+   actual scrollable area — this is the one global backstop that guarantees it regardless of
+   what any current or future screen adds. */
+html, body, #root { height: 100%; overflow-x: hidden; }
 body {
   margin: 0;
   font-family: "Inter Variable", Inter, system-ui, -apple-system, sans-serif;
-  font-size: 15px;
+  font-size: var(--aureon-text-body, 15px);
   line-height: 1.5;
   letter-spacing: -0.006em;
   font-feature-settings: "cv05" 1, "ss03" 1, "cv08" 1; /* Inter: refined a, g, tighter dots */
@@ -51,10 +56,10 @@ body {
 }
 
 .shell { max-width: 720px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
-.content { flex: 1; padding: 20px 18px 96px; }
-h1.title { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; margin: 8px 0 2px; }
-.sub { color: var(--aureon-color-text-secondary); font-size: 14.5px; line-height: 1.45; margin: 4px 0 22px; }
-h2.section { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; margin: 30px 0 14px; color: var(--aureon-color-text-secondary); text-transform: uppercase; }
+.content { flex: 1; padding: var(--aureon-space-lg, 20px) var(--aureon-space-md, 18px) 96px; }
+h1.title { font-size: var(--aureon-text-title, 28px); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; margin: 8px 0 2px; }
+.sub { color: var(--aureon-color-text-secondary); font-size: var(--aureon-text-label, 14.5px); line-height: 1.45; margin: 4px 0 22px; }
+h2.section { font-size: var(--aureon-text-caption, 12px); font-weight: 600; letter-spacing: 0.1em; margin: 30px 0 14px; color: var(--aureon-color-text-secondary); text-transform: uppercase; }
 
 /* Bottom nav */
 /* Ovio-style bottom bar: a floating, icon-only pill (no text labels), centred, with the active tab
@@ -70,7 +75,7 @@ h2.section { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; margin: 3
 .tabbar button {
   background: none; border: 0; color: var(--aureon-color-text-secondary);
   font-size: 0; /* hide the text label (kept for screen readers) */
-  width: 48px; height: 48px; display: grid; place-items: center;
+  width: var(--aureon-touch-target, 48px); height: var(--aureon-touch-target, 48px); display: grid; place-items: center;
   cursor: pointer; border-radius: 50%; transition: background .15s ease, color .15s ease;
 }
 .tabbar button .ic { font-size: 21px; line-height: 1; }
@@ -311,7 +316,7 @@ button.danger { color: var(--aureon-color-status-critical); border-color: color-
 .card {
   background: var(--aureon-color-base-surface-raised);
   border: 1px solid var(--aureon-color-base-hairline);
-  border-radius: 18px; padding: 16px; margin-bottom: 12px;
+  border-radius: 18px; padding: var(--aureon-space-md, 16px); margin-bottom: var(--aureon-space-sm, 12px);
 }
 /* Ovio room list: full-width photographic bands stacked vertically (not a dense grid of tiles). */
 .grid { display: flex; flex-direction: column; gap: 14px; }
@@ -411,7 +416,7 @@ button.link {
 .settings .opt-label { font-size: 14px; color: var(--aureon-color-text-secondary); margin: 16px 0 8px; }
 .card-section {
   background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
-  border-radius: 16px; padding: 14px 16px;
+  border-radius: 16px; padding: var(--aureon-space-sm, 14px) var(--aureon-space-md, 16px);
 }
 .seg { display: flex; gap: 8px; flex-wrap: wrap; }
 .seg button {

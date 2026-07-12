@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Grid } from "@supreme/aureon-web";
 import { useHeroFlip } from "./herotransition.js";
 import { useAsync } from "./use-async.js";
 import { FavHeart, useFavorites } from "./favorites.js";
@@ -118,11 +119,11 @@ export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: str
         <button className="quick" onClick={() => onNavigate("energy")}><span className="qic"><Icon name="energy" size={18} /></span>Energy</button>
       </div>
 
-      <div className="grid">
+      <Grid>
         {(home?.rooms ?? []).map((r) => (
           <RoomCard key={r.id} room={r} onOpen={() => onOpenRoom(r.id)} />
         ))}
-      </div>
+      </Grid>
     </div>
   );
 }
@@ -208,7 +209,7 @@ export function RoomsScreen({
         </div>
       )}
       {err && <p className="err">{err}</p>}
-      <div className="grid">
+      <Grid>
         {/* Frequently-used rooms move higher (§ Personalization) — a stable order until the home has
             usage history, then the rooms you open most float to the top. */}
         {byFrequency(home?.rooms ?? [], "room").map((r) => (
@@ -216,7 +217,7 @@ export function RoomsScreen({
             onOpen={(rect) => { heroOrigin.current = rect; recordUse("room", r.id); onSelect(r.id); }}
             onDelete={() => deleteRoom(r)} />
         ))}
-      </div>
+      </Grid>
     </div>
   );
 }
@@ -649,7 +650,7 @@ export function Security() {
           )}
         </div>
       )}
-      <div className="grid">
+      <Grid>
         {(cameras ?? []).map((c) => (
           <div key={c.id} className="tile" onClick={() => c.streamUrl && void play(c.id)} style={{ minHeight: 110 }}>
             {c.snapshotUrl && (
@@ -664,7 +665,7 @@ export function Security() {
             </div>
           </div>
         ))}
-      </div>
+      </Grid>
     </div>
   );
 }

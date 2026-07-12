@@ -14,6 +14,61 @@
  * unmodified until they're migrated to these components.
  */
 
+/* ── Responsive framework (§ Design System — Fluid Tokens + Density Modes) ──────── */
+/*
+ * The permanent responsive layer every current and future SupremeOS surface draws from —
+ * fluid typography/spacing/touch-targets/icon sizes that scale continuously with the
+ * viewport via clamp(), plus density-scoped overrides keyed off the `data-density` attribute
+ * `initAureonDensity()` (responsive.ts) stamps on <html>. Bounds are anchored to the existing
+ * token scale (aureon.tokens.json's typography.scale / spacing) so this is a responsive
+ * REFINEMENT of the established values, not a new visual language.
+ *
+ * No component picks a density mode itself; components either consume these custom
+ * properties directly (pure CSS, zero re-render) or, for the rare case that needs real
+ * structural branching, read `useAureonDensity()`.
+ */
+:root {
+  /* Fluid typography — clamp(min, viewport-driven midpoint, max), min/max from the token scale. */
+  --aureon-text-caption: clamp(10.5px, 0.5vw + 9.3px, 11px);
+  --aureon-text-label: clamp(12px, 0.5vw + 10.7px, 13px);
+  --aureon-text-body: clamp(14px, 0.8vw + 12.2px, 16px);
+  --aureon-text-headline: clamp(18px, 1.8vw + 14.6px, 22px);
+  --aureon-text-title: clamp(22px, 3.2vw + 15.9px, 28px);
+  --aureon-text-display: clamp(28px, 4.8vw + 18.7px, 40px);
+
+  /* Fluid spacing — same names/values as the token scale at rest (1200px+), compresses gently
+     below that so dense compact-width layouts don't feel like a shrunk desktop page. */
+  --aureon-space-xs: clamp(3px, 0.3vw + 2.4px, 4px);
+  --aureon-space-sm: clamp(6px, 0.6vw + 4.8px, 8px);
+  --aureon-space-md: clamp(10px, 1vw + 7.6px, 16px);
+  --aureon-space-lg: clamp(16px, 1.3vw + 12.4px, 24px);
+  --aureon-space-xl: clamp(24px, 2.7vw + 17.6px, 40px);
+  --aureon-space-xxl: clamp(36px, 4.7vw + 25.6px, 64px);
+
+  /* Touch targets + icons — never below a comfortably tappable/legible floor, a little roomier
+     on displays that can spare the pixels. */
+  --aureon-touch-target: clamp(40px, 1.6vw + 34.4px, 48px);
+  --aureon-icon-size: clamp(20px, 0.7vw + 17.9px, 24px);
+}
+
+/* Compact density (4"–7" panels, phones, folded foldables): essential controls need the
+   largest, most certain touch targets and the least competing whitespace. */
+:root[data-density="compact"] {
+  --aureon-touch-target: 48px;
+  --aureon-space-lg: 16px;
+  --aureon-space-xl: 22px;
+}
+
+/* Expanded density (desktop/laptop/ultrawide/15" panels): space to spare, so secondary
+   spacing can open up a little beyond the fluid curve's own resting value. */
+:root[data-density="expanded"] {
+  --aureon-space-lg: clamp(20px, 0.6vw + 18.5px, 26px);
+  --aureon-space-xl: clamp(32px, 1vw + 28.4px, 44px);
+}
+
+/* Any scrollable region — sheets, panels, lists — must never force horizontal scrolling. */
+.aureon-no-x-scroll { max-width: 100%; overflow-x: hidden; }
+
 /* ── Button ──────────────────────────────────────────────────────────────────── */
 
 .aureon-btn {
@@ -286,3 +341,41 @@
 .aureon-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-bottom: 12px; }
 .aureon-facts-k { display: block; font-size: 11px; color: var(--aureon-color-text-secondary); }
 .aureon-facts-v { display: block; font-size: 13.5px; }
+
+/* ── Grid (§ Design System — Responsive Framework: Responsive Grid) ─────────────── */
+
+.aureon-grid { display: grid; }
+.aureon-grid--gap-sm { gap: var(--aureon-space-sm); }
+.aureon-grid--gap-md { gap: var(--aureon-space-md); }
+.aureon-grid--gap-lg { gap: var(--aureon-space-lg); }
+
+/* ── Container (§ Design System — Responsive Framework: Responsive Container) ──── */
+
+.aureon-container { width: 100%; margin: 0 auto; padding: 0 var(--aureon-space-lg); box-sizing: border-box; }
+
+/* ── Stack (§ Design System — Responsive Framework: Responsive Stack) ──────────── */
+
+.aureon-stack { display: flex; min-width: 0; }
+.aureon-stack--column { flex-direction: column; }
+.aureon-stack--row { flex-direction: row; }
+.aureon-stack--responsive { flex-direction: row; }
+.aureon-stack--wrap { flex-wrap: wrap; }
+.aureon-stack--gap-xs { gap: var(--aureon-space-xs); }
+.aureon-stack--gap-sm { gap: var(--aureon-space-sm); }
+.aureon-stack--gap-md { gap: var(--aureon-space-md); }
+.aureon-stack--gap-lg { gap: var(--aureon-space-lg); }
+.aureon-stack--gap-xl { gap: var(--aureon-space-xl); }
+.aureon-stack--align-start { align-items: flex-start; }
+.aureon-stack--align-center { align-items: center; }
+.aureon-stack--align-end { align-items: flex-end; }
+.aureon-stack--align-stretch { align-items: stretch; }
+.aureon-stack--justify-start { justify-content: flex-start; }
+.aureon-stack--justify-center { justify-content: center; }
+.aureon-stack--justify-end { justify-content: flex-end; }
+.aureon-stack--justify-space-between { justify-content: space-between; }
+/* A `direction="responsive"` Stack folds into a column once the viewport drops into compact
+ * density — the single most common manual "stack on small screens" media query in the app,
+ * generalized once instead of repeated per file. */
+@media (max-width: 480px) {
+  .aureon-stack--responsive { flex-direction: column; align-items: stretch; }
+}

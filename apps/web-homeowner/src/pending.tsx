@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Grid } from "@supreme/aureon-web";
 import { client } from "./api.js";
 
 /**
@@ -58,11 +59,11 @@ export function PendingApproval({ rooms, onChanged }: { rooms: Room[]; onChanged
         <button disabled={scanning} onClick={scan}>{scanning ? "Scanning…" : "Rescan"}</button>
       </div>
       <p className="muted">Review devices found on your network. Approve the ones you recognise; reject the rest.</p>
-      <div className="grid">
+      <Grid minItemWidth={280}>
         {pending.map((p) => (
           <PendingCard key={p.id} device={p} rooms={rooms} busy={busy === p.id} onApprove={(r) => approve(p, r)} onReject={() => reject(p)} />
         ))}
-      </div>
+      </Grid>
       {err && <p className="err">{err}</p>}
     </div>
   );

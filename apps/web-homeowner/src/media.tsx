@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Device } from "@supreme/domain-model";
+import { Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client } from "./api.js";
 import { AvrConsole } from "./avr-console.js";
@@ -78,7 +79,7 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
       {groups.map(([room, list]) => (
         <div key={room} className="dev-group">
           <h2 className="section">{room} <span className="chip-n">{list.length}</span></h2>
-          <div className="grid">
+          <Grid minItemWidth={260}>
             {list.map((d) => {
               const playing = nowPlaying(d);
               return (
@@ -94,7 +95,7 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
                 </button>
               );
             })}
-          </div>
+          </Grid>
         </div>
       ))}
     </div>
