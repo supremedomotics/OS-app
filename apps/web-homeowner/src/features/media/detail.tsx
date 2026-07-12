@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
-import { client } from "./api.js";
-import { useLive } from "./live.js";
+import { client, fetchDriverRegistry } from "../../api.js";
+import { useLive } from "../../live.js";
 import {
   AdvancedSettingsSection,
   AutomationsSection,
   DiagnosticsSection,
   HistorySection,
   InformationSection,
-} from "./device-detail-sections.js";
+} from "../../device-detail-sections.js";
+import { useAsync } from "../../use-async.js";
+import { MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
 
 /**
  * The AVR/Receiver console (§ AVR Detail Page) — a rich, capability-driven control
@@ -533,7 +535,7 @@ function MiniPlayer({
 }
 
 export function AvrConsole({
-  device, allDevices, homeDevices, roomName, onBack, onNavigateDevice, onRemoved, devMode = false,
+  device, allDevices, homeDevices, roomName, onBack, onNavigateDevice, onRemoved, onDeviceUpdated, devMode = false,
 }: {
   device: Device;
   allDevices: Device[];
@@ -542,6 +544,7 @@ export function AvrConsole({
   onBack: () => void;
   onNavigateDevice: (d: Device) => void;
   onRemoved: () => void;
+  onDeviceUpdated?: (d: Device) => void;
   devMode?: boolean;
 }) {
   const { states, apply } = useLive();
@@ -620,12 +623,27 @@ export function AvrConsole({
     apply(device.id, "onoff", { kind: "onoff", on });
     void cmd(device.id, { capability: "onoff", action: on ? "on" : "off" });
   };
+
+  // Television / Speaker / AVR / Projector (§ Premium Device Experience Library — Media): all
+  // four are the same real `media` capability, never a distinct backend concept — the label and
+  // icon come from an explicit installer classification if one's been set, else the one real
+  // signal that actually distinguishes anything (the "avr" driver protocol), else a conservative
+  // "Speaker" default. See capability-mapper.ts.
+  const [registry] = useAsync(() => fetchDriverRegistry());
+  const driver = device.driverId ? registry?.find((r) => r.installedId === device.driverId || r.key === device.driverId) ?? null : null;
+  const kind = mediaDeviceKind(device, driver?.protocols[0] ?? null);
+  const kindMeta = mediaKindMeta(kind);
+  const setKind = async (next: MediaDeviceKind) => {
+    const res = await client.updateDevice(device.id, { metadata: { ...device.metadata, media: { kind: next } } });
+    onDeviceUpdated?.(res.device);
+  };
+
   return (
     <div className="avr-console">
       <div className="avr-main">
         <div className="avr-head-card">
           <button className="avr-back" onClick={onBack} aria-label="Back">←</button>
-          <div className="avr-head-ic">📻</div>
+          <div className="avr-head-ic">{kindMeta.icon}</div>
           <div className="avr-head-meta">
             <h2>{device.name}</h2>
             <p>{roomName}</p>
@@ -699,7 +717,17 @@ export function AvrConsole({
         {devMode && <DiagnosticsSection device={device} />}
         <AutomationsSection device={device} />
         <HistorySection device={device} />
-        <AdvancedSettingsSection device={device} onRemoved={onRemoved} />
+        <AdvancedSettingsSection device={device} onRemoved={onRemoved}>
+          {/* Television/Speaker/AVR/Projector is an installer classification, not a driver-
+              reported fact (§ capability-mapper.ts) — same "installer-entered" pattern as
+              ClimateConsole's brand/unit type, editable right alongside rename/remove. */}
+          <label className="drv-field" style={{ marginBottom: 10 }}>
+            <span className="lbl">Device type</span>
+            <select value={kind} onChange={(e) => void setKind(e.target.value as MediaDeviceKind)}>
+              {MEDIA_KIND_OPTIONS.map((o) => <option key={o.kind} value={o.kind}>{o.icon} {o.label}</option>)}
+            </select>
+          </label>
+        </AdvancedSettingsSection>
       </aside>
 
       <MiniPlayer device={device} media={live} position={livePosition} transportShown={(a) => transportShown(a)} onToggle={toggle} onVolume={setVolume} />

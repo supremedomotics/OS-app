@@ -3,7 +3,8 @@ import type { Device } from "@supreme/domain-model";
 import { Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client } from "./api.js";
-import { AvrConsole } from "./avr-console.js";
+import { AvrConsole } from "./features/media/detail.js";
+import { MediaDeviceCard } from "./features/media/card.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 
@@ -54,6 +55,7 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
         onBack={() => setSelectedId(null)}
         onNavigateDevice={(d) => setSelectedId(d.id)}
         onRemoved={() => { setSelectedId(null); void load(); }}
+        onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
         devMode={devMode}
       />
     );
@@ -80,21 +82,19 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
         <div key={room} className="dev-group">
           <h2 className="section">{room} <span className="chip-n">{list.length}</span></h2>
           <Grid minItemWidth={260}>
-            {list.map((d) => {
-              const playing = nowPlaying(d);
-              return (
-                <button key={d.id} className="media-card" onClick={() => setSelectedId(d.id)}>
-                  <span className="media-ic">♪</span>
-                  <span className="media-meta">
-                    <span className="media-name">{d.name}</span>
-                    <span className="media-now">{playing}</span>
-                  </span>
+            {list.map((d) => (
+              <MediaDeviceCard
+                key={d.id}
+                device={d}
+                status={nowPlaying(d)}
+                onOpen={() => setSelectedId(d.id)}
+                trailing={
                   <FavHeart fav={{ type: "device", deviceId: d.id }}
                     active={fav.isFav({ type: "device", deviceId: d.id })}
                     onToggle={() => fav.toggle({ type: "device", deviceId: d.id })} />
-                </button>
-              );
-            })}
+                }
+              />
+            ))}
           </Grid>
         </div>
       ))}
