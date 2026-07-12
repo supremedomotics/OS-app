@@ -32,6 +32,7 @@ import { LockCard } from "./features/security/card.js";
 import { LockDetail } from "./features/security/lock-detail.js";
 import { CameraCard } from "./features/security/camera-card.js";
 import { CameraDetail } from "./features/security/camera-detail.js";
+import { NvrDetail } from "./features/security/nvr-detail.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -618,6 +619,7 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
   const [registry] = useAsync(() => fetchDriverRegistry());
   const [selectedLockId, setSelectedLockId] = useState<string | null>(null);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
+  const [nvrOpen, setNvrOpen] = useState(false);
 
   async function loadDevices() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
@@ -651,6 +653,9 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
         onBack={() => setSelectedCameraId(null)}
       />
     );
+  }
+  if (nvrOpen) {
+    return <NvrDetail cameras={cameras ?? []} onBack={() => setNvrOpen(false)} />;
   }
 
   async function arm(mode: "armed_home" | "armed_away" | "armed_night") {
@@ -698,7 +703,10 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
         </Grid>
       )}
 
-      {(cameras ?? []).length > 0 && <h2 className="section">Cameras</h2>}
+      <div className="screen-head" style={{ marginBottom: 0 }}>
+        <h2 className="section" style={{ margin: 0 }}>Cameras</h2>
+        <button className="chip" onClick={() => setNvrOpen(true)}>🖥️ NVR</button>
+      </div>
       <Grid>
         {(cameras ?? []).map((c) => (
           <CameraCard key={c.id} camera={c} onOpen={() => setSelectedCameraId(c.id)} />
