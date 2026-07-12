@@ -51,6 +51,7 @@ export function LockDetail({
   const jammed = live.jammed ?? false;
 
   const videoAvail = capabilityAvailability(device, "media");
+  const ringAvail = capabilityAvailability(device, "sensor");
   const accessCodesAvail = capabilityAvailability(device, "lock", "accessCodes");
   const autoLockAvail = capabilityAvailability(device, "lock", "autoLockSeconds");
   const batteryAvail = capabilityAvailability(device, "sensor");
@@ -86,6 +87,14 @@ export function LockDetail({
           <CapabilityGate available={videoAvail.available} reason={videoAvail.available ? undefined : videoAvail.reason}>
             <Card style={{ minHeight: 160, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <span className="muted">Live video</span>
+            </Card>
+          </CapabilityGate>
+        )}
+        {isDoorPhone && (
+          <CapabilityGate available={ringAvail.available} reason={ringAvail.available ? undefined : ringAvail.reason}>
+            <Card>
+              <span className="avr-field-label">Doorbell</span>
+              <p className="muted" style={{ marginTop: 6 }}>No ring events yet.</p>
             </Card>
           </CapabilityGate>
         )}
