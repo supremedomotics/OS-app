@@ -1,36 +1,36 @@
 import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import { Sheet } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 
 /**
- * Ovio-style device-detail BOTTOM SHEETS — a sheet slides up over the dimmed room with a
- * grab handle, a Title + status subtitle, and capability-specific controls (climate dual
- * setpoint, cover up/stop/down, lock unlatch/unlock, switch turn-off, media transport).
+ * Device-detail overlay (§ Design System — Inspector Panel / Bottom Sheet): a right-hand panel
+ * on desktop/tablet, a sheet that slides up over the dimmed room on mobile — one component
+ * ({@link Sheet}) picks the presentation from the viewport. Title + status subtitle, then
+ * capability-specific controls (climate dual setpoint, cover up/stop/down, lock unlatch/unlock,
+ * switch turn-off, media transport).
  */
 export function DeviceSheet({ device, onClose }: { device: Device; onClose: () => void }) {
   const caps = device.capabilities.map((c) => c.kind);
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <span className="grab" />
-        {caps.includes("temperature") ? (
-          <ClimateSheet device={device} />
-        ) : caps.includes("position") ? (
-          <CoverSheet device={device} />
-        ) : caps.includes("lock") ? (
-          <LockSheet device={device} />
-        ) : caps.includes("fan") ? (
-          <FanSheet device={device} />
-        ) : caps.includes("vacuum") ? (
-          <VacuumSheet device={device} />
-        ) : caps.includes("media") ? (
-          <MediaSheet device={device} />
-        ) : (
-          <SwitchSheet device={device} />
-        )}
-      </div>
-    </div>
+    <Sheet open onClose={onClose} aria-label={`${device.name} controls`}>
+      {caps.includes("temperature") ? (
+        <ClimateSheet device={device} />
+      ) : caps.includes("position") ? (
+        <CoverSheet device={device} />
+      ) : caps.includes("lock") ? (
+        <LockSheet device={device} />
+      ) : caps.includes("fan") ? (
+        <FanSheet device={device} />
+      ) : caps.includes("vacuum") ? (
+        <VacuumSheet device={device} />
+      ) : caps.includes("media") ? (
+        <MediaSheet device={device} />
+      ) : (
+        <SwitchSheet device={device} />
+      )}
+    </Sheet>
   );
 }
 
