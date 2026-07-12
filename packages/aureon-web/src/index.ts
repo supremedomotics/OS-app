@@ -33,6 +33,7 @@ export { Sheet, type SheetProps, type SheetPresentation } from "./components/She
 export { OverflowMenu, type OverflowMenuProps, type OverflowMenuAction } from "./components/OverflowMenu.js";
 export { Icon, iconForCapabilities, type IconName, type IconProps } from "./components/Icon.js";
 export { DeviceFacts, type DeviceFactsProps, type DeviceFactRow } from "./components/DeviceFacts.js";
+export { CollapsibleSection, type CollapsibleSectionProps } from "./components/CollapsibleSection.js";
 export { AUREON_BREAKPOINT, layoutForWidth, useAureonLayout, type AureonLayout } from "./responsive.js";
 
 /** Flatten the token tree into CSS-variable name/value pairs. */

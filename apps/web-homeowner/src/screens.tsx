@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useHeroFlip } from "./herotransition.js";
+import { useAsync } from "./use-async.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { recordUse, byFrequency } from "./usage.js";
 import { friendlyError } from "./errors.js";
@@ -29,23 +30,7 @@ import { RoomLighting } from "./room-lighting.js";
 import { HlsPlayer, WebRtcPlayer } from "./players.js";
 import { Icon } from "./icons.js";
 
-export function useAsync<T>(load: () => Promise<T>, deps: unknown[] = []): [T | null, () => void] {
-  const [value, setValue] = useState<T | null>(null);
-  const [n, setN] = useState(0);
-  useEffect(() => {
-    let live = true;
-    // Swallow per-endpoint failures (e.g. energy needs the DB-backed analytics) so one
-    // unavailable surface degrades to empty rather than breaking the screen.
-    load()
-      .then((v) => live && setValue(v))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, n]);
-  return [value, () => setN((x) => x + 1)];
-}
+export { useAsync } from "./use-async.js";
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 function greetingFor(d: Date): string {
@@ -146,9 +131,11 @@ export function Dashboard({ onOpenRoom, onNavigate }: { onOpenRoom: (roomId: str
 export function RoomsScreen({
   selected,
   onSelect,
+  devMode = false,
 }: {
   selected: string | null;
   onSelect: (roomId: string | null) => void;
+  devMode?: boolean;
 }) {
   const [home, refresh] = useAsync<HomeView>(() => client.home());
   const [allDevices] = useAsync<Device[]>(async () => (await client.devices()).devices);
@@ -202,6 +189,7 @@ export function RoomsScreen({
         heroImageUrl={room?.heroImageUrl ?? null}
         heroOrigin={heroOrigin.current}
         onBack={() => onSelect(null)}
+        devMode={devMode}
       />
     );
   }
@@ -314,7 +302,7 @@ function categorySummary(kind: CategoryKind, devices: Device[], live: Record<str
   }
 }
 
-function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void }) {
+function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack, devMode = false }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void; devMode?: boolean }) {
   const heroRef = useHeroFlip<HTMLDivElement>(heroOrigin);
   const [devices, reloadDevices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
   const { states } = useLive();
@@ -329,7 +317,7 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { ro
   }
   if (category) {
     const cat = cats.find((c) => c.kind === category);
-    if (cat) return <CategoryDeviceList roomName={name} category={cat} onBack={() => setCategory(null)} onDeviceRemoved={reloadDevices} />;
+    if (cat) return <CategoryDeviceList roomName={name} category={cat} onBack={() => setCategory(null)} onDeviceRemoved={reloadDevices} devMode={devMode} />;
   }
 
   return (
@@ -374,7 +362,7 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack }: { ro
 /** The device list for a single category (Media, Curtains, Climate, …) — tap a card to open its
  * full control. Lighting has its own richer page ({@link RoomLighting}); every other category
  * reuses the same tile grammar as the rest of the app. */
-function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void }) {
+function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved, devMode = false }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
   const [detail, setDetail] = useState<Device | null>(null);
   const [sheet, setSheet] = useState<Device | null>(null);
   const open = (d: Device) => {
@@ -401,7 +389,15 @@ function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved }: { r
           <RemovableDeviceTile key={d.id} device={d} onOpen={() => open(d)} onRemoved={onDeviceRemoved} />
         ))}
       </div>
-      {sheet && <DeviceSheet device={sheet} onClose={() => setSheet(null)} />}
+      {sheet && (
+        <DeviceSheet
+          device={sheet}
+          onClose={() => setSheet(null)}
+          roomName={roomName}
+          devMode={devMode}
+          onRemoved={() => { setSheet(null); onDeviceRemoved?.(); }}
+        />
+      )}
     </div>
   );
 }

@@ -300,9 +300,20 @@ export interface AutomationView {
   id: string;
   name: string;
   enabled: boolean;
-  triggers: { type: string; capability?: string; field?: string; at?: string; everyMinutes?: number }[];
-  conditions: { type: string }[];
-  actions: { type: string }[];
+  triggers: { type: string; deviceId?: string; capability?: string; field?: string; at?: string; everyMinutes?: number }[];
+  conditions: { type: string; deviceId?: string }[];
+  actions: { type: string; deviceId?: string }[];
+}
+
+/** Every automation with at least one trigger/condition/action referencing this device — there's
+ * no server-side filter (§ Automations reference devices by id inside their DSL, not via an
+ * index), so this fetches the home's automations and filters client-side. */
+export function automationsForDevice(automations: AutomationView[], deviceId: string): AutomationView[] {
+  return automations.filter((a) =>
+    a.triggers.some((t) => t.deviceId === deviceId) ||
+    a.conditions.some((c) => c.deviceId === deviceId) ||
+    a.actions.some((act) => act.deviceId === deviceId),
+  );
 }
 
 export async function fetchAutomations(): Promise<AutomationView[]> {
@@ -354,6 +365,48 @@ export async function createAutomation(body: {
 }): Promise<boolean> {
   const res = await authed("/v1/automations", { method: "POST", body: JSON.stringify(body) });
   return res.ok;
+}
+
+// ── Device history (§ Design System — Universal Page Structure: History) ────────
+// Two independent, genuinely-per-device timelines the hub already keeps — the Supreme
+// Intelligence Engine's own decision log, and (only once a homeowner has configured an
+// electricity provider) the energy-cost series. Neither has an SDK wrapper yet; both fail
+// soft to an empty list so an unconfigured/quiet device just hides its History section
+// rather than showing an error (§ "only show fields that exist").
+
+export interface DeviceHistoryEntry {
+  id: string;
+  ts: string;
+  action: string;
+  reason: string | null;
+  automatic: boolean;
+}
+
+export async function fetchIntelligenceHistory(deviceId: string): Promise<DeviceHistoryEntry[]> {
+  try {
+    const res = await authed(`/v1/intelligence/history?deviceId=${encodeURIComponent(deviceId)}&limit=20`);
+    if (!res.ok) return [];
+    return ((await res.json()) as { history: DeviceHistoryEntry[] }).history;
+  } catch {
+    return [];
+  }
+}
+
+export interface EnergyHistoryPoint {
+  period: string;
+  kwh: number;
+  cost: number;
+}
+
+export async function fetchEnergyHistory(deviceId: string): Promise<{ currency: string; points: EnergyHistoryPoint[] }> {
+  try {
+    const res = await authed(`/v1/energy/history?deviceId=${encodeURIComponent(deviceId)}&bucket=day`);
+    if (!res.ok) return { currency: "", points: [] };
+    const j = (await res.json()) as { currency: string; history: EnergyHistoryPoint[] };
+    return { currency: j.currency, points: j.history };
+  } catch {
+    return { currency: "", points: [] };
+  }
 }
 
 // ── Advanced automation & energy configuration (authenticated) ──────────────────────

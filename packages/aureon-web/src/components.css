@@ -185,6 +185,7 @@
   display: flex;
   flex-direction: column;
   max-height: 92vh;
+  overflow-y: auto;
 }
 
 .aureon-sheet--bottom {
@@ -262,6 +263,20 @@
 
 @keyframes aureon-panel-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .aureon-overflow-menu { animation: none; } }
+
+/* ── Collapsible section (§ Design System — Universal Page Structure) ──────────── */
+/* Values copied from drivers.tsx's .drv-row/.drv-head/.drv-chev/.drv-detail. */
+
+.aureon-collapsible { border: 1px solid var(--aureon-color-base-hairline); border-radius: 14px; overflow: hidden; background: var(--aureon-color-base-surface); }
+.aureon-collapsible--open { border-color: var(--aureon-color-gold-500); }
+.aureon-collapsible-head {
+  width: 100%; display: flex; align-items: center; gap: 10px; background: none; border: 0;
+  cursor: pointer; padding: 12px 14px; color: var(--aureon-color-text-primary); text-align: left; font: inherit;
+}
+.aureon-collapsible-title { flex: 1; font-weight: 600; }
+.aureon-collapsible-chev { color: var(--aureon-color-text-secondary); font-size: 12px; }
+.aureon-collapsible-body { padding: 4px 14px 16px; border-top: 1px solid var(--aureon-color-base-hairline); animation: aureon-panel-up 0.2s ease; }
+@media (prefers-reduced-motion: reduce) { .aureon-collapsible-body { animation: none; } }
 
 /* ── Device facts (§ Design System — Information / Diagnostics sections) ───────── */
 /* Values copied from devices.tsx's .dev-facts/.k/.v, which already implemented the
