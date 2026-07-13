@@ -1,16 +1,25 @@
 # Supreme hub edge TLS terminator (production hardening §1).
 #
 # Terminates HTTPS for the hub and proxies to the internal gateway (Supreme API +
-# WSS) and the installer portal. Auto-HTTPS: a real domain gets an ACME cert; the
-# default `localhost` uses Caddy's internal CA (self-signed) for local/dev. The
-# gateway/portal are NOT published to the host — only this proxy is.
+# WSS) and the installer portal. Auto-HTTPS: a real domain gets an ACME cert; every
+# other way of reaching this host (bare `localhost`, the Docker host's LAN IP, a
+# friendly local hostname like `supremeos.local`) uses Caddy's internal CA
+# (self-signed, local-only — see infra/hub-compose/README.md "Trusting the local CA"
+# for the one-time step to stop browsers warning about it). The gateway/portal are NOT
+# published to the host — only this proxy is (docker-compose.yml already publishes
+# 80/443 on every host interface, not just loopback; the fix for LAN access lives
+# entirely here, in which *hostnames* Caddy is willing to terminate TLS for).
 
 {
-	# ACME contact for a real domain; ignored for localhost (internal CA).
+	# ACME contact for a real domain; ignored for the internal-CA paths below.
 	email {$ACME_EMAIL:admin@supreme.local}
 }
 
-{$SUPREME_DOMAIN:localhost} {
+# Shared routing + hardening (§ DRY — one place to add a route or header for every way
+# of reaching this hub, instead of one copy per hostname/IP variant below). Identical
+# to the routes this file already had; nothing here changes behavior, only where it's
+# defined.
+(supreme_routes) {
 	encode zstd gzip
 
 	# Hardening headers (HSTS complements the gateway's helmet headers).
@@ -43,4 +52,31 @@
 
 	# Everything else → the homeowner app (the primary web UI).
 	reverse_proxy homeowner:80
+}
+
+# Primary named site: a real ACME domain when the operator sets SUPREME_DOMAIN to one
+# (production/remote-access deployments — unchanged from before), otherwise defaults to
+# `localhost` and gets Caddy's internal CA automatically (Caddy never attempts ACME for
+# `localhost` or any non-public name).
+{$SUPREME_DOMAIN:localhost} {
+	import supreme_routes
+}
+
+# Local-network catch-all (§ LAN access — new). Matches every HTTPS request that isn't
+# the exact hostname above: the Docker host's LAN IP, `supremeos.local`/`supreme.local`
+# (see README for the one-time hostname step), or any other name/IP pointed at this
+# machine. Always the internal CA — an IP address or a `.local` name can never get a
+# real ACME certificate, so this must never try. Caddy resolves overlapping site blocks
+# by host-match specificity, so exact-host requests still hit the named block above;
+# this only catches what that block doesn't.
+:443 {
+	tls internal
+	import supreme_routes
+}
+
+# Plain-HTTP catch-all → HTTPS redirect for every hostname/IP not already covered by the
+# named block's own automatic HTTPS redirect (Caddy adds that redirect automatically
+# only for the exact hostname in the block above).
+:80 {
+	redir https://{host}{uri} permanent
 }
