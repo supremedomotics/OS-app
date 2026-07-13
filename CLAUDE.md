@@ -221,22 +221,42 @@ granting host-socket access.
 
 ### URL discovery workflow (browser testing)
 
-**Never hardcode `localhost` or an IP** when testing the running app. Before every browser
-session:
+**Never hardcode `localhost` or an IP, and never reuse a value from a prior session** — this
+machine's LAN IP changes between networks (observed firsthand across sessions: `132.168.1.80` →
+`192.168.0.117`). Before every browser session, run the discovery tool instead of re-deriving
+this by hand:
 
-1. Confirm the stack is up: `docker compose -f infra/hub-compose/docker-compose.yml ps` (or
-   `docker ps --filter name=supreme-hub`) — look for `supreme-hub-proxy-1` running.
-2. Get the current LAN IPv4: `ipconfig` (Windows) → the active adapter's IPv4 Address (this
-   machine's address changes between networks — never assume a prior session's value is still
-   correct).
-3. Probe in this order, using the first that responds: `https://<LAN-IP>` → `https://localhost` →
-   `http://<LAN-IP>` → `http://localhost`. HTTPS first because Caddy terminates TLS there (see
-   `infra/hub-compose/Caddyfile`); HTTP is the redirect-only fallback.
-4. Only then open that URL in Playwright.
+```bash
+node tools/discover-supremeos-url/discover-supremeos-url.js
+```
+```powershell
+tools/discover-supremeos-url/discover-supremeos-url.ps1
+```
 
-This exists because Caddy's TLS setup uses an on-demand internal-CA policy keyed to whatever
-`Host`/SNI the client presents (see `infra/hub-compose/Caddyfile`'s `:443` catch-all) — the LAN
-IP is not fixed infrastructure, it's whatever this machine's current network assigns it.
+Both are equivalent (same logic, same JSON contract) — use whichever fits the calling context.
+Prints **only** the result JSON to stdout (safe to pipe/parse); all diagnostics go to stderr.
+
+```json
+{ "url": "https://192.168.0.117", "protocol": "https", "host": "192.168.0.117", "port": "443", "healthy": true }
+```
+
+`healthy: false` (non-zero exit) means don't proceed to browser testing — the JSON includes an
+`error` field (`docker-not-running` / `proxy-unhealthy` / `no-healthy-endpoint`) telling you
+which layer to fix first, before touching the browser at all.
+
+The tool itself: confirms Docker Desktop is running and `supreme-hub-proxy` is healthy; detects
+the active LAN adapter (excluding Hyper-V/WSL/VirtualBox/Docker/link-local — **do not trust
+adapter name alone**, a VirtualBox host-only adapter surfaced as a generic `"Ethernet 2"` during
+development with nothing in its name to exclude on; requiring a default gateway is what actually
+filters it out); probes `https://<LAN-IP>` → `https://localhost` → `http://<LAN-IP>` →
+`http://localhost` in that order (HTTPS first — Caddy terminates TLS there via an on-demand
+internal-CA policy keyed to whatever `Host`/SNI the client presents, see
+`infra/hub-compose/Caddyfile`'s `:443` catch-all); and for each candidate verifies the root HTML
+returns 200, the actual JS bundle and CSS referenced in that HTML both return 200, `/healthz`
+returns 200, and `/v1/setup/status` returns 200 — not just "the port is open." Returns the first
+fully-healthy candidate.
+
+Source: `tools/discover-supremeos-url/{discover-supremeos-url.js,discover-supremeos-url.ps1}`.
 
 ### Docker rebuild workflow
 
