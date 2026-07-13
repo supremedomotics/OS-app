@@ -23,6 +23,8 @@ import { client, fetchDriverRegistry } from "./api.js";
 import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./room-image.js";
 import { useLive } from "./live.js";
 import { LightingDetail } from "./lighting.js";
+import { ClimateConsole } from "./climate-console.js";
+import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
 import { DeviceSheet } from "./device-sheets.js";
 import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
@@ -368,12 +370,23 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack, devMod
  * reuses the same tile grammar as the rest of the app. */
 function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved, devMode = false }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
   const [detail, setDetail] = useState<Device | null>(null);
+  const [climateId, setClimateId] = useState<string | null>(null);
+  const [scheduleId, setScheduleId] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Device | null>(null);
+  // § UI consistency rule: a device's detail page must be byte-identical no matter which
+  // path opened it (Room > category > device, or the device's own dedicated whole-home
+  // tab). Climate and Lighting each have a richer, capability-specific console
+  // (ClimateConsole / LightingDetail) that the dedicated tabs already use — route to the
+  // SAME component here instead of falling through to the generic DeviceSheet, which was
+  // previously the fallback for every non-lighting capability including climate.
   const open = (d: Device) => {
     const caps = d.capabilities.map((c) => c.kind);
     if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
+    else if (caps.includes("temperature")) setClimateId(d.id);
     else setSheet(d);
   };
+  const climate = climateId ? category.devices.find((d) => d.id === climateId) ?? null : null;
+  const scheduling = scheduleId ? category.devices.find((d) => d.id === scheduleId) ?? null : null;
   if (detail) {
     return (
       <LightingDetail
@@ -381,6 +394,31 @@ function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved, devMo
         onClose={() => setDetail(null)}
         onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
         roomName={roomName}
+        devMode={devMode}
+      />
+    );
+  }
+  if (scheduling) {
+    const config = (scheduling.capabilities.find((c) => c.kind === "temperature")?.config ?? {}) as { modes?: string[]; fanSpeeds?: string[] };
+    return (
+      <ClimateSchedulerPage
+        device={scheduling}
+        modes={config.modes ?? []}
+        fanSpeeds={config.fanSpeeds ?? []}
+        onBack={() => setScheduleId(null)}
+      />
+    );
+  }
+  if (climate) {
+    return (
+      <ClimateConsole
+        device={climate}
+        roomName={roomName}
+        onBack={() => setClimateId(null)}
+        onNavigateDevice={(d) => setClimateId(d.id)}
+        onRemoved={() => { setClimateId(null); onDeviceRemoved?.(); }}
+        onDeviceUpdated={() => onDeviceRemoved?.()}
+        onOpenSchedule={(d) => setScheduleId(d.id)}
         devMode={devMode}
       />
     );
