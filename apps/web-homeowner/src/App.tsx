@@ -3,7 +3,8 @@ import type { SupremeStream } from "@supreme/sdk";
 import { useAureonDensity } from "@supreme/aureon-web";
 import { client, fetchLicense, fetchSetupStatus, onSessionExpired, openStream, type SetupStatus } from "./api.js";
 import { LiveContext, type LiveStates } from "./live.js";
-import { Energy, RoomsScreen, Scenes, Security } from "./screens.js";
+import { RoomsScreen, Scenes, Security } from "./screens.js";
+import { Energy } from "./infrastructure-energy.js";
 import { ForgotPassword, SetupWizard } from "./onboarding.js";
 import { PasswordInput } from "./password-input.js";
 import { ThemeSettings, NotificationCenter } from "./settings.js";
@@ -139,7 +140,7 @@ export function App() {
       {tab === "media" && <Media onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "climate" && <Climate onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "security" && <Security devMode={showInstallerDiagnostics} />}
-      {tab === "energy" && <Energy />}
+      {tab === "energy" && <Energy onNavigate={go} />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}
       {tab === "settings" && <ThemeSettings role={role} />}
       {tab === "developer" && (devMode || role === "developer") && <DeveloperTools />}

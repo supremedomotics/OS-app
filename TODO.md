@@ -61,7 +61,9 @@
   (`services/analytics`, `/v1/energy/*`); the rest currently have little-to-no backend
   representation (KNX generic `onoff` for Pool/Irrigation; nothing for the rest) — expect most
   controls to be honestly capability-gated at first, same as Camera/NVR were.
-- **Status:** Not started.
+- **Status:** Energy (device #1 of 8) built — see Completed. Solar, Battery Storage, EV Charger,
+  Pool, Irrigation, Water Tank, Generator, Building Management, Vehicle not started; the new
+  `features/infrastructure/<domain>/` pattern + `PowerRing` component are ready to extend.
 
 ### Finish emoji migration in generic device quick-sheets
 - **Description:** `device-sheets.tsx`'s Climate/Fan/Vacuum/generic-Media quick-sheets still use
@@ -162,6 +164,14 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- Infrastructure module, Energy (device #1 of 8) — `features/infrastructure/energy/`
+  (capability-mapper/card/detail) plus `infrastructure-energy.tsx` (whole-home dashboard),
+  replacing the old plain-`.card.row` Energy tab. New shared `PowerRing` radial-gauge component
+  in `@supreme/aureon-web`, 7 new icons (`plug`/`sun`/`ev`/`generator-unit`/`leaf`/`trend-up`/
+  `flow`). Whole-home hero and per-device consumption sparkline both read real
+  `client.energySummary()`/`/v1/energy/history` data — no fabricated live numbers; per-device
+  page gates Schedule/Load Priority/Usage Alerts/Efficiency Insights honestly (no backing
+  capability exists yet). `devices.tsx`'s `friendlyType()` updated to classify energy devices.
 - Monorepo foundation: pnpm + Turborepo (TS/Python) + Melos (Flutter), domain-model, contracts,
   Aureon design tokens, hub Compose stack with hidden HA, SIL skeleton, Identity + Permissions,
   gateway (REST + WSS).

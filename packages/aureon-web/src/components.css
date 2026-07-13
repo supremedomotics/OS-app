@@ -514,3 +514,18 @@
   background: color-mix(in srgb, var(--aureon-color-base-void) 88%, transparent);
   border-radius: inherit; pointer-events: none;
 }
+
+/* ── PowerRing (§ Infrastructure Design Language — bounded-value radial gauge) ──────────────
+ * Reusable across every Infrastructure page (Energy draw, Battery %, Solar output, Tank level,
+ * …), not an Energy-only widget. The filled arc animates on value change; respects
+ * prefers-reduced-motion by disabling the transition, not the ring itself. */
+
+.aureon-power-ring { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.aureon-power-ring-arc { transition: stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1), stroke 0.4s ease; }
+@media (prefers-reduced-motion: reduce) { .aureon-power-ring-arc { transition: none; } }
+.aureon-power-ring-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; text-align: center; padding: 0 12%;
+}
+.aureon-power-ring-value { font-family: var(--aureon-font-display, inherit); font-size: clamp(18px, 2.4vw, 26px); font-weight: 650; line-height: 1.1; color: var(--power-ring-color); }
+.aureon-power-ring-sub { font-size: 11.5px; color: var(--aureon-color-text-secondary); }

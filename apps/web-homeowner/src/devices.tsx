@@ -9,6 +9,7 @@ import { EmptyState } from "./empty.js";
 import { friendlyError } from "./errors.js";
 import { mediaDeviceKind, mediaKindMeta } from "./features/media/capability-mapper.js";
 import { securityLockKind, securityLockKindMeta } from "./features/security/capability-mapper.js";
+import { energyDeviceKind, energyKindMeta, isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -36,6 +37,7 @@ export function friendlyType(d: Device): string {
   if (t.includes("fan") || caps.includes("fan")) return "Fan";
   if (t.includes("vacuum") || caps.includes("vacuum")) return "Vacuum";
   if (t.includes("media") || caps.includes("media")) return mediaKindMeta(mediaDeviceKind(d)).label;
+  if (isEnergyDevice(d)) return energyKindMeta(energyDeviceKind(d)).label;
   if (t.includes("sensor") || caps.includes("sensor")) return "Sensor";
   if (t.includes("camera")) return "Camera";
   if (caps.includes("onoff")) return "Switch";

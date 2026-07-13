@@ -27,7 +27,9 @@ export type IconName =
   | "camera" | "expand" | "record" | "mic" | "sparkle" | "joystick" | "grid" | "calendar"
   | "monitor" | "database" | "target" | "heart" | "download" | "tv" | "projector" | "receiver"
   | "speaker" | "gamepad" | "volume" | "volume-mute" | "image" | "remote" | "film" | "music-note"
-  | "apple-tv" | "cabinet";
+  | "apple-tv" | "cabinet"
+  // § Infrastructure Design Language — Energy (reusable across Solar/Battery/EV/Generator)
+  | "plug" | "sun" | "ev" | "generator-unit" | "leaf" | "trend-up" | "flow";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <><path d="M3 10.7 12 3.5l9 7.2" /><path d="M5.6 9.6V20h12.8V9.6" /><path d="M10 20v-5h4v5" /></>,
@@ -104,6 +106,15 @@ const PATHS: Record<IconName, JSX.Element> = {
   film: <><rect x="3" y="4.5" width="18" height="15" rx="1.6" /><path d="M8 4.5v15M16 4.5v15" /><path d="M3 9h5M16 9h5M3 15h5M16 15h5" /></>,
   "music-note": <><path d="M9 18a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" /><path d="M12 15V4.5l7-1.5v11" /></>,
   cabinet: <><rect x="5" y="2.5" width="14" height="19" rx="1.4" /><path d="M5 12h14" /><circle cx="9.5" cy="7.2" r="0.8" fill="currentColor" stroke="none" /><circle cx="9.5" cy="16.8" r="0.8" fill="currentColor" stroke="none" /></>,
+
+  // § Infrastructure Design Language — Energy (§ reusable across future Solar/Battery/EV/Generator pages)
+  plug: <><path d="M9 2.5v6M15 2.5v6" /><path d="M6.5 8.5h11v3.5a5.5 5.5 0 0 1-11 0z" /><path d="M12 17.5V21" /></>,
+  sun: <><circle cx="12" cy="12" r="4.4" /><path d="M12 2.8v2.6M12 18.6v2.6M4.2 12h2.6M17.2 12h2.6M6.3 6.3l1.8 1.8M15.9 15.9l1.8 1.8M17.7 6.3l-1.8 1.8M8.1 15.9l-1.8 1.8" /></>,
+  ev: <><rect x="2.5" y="10.5" width="15" height="7" rx="2" /><path d="M5 10.5l2-4h6.5l2 4" /><circle cx="6.5" cy="17.5" r="1.6" /><circle cx="13.5" cy="17.5" r="1.6" /><path d="M18 12.5h1.8l1.7 2.3v2.7h-3.5" /></>,
+  "generator-unit": <><rect x="3" y="7" width="14" height="11" rx="1.8" /><circle cx="10" cy="12.5" r="3.4" /><path d="M10 10v1.4M10 13.6V15M8.3 12.5H10M10 12.5h1.7" /><path d="M18 10v-2M18 20v-2M18 8h2.5M18 18h2.5" /></>,
+  leaf: <><path d="M6 19c-1.5-6 2-13 12.5-14.5C20 14 13 19 6 19Z" /><path d="M6 19c1-3.5 3-6.5 6-9" /></>,
+  "trend-up": <><path d="M4 16.5 10 10l4 4 6-7" /><path d="M15.5 6.5H20V11" /></>,
+  flow: <><path d="M4 7h6a3 3 0 0 1 3 3v0a3 3 0 0 0 3 3h4" /><path d="M4 17h6a3 3 0 0 0 3-3v0a3 3 0 0 1 3-3h4" /><path d="M17.5 4 20 6.5 17.5 9M17.5 15l2.5 2.5-2.5 2.5" /></>,
 };
 
 export interface IconProps {

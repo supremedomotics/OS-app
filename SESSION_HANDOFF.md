@@ -4,119 +4,114 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-**Branch:** `claude/supreme-os-architecture-VbMgU` — pushed and up to date with origin as of the
-last commit below.
+**Branch:** `main` — synced to `origin/main` at the start of this session (fast-forwarded from
+90 commits behind); this session's changes are uncommitted local edits, not yet pushed.
 
 ## Current development status
 
-The **Premium Device Experience Library** initiative is mid-flight. The Media module
-(Television, Projector, AVR, Speaker) and the Security module (Door Lock, Furniture Lock, SIP
-Video Door Phone, Camera, NVR, Alarm System) are built and visually polished. The Infrastructure
-module (Energy, EV Charger, Pool, Irrigation, Water Tank, Generator, Building Management,
-Vehicle) has **not been started** — the user explicitly paused new-module work to run a
-dedicated UI/UX polish phase first, which just completed its first substantial pass.
+The **Infrastructure module** initiative has started: **Energy** (device type #1 of 8) is built
+— capability-mapper, Standard Card, per-device Premium Detail Page, and a rebuilt whole-home
+dashboard, replacing the old plain-`.card.row` Energy tab. The remaining 7 Infrastructure device
+types (Solar, Battery Storage, EV Charger, Pool, Irrigation, Water Tank, Generator, Building
+Management/Vehicle) are **not started** but now have a real pattern + a reusable gauge component
+to extend. The Design Polish phase (ambient color identity, layout-rhythm variation per category)
+from the previous handoff is still open and unaffected by this session's work.
 
-## Completed this session (most recent → oldest, see `git log` for full detail)
+## Completed this session
 
-1. **SVG icon system** — `packages/aureon-web/src/components/Icon.tsx` grew from 22 to 63 icon
-   names. Every emoji glyph on the Security and Media premium pages (lock states, shield/alert,
-   battery/user/clock/wifi/key/timer/door/briefcase/moon/siren, camera/record/mic/sparkle/
-   joystick/grid/calendar/monitor/database/target/heart/download, and the full media-device
-   family) was replaced with a hand-drawn 24×24 stroke-line icon. `QuickAction.icon` and
-   `CapabilityGridItem.icon` now type as `ReactNode` instead of `string`. Two small motion
-   additions: a heartbeat pulse on the Camera LIVE badge, a shudder on the Alarm hero while
-   actually triggered.
-2. **Design Polish phase** — shared `Card` got real elevation/gradient-border/hover-lift;
-   `Button`/`IconButton` got hover-glow/press-scale/focus/loading states; new `CapabilityGrid`
-   component collapses repeated "Driver required" spam into one quiet chip strip + one
-   explanation (was the #1 named complaint); hero title typography now uses the shared `title`
-   token; hero icon plates enlarged; new opt-in `.avr-now--wash` ambient hero glow (AVR/Speaker's
-   own tuned hero left untouched); fixed a real app-wide layout bug — the desktop content column
-   (`.wide-content`) was capped at 1100px but never centered, leaving a dead zone on
-   wide/ultrawide displays on *every* page in the app, not just the new ones.
-3. **Security module** — built Door Lock/Furniture Lock/SIP Video Door Phone (shared
-   `LockDetail` page), Camera (real live view via WebRTC/HLS, genuine snapshot-download and
-   Fullscreen actions), NVR (real channel grid from registered cameras, everything
-   recorder-specific honestly gated), and upgraded the existing Alarm arm/disarm card into a full
-   premium panel. All wired into the `Security` tab alongside the pre-existing camera/alarm
-   plumbing.
-4. **Media module + shared infra** — `features/media/` (Television, Projector share
-   `SimpleMediaDetail`; AVR/Speaker keep the pre-existing rich console). Built the
-   capability-availability engine (`features/_shared/capability-availability.ts`) and the
-   `CapabilityGate` primitive that everything above depends on. Built the adaptive
-   `.aureon-detail-grid` two-column layout, the `Timeline`/`QuickActions` primitives, and
-   upgraded `DeviceFacts`/Information/Diagnostics into icon-badged fact tiles.
-5. **Responsive framework** (frozen per explicit user instruction) — density engine
-   (`compact`/`comfortable`/`expanded`), fluid tokens, `Grid`/`Container`/`Stack` primitives.
-6. Earlier in this development arc (see `PROJECT_CONTEXT.md` §6 for a higher-level summary):
-   full Design System phases 0–8 (component library, unified icon registry — the pre-existing
-   22, Sheet/Inspector panel, Universal DeviceSheet 7-section architecture), and — well before
-   that — the AVR/HEOS/Yamaha universal media framework, KNX ETS import engine, user-management/
-   roles, and the base Lighting/Climate/Media/Security device consoles.
+1. **Energy feature module** (`apps/web-homeowner/src/features/infrastructure/energy/`):
+   - `capability-mapper.ts` — `EnergyDeviceKind` (`smart_plug`/`power_meter`/`solar_inverter`/
+     `battery_storage`/`ev_charger`/`generator`), classified from `device.metadata.energy.kind`
+     first, falling back to whether the device has an `onoff` capability. `isEnergyDevice()`
+     identifies devices this module owns via a `sensor` capability with `measure: "power"|
+     "energy"` — there is no dedicated energy `CapabilityKind` in `domain-model` yet.
+   - `card.tsx` — `EnergyDeviceCard`, structurally identical to Media/Security's `.media-card`
+     but leads with a small live `PowerRing` instead of a static icon.
+   - `detail.tsx` — `EnergyDeviceDetail`, the same hero→controls→QuickActions→CapabilityGrid→
+     Universal Page Structure skeleton as `SimpleMediaDetail`/`LockDetail`. Hero is a large
+     `PowerRing` reading the device's real live sensor value (never fabricated — devices with no
+     reading show "No live reading", not a fake number). Includes a real consumption sparkline
+     off the existing `/v1/energy/history` endpoint (`fetchEnergyHistory()`, already in
+     `api.ts`, no new endpoint needed). Schedule/Load Priority/Usage Alerts/Efficiency Insights
+     are honestly capability-gated ("Driver required") — no backing capability exists for any of
+     them yet.
+   - `apps/web-homeowner/src/infrastructure-energy.tsx` — the whole-home dashboard that replaces
+     `screens.tsx`'s old `Energy()`. Hero reads real `client.energySummary()` totals (no
+     invented "live power flow" — the backend only reports periodic aggregates); top-consumers
+     list and a room-grouped device grid both reuse `EnergyDeviceCard`; drills into
+     `EnergyDeviceDetail` via the same `selectedId` local-state pattern `media.tsx` uses.
+2. **New shared component — `PowerRing`** (`packages/aureon-web/src/components/PowerRing.tsx`):
+   a generic bounded-value radial SVG gauge (not Energy-specific — usable for battery %, solar
+   output, tank level, etc. on future Infrastructure pages). Animated arc respects
+   `prefers-reduced-motion` (transition disabled, not the ring itself). Exported from
+   `@supreme/aureon-web`'s `index.ts`; CSS added to `components.css`.
+3. **7 new icons** in `Icon.tsx`'s `PATHS`: `plug`, `sun`, `ev`, `generator-unit`, `leaf`,
+   `trend-up`, `flow` — reusable across future Solar/Battery/EV/Generator pages, same pattern as
+   the existing Security/Media icon family.
+4. **`devices.tsx`'s `friendlyType()`** updated with an `isEnergyDevice()` branch before the
+   generic "Sensor" fallback, so the Device Manager's Type column shows the real energy kind
+   label instead of a generic "Sensor".
+5. Deleted the old `Energy()` function from `screens.tsx` (dead code, superseded by
+   `infrastructure-energy.tsx`) and its now-unused `EnergySummaryResponse` import.
 
-## Files most recently touched (this session)
+## Files touched this session
 
-- `packages/aureon-web/src/components/{Icon,Card,Button,QuickActions,CapabilityGrid,
-  CapabilityGate,Timeline,DeviceFacts}.tsx`, `components.css`, `index.ts`
-- `apps/web-homeowner/src/features/security/{lock-detail,camera-detail,camera-card,
-  alarm-panel,nvr-detail,card,capability-mapper}.tsx`
-- `apps/web-homeowner/src/features/media/{simple-detail,card,capability-mapper}.tsx`
-- `apps/web-homeowner/src/{device-sheets,device-detail-sections,screens,styles}.tsx/.css`
+- `packages/aureon-web/src/components/{Icon,PowerRing}.tsx`, `components.css`, `index.ts`
+- `apps/web-homeowner/src/features/infrastructure/energy/{capability-mapper,card,detail}.tsx`
+  (new directory)
+- `apps/web-homeowner/src/infrastructure-energy.tsx` (new)
+- `apps/web-homeowner/src/{App,devices,screens}.tsx`
 
 ## Architecture decisions made this session
 
-- **"UI is the contract"** (see `PROJECT_CONTEXT.md` §5) — premium pages show the full intended
-  control set for a device category even with zero backend support today; unavailable controls
-  gate instead of disappearing. This is now the standing rule for all future device modules.
-- Icon system: SVG-only in real UI; emoji tolerated in exactly one place (native `<select>
-  <option>` text), via a dual `icon`(text)/`iconName`(SVG) field on capability-mapper `KindMeta`
-  types.
-- `CapabilityGrid` (declutter pattern) vs. `CapabilityGate` (single-control gating) are both
-  kept — grid for "More controls"-style multi-item grids, gate for one-off standalone controls
-  (hero facts, a lone gated card). Don't collapse these into one API; they solve different
-  layout problems.
+- **Infrastructure module lives at `features/infrastructure/<domain>/`**, not
+  `features/<domain>/` — one level deeper than Media/Security, since "Infrastructure" is the
+  product-facing module name for the whole device-type family (Energy, Solar, Battery, …), the
+  same way `Security` groups Lock/Camera/NVR/Alarm.
+- **`PowerRing` is generic, not Energy-specific** — deliberately no "power" semantics baked into
+  its props beyond a default tone, so it's the shared bounded-gauge primitive for every future
+  Infrastructure page rather than something each page reimplements.
+- **No fabricated "live power flow" visualization.** The real `/v1/energy/*` backend reports
+  periodic aggregates (`energySummary()`) and per-device sensor readings — not a continuous
+  instantaneous flow graph between grid/solar/battery/loads. The hero shows what's real (current
+  sensor reading, period totals); it does not simulate a flow animation the backend can't back,
+  per this project's own "never fabricate data or capabilities" rule.
+- Scoped the reusable-component set to what Energy actually needed (`PowerRing` + reuse of
+  existing `Card`/`Grid`/`CapabilityGrid`/`CapabilityGate`) rather than pre-building the full
+  ~15-component wishlist (`EnergyFlowCard`, `ConsumptionChart`, `GridCard`, `SolarCard`, etc.)
+  speculatively for modules that don't exist yet — each will be extracted into a shared
+  component the first time a second Infrastructure page actually needs the same shape, not
+  before (see `ConsumptionSpark` in `detail.tsx`, marked with a `ponytail:` comment for exactly
+  this).
 
 ## Known issues / open gaps
 
-- **Real, pre-existing bug (not introduced this session):** resizing the browser window across
-  the `expanded`↔`comfortable` density breakpoint mid-session remounts the entire page tree
-  (`App.tsx` renders two structurally different root trees — `app-wide` sidebar layout vs.
-  `shell` bottom-tab layout — for `wide` true/false), silently discarding any in-page navigation
-  state (e.g. which device detail page was open). Narrow, real-device users won't hit this; it's
-  a genuine gap if a user resizes a desktop browser window across ~1200px.
-- `device-sheets.tsx`'s generic Climate/Fan/Vacuum/Media quick-sheets still use emoji (fire/
-  snowflake/fan mode icons, shuffle/repeat) — out of scope for this pass since those capability
-  types weren't part of the Security/Media redesign; would need a handful more `Icon.tsx`
-  entries to finish.
-- Lighting/Climate/AVR pages were deliberately left with a light touch — they already have
-  distinct, real interactive heroes (color wheel, thermostat dial, album-art/waveform) predating
-  this cycle; only their shared Information/Card/Button rendering was upgraded automatically.
-- No device-category *ambient color identity* yet (brief asked for e.g. camera = blue
-  "technology" tint, media = cinematic violet) — current hero tinting is state-driven (locked/
-  armed/triggered/on-off), not category-driven. Not implemented; would need care to not conflict
-  with the existing state-tint semantics.
-- No layout-rhythm variation yet — every premium page still follows the same
-  hero→controls→quick-actions→more-controls→info column shape. The brief asked each device
-  category to feel structurally distinct, not just re-skinned.
-- `packages/hub-identity`/`hub-pki`/ADRs 0007–0015 (cloud identity, zero-trust tunnel broker,
-  voice, Matter, HomeKit, Intelligence Engine, licensing/driver framework, universal AVR
-  framework) exist in the repo but were **not** touched or verified this session — see
-  `docs/production-readiness.md` for the project's own honest field-readiness assessment
-  (~25–30%, distinct from ~80% feature-complete).
+- **Not live-verified against real device data.** Typecheck passes clean
+  (`pnpm --filter web-homeowner typecheck`) and the dev server boots with zero console/build
+  errors, but the app requires the gateway + Postgres backend (`hub-compose`) to authenticate
+  and load real device data — that stack wasn't running this session, so the Energy hero/cards/
+  detail page have not been visually confirmed against live data or screenshotted at every
+  breakpoint. Do this first next session, before building the next Infrastructure device type.
+- Ring "max" in `EnergyDeviceDetail`/`infrastructure-energy.tsx` is a display-only scaling
+  heuristic (`value * 1.4`) — there's no rated-wattage config to size the gauge against yet
+  (marked `ponytail:` in `detail.tsx`). Not a fabricated reading, just an arbitrary visual scale.
+- No device-category ambient color identity or layout-rhythm variation yet (carried over from
+  the previous handoff, still open, unrelated to this session's work) — see previous gaps below.
+- Everything from the previous handoff not touched this session remains open: the
+  `expanded`↔`comfortable` density-breakpoint remount bug, `device-sheets.tsx`'s generic
+  Climate/Fan/Vacuum/Media quick-sheets still using emoji, and the production-readiness gap
+  (~80% feature-complete, ~25–30% field-deployment ready per `docs/production-readiness.md`).
 
 ## Immediate priorities for the next session
 
-Pick up from where this one paused — the user asked to continue the Design Polish phase but the
-session ended for context-budget reasons before going further. In priority order:
-
-1. Device-category ambient color identity (see gap above) — the most visually impactful
-   remaining item from the polish brief.
-2. Layout rhythm variation per category (split layouts, floating cards, staggered composition)
-   — the second most-repeated ask in the brief.
-3. Finish the emoji migration in `device-sheets.tsx`'s generic quick-sheets.
-4. Only after the polish phase reaches a "consistently premium" bar across what exists today:
-   resume the Infrastructure module in the original priority order (Energy → EV Charger → Pool →
-   Irrigation → Water Tank → Generator → Building Management; Vehicle/Tesla was #11 in the
-   original list, before Energy).
+1. Stand up the local backend (`hub-compose` or equivalent) and live-verify the Energy module —
+   phone/tablet/desktop/ultrawide screenshots, real device data, zero console errors — before
+   building the next Infrastructure device type.
+2. Continue the Infrastructure module: next device type (Solar or Battery Storage recommended —
+   both would exercise `PowerRing` a second time and validate it as genuinely reusable before
+   more Infrastructure pages are built on top of it).
+3. Device-category ambient color identity + layout-rhythm variation (carried over, still the
+   most-requested remaining polish item).
+4. Finish the emoji migration in `device-sheets.tsx`'s generic quick-sheets.
 
 See `TODO.md` for the full backlog with priority tiers.
