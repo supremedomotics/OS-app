@@ -194,6 +194,109 @@ in `packages/aureon-web`; every page inherits the improvement automatically.
   overflow, zero clipped controls, no broken layout at any tier. Use the `run` skill's Playwright
   pattern; screenshot and actually look at the result.
 
+## Autonomous development environment (Claude Desktop)
+
+This section documents the local MCP-driven dev environment configured for this workstation
+(`%APPDATA%\Claude\claude_desktop_config.json`), so any future session — Desktop or Code — knows
+what tools exist, how to use them correctly, and their real limitations. Nothing here is
+aspirational; every claim was validated against a real MCP handshake or a real command run on
+this machine.
+
+### Available MCP servers
+
+| Server | What it actually is | Real scope |
+|---|---|---|
+| `filesystem` | `@modelcontextprotocol/server-filesystem` (Anthropic reference, native) | Read/write access to `G:\Documents\Claude Projects\OS-app` only |
+| `playwright` | `@playwright/mcp` (Microsoft, native) | Runs as a real process on this machine — can reach `localhost`/LAN IPs directly (unlike a cloud-sandboxed browser tool). Screenshots/traces write to `.claude/playwright-output/` |
+| `terminal` | `@wonderwhy-er/desktop-commander` (native, **not** the sandboxed Docker-catalog variant) | Real shell access with `docker`, `git`, `pnpm`, `node` on `PATH`. `allowedDirectories` restricted to `G:\Documents\Claude Projects\OS-app` (config lives at `~/.claude-server-commander/config.json`, not settable via a CLI flag) |
+| `git` | official `mcp-server-git` via `uvx --python <standalone Python 3.12>` | Repository-scoped to `OS-app` |
+
+**Docker MCP Toolkit exists on this machine** (`docker mcp` CLI plugin, 315-server catalog) but is
+**deliberately not configured** — every catalog server (including its own Desktop Commander
+build) runs sandboxed inside its own container with no host Docker-socket access, so it cannot
+rebuild or inspect this project's actual containers. The native `terminal` server above already
+does this correctly; adding the Toolkit gateway would only duplicate shell-execution capability
+through a more restricted transport. Re-evaluate only if Docker ships a catalog server explicitly
+granting host-socket access.
+
+### URL discovery workflow (browser testing)
+
+**Never hardcode `localhost` or an IP** when testing the running app. Before every browser
+session:
+
+1. Confirm the stack is up: `docker compose -f infra/hub-compose/docker-compose.yml ps` (or
+   `docker ps --filter name=supreme-hub`) — look for `supreme-hub-proxy-1` running.
+2. Get the current LAN IPv4: `ipconfig` (Windows) → the active adapter's IPv4 Address (this
+   machine's address changes between networks — never assume a prior session's value is still
+   correct).
+3. Probe in this order, using the first that responds: `https://<LAN-IP>` → `https://localhost` →
+   `http://<LAN-IP>` → `http://localhost`. HTTPS first because Caddy terminates TLS there (see
+   `infra/hub-compose/Caddyfile`); HTTP is the redirect-only fallback.
+4. Only then open that URL in Playwright.
+
+This exists because Caddy's TLS setup uses an on-demand internal-CA policy keyed to whatever
+`Host`/SNI the client presents (see `infra/hub-compose/Caddyfile`'s `:443` catch-all) — the LAN
+IP is not fixed infrastructure, it's whatever this machine's current network assigns it.
+
+### Docker rebuild workflow
+
+Whenever a code change requires a container rebuild, **rebuild only what changed** — never
+`docker compose up --force-recreate` the whole stack for a one-service change (confirmed
+elsewhere in this session: a full `--force-recreate` cascades to unrelated services like
+`mqtt`/`nats`/`homeassistant` via the Compose dependency graph, which is unnecessary churn for a
+scoped change):
+
+```powershell
+cd infra/hub-compose
+docker compose build <service>              # e.g. homeowner, gateway, installer-portal
+docker compose up -d --force-recreate <service>
+docker compose ps                            # confirm it's Up, not Restarting
+docker logs <container> --tail 50            # confirm no startup errors
+curl -sk https://<discovered-URL>/healthz    # confirm the health endpoint responds before opening a browser
+```
+
+A bind-mounted config file (e.g. `Caddyfile`) changing does **not** need a rebuild — `docker
+compose restart <service>` restarts the process only. But if the container was already running
+when the file changed, verify the mount actually picked it up (`docker exec <container> md5sum
+<path>` vs. the host file) before trusting a `restart` — Windows Docker Desktop bind mounts have
+been observed serving stale content after `restart` alone in this environment; `docker compose up
+-d --force-recreate <service>` reliably refreshes the mount when in doubt.
+
+### Browser validation workflow
+
+After any frontend change, before reporting it done:
+
+1. Discover the URL (above), rebuild/restart the relevant container if needed.
+2. Open it in Playwright; wait for the app shell to render (not just HTTP 200 — confirm real DOM
+   content, since a 200 with an empty root div is not "loaded").
+3. Capture: console messages (filter for `error`/`warning`), failed network requests (4xx/5xx),
+   and a screenshot at each responsive tier this project requires (~390px / ~834px / ~1440px /
+   ~2560px — see UI & UX standards above).
+4. If anything failed to load: read the console/network evidence first, form a hypothesis, check
+   the relevant source file, and only then decide whether it's a code bug (fix it) or an
+   environment issue (report exactly what's blocking, don't guess).
+
+### Coding & debugging conventions
+
+Same as the rest of this document — nothing here overrides `Development principles` or `Coding
+standards` above. The one addition: prefer the `terminal` server's real command execution over
+guessing at behavior; if unsure whether a change compiles, actually run `pnpm --filter
+<package> typecheck`, don't assume.
+
+### Known environment limitations (this workstation, recorded so nobody re-discovers them)
+
+- `uv`'s own managed-Python downloader fails at the "minor version link" (junction-creation) step
+  in this shell environment — this is bypassed by using a `winget`-installed standalone Python
+  (`Python.Python.3.12`) and pointing `uvx --python <path>` at it explicitly. If `uv python
+  install` is ever needed directly, expect this to fail the same way.
+- Scripted (non-interactive) stdio calls to Desktop Commander's filesystem-touching tools
+  (`read_file`, `list_directory`, etc.) do not reliably return a response — only in-memory tools
+  like `get_config` do. This looks like an async initialization or permission-gate step that only
+  a real GUI-driven MCP client satisfies. Config *changes* (editing
+  `~/.claude-server-commander/config.json` directly, or via `set_config_value` from a live
+  session) are reliable and persist across restarts; it's specifically scripted multi-turn
+  *filesystem tool* verification that's unreliable.
+
 ## Session completion checklist
 
 Before ending every session:
