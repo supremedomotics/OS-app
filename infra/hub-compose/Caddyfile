@@ -69,8 +69,22 @@
 # real ACME certificate, so this must never try. Caddy resolves overlapping site blocks
 # by host-match specificity, so exact-host requests still hit the named block above;
 # this only catches what that block doesn't.
+#
+# `on_demand` is required here, not optional: a bare `:443` site address has no
+# hostname of its own for Caddy's automatic-HTTPS to pre-manage a cert for, so plain
+# `tls internal` registers nothing and Caddy has no cert for any SNI it wasn't told
+# about up front — every connection through this block would fail TLS with a fatal
+# "internal_error" alert (confirmed via `openssl s_client`: exactly this symptom, only
+# `localhost`'s pre-issued cert from the block above worked, purely coincidentally).
+# `on_demand` tells Caddy to synthesize an internal-CA cert for whatever SNI arrives at
+# handshake time instead of requiring it be pre-declared — Caddy's own documented
+# pattern for "serve HTTPS for arbitrary local hostnames." No `on_demand_tls` ask/
+# permission gate is needed for the internal issuer specifically (unlike ACME
+# on-demand) since self-signed local certs have no external abuse/rate-limit surface.
 :443 {
-	tls internal
+	tls internal {
+		on_demand
+	}
 	import supreme_routes
 }
 
