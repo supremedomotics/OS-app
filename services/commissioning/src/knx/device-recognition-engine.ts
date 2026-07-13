@@ -55,6 +55,15 @@ const FUNCTION_WORDS = new Set([
   "position", "move", "up/down", "up", "down", "stop",
   "temperature", "temp", "setpoint", "current", "actual", "ambient", "mode", "swing",
   "lock", "unlock", "scene", "recall", "colour", "color", "rgb", "rgbw", "rgbww", "white",
+  // Real-world ETS installers overwhelmingly name group addresses with abbreviations, not
+  // the full words above ("Living Spot-1 SW" / "Living Spot-1 FB" / "Living Spot-1 Dimm" /
+  // "Living Spot-1 Abs Col", not "...Switch" / "...Feedback" / "...Dimming" / "...Absolute
+  // Colour") - confirmed against a real customer ETS export during QA that split one 8-GA
+  // light circuit into 6 separate devices because none of these abbreviations matched the
+  // full-word-only list above. Kept as a flat addition (not a synonym-normalization layer)
+  // since this Set is purely a strip-list, not something anything else keys off the exact
+  // spelling of.
+  "sw", "fb", "dimm", "abs", "rel", "col", "stat", "sp", "amb", "cur",
 ]);
 
 function looksLikeCover(text: string): boolean {
@@ -334,6 +343,20 @@ function clusterSignals(signals: GaSignal[], knownRoomNames: string[]): Map<stri
       // device PER group address instead of one device total.
       const room = findRoomHint(sig.ga.name, rooms) ?? findRoomHint(sig.ga.mainGroup ?? "", rooms);
       key = `mg:${room ?? sig.ga.mainGroup ?? ""}::${sig.ga.middleGroup.trim().toLowerCase()}`;
+    } else if (sig.ga.mainGroup?.trim()) {
+      // A flat, single-level GroupRange export (no nested Middle Group at all — confirmed
+      // against a real customer export during QA: a GroupRange named "Conference Study
+      // Cove" directly containing 8 GroupAddresses like "SW"/"Dimm"/"Abs Col" with no
+      // shared word in the leaf names themselves, only the GroupRange's own Name). When
+      // there's no deeper level to fall back to, the one GroupRange this address sits in
+      // IS the finest-grained circuit-identity signal available — using it here is strictly
+      // better than falling straight to per-GA-name splitting (tier 3), which is guaranteed
+      // to over-split in exactly this shape of export. Tradeoff: if an installer used ONE
+      // flat GroupRange to mean "a whole room" rather than "one circuit", this would
+      // over-merge instead of over-split — a real risk, but the opposite failure mode from
+      // what every QA report on this engine has actually hit so far.
+      const room = findRoomHint(sig.ga.name, rooms) ?? findRoomHint(sig.ga.mainGroup, rooms);
+      key = `rg:${room ?? ""}::${sig.ga.mainGroup.trim().toLowerCase()}`;
     } else {
       const base = deviceBaseName(sig.ga.name, sig.roleText);
       const room = findRoomHint(sig.ga.name, rooms);
