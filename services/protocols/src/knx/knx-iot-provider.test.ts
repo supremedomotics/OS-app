@@ -21,6 +21,12 @@ class FakeTransport implements IKnxIotTransport {
     if (this.shouldFailGet) throw new Error("no response");
     return this.functionalBlocksResponse;
   }
+
+  observeHandlers: ((payload: string) => void)[] = [];
+  observe(_host: string, _port: number, _pathname: string, onUpdate: (payload: string) => void): () => void {
+    this.observeHandlers.push(onUpdate);
+    return () => { this.observeHandlers = this.observeHandlers.filter((h) => h !== onUpdate); };
+  }
 }
 
 describe("KnxIotProvider", () => {
@@ -53,6 +59,19 @@ describe("KnxIotProvider", () => {
   it("never claims bus.monitor — subscribe() throws so it can't silently duplicate KNX Ultimate's job", () => {
     const provider = new KnxIotProvider({ transport: new FakeTransport() });
     expect(() => provider.subscribe()).toThrow(/not applicable/);
+  });
+
+  it("observeResource wires real transport notifications into the caller's handler and counts them", () => {
+    const transport = new FakeTransport();
+    const provider = new KnxIotProvider({ transport });
+    const updates: string[] = [];
+    const unsubscribe = provider.observeResource("10.0.0.42", "/dp/1", (p) => updates.push(p));
+    expect(transport.observeHandlers).toHaveLength(1);
+    transport.observeHandlers[0]?.("on");
+    expect(updates).toEqual(["on"]);
+    expect(provider.diagnostics().packetsReceived).toBe(1);
+    unsubscribe();
+    expect(transport.observeHandlers).toHaveLength(0);
   });
 
   it("diagnostics reflect real transport errors, never fabricated success", async () => {

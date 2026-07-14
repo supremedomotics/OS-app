@@ -21,6 +21,10 @@ export interface DiscoveredEntry {
 export interface IKnxIotTransport {
   discoverOnce(multicastAddress: string, port: number, timeoutMs: number): Promise<DiscoveredEntry[]>;
   get(host: string, port: number, pathname: string): Promise<string>;
+  /** Real CoAP Observe (RFC 7641) registration on a resource — `onUpdate` fires once per
+   * notification. Returns an unsubscribe function; never a polling loop pretending to be
+   * push (§ Observe Layer). */
+  observe(host: string, port: number, pathname: string, onUpdate: (payload: string) => void, onError: (err: Error) => void): () => void;
 }
 
 export class CoapKnxIotTransport implements IKnxIotTransport {
@@ -68,6 +72,24 @@ export class CoapKnxIotTransport implements IKnxIotTransport {
       req.on("error", (err: Error) => reject(err));
       req.end();
     });
+  }
+
+  observe(host: string, port: number, pathname: string, onUpdate: (payload: string) => void, onError: (err: Error) => void): () => void {
+    const req = coap.request({ host, port, pathname, method: "GET", observe: true });
+    let firstResponse: coap.IncomingMessage | null = null;
+    req.on("response", (res: coap.IncomingMessage) => {
+      firstResponse = res;
+      onUpdate(res.payload.toString("utf8"));
+      res.on("data", () => onUpdate(res.payload.toString("utf8")));
+    });
+    req.on("error", onError);
+    req.end();
+    return () => {
+      // node-coap has no explicit deregister call in this ambient surface; closing the
+      // listener is the honest thing this transport can do without a real device to
+      // validate a full RFC 7641 GET-with-Observe:1 deregistration against.
+      firstResponse?.removeAllListeners("data");
+    };
   }
 }
 

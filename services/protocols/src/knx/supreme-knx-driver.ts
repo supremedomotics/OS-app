@@ -15,6 +15,8 @@ import { defaultDpt, stateFromValue, valueFromCommand } from "../knx-codec.js";
 import { KnxTaskRouter } from "./task-router.js";
 import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
 import { KnxIotProvider } from "./knx-iot-provider.js";
+import { parseFunctionalBlocks } from "./functional-block-parser.js";
+import { mapUnifiedDevices, type KnxIotDiscoverySignal, type UnifiedKnxDevice, type UnifiedDeviceMapperInput } from "./unified-device-mapper.js";
 import type { IKnxProvider, ProviderDiagnostics } from "./provider.js";
 
 /**
@@ -54,15 +56,24 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   readonly protocol = "knx";
   private readonly router = new KnxTaskRouter();
   private readonly ultimate: IKnxProvider;
+  private readonly iot: IKnxProvider;
   private readonly bindings: KnxDeviceBinding[] = [];
   private readonly devices = new Set<DeviceId>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly listeners = new Set<StateListener>();
   private connected = false;
 
+  // Unified Device Intelligence counters (§ Diagnostics — Phase 3). Real, only set when
+  // discoverUnified() has actually run; null/unset until then, never fabricated.
+  private lastFunctionalBlockUpdate: string | null = null;
+  private lastMetadataSync: string | null = null;
+  private lastUnifiedDeviceCount: number | null = null;
+  private lastUnifiedCapabilityCount: number | null = null;
+
   constructor(opts: SupremeKnxDriverOptions) {
     this.ultimate = opts.ultimateProvider ?? new KnxUltimateProvider({ host: opts.host, port: opts.port });
     const iot = opts.iotProvider ?? new KnxIotProvider();
+    this.iot = iot;
     // Routing table (§ Internal Task Router): every bus/DPT/security/transport task
     // kind goes to KNX Ultimate — unchanged, KNX IoT never duplicates group
     // communication. discovery.metadata/functional_blocks now route to the real KNX
@@ -148,15 +159,74 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     return () => this.listeners.delete(listener);
   }
 
-  /** Diagnostics (§ Diagnostics) — this driver's own ownership/registration facts,
-   * plus every provider's real, non-fabricated counters. */
-  diagnostics(): { protocol: string; connected: boolean; deviceCount: number; bindingCount: number; providers: ProviderDiagnostics[] } {
+  /** Unified Device Pipeline (§ Unified Device Intelligence — Phase 3): KNX Discovery →
+   * KNX IoT Provider → Functional Blocks → Semantic Metadata → ETS Metadata → Universal
+   * Circuit Grouping → Capability Detection → Unified Device Mapper → Supreme Device.
+   *
+   * Neither provider owns the result — this method only COLLECTS what each provider
+   * contributes (KNX IoT's discovery + functional blocks; the caller's own ETS signals)
+   * and hands them to {@link mapUnifiedDevices}. Ownership of whatever devices get
+   * bound from this result stays with THIS driver via {@link bind}, same as always
+   * (§ Architectural Rule — unchanged from Phase 1/2). */
+  async discoverUnified(
+    ets?: UnifiedDeviceMapperInput["ets"],
+    userOverrides?: UnifiedDeviceMapperInput["userOverrides"],
+  ): Promise<UnifiedKnxDevice[]> {
+    const iotDiscovered = await this.iot.discover();
+    const knxIotSignals: KnxIotDiscoverySignal[] = [];
+    for (const d of iotDiscovered) {
+      const host = String(d.raw.host);
+      const linkFormat = String(d.raw.linkFormat);
+      let functionalBlocks: KnxIotDiscoverySignal["functionalBlocks"];
+      try {
+        const body = (await this.router.execute({ kind: "discovery.functional_blocks", host })) as string;
+        functionalBlocks = parseFunctionalBlocks(body).blocks;
+        this.lastFunctionalBlockUpdate = new Date().toISOString();
+      } catch {
+        // No functional-block response for this device yet — the device still exists
+        // with whatever grouping/name-based classification is possible (§ pipeline:
+        // every stage enriches, none is required for a device to appear at all).
+        functionalBlocks = undefined;
+      }
+      knxIotSignals.push({ host, linkFormat, functionalBlocks });
+    }
+
+    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides });
+    this.lastMetadataSync = new Date().toISOString();
+    this.lastUnifiedDeviceCount = result.length;
+    this.lastUnifiedCapabilityCount = result.reduce((n, d) => n + d.capabilities.length, 0);
+    return result;
+  }
+
+  /** Diagnostics (§ Diagnostics) — this driver's own ownership/registration facts, every
+   * provider's real, non-fabricated counters, and the Unified Device Pipeline's own
+   * results once {@link discoverUnified} has run at least once (null fields until then —
+   * never a fabricated zero pretending the pipeline has already run). */
+  diagnostics(): {
+    protocol: string;
+    connected: boolean;
+    deviceCount: number;
+    bindingCount: number;
+    providers: ProviderDiagnostics[];
+    transportProvider: string;
+    metadataProvider: string;
+    lastFunctionalBlockUpdate: string | null;
+    lastMetadataSync: string | null;
+    unifiedDeviceCount: number | null;
+    unifiedCapabilityCount: number | null;
+  } {
     return {
       protocol: this.protocol,
       connected: this.connected,
       deviceCount: this.devices.size,
       bindingCount: this.bindings.length,
       providers: this.router.diagnostics(),
+      transportProvider: this.ultimate.name,
+      metadataProvider: this.iot.name,
+      lastFunctionalBlockUpdate: this.lastFunctionalBlockUpdate,
+      lastMetadataSync: this.lastMetadataSync,
+      unifiedDeviceCount: this.lastUnifiedDeviceCount,
+      unifiedCapabilityCount: this.lastUnifiedCapabilityCount,
     };
   }
 

@@ -92,5 +92,51 @@ describe("SupremeKnxDriver", () => {
     expect(diag.deviceCount).toBe(1);
     expect(diag.bindingCount).toBe(1);
     expect(diag.providers[0]?.packetsSent).toBe(1);
+    expect(diag.unifiedDeviceCount).toBeNull(); // discoverUnified() never ran this test
+  });
+});
+
+/** A fake KNX IoT provider — proves discoverUnified() runs the full pipeline (KNX IoT
+ * discovery → functional blocks → grouping → capability detection → merged device)
+ * through the driver, without a real CoAP network. */
+class FakeKnxIotProvider implements IKnxProvider {
+  readonly name = "fake-knx-iot";
+  async initialize(): Promise<void> {}
+  async discover(): Promise<DiscoveredDevice[]> {
+    return [{ backendId: "knx-iot:10.0.0.42", suggestedName: "10.0.0.42", capabilities: [], raw: { host: "10.0.0.42", linkFormat: '</dev>;title="Kitchen Light"', source: "knx-iot" } }];
+  }
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  async shutdown(): Promise<void> {}
+  async execute(task: KnxTask): Promise<unknown> {
+    if (task.kind === "discovery.functional_blocks") {
+      return '</fb/1/sw>;rt="urn:knx:fb.onoff";if="if.a";title="Kitchen Light",</fb/1/dim>;rt="urn:knx:fb.dim";if="if.a";title="Kitchen Light Dim"';
+    }
+    throw new Error(`unsupported: ${task.kind}`);
+  }
+  subscribe(): void { throw new Error("not applicable"); }
+  unsubscribe(): void {}
+  health(): ProviderHealth { return { connected: true, lastError: null }; }
+  diagnostics(): ProviderDiagnostics {
+    return { provider: this.name, connected: true, packetsSent: 0, packetsReceived: 0, lastTelegramAt: null, lastCommandAt: null, lastError: null, reconnectAttempts: 0 };
+  }
+}
+
+describe("SupremeKnxDriver.discoverUnified", () => {
+  it("runs the full Unified Device Pipeline: KNX IoT discovery + functional blocks + ETS + grouping → one merged Supreme device", async () => {
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: new FakeKnxProvider(), iotProvider: new FakeKnxIotProvider() });
+    const devices = await driver.discoverUnified([{ id: "10.0.0.42", name: "Kitchen Light SW", room: "Kitchen" }]);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.suggestedName).toBe("Kitchen Light");
+    expect(devices[0]?.capabilities).toEqual(expect.arrayContaining(["onoff", "brightness"]));
+    expect(devices[0]?.raw.metadata.room).toBe("Kitchen");
+
+    const diag = driver.diagnostics();
+    expect(diag.transportProvider).toBe("fake"); // KnxUltimateProvider's name (§ diagnostics)
+    expect(diag.metadataProvider).toBe("fake-knx-iot");
+    expect(diag.unifiedDeviceCount).toBe(1);
+    expect(diag.unifiedCapabilityCount).toBeGreaterThan(0);
+    expect(diag.lastFunctionalBlockUpdate).not.toBeNull();
+    expect(diag.lastMetadataSync).not.toBeNull();
   });
 });

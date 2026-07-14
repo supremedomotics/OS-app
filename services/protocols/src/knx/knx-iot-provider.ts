@@ -101,12 +101,28 @@ export class KnxIotProvider implements IKnxProvider {
     throw new Error(`knx-iot: unsupported task "${task.kind}"`);
   }
 
-  /** This provider is never registered for `bus.monitor` — state observation stays KNX
-   * Ultimate's job (§ no duplication), so subscribing here is a configuration error. */
+  /** This provider is never registered for `bus.monitor` — group-address state
+   * observation stays KNX Ultimate's job (§ no duplication), so subscribing here is a
+   * configuration error. Real KNX IoT resource observation (CoAP Observe) is a distinct
+   * capability, exposed separately as {@link observeResource} rather than overloading
+   * this method's group-address-keyed contract. */
   subscribe(): void {
     throw new Error("knx-iot: subscribe() is not applicable — this provider is not registered for bus.monitor");
   }
   unsubscribe(): void {}
+
+  /** Real CoAP Observe (§ Observe Layer) on a KNX IoT resource — never exposes a raw
+   * CoAP notification to the caller, only the decoded payload string; translating that
+   * into a Supreme event is {@link "./supreme-knx-driver.js" SupremeKnxDriver}'s job. */
+  observeResource(host: string, pathname: string, onUpdate: (payload: string) => void, port = this.port): () => void {
+    return this.transport.observe(host, port, pathname, (payload) => {
+      this.packetsReceived++;
+      this.lastTelegramAt = new Date().toISOString();
+      onUpdate(payload);
+    }, (err) => {
+      this.lastError = err.message;
+    });
+  }
 
   health(): ProviderHealth {
     return { connected: this.connected, lastError: this.lastError };

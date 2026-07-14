@@ -38,6 +38,7 @@ declare module "coap" {
     port?: number;
     pathname?: string;
     method?: "GET" | "POST" | "PUT" | "DELETE";
+    observe?: boolean;
   }
   export function request(params: RequestParams): OutgoingMessage;
 }
