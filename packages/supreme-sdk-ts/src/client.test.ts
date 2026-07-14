@@ -1,6 +1,12 @@
 import type { DeviceId } from "@supreme/domain-model";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryTokenStore, SupremeClient } from "./client.js";
+
+/** Builds an unsigned-but-shaped JWT carrying only the `exp` claim the SDK actually reads. */
+function fakeJwt(expSeconds: number): string {
+  const b64 = (obj: unknown) => btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_");
+  return `${b64({ alg: "none" })}.${b64({ exp: expSeconds })}.sig`;
+}
 
 /**
  * The access token is short-lived (15 min) by design; every homeowner command must survive it
@@ -93,5 +99,73 @@ describe("SupremeClient — automatic refresh-and-retry on 401", () => {
     await expect(client.command("dev1" as DeviceId, { capability: "onoff", action: "on" })).rejects.toThrow();
     expect(expired).toBe(true);
     expect(client.accessToken).toBeNull();
+  });
+});
+
+/**
+ * BUG-003: reactive (on-401) refresh alone means every request in flight the instant the access
+ * token expires 401s together — a dashboard mount fires a dozen-plus GETs, so that was the "15-18
+ * failed requests before the session recovers" symptom. The SDK now also refreshes proactively,
+ * ~60s ahead of the token's own `exp` claim, so a session that's actively in use never reaches
+ * that burst in the first place.
+ */
+describe("SupremeClient — proactive refresh ahead of token expiry", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("refreshes on its own, before any request ever sees a 401", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    let refreshCalls = 0;
+    let sawAny401 = false;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/auth/refresh") {
+        refreshCalls += 1;
+        return jsonResponse(200, {
+          accessToken: fakeJwt(nowSec + 900),
+          refreshToken: "refresh2",
+          expiresIn: 900,
+          tokenType: "Bearer",
+        });
+      }
+      sawAny401 = true; // any other call in this test is unexpected
+      return jsonResponse(401, { code: "unauthorized", message: "unexpected call" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: fakeJwt(nowSec + 90), refreshToken: "refresh1" });
+    new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    // Token expires in 90s and the buffer is 60s, so the proactive timer should fire at ~30s.
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(refreshCalls).toBe(1);
+    expect(sawAny401).toBe(false);
+  });
+
+  it("refreshes immediately on construction when a restored session's token is already past the buffer", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    let refreshCalls = 0;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/auth/refresh") {
+        refreshCalls += 1;
+        return jsonResponse(200, {
+          accessToken: fakeJwt(nowSec + 900),
+          refreshToken: "refresh2",
+          expiresIn: 900,
+          tokenType: "Bearer",
+        });
+      }
+      return jsonResponse(401, { code: "unauthorized", message: "unexpected call" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: fakeJwt(nowSec + 10), refreshToken: "refresh1" }); // inside the 60s buffer already
+    new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refreshCalls).toBe(1);
   });
 });

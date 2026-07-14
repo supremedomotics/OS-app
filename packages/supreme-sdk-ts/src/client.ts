@@ -111,6 +111,21 @@ export class MemoryTokenStore implements TokenStore {
   }
 }
 
+/** Reads the `exp` claim (seconds since epoch) out of a JWT without verifying it — the SDK never
+ * needs to trust the claim, only to know roughly when the server will start rejecting it, so it
+ * can refresh proactively (§ BUG-003). Returns null for anything that isn't a parseable JWT. */
+function decodeJwtExpiry(token: string): number | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const claims = JSON.parse(json) as { exp?: number };
+    return typeof claims.exp === "number" ? claims.exp : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface SupremeClientOptions {
   baseUrl: string;
   tokenStore?: TokenStore;
@@ -131,12 +146,45 @@ export class SupremeClient {
   /** In-flight refresh, so concurrent 401s (several device cards commanding at once) share one
    * refresh call instead of each racing the refresh endpoint. */
   private refreshing: Promise<TokenPair> | null = null;
+  /** Timer for the proactive refresh below (§ BUG-003) — cleared/rescheduled on every token change. */
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: SupremeClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.tokens = opts.tokenStore ?? new MemoryTokenStore();
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.onSessionExpired = opts.onSessionExpired;
+    // A restored session (page reload) may already hold a near-expiry access token — schedule
+    // its proactive refresh too, not just tokens minted during this instance's lifetime.
+    const existing = this.tokens.get();
+    if (existing) this.scheduleProactiveRefresh(existing.accessToken);
+  }
+
+  /** Store new tokens and (re)schedule the proactive refresh below — the single place tokens
+   * are ever written, so the schedule can never drift out of sync with what's stored. */
+  private setTokens(tokens: { accessToken: string; refreshToken: string } | null): void {
+    this.tokens.set(tokens);
+    if (this.refreshTimer) { clearTimeout(this.refreshTimer); this.refreshTimer = null; }
+    if (tokens) this.scheduleProactiveRefresh(tokens.accessToken);
+  }
+
+  /** Refresh ~60s before the access token's own `exp` claim, instead of waiting for it to
+   * actually expire. Reactive (on-401) refresh alone guarantees every request in flight at the
+   * expiry instant 401s together — a homeowner's dashboard fires a dozen-plus GETs on mount, so
+   * that burst was the exact "15-18 failed requests before the session recovers" behavior
+   * (§ BUG-003). Proactive refresh keeps the token valid so that burst never happens in normal
+   * use; the on-401 retry path in `request()` remains as a fallback (laptop sleep/wake, clock
+   * skew, a session opened long enough that this timer's tab was backgrounded and throttled). */
+  private scheduleProactiveRefresh(accessToken: string): void {
+    const exp = decodeJwtExpiry(accessToken);
+    if (exp == null) return;
+    const REFRESH_BUFFER_MS = 60_000;
+    const delay = exp * 1000 - Date.now() - REFRESH_BUFFER_MS;
+    if (delay <= 0) {
+      void this.refresh().catch(() => {});
+      return;
+    }
+    this.refreshTimer = setTimeout(() => { void this.refresh().catch(() => {}); }, delay);
   }
 
   // ── Auth ─────────────────────────────────────────────────────────────────────
@@ -144,7 +192,7 @@ export class SupremeClient {
     const res = await this.request("POST", "/v1/auth/login", { email, password }, false);
     const parsed = LoginResponse.parse(res);
     if (parsed.status === "ok") {
-      this.tokens.set({ accessToken: parsed.accessToken, refreshToken: parsed.refreshToken });
+      this.setTokens({ accessToken: parsed.accessToken, refreshToken: parsed.refreshToken });
     }
     return parsed;
   }
@@ -159,7 +207,7 @@ export class SupremeClient {
       try {
         const res = await this.request("POST", "/v1/auth/refresh", { refreshToken: current.refreshToken }, false);
         const pair = TokenPair.parse(res);
-        this.tokens.set({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+        this.setTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
         return pair;
       } finally {
         this.refreshing = null;
@@ -284,7 +332,7 @@ export class SupremeClient {
   }
   async finishPasskeyLogin(input: { credentialId: string; clientDataJSON: string; authenticatorData: string; signature: string }): Promise<LoginResponse> {
     const res = (await this.request("POST", "/v1/auth/passkey/finish", input)) as LoginResponse & { accessToken?: string; refreshToken?: string };
-    if (res.status === "ok") this.tokens.set({ accessToken: res.accessToken!, refreshToken: res.refreshToken! });
+    if (res.status === "ok") this.setTokens({ accessToken: res.accessToken!, refreshToken: res.refreshToken! });
     return res;
   }
 
@@ -589,7 +637,7 @@ export class SupremeClient {
    * explicit "Log Out" action; this is the lower-level primitive it (and a session-expiry
    * handler) builds on. Mirrors the Dart SDK's `clearSession()`. */
   clearSession(): void {
-    this.tokens.set(null);
+    this.setTokens(null);
   }
 
   /** Log out (§ Authentication): revoke the current session server-side, then clear the
@@ -637,7 +685,7 @@ export class SupremeClient {
         try {
           await this.refresh();
         } catch {
-          this.tokens.set(null);
+          this.setTokens(null);
           this.onSessionExpired?.();
           throw parsed;
         }
