@@ -35,7 +35,14 @@ export interface KnxGroupReadTask {
   groupAddress: string;
   dpt: string;
 }
-export type KnxTask = KnxGroupWriteTask | KnxGroupReadTask;
+/** Real KNX IoT task (§ KnxIotProvider) — CoAP GET /fb on a device already surfaced by
+ * discover(). host/port come from that discovery result, never guessed. */
+export interface KnxFunctionalBlocksTask {
+  kind: "discovery.functional_blocks";
+  host: string;
+  port?: number;
+}
+export type KnxTask = KnxGroupWriteTask | KnxGroupReadTask | KnxFunctionalBlocksTask;
 
 export interface ProviderHealth {
   connected: boolean;

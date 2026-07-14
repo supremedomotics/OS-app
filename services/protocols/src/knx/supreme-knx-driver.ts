@@ -14,6 +14,7 @@ import {
 import { defaultDpt, stateFromValue, valueFromCommand } from "../knx-codec.js";
 import { KnxTaskRouter } from "./task-router.js";
 import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
+import { KnxIotProvider } from "./knx-iot-provider.js";
 import type { IKnxProvider, ProviderDiagnostics } from "./provider.js";
 
 /**
@@ -34,6 +35,10 @@ export interface SupremeKnxDriverOptions {
   port?: number;
   /** Injectable for tests; defaults to the real {@link KnxUltimateProvider}. */
   ultimateProvider?: IKnxProvider;
+  /** Injectable for tests; defaults to the real {@link KnxIotProvider}. Registered only
+   * for discovery.* kinds it can honestly serve (§ Compatibility Report) — never for
+   * bus/dpt/security/transport, which stay KNX Ultimate's (§ no duplication). */
+  iotProvider?: IKnxProvider;
 }
 
 interface KnxDeviceBinding {
@@ -57,16 +62,22 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
 
   constructor(opts: SupremeKnxDriverOptions) {
     this.ultimate = opts.ultimateProvider ?? new KnxUltimateProvider({ host: opts.host, port: opts.port });
+    const iot = opts.iotProvider ?? new KnxIotProvider();
     // Routing table (§ Internal Task Router): every bus/DPT/security/transport task
-    // kind goes to KNX Ultimate. discovery.* kinds are deliberately left unregistered —
-    // see the architecture document; registering a future KNX IoT provider here is a
-    // one-line addition, never a change to this driver or the router itself.
+    // kind goes to KNX Ultimate — unchanged, KNX IoT never duplicates group
+    // communication. discovery.metadata/functional_blocks now route to the real KNX
+    // IoT provider (§ Compatibility Report); the remaining discovery.* kinds stay
+    // unregistered — no live KNX IoT device in this environment to validate them
+    // against yet.
     for (const kind of [
       "bus.group_write", "bus.group_read", "bus.monitor",
       "dpt.encode", "dpt.decode",
       "security.knx_secure", "transport.routing", "transport.tunneling",
     ] as const) {
       this.router.register(kind, this.ultimate);
+    }
+    for (const kind of ["discovery.metadata", "discovery.functional_blocks"] as const) {
+      this.router.register(kind, iot);
     }
   }
 
