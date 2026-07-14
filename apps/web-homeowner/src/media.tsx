@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { Device } from "@supreme/domain-model";
-import { Grid } from "@supreme/aureon-web";
+import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import { Button, Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client, fetchDriverRegistry } from "./api.js";
 import { AvrConsole } from "./features/media/detail.js";
@@ -87,11 +87,26 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
   for (const d of media) { const k = roomName(d.roomId); (byRoom.get(k) ?? byRoom.set(k, []).get(k)!).push(d); }
   const groups = [...byRoom.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
+  const allPower = async (on: boolean) => {
+    const targets = media.filter((d) => d.capabilities.some((c) => c.kind === "onoff"));
+    await Promise.all(targets.map((d) =>
+      client.command(d.id as DeviceId, { capability: "onoff", action: on ? "on" : "off" } as CapabilityCommand),
+    ));
+  };
+
   return (
     <div className="page">
-      <div className="page-head">
-        <h1 className="title">Media</h1>
-        <p className="sub">{devices ? `${media.length} player${media.length === 1 ? "" : "s"} across your home` : "Loading…"}</p>
+      <div className="page-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="title">Media</h1>
+          <p className="sub">{devices ? `${media.length} player${media.length === 1 ? "" : "s"} across your home` : "Loading…"}</p>
+        </div>
+        {media.length > 0 && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button onClick={() => void allPower(true)}>All ON</Button>
+            <Button onClick={() => void allPower(false)}>All OFF</Button>
+          </div>
+        )}
       </div>
 
       {devices && media.length === 0 && (
