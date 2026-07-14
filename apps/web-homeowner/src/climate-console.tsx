@@ -350,6 +350,11 @@ export function ClimateConsole({
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<QuickPreset | null>(null);
+  // The last non-off mode seen, so powering back on can restore it optimistically instead
+  // of leaving the mode label/dial stuck on "off" until the driver's state event round-trips
+  // (§ BUG-006 — onoff and temperature are separate capabilities; setPower must keep both
+  // optimistic reads coherent since they represent one physical on/off dimension together).
+  const [lastMode, setLastMode] = useState<"heat" | "cool" | "auto" | "fan_only" | null>(null);
 
   const modes = config.modes ?? [];
   const fanSpeeds = config.fanSpeeds ?? [];
@@ -386,6 +391,13 @@ export function ClimateConsole({
   };
   const setPower = (on: boolean) => {
     vibrate(10);
+    if (on) {
+      const restoreMode = (live.mode !== "off" ? live.mode : null) ?? lastMode ?? modes[0] ?? "auto";
+      applyTemp({ mode: restoreMode });
+    } else {
+      if (live.mode !== "off") setLastMode(live.mode);
+      applyTemp({ mode: "off" });
+    }
     apply(device.id, "onoff", { kind: "onoff", on });
     void cmd(device.id, { capability: "onoff", action: on ? "on" : "off" });
   };
