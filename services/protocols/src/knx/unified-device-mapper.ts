@@ -45,6 +45,16 @@ export interface UnifiedDeviceMapperInput {
   userOverrides?: Record<string, Partial<SemanticMetadata>>;
 }
 
+/** A single communication object contributing to this device — a KNX Ultimate group
+ * address or a KNX IoT resource (§ Phase 4 Binding Engine input). Kept generic (id+name)
+ * rather than protocol-typed so the Binding Engine decides, per-id, whether it looks like
+ * a bindable classic group address (`n/n/n`) or an IoT-only resource reference. */
+export interface CommunicationObject {
+  id: string;
+  name: string;
+  source: "knx_iot" | "ets";
+}
+
 export interface UnifiedKnxDevice extends DiscoveredDevice {
   raw: {
     deviceKind: KnxDeviceKind;
@@ -52,6 +62,7 @@ export interface UnifiedKnxDevice extends DiscoveredDevice {
     mergeExplanation: string[];
     sourceHrefs: string[];
     groupingKey: string;
+    communicationObjects: CommunicationObject[];
   };
 }
 
@@ -103,6 +114,11 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
     const merged = mergeMetadata(sources);
     const metadata = flattenMergedMetadata(merged);
 
+    const communicationObjects: CommunicationObject[] = [
+      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const })),
+      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const })),
+    ];
+
     return {
       backendId: `knx-unified:${cluster.key}`,
       suggestedName: metadata.deviceName ?? cluster.key,
@@ -113,6 +129,7 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
         mergeExplanation: explainMerge(merged),
         sourceHrefs: [...matchedOn, ...functionalBlocks.map((b) => b.href)],
         groupingKey: cluster.key,
+        communicationObjects,
       },
     };
   });
