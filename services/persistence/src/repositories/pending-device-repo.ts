@@ -75,14 +75,19 @@ export class PendingDeviceRepo implements IPendingDeviceStore {
   constructor(private readonly db: SqlDb) {}
 
   async upsert(i: StagePendingInput): Promise<void> {
-    // Dedupe by (home_id, backend_id): a re-scan refreshes last_seen + metadata but keeps the
-    // original id/first_seen and never revives a device already actioned (approved/rejected).
+    // Dedupe by (home_id, backend_id): a re-scan refreshes last_seen + metadata and keeps the
+    // original id/first_seen. Status is revived to 'pending' on every hit — safe because the
+    // caller (CommissioningService.discover) only ever passes backendIds that are NOT currently
+    // owned by a live Supreme device (see its own reverseLookup filter), so a still-commissioned
+    // device can never reach here. A backendId that previously got 'rejected' — or was 'approved'
+    // and the resulting device was later deleted — genuinely is available again; keeping it stuck
+    // at a terminal status forever left no way to reconsider it (§ BUG-005).
     await this.db.query(
       `INSERT INTO pending_devices
          (id, home_id, backend_id, suggested_name, protocol, source, capabilities, network, first_seen, last_seen, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$9,'pending')
        ON CONFLICT (home_id, backend_id) DO UPDATE SET
-         suggested_name=$4, protocol=$5, source=$6, capabilities=$7::jsonb, network=$8::jsonb, last_seen=$9`,
+         suggested_name=$4, protocol=$5, source=$6, capabilities=$7::jsonb, network=$8::jsonb, last_seen=$9, status='pending'`,
       [
         i.newId,
         i.homeId,
