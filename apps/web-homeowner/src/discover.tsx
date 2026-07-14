@@ -90,9 +90,11 @@ export function DiscoverDevices() {
     void loadRooms();
   }, []);
 
-  // The technologies a scan covers — every protocol any registered driver declares.
-  const protocols = Array.from(new Set(registry.flatMap((d) => d.protocols))).sort();
+  // The technologies a scan actually covers — only protocols an INSTALLED+enabled driver
+  // declares, shown in green. Listing every possible protocol regardless of install state
+  // just tells the installer things they haven't set up yet, not what a scan can find.
   const activeProtocols = new Set(registry.filter((d) => d.installed && d.enabled).flatMap((d) => d.protocols));
+  const protocols = Array.from(activeProtocols).sort();
 
   async function scan() {
     setPhase("scanning");
