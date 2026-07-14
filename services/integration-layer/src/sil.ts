@@ -195,4 +195,14 @@ export class SupremeIntegrationLayer {
   discover() {
     return this.adapter.discover();
   }
+
+  /** The live, connected driver instance currently registered for a protocol (e.g.
+   * "knx") — null when unavailable (single-backend HA setups, or no driver registered
+   * for that protocol yet). Read-only introspection for diagnostics/orchestration
+   * callers that need to check driver identity/ownership without going through the
+   * command() path (§ Phase 5 installer-workflow validation — never a second command
+   * routing mechanism, purely a lookup). */
+  getNativeDriver(protocol: string): INativeProtocolDriver | null {
+    return this.router?.native.driverFor(protocol) ?? null;
+  }
 }

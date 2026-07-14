@@ -9,6 +9,49 @@ export { discoveredFromZ2mBridge } from "./mqtt-discovery.js";
 export { ModbusProtocolDriver, type ModbusDriverOptions } from "./modbus-driver.js";
 export { KnxProtocolDriver, type KnxDriverOptions, type KnxConnection } from "./knx-driver.js";
 export { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./knx-codec.js";
+// Supreme KNX Driver (Next-Generation Architecture, Phases 2-4) — the Unified Device
+// Intelligence pipeline. Additive to KnxProtocolDriver above (not a replacement; see
+// each phase's Migration Notes for why the production driver hasn't been cut over).
+export { SupremeKnxDriver, type SupremeKnxDriverOptions } from "./knx/supreme-knx-driver.js";
+export { KnxUltimateProvider, type KnxUltimateProviderOptions } from "./knx/knx-ultimate-provider.js";
+export { KnxIotProvider, type KnxIotProviderOptions } from "./knx/knx-iot-provider.js";
+export { KnxTaskRouter } from "./knx/task-router.js";
+export type { IKnxProvider, KnxTask, KnxTaskKind, ProviderDiagnostics as KnxProviderDiagnostics, ProviderHealth as KnxProviderHealth } from "./knx/provider.js";
+export { parseFunctionalBlocks, type FunctionalBlock, type ParsedFunctionalBlocks } from "./knx/functional-block-parser.js";
+export { classifyFromText, classifyFunctionalBlock, mergeCapabilityHints, type CapabilityHint, type KnxDeviceKind } from "./knx/capability-mapper.js";
+export {
+  EMPTY_SEMANTIC_METADATA,
+  semanticMetadataFromEts,
+  semanticMetadataFromLinkFormatTitle,
+  type SemanticMetadata,
+  type EtsMetadataSource,
+} from "./knx/semantic-metadata.js";
+export {
+  mergeMetadata,
+  flattenMergedMetadata,
+  explainMerge,
+  type MetadataSource,
+  type MetadataSourceKind,
+  type MergedMetadata,
+  type MergedMetadataField,
+} from "./knx/metadata-merge.js";
+export {
+  mapUnifiedDevices,
+  type UnifiedKnxDevice,
+  type UnifiedDeviceMapperInput,
+  type KnxIotDiscoverySignal,
+  type CommunicationObject,
+} from "./knx/unified-device-mapper.js";
+export { planBindings, isFullyBindable, type BindingPlanItem } from "./knx/binding-engine.js";
+export { scoreConfidence, fieldsNeedingReview, CONFIDENCE_REVIEW_THRESHOLD, type ConfidenceScores } from "./knx/confidence-engine.js";
+export { assignRoom, type RoomAssignmentInput, type RoomAssignmentResult, type RoomAssignmentSource } from "./knx/room-assignment.js";
+export {
+  checkDuplicate,
+  bucketByDuplicateDecision,
+  type DuplicateDecision,
+  type DuplicateCheckResult,
+  type ExistingInstallationState,
+} from "./knx/duplicate-detection.js";
 export {
   knxSearch,
   encodeSearchRequest,

@@ -66,10 +66,14 @@ export interface UnifiedKnxDevice extends DiscoveredDevice {
   };
 }
 
+function titleCase(text: string): string {
+  return text.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function inferredMetadata(deviceKind: KnxDeviceKind, groupingKey: string): Partial<SemanticMetadata> {
   if (deviceKind === "unknown") return {};
-  const label = deviceKind.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  return { deviceName: `${groupingKey.replace(/\b\w/g, (c) => c.toUpperCase())} (${label})` };
+  const label = titleCase(deviceKind.replace(/_/g, " "));
+  return { deviceName: `${titleCase(groupingKey)} (${label})` };
 }
 
 /** Runs the full Unified Device Pipeline over whatever signals are available this cycle
@@ -92,9 +96,15 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
     const etsSignals = cluster.signals.map((s) => etsById.get(s.id)).filter((s): s is NonNullable<typeof s> => s !== undefined);
 
     const functionalBlocks = iotSignals.flatMap((d) => d.functionalBlocks ?? []);
+    // Classify from the RAW signal names too, not just the grouping key — the grouping
+    // engine (§ Phase 2, unmodified) strips trailing operation words like "Switch"/"SW"
+    // to find circuit identity, which is correct for its job but can strip the ONLY
+    // classification keyword a single-signal device has (e.g. "Hallway Switch" → circuit
+    // key "hallway"). classifyFromText already accepts multiple hints — this costs
+    // nothing extra and never overrides a real functional-block classification.
     const hints = functionalBlocks.length > 0
       ? functionalBlocks.map(classifyFunctionalBlock)
-      : [classifyFromText(cluster.key)];
+      : [classifyFromText(cluster.key, ...cluster.signals.map((s) => s.name))];
     const { capabilities, deviceKind, matchedOn } = mergeCapabilityHints(hints);
 
     const knxIotTitle = iotSignals[0]?.linkFormat.match(/title="([^"]*)"/)?.[1] ?? null;
@@ -108,7 +118,7 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
       { kind: "user", metadata: input.userOverrides?.[cluster.key] ?? {} },
       { kind: "knx_iot", metadata: semanticMetadataFromLinkFormatTitle(knxIotTitle) },
       { kind: "ets", metadata: semanticMetadataFromEts(etsMeta) },
-      { kind: "grouping", metadata: { ...EMPTY_SEMANTIC_METADATA, deviceName: cluster.key } },
+      { kind: "grouping", metadata: { ...EMPTY_SEMANTIC_METADATA, deviceName: titleCase(cluster.key) } },
       { kind: "inference", metadata: inferredMetadata(deviceKind, cluster.key) },
     ];
     const merged = mergeMetadata(sources);

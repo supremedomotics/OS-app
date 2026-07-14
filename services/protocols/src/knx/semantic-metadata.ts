@@ -58,7 +58,13 @@ export interface EtsMetadataSource {
 export function semanticMetadataFromEts(ets: EtsMetadataSource): SemanticMetadata {
   return {
     ...EMPTY_SEMANTIC_METADATA,
-    deviceName: ets.circuitName ?? null,
+    // Deliberately NOT `deviceName: ets.circuitName` — a circuit's ETS signals carry
+    // suffixed per-operation names ("Kitchen Light SW", "... STATUS"), and which one
+    // happens to be first in a cluster is arbitrary, not a reliable device name (§ Phase
+    // 5 fix: the worked pipeline example itself has ETS contribute room only — "ETS
+    // says: Kitchen" — with the CLEAN name coming from Universal Circuit Grouping, one
+    // priority tier below). Grouping's key is exactly the deduplicated, suffix-stripped
+    // name ETS's raw signals can't reliably provide.
     room: ets.room ?? null,
     description: ets.description ?? null,
   };

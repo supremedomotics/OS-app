@@ -29,7 +29,23 @@ import {
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
 import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
-import { knxSearch, type KnxGateway } from "@supreme/protocols";
+import {
+  knxSearch,
+  SupremeKnxDriver,
+  scoreConfidence,
+  assignRoom,
+  checkDuplicate,
+  planBindings,
+  type KnxGateway,
+  type UnifiedDeviceMapperInput,
+  type UnifiedKnxDevice,
+  type BindingPlanItem,
+  type ConfidenceScores,
+  type RoomAssignmentResult,
+  type DuplicateCheckResult,
+  type DuplicateDecision,
+  type ExistingInstallationState,
+} from "@supreme/protocols";
 import {
   CommissioningService,
   ConfigKnxLearningStore,
@@ -74,6 +90,35 @@ export interface KnxImportResult {
   devices: number;
   roomsCreated: number;
   created: { name: string; room: string | null; capabilities: string[] }[];
+}
+
+/** Discover Devices workspace sections (§ Phase 5) — every discovered device lands in
+ * exactly one, purely as a function of what the Confidence/Duplicate/Binding engines
+ * already decided. Never a manual installer classification. */
+export type KnxQueueSection = "ready" | "needs_review" | "duplicates" | "conflicts";
+
+export interface KnxInstallerQueueItem {
+  device: UnifiedKnxDevice;
+  confidence: ConfidenceScores;
+  room: RoomAssignmentResult;
+  duplicate: DuplicateCheckResult;
+  plans: BindingPlanItem[];
+  section: KnxQueueSection;
+}
+
+export interface KnxApprovalResult {
+  device: Awaited<ReturnType<CommissioningService["commission"]>>;
+  status: "ready" | "warning" | "error";
+  reason?: string;
+}
+
+/** Pure classification — a device lands in exactly one section, decided entirely by the
+ * three engines that already ran (§ Phase 4), never a separate ad-hoc rule set. */
+function knxQueueSection(decision: DuplicateDecision, confidence: ConfidenceScores, plans: BindingPlanItem[]): KnxQueueSection {
+  if (decision === "merge" || decision === "update") return "duplicates";
+  if (decision === "ask_installer") return "conflicts";
+  if (confidence.overall < 70 || plans.length === 0 || !plans.every((p) => p.bindable)) return "needs_review";
+  return "ready";
 }
 
 /** What triggered a driver's pass through the Driver Lifecycle pipeline — recorded
@@ -308,6 +353,151 @@ export class InstallerServices {
       }
     }
     return device;
+  }
+
+  // ── Supreme KNX Unified Device Intelligence (§ Phase 5 — production installer flow) ──
+
+  /** Builds a throwaway {@link SupremeKnxDriver} for DISCOVERY ONLY, from the same
+   * config the live "knx" driver already uses (§ reuse, not redesign) — never used for
+   * commands. Live command routing for approved devices still goes through whichever
+   * driver is registered for the "knx" protocol via {@link bindProtocol} (unchanged;
+   * see the KNX IoT Compatibility Report + each phase's Migration Notes for why the
+   * production driver hasn't been cut over yet). */
+  private async knxDiscoveryDriver(override?: { host: string; port?: number }): Promise<SupremeKnxDriver | null> {
+    if (override) return new SupremeKnxDriver(override);
+    // The manifest key is "supreme-knx" (§ manifests.ts) — match by protocol, the same
+    // field NATIVE_DRIVER_FACTORIES is keyed by, not the catalog key (§ don't re-derive
+    // a mapping that already exists elsewhere under a different name).
+    const entry = (await this.drivers.registry()).find((e) => e.protocols.includes("knx") && e.installed);
+    const host = entry?.config.host;
+    if (typeof host !== "string" || host.length === 0) return null;
+    const port = Number(entry?.config.port);
+    return new SupremeKnxDriver({ host, port: Number.isFinite(port) ? port : undefined });
+  }
+
+  /** The existing installation's state, for {@link checkDuplicate} — read-only, derived
+   * from the SAME stores every other diagnostic/listing endpoint already reads (never a
+   * separate KNX-specific registry). */
+  private async knxExistingState(): Promise<ExistingInstallationState> {
+    const [devices, bindings] = await Promise.all([this.d.home.listDevices(), this.listProtocolBindings()]);
+    const knxBindings = bindings.filter((b) => b.protocol === "knx");
+    return {
+      // The Supreme Device entity has no persisted `backendId` field (that mapping lives
+      // in the SIL's EntityRegistryMirror, not the domain model) — re-discovery dedup
+      // relies on the communicationObject/groupingKey checks below instead, which read
+      // real, already-available data rather than guessing at a field that doesn't exist.
+      backendIds: new Set(),
+      boundAddresses: new Set(knxBindings.map((b) => b.address)),
+      groupingKeys: new Set(devices.map((d) => d.name.toLowerCase())),
+    };
+  }
+
+  /**
+   * Production Discovery Pipeline (§ Phase 5): Scan → discoverUnified() → Confidence
+   * Engine → Room Assignment → Duplicate Detection → Binding Engine → Installer Queue.
+   * Every stage reuses the exact Phase 2-4 engine already built and tested — nothing
+   * here re-implements grouping, capability detection, metadata merge, or binding
+   * logic. No raw KNX object (group address string aside — see `communicationObjects`,
+   * which is intentionally protocol-transparent, not protocol-LEAKING: it's shown to the
+   * installer as "why", never used as a control) ever needs to leave this pipeline.
+   */
+  async knxInstallerQueue(opts: {
+    ets?: UnifiedDeviceMapperInput["ets"];
+    userOverrides?: UnifiedDeviceMapperInput["userOverrides"];
+    /** Overrides the installed driver's configured gateway — e.g. for a hub with no
+     * driver installed yet, or a test harness. Falls back to the installed "knx"
+     * driver's own config when omitted (the real production path). */
+    gateway?: { host: string; port?: number };
+  } = {}): Promise<KnxInstallerQueueItem[]> {
+    const driver = await this.knxDiscoveryDriver(opts.gateway);
+    if (!driver) throw new SupremeError("not_found", "the KNX driver is not configured on this hub yet");
+
+    const [devices, existing] = await Promise.all([
+      driver.discoverUnified(opts.ets, opts.userOverrides),
+      this.knxExistingState(),
+    ]);
+
+    return devices.map((device) => {
+      const confidence = scoreConfidence(device);
+      const room = assignRoom({ device });
+      const duplicate = checkDuplicate(device, existing);
+      const plans = planBindings(device);
+      return { device, confidence, room, duplicate, plans, section: knxQueueSection(duplicate.decision, confidence, plans) };
+    });
+  }
+
+  /**
+   * Approval (§ Phase 5): commission the device and bind every plan-supplied capability
+   * to ITS OWN group address (unlike {@link commissionDevice}'s single shared address —
+   * a real KNX circuit's write and status objects are genuinely different addresses per
+   * capability, so this composes {@link CommissioningService.commission} + repeated
+   * {@link bindProtocol} calls directly rather than reusing the single-address
+   * convenience wrapper). On any binding failure, rolls back everything already bound
+   * and the device itself — no half-registered device is ever left behind.
+   */
+  async approveKnxDevice(input: {
+    device: UnifiedKnxDevice;
+    name: string;
+    roomId: RoomId;
+    plans: BindingPlanItem[];
+  }): Promise<KnxApprovalResult> {
+    const bindablePlans = input.plans.filter((p): p is typeof p & { address: string } => p.bindable && p.address !== null);
+    if (bindablePlans.length === 0) {
+      throw new SupremeError("validation_failed", "this device has no bindable communication object yet — needs installer review, not approval");
+    }
+
+    const device = await this.commissioning.commission({
+      backendId: input.device.backendId,
+      name: input.name,
+      roomId: input.roomId,
+      capabilities: bindablePlans.map((p) => p.capability),
+      manufacturer: input.device.raw.metadata.manufacturer ?? undefined,
+      model: input.device.raw.metadata.model ?? undefined,
+    });
+
+    const bound: CapabilityKind[] = [];
+    try {
+      for (const plan of bindablePlans) {
+        await this.bindProtocol({ deviceId: device.id, capability: plan.capability, protocol: "knx", address: plan.address, config: plan.config });
+        bound.push(plan.capability);
+      }
+    } catch (err) {
+      await this.rollbackKnxDevice(device.id, bound);
+      return { device, status: "error", reason: `binding failed: ${(err as Error).message}` };
+    }
+
+    const validation = await this.validateKnxDevice(device.id);
+    if (validation.status === "error") {
+      await this.rollbackKnxDevice(device.id, bound);
+    }
+    return { device, ...validation };
+  }
+
+  /**
+   * Live Validation (§ Phase 5): confirms the driver that owns this protocol actually
+   * connected and actually took ownership of the device. A real read/write/feedback
+   * telegram round-trip additionally requires a live bus and is NOT performed here —
+   * this hub environment has no way to guarantee one exists at approval time, and
+   * fabricating a "verified" result without one would violate the project's core
+   * "never fabricate" rule. Diagnostics (§ Unified Diagnostics, Phase 3) remain the
+   * place to observe real telegram traffic once the device is live.
+   */
+  private async validateKnxDevice(deviceId: DeviceId): Promise<{ status: "ready" | "warning" | "error"; reason?: string }> {
+    const driver = this.d.sil.getNativeDriver("knx");
+    if (!driver) return { status: "warning", reason: "no live KNX driver is currently registered to verify ownership against" };
+    if (!driver.isConnected()) return { status: "warning", reason: "the KNX driver is not currently connected — device is bound but unverified" };
+    if (!driver.manages(deviceId)) return { status: "error", reason: "the driver does not report owning this device after binding" };
+    return { status: "ready" };
+  }
+
+  /** Rollback (§ Phase 5): undo every binding + the device registration itself — reuses
+   * the exact cleanup primitives {@link uninstallDriver} already established for BUG-012
+   * (never a second, parallel cleanup implementation). */
+  private async rollbackKnxDevice(deviceId: DeviceId, boundCapabilities: CapabilityKind[]): Promise<void> {
+    if (this.d.protocolBindingStore) {
+      for (const capability of boundCapabilities) await this.d.protocolBindingStore.remove(deviceId, capability);
+    }
+    await this.d.home.removeDevices([deviceId]);
   }
 
   /**

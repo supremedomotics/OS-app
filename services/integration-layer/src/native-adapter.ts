@@ -122,6 +122,12 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     return this.drivers.map((d) => d.protocol);
   }
 
+  /** The live driver instance for a protocol, or null when none is registered
+   * (§ Phase 5 — read-only lookup for orchestration/diagnostics callers). */
+  driverFor(protocol: string): INativeProtocolDriver | null {
+    return this.drivers.find((d) => d.protocol === protocol) ?? null;
+  }
+
   /** Per-protocol runtime status (for driver health): connectivity + any boot connect error. */
   protocolStatus(): Array<{ protocol: string; connected: boolean; error: string | null }> {
     const errByProto = new Map<string, string>();

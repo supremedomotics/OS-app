@@ -25,6 +25,7 @@ import {
   type PendingDeviceList,
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
+import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -360,6 +361,48 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const body = req.body as { devices?: unknown };
       if (!Array.isArray(body?.devices)) throw new SupremeError("validation_failed", "provide `devices` (the reviewed preview list)");
       reply.code(201).send(await i().commitKnxImport(body.devices));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // ── Supreme KNX Unified Device Intelligence (§ Phase 5) ────────────────────────
+  // Production installer flow for KNX: Scan → discoverUnified() → Confidence Engine →
+  // Room Assignment → Duplicate Detection → Binding Engine → Installer Queue → Approve.
+  // No raw KNX protocol object is returned here — every item is an already-intelligent
+  // Unified Device with a decided section (ready/needs_review/duplicates/conflicts).
+  app.post("/v1/commissioning/knx/queue", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { ets?: unknown; gateway?: { host?: unknown; port?: unknown } } | undefined;
+      const ets = Array.isArray(body?.ets) ? (body!.ets as { id: string; name: string; room?: string | null; description?: string | null }[]) : undefined;
+      const gateway = typeof body?.gateway?.host === "string"
+        ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
+        : undefined;
+      reply.send({ queue: await i().knxInstallerQueue({ ets, gateway }) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Single-action approval: commission + bind every plan-supplied capability + validate,
+  // rolling back automatically on any binding/validation failure (§ Rollback Flow).
+  app.post("/v1/commissioning/knx/approve", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { device?: UnifiedKnxDevice; name?: string; roomId?: string; plans?: BindingPlanItem[] };
+      if (!body.device || typeof body.name !== "string" || typeof body.roomId !== "string" || !Array.isArray(body.plans)) {
+        throw new SupremeError("validation_failed", "provide `device`, `name`, `roomId`, and `plans` from a prior queue response");
+      }
+      const result = await i().approveKnxDevice({
+        device: body.device,
+        name: body.name,
+        roomId: body.roomId as RoomId,
+        plans: body.plans,
+      });
+      reply.code(201).send(result);
     } catch (err) {
       sendError(reply, err);
     }
