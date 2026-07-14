@@ -995,7 +995,9 @@ export class InstallerServices {
     return d;
   }
 
-  /** Uninstall a driver (logged). */
+  /** Uninstall a driver (logged). Also removes every device it created — a device
+   *  whose driver no longer exists has no way to be controlled or rediscovered, so
+   *  leaving it behind just orphans a dead entry in the devices list. */
   async uninstallDriver(id: DriverId) {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     await this.drivers.uninstall(id);
@@ -1006,6 +1008,11 @@ export class InstallerServices {
           await this.d.sil.unregisterNativeProtocol(p);
           this.manifestManaged.delete(p);
         }
+      }
+      const orphaned = (await this.d.home.listDevices()).filter((dv) => dv.driverId === id);
+      if (orphaned.length) {
+        await this.d.home.removeDevices(orphaned.map((dv) => dv.id));
+        this.appendLog(entry.key, "info", `Removed ${orphaned.length} device(s) belonging to this driver`);
       }
     }
   }
