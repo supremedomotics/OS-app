@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { useAureonDensity } from "../responsive.js";
+import { IconButton } from "./Button.js";
 
 export type SheetPresentation = "bottom" | "panel" | "dialog";
 
@@ -44,6 +45,12 @@ export function Sheet({ open, onClose, children, presentation, "aria-label": ari
       <div className="aureon-sheet-backdrop" onClick={onClose} />
       <div className={`aureon-sheet aureon-sheet--${resolved}`} role="dialog" aria-modal="true" aria-label={ariaLabel}>
         {resolved === "bottom" && <div className="aureon-sheet-grab" aria-hidden />}
+        {/* Escape and backdrop-click already close this sheet, but neither is discoverable —
+         * especially on touch, where there's no keyboard and a full-bleed bottom sheet leaves
+         * little backdrop to tap. A visible close control is required on every presentation. */}
+        <div className="aureon-sheet-close">
+          <IconButton aria-label="Close" onClick={onClose}>✕</IconButton>
+        </div>
         {children}
       </div>
     </>
