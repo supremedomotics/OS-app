@@ -189,7 +189,12 @@ export function haStateToCapability(
 // ── helpers (kept private to the SIL) ────────────────────────────────────────
 
 function domainOf(entityId: string): string {
-  return entityId.split(".")[0] ?? "homeassistant";
+  // HA entity_ids are contractually always lowercase ("domain.object_id") - but a backend
+  // id can reach here with its original casing intact (e.g. CoolMaster's own "L1.104" UID
+  // format, stored as-is in the SIL registry). Calling a service on the un-lowercased
+  // domain 404s with "child_service_not_found" even though the real HA service exists
+  // under its lowercase name (§ BUG-010).
+  return (entityId.split(".")[0] ?? "homeassistant").toLowerCase();
 }
 function num(v: unknown): number | undefined {
   const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : undefined;
