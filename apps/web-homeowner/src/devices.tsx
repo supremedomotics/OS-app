@@ -165,6 +165,8 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
       {selectMode && (
         <div className="bulk-bar">
           <span className="muted">{selected.size} selected</span>
+          <Button onClick={() => setSelected(new Set(filtered.map((d) => d.id)))}>Select all</Button>
+          <Button onClick={() => setSelected(new Set())}>Deselect all</Button>
           <select value={bulkRoom} onChange={(e) => setBulkRoom(e.target.value)}>
             <option value="">Move to room…</option>
             {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
