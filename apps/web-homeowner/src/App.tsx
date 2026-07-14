@@ -13,6 +13,7 @@ import { DiscoverDevices } from "./discover.js";
 import { DeviceManager } from "./devices.js";
 import { Media } from "./media.js";
 import { Climate } from "./climate.js";
+import { Lighting } from "./lighting-page.js";
 import { ExtensionCenter } from "./extensions.js";
 import { DashboardOverview } from "./dashboard.js";
 import { DeveloperTools } from "./developer.js";
@@ -23,8 +24,8 @@ import { Icon } from "./icons.js";
 
 export type Tab =
   | "dashboard" | "discover" | "devices" | "extensions"
-  | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "security" | "energy" | "notifications" | "settings" | "developer";
-type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "security" | "energy" | "notifications" | "settings" | "developer";
+  | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "lighting" | "security" | "energy" | "notifications" | "settings" | "developer";
+type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "light" | "security" | "energy" | "notifications" | "settings" | "developer";
 
 // The full platform navigation (§ Navigation). Nothing is hidden behind URLs — every backend area is
 // a first-class destination. "developer" appears only in Developer Mode.
@@ -39,6 +40,7 @@ const NAV: { id: Tab; label: string; icon: NavIcon; dev?: boolean }[] = [
   { id: "areas", label: "Areas", icon: "areas" },
   { id: "media", label: "Media", icon: "media" },
   { id: "climate", label: "Climate", icon: "climate" },
+  { id: "lighting", label: "Lighting", icon: "light" },
   { id: "security", label: "Security", icon: "security" },
   { id: "energy", label: "Energy", icon: "energy" },
   { id: "notifications", label: "Notifications", icon: "notifications" },
@@ -139,6 +141,7 @@ export function App() {
       {tab === "areas" && <AreasScreen onNavigate={go} />}
       {tab === "media" && <Media onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "climate" && <Climate onNavigate={go} devMode={showInstallerDiagnostics} />}
+      {tab === "lighting" && <Lighting onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "security" && <Security devMode={showInstallerDiagnostics} />}
       {tab === "energy" && <Energy onNavigate={go} />}
       {tab === "notifications" && <div className="page"><NotificationCenter /></div>}
