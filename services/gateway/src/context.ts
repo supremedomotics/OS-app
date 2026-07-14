@@ -32,7 +32,7 @@ import {
   type IEventBus,
   type IPresenceStore,
 } from "@supreme/messaging";
-import type { IProtocolBindingStore } from "@supreme/integration-layer";
+import type { IProtocolBindingStore, IDeviceOwnershipStore, INativeProtocolDriver } from "@supreme/integration-layer";
 import type { IBackupStore, IPendingDeviceStore } from "@supreme/persistence";
 import {
   AutomationEngine,
@@ -111,12 +111,17 @@ export interface AppDeps {
   backupStore?: IBackupStore;
   /** Pending-device queue (§ Device Approval). */
   pendingDeviceStore?: IPendingDeviceStore;
+  /** Explicit device ownership persistence (§ Device Ownership). */
+  ownershipStore?: IDeviceOwnershipStore;
   /** Override push providers (tests); otherwise selected from config. */
   pushProviders?: IPushProvider[];
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
   db?: SqlDb;
   /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
   scanners?: IProtocolScanner[];
+  /** Env-configured native driver instances (bootstrap.ts), fed into the unified
+   * Driver Lifecycle pipeline alongside manifest-configured ones (§ Driver Lifecycle). */
+  envDrivers?: Map<string, INativeProtocolDriver>;
 }
 
 /**
@@ -490,6 +495,7 @@ export class AppContext {
       backupStore: deps.backupStore,
       pendingDeviceStore: deps.pendingDeviceStore,
       configStore: this.homeConfig,
+      envDrivers: deps.envDrivers,
     });
     await this.installer.init();
 

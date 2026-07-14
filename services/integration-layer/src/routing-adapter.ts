@@ -1,3 +1,4 @@
+import { SupremeError } from "@supreme/contracts";
 import type {
   CapabilityCommand,
   CapabilityKind,
@@ -14,21 +15,29 @@ import type {
 } from "./adapter.js";
 import type { EntityRegistryMirror } from "./registry.js";
 import { MigrationPolicy } from "./migration.js";
+import { OwnershipRegistry } from "./ownership.js";
 import { SupremeNativeAdapter } from "./native-adapter.js";
 
 /**
- * Routing backend adapter (blueprint §7, §16 Phase 4) — the strangler-fig seam.
+ * Routing backend adapter (blueprint §7, § Native Driver Architecture Refactor) — the
+ * strangler-fig seam.
  *
- * Implements {@link IBackendAdapter} by delegating each call to EITHER the Home
- * Assistant adapter or the Supreme-native engine, chosen per backend domain by the
- * {@link MigrationPolicy}. Migrating a domain to native is a one-line flag flip; the
- * SIL, domain services, gateway, and clients above are entirely unaware. When every
- * domain is native, the HA adapter is dead weight and can be dropped.
+ * Implements {@link IBackendAdapter} by delegating each call to whichever backend
+ * OWNS the device, per the explicit {@link OwnershipRegistry} — never a heuristic.
+ * A native-owned device NEVER falls back to Home Assistant, even transiently: if its
+ * driver isn't currently bound, the command fails loudly (`backend_unavailable`)
+ * rather than silently executing against the wrong backend. Home Assistant is only
+ * ever consulted for devices explicitly owned by it (§ Home Assistant's Future
+ * Role — an integration provider, never an execution fallback for native protocols).
  */
 export interface RoutingAdapterOptions {
   ha: IBackendAdapter;
   native?: SupremeNativeAdapter;
   registry: EntityRegistryMirror;
+  /** Defaults to a fresh, empty registry when omitted — every device then starts
+   * "unassigned" (uncommandable) until something explicitly claims ownership. Tests
+   * that need a device pre-owned must set it up via `ownership.set(...)`. */
+  ownership?: OwnershipRegistry;
   policy?: MigrationPolicy;
 }
 
@@ -36,6 +45,11 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   readonly kind = "routing";
   readonly ha: IBackendAdapter;
   readonly native: SupremeNativeAdapter;
+  readonly ownership: OwnershipRegistry;
+  /** Retained only for the legacy `/v1/migration` HA→native domain-status surface;
+   * no longer consulted by {@link pick} — ownership is authoritative (§ Command
+   * Routing: never on backend IDs, never on naming conventions, never on fallback
+   * heuristics). */
   readonly policy: MigrationPolicy;
   private readonly registry: EntityRegistryMirror;
   private readonly listeners = new Set<StateListener>();
@@ -44,6 +58,7 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     this.ha = opts.ha;
     this.native = opts.native ?? new SupremeNativeAdapter();
     this.registry = opts.registry;
+    this.ownership = opts.ownership ?? new OwnershipRegistry();
     this.policy = opts.policy ?? new MigrationPolicy();
     // State from either engine flows up unchanged.
     this.ha.onState((e) => this.fanout(e));
@@ -61,11 +76,11 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
-    await this.pick(deviceId, command.capability).command(deviceId, command);
+    await this.pick(deviceId).command(deviceId, command);
   }
 
   async getState(deviceId: DeviceId, capability: CapabilityKind): Promise<CapabilityState | null> {
-    return this.pick(deviceId, capability).getState(deviceId, capability);
+    return this.pick(deviceId).getState(deviceId, capability);
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
@@ -93,9 +108,11 @@ export class RoutingBackendAdapter implements IBackendAdapter {
 
   /**
    * Migrate a domain to the native engine: seed native state from the current
-   * (HA) state for every mapped device in the domain, then flip the routing flag.
-   * After this, commands and reads for that domain go native — nothing above the
-   * SIL changes. Returns the device/capability pairs moved.
+   * (HA) state for every mapped device in the domain, transfer OWNERSHIP for each
+   * (§ "If a Home Assistant device later migrates to a native SupremeOS driver,
+   * ownership must transfer automatically"), then flip the legacy domain flag for
+   * the `/v1/migration` status surface. After this, commands and reads for these
+   * devices go native — nothing above the SIL changes. Returns the pairs moved.
    */
   async migrateDomainToNative(domain: string): Promise<number> {
     let moved = 0;
@@ -105,19 +122,38 @@ export class RoutingBackendAdapter implements IBackendAdapter {
         this.native.provision(deviceId, capability, current ?? undefined);
         moved++;
       }
+      await this.ownership.set(deviceId, "native", "supreme-native");
     }
     this.policy.setEngine(domain, "native");
     return moved;
   }
 
-  private pick(deviceId: DeviceId, capability: CapabilityKind): IBackendAdapter {
-    // A device bound to a real native protocol stack (KNX/Modbus/MQTT) is owned by
-    // the native engine regardless of the per-domain migration flag — its commands
-    // and reads must always go to the bus it lives on.
-    if (this.native.manages(deviceId)) return this.native;
-    const domain = this.registry.domainOf(deviceId, capability);
-    if (domain) this.policy.register(domain);
-    return domain && this.policy.isNative(domain) ? this.native : this.ha;
+  /**
+   * The command router (§ Command Routing). Routing is based EXCLUSIVELY on
+   * {@link OwnershipRegistry} — never on a backend id's shape, never on a naming
+   * convention, never on a domain-based fallback. A device with no recorded owner,
+   * or a native owner whose driver isn't currently bound, fails loudly rather than
+   * silently executing against whatever backend happens to be left standing.
+   */
+  private pick(deviceId: DeviceId): IBackendAdapter {
+    const owner = this.ownership.get(deviceId);
+    if (!owner || owner.kind === "unassigned") {
+      throw new SupremeError(
+        "backend_unavailable",
+        `device ${deviceId} has no assigned owner — it must be commissioned (or its driver must finish binding) before it can be commanded`,
+      );
+    }
+    if (owner.kind === "native") {
+      if (!this.native.manages(deviceId)) {
+        throw new SupremeError(
+          "backend_unavailable",
+          `device ${deviceId} is owned by the native "${owner.protocol}" driver, but that driver is not currently bound — it will NOT fall back to Home Assistant; reconnect or reconfigure the "${owner.protocol}" driver`,
+        );
+      }
+      return this.native;
+    }
+    if (owner.kind === "ha") return this.ha;
+    throw new SupremeError("backend_unavailable", `device ${deviceId} is owned by "${owner.kind}", which has no command path wired up yet`);
   }
 
   private fanout(event: BackendStateEvent): void {

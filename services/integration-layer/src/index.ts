@@ -14,6 +14,13 @@ export type {
   StateListener,
 } from "./adapter.js";
 export { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
+export {
+  OwnershipRegistry,
+  InMemoryDeviceOwnershipStore,
+  type OwnerKind,
+  type DeviceOwnership,
+  type IDeviceOwnershipStore,
+} from "./ownership.js";
 export { SupremeIntegrationLayer, type SilOptions } from "./sil.js";
 export { MockAdapter } from "./mock-adapter.js";
 export {

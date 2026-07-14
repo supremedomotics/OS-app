@@ -15,6 +15,7 @@ import type {
   IProtocolBindingStore,
   StoredProtocolBinding,
   SupremeIntegrationLayer,
+  INativeProtocolDriver,
 } from "@supreme/integration-layer";
 import type { HomeService, IConfigStore } from "@supreme/home";
 import type { SceneService } from "@supreme/scenes";
@@ -75,6 +76,38 @@ export interface KnxImportResult {
   created: { name: string; room: string | null; capabilities: string[] }[];
 }
 
+/** What triggered a driver's pass through the Driver Lifecycle pipeline — recorded
+ * purely for diagnostics/log clarity, never branched on (§ Driver Lifecycle: every
+ * trigger runs the exact same stages). */
+export type DriverLifecycleTrigger = "boot" | "install" | "reconnect" | "config_change";
+
+export type DriverLifecycleStage =
+  | "registering" | "validating" | "restoring_bindings" | "rebinding_devices"
+  | "recalculating_ownership" | "publishing" | "ready" | "failed";
+
+export interface DriverLifecycleStatus {
+  protocol: string;
+  key: string;
+  stage: DriverLifecycleStage;
+  healthy: boolean;
+  lastError: string | null;
+  bindingCount: number;
+  boundCount: number;
+  ownedCount: number;
+  reconnects: number;
+  updatedAt: string;
+}
+
+export interface DriverDiagnosticsEntry {
+  key: string;
+  name: string;
+  installed: boolean;
+  enabled: boolean;
+  protocols: DriverLifecycleStatus[];
+  healthy: boolean;
+  lastError: string | null;
+}
+
 export interface InstallerDeps {
   config: GatewayConfig;
   sil: SupremeIntegrationLayer;
@@ -92,6 +125,11 @@ export interface InstallerDeps {
   pendingDeviceStore?: IPendingDeviceStore;
   /** Per-home settings store — backs the KNX import Learning Engine's remembered renames. */
   configStore: IConfigStore;
+  /** Env-configured native driver instances (bootstrap.ts), keyed by protocol — fed
+   * into the SAME Driver Lifecycle pipeline as manifest-configured drivers (§ Driver
+   * Lifecycle: no duplicate registration logic). Not yet connected; the pipeline's
+   * Register Driver stage connects them. */
+  envDrivers?: Map<string, INativeProtocolDriver>;
 }
 
 /**
@@ -158,12 +196,15 @@ export class InstallerServices {
       : generateSigningKeyPair();
   }
 
-  /** Boot-time hydration: active license, re-bind persisted protocol bindings, and start the native
-   *  stacks of every installed+configured driver (the manifest↔runtime bridge). */
+  /** Boot-time hydration: active license, then every native driver (env-configured AND
+   *  manifest-configured alike) through the one unified {@link runDriverLifecycle}
+   *  pipeline (§ Driver Lifecycle) — there is no longer a separate "rebind persisted
+   *  bindings" pass that can race a separate "start manifest drivers" pass; both
+   *  sources feed the same ordered sequence, per protocol, so a binding can never be
+   *  replayed before the driver it needs exists. */
   async init(): Promise<void> {
     await this.loadLicense();
-    await this.rebindProtocols();
-    await this.reconcileNativeDrivers();
+    await this.initializeNativeDrivers("boot");
   }
 
   private async loadLicense(): Promise<void> {
@@ -198,22 +239,6 @@ export class InstallerServices {
   }
 
   // ── Native protocol bindings (§3) ────────────────────────────────────────────
-
-  /** Re-bind every persisted protocol binding onto the native engine on boot. */
-  private async rebindProtocols(): Promise<void> {
-    const store = this.d.protocolBindingStore;
-    if (!store || !this.d.sil.migrationEnabled) return;
-    for (const b of await store.list()) {
-      try {
-        await this.d.sil.bindNative(
-          { deviceId: b.deviceId, capability: b.capability, address: b.address, config: b.config },
-          b.protocol,
-        );
-      } catch {
-        // A driver for this protocol may not be configured on this hub; skip it.
-      }
-    }
-  }
 
   /**
    * Bind a commissioned device's capability to a real bus address (KNX/Modbus/MQTT):
@@ -498,16 +523,49 @@ export class InstallerServices {
     return this.getDriverConfig(id);
   }
 
-  /** Protocols whose native driver was started FROM AN INSTALLED MANIFEST (vs env-wired at boot). We
-   *  only ever tear down protocols we started, so legacy env-configured drivers are never disturbed. */
-  private readonly manifestManaged = new Set<string>();
+  // ── Unified Driver Lifecycle (§ Native Driver Architecture Refactor) ──────────
+  //
+  // Every driver registration — boot, Extension Center install, driver update,
+  // reconnect, gateway restart, config change, protocol migration — funnels through
+  // ONE pipeline: Register Driver → Validate Driver → Register Protocol → Restore
+  // Protocol Bindings → Rebind Devices → Recalculate Ownership → Publish Ownership
+  // Changes → Driver Ready. There is no second, independent registration path
+  // anymore (the previous env-array-at-boot vs. manifest-driven-at-init split was
+  // the exact root cause of native commands silently executing through Home
+  // Assistant — see the Architecture Investigation Report). A failed stage stops the
+  // pipeline for that protocol, marks it unhealthy with a structured `lastError`, and
+  // is visible via {@link driverDiagnostics} — never a silent catch.
+
+  private readonly lifecycleStatus = new Map<string, DriverLifecycleStatus>();
+  /** Protocols currently registered through this pipeline (env- or manifest-sourced
+   * alike — the distinction no longer matters once both go through the same path). */
+  private readonly desiredProtocols = new Map<string, { key: string; config: Record<string, unknown> }>();
+
+  private setStage(protocol: string, patch: Partial<DriverLifecycleStatus>): void {
+    const prev = this.lifecycleStatus.get(protocol) ?? {
+      protocol, key: patch.key ?? protocol, stage: "registering" as const, healthy: false,
+      lastError: null, boundCount: 0, ownedCount: 0, bindingCount: 0, reconnects: 0, updatedAt: "",
+    };
+    this.lifecycleStatus.set(protocol, { ...prev, ...patch, updatedAt: new Date().toISOString() });
+  }
+
+  /** Boot only: register every env-configured native driver (bootstrap.ts) through
+   * this same pipeline, then reconcile the manifest-configured ones. Both sources
+   * are now indistinguishable to the pipeline itself — that's the fix. */
+  async initializeNativeDrivers(trigger: DriverLifecycleTrigger): Promise<void> {
+    for (const [protocol, driver] of this.d.envDrivers ?? []) {
+      await this.runDriverLifecycle(protocol, driver, `env:${protocol}`, trigger);
+    }
+    await this.reconcileManifestDrivers(trigger);
+  }
 
   /**
-   * Reconcile installed+enabled+configured drivers with their runtime native protocol stacks — the
-   * manifest↔runtime bridge. Starts manifest drivers that should run and aren't; stops manifest
-   * drivers that shouldn't. Env-wired drivers (bootstrap.ts) are left untouched.
+   * Reconcile installed+enabled+configured manifest drivers with their runtime native
+   * protocol stacks: start what should run and isn't, stop what shouldn't. Runs on
+   * boot AND after every install/enable/config-change (§ Driver Lifecycle — same
+   * pipeline for every trigger, not a boot-only special case).
    */
-  async reconcileNativeDrivers(): Promise<void> {
+  private async reconcileManifestDrivers(trigger: DriverLifecycleTrigger): Promise<void> {
     const reg = await this.drivers.registry();
     const desired = new Map<string, { config: Record<string, unknown>; key: string }>();
     for (const d of reg) {
@@ -516,22 +574,22 @@ export class InstallerServices {
       for (const p of d.protocols) if (hasNativeFactory(p)) desired.set(p, { config: d.config, key: d.key });
     }
     for (const [protocol, { config, key }] of desired) {
-      if (this.manifestManaged.has(protocol)) continue; // already ours (config edits go via reregister)
+      this.desiredProtocols.set(protocol, { key, config });
       const driver = buildNativeDriver(protocol, config, (level, message) => this.appendLog(key, level, message));
-      if (driver && (await this.d.sil.registerNativeDriver(driver))) {
-        this.manifestManaged.add(protocol);
-        this.appendLog(key, "info", `Native ${protocol} driver started`);
-      }
+      await this.runDriverLifecycle(protocol, driver, key, trigger);
     }
-    for (const protocol of [...this.manifestManaged]) {
-      if (!desired.has(protocol)) {
-        await this.d.sil.unregisterNativeProtocol(protocol);
-        this.manifestManaged.delete(protocol);
+    for (const [protocol, { key }] of [...this.desiredProtocols]) {
+      if (protocol.startsWith("env:")) continue;
+      if (!desired.has(protocol) && !(this.d.envDrivers?.has(protocol))) {
+        this.desiredProtocols.delete(protocol);
+        await this.runDriverLifecycle(protocol, null, key, "config_change");
       }
     }
   }
 
-  /** Force one driver's native stack to match its current install/enable/config state. */
+  /** Force one installed driver's native stack to match its current install/enable/
+   * config state — Extension Center install/enable/disable/config-edit all call this,
+   * which is itself just this protocol's slice of {@link runDriverLifecycle}. */
   private async reregisterDriver(key: string): Promise<void> {
     const entry = (await this.drivers.registry()).find((e) => e.key === key);
     if (!entry) return;
@@ -539,13 +597,101 @@ export class InstallerServices {
       if (!hasNativeFactory(protocol)) continue;
       const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config).complete;
       const driver = runnable ? buildNativeDriver(protocol, entry.config, (level, message) => this.appendLog(key, level, message)) : null;
-      if (driver) {
-        if (await this.d.sil.registerNativeDriver(driver)) this.manifestManaged.add(protocol);
-      } else if (this.manifestManaged.has(protocol)) {
-        await this.d.sil.unregisterNativeProtocol(protocol);
-        this.manifestManaged.delete(protocol);
+      if (runnable) this.desiredProtocols.set(protocol, { key, config: entry.config });
+      else this.desiredProtocols.delete(protocol);
+      await this.runDriverLifecycle(protocol, driver, key, "config_change");
+    }
+  }
+
+  /**
+   * The one driver-registration pipeline (§ Registration Pipeline). `driver === null`
+   * is the teardown variant (disable/uninstall/no-longer-desired): every device this
+   * protocol owned has its ownership explicitly cleared — released back to
+   * "unassigned", never silently left pointing at a dead driver and never silently
+   * defaulted to Home Assistant.
+   */
+  private async runDriverLifecycle(
+    protocol: string,
+    driver: INativeProtocolDriver | null,
+    key: string,
+    trigger: DriverLifecycleTrigger,
+  ): Promise<void> {
+    if (!driver) {
+      const owned = this.d.sil.ownership.devicesOwnedByProtocol(protocol);
+      await this.d.sil.unregisterNativeProtocol(protocol);
+      for (const deviceId of owned) await this.d.sil.ownership.clear(deviceId);
+      this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
+      this.lifecycleStatus.delete(protocol);
+      return;
+    }
+
+    const isReconnect = this.lifecycleStatus.get(protocol)?.stage === "ready" && trigger === "reconnect";
+    this.setStage(protocol, { key, stage: "registering", lastError: null, reconnects: (this.lifecycleStatus.get(protocol)?.reconnects ?? 0) + (isReconnect ? 1 : 0) });
+    try {
+      await this.d.sil.registerNativeDriver(driver); // Register Driver + Register Protocol (native-adapter connects here)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.setStage(protocol, { stage: "failed", healthy: false, lastError: message });
+      this.appendLog(key, "error", `Failed to register native ${protocol} driver (${trigger}): ${message}`);
+      return; // structured failure — visible in diagnostics, never silent
+    }
+
+    this.setStage(protocol, { stage: "validating" });
+    const connStatus = this.d.sil.nativeProtocolStatus().find((s) => s.protocol === protocol);
+    if (connStatus?.error) {
+      this.appendLog(key, "warn", `Native ${protocol} driver registered but failed to connect (${trigger}): ${connStatus.error}`);
+    } else {
+      this.appendLog(key, "info", `Native ${protocol} driver connected (${trigger})`);
+    }
+
+    this.setStage(protocol, { stage: "restoring_bindings" });
+    const store = this.d.protocolBindingStore;
+    const bindings = store ? (await store.list()).filter((b) => b.protocol === protocol) : [];
+
+    this.setStage(protocol, { stage: "rebinding_devices", bindingCount: bindings.length });
+    let bound = 0;
+    const failures: string[] = [];
+    for (const b of bindings) {
+      try {
+        await this.d.sil.bindNative({ deviceId: b.deviceId, capability: b.capability, address: b.address, config: b.config }, protocol);
+        bound++;
+      } catch (err) {
+        failures.push(`${b.deviceId}/${b.capability}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    if (failures.length) {
+      // A failed bind must never be invisible (§ Silent Failures) — structured log +
+      // health warning, surfaced per-driver via driverDiagnostics().
+      this.appendLog(key, "error", `${failures.length}/${bindings.length} device binding(s) failed to restore for ${protocol}: ${failures.join("; ")}`);
+    }
+
+    this.setStage(protocol, { stage: "recalculating_ownership", boundCount: bound });
+    const ownedCount = this.d.sil.ownership.devicesOwnedByProtocol(protocol).length;
+
+    this.setStage(protocol, { stage: "publishing", ownedCount });
+    this.appendLog(key, failures.length ? "warn" : "info", `${bound}/${bindings.length} device binding(s) restored for ${protocol} (${trigger})`);
+
+    this.setStage(protocol, { stage: "ready", healthy: !connStatus?.error, lastError: connStatus?.error ?? null });
+  }
+
+  /** Driver Diagnostics (§ Diagnostics): every driver's full lifecycle picture in one
+   * place — no log-reading required to answer "is this driver actually working". */
+  async driverDiagnostics(): Promise<DriverDiagnosticsEntry[]> {
+    const reg = await this.drivers.registry();
+    const out: DriverDiagnosticsEntry[] = [];
+    for (const entry of reg) {
+      const protocolEntries = entry.protocols.map((p) => this.lifecycleStatus.get(p)).filter((s): s is DriverLifecycleStatus => !!s);
+      out.push({
+        key: entry.key,
+        name: entry.name,
+        installed: entry.installed,
+        enabled: entry.enabled,
+        protocols: protocolEntries,
+        lastError: protocolEntries.find((p) => p.lastError)?.lastError ?? null,
+        healthy: protocolEntries.length === 0 || protocolEntries.every((p) => p.healthy),
+      });
+    }
+    return out;
   }
 
   /** In-memory per-driver log ring buffer (lifecycle + connection events). */
@@ -613,12 +759,22 @@ export class InstallerServices {
     };
   }
 
-  /** Connect a driver's native protocol stack(s). */
+  /** Connect a driver's native protocol stack(s) — the "reconnect" trigger (§ Driver
+   * Lifecycle). The driver instance itself isn't replaced here (that's the
+   * install/config-change path, {@link runDriverLifecycle}'s Register Driver stage),
+   * so existing bindings/ownership are untouched; this just re-establishes the bus
+   * connection and records the reconnect for diagnostics. */
   async connectDriver(id: DriverId): Promise<{ connected: boolean }> {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
     let connected = false;
-    for (const p of entry.protocols) if (await this.d.sil.connectNativeProtocol(p)) connected = true;
+    for (const p of entry.protocols) {
+      if (await this.d.sil.connectNativeProtocol(p)) {
+        connected = true;
+        const prev = this.lifecycleStatus.get(p);
+        if (prev) this.setStage(p, { stage: "ready", healthy: true, lastError: null, reconnects: prev.reconnects + 1 });
+      }
+    }
     this.appendLog(entry.key, connected ? "info" : "warn", connected ? "Connected" : "No native driver to connect (managed by backend)");
     return { connected };
   }
@@ -1004,9 +1160,9 @@ export class InstallerServices {
     if (entry) {
       this.appendLog(entry.key, "info", "Uninstalled");
       for (const p of entry.protocols) {
-        if (this.manifestManaged.has(p)) {
-          await this.d.sil.unregisterNativeProtocol(p);
-          this.manifestManaged.delete(p);
+        if (this.desiredProtocols.has(p)) {
+          this.desiredProtocols.delete(p);
+          await this.runDriverLifecycle(p, null, entry.key, "config_change"); // teardown: releases owned devices, never leaves them silently
         }
       }
       const orphaned = (await this.d.home.listDevices()).filter((dv) => dv.driverId === id);

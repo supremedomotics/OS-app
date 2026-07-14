@@ -13,7 +13,7 @@ import type { INotificationStore } from "@supreme/notifications";
 import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IAutomationStore } from "@supreme/automations";
 import type { ISecurityStore } from "@supreme/security";
-import type { IProtocolBindingStore } from "@supreme/integration-layer";
+import type { IProtocolBindingStore, IDeviceOwnershipStore } from "@supreme/integration-layer";
 import type { IPushTokenStore } from "@supreme/notifications";
 import type { IMigrationPolicyStore } from "@supreme/integration-layer";
 import type { IBackupStore } from "./repositories/backup-repo.js";
@@ -36,6 +36,7 @@ import { PushTokenRepo } from "./repositories/push-token-repo.js";
 import { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 import { BackupRepo } from "./repositories/backup-repo.js";
 import { PendingDeviceRepo, type IPendingDeviceStore } from "./repositories/pending-device-repo.js";
+import { DeviceOwnershipRepo } from "./repositories/device-ownership-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -64,6 +65,7 @@ export {
   type StagePendingInput,
 } from "./repositories/pending-device-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
+export { DeviceOwnershipRepo } from "./repositories/device-ownership-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 export { IntelligenceRepo, type SieHistoryRecord, type SieSavingsAggregate } from "./repositories/intelligence-repo.js";
@@ -88,6 +90,7 @@ export interface PersistenceStores {
   pendingDevices: IPendingDeviceStore;
   apiTokens: IApiTokenStore;
   webAuthn: IWebAuthnStore;
+  deviceOwnership: IDeviceOwnershipStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -110,6 +113,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     pendingDevices: new PendingDeviceRepo(db),
     apiTokens: new ApiTokenRepo(db),
     webAuthn: new WebAuthnRepo(db),
+    deviceOwnership: new DeviceOwnershipRepo(db),
   };
 }
 

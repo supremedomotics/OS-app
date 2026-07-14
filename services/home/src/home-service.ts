@@ -29,10 +29,13 @@ export class HomeService {
     this.store = store ?? new InMemoryHomeStore();
   }
 
-  /** Rebind every stored device's capabilities into the SIL registry (on boot). */
+  /** Rebind every stored device's capabilities into the SIL registry (on boot). Runs
+   * BEFORE the native driver lifecycle (§ Driver Lifecycle) so a device that's
+   * actually native-bound gets its ownership correctly overwritten from "ha" to
+   * "native" moments later, rather than racing it. */
   async rebindRegistry(): Promise<void> {
     for (const { device, backendIds } of await this.store.listDevices()) {
-      this.bind(device, backendIds);
+      await this.bind(device, backendIds);
     }
   }
 
@@ -82,7 +85,7 @@ export class HomeService {
 
   async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
     await this.store.putDevice(device, backendIds);
-    this.bind(device, backendIds);
+    await this.bind(device, backendIds);
   }
 
   /** Apply a normalized state delta from the SIL onto the cached/persisted device. */
@@ -160,7 +163,7 @@ export class HomeService {
     for (const id of ids) {
       const stored = await this.store.getDevice(id);
       if (stored) {
-        this.sil.unmapDevice(id);
+        await this.sil.unmapDevice(id);
         await this.store.deleteDevice(id);
         removed += 1;
       }
@@ -172,7 +175,7 @@ export class HomeService {
   async removeDevice(deviceId: DeviceId): Promise<void> {
     const stored = await this.store.getDevice(deviceId);
     if (!stored) throw new SupremeError("not_found", "device not found");
-    this.sil.unmapDevice(deviceId);
+    await this.sil.unmapDevice(deviceId);
     await this.store.deleteDevice(deviceId);
   }
 
@@ -217,7 +220,14 @@ export class HomeService {
     return room;
   }
 
-  private bind(device: Device, backendIds: Record<string, string>): void {
+  /** Map every backend-id'd capability into the SIL's HA-side registry, and — if this
+   * device was actually mapped to anything — record ownership as "ha" (§ Device
+   * Ownership: explicit, never inferred). A subsequent native `bindNative()` call
+   * (the driver lifecycle's Rebind Devices stage) correctly overwrites this to
+   * "native" for devices that are actually native-bound; this is always a safe
+   * starting default because it never runs after that stage in the boot sequence. */
+  private async bind(device: Device, backendIds: Record<string, string>): Promise<void> {
+    let mapped = false;
     for (const cap of device.capabilities) {
       const backendId = backendIds[cap.kind];
       if (backendId) {
@@ -225,7 +235,11 @@ export class HomeService {
           backendId,
           backendDomain: backendId.split(".")[0] ?? "unknown",
         });
+        mapped = true;
       }
+    }
+    if (mapped && this.sil.ownership.get(device.id)?.kind !== "native") {
+      await this.sil.ownership.set(device.id, "ha");
     }
   }
 }

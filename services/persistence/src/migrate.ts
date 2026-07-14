@@ -27,6 +27,7 @@ const MIGRATIONS = [
   "0017_api_tokens.sql",
   "0018_email_verified.sql",
   "0019_webauthn.sql",
+  "0020_device_ownership.sql",
 ] as const;
 
 /**

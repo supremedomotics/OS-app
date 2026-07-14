@@ -93,12 +93,16 @@ describe("Gateway persistence + restart", () => {
     expect((await ctx.home.listDevices()).length).toBe(before + 1);
     expect((await inst.listPendingDevices()).some((p) => p.id === lamp.id)).toBe(false);
 
-    // Reject the fan → it's gone from the queue and a re-stage of the same backendId won't resurface it.
+    // Reject the fan → it's gone from the queue. A re-stage of the same backendId DOES
+    // resurface it (§ BUG-005 fix): rejecting only means "not right now", and since
+    // commissioning.discover() already guarantees a still-owned backendId never reaches
+    // upsert() in the first place, reviving a re-sighted device to "pending" can never
+    // wrongly resurface something that's actually in use.
     const fan = (await inst.listPendingDevices())[0]!;
     await inst.rejectPendingDevice(fan.id);
     expect(await inst.listPendingDevices()).toHaveLength(0);
     await stage("mqtt.fan", "Study Fan");
-    expect((await inst.listPendingDevices()).some((p) => p.backendId === "mqtt.fan")).toBe(false);
+    expect((await inst.listPendingDevices()).some((p) => p.backendId === "mqtt.fan")).toBe(true);
 
     await new Promise((r) => setTimeout(r, 50));
     await ctx.shutdown();

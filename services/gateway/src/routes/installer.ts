@@ -81,6 +81,19 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Driver Diagnostics (§ Diagnostics): full Driver Lifecycle picture for every driver —
+  // registration stage, protocol status, ownership/binding counts, health, last error,
+  // reconnect history — without reading logs.
+  app.get("/v1/drivers/diagnostics", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send({ drivers: await i().driverDiagnostics(), ownership: ctx.sil.ownership.countsByKind() });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Per-driver configuration (schema + masked values), and a schema-validated update.
   app.get<{ Params: { id: string } }>("/v1/drivers/:id/config", async (req, reply) => {
     try {

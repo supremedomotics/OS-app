@@ -4,6 +4,7 @@ import { MockAdapter } from "./mock-adapter.js";
 import { SupremeNativeAdapter } from "./native-adapter.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import { EntityRegistryMirror } from "./registry.js";
+import { OwnershipRegistry } from "./ownership.js";
 import { SupremeIntegrationLayer } from "./sil.js";
 
 /**
@@ -15,8 +16,9 @@ function setup() {
   const ha = new MockAdapter();
   const native = new SupremeNativeAdapter();
   const registry = new EntityRegistryMirror();
-  const router = new RoutingBackendAdapter({ ha, native, registry });
-  const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+  const ownership = new OwnershipRegistry();
+  const router = new RoutingBackendAdapter({ ha, native, registry, ownership });
+  const sil = new SupremeIntegrationLayer({ adapter: router, registry, ownership });
   return { ha, native, registry, router, sil };
 }
 
@@ -27,6 +29,9 @@ describe("RoutingBackendAdapter — native migration", () => {
 
     const light = newId("device") as DeviceId;
     sil.mapEntity(light, "brightness", { backendId: "light.kitchen", backendDomain: "light" });
+    // Ownership is explicit (§ Device Ownership) — commissioning normally sets this;
+    // this test maps the registry directly, so it must assign ownership itself too.
+    await sil.ownership.set(light, "ha");
 
     // Default: command goes to HA; native has nothing.
     await sil.command(light, { capability: "brightness", action: "set", level: 40 });
@@ -56,6 +61,8 @@ describe("RoutingBackendAdapter — native migration", () => {
     const lock = newId("device") as DeviceId;
     sil.mapEntity(light, "brightness", { backendId: "light.x", backendDomain: "light" });
     sil.mapEntity(lock, "lock", { backendId: "lock.front", backendDomain: "lock" });
+    await sil.ownership.set(light, "ha");
+    await sil.ownership.set(lock, "ha");
 
     await sil.migrateDomain("light", "native");
 

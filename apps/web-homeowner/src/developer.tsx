@@ -10,7 +10,7 @@ import { apiRequest, fetchAudit, fetchLicense, streamUrl, verifyAudit, type Audi
  */
 export function DeveloperTools() {
   const [devMode, setDevMode] = useState(false);
-  const [tool, setTool] = useState<"api" | "ws" | "diag" | "audit">("api");
+  const [tool, setTool] = useState<"api" | "ws" | "diag" | "audit" | "drivers">("api");
 
   useEffect(() => {
     void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode)));
@@ -26,13 +26,74 @@ export function DeveloperTools() {
         <button className={tool === "api" ? "on" : ""} onClick={() => setTool("api")}>API Explorer</button>
         <button className={tool === "ws" ? "on" : ""} onClick={() => setTool("ws")}>WebSocket</button>
         <button className={tool === "diag" ? "on" : ""} onClick={() => setTool("diag")}>Diagnostics</button>
+        <button className={tool === "drivers" ? "on" : ""} onClick={() => setTool("drivers")}>Driver Lifecycle</button>
         <button className={tool === "audit" ? "on" : ""} onClick={() => setTool("audit")}>Audit log</button>
       </div>
       {tool === "api" && <ApiExplorer />}
       {tool === "ws" && <WsInspector />}
       {tool === "diag" && <Diagnostics />}
+      {tool === "drivers" && <DriverLifecyclePanel />}
       {tool === "audit" && <AuditLog />}
     </section>
+  );
+}
+
+interface DriverLifecycleStatusView {
+  protocol: string; key: string; stage: string; healthy: boolean; lastError: string | null;
+  bindingCount: number; boundCount: number; ownedCount: number; reconnects: number; updatedAt: string;
+}
+interface DriverDiagnosticsEntryView {
+  key: string; name: string; installed: boolean; enabled: boolean;
+  protocols: DriverLifecycleStatusView[]; healthy: boolean; lastError: string | null;
+}
+
+/** Driver Diagnostics (§ Diagnostics): every native driver's full lifecycle picture —
+ * registration stage, ownership/binding counts, health, last error, reconnects — so
+ * troubleshooting "why isn't this device responding" never requires reading logs. */
+function DriverLifecyclePanel() {
+  const [drivers, setDrivers] = useState<DriverDiagnosticsEntryView[]>([]);
+  const [ownership, setOwnership] = useState<Record<string, number> | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setBusy(true);
+    const res = await apiRequest("GET", "/v1/drivers/diagnostics");
+    if (res.status === 200) {
+      const body = res.body as { drivers: DriverDiagnosticsEntryView[]; ownership: Record<string, number> };
+      setDrivers(body.drivers);
+      setOwnership(body.ownership);
+    }
+    setBusy(false);
+  }
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <div className="dev-drivers">
+      <div className="dev-row2" style={{ marginBottom: 8 }}>
+        <button disabled={busy} onClick={load}>{busy ? "Loading…" : "Refresh"}</button>
+        {ownership && (
+          <span className="muted">
+            Ownership — native {ownership.native} · ha {ownership.ha} · matter {ownership.matter} · cloud {ownership.cloud} · unassigned {ownership.unassigned}
+          </span>
+        )}
+      </div>
+      {drivers.filter((d) => d.protocols.length > 0).length === 0 && <p className="muted">No native protocol drivers have registered yet.</p>}
+      {drivers.filter((d) => d.protocols.length > 0).map((d) => (
+        <div key={d.key} className="audit-list" style={{ marginBottom: 10 }}>
+          <div className="dev-row2">
+            <strong>{d.name}</strong>
+            <span className={d.healthy ? "muted" : "err"}>{d.healthy ? "✓ healthy" : "✕ unhealthy"}</span>
+          </div>
+          {d.protocols.map((p) => (
+            <div key={p.protocol} style={{ fontSize: 13, marginTop: 4 }}>
+              <div><code>{p.protocol}</code> — stage: <b>{p.stage}</b>{p.reconnects > 0 ? ` · ${p.reconnects} reconnect(s)` : ""}</div>
+              <div className="muted">bindings {p.boundCount}/{p.bindingCount} restored · {p.ownedCount} device(s) owned · updated {new Date(p.updatedAt).toLocaleTimeString()}</div>
+              {p.lastError && <div className="err">last error: {p.lastError}</div>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   );
 }
 

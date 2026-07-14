@@ -7,6 +7,7 @@ import {
   RoutingBackendAdapter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
+  OwnershipRegistry,
   provisionHaToken,
   haHttpFromWsUrl,
   type IBackendAdapter,
@@ -118,6 +119,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.pushTokenStore = stores.pushTokens;
     deps.backupStore = stores.backups;
     deps.pendingDeviceStore = stores.pendingDevices;
+    deps.ownershipStore = stores.deviceOwnership;
     migrationStore = stores.migrationPolicy;
     deps.db = stores.db;
   }
@@ -275,13 +277,23 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // Restore persisted native-migration routing so migrated domains stay native on reboot.
   const policy = new MigrationPolicy([], migrationStore);
   await policy.hydrate();
+  // The native adapter starts with NO drivers registered — every env-configured driver
+  // built above is instead handed to InstallerServices as `envDrivers` (below) and
+  // registered through the same Driver Lifecycle pipeline manifest-configured drivers
+  // use (§ Driver Lifecycle: no duplicate registration logic). This is the structural
+  // fix for the boot-order race the Architecture Investigation Report identified: a
+  // persisted protocol binding can no longer be replayed before the driver it needs
+  // exists, because there is only one place drivers get registered + bindings restored.
+  const ownership = new OwnershipRegistry(deps.ownershipStore);
   const router = new RoutingBackendAdapter({
     ha: haSide,
-    native: new SupremeNativeAdapter({ drivers: nativeDrivers }),
+    native: new SupremeNativeAdapter(),
     registry,
+    ownership,
     policy,
   });
-  deps.sil = new SupremeIntegrationLayer({ adapter: router, registry });
+  deps.sil = new SupremeIntegrationLayer({ adapter: router, registry, ownership });
+  deps.envDrivers = new Map(nativeDrivers.map((d) => [d.protocol, d] as const));
 
   // Proactive voice reporting (ADR 0010): when configured, publish local state changes to the
   // cloud Voice service so Alexa/Google stay in sync. Outbound-only and non-fatal.

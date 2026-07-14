@@ -10,6 +10,7 @@ import type { BackendStateEvent, IBackendAdapter, MediaArtwork, MediaQueueItem }
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { EngineKind } from "./migration.js";
+import { OwnershipRegistry, type IDeviceOwnershipStore } from "./ownership.js";
 import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.js";
 
 /**
@@ -23,18 +24,32 @@ import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.
 export interface SilOptions {
   adapter: IBackendAdapter;
   registry?: EntityRegistryMirror;
+  /** Explicit device ownership (§ Native Driver Architecture Refactor) — required
+   * whenever `adapter` is a {@link RoutingBackendAdapter}, since ownership is the
+   * ONLY signal the command router consults. */
+  ownership?: OwnershipRegistry;
+  ownershipStore?: IDeviceOwnershipStore;
 }
 
 export class SupremeIntegrationLayer {
   private readonly adapter: IBackendAdapter;
   readonly registry: EntityRegistryMirror;
+  readonly ownership: OwnershipRegistry;
 
   constructor(opts: SilOptions) {
     this.adapter = opts.adapter;
     this.registry = opts.registry ?? new EntityRegistryMirror();
+    // A RoutingBackendAdapter owns its own OwnershipRegistry (the router IS the thing
+    // that consults it on every command); reuse that exact instance when the caller
+    // didn't hand one in explicitly, rather than silently creating a second, empty
+    // registry the router never sees — that split-brain is easy to introduce by
+    // accident (constructing the adapter and the SIL as two separate calls) and would
+    // make every device look "unassigned" to command() even though it's genuinely owned.
+    this.ownership = opts.ownership ?? (opts.adapter instanceof RoutingBackendAdapter ? opts.adapter.ownership : new OwnershipRegistry(opts.ownershipStore));
   }
 
   async start(): Promise<void> {
+    await this.ownership.hydrate();
     await this.adapter.connect();
   }
 
@@ -110,24 +125,32 @@ export class SupremeIntegrationLayer {
   }
 
   /**
-   * Bind a device/capability to a real native protocol stack (KNX/Modbus/MQTT). After
-   * this the device is owned by the Supreme-native engine and its commands/state flow
-   * over that bus. Available only when the SIL is backed by a routing adapter.
+   * Bind a device/capability to a real native protocol stack (KNX/Modbus/MQTT/…). On
+   * success this is also the ONLY place ownership transitions to "native" — a bind
+   * that throws leaves ownership exactly as it was (§ Ownership changes must be
+   * transactional: never partially applied). Available only when the SIL is backed
+   * by a routing adapter.
    */
   async bindNative(binding: ProtocolBinding, protocol: string): Promise<void> {
     const router = this.router;
     if (!router) throw new SupremeError("conflict", "native protocol binding is not enabled on this hub");
     await router.native.bind(binding, protocol);
+    await this.ownership.set(binding.deviceId, "native", protocol);
   }
 
-  /** Register a Supreme device capability ↔ backend entity mapping. */
+  /** Register a Supreme device capability ↔ backend entity mapping (HA-side registry —
+   * distinct from ownership, which records WHO commands the device; this records what
+   * HA-native reads/discovery-dedup consult). */
   mapEntity(deviceId: DeviceId, capability: CapabilityKind, ref: BackendEntityRef): void {
     this.registry.map(deviceId, capability, ref);
   }
 
-  /** Drop every backend mapping for a device (used when the device is deleted). */
-  unmapDevice(deviceId: DeviceId): void {
+  /** Drop every backend mapping AND ownership record for a device (used when the
+   * device is deleted) — an orphaned ownership row would otherwise let a future
+   * device reuse the same id (unlikely, but ownership must never lie). */
+  async unmapDevice(deviceId: DeviceId): Promise<void> {
     this.registry.unmapDevice(deviceId);
+    await this.ownership.clear(deviceId);
   }
 
   /** Issue a Supreme capability command. Rejects read-only capabilities. */
