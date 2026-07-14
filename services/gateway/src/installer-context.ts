@@ -1167,6 +1167,17 @@ export class InstallerServices {
       }
       const orphaned = (await this.d.home.listDevices()).filter((dv) => dv.driverId === id);
       if (orphaned.length) {
+        // Protocol bindings (bus address + config, e.g. IP/credentials for that specific
+        // device) live in their own table, keyed by device+capability — removeDevices()
+        // only clears the SIL registry/ownership, so these rows would otherwise survive
+        // as orphaned data with no device or driver left to reference them.
+        if (this.d.protocolBindingStore) {
+          for (const dv of orphaned) {
+            for (const cap of dv.capabilities) {
+              await this.d.protocolBindingStore.remove(dv.id, cap.kind);
+            }
+          }
+        }
         await this.d.home.removeDevices(orphaned.map((dv) => dv.id));
         this.appendLog(entry.key, "info", `Removed ${orphaned.length} device(s) belonging to this driver`);
       }
