@@ -46,7 +46,7 @@ const RULES: KeywordRule[] = [
   { keywords: ["rgbw"], deviceKind: "rgbw_light", capabilities: ["onoff", "brightness", "color"] },
   { keywords: ["rgb"], deviceKind: "rgb_light", capabilities: ["onoff", "brightness", "color"] },
   { keywords: ["tunablewhite", "tunable_white", "cct", "colortemp", "kelvin"], deviceKind: "tunable_white_light", capabilities: ["onoff", "brightness", "color"] },
-  { keywords: ["dimm", "dim", "brightness"], deviceKind: "light", capabilities: ["onoff", "brightness"] },
+  { keywords: ["dimm", "dim", "dimming", "brightness"], deviceKind: "light", capabilities: ["onoff", "brightness"] },
   { keywords: ["light", "lighting", "lamp"], deviceKind: "light", capabilities: ["onoff"] },
 
   { keywords: ["thermostat"], deviceKind: "thermostat", capabilities: ["temperature"] },
@@ -70,7 +70,7 @@ const RULES: KeywordRule[] = [
   { keywords: ["media", "audio", "player"], deviceKind: "media", capabilities: ["media"] },
 
   { keywords: ["socket", "outlet", "plug"], deviceKind: "socket", capabilities: ["onoff"] },
-  { keywords: ["switch", "sw"], deviceKind: "switch", capabilities: ["onoff"] },
+  { keywords: ["switch", "switching", "sw"], deviceKind: "switch", capabilities: ["onoff"] },
   { keywords: ["sensor", "value"], deviceKind: "sensor", capabilities: ["sensor"] },
 ];
 

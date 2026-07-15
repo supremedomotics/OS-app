@@ -59,4 +59,33 @@ describe("mapUnifiedDevices", () => {
     expect(devices[0]?.raw.metadata.room).toBe("Chef's Kitchen");
     expect(devices[0]?.raw.mergeExplanation.some((e) => e.includes('"Chef\'s Light" ← user'))).toBe(true);
   });
+
+  it("Group Address Schema Engine: Schema 2's mid-string operation words merge correctly, which bare grouping could not do", () => {
+    const devices = mapUnifiedDevices({
+      ets: [
+        { id: "1", name: "Lighting - Switching - Living DL-1" },
+        { id: "2", name: "Lighting - Dimming - Living DL-1" },
+      ],
+      schemaId: "circuit-operation-name",
+    });
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.raw.groupingKey).toBe("living dl-1");
+    expect(devices[0]?.capabilities).toEqual(expect.arrayContaining(["onoff", "brightness"]));
+  });
+
+  it("Schema 1's extracted room fills in when no per-signal room was given explicitly", () => {
+    const devices = mapUnifiedDevices({
+      ets: [{ id: "1", name: "Ground Floor - Living Room - Main Ceiling Light" }],
+      schemaId: "floor-room-device",
+    });
+    expect(devices[0]?.raw.metadata.room).toBe("Living Room");
+  });
+
+  it("an explicit per-signal room still wins over the schema's extracted one", () => {
+    const devices = mapUnifiedDevices({
+      ets: [{ id: "1", name: "Ground Floor - Living Room - Main Ceiling Light", room: "Override Room" }],
+      schemaId: "floor-room-device",
+    });
+    expect(devices[0]?.raw.metadata.room).toBe("Override Room");
+  });
 });

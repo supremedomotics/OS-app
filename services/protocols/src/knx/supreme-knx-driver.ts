@@ -235,6 +235,8 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   async discoverUnified(
     ets?: UnifiedDeviceMapperInput["ets"],
     userOverrides?: UnifiedDeviceMapperInput["userOverrides"],
+    schemaId?: UnifiedDeviceMapperInput["schemaId"],
+    schemaOptions?: UnifiedDeviceMapperInput["schemaOptions"],
   ): Promise<UnifiedKnxDevice[]> {
     const iotDiscovered = await this.iot.discover();
     const knxIotSignals: KnxIotDiscoverySignal[] = [];
@@ -255,7 +257,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       knxIotSignals.push({ host, linkFormat, functionalBlocks });
     }
 
-    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides });
+    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides, schemaId, schemaOptions });
     this.lastMetadataSync = new Date().toISOString();
     this.lastUnifiedDeviceCount = result.length;
     this.lastUnifiedCapabilityCount = result.reduce((n, d) => n + d.capabilities.length, 0);

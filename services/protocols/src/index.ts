@@ -54,6 +54,17 @@ export {
   type KnxIotDiscoverySignal,
   type CommunicationObject,
 } from "./knx/unified-device-mapper.js";
+export {
+  groupWithSchema,
+  SCHEMA_REGISTRY,
+  SchemaRegistry,
+  floorRoomDeviceSchema,
+  circuitOperationNameSchema,
+  type GroupAddressSchema,
+  type SchemaExtraction,
+  type SchemaOptions,
+  type SchemaGroupedCluster,
+} from "./knx/schema-engine.js";
 export { planBindings, isFullyBindable, type BindingPlanItem } from "./knx/binding-engine.js";
 export { scoreConfidence, fieldsNeedingReview, CONFIDENCE_REVIEW_THRESHOLD, type ConfidenceScores } from "./knx/confidence-engine.js";
 export { assignRoom, type RoomAssignmentInput, type RoomAssignmentResult, type RoomAssignmentSource } from "./knx/room-assignment.js";

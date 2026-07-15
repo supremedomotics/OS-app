@@ -1,4 +1,4 @@
-import { groupByCircuitName, type GroupingSignal } from "@supreme/domain-model";
+import { groupByCircuitName, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
 import type { DiscoveredDevice } from "@supreme/integration-layer";
 import { classifyFromText, classifyFunctionalBlock, mergeCapabilityHints, type KnxDeviceKind } from "./capability-mapper.js";
 import type { FunctionalBlock } from "./functional-block-parser.js";
@@ -9,6 +9,7 @@ import {
   type MetadataSource,
 } from "./metadata-merge.js";
 import { EMPTY_SEMANTIC_METADATA, semanticMetadataFromEts, semanticMetadataFromLinkFormatTitle, type EtsMetadataSource, type SemanticMetadata } from "./semantic-metadata.js";
+import { groupWithSchema, type SchemaOptions } from "./schema-engine.js";
 
 /**
  * Unified Device Mapper (§ Unified Device Intelligence — Phase 3).
@@ -43,6 +44,15 @@ export interface UnifiedDeviceMapperInput {
   /** Installer/user-entered overrides, keyed by the grouping key the device will land
    * under (§ Merge priority: user always wins). */
   userOverrides?: Record<string, Partial<SemanticMetadata>>;
+  /** Group Address Schema Engine selection (§ Configurable Group Address Schema Engine)
+   * — which naming convention this project's group-address names follow. Absent means
+   * the plain circuit-name grouping this mapper has always done (backward compatible —
+   * every existing caller that never selects a schema is unaffected). When present,
+   * clustering runs through {@link groupWithSchema} instead of the bare
+   * `groupByCircuitName` call, which still does 100% of the actual clustering work —
+   * the schema only decides what text gets fed to it. */
+  schemaId?: string;
+  schemaOptions?: SchemaOptions;
 }
 
 /** A single communication object contributing to this device — a KNX Ultimate group
@@ -87,7 +97,9 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
   ];
   if (signals.length === 0) return [];
 
-  const clusters = groupByCircuitName(signals);
+  const clusters: (DeviceCluster & { room?: string | null; circuitType?: string | null; operationType?: string | null })[] = input.schemaId
+    ? groupWithSchema(signals, input.schemaId, input.schemaOptions ?? {})
+    : groupByCircuitName(signals);
   const iotByHost = new Map((input.knxIot ?? []).map((d) => [`knx-iot:${d.host}`, d]));
   const etsById = new Map((input.ets ?? []).map((s) => [s.id, s]));
 
@@ -102,15 +114,26 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
     // classification keyword a single-signal device has (e.g. "Hallway Switch" → circuit
     // key "hallway"). classifyFromText already accepts multiple hints — this costs
     // nothing extra and never overrides a real functional-block classification.
+    // Classify from the ORIGINAL raw signal names (etsSignals/iotSignals), not
+    // `cluster.signals[].name` — when a Group Address Schema Engine extraction ran
+    // (§ Configurable Group Address Schema Engine), `cluster.signals[].name` is the
+    // STRIPPED circuit name only ("Living DL-1"), with real classification signal like
+    // "Switching"/"Dimming" moved out into per-signal metadata the cluster only keeps
+    // one copy of (first signal). The raw pre-extraction names still carry every
+    // signal's full text, so classification never loses signal to schema stripping.
+    const rawNames = [...etsSignals.map((s) => s.name), ...iotSignals.map((s) => s.linkFormat)];
     const hints = functionalBlocks.length > 0
       ? functionalBlocks.map(classifyFunctionalBlock)
-      : [classifyFromText(cluster.key, ...cluster.signals.map((s) => s.name))];
+      : [classifyFromText(cluster.key, ...rawNames)];
     const { capabilities, deviceKind, matchedOn } = mergeCapabilityHints(hints);
 
     const knxIotTitle = iotSignals[0]?.linkFormat.match(/title="([^"]*)"/)?.[1] ?? null;
     const etsMeta: EtsMetadataSource = {
       circuitName: etsSignals[0]?.name ?? null,
-      room: etsSignals[0]?.room ?? null,
+      // An explicit per-signal room always wins; a Schema Engine room extraction (e.g.
+      // Schema 1's "Floor → Room → Device Name") fills in only when nothing more
+      // specific said otherwise — never overrides real data with a guess.
+      room: etsSignals[0]?.room ?? cluster.room ?? null,
       description: etsSignals[0]?.description ?? null,
     };
 

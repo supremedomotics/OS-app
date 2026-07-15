@@ -41,6 +41,19 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       hostField,
       portField(3671),
       { key: "individualAddress", label: "Physical address", type: "text", placeholder: "1.1.255", help: "The interface's KNX individual address.", secret: false },
+      {
+        key: "groupAddressSchema",
+        label: "Group Address Schema",
+        type: "select",
+        required: true,
+        default: "floor-room-device",
+        help: "How this project's group-address names are structured — used to group every operation belonging to one circuit into a single SupremeOS device.",
+        options: [
+          { value: "floor-room-device", label: "Floor → Room → Device Name" },
+          { value: "circuit-operation-name", label: "Circuit Type → Operation Type → Circuit Name" },
+        ],
+        secret: false,
+      },
     ],
   }),
   defineManifest({
