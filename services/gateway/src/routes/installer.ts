@@ -315,7 +315,38 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   });
 
   // ── ETS group-address import (§4): KNX project → device cards ─────────────────
-  app.post("/v1/commissioning/import/knx", async (req, reply) => {
+  //
+  // BODY SIZE (§ ETS Import production blocker): the gateway's global `bodyLimit`
+  // (server.ts, 1 MiB) exists to blunt oversized-payload abuse on the JSON API — a
+  // sound default for every other route, but wrong for this one. A `.knxproj` upload is
+  // base64-encoded inside a JSON string (≈33% inflation over the binary ZIP) and a
+  // commercial ETS export with thousands of group addresses routinely exceeds 1 MiB as
+  // plain XML alone; the 1 MiB cap is what actually produces "Request body is too
+  // large" (Fastify's own FST_ERR_CTP_BODY_TOO_LARGE, confirmed against the installed
+  // fastify package's error source, not guessed). Investigated and ruled out as the
+  // cause: Caddy (infra/hub-compose/Caddyfile has no request_body/max_size directive —
+  // no proxy-level cap exists), the multipart parser (not in play — these routes accept
+  // JSON, not multipart/form-data), and the XML/ZIP parser (services/commissioning's
+  // runKnxImport/unzipKnxproj operate in-memory on whatever buffer they're handed; they
+  // were never reached because the body was rejected before parsing started).
+  //
+  // Fix: override ONLY these two content-receiving routes to a generous 64 MiB ceiling
+  // — enormous headroom for even large multi-building commercial projects (tens of
+  // thousands of group addresses is single-digit MB of XML) — while leaving the global
+  // 1 MiB default untouched for every other endpoint, preserving its abuse-prevention
+  // intent exactly where it still applies. NOT a blanket "raise the limit" — a scoped,
+  // justified exception on the two routes that legitimately need it.
+  //
+  // Explicitly NOT implemented this pass (a materially larger, separate feature): a
+  // streaming multipart upload protocol, incremental/streaming XML parsing, real-time
+  // progress reporting, mid-upload cancellation, or resumable/interrupted-import
+  // recovery. The in-memory parse this fix unblocks is bounded (64 MiB ceiling, not
+  // unbounded), which is sufficient for the reported bug (a "relatively small" project
+  // failing) and for realistic large commercial projects, but is not the fully
+  // streaming pipeline the request describes as the end state.
+  const ETS_IMPORT_BODY_LIMIT = 64 * 1024 * 1024;
+
+  app.post("/v1/commissioning/import/knx", { bodyLimit: ETS_IMPORT_BODY_LIMIT }, async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
@@ -335,7 +366,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
 
   // Parse-only preview: same inputs as the import route, but nothing is committed — the
   // installer reviews the device list (room, detected circuit type) before saving.
-  app.post("/v1/commissioning/import/knx/preview", async (req, reply) => {
+  app.post("/v1/commissioning/import/knx/preview", { bodyLimit: ETS_IMPORT_BODY_LIMIT }, async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");

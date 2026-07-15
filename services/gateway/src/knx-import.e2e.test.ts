@@ -166,4 +166,37 @@ describe("KNX ETS import → device cards", () => {
     };
     expect(new Set(nookDevices.devices[0]?.capabilities.map((c) => c.kind))).toEqual(new Set(["onoff", "brightness", "color"]));
   });
+
+  it(
+    "imports a large commercial-scale ETS export whose body exceeds the gateway's global 1 MiB API limit (§ ETS Import production blocker)",
+    async () => {
+      // Synthesizes a project large enough to exceed the gateway's default 1 MiB
+      // bodyLimit — proving the scoped per-route override on the import routes is what
+      // actually fixes "Request body is too large" for a real commercial-scale project,
+      // not just a toy fixture that happens to fit.
+      const lines: string[] = [];
+      let addr = 1;
+      const CIRCUITS = 5200;
+      for (let circuit = 0; circuit < CIRCUITS; circuit++) {
+        const room = `Zone ${circuit % 50}`;
+        const name = `${room} - Circuit ${circuit} Downlight`;
+        lines.push(`<GroupAddress Name="${name} - Switch" Address="1/1/${addr++}" DPTs="DPST-1-1" />`);
+        lines.push(`<GroupAddress Name="${name} - Status" Address="1/1/${addr++}" DPTs="DPST-1-1" />`);
+      }
+      const largeExport = `<GroupAddress-Export>${lines.join("\n")}</GroupAddress-Export>`;
+      const body = JSON.stringify({ content: largeExport });
+      expect(body.length).toBeGreaterThan(1_048_576); // confirms the fixture genuinely exceeds the global limit
+
+      const res = await fetch(`${baseUrl}/v1/commissioning/import/knx/preview`, {
+        method: "POST",
+        headers: auth(),
+        body,
+      });
+      expect(res.status).toBe(200); // not 413 — the scoped bodyLimit override is what makes this pass
+      const out = (await res.json()) as { devices: unknown[]; stats: { groupAddressCount: number } };
+      expect(out.stats.groupAddressCount).toBe(CIRCUITS * 2);
+      expect(out.devices).toHaveLength(CIRCUITS); // every switch+status pair grouped into one device
+    },
+    30000,
+  );
 });
