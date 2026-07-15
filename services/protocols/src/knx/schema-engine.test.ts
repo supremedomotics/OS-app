@@ -5,7 +5,9 @@ import {
   SchemaRegistry,
   floorRoomDeviceSchema,
   circuitOperationNameSchema,
-  type GroupAddressSchema,
+  defineHierarchySchema,
+  validateSchemaPlugin,
+  type GroupAddressSchemaPlugin,
 } from "./schema-engine.js";
 
 describe("floorRoomDeviceSchema", () => {
@@ -101,11 +103,12 @@ describe("groupWithSchema — the full pipeline, reusing the existing grouping e
 
   it("registry is the only extension seam — a new/plugin schema needs no discovery-code change", () => {
     const registry = new SchemaRegistry();
-    const custom: GroupAddressSchema = {
+    const custom: GroupAddressSchemaPlugin = {
       id: "custom",
       name: "Custom",
       description: "test plugin schema",
       levels: ["circuitName"],
+      metadata: { source: "custom", version: "0.1.0", author: "test installer" },
       extract: (rawName) => ({ circuitName: rawName, room: null, floor: null, circuitType: null, operationType: null }),
     };
     registry.register(custom);
@@ -113,5 +116,90 @@ describe("groupWithSchema — the full pipeline, reusing the existing grouping e
     expect(registry.list().map((s) => s.id)).toEqual(["custom"]);
     // The real registry ships both built-ins pre-registered.
     expect(SCHEMA_REGISTRY.list().map((s) => s.id).sort()).toEqual(["circuit-operation-name", "floor-room-device"]);
+  });
+
+  it("unregister() removes a plugin — the registry never accumulates dead entries", () => {
+    const registry = new SchemaRegistry();
+    registry.register(floorRoomDeviceSchema);
+    registry.unregister(floorRoomDeviceSchema.id);
+    expect(registry.get(floorRoomDeviceSchema.id)).toBeUndefined();
+  });
+
+  it("listBySource() separates built-in from community/ai-generated/custom plugins by real provenance", () => {
+    const registry = new SchemaRegistry();
+    registry.register(floorRoomDeviceSchema); // source: "built-in"
+    registry.register({
+      id: "community-1", name: "Community Schema", description: "imported", levels: ["circuitName"],
+      metadata: { source: "community", version: "1.0.0", author: "Jane Installer" },
+      extract: (rawName) => ({ circuitName: rawName, room: null, floor: null, circuitType: null, operationType: null }),
+    });
+    expect(registry.listBySource("built-in").map((p) => p.id)).toEqual(["floor-room-device"]);
+    expect(registry.listBySource("community").map((p) => p.id)).toEqual(["community-1"]);
+    expect(registry.listBySource("ai-generated")).toEqual([]);
+  });
+});
+
+describe("defineHierarchySchema (§ Plugin Architecture — built-ins as data, not hardcoded logic)", () => {
+  it("built-in plugins are constructed through the exact same declarative factory a future AI/community/custom plugin would use", () => {
+    expect(floorRoomDeviceSchema.metadata).toMatchObject({ source: "built-in" });
+    expect(circuitOperationNameSchema.metadata).toMatchObject({ source: "built-in" });
+  });
+
+  it("builds a real, working plugin from pure data — no custom extract() function written by hand", () => {
+    const buildingWingRoomDevice = defineHierarchySchema({
+      id: "building-wing-room-device",
+      name: "Building → Wing → Room → Device",
+      description: "a 4-level hierarchy a future plugin author might define",
+      levels: ["floor", "room", "circuitName"], // only 3 named fields exist on SchemaExtraction — proves graceful handling
+    });
+    const r = buildingWingRoomDevice.extract("North Wing - Conference Room - Ceiling Light", {});
+    expect(r).toEqual({ circuitName: "Ceiling Light", room: "Conference Room", floor: "North Wing", circuitType: null, operationType: null });
+  });
+
+  it("degrades gracefully with fewer segments than declared levels, same as the original hand-written schemas did", () => {
+    const plugin = defineHierarchySchema({ id: "test", name: "Test", description: "t", levels: ["floor", "room", "circuitName"] });
+    expect(plugin.extract("Just A Device", {})).toMatchObject({ circuitName: "Just A Device", room: null, floor: null });
+  });
+
+  it("rejects a definition that doesn't end in circuitName — the one structural rule the factory enforces", () => {
+    expect(() => defineHierarchySchema({ id: "bad", name: "Bad", description: "d", levels: ["floor", "room"] })).toThrow(/circuitName/);
+  });
+
+  it("a declaratively-defined plugin works end-to-end through groupWithSchema, identically to a hand-written one", () => {
+    const registry = new SchemaRegistry();
+    const plugin = defineHierarchySchema({
+      id: "type-name",
+      name: "Type → Name",
+      description: "a minimal 2-level custom schema",
+      levels: ["circuitType", "circuitName"],
+    });
+    registry.register(plugin);
+    // groupWithSchema always reads from SCHEMA_REGISTRY, so route through the real
+    // engine by temporarily using the module's own registry.
+    SCHEMA_REGISTRY.register(plugin);
+    const clusters = groupWithSchema(
+      [{ id: "1", name: "Lighting - Foyer Lamp" }, { id: "2", name: "Lighting - Foyer Lamp Status" }],
+      "type-name",
+    );
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.circuitType).toBe("Lighting");
+  });
+});
+
+describe("validateSchemaPlugin (§ Future AI Schema Architecture — defensive boundary)", () => {
+  it("accepts a well-formed plugin", () => {
+    expect(validateSchemaPlugin(floorRoomDeviceSchema)).toBe(true);
+  });
+
+  it("rejects a plugin missing required fields — the exact shape a malformed AI-generated or community JSON import might have", () => {
+    expect(validateSchemaPlugin({ id: "x" })).toBe(false);
+    expect(validateSchemaPlugin({ id: "x", name: "X", description: "d", levels: ["circuitName"] })).toBe(false); // no metadata
+    expect(validateSchemaPlugin({ id: "x", name: "X", description: "d", levels: "not-an-array", metadata: { source: "custom" }, extract: () => {} })).toBe(false);
+    expect(validateSchemaPlugin(null)).toBe(false);
+    expect(validateSchemaPlugin("just a string")).toBe(false);
+  });
+
+  it("rejects a plugin whose extract is not a real function", () => {
+    expect(validateSchemaPlugin({ id: "x", name: "X", description: "d", levels: [], metadata: { source: "custom" }, extract: "not a function" })).toBe(false);
   });
 });

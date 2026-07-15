@@ -60,10 +60,16 @@ export {
   SchemaRegistry,
   floorRoomDeviceSchema,
   circuitOperationNameSchema,
+  defineHierarchySchema,
+  validateSchemaPlugin,
   type GroupAddressSchema,
+  type GroupAddressSchemaPlugin,
   type SchemaExtraction,
   type SchemaOptions,
   type SchemaGroupedCluster,
+  type SchemaPluginSource,
+  type SchemaPluginMetadata,
+  type HierarchySchemaDefinition,
 } from "./knx/schema-engine.js";
 export { planBindings, isFullyBindable, type BindingPlanItem } from "./knx/binding-engine.js";
 export { scoreConfidence, fieldsNeedingReview, CONFIDENCE_REVIEW_THRESHOLD, type ConfidenceScores } from "./knx/confidence-engine.js";
