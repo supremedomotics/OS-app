@@ -233,6 +233,17 @@ export class KnxUltimateProvider implements IKnxProvider {
     return this.connectionManager?.metrics() ?? null;
   }
 
+  /** Connection Quality Monitoring (§ Enterprise Reliability — "telegram rate"): a real
+   * division of two real counters (packets received ÷ elapsed connected minutes), never
+   * a fabricated/simulated rate. Null whenever either input isn't meaningful yet — no
+   * uptime recorded, or uptime is effectively zero (a fresh connect, avoiding a
+   * division that would report a wildly inflated instantaneous rate off one packet). */
+  telegramRatePerMinute(): number | null {
+    const uptimeMs = this.connectionManager?.metrics().uptimeMs;
+    if (!uptimeMs || uptimeMs < 1000) return null;
+    return this.packetsReceived / (uptimeMs / 60_000);
+  }
+
   diagnostics(): ProviderDiagnostics {
     return {
       provider: this.name,

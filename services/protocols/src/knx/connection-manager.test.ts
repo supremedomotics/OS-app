@@ -23,6 +23,26 @@ describe("ConnectionManager", () => {
     expect(cm.metrics().uptimeMs).toBe(0);
   });
 
+  it("measures a real connect duration, on success and on failure (§ Connection Quality Monitoring)", async () => {
+    let now = 0;
+    const connect = vi.fn().mockImplementation(() => {
+      now += 42; // simulate 42ms of real elapsed connect time
+      return Promise.resolve();
+    });
+    const cm = new ConnectionManager({ connect, disconnect: vi.fn(), now: () => now });
+    await cm.start();
+    expect(cm.metrics().lastConnectDurationMs).toBe(42);
+
+    now = 0;
+    const failing = vi.fn().mockImplementation(() => {
+      now += 17;
+      return Promise.reject(new Error("refused"));
+    });
+    const cm2 = new ConnectionManager({ connect: failing, disconnect: vi.fn(), now: () => now });
+    await cm2.start();
+    expect(cm2.metrics().lastConnectDurationMs).toBe(17); // a failed attempt's duration is real data too
+  });
+
   it("retries with exponential backoff on repeated connect failures, capped at maxBackoffMs", async () => {
     let attempt = 0;
     const connect = vi.fn().mockImplementation(() => {

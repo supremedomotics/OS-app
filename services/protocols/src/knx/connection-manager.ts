@@ -35,6 +35,10 @@ export interface ConnectionManagerMetrics {
   lastConnectedAt: string | null;
   lastDisconnectedAt: string | null;
   lastError: string | null;
+  /** Real, measured elapsed time of the most recent connect() call — successful or not
+   * (§ Enterprise Reliability — Connection Quality Monitoring: "reconnect duration").
+   * Null until at least one connect attempt has completed. */
+  lastConnectDurationMs: number | null;
 }
 
 export interface ConnectionManagerOptions {
@@ -76,6 +80,7 @@ export class ConnectionManager {
   private lastConnectedAt: string | null = null;
   private lastDisconnectedAt: string | null = null;
   private lastError: string | null = null;
+  private lastConnectDurationMs: number | null = null;
 
   constructor(opts: ConnectionManagerOptions) {
     this.opts = opts;
@@ -157,6 +162,7 @@ export class ConnectionManager {
       lastConnectedAt: this.lastConnectedAt,
       lastDisconnectedAt: this.lastDisconnectedAt,
       lastError: this.lastError,
+      lastConnectDurationMs: this.lastConnectDurationMs,
     };
   }
 
@@ -171,8 +177,10 @@ export class ConnectionManager {
     if (this.connecting || this.stopped) return;
     this.connecting = true;
     this.setState(this.reconnectAttempts > 0 ? "recovering" : "connecting", reason);
+    const startedAt = this.now();
     try {
       await this.opts.connect();
+      this.lastConnectDurationMs = this.now() - startedAt;
       this.connecting = false;
       if (this.stopped) return; // stop() ran while connect() was in flight
       this.connectedAt = this.now();
@@ -184,6 +192,7 @@ export class ConnectionManager {
       this.setState("connected", "connected");
       this.startHeartbeat();
     } catch (err) {
+      this.lastConnectDurationMs = this.now() - startedAt;
       this.connecting = false;
       this.lastError = err instanceof Error ? err.message : String(err);
       this.reconnectAttempts++;

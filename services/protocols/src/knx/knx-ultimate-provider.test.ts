@@ -104,4 +104,19 @@ describe("KnxUltimateProvider", () => {
     expect(values).toEqual([true]); // delivered through the NEW client, same handler —
     // never re-registered by anything, because it was never lost (§ Phase 7 §1).
   }, 10000);
+
+  it("telegramRatePerMinute() is a real division of real counters, null before there's meaningful uptime", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    expect(provider.telegramRatePerMinute()).toBeNull(); // not connected yet — never a fabricated 0
+    await provider.connect();
+    expect(provider.telegramRatePerMinute()).toBeNull(); // uptime <1s — avoids a wildly inflated instantaneous rate
+
+    await new Promise((r) => setTimeout(r, 1100));
+    FakeClient.instances[0]!.emitIndication("1/1/1", Buffer.from([1]));
+    FakeClient.instances[0]!.emitIndication("1/1/1", Buffer.from([1]));
+    const rate = provider.telegramRatePerMinute();
+    expect(rate).not.toBeNull();
+    expect(rate!).toBeGreaterThan(0); // 2 packets over ~1.1s of uptime — a real, positive rate
+  }, 10000);
 });

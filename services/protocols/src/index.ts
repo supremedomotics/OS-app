@@ -19,6 +19,12 @@ export {
   type ConnectionManagerOptions,
   type ConnectionManagerMetrics,
 } from "./knx/connection-manager.js";
+export {
+  OfflineCommandQueue,
+  type OfflineCommandQueueOptions,
+  type QueuedCommand,
+  type DrainResult,
+} from "./knx/offline-command-queue.js";
 export { KnxUltimateProvider, type KnxUltimateProviderOptions } from "./knx/knx-ultimate-provider.js";
 export { KnxIotProvider, type KnxIotProviderOptions } from "./knx/knx-iot-provider.js";
 export { KnxTaskRouter } from "./knx/task-router.js";

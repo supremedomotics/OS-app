@@ -17,6 +17,7 @@ import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
 import { KnxIotProvider } from "./knx-iot-provider.js";
 import { parseFunctionalBlocks } from "./functional-block-parser.js";
 import { mapUnifiedDevices, type KnxIotDiscoverySignal, type UnifiedKnxDevice, type UnifiedDeviceMapperInput } from "./unified-device-mapper.js";
+import { OfflineCommandQueue, type DrainResult } from "./offline-command-queue.js";
 import type { IKnxProvider, ProviderDiagnostics } from "./provider.js";
 
 /**
@@ -76,21 +77,34 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   private lastSyncCount: number | null = null;
   private lastSyncErrorCount: number | null = null;
 
+  // Offline Command Queue (§ Enterprise Reliability — Queue Recovery Policy): a command
+  // issued while disconnected queues (MERGE + TTL-EXPIRE) instead of failing outright.
+  private readonly offlineQueue = new OfflineCommandQueue<DeviceId, CapabilityCommand>({
+    keyOf: (deviceId, command) => `${deviceId}:${command.capability}`,
+  });
+  private lastQueueDrainAt: string | null = null;
+  private lastQueueDrainResult: DrainResult | null = null;
+
   constructor(opts: SupremeKnxDriverOptions) {
     this.ultimate = opts.ultimateProvider ?? new KnxUltimateProvider({ host: opts.host, port: opts.port });
     const iot = opts.iotProvider ?? new KnxIotProvider();
     this.iot = iot;
-    // State Synchronization (§ Phase 7): whenever the transport provider (re)establishes
-    // a connection — first connect OR a Connection-Manager-supervised reconnect after an
-    // outage — read back every bound device's current value rather than waiting
-    // indefinitely for a spontaneous telegram. Feature-detected: only providers that
-    // expose real connection-state transitions (today: KnxUltimateProvider) trigger
-    // this; a provider/fake without it just never fires it, never fabricated.
+    // State Synchronization (§ Phase 7) + Queue Recovery (§ Enterprise Reliability):
+    // whenever the transport provider (re)establishes a connection — first connect OR a
+    // Connection-Manager-supervised reconnect after an outage — read back every bound
+    // device's current value AND flush whatever commands queued while offline, rather
+    // than waiting indefinitely for a spontaneous telegram or silently dropping what the
+    // homeowner asked for. Feature-detected: only providers that expose real connection-
+    // state transitions (today: KnxUltimateProvider) trigger this; a provider/fake
+    // without it just never fires it, never fabricated.
     const supervisedUltimate = this.ultimate as Partial<{
       onConnectionStateChange: (cb: (state: string, previous: string) => void) => () => void;
     }>;
     supervisedUltimate.onConnectionStateChange?.((state) => {
-      if (state === "connected") void this.syncAll();
+      if (state === "connected") {
+        void this.syncAll();
+        void this.drainOfflineQueue();
+      }
     });
     // Routing table (§ Internal Task Router): every bus/DPT/security/transport task
     // kind goes to KNX Ultimate — unchanged, KNX IoT never duplicates group
@@ -147,10 +161,25 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
-    if (!this.connected) throw new Error("supreme-knx: not connected");
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`supreme-knx: ${deviceId} not bound for ${command.capability}`);
-    const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
+    if (!this.connected) {
+      // Queue Recovery (§ Enterprise Reliability): accepted, not lost — flushed (MERGE +
+      // TTL-EXPIRE) the moment the connection returns, per {@link OfflineCommandQueue}'s
+      // documented policy. Still optimistically reflects the command so the UI shows the
+      // homeowner's intent immediately, exactly like the connected path below.
+      this.offlineQueue.enqueue(deviceId, command);
+      const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
+      const value = valueFromCommand(command, prev, b.dpt);
+      const optimistic = value !== null ? stateFromValue(b.capability as CapabilityState["kind"], value, b.config) : null;
+      if (optimistic) this.record(b, optimistic);
+      return;
+    }
+    await this.executeCommand(b, command);
+  }
+
+  private async executeCommand(b: KnxDeviceBinding, command: CapabilityCommand): Promise<void> {
+    const prev = this.states.get(bindingKey(b.deviceId, command.capability)) ?? null;
     const value = valueFromCommand(command, prev, b.dpt);
     if (value === null) throw new Error(`supreme-knx: unsupported command for ${command.capability}`);
     await this.router.execute({ kind: "bus.group_write", groupAddress: b.writeGa, dpt: b.dpt, value });
@@ -158,6 +187,23 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     // identical contract to every other native driver in this codebase.
     const optimistic = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
     if (optimistic) this.record(b, optimistic);
+  }
+
+  /** Flushes whatever commands queued while disconnected (§ Queue Recovery), executing
+   * each through the SAME path a live command takes — never a separate, duplicated write
+   * mechanism. Safe to call with an empty queue (no-op) and safe on a driver with no
+   * bindings for a queued device (that command silently can't execute — the binding was
+   * presumably removed while offline; nothing to do about a device that no longer
+   * exists). */
+  async drainOfflineQueue(): Promise<DrainResult> {
+    const result = await this.offlineQueue.drain(async (deviceId, command) => {
+      const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
+      if (!b) return;
+      await this.executeCommand(b, command);
+    });
+    this.lastQueueDrainAt = new Date().toISOString();
+    this.lastQueueDrainResult = result;
+    return result;
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -259,6 +305,9 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     lastSyncAt: string | null;
     lastSyncCount: number | null;
     lastSyncErrorCount: number | null;
+    queuedCommandCount: number;
+    lastQueueDrainAt: string | null;
+    lastQueueDrainResult: DrainResult | null;
   } {
     return {
       protocol: this.protocol,
@@ -275,6 +324,9 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       lastSyncAt: this.lastSyncAt,
       lastSyncCount: this.lastSyncCount,
       lastSyncErrorCount: this.lastSyncErrorCount,
+      queuedCommandCount: this.offlineQueue.size(),
+      lastQueueDrainAt: this.lastQueueDrainAt,
+      lastQueueDrainResult: this.lastQueueDrainResult,
     };
   }
 

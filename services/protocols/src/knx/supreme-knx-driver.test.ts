@@ -204,3 +204,65 @@ describe("SupremeKnxDriver.syncAll (§ Phase 7 State Synchronization)", () => {
     expect(provider.reads).toEqual(["1/1/1"]);
   });
 });
+
+describe("SupremeKnxDriver offline command queue (§ Enterprise Reliability — Queue Recovery)", () => {
+  it("queues a command issued while disconnected instead of throwing, and reflects it optimistically", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    // Deliberately never connected.
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.command(deviceId, { capability: "onoff", action: "on" });
+    expect(provider.writes).toEqual([]); // nothing sent to the bus yet — offline
+    expect(driver.diagnostics().queuedCommandCount).toBe(1);
+    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true }); // optimistic UI reflection
+  });
+
+  it("MERGE: turning a light on then off while offline only ever applies OFF once reconnected", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.command(deviceId, { capability: "onoff", action: "on" });
+    await driver.command(deviceId, { capability: "onoff", action: "off" });
+    expect(driver.diagnostics().queuedCommandCount).toBe(1); // superseded, not appended
+
+    const result = await driver.drainOfflineQueue();
+    expect(result).toEqual({ executed: 1, expired: 0 });
+    expect(provider.writes).toHaveLength(1);
+    expect(provider.writes[0]).toMatchObject({ value: false }); // OFF won — ON was superseded, never sent
+  });
+
+  it("drainOfflineQueue() runs every queued command through the real write path exactly once", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const d1 = newId("device") as DeviceId;
+    const d2 = newId("device") as DeviceId;
+    await driver.bind({ deviceId: d1, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId: d2, capability: "onoff", address: "1/1/2" });
+    await driver.command(d1, { capability: "onoff", action: "on" });
+    await driver.command(d2, { capability: "onoff", action: "off" });
+
+    await driver.connect(); // now actually connected
+    const result = await driver.drainOfflineQueue();
+    expect(result).toEqual({ executed: 2, expired: 0 });
+    expect(provider.writes).toHaveLength(2);
+    expect(driver.diagnostics().queuedCommandCount).toBe(0);
+    expect(driver.diagnostics().lastQueueDrainResult).toEqual({ executed: 2, expired: 0 });
+  });
+
+  it("automatically drains the queue whenever the transport provider reports a (re)connect", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.command(deviceId, { capability: "onoff", action: "on" });
+    expect(driver.diagnostics().queuedCommandCount).toBe(1);
+
+    await driver.connect();
+    provider.fireConnectionState("connected", "recovering");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(driver.diagnostics().queuedCommandCount).toBe(0);
+    expect(provider.writes).toHaveLength(1);
+  });
+});
