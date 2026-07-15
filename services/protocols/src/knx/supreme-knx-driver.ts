@@ -70,10 +70,28 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   private lastUnifiedDeviceCount: number | null = null;
   private lastUnifiedCapabilityCount: number | null = null;
 
+  // State Synchronization counters (§ Phase 7). Real, only set once syncAll() has
+  // actually run — null until then, never fabricated.
+  private lastSyncAt: string | null = null;
+  private lastSyncCount: number | null = null;
+  private lastSyncErrorCount: number | null = null;
+
   constructor(opts: SupremeKnxDriverOptions) {
     this.ultimate = opts.ultimateProvider ?? new KnxUltimateProvider({ host: opts.host, port: opts.port });
     const iot = opts.iotProvider ?? new KnxIotProvider();
     this.iot = iot;
+    // State Synchronization (§ Phase 7): whenever the transport provider (re)establishes
+    // a connection — first connect OR a Connection-Manager-supervised reconnect after an
+    // outage — read back every bound device's current value rather than waiting
+    // indefinitely for a spontaneous telegram. Feature-detected: only providers that
+    // expose real connection-state transitions (today: KnxUltimateProvider) trigger
+    // this; a provider/fake without it just never fires it, never fabricated.
+    const supervisedUltimate = this.ultimate as Partial<{
+      onConnectionStateChange: (cb: (state: string, previous: string) => void) => () => void;
+    }>;
+    supervisedUltimate.onConnectionStateChange?.((state) => {
+      if (state === "connected") void this.syncAll();
+    });
     // Routing table (§ Internal Task Router): every bus/DPT/security/transport task
     // kind goes to KNX Ultimate — unchanged, KNX IoT never duplicates group
     // communication. discovery.metadata/functional_blocks now route to the real KNX
@@ -198,6 +216,30 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     return result;
   }
 
+  /** State Synchronization (§ Phase 7): issues a real `bus.group_read` for every bound
+   * device's status address — never waits indefinitely for a spontaneous telegram. Each
+   * binding is read independently (one failure never blocks the rest); the actual
+   * values arrive asynchronously through the normal subscribe()/record() path exactly
+   * like any other status update, so no separate result-handling exists here — this
+   * method's job is only to REQUEST them. Safe to call with zero bindings (a no-op) and
+   * safe to call repeatedly (idempotent — a read that's already in flight just gets a
+   * duplicate GroupValueResponse, handled the same as any duplicate telegram). */
+  async syncAll(): Promise<{ requested: number; failed: number }> {
+    let failed = 0;
+    for (const b of this.bindings) {
+      try {
+        await this.router.execute({ kind: "bus.group_read", groupAddress: b.statusGa, dpt: b.dpt });
+      } catch {
+        failed++; // a provider without a real group-read implementation, or a transient
+        // failure — never lets one binding's failure stop the rest from syncing.
+      }
+    }
+    this.lastSyncAt = new Date().toISOString();
+    this.lastSyncCount = this.bindings.length;
+    this.lastSyncErrorCount = failed;
+    return { requested: this.bindings.length, failed };
+  }
+
   /** Diagnostics (§ Diagnostics) — this driver's own ownership/registration facts, every
    * provider's real, non-fabricated counters, and the Unified Device Pipeline's own
    * results once {@link discoverUnified} has run at least once (null fields until then —
@@ -214,6 +256,9 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     lastMetadataSync: string | null;
     unifiedDeviceCount: number | null;
     unifiedCapabilityCount: number | null;
+    lastSyncAt: string | null;
+    lastSyncCount: number | null;
+    lastSyncErrorCount: number | null;
   } {
     return {
       protocol: this.protocol,
@@ -227,6 +272,9 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       lastMetadataSync: this.lastMetadataSync,
       unifiedDeviceCount: this.lastUnifiedDeviceCount,
       unifiedCapabilityCount: this.lastUnifiedCapabilityCount,
+      lastSyncAt: this.lastSyncAt,
+      lastSyncCount: this.lastSyncCount,
+      lastSyncErrorCount: this.lastSyncErrorCount,
     };
   }
 

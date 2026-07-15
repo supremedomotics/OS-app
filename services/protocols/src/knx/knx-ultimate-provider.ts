@@ -1,6 +1,6 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
 import type { IKnxProvider, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
-import { ConnectionManager, type ConnectionManagerMetrics } from "./connection-manager.js";
+import { ConnectionManager, type ConnectionManagerMetrics, type ConnectionState } from "./connection-manager.js";
 
 /**
  * KNX Ultimate Provider (§ Internal Architecture) — the real KNXnet/IP transport,
@@ -22,6 +22,12 @@ interface KnxUltimateClient {
   Connect(): void;
   Disconnect(): Promise<void>;
   write(groupAddress: string, value: unknown, dpt: string): void;
+  /** Sends a real GroupValueRead request (verified against the installed `knxultimate`
+   * package's `KNXClient.read()`). Fire-and-forget by design — matches the KNX bus
+   * itself: the response is a separate, asynchronous GroupValueResponse telegram that
+   * arrives through the same "indication" event every other status update does, so it
+   * needs no separate response-correlation machinery (§ State Synchronization). */
+  read(groupAddress: string): void;
   on(event: "connected", cb: () => void): KnxUltimateClient;
   on(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
   on(event: "indication", cb: (packet: KnxUltimateIndication) => void): KnxUltimateClient;
@@ -53,6 +59,11 @@ export class KnxUltimateProvider implements IKnxProvider {
    * a genuine startup misconfiguration still surfaces immediately rather than retrying
    * silently forever. */
   private connectionManager: ConnectionManager | null = null;
+  /** Real subscribers to connection-state transitions (§ Phase 7 State Synchronization)
+   * — lets {@link "./supreme-knx-driver.js" SupremeKnxDriver} trigger a group-read sync
+   * pass whenever the connection (re)establishes, without this provider needing to know
+   * anything about bindings/devices itself (§ Ownership: providers never own devices). */
+  private readonly stateListeners = new Set<(state: ConnectionState, previous: ConnectionState) => void>();
 
   // Real, incrementing-only counters — never fabricated (§ Diagnostics).
   private packetsSent = 0;
@@ -86,11 +97,23 @@ export class KnxUltimateProvider implements IKnxProvider {
     this.connectionManager ??= new ConnectionManager({
       connect: () => this.doConnect(),
       disconnect: () => this.doDisconnect(),
-      onStateChange: (state, _prev, reason) => {
+      onStateChange: (state, previous, reason) => {
         if (state === "error" || state === "degraded") this.lastError = reason;
+        for (const listener of this.stateListeners) listener(state, previous);
       },
     });
     this.connectionManager.markConnected();
+    for (const listener of this.stateListeners) listener("connected", "connecting");
+  }
+
+  /** Subscribes to real connection-state transitions. Returns an unsubscribe function.
+   * The very first successful {@link connect} fires this too (via the explicit call
+   * above) even though it predates the Connection Manager's own "connected" transition
+   * — a caller shouldn't have to special-case "first connect vs. reconnect" to know
+   * when a sync pass is due. */
+  onConnectionStateChange(listener: (state: ConnectionState, previous: ConnectionState) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
   }
 
   /** The real connect logic (§ Connection Manager: `connect` callback). Always builds a
@@ -150,6 +173,13 @@ export class KnxUltimateProvider implements IKnxProvider {
 
   private wireIndications(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): void {
     client.on("indication", (packet) => {
+      // Guards against a STALE listener on a retired client instance (§ Phase 7 Resource
+      // Cleanup — "removes stale references/callbacks"): after a reconnect, the old
+      // client's own EventEmitter can still be holding this closure even though nothing
+      // calls `.removeAllListeners()` on it (knxultimate exposes no such hook this
+      // provider can rely on) — this identity check is what actually stops it from
+      // double-delivering through both the dead and the live client.
+      if (this.client !== client) return;
       const cemi = packet.cEMIMessage;
       const dst = cemi?.dstAddress?.toString?.();
       const raw = cemi?.npdu?.dataValue;
@@ -171,11 +201,14 @@ export class KnxUltimateProvider implements IKnxProvider {
       return undefined;
     }
     if (task.kind === "bus.group_read") {
-      // KNX Ultimate's tunnelling client has no synchronous group-read primitive in
-      // this driver's current transport wiring — status is learned passively via
-      // subscribe(), matching the existing (pre-refactor) KnxProtocolDriver's own
-      // behavior exactly. Documented, not silently faked (§ Diagnostics).
-      throw new Error("knx-ultimate: active group-read is not implemented; subscribe() for passive status instead");
+      // Real GroupValueRead request (§ Phase 7 State Synchronization — verified against
+      // KNXClient.read() in the installed knxultimate package). The value itself arrives
+      // asynchronously via the existing "indication" handler/subscribe() path, exactly
+      // like a spontaneous status telegram — this call only triggers the request.
+      this.client.read(task.groupAddress);
+      this.packetsSent++;
+      this.lastCommandAt = new Date().toISOString();
+      return undefined;
     }
     throw new Error(`knx-ultimate: unsupported task "${(task as KnxTask).kind}"`);
   }
