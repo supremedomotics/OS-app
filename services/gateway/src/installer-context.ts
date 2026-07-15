@@ -121,6 +121,42 @@ function knxQueueSection(decision: DuplicateDecision, confidence: ConfidenceScor
   return "ready";
 }
 
+/** Discover Devices Summary (§ Discovery Validation) — aggregates data every engine in
+ * the pipeline ALREADY computed (Phase 3 Unified Device Mapper, Phase 4 Confidence/
+ * Binding/Duplicate Detection). Nothing here re-derives a number those engines didn't
+ * already produce; this is purely a rollup for the installer to see before approval. */
+export interface KnxDiscoverySummary {
+  totalGroupAddresses: number;
+  communicationObjects: number;
+  circuitsCreated: number;
+  devicesCreated: number;
+  duplicateCircuits: number;
+  unsupportedObjects: number;
+  needsReviewCount: number;
+  readyCount: number;
+  discoveryDurationMs: number;
+  groupAddressSchema: string;
+}
+
+function summarizeKnxQueue(queue: KnxInstallerQueueItem[], discoveryMs: number, schemaId: string): KnxDiscoverySummary {
+  const communicationObjects = queue.reduce((n, item) => n + item.device.raw.communicationObjects.length, 0);
+  return {
+    // A "circuit" and the SupremeOS device it becomes are the same thing in this
+    // pipeline (§ Universal Device Grouping — one circuit, one device, by design), so
+    // both counts are real, not two different derivations of the same number.
+    totalGroupAddresses: communicationObjects,
+    communicationObjects,
+    circuitsCreated: queue.length,
+    devicesCreated: queue.length,
+    duplicateCircuits: queue.filter((i) => i.section === "duplicates" || i.section === "conflicts").length,
+    unsupportedObjects: queue.filter((i) => i.device.raw.deviceKind === "unknown" || i.device.capabilities.length === 0).length,
+    needsReviewCount: queue.filter((i) => i.section === "needs_review").length,
+    readyCount: queue.filter((i) => i.section === "ready").length,
+    discoveryDurationMs: discoveryMs,
+    groupAddressSchema: schemaId,
+  };
+}
+
 /** What triggered a driver's pass through the Driver Lifecycle pipeline — recorded
  * purely for diagnostics/log clarity, never branched on (§ Driver Lifecycle: every
  * trigger runs the exact same stages). */
@@ -375,6 +411,16 @@ export class InstallerServices {
     return new SupremeKnxDriver({ host, port: Number.isFinite(port) ? port : undefined });
   }
 
+  /** The installer's selected Group Address Schema (§ Configurable Group Address Schema
+   * Engine — the manifest field added earlier; this is what actually WIRES it into
+   * discovery). Falls back to the manifest's own declared default when the driver isn't
+   * installed/configured yet or the field is unset, never a silently different guess. */
+  private async knxConfiguredSchemaId(): Promise<string> {
+    const entry = (await this.drivers.registry()).find((e) => e.protocols.includes("knx") && e.installed);
+    const configured = entry?.config.groupAddressSchema;
+    return typeof configured === "string" && configured.length > 0 ? configured : "floor-room-device";
+  }
+
   /** The existing installation's state, for {@link checkDuplicate} — read-only, derived
    * from the SAME stores every other diagnostic/listing endpoint already reads (never a
    * separate KNX-specific registry). */
@@ -408,22 +454,31 @@ export class InstallerServices {
      * driver installed yet, or a test harness. Falls back to the installed "knx"
      * driver's own config when omitted (the real production path). */
     gateway?: { host: string; port?: number };
-  } = {}): Promise<KnxInstallerQueueItem[]> {
+    /** Overrides the installed driver's configured Group Address Schema — e.g. for a
+     * one-off "try this schema" preview before saving it. Falls back to the driver's
+     * saved configuration when omitted (the real production path). */
+    schemaId?: string;
+  } = {}): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
     const driver = await this.knxDiscoveryDriver(opts.gateway);
     if (!driver) throw new SupremeError("not_found", "the KNX driver is not configured on this hub yet");
+    const schemaId = opts.schemaId ?? (await this.knxConfiguredSchemaId());
 
+    const startedAt = Date.now();
     const [devices, existing] = await Promise.all([
-      driver.discoverUnified(opts.ets, opts.userOverrides),
+      driver.discoverUnified(opts.ets, opts.userOverrides, schemaId),
       this.knxExistingState(),
     ]);
+    const discoveryMs = Date.now() - startedAt;
 
-    return devices.map((device) => {
+    const queue = devices.map((device) => {
       const confidence = scoreConfidence(device);
       const room = assignRoom({ device });
       const duplicate = checkDuplicate(device, existing);
       const plans = planBindings(device);
       return { device, confidence, room, duplicate, plans, section: knxQueueSection(duplicate.decision, confidence, plans) };
     });
+
+    return { queue, summary: summarizeKnxQueue(queue, discoveryMs, schemaId) };
   }
 
   /**

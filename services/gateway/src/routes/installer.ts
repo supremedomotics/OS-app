@@ -411,7 +411,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const gateway = typeof body?.gateway?.host === "string"
         ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
         : undefined;
-      reply.send({ queue: await i().knxInstallerQueue({ ets, gateway }) });
+      reply.send(await i().knxInstallerQueue({ ets, gateway }));
     } catch (err) {
       sendError(reply, err);
     }

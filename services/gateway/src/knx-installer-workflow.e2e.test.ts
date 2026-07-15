@@ -101,7 +101,20 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
         }),
       });
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { queue: Array<Record<string, unknown>> };
+      const body = (await res.json()) as {
+        queue: Array<Record<string, unknown>>;
+        summary: {
+          totalGroupAddresses: number;
+          circuitsCreated: number;
+          devicesCreated: number;
+          duplicateCircuits: number;
+          unsupportedObjects: number;
+          readyCount: number;
+          needsReviewCount: number;
+          discoveryDurationMs: number;
+          groupAddressSchema: string;
+        };
+      };
       expect(body.queue).toHaveLength(1);
 
       const item = body.queue[0]!;
@@ -112,6 +125,20 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
       expect(item.section).toBe("ready"); // real GA present, fully bindable, no duplicate
       const plans = item.plans as Array<{ address: string; bindable: boolean }>;
       expect(plans[0]).toMatchObject({ address: "1/1/1", bindable: true });
+
+      // Discovery Summary (§ Discover Devices Summary) — aggregates what the engines
+      // above already computed, nothing re-derived.
+      expect(body.summary).toMatchObject({
+        totalGroupAddresses: 2, // the 2 ETS signals for this one circuit
+        circuitsCreated: 1,
+        devicesCreated: 1,
+        duplicateCircuits: 0,
+        unsupportedObjects: 0,
+        readyCount: 1,
+        needsReviewCount: 0,
+        groupAddressSchema: "floor-room-device", // no driver installed → manifest default
+      });
+      expect(body.summary.discoveryDurationMs).toBeGreaterThanOrEqual(0);
     },
     10000,
   );
