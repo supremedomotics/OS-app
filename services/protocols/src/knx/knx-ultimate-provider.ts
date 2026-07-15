@@ -1,5 +1,6 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
 import type { IKnxProvider, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
+import { ConnectionManager, type ConnectionManagerMetrics } from "./connection-manager.js";
 
 /**
  * KNX Ultimate Provider (§ Internal Architecture) — the real KNXnet/IP transport,
@@ -47,6 +48,11 @@ export class KnxUltimateProvider implements IKnxProvider {
   private client: KnxUltimateClient | null = null;
   private dptlib: KnxUltimateDptLib | null = null;
   private readonly observers = new Map<string, { dpt: string; handler: (value: unknown) => void }[]>();
+  /** Owns ONGOING reconnect supervision (§ Phase 6 Connection Manager) — created after
+   * the FIRST successful connect, which stays a direct, synchronously-rejecting call so
+   * a genuine startup misconfiguration still surfaces immediately rather than retrying
+   * silently forever. */
+  private connectionManager: ConnectionManager | null = null;
 
   // Real, incrementing-only counters — never fabricated (§ Diagnostics).
   private packetsSent = 0;
@@ -75,6 +81,23 @@ export class KnxUltimateProvider implements IKnxProvider {
 
   async connect(): Promise<void> {
     if (this.client) return;
+    await this.doConnect(); // first connect stays direct — a real misconfiguration must
+    // still reject synchronously here, not retry silently forever (§ Connection Manager).
+    this.connectionManager ??= new ConnectionManager({
+      connect: () => this.doConnect(),
+      disconnect: () => this.doDisconnect(),
+      onStateChange: (state, _prev, reason) => {
+        if (state === "error" || state === "degraded") this.lastError = reason;
+      },
+    });
+    this.connectionManager.markConnected();
+  }
+
+  /** The real connect logic (§ Connection Manager: `connect` callback). Always builds a
+   * fresh client — idempotency for "already connected" is the PUBLIC {@link connect}'s
+   * job, not this one's, since the manager also calls this directly on every reconnect
+   * attempt when `this.client` is already null. */
+  private async doConnect(): Promise<void> {
     const moduleName = "knxultimate";
     try {
       const imported = (await import(moduleName)) as unknown as KnxUltimateModule;
@@ -83,16 +106,24 @@ export class KnxUltimateProvider implements IKnxProvider {
       const dptlib = imported.dptlib ?? runtime.dptlib;
       if (!Client || !dptlib) throw new Error("knxultimate did not expose KNXClient and dptlib");
       this.dptlib = dptlib;
-      this.client = new Client({ hostProtocol: "TunnelUDP", ipAddr: this.opts.host, ipPort: this.opts.port ?? 3671 });
-      this.wireIndications(this.client, dptlib);
+      const client = new Client({ hostProtocol: "TunnelUDP", ipAddr: this.opts.host, ipPort: this.opts.port ?? 3671 });
+      this.wireIndications(client, dptlib);
       await new Promise<void>((resolve, reject) => {
         let settled = false;
-        this.client!.on("connected", () => { settled = true; resolve(); });
-        this.client!.on("error", (err) => {
+        client.on("connected", () => { settled = true; this.client = client; resolve(); });
+        client.on("error", (err) => {
           this.lastError = err instanceof Error ? err.message : String(err);
-          if (!settled) reject(err instanceof Error ? err : new Error(String(err)));
+          if (!settled) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+            return;
+          }
+          // A post-connect error (§ Self-Healing: "lost tunnels") — the client is dead;
+          // hand off to the Connection Manager rather than swallowing it silently, which
+          // is what this code did before Phase 6 (a real, now-fixed gap).
+          this.client = null;
+          this.connectionManager?.reportDisconnected(this.lastError ?? "knx-ultimate: connection error");
         });
-        this.client!.Connect();
+        client.Connect();
       });
     } catch (err) {
       this.reconnectAttempts++;
@@ -103,6 +134,11 @@ export class KnxUltimateProvider implements IKnxProvider {
   }
 
   async disconnect(): Promise<void> {
+    await this.connectionManager?.stop();
+    await this.doDisconnect();
+  }
+
+  private async doDisconnect(): Promise<void> {
     await this.client?.Disconnect();
     this.client = null;
   }
@@ -158,6 +194,12 @@ export class KnxUltimateProvider implements IKnxProvider {
     return { connected: this.client !== null, lastError: this.lastError };
   }
 
+  /** Real Connection Manager metrics (§ Phase 6 Metrics) — null before the first
+   * connect() has run, never fabricated. */
+  connectionMetrics(): ConnectionManagerMetrics | null {
+    return this.connectionManager?.metrics() ?? null;
+  }
+
   diagnostics(): ProviderDiagnostics {
     return {
       provider: this.name,
@@ -167,7 +209,11 @@ export class KnxUltimateProvider implements IKnxProvider {
       lastTelegramAt: this.lastTelegramAt,
       lastCommandAt: this.lastCommandAt,
       lastError: this.lastError,
-      reconnectAttempts: this.reconnectAttempts,
+      // Once the Connection Manager exists it's the authoritative counter (it also
+      // tracks post-first-connect reconnects the old local counter never saw); fall
+      // back to the pre-first-connect local count otherwise.
+      reconnectAttempts: this.connectionManager?.metrics().reconnectAttempts ?? this.reconnectAttempts,
+      connectionState: this.connectionManager?.state ?? null,
     };
   }
 }

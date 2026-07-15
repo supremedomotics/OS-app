@@ -62,6 +62,11 @@ export interface ProviderDiagnostics {
   lastCommandAt: string | null;
   lastError: string | null;
   reconnectAttempts: number;
+  /** Connection Manager state (§ Phase 6), when this provider is supervised by one —
+   * null for providers with no supervised connection lifecycle (e.g. KNX IoT, which is
+   * connectionless CoAP). Optional/nullable so no existing provider's diagnostics()
+   * literal needs to change. */
+  connectionState?: import("./connection-manager.js").ConnectionState | null;
 }
 
 export interface IKnxProvider {

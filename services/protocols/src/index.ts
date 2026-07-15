@@ -13,6 +13,12 @@ export { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./k
 // Intelligence pipeline. Additive to KnxProtocolDriver above (not a replacement; see
 // each phase's Migration Notes for why the production driver hasn't been cut over).
 export { SupremeKnxDriver, type SupremeKnxDriverOptions } from "./knx/supreme-knx-driver.js";
+export {
+  ConnectionManager,
+  type ConnectionState,
+  type ConnectionManagerOptions,
+  type ConnectionManagerMetrics,
+} from "./knx/connection-manager.js";
 export { KnxUltimateProvider, type KnxUltimateProviderOptions } from "./knx/knx-ultimate-provider.js";
 export { KnxIotProvider, type KnxIotProviderOptions } from "./knx/knx-iot-provider.js";
 export { KnxTaskRouter } from "./knx/task-router.js";
