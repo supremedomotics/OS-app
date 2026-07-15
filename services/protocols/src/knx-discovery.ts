@@ -33,6 +33,15 @@ export interface KnxGateway {
   /** KNX routing multicast address the device is configured for. */
   multicastAddress?: string;
   macAddress?: string;
+  /** Parsed from the SUPP_SVC_FAMILIES DIB when the response includes one — null (never
+   * guessed) when the response doesn't carry that DIB at all. Manufacturer name and KNX
+   * Secure capability are NOT reported: the SEARCH_RESPONSE carries no manufacturer name
+   * (only a numeric KNX manufacturer ID this codebase has no lookup table for), and this
+   * codebase has not verified the exact IP-Secure service-family byte value against the
+   * KNX Association spec — reporting either would be a guess this project's "never
+   * fabricate" rule forbids. */
+  tunnellingCapable: boolean | null;
+  routingCapable: boolean | null;
 }
 
 /** Minimal UDP socket surface (so tests can inject a fake). */
@@ -84,6 +93,28 @@ export function parseSearchResponse(buf: Buffer, sourceAddress: string): KnxGate
   const mac = Array.from({ length: 6 }, (_, i) => buf.readUInt8(dib + 22 + i).toString(16).padStart(2, "0")).join(":");
   const name = buf.subarray(dib + 28, dib + 28 + 30).toString("latin1").replace(/\0.*$/, "").trim();
 
+  // SUPP_SVC_FAMILIES DIB (optional, immediately follows the 54-byte Device Info DIB) —
+  // pairs of (service_family_id, version) bytes. Family IDs are the stable, widely-used
+  // KNXnet/IP Core values (the same ones calimero/xknx/knxd parse): CORE=0x02,
+  // DEVICE_MANAGEMENT=0x03, TUNNELLING=0x04, ROUTING=0x05, REMOTE_LOGGING=0x06,
+  // REMOTE_CONFIG_DIAGNOSIS=0x07, OBJECT_SERVER=0x08.
+  const svcDibOffset = dib + 54;
+  let tunnellingCapable: boolean | null = null;
+  let routingCapable: boolean | null = null;
+  if (buf.length >= svcDibOffset + 2) {
+    const svcLen = buf.readUInt8(svcDibOffset);
+    const svcType = buf.readUInt8(svcDibOffset + 1);
+    if (svcType === 0x02 && svcLen >= 2 && buf.length >= svcDibOffset + svcLen) {
+      tunnellingCapable = false;
+      routingCapable = false;
+      for (let i = svcDibOffset + 2; i + 1 < svcDibOffset + svcLen; i += 2) {
+        const familyId = buf.readUInt8(i);
+        if (familyId === 0x04) tunnellingCapable = true;
+        if (familyId === 0x05) routingCapable = true;
+      }
+    }
+  }
+
   return {
     address,
     port: port || KNX_PORT,
@@ -91,6 +122,8 @@ export function parseSearchResponse(buf: Buffer, sourceAddress: string): KnxGate
     name: name || `KNX ${individualAddress}`,
     multicastAddress,
     macAddress: mac,
+    tunnellingCapable,
+    routingCapable,
   };
 }
 

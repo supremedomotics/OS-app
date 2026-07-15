@@ -7,9 +7,11 @@ import {
   type KnxDiscoverySocket,
 } from "./knx-discovery.js";
 
-/** Build a valid KNXnet/IP SEARCH_RESPONSE for a fake interface. */
-function buildSearchResponse(ip: string, port: number, ia: number, name: string): Buffer {
-  const buf = Buffer.alloc(6 + 8 + 54);
+/** Build a valid KNXnet/IP SEARCH_RESPONSE for a fake interface. `serviceFamilyIds`
+ * optionally appends a real SUPP_SVC_FAMILIES DIB (family_id/version byte pairs). */
+function buildSearchResponse(ip: string, port: number, ia: number, name: string, serviceFamilyIds?: number[]): Buffer {
+  const svcDibLen = serviceFamilyIds ? 2 + serviceFamilyIds.length * 2 : 0;
+  const buf = Buffer.alloc(6 + 8 + 54 + svcDibLen);
   buf.writeUInt8(0x06, 0);
   buf.writeUInt8(0x10, 1);
   buf.writeUInt16BE(0x0202, 2);
@@ -29,6 +31,15 @@ function buildSearchResponse(ip: string, port: number, ia: number, name: string)
   buf.writeUInt8(23, dib + 20);
   buf.writeUInt8(12, dib + 21);
   buf.write(name, dib + 28, "latin1");
+  if (serviceFamilyIds) {
+    const svc = dib + 54;
+    buf.writeUInt8(svcDibLen, svc);
+    buf.writeUInt8(0x02, svc + 1); // SUPP_SVC_FAMILIES
+    for (const [i, id] of serviceFamilyIds.entries()) {
+      buf.writeUInt8(id, svc + 2 + i * 2);
+      buf.writeUInt8(1, svc + 2 + i * 2 + 1); // version
+    }
+  }
   return buf;
 }
 
@@ -55,6 +66,19 @@ describe("KNXnet/IP discovery", () => {
       name: "MDT IP Interface",
       multicastAddress: "224.0.23.12",
     });
+  });
+
+  it("parses SUPP_SVC_FAMILIES to report real tunnelling/routing capability (§ Gateway Auto Discovery)", () => {
+    const tunnelOnly = parseSearchResponse(buildSearchResponse("192.168.1.10", 3671, 0x1100, "Tunnel-only IF", [0x02, 0x03, 0x04]), "192.168.1.10");
+    expect(tunnelOnly).toMatchObject({ tunnellingCapable: true, routingCapable: false });
+
+    const both = parseSearchResponse(buildSearchResponse("192.168.1.11", 3671, 0x1101, "Router", [0x02, 0x04, 0x05]), "192.168.1.11");
+    expect(both).toMatchObject({ tunnellingCapable: true, routingCapable: true });
+  });
+
+  it("reports null capability (never guessed) when the response has no SUPP_SVC_FAMILIES DIB at all", () => {
+    const gw = parseSearchResponse(buildSearchResponse("192.168.1.10", 3671, 0x1100, "Old Interface"), "192.168.1.10");
+    expect(gw).toMatchObject({ tunnellingCapable: null, routingCapable: null });
   });
 
   it("rejects non-KNX frames", () => {
