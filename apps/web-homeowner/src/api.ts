@@ -236,6 +236,27 @@ export const importKnx = (content: string): Promise<KnxImportResult> => postKnxI
 export const importKnxProject = (base64: string, password?: string): Promise<KnxImportResult> =>
   postKnxImport(password ? { knxproj: base64, password } : { knxproj: base64 });
 
+/** A KNX/IP interface found by real KNXnet/IP SEARCH_REQUEST discovery (§ Gateway Auto
+ * Discovery) — real fields only; `tunnellingCapable`/`routingCapable` are null when the
+ * response carried no SUPP_SVC_FAMILIES DIB, never guessed. */
+export interface KnxGateway {
+  address: string;
+  port: number;
+  individualAddress: string;
+  name: string;
+  multicastAddress?: string;
+  macAddress?: string;
+  tunnellingCapable: boolean | null;
+  routingCapable: boolean | null;
+}
+/** Scans the LAN for KNX/IP interfaces (§ Gateway Auto Discovery) — the existing
+ * `knxSearch()` backend, reused as-is; this is the only client-side entry point for it. */
+export async function discoverKnxGateways(): Promise<KnxGateway[]> {
+  const res = await authed("/v1/commissioning/knx/interfaces");
+  if (!res.ok) throw new Error(await errorMessage(res, "Gateway discovery failed."));
+  return ((await res.json()) as { interfaces: KnxGateway[] }).interfaces;
+}
+
 // ── Licensing (authenticated) ────────────────────────────────────────────────────
 export interface LicenseService {
   active: boolean;

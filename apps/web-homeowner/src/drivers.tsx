@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   connectDriver,
+  discoverKnxGateways,
   type DriverConfigField,
   type DriverEntry,
   fetchDriverHealth,
@@ -10,6 +11,7 @@ import {
   importKnx,
   importKnxProject,
   installDriverByKey,
+  type KnxGateway,
   type KnxImportResult,
   setDriverConfig,
   setDriverEnabled,
@@ -173,6 +175,16 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
       {driver.installed && schema.length > 0 && (
         <div className="drv-config">
           <h4>Configuration</h4>
+          {driver.protocols.includes("knx") && (
+            <KnxGatewayDiscoveryPanel
+              onSelect={(gw) => setValues((cur) => ({
+                ...cur,
+                host: gw.address,
+                port: gw.port,
+                individualAddress: gw.individualAddress,
+              }))}
+            />
+          )}
           {schema.map((f) => (
             <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
           ))}
@@ -209,6 +221,94 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
 
       {msg && <p className="muted">{msg}</p>}
       {err && <p className="err">{err}</p>}
+    </div>
+  );
+}
+
+/**
+ * KNX Gateway Auto Discovery (§ Driver Settings Experience): scans the LAN for KNX/IP
+ * interfaces the moment this panel mounts (i.e. the instant the installer opens KNX
+ * config), using the EXISTING `knxSearch()` backend via `discoverKnxGateways()` — no
+ * discovery logic lives here, only the UI around it. One gateway found → selected
+ * automatically. Multiple → a selectable list. None → manual entry is still right there
+ * in the fields below, exactly as documented as the fallback path.
+ */
+function KnxGatewayDiscoveryPanel({ onSelect }: { onSelect: (gw: KnxGateway) => void }) {
+  const [status, setStatus] = useState<"scanning" | "done" | "error">("scanning");
+  const [gateways, setGateways] = useState<KnxGateway[]>([]);
+  const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function scan() {
+    setStatus("scanning");
+    setError(null);
+    setSelectedAddress(null);
+    try {
+      const found = await discoverKnxGateways();
+      setGateways(found);
+      setStatus("done");
+      if (found.length === 1) select(found[0]!);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gateway discovery failed.");
+      setStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    void scan();
+    // Scans once when the installer opens this driver's configuration — re-scan is a
+    // deliberate action (the button below), not something that should silently re-fire
+    // on every unrelated re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function select(gw: KnxGateway) {
+    setSelectedAddress(gw.address);
+    onSelect(gw);
+  }
+
+  return (
+    <div className="drv-field" style={{ marginBottom: 14 }}>
+      <span className="lbl">Gateway discovery</span>
+      {status === "scanning" && <p className="muted" aria-busy="true">Scanning the network for KNX/IP gateways…</p>}
+      {status === "error" && (
+        <p className="err">
+          {error} Enter the gateway details manually below, or{" "}
+          <button type="button" className="link" onClick={() => void scan()}>try again</button>.
+        </p>
+      )}
+      {status === "done" && gateways.length === 0 && (
+        <p className="muted">
+          No KNX/IP gateways found on this network.{" "}
+          <button type="button" className="link" onClick={() => void scan()}>Scan again</button>, or enter the
+          gateway details manually below.
+        </p>
+      )}
+      {status === "done" && gateways.length > 0 && (
+        <>
+          <p className="muted">
+            {gateways.length === 1 ? "1 gateway found and selected below." : `${gateways.length} gateways found — select one.`}
+            {" "}<button type="button" className="link" onClick={() => void scan()}>Scan again</button>
+          </p>
+          <div className="knx-gw-list">
+            {gateways.map((gw) => (
+              <button
+                type="button"
+                key={gw.address}
+                className={`knx-gw-item${selectedAddress === gw.address ? " selected" : ""}`}
+                onClick={() => select(gw)}
+              >
+                <div className="knx-gw-name">{gw.name}</div>
+                <div className="knx-gw-meta">
+                  {gw.address}:{gw.port} · {gw.individualAddress}
+                  {gw.tunnellingCapable === true && " · Tunnelling"}
+                  {gw.routingCapable === true && " · Routing"}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

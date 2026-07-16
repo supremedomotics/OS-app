@@ -903,6 +903,13 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .drv-field input:not([type="checkbox"]), .drv-field select { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); }
 .drv-field input[type="checkbox"] { width: auto; align-self: flex-start; }
 .drv-field .help { font-size: 12px; color: var(--aureon-color-text-secondary); }
+.drv-field button.link { background: none; border: none; padding: 0; color: var(--aureon-color-gold-400); cursor: pointer; font-size: inherit; text-decoration: underline; }
+.knx-gw-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.knx-gw-item { text-align: left; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.knx-gw-item:hover { border-color: var(--aureon-color-gold-400); }
+.knx-gw-item.selected { border-color: var(--aureon-color-gold-500); background: color-mix(in srgb, var(--aureon-color-gold-500) 10%, var(--aureon-color-base-surface)); }
+.knx-gw-name { font-size: 14px; color: var(--aureon-color-text-primary); font-weight: 600; }
+.knx-gw-meta { font-size: 12px; color: var(--aureon-color-text-secondary); margin-top: 2px; }
 .drv-health { margin-top: 10px; font-size: 13px; }
 .drv-logs { margin-top: 12px; font-size: 12px; }
 .drv-logs summary { cursor: pointer; color: var(--aureon-color-text-secondary); }
