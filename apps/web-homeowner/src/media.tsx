@@ -2,21 +2,18 @@ import { useEffect, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { Button, Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
-import { client, fetchDriverRegistry } from "./api.js";
-import { AvrConsole } from "./features/media/detail.js";
-import { SimpleMediaDetail } from "./features/media/simple-detail.js";
+import { client } from "./api.js";
 import { MediaDeviceCard } from "./features/media/card.js";
-import { mediaDeviceKind, usesSimpleMediaDetail } from "./features/media/capability-mapper.js";
-import { useAsync } from "./use-async.js";
+import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 
 /**
  * Media (§ Navigation → Media) — the whole-home view of everything that plays: every device the
- * home already exposes with a `media` capability, grouped by room. Selecting one opens the rich,
- * capability-driven AVR console (§ AVR Detail Page) as this page's main content — not a modal —
- * matching how a real receiver's control surface earns the whole screen. Pure presentation over
- * the real devices()/command() surface — no new backend, no duplicate media system.
+ * home already exposes with a `media` capability, grouped by room. Selecting one hands off to
+ * the Canonical Device Detail Router (§ Platform Architecture Rule) via `openDevice(id)`, which
+ * decides between the AVR console and the simple TV/projector page — this page never renders
+ * either itself.
  */
 type Room = { id: string; name: string };
 
@@ -31,57 +28,21 @@ function nowPlaying(d: Device): string {
   return playing ? "Playing" : "Idle";
 }
 
-export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
+export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const fav = useFavorites();
+  const { openDevice, refreshToken } = useOpenDevice();
 
   async function load() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [refreshToken]);
 
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const media = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "media"));
-  const selected = selectedId ? media.find((d) => d.id === selectedId) ?? null : null;
-
-  // Television/Projector get the Media module's consumer-shaped premium page instead of the
-  // AVR console's receiver UI (§ capability-mapper.ts) — the classification needs the driver
-  // registry (for the one real distinguishing protocol signal), fetched once here.
-  const [registry] = useAsync(() => fetchDriverRegistry());
-  if (selected) {
-    const driver = selected.driverId ? registry?.find((r) => r.installedId === selected.driverId || r.key === selected.driverId) ?? null : null;
-    const kind = mediaDeviceKind(selected, driver?.protocols[0] ?? null);
-    const onDeviceUpdated = (d: Device) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev);
-    if (usesSimpleMediaDetail(kind)) {
-      return (
-        <SimpleMediaDetail
-          device={selected}
-          roomName={roomName(selected.roomId)}
-          onBack={() => setSelectedId(null)}
-          onRemoved={() => { setSelectedId(null); void load(); }}
-          onDeviceUpdated={onDeviceUpdated}
-          devMode={devMode}
-        />
-      );
-    }
-    return (
-      <AvrConsole
-        device={selected}
-        allDevices={media}
-        homeDevices={devices ?? []}
-        roomName={roomName(selected.roomId)}
-        onBack={() => setSelectedId(null)}
-        onNavigateDevice={(d) => setSelectedId(d.id)}
-        onRemoved={() => { setSelectedId(null); void load(); }}
-        onDeviceUpdated={onDeviceUpdated}
-        devMode={devMode}
-      />
-    );
-  }
 
   const byRoom = new Map<string, Device[]>();
   for (const d of media) { const k = roomName(d.roomId); (byRoom.get(k) ?? byRoom.set(k, []).get(k)!).push(d); }
@@ -124,7 +85,7 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
                 key={d.id}
                 device={d}
                 status={nowPlaying(d)}
-                onOpen={() => setSelectedId(d.id)}
+                onOpen={() => openDevice(d.id)}
                 trailing={
                   <FavHeart fav={{ type: "device", deviceId: d.id }}
                     active={fav.isFav({ type: "device", deviceId: d.id })}

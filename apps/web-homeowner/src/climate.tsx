@@ -3,21 +3,16 @@ import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model"
 import { Button, Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client } from "./api.js";
-import { ClimateConsole } from "./climate-console.js";
-import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
+import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 import { useLive } from "./live.js";
 
 /**
  * Climate (§ Navigation → Climate) — the whole-home view of HVAC units: every device the home
- * exposes with a `temperature` capability, grouped by room. The console (ClimateConsole)
- * already degrades gracefully when a unit's capability config is bare (no modes/fan speeds/
- * swing positions declared) — it just hides the sections it has nothing to show, rather than
- * requiring a rich, driver-reported config up front — so this list shouldn't gate on that
- * either: any commissioned AC/thermostat belongs here once it's added, full parity with a
- * CoolMaster-bound unit or not. Selecting a unit opens the rich console as this page's main
- * content — not a modal — matching the Media page's own pattern.
+ * exposes with a `temperature` capability, grouped by room. Selecting a unit hands off to the
+ * Canonical Device Detail Router (§ Platform Architecture Rule) via `openDevice(id)` — this
+ * page never renders the console itself, only routes to it.
  */
 type Room = { id: string; name: string };
 
@@ -34,52 +29,22 @@ function hasClimateConfig(d: Device): boolean {
   return d.capabilities.some((c) => c.kind === "temperature");
 }
 
-export function Climate({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
+export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [scheduleId, setScheduleId] = useState<string | null>(null);
   const fav = useFavorites();
   const { states } = useLive();
+  const { openDevice, refreshToken } = useOpenDevice();
 
   async function load() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [refreshToken]);
 
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const units = (devices ?? []).filter(hasClimateConfig);
-  const selected = selectedId ? units.find((d) => d.id === selectedId) ?? null : null;
-  const scheduling = scheduleId ? units.find((d) => d.id === scheduleId) ?? null : null;
-
-  if (scheduling) {
-    const config = (scheduling.capabilities.find((c) => c.kind === "temperature")?.config ?? {}) as { modes?: string[]; fanSpeeds?: string[] };
-    return (
-      <ClimateSchedulerPage
-        device={scheduling}
-        modes={config.modes ?? []}
-        fanSpeeds={config.fanSpeeds ?? []}
-        onBack={() => setScheduleId(null)}
-      />
-    );
-  }
-
-  if (selected) {
-    return (
-      <ClimateConsole
-        device={selected}
-        roomName={roomName(selected.roomId)}
-        onBack={() => setSelectedId(null)}
-        onNavigateDevice={(d) => setSelectedId(d.id)}
-        onRemoved={() => { setSelectedId(null); void load(); }}
-        onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
-        onOpenSchedule={(d) => setScheduleId(d.id)}
-        devMode={devMode}
-      />
-    );
-  }
 
   const byRoom = new Map<string, Device[]>();
   for (const d of units) { const k = roomName(d.roomId); (byRoom.get(k) ?? byRoom.set(k, []).get(k)!).push(d); }
@@ -120,7 +85,7 @@ export function Climate({ onNavigate, devMode = false }: { onNavigate?: (t: Tab)
             {list.map((d) => {
               const summary = climateSummary(d, states[d.id] ?? {});
               return (
-                <button key={d.id} className="media-card" onClick={() => setSelectedId(d.id)}>
+                <button key={d.id} className="media-card" onClick={() => openDevice(d.id)}>
                   <span className="media-ic">❄</span>
                   <span className="media-meta">
                     <span className="media-name">{d.name}</span>

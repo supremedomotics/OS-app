@@ -8,9 +8,9 @@ import { useAsync } from "./use-async.js";
 import { useLive } from "./live.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
-import { EnergyDeviceDetail } from "./features/infrastructure/energy/detail.js";
 import { EnergyDeviceCard } from "./features/infrastructure/energy/card.js";
 import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
+import { useOpenDevice } from "./device-detail-router.js";
 
 type Room = { id: string; name: string };
 
@@ -26,35 +26,21 @@ type Room = { id: string; name: string };
 export function Energy({ onNavigate }: { onNavigate?: (t: Tab) => void } = {}) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [summary] = useAsync<EnergySummaryResponse | null>(() => client.energySummary().catch(() => null));
   const { states } = useLive();
   const fav = useFavorites();
+  const { openDevice, refreshToken } = useOpenDevice();
 
   async function load() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [refreshToken]);
 
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const energyDevices = (devices ?? []).filter(isEnergyDevice);
-  const selected = selectedId ? energyDevices.find((d) => d.id === selectedId) ?? null : null;
   const deviceName = (id: string) => (devices ?? []).find((d) => d.id === id)?.name ?? "A device";
-
-  if (selected) {
-    const onDeviceUpdated = (d: Device) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev);
-    return (
-      <EnergyDeviceDetail
-        device={selected}
-        roomName={roomName(selected.roomId)}
-        onBack={() => setSelectedId(null)}
-        onRemoved={() => { setSelectedId(null); void load(); }}
-        onDeviceUpdated={onDeviceUpdated}
-      />
-    );
-  }
 
   const totalMeasure = summary?.summary.find((m) => m.measure === "power" || m.measure === "energy") ?? summary?.summary[0];
   const hasData = Boolean(summary && (summary.summary.length > 0 || summary.topConsumers.length > 0));
@@ -118,7 +104,7 @@ export function Energy({ onNavigate }: { onNavigate?: (t: Tab) => void } = {}) {
                 key={d.id}
                 device={d}
                 liveState={states[d.id]}
-                onOpen={() => setSelectedId(d.id)}
+                onOpen={() => openDevice(d.id)}
                 trailing={
                   <FavHeart fav={{ type: "device", deviceId: d.id }}
                     active={fav.isFav({ type: "device", deviceId: d.id })}

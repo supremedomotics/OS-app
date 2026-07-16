@@ -22,20 +22,17 @@ import type {
 import { client, fetchDriverRegistry } from "./api.js";
 import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./room-image.js";
 import { useLive } from "./live.js";
-import { LightingDetail } from "./lighting.js";
-import { ClimateConsole } from "./climate-console.js";
-import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
 import { DeviceSheet } from "./device-sheets.js";
 import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
 import { useOpenDevice } from "./device-detail-router.js";
 import { Icon } from "./icons.js";
 import { LockCard } from "./features/security/card.js";
-import { LockDetail } from "./features/security/lock-detail.js";
 import { CameraCard } from "./features/security/camera-card.js";
 import { CameraDetail } from "./features/security/camera-detail.js";
 import { NvrDetail } from "./features/security/nvr-detail.js";
 import { AlarmPanel } from "./features/security/alarm-panel.js";
+import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -371,60 +368,19 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack, devMod
  * full control. Lighting has its own richer page ({@link RoomLighting}); every other category
  * reuses the same tile grammar as the rest of the app. */
 function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved, devMode = false }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
-  const [detail, setDetail] = useState<Device | null>(null);
-  const [climateId, setClimateId] = useState<string | null>(null);
-  const [scheduleId, setScheduleId] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Device | null>(null);
-  // § UI consistency rule: a device's detail page must be byte-identical no matter which
-  // path opened it (Room > category > device, or the device's own dedicated whole-home
-  // tab). Climate and Lighting each have a richer, capability-specific console
-  // (ClimateConsole / LightingDetail) that the dedicated tabs already use — route to the
-  // SAME component here instead of falling through to the generic DeviceSheet, which was
-  // previously the fallback for every non-lighting capability including climate.
+  const { openDevice } = useOpenDevice();
+  // § Platform Architecture Rule (Canonical Device Detail Router) — a device's detail page
+  // must be byte-identical no matter which path opened it. Every capability the router
+  // already covers (lighting, climate, locks, media, energy) hands off to openDevice();
+  // DeviceSheet remains the fallback ONLY for capabilities with no canonical console yet
+  // (curtains, fans, sensors, water, …) — see device-detail-router.tsx's disclosed gaps.
   const open = (d: Device) => {
     const caps = d.capabilities.map((c) => c.kind);
-    if (caps.includes("brightness") || caps.includes("color")) setDetail(d);
-    else if (caps.includes("temperature")) setClimateId(d.id);
+    const hasCanonicalPage = caps.some((c) => ["brightness", "color", "temperature", "lock", "media"].includes(c)) || isEnergyDevice(d);
+    if (hasCanonicalPage) openDevice(d.id);
     else setSheet(d);
   };
-  const climate = climateId ? category.devices.find((d) => d.id === climateId) ?? null : null;
-  const scheduling = scheduleId ? category.devices.find((d) => d.id === scheduleId) ?? null : null;
-  if (detail) {
-    return (
-      <LightingDetail
-        device={detail}
-        onClose={() => setDetail(null)}
-        onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
-        roomName={roomName}
-        devMode={devMode}
-      />
-    );
-  }
-  if (scheduling) {
-    const config = (scheduling.capabilities.find((c) => c.kind === "temperature")?.config ?? {}) as { modes?: string[]; fanSpeeds?: string[] };
-    return (
-      <ClimateSchedulerPage
-        device={scheduling}
-        modes={config.modes ?? []}
-        fanSpeeds={config.fanSpeeds ?? []}
-        onBack={() => setScheduleId(null)}
-      />
-    );
-  }
-  if (climate) {
-    return (
-      <ClimateConsole
-        device={climate}
-        roomName={roomName}
-        onBack={() => setClimateId(null)}
-        onNavigateDevice={(d) => setClimateId(d.id)}
-        onRemoved={() => { setClimateId(null); onDeviceRemoved?.(); }}
-        onDeviceUpdated={() => onDeviceRemoved?.()}
-        onOpenSchedule={(d) => setScheduleId(d.id)}
-        devMode={devMode}
-      />
-    );
-  }
   return (
     <div>
       <button className="back" onClick={onBack}>‹ {roomName}</button>
@@ -651,41 +607,27 @@ function SceneQuickActions({ scene, isFav, onClose, onRun, onFav, onChanged }: {
  * grounded slice — tapping a lock opens its Premium Detail Page ({@link LockDetail}), not a
  * quick sheet, matching how the Media tab opens AvrConsole/SimpleMediaDetail directly.
  */
-export function Security({ devMode = false }: { devMode?: boolean } = {}) {
+export function Security({ devMode: _devMode = false }: { devMode?: boolean } = {}) {
   const [state, reload] = useAsync<SecurityStateResponse>(() => client.securityState());
   const [cameras] = useAsync(async () => (await client.cameras()).cameras);
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [registry] = useAsync(() => fetchDriverRegistry());
-  const [selectedLockId, setSelectedLockId] = useState<string | null>(null);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [nvrOpen, setNvrOpen] = useState(false);
+  const { openDevice, refreshToken } = useOpenDevice();
 
   async function loadDevices() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
   }
-  useEffect(() => { void loadDevices(); }, []);
+  useEffect(() => { void loadDevices(); }, [refreshToken]);
 
   const locks = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "lock"));
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
-  const selectedLock = selectedLockId ? locks.find((d) => d.id === selectedLockId) ?? null : null;
   const selectedCamera = selectedCameraId ? (cameras ?? []).find((c) => c.id === selectedCameraId) ?? null : null;
 
-  if (selectedLock) {
-    return (
-      <LockDetail
-        device={selectedLock}
-        roomName={roomName(selectedLock.roomId)}
-        onBack={() => setSelectedLockId(null)}
-        onRemoved={() => { setSelectedLockId(null); void loadDevices(); }}
-        onDeviceUpdated={(d) => setDevices((prev) => prev?.map((x) => (x.id === d.id ? d : x)) ?? prev)}
-        allLocks={locks.filter((d) => d.id !== selectedLock.id)}
-        devMode={devMode}
-      />
-    );
-  }
   if (selectedCamera) {
     return (
       <CameraDetail
@@ -726,7 +668,7 @@ export function Security({ devMode = false }: { devMode?: boolean } = {}) {
                 device={d}
                 status={status}
                 driverProtocol={driver?.protocols[0] ?? null}
-                onOpen={() => setSelectedLockId(d.id)}
+                onOpen={() => openDevice(d.id)}
               />
             );
           })}
