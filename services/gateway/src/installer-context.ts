@@ -520,7 +520,12 @@ export class InstallerServices {
   async approveKnxDevice(input: {
     device: UnifiedKnxDevice;
     name: string;
-    roomId: RoomId;
+    /** Explicit installer choice — priority 1. Omit to let the Room Assignment Engine
+     * resolve an existing/new room from `roomNameHint` (§ Automatic Room Creation). */
+    roomId?: RoomId;
+    /** The Room Assignment Engine's own suggestion (`item.room.room` from the queue) —
+     * used to find-or-create a room only when `roomId` is not supplied. */
+    roomNameHint?: string | null;
     plans: BindingPlanItem[];
   }): Promise<KnxApprovalResult> {
     const bindablePlans = input.plans.filter((p): p is typeof p & { address: string } => p.bindable && p.address !== null);
@@ -528,10 +533,11 @@ export class InstallerServices {
       throw new SupremeError("validation_failed", "this device has no bindable communication object yet — needs installer review, not approval");
     }
 
+    const roomId = await this.resolveOrCreateRoom(input.roomId, input.roomNameHint ?? input.device.raw.metadata.room ?? null);
     const device = await this.commissioning.commission({
       backendId: input.device.backendId,
       name: input.name,
-      roomId: input.roomId,
+      roomId,
       capabilities: bindablePlans.map((p) => p.capability),
       manufacturer: input.device.raw.metadata.manufacturer ?? undefined,
       model: input.device.raw.metadata.model ?? undefined,
@@ -721,50 +727,76 @@ export class InstallerServices {
     return knxSearch();
   }
 
-  /** Commission a parsed device list into rooms (creating rooms as needed) + bind each
-   * capability, threading its recognized `config` (real DPT, a separate status address
-   * when the source declared one, sensor measure/unit) through to the native binding. */
-  private async commissionImported(imported: EntitySource[], protocol = "knx"): Promise<KnxImportResult> {
+  /**
+   * Generic Room Assignment Engine — find-or-create (§ Automatic Room Creation): the ONE
+   * place in the codebase that turns a room NAME (from any source — ETS Function/Space
+   * metadata, a live-discovery group name, circuit-name inference, or an installer's
+   * explicit override) into a real `RoomId`, creating the room only when nothing matching
+   * already exists. Every commissioning path in this file (the legacy
+   * {@link commissionImported} used by ETS one-shot import and {@link autoCommission}'s
+   * live-bus flow, AND the Discovery Queue's {@link approveKnxDevice}) now shares this
+   * single implementation instead of three copies of the same find-or-create logic —
+   * this is what "lives in the common commissioning pipeline, not inside individual
+   * drivers" means in practice: it's a method on the driver-agnostic installer service,
+   * not on `SupremeKnxDriver` or any other protocol driver.
+   *
+   * Priority order (only the first two are implemented today — AI inference is a stated
+   * future step, not something to fabricate now):
+   *   1. Explicit `roomId` override (installer already picked a real room) — used as-is.
+   *   2. Existing SupremeOS room whose name case-insensitively matches `roomNameHint`.
+   *   3. Create a new room named `roomNameHint` (or "Unassigned" when no hint at all).
+   */
+  private async resolveOrCreateRoom(roomId: RoomId | undefined, roomNameHint: string | null): Promise<RoomId> {
+    if (roomId) {
+      await this.d.home.requireRoom(roomId);
+      return roomId;
+    }
+    const name = (roomNameHint ?? "").trim() || "Unassigned";
     const existing = await this.d.home.listRooms();
-    const roomByName = new Map(existing.map((r) => [r.name.toLowerCase(), r] as const));
-    let roomsCreated = 0;
+    const match = existing.find((r) => r.name.toLowerCase() === name.toLowerCase());
+    if (match) return match.id;
+    const room: Room = {
+      id: newId("room") as RoomId,
+      homeId: this.d.homeId,
+      name,
+      building: null,
+      floor: 0,
+      area: null,
+      areaType: "other",
+      sortOrder: existing.length,
+      icon: "home",
+      heroImageUrl: null,
+      parentRoomId: null,
+    };
+    await this.d.home.addRoom(room);
+    return room.id;
+  }
+
+  /** Commission a parsed device list into rooms (creating rooms as needed via
+   * {@link resolveOrCreateRoom}) + bind each capability, threading its recognized
+   * `config` (real DPT, a separate status address when the source declared one, sensor
+   * measure/unit) through to the native binding. */
+  private async commissionImported(imported: EntitySource[], protocol = "knx"): Promise<KnxImportResult> {
+    const before = await this.d.home.listRooms();
+    const roomIds = new Set(before.map((r) => r.id));
     const created: { name: string; room: string | null; capabilities: string[] }[] = [];
 
     for (const dev of imported) {
       const entity = generateEntities(dev);
-      const roomName = entity.room ?? "Unassigned";
-      let room = roomByName.get(roomName.toLowerCase());
-      if (!room) {
-        const newRoom: Room = {
-          id: newId("room") as RoomId,
-          homeId: this.d.homeId,
-          name: roomName,
-          building: null,
-          floor: 0,
-          area: null,
-          areaType: "other",
-          sortOrder: existing.length + roomsCreated,
-          icon: "home",
-          heroImageUrl: null,
-          parentRoomId: null,
-        };
-        await this.d.home.addRoom(newRoom);
-        roomByName.set(roomName.toLowerCase(), newRoom);
-        room = newRoom;
-        roomsCreated++;
-      }
+      const roomId = await this.resolveOrCreateRoom(undefined, entity.room);
       const device = await this.commissioning.commission({
         backendId: entity.bindings[0]!.address,
         name: entity.name,
-        roomId: room.id,
+        roomId,
         capabilities: entity.bindings.map((b) => b.capability as CapabilityKind),
       });
       for (const b of entity.bindings) {
         await this.bindProtocol({ deviceId: device.id, capability: b.capability as CapabilityKind, protocol, address: b.address, config: b.config });
       }
       created.push({ name: entity.name, room: entity.room, capabilities: entity.bindings.map((b) => b.capability) });
+      roomIds.add(roomId);
     }
-    return { devices: created.length, roomsCreated, created };
+    return { devices: created.length, roomsCreated: roomIds.size - before.length, created };
   }
 
   // ── Licensing ──────────────────────────────────────────────────────────────

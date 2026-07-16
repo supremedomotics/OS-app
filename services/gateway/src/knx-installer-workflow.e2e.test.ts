@@ -315,3 +315,113 @@ describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import &
     expect(res.status).toBe(422);
   });
 });
+
+/**
+ * Automatic Room Creation (§ Generic Room Assignment Engine): approving a device with NO
+ * `roomId` must never require the installer to pre-create a room. The engine finds an
+ * existing room by name when one matches, and creates a new one otherwise — reusing the
+ * exact same `resolveOrCreateRoom` the legacy ETS one-shot import and Casambi-style
+ * `/v1/commissioning/auto` already relied on, now shared by the Discovery Queue's approve
+ * path too (no per-driver room-creation logic).
+ */
+describe("KNX Automatic Room Creation (§ Generic Room Assignment Engine)", () => {
+  let app: FastifyInstance;
+  let ctx: AppContext;
+  let baseUrl: string;
+  let token = "";
+
+  const auth = () => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+
+  beforeAll(async () => {
+    const registry = new EntityRegistryMirror();
+    const router = new RoutingBackendAdapter({
+      ha: new MockAdapter(),
+      native: new SupremeNativeAdapter({ drivers: [new FakeKnx()] }),
+      registry,
+      policy: new MigrationPolicy(),
+    });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+      sil,
+      protocolBindingStore: new InMemoryProtocolBindingStore(),
+    });
+    app = await buildServer(ctx);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const addr = app.server.address();
+    baseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    const res = await fetch(`${baseUrl}/v1/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+    });
+    token = ((await res.json()) as { accessToken: string }).accessToken;
+  });
+  afterAll(async () => {
+    await app.close();
+    await ctx.shutdown();
+  });
+
+  it("creates a new room from the queue's own room hint when no matching room exists and no roomId is supplied", async () => {
+    const before = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    expect(before.rooms.some((r) => r.name === "Attic")).toBe(false);
+
+    // A flat GA export carries no structured room metadata (§ never fabricate — room stays
+    // null unless a source actually provides it), so this uses the `ets` signal shape's own
+    // `room` field directly — the same tier-1 "signal-provided room" path live KNX IoT
+    // discovery and richer .knxproj Function/Space trees both feed into Room Assignment.
+    const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "4/1/1", name: "Vent Fan Switch", room: "Attic" }] }),
+    });
+    const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown; room: { room: string | null } }> };
+    expect(queue).toHaveLength(1);
+    expect(queue[0]!.room.room).toBe("Attic");
+
+    const approveRes = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+      method: "POST",
+      headers: auth(),
+      // No roomId at all — this is the case that used to require a pre-existing room.
+      body: JSON.stringify({ device: queue[0]!.device, name: "Vent Fan", plans: queue[0]!.plans }),
+    });
+    expect(approveRes.status).toBe(201);
+    const approved = (await approveRes.json()) as { device: { id: string }; status: string };
+    expect(approved.status).toBe("ready");
+
+    const after = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    const atticRoom = after.rooms.find((r) => r.name === "Attic");
+    expect(atticRoom).toBeTruthy();
+
+    const devices = (await (await fetch(`${baseUrl}/v1/rooms/${atticRoom!.id}/devices`, { headers: auth() })).json()) as { devices: { id: string }[] };
+    expect(devices.devices.some((d) => d.id === approved.device.id)).toBe(true);
+  }, 10000);
+
+  it("reuses an existing room by name instead of creating a duplicate", async () => {
+    const before = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    const atticRoom = before.rooms.find((r) => r.name === "Attic")!;
+    expect(atticRoom).toBeTruthy();
+    const atticCountBefore = before.rooms.filter((r) => r.name === "Attic").length;
+
+    const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "4/2/1", name: "Storage Light Switch", room: "Attic" }] }),
+    });
+    const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown }> };
+    expect(queue).toHaveLength(1);
+
+    const approveRes = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ device: queue[0]!.device, name: "Storage Light", plans: queue[0]!.plans }),
+    });
+    expect(approveRes.status).toBe(201);
+    const approved = (await approveRes.json()) as { device: { id: string } };
+
+    const after = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    expect(after.rooms.filter((r) => r.name === "Attic").length).toBe(atticCountBefore); // no duplicate room created
+
+    const devices = (await (await fetch(`${baseUrl}/v1/rooms/${atticRoom.id}/devices`, { headers: auth() })).json()) as { devices: { id: string }[] };
+    expect(devices.devices.some((d) => d.id === approved.device.id)).toBe(true); // landed in the SAME existing room
+  }, 10000);
+});

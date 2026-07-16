@@ -112,11 +112,15 @@ export function KnxDiscoveryWorkspace() {
       const out = await knxDiscoveryQueue(ets);
       setResult(out);
       // Pre-fill each device's editable name/room from the backend's own recommendation —
-      // the installer only overrides what they disagree with (§ Editing).
+      // the installer only overrides what they disagree with (§ Editing). Leaving roomId
+      // "" (Automatic) is a real, valid choice now, not a blocked state: the Room
+      // Assignment Engine finds-or-creates a room from the Confidence Engine's own room
+      // hint at approval time (§ Automatic Room Creation) — the installer never has to
+      // pre-create a room before approving.
       const initial: Record<string, { name: string; roomId: string }> = {};
       for (const item of out.queue) {
         const matchedRoom = rooms.find((r) => r.name.toLowerCase() === (item.room.room ?? "").toLowerCase());
-        initial[item.device.backendId] = { name: item.device.suggestedName, roomId: matchedRoom?.id ?? rooms[0]?.id ?? "" };
+        initial[item.device.backendId] = { name: item.device.suggestedName, roomId: matchedRoom?.id ?? "" };
       }
       setEdits(initial);
       setPhase("done");
@@ -129,16 +133,13 @@ export function KnxDiscoveryWorkspace() {
   }
 
   async function approve(item: KnxInstallerQueueItem) {
-    const edit = edits[item.device.backendId];
-    if (!edit?.roomId) {
-      // Never leave this silent — a no-op approve looks identical to a hung request
-      // otherwise, and the installer has no way to tell why nothing happened.
-      setApproved((cur) => ({ ...cur, [item.device.backendId]: { device: { id: "", name: edit?.name ?? item.device.suggestedName }, status: "error", reason: "No room to assign — create a room first." } }));
-      return;
-    }
+    const edit = edits[item.device.backendId] ?? { name: item.device.suggestedName, roomId: "" };
     setApproving(item.device.backendId);
     try {
-      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: edit.roomId, plans: item.plans });
+      // roomId "" means Automatic — the Room Assignment Engine finds-or-creates a room
+      // from the queue's own room hint (§ Automatic Room Creation), so there is nothing
+      // to block approval on here anymore.
+      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: edit.roomId || undefined, roomNameHint: item.room.room ?? undefined, plans: item.plans });
       setApproved((cur) => ({ ...cur, [item.device.backendId]: res }));
     } catch (e) {
       setApproved((cur) => ({ ...cur, [item.device.backendId]: { device: { id: "", name: edit.name }, status: "error", reason: e instanceof Error ? e.message : "Approval failed." } }));
@@ -402,6 +403,7 @@ function DeviceCard({
       <label className="knx-device-room">
         Room
         <select value={edit.roomId} onChange={(e) => onEdit({ roomId: e.target.value })} disabled={!!approval || rejected}>
+          <option value="">Automatic{item.room.room ? ` (${item.room.room})` : " (Unassigned)"}</option>
           {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select>
       </label>
