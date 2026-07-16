@@ -18,6 +18,7 @@ import {
   uninstallDriver,
   updateDriverByKey,
 } from "./api.js";
+import { KnxDiscoveryWorkspace } from "./knx-discovery-workspace.js";
 
 /**
  * Driver Manager (§9 Driver Framework). Populates entirely from the driver REGISTRY, so any current
@@ -196,6 +197,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           bus is connected. Protocol-specific (KNX only), so it's a direct addition here rather
           than a generic schema field. */}
       {driver.installed && driver.protocols.includes("knx") && <KnxImportPanel />}
+      {driver.installed && driver.protocols.includes("knx") && <KnxDiscoveryWorkspace />}
 
       {/* Health */}
       {health && (

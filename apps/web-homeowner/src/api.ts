@@ -257,6 +257,71 @@ export async function discoverKnxGateways(): Promise<KnxGateway[]> {
   return ((await res.json()) as { interfaces: KnxGateway[] }).interfaces;
 }
 
+// ── Supreme KNX Unified Device Intelligence — Discovery Queue (authenticated) ─────
+// Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
+// invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines
+// already compute and the queue endpoint already returns.
+export interface KnxUnifiedDevice {
+  backendId: string;
+  suggestedName: string;
+  capabilities: string[];
+  raw: {
+    deviceKind: string;
+    metadata: { room: string | null; manufacturer: string | null; model: string | null; deviceName: string | null };
+    mergeExplanation: string[];
+    sourceHrefs: string[];
+    groupingKey: string;
+    communicationObjects: { id: string; name: string; source: "knx_iot" | "ets" }[];
+  };
+}
+export interface KnxConfidenceScores {
+  name: number; room: number; capability: number; grouping: number; manufacturer: number; model: number; overall: number;
+}
+export interface KnxRoomAssignment { room: string | null; source: string; reason: string }
+export interface KnxDuplicateCheck { decision: "new" | "merge" | "update" | "ignore" | "ask_installer"; reason: string; matchedOn: string | null }
+export interface KnxBindingPlan { capability: string; address: string | null; config: Record<string, unknown>; bindable: boolean; reason: string }
+export type KnxQueueSection = "ready" | "needs_review" | "duplicates" | "conflicts";
+export interface KnxInstallerQueueItem {
+  device: KnxUnifiedDevice;
+  confidence: KnxConfidenceScores;
+  room: KnxRoomAssignment;
+  duplicate: KnxDuplicateCheck;
+  plans: KnxBindingPlan[];
+  section: KnxQueueSection;
+}
+export interface KnxDiscoverySummary {
+  totalGroupAddresses: number;
+  communicationObjects: number;
+  circuitsCreated: number;
+  devicesCreated: number;
+  duplicateCircuits: number;
+  unsupportedObjects: number;
+  needsReviewCount: number;
+  readyCount: number;
+  discoveryDurationMs: number;
+  groupAddressSchema: string;
+}
+/** Runs the full Unified Device Intelligence pipeline (§ discoverUnified -> Confidence
+ * -> Room Assignment -> Duplicate Detection -> Binding Engine) — the same backend used
+ * by Driver Settings, reused as-is; this is only the client entry point for it. */
+export async function knxDiscoveryQueue(): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify({}) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
+  return (await res.json()) as { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary };
+}
+export interface KnxApprovalResult {
+  device: { id: string; name: string };
+  status: "ready" | "warning" | "error";
+  reason?: string;
+}
+/** Commission + bind + validate in one action (§ Approval) — rolls back automatically
+ * server-side on any failure; nothing here duplicates that logic. */
+export async function approveKnxDevice(input: { device: KnxUnifiedDevice; name: string; roomId: string; plans: KnxBindingPlan[] }): Promise<KnxApprovalResult> {
+  const res = await authed("/v1/commissioning/knx/approve", { method: "POST", body: JSON.stringify(input) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Approval failed."));
+  return (await res.json()) as KnxApprovalResult;
+}
+
 // ── Licensing (authenticated) ────────────────────────────────────────────────────
 export interface LicenseService {
   active: boolean;
