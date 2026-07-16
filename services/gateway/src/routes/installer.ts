@@ -402,16 +402,33 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   // Room Assignment → Duplicate Detection → Binding Engine → Installer Queue → Approve.
   // No raw KNX protocol object is returned here — every item is an already-intelligent
   // Unified Device with a decided section (ready/needs_review/duplicates/conflicts).
-  app.post("/v1/commissioning/knx/queue", async (req, reply) => {
+  // ETS Project Import is a signal SOURCE into this same route (§ Unify ETS Import &
+  // Discovery Pipeline) — `content`/`knxproj` are optional alongside `ets`/`gateway`, so
+  // this is the single entry point every KNX onboarding method (live discovery, ETS
+  // import, and any future CSV/manual/AI source) funnels through. Needs the same
+  // ETS_IMPORT_BODY_LIMIT the legacy import routes already needed, for the same reason:
+  // an ETS project's content can legitimately be tens of MB.
+  app.post("/v1/commissioning/knx/queue", { bodyLimit: ETS_IMPORT_BODY_LIMIT }, async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const body = req.body as { ets?: unknown; gateway?: { host?: unknown; port?: unknown } } | undefined;
+      const body = req.body as {
+        ets?: unknown;
+        gateway?: { host?: unknown; port?: unknown };
+        content?: unknown;
+        knxproj?: unknown;
+        password?: unknown;
+      } | undefined;
       const ets = Array.isArray(body?.ets) ? (body!.ets as { id: string; name: string; room?: string | null; description?: string | null }[]) : undefined;
       const gateway = typeof body?.gateway?.host === "string"
         ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
         : undefined;
-      reply.send(await i().knxInstallerQueue({ ets, gateway }));
+      const etsSource = typeof body?.knxproj === "string" && body.knxproj.length > 0
+        ? { kind: "knxproj" as const, base64: body.knxproj, password: typeof body.password === "string" ? body.password : undefined }
+        : typeof body?.content === "string" && body.content.length > 0
+          ? { kind: "text" as const, content: body.content }
+          : undefined;
+      reply.send(await i().knxInstallerQueue({ ets, gateway, etsSource }));
     } catch (err) {
       sendError(reply, err);
     }

@@ -136,7 +136,7 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
         unsupportedObjects: 0,
         readyCount: 1,
         needsReviewCount: 0,
-        groupAddressSchema: "floor-room-device", // no driver installed → manifest default
+        groupAddressSchema: "auto", // no driver installed / no explicit schema → schema-less trailing-operation-word grouping
       });
       expect(body.summary.discoveryDurationMs).toBeGreaterThanOrEqual(0);
     },
@@ -213,4 +213,105 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
     const devicesAfter = (await (await fetch(`${baseUrl}/v1/rooms/${roomId}/devices`, { headers: auth() })).json()) as { devices: { name: string }[] };
     expect(devicesAfter.devices.some((d) => d.name === "Test")).toBe(false); // nothing leaked through
   }, 10000);
+});
+
+describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import & Discovery Pipeline)", () => {
+  let app: FastifyInstance;
+  let ctx: AppContext;
+  let baseUrl: string;
+  let token = "";
+
+  beforeAll(async () => {
+    const registry = new EntityRegistryMirror();
+    const router = new RoutingBackendAdapter({
+      ha: new MockAdapter(),
+      native: new SupremeNativeAdapter({ drivers: [new FakeKnx()] }),
+      registry,
+      policy: new MigrationPolicy(),
+    });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), { sil, protocolBindingStore: new InMemoryProtocolBindingStore() });
+    app = await buildServer(ctx);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const addr = app.server.address();
+    baseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    const res = await fetch(`${baseUrl}/v1/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+    });
+    token = ((await res.json()) as { accessToken: string }).accessToken;
+  });
+  afterAll(async () => {
+    await app.close();
+    await ctx.shutdown();
+  });
+  const auth = () => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+
+  it(
+    "an ETS group-address export POSTed to the SAME /knx/queue route produces a real queue item through the identical Confidence/Room/Duplicate/Binding pipeline live discovery uses — no separate ETS commissioning path",
+    async () => {
+      const content = `<GroupAddress-Export>
+        <GroupAddress Name="Living Room - Reading Lamp - Switch" Address="1/2/1" DPTs="DPST-1-1" />
+        <GroupAddress Name="Living Room - Reading Lamp - Status" Address="1/2/3" DPTs="DPST-1-1" />
+      </GroupAddress-Export>`;
+      const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ gateway: { host: "127.0.0.1" }, content }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { queue: Array<Record<string, unknown>>; summary: { totalGroupAddresses: number } };
+      expect(body.queue).toHaveLength(1);
+      const item = body.queue[0]!;
+      // Went through the exact same engines a live-discovered device does: a real
+      // confidence score, a real duplicate decision, a real binding plan with the ETS
+      // group address as the write address — not a separate legacy shape.
+      // No structured ETS Function/Space tree in this flat export, so room isn't split out
+      // separately — the full dash-separated circuit name is the correct suggestion.
+      expect((item.device as { suggestedName: string }).suggestedName).toBe("Living Room Reading Lamp");
+      expect((item.confidence as { overall: number }).overall).toBeGreaterThan(0);
+      expect((item.duplicate as { decision: string }).decision).toBe("new");
+      const plans = item.plans as Array<{ address: string; bindable: boolean }>;
+      expect(plans[0]).toMatchObject({ address: "1/2/1", bindable: true });
+      expect(body.summary.totalGroupAddresses).toBe(2);
+    },
+    10000,
+  );
+
+  it("an ETS-sourced device approves through the exact same approval endpoint as a live-discovered device", async () => {
+    const content = `<GroupAddress-Export>
+      <GroupAddress Name="Hallway - Ceiling Light - Switch" Address="1/3/1" DPTs="DPST-1-1" />
+    </GroupAddress-Export>`;
+    const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, content }),
+    });
+    const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown }> };
+    expect(queue).toHaveLength(1);
+
+    const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    const roomId = home.rooms[0]!.id;
+    const approveRes = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ device: queue[0]!.device, name: "Ceiling Light", roomId, plans: queue[0]!.plans }),
+    });
+    expect(approveRes.status).toBe(201);
+    const approved = (await approveRes.json()) as { status: string };
+    expect(approved.status).toBe("ready");
+
+    const bindings = (await (await fetch(`${baseUrl}/v1/commissioning/bindings`, { headers: auth() })).json()) as { bindings: { address: string; protocol: string }[] };
+    expect(bindings.bindings.some((b) => b.address === "1/3/1" && b.protocol === "knx")).toBe(true);
+  }, 10000);
+
+  it("rejects an ETS export with no group addresses instead of silently returning an empty queue", async () => {
+    const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, content: "<GroupAddress-Export></GroupAddress-Export>" }),
+    });
+    expect(res.status).toBe(422);
+  });
 });

@@ -304,8 +304,8 @@ export interface KnxDiscoverySummary {
 /** Runs the full Unified Device Intelligence pipeline (§ discoverUnified -> Confidence
  * -> Room Assignment -> Duplicate Detection -> Binding Engine) — the same backend used
  * by Driver Settings, reused as-is; this is only the client entry point for it. */
-export async function knxDiscoveryQueue(): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
-  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify({}) });
+export async function knxDiscoveryQueue(ets?: { content?: string; knxproj?: string; password?: string }): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify(ets ?? {}) });
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary };
 }

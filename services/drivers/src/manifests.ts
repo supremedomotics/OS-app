@@ -46,9 +46,10 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
         label: "Group Address Schema",
         type: "select",
         required: true,
-        default: "floor-room-device",
-        help: "How this project's group-address names are structured — used to group every operation belonging to one circuit into a single SupremeOS device.",
+        default: "auto",
+        help: "How this project's group-address names are structured — used to group every operation belonging to one circuit into a single SupremeOS device. \"Automatic\" strips known operation-word suffixes (Switch/Status/Dimming/…) regardless of position — the safe default for a typical flat export (\"Room - Device - Operation\"). Pick a specific schema only when your project follows a strict, consistent hierarchy the automatic detector doesn't match.",
         options: [
+          { value: "auto", label: "Automatic (recommended)" },
           { value: "floor-room-device", label: "Floor → Room → Device Name" },
           { value: "circuit-operation-name", label: "Circuit Type → Operation Type → Circuit Name" },
         ],

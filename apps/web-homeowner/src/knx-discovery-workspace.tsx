@@ -38,16 +38,46 @@ export function KnxDiscoveryWorkspace() {
   const [collapsed, setCollapsed] = useState<Record<KnxQueueSection, boolean>>({ ready: false, needs_review: false, duplicates: true, conflicts: true });
   const [edits, setEdits] = useState<Record<string, { name: string; roomId: string }>>({});
 
+  // ETS Project Import (§ Unify ETS Import & Discovery Pipeline) — an ETS export is just
+  // another SIGNAL SOURCE into the same discoverUnified() pipeline live scanning uses, so
+  // it's staged here rather than as a separate import panel/workflow. No parsing or
+  // commissioning logic lives in this file — `content`/`knxproj` are handed to the
+  // backend as-is, which parses (never commissions) and merges them into the same queue.
+  const [etsText, setEtsText] = useState("");
+  const [etsProject, setEtsProject] = useState<string | null>(null);
+  const [etsPassword, setEtsPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
+
   useEffect(() => {
     void client.home().then((h) => setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name }))));
   }, []);
+
+  async function onFile(file: File) {
+    setNeedsPassword(false);
+    setEtsPassword("");
+    if (file.name.toLowerCase().endsWith(".knxproj")) {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
+      setEtsProject(btoa(bin));
+      setEtsText("");
+    } else {
+      setEtsText(await file.text());
+      setEtsProject(null);
+    }
+  }
 
   async function scan() {
     setPhase("scanning");
     setError(null);
     setApproved({});
     try {
-      const out = await knxDiscoveryQueue();
+      const ets = etsProject
+        ? { knxproj: etsProject, password: etsPassword || undefined }
+        : etsText.trim()
+          ? { content: etsText }
+          : undefined;
+      const out = await knxDiscoveryQueue(ets);
       setResult(out);
       // Pre-fill each device's editable name/room from the backend's own recommendation —
       // the installer only overrides what they disagree with (§ Editing).
@@ -59,7 +89,9 @@ export function KnxDiscoveryWorkspace() {
       setEdits(initial);
       setPhase("done");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Discovery failed.");
+      const message = e instanceof Error ? e.message : "Discovery failed.";
+      if (etsProject && /password/i.test(message)) setNeedsPassword(true);
+      setError(message);
       setPhase("error");
     }
   }
@@ -85,11 +117,37 @@ export function KnxDiscoveryWorkspace() {
     <div className="drv-config">
       <h4>Discover devices</h4>
       <p className="muted">
-        Runs the full Unified Device Intelligence pipeline over the connected gateway and KNX IoT
-        network — grouping, capability detection, room assignment, duplicate detection, and
-        binding plans, using the schema selected above.
+        Scans the connected gateway and KNX IoT network, and/or an ETS project you provide below —
+        the same Unified Device Intelligence pipeline either way: grouping, capability detection,
+        room assignment, duplicate detection, and binding plans, using the schema selected above.
       </p>
-      <div className="drv-actions" style={{ marginTop: 4 }}>
+      <label className="drv-field" style={{ marginTop: 4 }}>
+        <span className="lbl">ETS project (optional)</span>
+        <input
+          type="file"
+          accept=".knxproj,.csv,.xml,text/xml,text/csv"
+          disabled={phase === "scanning"}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
+        />
+        <span className="help">
+          Upload a .knxproj, or paste a group-address export (CSV/XML) below. Imported devices go
+          through this same review workspace — approve them exactly like a live-discovered device.
+        </span>
+      </label>
+      <textarea
+        value={etsText}
+        onChange={(e) => { setEtsText(e.target.value); setEtsProject(null); }}
+        placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
+        rows={4}
+        style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
+      />
+      {needsPassword && etsProject && (
+        <label className="drv-field" style={{ marginTop: 8 }}>
+          <span className="lbl">Project password</span>
+          <input type="password" value={etsPassword} onChange={(e) => setEtsPassword(e.target.value)} placeholder="ETS project password" />
+        </label>
+      )}
+      <div className="drv-actions" style={{ marginTop: 8 }}>
         <button className="primary" disabled={phase === "scanning"} onClick={() => void scan()}>
           {phase === "scanning" ? "Scanning…" : result ? "Scan again" : "Discover devices"}
         </button>

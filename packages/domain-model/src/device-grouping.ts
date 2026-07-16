@@ -99,6 +99,7 @@ export function groupByCircuitName(signals: GroupingSignal[], options: GroupingO
     const tokens = signal.name
       .split(/\s+/)
       .filter(Boolean)
+      .filter((t) => !/^[-–—/|]+$/.test(t))
       .map((t) => normalizeToken(t, abbreviations));
     const circuitTokens = stripTrailingOperationWords(tokens, operationWords);
     const key = circuitTokens.length > 0 ? circuitTokens.join(" ") : signal.name.trim().toLowerCase();

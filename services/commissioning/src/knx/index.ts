@@ -32,6 +32,38 @@ function parseSource(source: KnxImportSource): KnxProjectModel {
   return looksLikeEsf(source.content) ? parseEsf(source.content) : parseGaExport(source.content);
 }
 
+/** Public parse-only entry point (§ Unify ETS Import & Discovery Pipeline — "the ETS
+ * parser should only parse, it must never commission devices directly"). Exposes the
+ * SAME parsing this file has always used for `runKnxImport()`'s first stage — no new
+ * parsing logic, just making the existing internal step callable on its own so the
+ * Supreme KNX Driver's discovery pipeline can consume raw group addresses as signals
+ * instead of this file's own recognition/room-assignment/commissioning stages. */
+export function parseKnxSource(source: KnxImportSource): KnxProjectModel {
+  return parseSource(source);
+}
+
+/** Every group address in a parsed project, as a room-annotated signal (§ Unified
+ * Device Model) — the exact shape `mapUnifiedDevices`'s `ets` input already expects
+ * (`@supreme/protocols`), so ETS becomes just another signal SOURCE into the same
+ * Unified Device Mapper live discovery already uses, never a second commissioning path.
+ * Room is resolved from the model's own Function/Space tree when the export carries one
+ * (real ETS metadata — not a guess); left null otherwise, exactly like a KNX IoT signal
+ * with no room metadata is left null today. */
+export function knxSignalsFromModel(model: KnxProjectModel): { id: string; name: string; room: string | null; description: string | null }[] {
+  const roomByGaId = new Map<string, string>();
+  for (const fn of model.functions.values()) {
+    const room = fn.spaceId ? model.spaces.get(fn.spaceId)?.name : undefined;
+    if (!room) continue;
+    for (const gaId of fn.groupAddressIds) roomByGaId.set(gaId, room);
+  }
+  return [...model.groupAddresses.values()].map((ga) => ({
+    id: ga.address,
+    name: ga.name,
+    room: roomByGaId.get(ga.id) ?? null,
+    description: ga.description,
+  }));
+}
+
 /** Detect two different recognized devices landing on the same (name, room) — a real
  * naming collision worth flagging (possibly the same physical circuit split by naming,
  * or just two coincidentally-identical names), never auto-merged since their group

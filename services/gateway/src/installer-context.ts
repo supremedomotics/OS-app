@@ -51,7 +51,9 @@ import {
   ConfigKnxLearningStore,
   generateEntities,
   KnxDecryptError,
+  knxSignalsFromModel,
   learnRenames,
+  parseKnxSource,
   runKnxImport,
   unzipKnxproj,
   type EntitySource,
@@ -138,7 +140,7 @@ export interface KnxDiscoverySummary {
   groupAddressSchema: string;
 }
 
-function summarizeKnxQueue(queue: KnxInstallerQueueItem[], discoveryMs: number, schemaId: string): KnxDiscoverySummary {
+function summarizeKnxQueue(queue: KnxInstallerQueueItem[], discoveryMs: number, schemaId: string | undefined): KnxDiscoverySummary {
   const communicationObjects = queue.reduce((n, item) => n + item.device.raw.communicationObjects.length, 0);
   return {
     // A "circuit" and the SupremeOS device it becomes are the same thing in this
@@ -153,7 +155,7 @@ function summarizeKnxQueue(queue: KnxInstallerQueueItem[], discoveryMs: number, 
     needsReviewCount: queue.filter((i) => i.section === "needs_review").length,
     readyCount: queue.filter((i) => i.section === "ready").length,
     discoveryDurationMs: discoveryMs,
-    groupAddressSchema: schemaId,
+    groupAddressSchema: schemaId ?? "auto",
   };
 }
 
@@ -413,12 +415,15 @@ export class InstallerServices {
 
   /** The installer's selected Group Address Schema (§ Configurable Group Address Schema
    * Engine — the manifest field added earlier; this is what actually WIRES it into
-   * discovery). Falls back to the manifest's own declared default when the driver isn't
-   * installed/configured yet or the field is unset, never a silently different guess. */
-  private async knxConfiguredSchemaId(): Promise<string> {
+   * discovery). Returns `undefined` for "auto" (the manifest default) or when unset/not
+   * configured — a positional schema is only ever force-applied when the installer
+   * explicitly picked one, since the safe default is the schema-less trailing-operation-
+   * word grouping every non-positional ETS export actually needs (see
+   * `groupWithSchema`/`groupByCircuitName`). */
+  private async knxConfiguredSchemaId(): Promise<string | undefined> {
     const entry = (await this.drivers.registry()).find((e) => e.protocols.includes("knx") && e.installed);
     const configured = entry?.config.groupAddressSchema;
-    return typeof configured === "string" && configured.length > 0 ? configured : "floor-room-device";
+    return typeof configured === "string" && configured.length > 0 && configured !== "auto" ? configured : undefined;
   }
 
   /** The existing installation's state, for {@link checkDuplicate} — read-only, derived
@@ -458,14 +463,36 @@ export class InstallerServices {
      * one-off "try this schema" preview before saving it. Falls back to the driver's
      * saved configuration when omitted (the real production path). */
     schemaId?: string;
+    /** ETS Project Import (§ Unify ETS Import & Discovery Pipeline) — an ETS project is
+     * just another SIGNAL SOURCE into the exact same Unified Device Mapper live
+     * discovery already uses, never a second commissioning path. The parser (real,
+     * existing XML/CSV/.esf/.knxproj parsing from @supreme/commissioning) only parses —
+     * it never recognizes devices, assigns rooms, or commissions anything itself; every
+     * group address it finds becomes a plain (id, name, room?) signal, merged with any
+     * `opts.ets`/live KNX IoT signals and handed to the SAME discoverUnified() call
+     * below. Room comes from the ETS project's own Function/Space tree when present
+     * (real metadata, not guessed) and is still subject to the same "explicit signal
+     * beats inference" merge priority every other signal source already follows. */
+    etsSource?: { kind: "text"; content: string } | { kind: "knxproj"; base64: string; password?: string };
   } = {}): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
     const driver = await this.knxDiscoveryDriver(opts.gateway);
     if (!driver) throw new SupremeError("not_found", "the KNX driver is not configured on this hub yet");
     const schemaId = opts.schemaId ?? (await this.knxConfiguredSchemaId());
 
+    let ets = opts.ets;
+    if (opts.etsSource) {
+      const source = opts.etsSource.kind === "knxproj"
+        ? await this.knxProjectSource(opts.etsSource.base64, opts.etsSource.password)
+        : { kind: "text" as const, content: opts.etsSource.content };
+      const model = parseKnxSource(source);
+      const etsSignals = knxSignalsFromModel(model);
+      if (etsSignals.length === 0) throw new SupremeError("validation_failed", "no group addresses were found in this project — check that you exported the correct file, or that the ETS project isn't empty.");
+      ets = [...(ets ?? []), ...etsSignals];
+    }
+
     const startedAt = Date.now();
     const [devices, existing] = await Promise.all([
-      driver.discoverUnified(opts.ets, opts.userOverrides, schemaId),
+      driver.discoverUnified(ets, opts.userOverrides, schemaId),
       this.knxExistingState(),
     ]);
     const discoveryMs = Date.now() - startedAt;
