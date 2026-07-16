@@ -3,7 +3,7 @@ import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model"
 import { Button, Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
 import { client } from "./api.js";
-import { LightingDetail } from "./lighting.js";
+import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 import { useLive } from "./live.js";
@@ -11,9 +11,9 @@ import { useLive } from "./live.js";
 /**
  * Lighting (§ Navigation → Lighting) — the whole-home view of every dimmable/colour light,
  * grouped by room, matching the Climate/Media pattern exactly: a room-grouped card grid, an
- * All ON / All OFF pair, and selecting a card opens the same {@link LightingDetail} console
- * every other entry point to a light uses (Rooms → <room> → Lighting, Devices, …) — one
- * canonical detail page, never a page-specific alternate.
+ * All ON / All OFF pair, and selecting a card hands off to the Canonical Device Detail
+ * Router (§ Platform Architecture Rule) via `openDevice(id)` — this page never renders its
+ * own detail component, only routes to it.
  */
 type Room = { id: string; name: string };
 
@@ -32,35 +32,22 @@ function lightSummary(d: Device, live: Record<string, unknown>): string {
   return typeof level === "number" ? `${Math.round(level)}%` : "On";
 }
 
-export function Lighting({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
+export function Lighting({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const fav = useFavorites();
   const { states } = useLive();
+  const { openDevice, refreshToken } = useOpenDevice();
 
   async function load() {
     const [devs, home] = await Promise.all([client.devices(), client.home()]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [refreshToken]);
 
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const lights = (devices ?? []).filter(isLight);
-  const selected = selectedId ? lights.find((d) => d.id === selectedId) ?? null : null;
-
-  if (selected) {
-    return (
-      <LightingDetail
-        device={selected}
-        roomName={roomName(selected.roomId)}
-        onClose={() => setSelectedId(null)}
-        onRemoved={() => { setSelectedId(null); void load(); }}
-        devMode={devMode}
-      />
-    );
-  }
 
   const byRoom = new Map<string, Device[]>();
   for (const d of lights) { const k = roomName(d.roomId); (byRoom.get(k) ?? byRoom.set(k, []).get(k)!).push(d); }
@@ -101,7 +88,7 @@ export function Lighting({ onNavigate, devMode = false }: { onNavigate?: (t: Tab
             {list.map((d) => {
               const summary = lightSummary(d, states[d.id] ?? {});
               return (
-                <button key={d.id} className="media-card" onClick={() => setSelectedId(d.id)}>
+                <button key={d.id} className="media-card" onClick={() => openDevice(d.id)}>
                   <span className="media-ic">☀</span>
                   <span className="media-meta">
                     <span className="media-name">{d.name}</span>

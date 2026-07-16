@@ -21,6 +21,7 @@ import { AreasScreen } from "./areas.js";
 import { CommandPalette } from "./palette.js";
 import { passkeysSupported, signInWithPasskey } from "./passkeys.js";
 import { Icon } from "./icons.js";
+import { CanonicalDeviceDetail, DeviceDetailContext } from "./device-detail-router.js";
 
 export type Tab =
   | "dashboard" | "discover" | "devices" | "extensions"
@@ -76,6 +77,12 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const streamRef = useRef<SupremeStream | null>(null);
   const wide = useWide();
+  // Canonical Device Detail (§ Platform Architecture Rule — one detail page per device
+  // type, reached identically from every entry point): owned here, at the app root, so no
+  // individual page can hold its own "selected device" state and render its own copy.
+  const [openDeviceId, setOpenDeviceId] = useState<string | null>(null);
+  const [deviceRefreshToken, setDeviceRefreshToken] = useState(0);
+  const deviceDetail = { openDevice: setOpenDeviceId, refreshToken: deviceRefreshToken };
 
   useEffect(() => { void fetchSetupStatus().then(setSetup); }, []);
   // Drop to the login screen only when the refresh token itself is dead (30-day expiry or revoked) —
@@ -112,7 +119,7 @@ export function App() {
   }
   if (!authed) return <Login onAuthed={() => setAuthed(true)} />;
 
-  const go = (t: Tab) => { if (t === "rooms") setSelectedRoom(null); setTab(t); setMoreOpen(false); };
+  const go = (t: Tab) => { if (t === "rooms") setSelectedRoom(null); setOpenDeviceId(null); setTab(t); setMoreOpen(false); };
   // The Developer tab shows for either the home-wide Developer Mode license flag OR an
   // account whose role is specifically "Developer" — either is a legitimate reason to see it.
   const items = NAV.filter((n) => !n.dev || devMode || role === "developer");
@@ -129,7 +136,19 @@ export function App() {
   ) : null;
 
   // Keyed on the active tab so switching destinations replays the enter transition (§ Animation).
-  const page = (
+  // An open canonical device detail REPLACES the tab content entirely, regardless of which
+  // tab/room screen requested it — this is what makes it "one destination, reached
+  // identically from every path" rather than a per-page overlay.
+  const page = openDeviceId ? (
+    <div className="page-anim" key={`device:${openDeviceId}`}>
+      <CanonicalDeviceDetail
+        deviceId={openDeviceId}
+        devMode={showInstallerDiagnostics}
+        onClose={() => setOpenDeviceId(null)}
+        onRemoved={() => { setDeviceRefreshToken((t) => t + 1); setOpenDeviceId(null); }}
+      />
+    </div>
+  ) : (
     <div className="page-anim" key={tab}>
       {tab === "dashboard" && <DashboardOverview onNavigate={go} onOpenRoom={(id) => { setSelectedRoom(id); setTab("rooms"); }} devMode={showInstallerDiagnostics} />}
       {tab === "discover" && <DiscoverDevices />}
@@ -155,24 +174,26 @@ export function App() {
   if (wide) {
     return (
       <LiveContext.Provider value={{ states, apply }}>
-        <div className="app-wide">
-          <aside className="rail">
-            <div className="rail-brand">Supreme</div>
-            <button className="rail-search" onClick={() => setPaletteOpen(true)}>
-              <span className="ic"><Icon name="discover" /></span><span>Search</span><kbd>⌘K</kbd>
-            </button>
-            <nav>
-              {items.map((n) => (
-                <button key={n.id} className={`rail-item${tab === n.id ? " active" : ""}`} onClick={() => go(n.id)}>
-                  <span className="ic"><Icon name={n.icon} /></span><span>{n.label}</span>
-                </button>
-              ))}
-            </nav>
-            {devMode && <div className="rail-dev">DEVELOPMENT BUILD</div>}
-          </aside>
-          <main className="wide-content">{page}</main>
-          {palette}
-        </div>
+        <DeviceDetailContext.Provider value={deviceDetail}>
+          <div className="app-wide">
+            <aside className="rail">
+              <div className="rail-brand">Supreme</div>
+              <button className="rail-search" onClick={() => setPaletteOpen(true)}>
+                <span className="ic"><Icon name="discover" /></span><span>Search</span><kbd>⌘K</kbd>
+              </button>
+              <nav>
+                {items.map((n) => (
+                  <button key={n.id} className={`rail-item${tab === n.id ? " active" : ""}`} onClick={() => go(n.id)}>
+                    <span className="ic"><Icon name={n.icon} /></span><span>{n.label}</span>
+                  </button>
+                ))}
+              </nav>
+              {devMode && <div className="rail-dev">DEVELOPMENT BUILD</div>}
+            </aside>
+            <main className="wide-content">{page}</main>
+            {palette}
+          </div>
+        </DeviceDetailContext.Provider>
       </LiveContext.Provider>
     );
   }
@@ -181,6 +202,7 @@ export function App() {
   const overflow = items.filter((n) => !PRIMARY.includes(n.id));
   return (
     <LiveContext.Provider value={{ states, apply }}>
+      <DeviceDetailContext.Provider value={deviceDetail}>
       <div className="shell">
         <div className="content">{page}</div>
         <DevWatermark show={devMode} />
@@ -215,6 +237,7 @@ export function App() {
         </nav>
         {palette}
       </div>
+      </DeviceDetailContext.Provider>
     </LiveContext.Provider>
   );
 }

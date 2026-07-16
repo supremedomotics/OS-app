@@ -1,10 +1,10 @@
-import { useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { colorModes } from "./colormode.js";
 import { DeviceTile } from "./device-tile.js";
-import { LightingDetail, ColorWheel, TempSlider } from "./lighting.js";
+import { ColorWheel, TempSlider } from "./lighting.js";
+import { useOpenDevice } from "./device-detail-router.js";
 
 type ColorSt = { on?: boolean; level?: number; hue?: number | null; saturation?: number | null; kelvin?: number | null };
 type BrightnessSt = { on?: boolean; level?: number };
@@ -13,13 +13,16 @@ type BrightnessSt = { on?: boolean; level?: number };
  * The room's Lighting page (§11.1): reached via Room → Lighting on the category screen. A master
  * "all lights" control, room-wide colour-temperature and colour controls — each shown ONLY when the
  * room actually has a light that supports it — and every individual light as a tap-to-toggle,
- * drag-to-dim tile. Tapping a light's chevron opens its own full {@link LightingDetail}. Everything
- * here is live: a change made anywhere else (another screen, a physical switch, the driver's own
- * app) reflects immediately, because every value reads through {@link useLive}.
+ * drag-to-dim tile. Tapping a light's chevron hands off to the Canonical Device Detail Router
+ * (§ Platform Architecture Rule) via `openDevice(id)` — once a specific light is opened, the room
+ * context (this page, its master switch, its group controls) is left behind entirely; there is no
+ * local detail rendering here anymore. Everything on THIS page is live: a change made anywhere else
+ * (another screen, a physical switch, the driver's own app) reflects immediately, because every
+ * value reads through {@link useLive}.
  */
-export function RoomLighting({ name, lights, onBack, onDeviceRemoved, devMode = false }: { roomId: string; name: string; lights: Device[]; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
+export function RoomLighting({ name, lights, onBack }: { roomId: string; name: string; lights: Device[]; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
   const { states, apply } = useLive();
-  const [detail, setDetail] = useState<Device | null>(null);
+  const { openDevice } = useOpenDevice();
 
   const stateOf = (d: Device) => ({ ...d.state, ...states[d.id] }) as Record<string, ColorSt | BrightnessSt | undefined>;
   const colorOf = (d: Device) => stateOf(d).color as ColorSt | undefined;
@@ -49,18 +52,6 @@ export function RoomLighting({ name, lights, onBack, onDeviceRemoved, devMode = 
   // honest starting point when the room's lights may currently differ.
   const rgbAnchor = rgbLights.length > 0 ? colorOf(rgbLights[0]!) : undefined;
   const cctAnchor = cctLights.length > 0 ? colorOf(cctLights[0]!) : undefined;
-
-  if (detail) {
-    return (
-      <LightingDetail
-        device={detail}
-        onClose={() => setDetail(null)}
-        onRemoved={() => { setDetail(null); onDeviceRemoved?.(); }}
-        roomName={name}
-        devMode={devMode}
-      />
-    );
-  }
 
   function setAll(on: boolean) {
     for (const d of lights) {
@@ -123,7 +114,7 @@ export function RoomLighting({ name, lights, onBack, onDeviceRemoved, devMode = 
 
       <div className="rl-grid">
         {lights.map((d) => (
-          <DeviceTile key={d.id} device={d} onOpen={() => setDetail(d)} />
+          <DeviceTile key={d.id} device={d} onOpen={() => openDevice(d.id)} />
         ))}
       </div>
     </div>

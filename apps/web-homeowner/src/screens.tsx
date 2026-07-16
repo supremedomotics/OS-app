@@ -28,6 +28,7 @@ import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
 import { DeviceSheet } from "./device-sheets.js";
 import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
+import { useOpenDevice } from "./device-detail-router.js";
 import { Icon } from "./icons.js";
 import { LockCard } from "./features/security/card.js";
 import { LockDetail } from "./features/security/lock-detail.js";
@@ -310,7 +311,8 @@ function categorySummary(kind: CategoryKind, devices: Device[], live: Record<str
 
 function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack, devMode = false }: { roomId: string; name: string; heroImageUrl: string | null; heroOrigin: DOMRect | null; onBack: () => void; devMode?: boolean }) {
   const heroRef = useHeroFlip<HTMLDivElement>(heroOrigin);
-  const [devices, reloadDevices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId]);
+  const { refreshToken } = useOpenDevice();
+  const [devices, reloadDevices] = useAsync<Device[]>(async () => (await client.devicesInRoom(roomId as RoomId)).devices, [roomId, refreshToken]);
   const { states } = useLive();
   const roomPhoto = useRoomPhoto({ id: roomId, name, heroImageUrl }, client);
   const [category, setCategory] = useState<CategoryKind | null>(null);
