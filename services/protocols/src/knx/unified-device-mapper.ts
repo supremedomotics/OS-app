@@ -1,4 +1,4 @@
-import { groupByCircuitName, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
+import { classifyDevice, groupByCircuitName, type DeviceClassification, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
 import type { DiscoveredDevice } from "@supreme/integration-layer";
 import { classifyFromText, classifyFunctionalBlock, mergeCapabilityHints, type KnxDeviceKind } from "./capability-mapper.js";
 import type { FunctionalBlock } from "./functional-block-parser.js";
@@ -73,6 +73,12 @@ export interface UnifiedKnxDevice extends DiscoveredDevice {
     sourceHrefs: string[];
     groupingKey: string;
     communicationObjects: CommunicationObject[];
+    /** Universal Device Intelligence Engine output (§ Universal Device Intelligence
+     * Engine, `@supreme/domain-model`'s `classifyDevice`) — category/type/canonical page/
+     * icon/confidence, computed from the SAME protocol-agnostic engine every other driver
+     * uses, not a KNX-specific classification. Extends `deviceKind` (which exists for
+     * capability/binding purposes) rather than replacing it. */
+    classification: DeviceClassification;
   };
 }
 
@@ -152,6 +158,17 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
       ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const })),
     ];
 
+    // Universal Device Intelligence Engine (§ Intelligence Priority): pool circuit name,
+    // group/room text, raw communication-object names, and functional-block titles — the
+    // same priority-ordered sources KNX already threads through this mapper, handed to the
+    // protocol-agnostic engine instead of a KNX-specific classifier.
+    const classification = classifyDevice({
+      circuitName: etsSignals[0]?.name ?? cluster.key,
+      groupName: etsMeta.room,
+      communicationObjectNames: rawNames,
+      functionalBlockTitles: functionalBlocks.map((b) => b.title).filter((t): t is string => Boolean(t)),
+    });
+
     return {
       backendId: `knx-unified:${cluster.key}`,
       suggestedName: metadata.deviceName ?? cluster.key,
@@ -163,6 +180,7 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
         sourceHrefs: [...matchedOn, ...functionalBlocks.map((b) => b.href)],
         groupingKey: cluster.key,
         communicationObjects,
+        classification,
       },
     };
   });

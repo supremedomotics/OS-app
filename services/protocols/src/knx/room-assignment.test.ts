@@ -21,13 +21,26 @@ describe("assignRoom", () => {
   });
 
   it("falls to AI inference only after every real source is exhausted", () => {
-    const device = mapUnifiedDevices({ ets: [{ id: "1/1/1", name: "Some Light" }] })[0]!;
+    // "Light" alone (no prefix) — the Universal Device Intelligence Engine's name-based
+    // room inference correctly finds nothing preceding the matched type, so this still
+    // exercises "no real source resolves a room" rather than accidentally supplying one.
+    const device = mapUnifiedDevices({ ets: [{ id: "1/1/1", name: "Light" }] })[0]!;
     const result = assignRoom({ device, aiInference: () => "Study" });
     expect(result).toMatchObject({ room: "Study", source: "ai_inference" });
   });
 
+  it("extracts the room from the device name when no other source provides one (§ Additional Enhancement)", () => {
+    const device = mapUnifiedDevices({ ets: [{ id: "1/1/1", name: "R&D Downlight" }] })[0]!;
+    const result = assignRoom({ device });
+    expect(result).toMatchObject({ room: "R&D", source: "circuit_intelligence" });
+    expect(result.reason).toContain("Downlight");
+  });
+
   it("never fabricates a room — unassigned when nothing resolves it", () => {
-    const device = mapUnifiedDevices({ ets: [{ id: "1/1/1", name: "Some Light" }] })[0]!;
+    // "Light" alone (no prefix) — the Universal Device Intelligence Engine's name-based
+    // room inference correctly finds nothing preceding the matched type, so this still
+    // exercises "no real source resolves a room" rather than accidentally supplying one.
+    const device = mapUnifiedDevices({ ets: [{ id: "1/1/1", name: "Light" }] })[0]!;
     expect(assignRoom({ device })).toMatchObject({ room: null, source: "unassigned" });
   });
 });

@@ -14,3 +14,5 @@ export * from "./notifications.js";
 export * from "./drivers.js";
 export * from "./automations-dsl.js";
 export * from "./device-grouping.js";
+export * from "./device-vocabulary.js";
+export * from "./device-classification.js";

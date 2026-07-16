@@ -398,7 +398,7 @@ function DeviceCard({
         <span className={`drv-badge ${item.confidence.overall >= 85 ? "ok" : item.confidence.overall >= 70 ? "" : "err"}`}>{item.confidence.overall}% confidence</span>
       </div>
       <div className="knx-device-meta">
-        {item.device.raw.deviceKind} · {item.device.capabilities.join(", ") || "no capability detected"} · {item.device.raw.communicationObjects.length} communication object{item.device.raw.communicationObjects.length === 1 ? "" : "s"} · {item.duplicate.decision}
+        {item.device.raw.classification.category} → {item.device.raw.classification.type} · {item.device.capabilities.join(", ") || "no capability detected"} · {item.device.raw.communicationObjects.length} communication object{item.device.raw.communicationObjects.length === 1 ? "" : "s"} · {item.duplicate.decision}
       </div>
       <label className="knx-device-room">
         Room
@@ -412,6 +412,8 @@ function DeviceCard({
       {showWhy && (
         <div className="knx-explain">
           <div><strong>Circuit:</strong> {item.device.raw.groupingKey}</div>
+          <div><strong>Classification:</strong> {item.device.raw.classification.category} → {item.device.raw.classification.type} ({item.device.raw.classification.confidence}% confidence) — {item.device.raw.classification.reason}</div>
+          <div><strong>Canonical detail page:</strong> {item.device.raw.classification.canonicalDetailPage}</div>
           <div><strong>Grouping/schema used:</strong> {schemaUsed}</div>
           <div><strong>Merge decisions:</strong> {item.device.raw.mergeExplanation.join("; ") || "none recorded"}</div>
           <div><strong>Capability reasoning:</strong> {item.device.capabilities.length > 0 ? `${item.device.capabilities.join(", ")} detected from communication object datapoint types` : "no communication object mapped to a known capability"}</div>

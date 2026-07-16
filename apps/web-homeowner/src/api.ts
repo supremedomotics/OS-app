@@ -261,6 +261,16 @@ export async function discoverKnxGateways(): Promise<KnxGateway[]> {
 // Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
 // invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines
 // already compute and the queue endpoint already returns.
+export interface KnxDeviceClassification {
+  category: string;
+  type: string;
+  canonicalDetailPage: string;
+  icon: string;
+  automationCategory: string;
+  confidence: number;
+  reason: string;
+  matchedKeyword: string | null;
+}
 export interface KnxUnifiedDevice {
   backendId: string;
   suggestedName: string;
@@ -272,6 +282,8 @@ export interface KnxUnifiedDevice {
     sourceHrefs: string[];
     groupingKey: string;
     communicationObjects: { id: string; name: string; source: "knx_iot" | "ets" }[];
+    /** Universal Device Intelligence Engine output (§ Universal Device Intelligence Engine) — protocol-agnostic classification, not KNX-specific. */
+    classification: KnxDeviceClassification;
   };
 }
 export interface KnxConfidenceScores {

@@ -1,3 +1,4 @@
+import { inferRoomFromName } from "@supreme/domain-model";
 import type { UnifiedKnxDevice } from "./unified-device-mapper.js";
 
 /**
@@ -63,6 +64,16 @@ export function assignRoom(input: RoomAssignmentInput): RoomAssignmentResult {
     return { room: existingMatch, source: "existing_room_mapping", reason: "a previously-approved device sharing a communication object with this one is already in this room" };
   }
 
+  // Circuit Intelligence (§ Additional Enhancement — "intelligently extract the room from
+  // the device name"): the Universal Device Intelligence Engine already computed WHICH
+  // part of the device's own name is its type ("Ceiling Light" in "Kitchen Ceiling
+  // Light") — whatever precedes that is a real room-name candidate, not a guess pulled
+  // from nowhere. Only used when nothing more authoritative (installer, KNX IoT, ETS,
+  // existing mapping) already answered.
+  const nameInferredRoom = inferRoomFromName(device.suggestedName, device.raw.classification);
+  if (nameInferredRoom) {
+    return { room: nameInferredRoom, source: "circuit_intelligence", reason: `extracted from the device name — "${nameInferredRoom}" precedes the detected type "${device.raw.classification.type}"` };
+  }
   if (device.raw.communicationObjects.length > 1) {
     return { room: null, source: "circuit_intelligence", reason: "circuit grouping found multiple related signals but none carried a room name" };
   }
