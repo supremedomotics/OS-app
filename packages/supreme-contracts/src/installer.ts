@@ -75,6 +75,14 @@ export const DiscoveredDeviceView = z.object({
    * Absent when the protocol needs no config (KNX group address, Modbus register, …).
    */
   bindConfig: z.record(z.unknown()).optional(),
+  /**
+   * Room-name hint the driver's own discovery already resolved (a Casambi Group name,
+   * an ETS Function/Space, …) — never a guess invented by commissioning, only ever what
+   * the driver genuinely reported. Pass straight through as `roomNameHint` on a
+   * `CommissionRequest` so the shared Room Assignment Engine can find-or-create the
+   * matching Supreme room without the installer having to pick one by hand.
+   */
+  roomHint: z.string().nullable().optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
@@ -111,7 +119,12 @@ export type DiscoverRequest = z.infer<typeof DiscoverRequest>;
 export const CommissionRequest = z.object({
   backendId: z.string(),
   name: z.string().min(1),
-  roomId: z.string(),
+  /** Explicit installer choice — omit to let the Room Assignment Engine resolve one from
+   * `roomNameHint` (§ Universal Room Intelligence). */
+  roomId: z.string().optional(),
+  /** A driver-reported room hint (e.g. `DiscoveredDeviceView.roomHint`) — used to find-or-
+   * create a room only when `roomId` is not supplied. */
+  roomNameHint: z.string().nullable().optional(),
   capabilities: z.array(CapabilityKind).min(1),
   supremeType: SupremeDeviceType.optional(),
   manufacturer: z.string().nullable().optional(),

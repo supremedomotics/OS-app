@@ -45,6 +45,12 @@ export interface DiscoveredView {
    * HEOS player's `pid`, an AVR/Yamaha `zone`, …) — pass straight through as the bind
    * `config` so commissioning needs no manual entry beyond room + name. */
   bindConfig?: Record<string, unknown>;
+  /** Room-name hint the driver's own discovery already resolved (a Casambi Group name,
+   * an ETS Function/Space, …) — never a guess invented here, only ever what the driver's
+   * `raw.room` genuinely reported. Threaded through to `InstallerServices.commissionDevice()`
+   * so the SAME shared `resolveOrCreateRoom()` KNX already uses can find-or-create the
+   * matching Supreme room, protocol-independently (§ Universal Room Intelligence). */
+  roomHint?: string | null;
 }
 
 /**
@@ -174,6 +180,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     d.raw?.bindConfig && typeof d.raw.bindConfig === "object" && !Array.isArray(d.raw.bindConfig)
       ? (d.raw.bindConfig as Record<string, unknown>)
       : undefined;
+  const roomHint = typeof d.raw?.room === "string" && d.raw.room.trim().length > 0 ? d.raw.room : undefined;
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -183,6 +190,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     protocol,
     ...(network ? { network } : {}),
     ...(bindConfig ? { bindConfig } : {}),
+    ...(roomHint ? { roomHint } : {}),
   };
 }
 

@@ -11,7 +11,7 @@ import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } fro
  * Building › Floor › Room › Area › Name › Done — in one guided flow. The installer assigns a
  * *place*, never a protocol.
  */
-type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string } };
+type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string }; roomHint?: string | null };
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 
 /**
@@ -68,6 +68,26 @@ function matchRoomByName(deviceName: string, rooms: Room[]): Room | undefined {
   const dn = deviceName.toLowerCase();
   const matches = rooms.filter((r) => r.name.trim().length > 0 && dn.includes(r.name.trim().toLowerCase()));
   return matches.sort((a, b) => b.name.length - a.name.length)[0];
+}
+
+/** Matches the gateway's `normalizeRoomName` (§ Universal Room Intelligence) — strips
+ * punctuation/whitespace so "R&D"/"r&d"/"R & D" compare equal without merging genuinely
+ * different room names. */
+function normalizeRoomName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** The driver's own reported room (a Casambi Group, an ETS Function/Space, …) is a far
+ * more reliable signal than guessing from the device's name — prefer it, matched against
+ * existing rooms the SAME way the backend's resolveOrCreateRoom does, before falling back
+ * to the name-substring heuristic. */
+function matchRoom(device: Discovered, rooms: Room[]): Room | undefined {
+  if (device.roomHint) {
+    const target = normalizeRoomName(device.roomHint);
+    const hinted = rooms.find((r) => normalizeRoomName(r.name) === target);
+    if (hinted) return hinted;
+  }
+  return matchRoomByName(device.suggestedName, rooms);
 }
 
 export function DiscoverDevices() {
@@ -176,18 +196,23 @@ function FoundDevice({
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(device.suggestedName);
-  // Assign directly to the room its own name points at (e.g. "Pantry DL-1" → Pantry) instead of
-  // defaulting to the first room in the list and making the installer pick every time — still
-  // just a pre-selection, changeable below like any other field.
-  const matchedRoom = matchRoomByName(device.suggestedName, rooms);
+  // Assign directly to the room the driver itself reported (a Casambi Group, an ETS
+  // Function/Space, …) or, failing that, the room its own name points at (e.g. "Pantry
+  // DL-1" → Pantry) — never defaulting to "pick a room" when a reliable signal exists
+  // (§ Universal Room Intelligence). Still just a pre-selection, changeable below.
+  const matchedRoom = matchRoom(device, rooms);
+  // A reliable room hint with NO existing SupremeOS match means "create this room
+  // automatically," not "make the installer figure it out" — pre-fill the existing
+  // create-room cascade rather than forcing a blank picker.
+  const needsNewRoom = !matchedRoom && Boolean(device.roomHint);
   // Location cascade. `mode` toggles between placing into an existing room and creating a new one
   // (Building → Floor → Room → Area) inline, so a device can be commissioned even in an empty home.
-  const [mode, setMode] = useState<"existing" | "new">(rooms.length ? "existing" : "new");
-  const [roomId, setRoomId] = useState(matchedRoom?.id ?? rooms[0]?.id ?? "");
+  const [mode, setMode] = useState<"existing" | "new">(needsNewRoom ? "new" : rooms.length ? "existing" : "new");
+  const [roomId, setRoomId] = useState(matchedRoom?.id ?? (needsNewRoom ? "" : rooms[0]?.id ?? ""));
   const [building, setBuilding] = useState(rooms[0]?.building ?? "");
   const [floor, setFloor] = useState(String(rooms[0]?.floor ?? 0));
   const [area, setArea] = useState("");
-  const [roomName, setRoomName] = useState("");
+  const [roomName, setRoomName] = useState(needsNewRoom ? (device.roomHint ?? "") : "");
   const [step, setStep] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -200,10 +225,10 @@ function FoundDevice({
   // with "Pick or create a room." even though a room is clearly shown as selected.
   const touchedRoom = useRef(false);
   useEffect(() => {
-    if (touchedRoom.current || rooms.length === 0 || roomId) return;
+    if (touchedRoom.current || rooms.length === 0 || roomId || needsNewRoom) return;
     setMode("existing");
     setRoomId(matchedRoom?.id ?? rooms[0]!.id);
-  }, [rooms, roomId, matchedRoom]);
+  }, [rooms, roomId, matchedRoom, needsNewRoom]);
 
   async function pair() {
     setBusy(true); setErr(null);

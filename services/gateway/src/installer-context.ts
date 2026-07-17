@@ -77,6 +77,16 @@ import type { GatewayConfig } from "./config.js";
 /** SKU tiers, lowest → highest. A higher tier entitles all lower SKUs. */
 const SKU_TIERS = ["essential", "pro", "estate"] as const;
 
+/** Universal Room Intelligence — Room Normalization (§ Room matching must be case-
+ * insensitive and normalization-aware): strips punctuation and whitespace, never real
+ * words, so "R&D"/"r&d"/"R & D" collapse to the same key while "Living"/"Living Room"
+ * stay distinct (removing a space never removes a word). Deliberately NOT a fuzzy/
+ * similarity match — that would risk merging genuinely different rooms, which the room
+ * resolver must never do on its own. */
+function normalizeRoomName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 /** Replace configured secret values with a masked placeholder so plaintext never leaves the hub. */
 function maskSecrets(config: Record<string, unknown>, schema: { key: string; secret?: boolean }[]): Record<string, unknown> {
   const out = { ...config };
@@ -372,7 +382,14 @@ export class InstallerServices {
   async commissionDevice(input: {
     backendId: string;
     name: string;
-    roomId: RoomId;
+    /** Explicit installer choice — priority 1. Omit to let the Room Assignment Engine
+     * resolve an existing/new room from `roomNameHint` (§ Universal Room Intelligence —
+     * the SAME shared resolver every other commissioning path in this file uses). */
+    roomId?: RoomId;
+    /** A driver-reported room hint (a Casambi Group name, an ETS Function/Space, a
+     * KNX IoT title, …) — `DiscoveredView.roomHint` threads straight through here from
+     * whatever the SIL's discover() already found, never fabricated. */
+    roomNameHint?: string | null;
     capabilities: CapabilityKind[];
     supremeType?: Parameters<CommissioningService["commission"]>[0]["supremeType"];
     manufacturer?: string | null;
@@ -382,8 +399,9 @@ export class InstallerServices {
     address?: string;
     config?: Record<string, unknown>;
   }): Promise<Awaited<ReturnType<CommissioningService["commission"]>>> {
-    const { protocol, address, config, ...commissionInput } = input;
-    const device = await this.commissioning.commission(commissionInput);
+    const { protocol, address, config, roomNameHint, ...commissionInput } = input;
+    const roomId = await this.resolveOrCreateRoom(input.roomId, roomNameHint ?? null);
+    const device = await this.commissioning.commission({ ...commissionInput, roomId });
     if (protocol) {
       const busAddress = address ?? input.backendId;
       for (const capability of input.capabilities) {
@@ -743,7 +761,11 @@ export class InstallerServices {
    * Priority order (only the first two are implemented today — AI inference is a stated
    * future step, not something to fabricate now):
    *   1. Explicit `roomId` override (installer already picked a real room) — used as-is.
-   *   2. Existing SupremeOS room whose name case-insensitively matches `roomNameHint`.
+   *   2. Existing SupremeOS room whose name matches `roomNameHint` under
+   *      {@link normalizeRoomName} (case/punctuation/whitespace-insensitive — "R&D",
+   *      "r&d", and "R & D" all resolve to the same room; "Living" and "Living Room"
+   *      deliberately do NOT collapse into each other — normalization only strips
+   *      formatting noise, it never drops or merges real words).
    *   3. Create a new room named `roomNameHint` (or "Unassigned" when no hint at all).
    */
   private async resolveOrCreateRoom(roomId: RoomId | undefined, roomNameHint: string | null): Promise<RoomId> {
@@ -753,7 +775,8 @@ export class InstallerServices {
     }
     const name = (roomNameHint ?? "").trim() || "Unassigned";
     const existing = await this.d.home.listRooms();
-    const match = existing.find((r) => r.name.toLowerCase() === name.toLowerCase());
+    const target = normalizeRoomName(name);
+    const match = existing.find((r) => normalizeRoomName(r.name) === target);
     if (match) return match.id;
     const room: Room = {
       id: newId("room") as RoomId,

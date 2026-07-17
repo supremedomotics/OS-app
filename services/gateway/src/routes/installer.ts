@@ -306,7 +306,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const input = CommissionRequest.parse(req.body);
       const device = await i().commissionDevice({
         ...input,
-        roomId: input.roomId as RoomId,
+        roomId: input.roomId ? (input.roomId as RoomId) : undefined,
       });
       reply.code(201).send({ device });
     } catch (err) {
