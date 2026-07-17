@@ -20,8 +20,9 @@ type Room = { id: string; name: string };
  * architecture Media/Security established: a real hero built from `client.energySummary()` (the
  * genuine `/v1/energy/summary` aggregate — no per-second "live power flow" fabricated on top of
  * it, since the backend doesn't report one), a top-consumers list reusing `EnergyDeviceCard`,
- * and a grouped list of every device this module owns (`isEnergyDevice`) drilling into
- * `EnergyDeviceDetail` on selection — the same `selectedId` local-state pattern as `media.tsx`.
+ * and a grouped list of every device this module owns (`isEnergyDevice`) — selecting one hands
+ * off to the Canonical Device Detail Router via `openDevice(id)`; this page never renders
+ * `EnergyDeviceDetail` itself.
  */
 export function Energy({ onNavigate }: { onNavigate?: (t: Tab) => void } = {}) {
   const [devices, setDevices] = useState<Device[] | null>(null);

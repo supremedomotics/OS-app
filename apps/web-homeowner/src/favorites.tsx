@@ -3,6 +3,7 @@ import type { Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import type { Tab } from "./App.js";
 import { recordUse, recentUses } from "./usage.js";
+import { useOpenDevice } from "./device-detail-router.js";
 
 /**
  * Favorites (§ Favorites) — pin the rooms, devices and scenes you use most so they're one tap away.
@@ -54,6 +55,7 @@ export function FavHeart({ fav, active, onToggle }: { fav: FavRef; active: boole
 
 /** The Dashboard favourites row — pinned devices (one-tap toggle) + scenes (one-tap activate). */
 export function FavoritesRow({ onNavigate }: { onNavigate: (t: Tab) => void }) {
+  const { openDevice } = useOpenDevice();
   const [keys, setKeys] = useState<Set<string> | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [scenes, setScenes] = useState<{ id: string; name: string; icon: string | null }[]>([]);
@@ -105,6 +107,16 @@ export function FavoritesRow({ onNavigate }: { onNavigate: (t: Tab) => void }) {
             <span className="fav-ic">{isOn(d) ? "◉" : "○"}</span>
             <span className="fav-name">{d.name}</span>
             <span className="fav-sub">{isOn(d) ? "On" : "Off"}</span>
+            <span
+              className="fav-open"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${d.name} controls`}
+              onClick={(e) => { e.stopPropagation(); openDevice(d.id); }}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openDevice(d.id); } }}
+            >
+              ›
+            </span>
           </button>
         ))}
       </div>
@@ -119,6 +131,7 @@ export function FavoritesRow({ onNavigate }: { onNavigate: (t: Tab) => void }) {
  * backend, no invented data.
  */
 export function RecentlyUsedRow() {
+  const { openDevice } = useOpenDevice();
   const [recent, setRecent] = useState<{ kind: "device" | "scene"; id: string }[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [scenes, setScenes] = useState<{ id: string; name: string; icon: string | null }[]>([]);
@@ -164,6 +177,16 @@ export function RecentlyUsedRow() {
         <span className="fav-ic">{isOn(d) ? "◉" : "○"}</span>
         <span className="fav-name">{d.name}</span>
         <span className="fav-sub">{isOn(d) ? "On" : "Off"}</span>
+        <span
+          className="fav-open"
+          role="button"
+          tabIndex={0}
+          aria-label={`Open ${d.name} controls`}
+          onClick={(e) => { e.stopPropagation(); openDevice(d.id); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openDevice(d.id); } }}
+        >
+          ›
+        </span>
       </button>
     );
   }).filter(Boolean);

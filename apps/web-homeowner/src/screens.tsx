@@ -22,7 +22,6 @@ import type {
 import { client, fetchDriverRegistry } from "./api.js";
 import { useRoomPhoto, styleForPhoto, ensureRoomHeroes, type RoomLike } from "./room-image.js";
 import { useLive } from "./live.js";
-import { DeviceSheet } from "./device-sheets.js";
 import { RemovableDeviceTile } from "./device-tile.js";
 import { RoomLighting } from "./room-lighting.js";
 import { useOpenDevice } from "./device-detail-router.js";
@@ -32,7 +31,6 @@ import { CameraCard } from "./features/security/camera-card.js";
 import { CameraDetail } from "./features/security/camera-detail.js";
 import { NvrDetail } from "./features/security/nvr-detail.js";
 import { AlarmPanel } from "./features/security/alarm-panel.js";
-import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -367,38 +365,22 @@ function RoomCategories({ roomId, name, heroImageUrl, heroOrigin, onBack, devMod
 /** The device list for a single category (Media, Curtains, Climate, …) — tap a card to open its
  * full control. Lighting has its own richer page ({@link RoomLighting}); every other category
  * reuses the same tile grammar as the rest of the app. */
-function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved, devMode = false }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
-  const [sheet, setSheet] = useState<Device | null>(null);
+function CategoryDeviceList({ roomName, category, onBack, onDeviceRemoved }: { roomName: string; category: CategoryDef & { devices: Device[] }; onBack: () => void; onDeviceRemoved?: () => void; devMode?: boolean }) {
   const { openDevice } = useOpenDevice();
-  // § Platform Architecture Rule (Canonical Device Detail Router) — a device's detail page
-  // must be byte-identical no matter which path opened it. Every capability the router
-  // already covers (lighting, climate, locks, media, energy) hands off to openDevice();
-  // DeviceSheet remains the fallback ONLY for capabilities with no canonical console yet
-  // (curtains, fans, sensors, water, …) — see device-detail-router.tsx's disclosed gaps.
-  const open = (d: Device) => {
-    const caps = d.capabilities.map((c) => c.kind);
-    const hasCanonicalPage = caps.some((c) => ["brightness", "color", "temperature", "lock", "media"].includes(c)) || isEnergyDevice(d);
-    if (hasCanonicalPage) openDevice(d.id);
-    else setSheet(d);
-  };
+  // § Platform Architecture Rule (Canonical Device Detail Router) — every commissioned
+  // device's detail page, including the DeviceSheet fallback, is now owned exclusively by
+  // the router. This page only routes; it never decides which component renders.
+  // `onDeviceRemoved` here is RemovableDeviceTile's own swipe-to-delete gesture (a list-
+  // management action, not a detail page) — unrelated to the router migration.
   return (
     <div>
       <button className="back" onClick={onBack}>‹ {roomName}</button>
       <h1 className="title">{category.label}</h1>
       <div className="dlist">
         {category.devices.map((d) => (
-          <RemovableDeviceTile key={d.id} device={d} onOpen={() => open(d)} onRemoved={onDeviceRemoved} />
+          <RemovableDeviceTile key={d.id} device={d} onOpen={() => openDevice(d.id)} onRemoved={onDeviceRemoved} />
         ))}
       </div>
-      {sheet && (
-        <DeviceSheet
-          device={sheet}
-          onClose={() => setSheet(null)}
-          roomName={roomName}
-          devMode={devMode}
-          onRemoved={() => { setSheet(null); onDeviceRemoved?.(); }}
-        />
-      )}
     </div>
   );
 }

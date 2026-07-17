@@ -11,6 +11,7 @@ import { SimpleMediaDetail } from "./features/media/simple-detail.js";
 import { mediaDeviceKind, usesSimpleMediaDetail } from "./features/media/capability-mapper.js";
 import { EnergyDeviceDetail } from "./features/infrastructure/energy/detail.js";
 import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
+import { DeviceSheet } from "./device-sheets.js";
 
 /**
  * Canonical Device Detail Router (§ Platform Architecture Rule — "Every device type must
@@ -29,15 +30,19 @@ import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapp
  * differently-shaped device object — the props reaching the canonical page are always
  * derived identically regardless of which screen triggered the open.
  *
- * Migrated so far: Lighting, Climate (+ its Schedule sub-page), Locks, Media (AVR console +
- * simple TV/projector page), Energy. NOT migrated (real, disclosed gaps, not silent):
+ * Rich consoles: Lighting, Climate (+ its Schedule sub-page), Locks, Media (AVR console +
+ * simple TV/projector page), Energy. Every OTHER capability set (curtains, blinds, fans,
+ * sensors, water, generic "other") falls through to {@link DeviceSheet} — the canonical
+ * fallback, owned here like every other detail component, never rendered directly by a
+ * navigation page (§ Priority 2 — "DeviceSheet is itself a detail implementation and must
+ * follow the same architecture"). Adding a dedicated rich console for one of these types
+ * later means changing ONLY this file's dispatch order — no navigation page needs to know.
+ *
+ * NOT migrated — a real, disclosed gap, not silent:
  *   - Cameras/NVR (`client.cameras()`) — a fundamentally different data model, not indexed
  *     by `DeviceId` the way every other capability-bearing device is. Forcing it through
- *     `openDevice(deviceId: string)` would mean inventing a fake device-id mapping.
- *   - Curtains, Blinds, Fans, Sensors, Water, generic "other" — these already share ONE
- *     generic `DeviceSheet` fallback (no duplication today), and don't yet have a
- *     dedicated rich console the way Lighting/Climate/Media/Locks/Energy do. Adding a
- *     canonical page for them is real follow-up work, not a router wiring change.
+ *     `openDevice(deviceId: string)` would mean inventing a fake device-id mapping. See
+ *     the Camera/NVR architecture recommendation in this session's report.
  *   - Scenes, Automations, Discovery Queue, Device Review Workspace — these aren't
  *     single-device detail pages at all (a scene is a set of actions, a discovery-queue
  *     item is a pre-commissioned candidate, not yet a `Device`).
@@ -160,10 +165,10 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
     return <EnergyDeviceDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onRemoved} devMode={ctx.devMode} />;
   }
 
-  // No canonical console for this capability set yet (curtains, fans, sensors, water,
-  // generic "other") — real gap, not fabricated. Callers for these types don't call
-  // openDevice() yet; reaching here would mean a future caller opened an unmigrated type.
-  return null;
+  // Canonical fallback (§ Priority 2) — curtains, blinds, fans, sensors, water, generic
+  // "other" all land here today. Real gap: none of these has a dedicated rich console yet;
+  // DeviceSheet is the honest, shared, non-duplicated answer until one exists.
+  return <DeviceSheet device={device} roomName={ctx.roomName} devMode={ctx.devMode} onClose={ctx.onClose} onRemoved={ctx.onRemoved} />;
 }
 
 /** Renders at the app root, above whatever tab/page is active — an open device replaces

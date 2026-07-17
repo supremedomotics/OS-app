@@ -10,6 +10,7 @@ import { friendlyError } from "./errors.js";
 import { mediaDeviceKind, mediaKindMeta } from "./features/media/capability-mapper.js";
 import { securityLockKind, securityLockKindMeta } from "./features/security/capability-mapper.js";
 import { energyDeviceKind, energyKindMeta, isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
+import { useOpenDevice } from "./device-detail-router.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -100,6 +101,7 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
   const [bulkRoom, setBulkRoom] = useState("");
   const [busy, setBusy] = useState(false);
   const fav = useFavorites();
+  const { refreshToken } = useOpenDevice();
 
   const toggleSelect = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -118,7 +120,7 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
     }
     setSceneUse(use);
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [refreshToken]);
 
   // Resolve a device's driver → its display name + primary protocol, from the registry.
   const driverInfo = (driverId: string | null | undefined): DriverInfo | null => {
@@ -216,6 +218,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const isOnline = online(device);
+  const { openDevice } = useOpenDevice();
   // Real network coordinates captured at discovery (present only for IP-bus devices).
   const net = (device.metadata as { network?: { ip?: string; mac?: string; host?: string } } | undefined)?.network;
 
@@ -262,6 +265,7 @@ function DeviceRow({ device, rooms, expanded, onToggle, onChanged, roomName, dri
             </select>
           </label>
           <div className="drv-actions">
+            <Button onClick={() => openDevice(device.id)}>Open controls</Button>
             <Button variant="primary" disabled={busy} onClick={save}>Save</Button>
             <Button disabled={busy} onClick={clone}>Clone</Button>
             <Button variant="danger" disabled={busy} onClick={remove}>Remove device</Button>

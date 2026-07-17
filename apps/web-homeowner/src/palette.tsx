@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { client, fetchAutomations } from "./api.js";
 import type { Tab } from "./App.js";
+import { useOpenDevice } from "./device-detail-router.js";
 
 /**
  * Global search / command palette (§ Global Search). One place to jump to anything — devices, rooms,
  * scenes, automations, or a navigation destination — by fuzzy name. Opened with ⌘K / Ctrl-K or the
- * search button. Pure client-side over data the app already has; selecting an item navigates.
+ * search button. Pure client-side over data the app already has; selecting a device hands off to the
+ * Canonical Device Detail Router (§ Platform Architecture Rule) via openDevice() — search never
+ * merely jumps to the Devices tab and makes the homeowner find it again.
  */
 export type PaletteNav = { id: Tab; label: string };
-type Item = { key: string; label: string; sub: string; tab: Tab; roomId?: string };
+type Item = { key: string; label: string; sub: string; tab: Tab; roomId?: string; deviceId?: string };
 
 /** A light subsequence score: all query chars must appear in order; earlier + tighter matches rank higher. */
 function score(query: string, text: string): number | null {
@@ -33,6 +36,7 @@ function score(query: string, text: string): number | null {
 export function CommandPalette({ navItems, onNavigate, onSelectRoom, onClose }: {
   navItems: PaletteNav[]; onNavigate: (t: Tab) => void; onSelectRoom: (id: string) => void; onClose: () => void;
 }) {
+  const { openDevice } = useOpenDevice();
   const [items, setItems] = useState<Item[]>([]);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -48,7 +52,7 @@ export function CommandPalette({ navItems, onNavigate, onSelectRoom, onClose }: 
         // Devices carry their room for context; selecting jumps to the Devices page.
         const roomName = new Map<string, string>(home.rooms.map((r) => [r.id as string, r.name]));
         const devs = (await client.devices()).devices;
-        for (const d of devs) base.push({ key: `device:${d.id}`, label: d.name, sub: `Device · ${roomName.get(d.roomId ?? "") ?? "Unassigned"}`, tab: "devices" });
+        for (const d of devs) base.push({ key: `device:${d.id}`, label: d.name, sub: `Device · ${roomName.get(d.roomId ?? "") ?? "Unassigned"}`, tab: "devices", deviceId: d.id });
         for (const s of scenes.scenes) base.push({ key: `scene:${s.id}`, label: s.name, sub: "Scene", tab: "scenes" });
         for (const a of autos) base.push({ key: `auto:${a.id}`, label: a.name, sub: "Automation", tab: "automations" });
       } catch { /* nav items still work offline */ }
@@ -70,6 +74,7 @@ export function CommandPalette({ navItems, onNavigate, onSelectRoom, onClose }: 
 
   function choose(it: Item | undefined) {
     if (!it) return;
+    if (it.deviceId) { openDevice(it.deviceId); onClose(); return; }
     if (it.roomId) onSelectRoom(it.roomId);
     onNavigate(it.tab);
     onClose();
