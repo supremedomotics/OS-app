@@ -4,114 +4,137 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-**Branch:** `main` — synced to `origin/main` at the start of this session (fast-forwarded from
-90 commits behind); this session's changes are uncommitted local edits, not yet pushed.
+**Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start.
 
 ## Current development status
 
-The **Infrastructure module** initiative has started: **Energy** (device type #1 of 8) is built
-— capability-mapper, Standard Card, per-device Premium Detail Page, and a rebuilt whole-home
-dashboard, replacing the old plain-`.card.row` Energy tab. The remaining 7 Infrastructure device
-types (Solar, Battery Storage, EV Charger, Pool, Irrigation, Water Tank, Generator, Building
-Management/Vehicle) are **not started** but now have a real pattern + a reusable gauge component
-to extend. The Design Polish phase (ambient color identity, layout-rhythm variation per category)
-from the previous handoff is still open and unaffected by this session's work.
+The incoming brief asked for a full "SupremeOS Universal AV Driver SDK." A gap analysis (citing
+exact file:line evidence, not assumption) found the Universal AVR Framework (ADR 0015) was
+already built and shipping in a previous session — Denon/Marantz Telnet, HEOS, and Yamaha YXC
+drivers with real discovery, dynamic capability detection, and reconnect. This session closed the
+genuinely missing pieces confirmed by that gap analysis: a Diagnostics Console, a confidence-based
+Room Assignment Engine (replacing a narrower prior policy, per explicit user direction), Automatic
+Zone Generation, and a Media Topology Engine — plus small, honest discovery enrichment (best-effort
+MAC lookup, real model threading). Full details and rationale live in ADR 0015's new addendum
+(`docs/architecture/adr/0015-universal-avr-framework.md`).
 
 ## Completed this session
 
-1. **Energy feature module** (`apps/web-homeowner/src/features/infrastructure/energy/`):
-   - `capability-mapper.ts` — `EnergyDeviceKind` (`smart_plug`/`power_meter`/`solar_inverter`/
-     `battery_storage`/`ev_charger`/`generator`), classified from `device.metadata.energy.kind`
-     first, falling back to whether the device has an `onoff` capability. `isEnergyDevice()`
-     identifies devices this module owns via a `sensor` capability with `measure: "power"|
-     "energy"` — there is no dedicated energy `CapabilityKind` in `domain-model` yet.
-   - `card.tsx` — `EnergyDeviceCard`, structurally identical to Media/Security's `.media-card`
-     but leads with a small live `PowerRing` instead of a static icon.
-   - `detail.tsx` — `EnergyDeviceDetail`, the same hero→controls→QuickActions→CapabilityGrid→
-     Universal Page Structure skeleton as `SimpleMediaDetail`/`LockDetail`. Hero is a large
-     `PowerRing` reading the device's real live sensor value (never fabricated — devices with no
-     reading show "No live reading", not a fake number). Includes a real consumption sparkline
-     off the existing `/v1/energy/history` endpoint (`fetchEnergyHistory()`, already in
-     `api.ts`, no new endpoint needed). Schedule/Load Priority/Usage Alerts/Efficiency Insights
-     are honestly capability-gated ("Driver required") — no backing capability exists for any of
-     them yet.
-   - `apps/web-homeowner/src/infrastructure-energy.tsx` — the whole-home dashboard that replaces
-     `screens.tsx`'s old `Energy()`. Hero reads real `client.energySummary()` totals (no
-     invented "live power flow" — the backend only reports periodic aggregates); top-consumers
-     list and a room-grouped device grid both reuse `EnergyDeviceCard`; drills into
-     `EnergyDeviceDetail` via the same `selectedId` local-state pattern `media.tsx` uses.
-2. **New shared component — `PowerRing`** (`packages/aureon-web/src/components/PowerRing.tsx`):
-   a generic bounded-value radial SVG gauge (not Energy-specific — usable for battery %, solar
-   output, tank level, etc. on future Infrastructure pages). Animated arc respects
-   `prefers-reduced-motion` (transition disabled, not the ring itself). Exported from
-   `@supreme/aureon-web`'s `index.ts`; CSS added to `components.css`.
-3. **7 new icons** in `Icon.tsx`'s `PATHS`: `plug`, `sun`, `ev`, `generator-unit`, `leaf`,
-   `trend-up`, `flow` — reusable across future Solar/Battery/EV/Generator pages, same pattern as
-   the existing Security/Media icon family.
-4. **`devices.tsx`'s `friendlyType()`** updated with an `isEnergyDevice()` branch before the
-   generic "Sensor" fallback, so the Device Manager's Type column shows the real energy kind
-   label instead of a generic "Sensor".
-5. Deleted the old `Energy()` function from `screens.tsx` (dead code, superseded by
-   `infrastructure-energy.tsx`) and its now-unused `EnergySummaryResponse` import.
+1. **Diagnostics Console** (§ Universal AV Driver SDK): a shared `DriverDiagnosticsTracker`
+   (`services/protocols/src/driver-diagnostics.ts`, generalized from the counter pattern already
+   proven in `knx-ultimate-provider.ts`) wired into `AvrProtocolDriver`/`HeosProtocolDriver`/
+   `YamahaProtocolDriver` — real RX/TX packet counts, last command/response + timestamps, response
+   time, reconnect count, last error. Exposed via a new optional `INativeProtocolDriver.
+   getDiagnostics?()`, plumbed through `SupremeNativeAdapter`/`RoutingBackendAdapter`/
+   `SupremeIntegrationLayer` (mirroring the existing `getCapabilityConfig` seam exactly — and in
+   the process fixed a real pre-existing gap: `RoutingBackendAdapter` never actually implemented
+   `getCapabilityConfig`, so a routed device's capability config silently never reached the UI;
+   both are now implemented together). New route `GET /v1/devices/:id/diagnostics` → new
+   `DeviceDriverDiagnostics` contract type → `fetchDeviceDiagnostics()` → rendered in
+   `DiagnosticsSection` (`device-detail-sections.tsx`). MAC is a best-effort local ARP-table read
+   (`services/protocols/src/arp-lookup.ts`, Linux `/proc/net/arp` only — never active probing).
+   Firmware stays honestly `null` for all three protocols (verified: none of the specs expose it).
+2. **Room Assignment Engine** (§ Automatic Room Assignment) — a new, generic, protocol-agnostic
+   engine (`services/commissioning/src/room-assignment-engine.ts`), explicitly NOT the same as
+   the existing KNX-ETS-project-tree engine at `knx/room-assignment-engine.ts` (different input
+   shape, different job — both now coexist). Confidence tiers: `explicit_attribute` (100),
+   `persistent_user_zone_name` (90 — HEOS player names, Yamaha MusicCast zone names), `friendly_
+   name_heuristic` (70 — normalized SSDP friendlyName, brand/category/zone noise words stripped).
+   Below 70 → the fixed `"Unassigned Devices"` room, never a silent guess. This **explicitly
+   supersedes** ADR 0015 §2.3's prior "installer always assigns the room" position, per direct
+   user instruction overriding that architecture decision — see the ADR addendum for the full
+   policy text.
+3. **Automatic Zone Generation**: Yamaha's `discover()` now also queries `/system/getFeatures`
+   per candidate (a real wire call) and reports every zone the unit actually has; a new
+   `InstallerServices.autoCommissionMedia()` (`services/gateway/src/installer-context.ts`, routed
+   at `POST /v1/commissioning/auto-media`) auto-creates a sibling Supreme device per extra zone,
+   sharing the physical connection, in the same resolved room. Denon Telnet's Zone 2 stays a
+   deliberate manual step (protocol genuinely can't detect it — unchanged from the original ADR).
+   Dedup via `registry.reverseLookup` so a repeat run never re-commissions/re-expands.
+4. **Media Topology Engine**: `packages/domain-model/src/media-topology.ts` — installer-declared
+   HDMI-input/output/zone → connected-thing graph (`{output, label, connectedDeviceId?,
+   connectedLabel}`), stored in the existing free-form `device.metadata.avrTopology` (no
+   persistence/migration change). Rendered + edited (devMode-gated) in a new `TopologySection`
+   inside the AVR console (`apps/web-homeowner/src/features/media/detail.tsx`).
+5. **Discovery enrichment**: HEOS/Yamaha now thread a real `model` string through to `bindConfig`
+   (HEOS `get_player_info`, Yamaha's UPnP `<modelName>`) — Denon Telnet stays `null` (no wire
+   source). Active subnet scanning was deliberately NOT built (SSDP/mDNS already cover every
+   brand in scope non-intrusively — a blind scan is the wrong default here).
+6. **Tests**: 20 new/changed test files across `services/protocols`, `services/commissioning`,
+   `services/integration-layer`, `services/gateway`, `packages/domain-model` — including a new
+   end-to-end proof (`services/gateway/src/auto-commission-media.e2e.test.ts`): discover →
+   confidence-scored room assignment → auto zone generation → bind → live control, plus the
+   Unassigned-bucket and repeat-run-is-a-noop cases. Full monorepo `pnpm turbo run build /
+   typecheck / test` all pass clean (93/93 tasks each).
 
 ## Files touched this session
 
-- `packages/aureon-web/src/components/{Icon,PowerRing}.tsx`, `components.css`, `index.ts`
-- `apps/web-homeowner/src/features/infrastructure/energy/{capability-mapper,card,detail}.tsx`
-  (new directory)
-- `apps/web-homeowner/src/infrastructure-energy.tsx` (new)
-- `apps/web-homeowner/src/{App,devices,screens}.tsx`
+- New: `services/protocols/src/{driver-diagnostics,arp-lookup}.ts` (+ `.test.ts` each)
+- New: `services/commissioning/src/room-assignment-engine.ts` (+ `.test.ts`)
+- New: `packages/domain-model/src/media-topology.ts` (+ `.test.ts`)
+- New: `services/gateway/src/auto-commission-media.e2e.test.ts`
+- Modified: `services/protocols/src/{avr,heos,yamaha}-driver.ts`, `yamaha-codec.ts`,
+  `{avr,heos,yamaha}-driver.test.ts`
+- Modified: `services/integration-layer/src/{adapter,native-adapter,routing-adapter,sil,
+  protocols/driver}.ts`, `index.ts`
+- Modified: `services/commissioning/src/index.ts` (`DiscoveredView` gains `locationHint`/`zones`)
+- Modified: `services/gateway/src/installer-context.ts`, `routes/{devices,installer}.ts`
+- Modified: `packages/supreme-contracts/src/rest.ts` (`DeviceDriverDiagnostics`)
+- Modified: `packages/domain-model/src/index.ts`
+- Modified: `apps/web-homeowner/src/{api,device-detail-sections,styles}.ts(x/css)`,
+  `features/media/detail.tsx`
+- Docs: `docs/architecture/adr/0015-universal-avr-framework.md` (addendum),
+  `docs/architecture/avr-framework-review.md` (supersede note on §2.3)
 
 ## Architecture decisions made this session
 
-- **Infrastructure module lives at `features/infrastructure/<domain>/`**, not
-  `features/<domain>/` — one level deeper than Media/Security, since "Infrastructure" is the
-  product-facing module name for the whole device-type family (Energy, Solar, Battery, …), the
-  same way `Security` groups Lock/Camera/NVR/Alarm.
-- **`PowerRing` is generic, not Energy-specific** — deliberately no "power" semantics baked into
-  its props beyond a default tone, so it's the shared bounded-gauge primitive for every future
-  Infrastructure page rather than something each page reimplements.
-- **No fabricated "live power flow" visualization.** The real `/v1/energy/*` backend reports
-  periodic aggregates (`energySummary()`) and per-device sensor readings — not a continuous
-  instantaneous flow graph between grid/solar/battery/loads. The hero shows what's real (current
-  sensor reading, period totals); it does not simulate a flow animation the backend can't back,
-  per this project's own "never fabricate data or capabilities" rule.
-- Scoped the reusable-component set to what Energy actually needed (`PowerRing` + reuse of
-  existing `Card`/`Grid`/`CapabilityGrid`/`CapabilityGate`) rather than pre-building the full
-  ~15-component wishlist (`EnergyFlowCard`, `ConsumptionChart`, `GridCard`, `SolarCard`, etc.)
-  speculatively for modules that don't exist yet — each will be extracted into a shared
-  component the first time a second Infrastructure page actually needs the same shape, not
-  before (see `ConsumptionSpark` in `detail.tsx`, marked with a `ponytail:` comment for exactly
-  this).
+- **Two Room Assignment Engines coexist, deliberately.** The new generic one
+  (`services/commissioning/src/room-assignment-engine.ts`) handles live-discovery hints across
+  any protocol; the existing KNX one (`knx/room-assignment-engine.ts`) resolves an ETS project
+  file's building/floor/room tree — different input shape, different job. Neither was merged into
+  the other; the KNX ETS import pipeline was not touched (working, well-tested, high blast-radius
+  if broken).
+- **`autoCommissionMedia` is a new method, not a rewrite of `autoCommission`.** The existing
+  generic `autoCommission(protocol)` (used by Casambi) takes a bare `raw.room` string with no
+  confidence check and has no zone-expansion concept; extending it in place risked regressing
+  Casambi's working path. A parallel, AVR/HEOS/Yamaha-scoped method was added instead, following
+  the same `discover → resolve room → commission → bind` shape.
+- **Diagnostics is per-physical-link, not per-Supreme-device**, for AVR/HEOS (one TCP socket,
+  many devices) and per-host for Yamaha (HTTP request/response, no persistent socket) — sibling
+  zone devices on the same physical unit correctly report identical RX/TX counters, which is
+  honest (it *is* the same wire traffic), not a bug.
+- **No active subnet scanning.** SSDP/mDNS already cover every brand in scope; a blind scan is
+  intrusive and the wrong default for a local-first luxury platform. MAC enrichment uses the
+  passive local ARP table instead.
 
 ## Known issues / open gaps
 
-- **Not live-verified against real device data.** Typecheck passes clean
-  (`pnpm --filter web-homeowner typecheck`) and the dev server boots with zero console/build
-  errors, but the app requires the gateway + Postgres backend (`hub-compose`) to authenticate
-  and load real device data — that stack wasn't running this session, so the Energy hero/cards/
-  detail page have not been visually confirmed against live data or screenshotted at every
-  breakpoint. Do this first next session, before building the next Infrastructure device type.
-- Ring "max" in `EnergyDeviceDetail`/`infrastructure-energy.tsx` is a display-only scaling
-  heuristic (`value * 1.4`) — there's no rated-wattage config to size the gauge against yet
-  (marked `ponytail:` in `detail.tsx`). Not a fabricated reading, just an arbitrary visual scale.
-- No device-category ambient color identity or layout-rhythm variation yet (carried over from
-  the previous handoff, still open, unrelated to this session's work) — see previous gaps below.
-- Everything from the previous handoff not touched this session remains open: the
-  `expanded`↔`comfortable` density-breakpoint remount bug, `device-sheets.tsx`'s generic
-  Climate/Fan/Vacuum/Media quick-sheets still using emoji, and the production-readiness gap
-  (~80% feature-complete, ~25–30% field-deployment ready per `docs/production-readiness.md`).
+- **Not live-verified against real Denon/HEOS/Yamaha hardware or a running `hub-compose` stack**
+  — this environment has neither. Every protocol claim is checked against the vendor specs
+  already cited in ADR 0015 and exercised through in-process fake TCP/HTTP servers (this repo's
+  established testing convention); `tsc`/`vite build` both pass clean, but the new Topology UI has
+  not been Playwright-verified in a real browser at any responsive tier, per this project's own
+  UI testing standard. Do this first if picking AVR work back up.
+- No whole-home Media Dashboard topology *graph view* — only the per-device connections list was
+  built (task explicitly asked for diagnostics/dashboard/automation-relationships support; only
+  the diagnostics-adjacent per-device view shipped this session).
+- The generic Room Assignment Engine is wired for AVR/HEOS/Yamaha only. The brief asked for it to
+  be reusable by Matter/KNX/Zigbee/Z-Wave/BLE/IP drivers too — the engine itself is already
+  protocol-agnostic (takes a generic `LocationHint`), but none of those other drivers were changed
+  to emit one this session (deliberately, to avoid touching working KNX ETS import / other stable
+  pipelines in a single large session).
+- Everything from the previous handoff not touched this session remains open (Infrastructure
+  module device types #2–8, design-polish phase, density-breakpoint remount bug, production-
+  readiness gap — see `TODO.md`).
 
 ## Immediate priorities for the next session
 
-1. Stand up the local backend (`hub-compose` or equivalent) and live-verify the Energy module —
-   phone/tablet/desktop/ultrawide screenshots, real device data, zero console errors — before
-   building the next Infrastructure device type.
-2. Continue the Infrastructure module: next device type (Solar or Battery Storage recommended —
-   both would exercise `PowerRing` a second time and validate it as genuinely reusable before
-   more Infrastructure pages are built on top of it).
-3. Device-category ambient color identity + layout-rhythm variation (carried over, still the
-   most-requested remaining polish item).
-4. Finish the emoji migration in `device-sheets.tsx`'s generic quick-sheets.
+1. Stand up `hub-compose` and live-verify the Topology UI + Diagnostics Console fields against
+   real device data at every responsive tier (or at minimum against a real Denon/HEOS/Yamaha unit
+   if hardware is available).
+2. If more protocols should feed the Room Assignment Engine, wire a `locationHint` into Matter/
+   KNX/Zigbee discovery the same way AVR/HEOS/Yamaha now do — the engine itself needs no changes.
+3. Continue the Infrastructure module (Solar/Battery Storage next) or the Design Polish phase —
+   both still open from before this session.
 
 See `TODO.md` for the full backlog with priority tiers.

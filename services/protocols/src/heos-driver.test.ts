@@ -150,6 +150,21 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
     expect(heos.sockets.size).toBe(1);
   });
 
+  it("reports real Diagnostics Console counters shared by both bound players (one connection)", async () => {
+    const before = driver.getDiagnostics(livingRoom);
+    expect(before?.connectionStatus).toBe("connected");
+    expect(before?.protocol).toBe("heos");
+    expect(before?.packetsSent).toBeGreaterThan(0);
+    const sentBefore = before!.packetsSent;
+
+    await driver.command(livingRoom, { capability: "media", action: "volume", volume: 40 });
+    await vi.waitFor(() => expect(driver.getDiagnostics(livingRoom)!.packetsSent).toBeGreaterThan(sentBefore));
+
+    // Living room and theatre share ONE physical connection — diagnostics for both
+    // devices report the same underlying link traffic.
+    expect(driver.getDiagnostics(theatre)?.packetsSent).toBe(driver.getDiagnostics(livingRoom)?.packetsSent);
+  });
+
   it("rejects binding a non-media capability — HEOS has no power surface", async () => {
     await expect(
       driver.bind({ deviceId: "device-heos-bad" as DeviceId, capability: "onoff", address: `127.0.0.1:${heos.port}`, config: { pid: "3" } }),
@@ -247,8 +262,28 @@ describe("HeosProtocolDriver — discovery", () => {
     });
     const found = await driver.discover();
     expect(found).toEqual([
-      { backendId: "1", suggestedName: "Living Room", capabilities: ["media"], raw: { ip: "127.0.0.1", model: "HEOS Bar", bindConfig: { pid: "1" } } },
-      { backendId: "2", suggestedName: "Theatre", capabilities: ["media"], raw: { ip: "127.0.0.1", model: "HEOS Bar", bindConfig: { pid: "2" } } },
+      {
+        backendId: "1",
+        suggestedName: "Living Room",
+        capabilities: ["media"],
+        raw: {
+          ip: "127.0.0.1",
+          model: "HEOS Bar",
+          bindConfig: { pid: "1", model: "HEOS Bar" },
+          locationHint: { raw: "Living Room", source: "persistent_user_zone_name" },
+        },
+      },
+      {
+        backendId: "2",
+        suggestedName: "Theatre",
+        capabilities: ["media"],
+        raw: {
+          ip: "127.0.0.1",
+          model: "HEOS Bar",
+          bindConfig: { pid: "2", model: "HEOS Bar" },
+          locationHint: { raw: "Theatre", source: "persistent_user_zone_name" },
+        },
+      },
     ]);
     await new Promise<void>((r) => heos.server.close(() => r()));
   });

@@ -217,6 +217,22 @@ describe("YamahaProtocolDriver (in-process YXC unit over HTTP, 2 zones)", () => 
     expect(state?.title).toBeNull();
   });
 
+  it("reports real Diagnostics Console counters keyed by host, shared across both zones", async () => {
+    const before = driver.getDiagnostics(main);
+    expect(before?.connectionStatus).toBe("connected"); // bind() already called getFeatures successfully
+    expect(before?.protocol).toBe("yamaha");
+    expect(before?.packetsSent).toBeGreaterThan(0);
+    const sentBefore = before!.packetsSent;
+
+    await driver.command(main, { capability: "media", action: "volume", volume: 50 });
+    const after = driver.getDiagnostics(main)!;
+    expect(after.packetsSent).toBeGreaterThan(sentBefore);
+    expect(after.lastCommand).toMatch(/^(main|netusb)\//); // setVolume, then a syncZone re-fetch
+    expect(after.lastCommandAt).not.toBeNull();
+    // Same physical host — zone2's diagnostics reflect the same request/response traffic.
+    expect(driver.getDiagnostics(zone2)?.packetsSent).toBe(after.packetsSent);
+  });
+
   it("commands main zone power independently of zone2", async () => {
     const ev = nextEvent(driver, (e) => e.deviceId === mainPower && (e.state as { on?: boolean }).on === false);
     await driver.command(mainPower, { capability: "onoff", action: "off" });
@@ -310,9 +326,39 @@ describe("YamahaProtocolDriver — discovery", () => {
           location: "http://192.168.1.60/desc.xml",
           manufacturer: "Yamaha Corporation",
           friendlyName: "Master Bedroom",
+          zones: [{ id: "main", label: "Main Zone" }],
           bindConfig: { zone: "main" },
+          locationHint: { raw: "Master Bedroom", source: "persistent_user_zone_name" },
         },
       },
     ]);
+  });
+
+  it("§Automatic Zone Generation: a real getFeatures response with extra zones surfaces them all at discovery time", async () => {
+    const upnpXml = "<root><device><manufacturer>Yamaha Corporation</manufacturer><friendlyName>Media Room</friendlyName><modelName>RX-A8A</modelName></device></root>";
+    const featuresJson = {
+      response_code: 0,
+      system: { func_list: [], input_list: [] },
+      zone: [
+        { id: "main", func_list: ["power"], input_list: ["hdmi1"], sound_program_list: [], range_step: [] },
+        { id: "zone2", func_list: ["power"], input_list: ["hdmi1"], sound_program_list: [], range_step: [] },
+        { id: "zone3", func_list: ["power"], input_list: ["hdmi1"], sound_program_list: [], range_step: [] },
+      ],
+    };
+    const driver = new YamahaProtocolDriver({
+      ssdp: async () => [{ address: "192.168.1.70", location: "http://192.168.1.70/desc.xml" }],
+      fetchImpl: (async (url: string) => {
+        if (url.includes("desc.xml")) return { ok: true, text: async () => upnpXml };
+        return { ok: true, json: async () => featuresJson };
+      }) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found).toHaveLength(1);
+    expect(found[0]?.raw.zones).toEqual([
+      { id: "main", label: "Main Zone" },
+      { id: "zone2", label: "Zone 2" },
+      { id: "zone3", label: "Zone 3" },
+    ]);
+    expect(found[0]?.raw.bindConfig).toEqual({ zone: "main", model: "RX-A8A" });
   });
 });

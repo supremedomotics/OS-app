@@ -455,6 +455,23 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // §Automatic Room Assignment / §Automatic Zone Generation (Universal AV Driver SDK):
+  // auto-commission AVR/HEOS/Yamaha discoveries through the confidence-based Room
+  // Assignment Engine — never the bare "raw.room string" path /commissioning/auto uses.
+  app.post("/v1/commissioning/auto-media", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const protocol = (req.body as { protocol?: unknown })?.protocol;
+      if (protocol !== "avr" && protocol !== "heos" && protocol !== "yamaha") {
+        throw new SupremeError("validation_failed", "protocol must be one of: avr, heos, yamaha");
+      }
+      reply.code(201).send(await i().autoCommissionMedia(protocol));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // KNXnet/IP interface discovery — find gateways on the LAN to configure the KNX driver host/port.
   app.get("/v1/commissioning/knx/interfaces", async (req, reply) => {
     try {

@@ -136,6 +136,30 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     expect(avr.received).toContain("PSTRE 49");
     expect(avr.received).toContain("MSSTEREO");
   });
+
+  it("reports real Diagnostics Console counters for a bound, connected device", async () => {
+    const before = driver.getDiagnostics(dev);
+    expect(before?.connectionStatus).toBe("connected");
+    expect(before?.protocol).toBe("avr");
+    expect(before?.packetsSent).toBeGreaterThan(0); // init query alone counts
+    expect(before?.model).toBeNull(); // Denon Telnet exposes no model on the wire
+    const sentBefore = before!.packetsSent;
+    const receivedBefore = before!.packetsReceived;
+
+    await driver.command(dev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => {
+      const after = driver.getDiagnostics(dev)!;
+      expect(after.packetsSent).toBeGreaterThan(sentBefore);
+      expect(after.packetsReceived).toBeGreaterThan(receivedBefore);
+    });
+    const after = driver.getDiagnostics(dev)!;
+    expect(after.lastCommand).toBe("PWON");
+    expect(after.lastCommandAt).not.toBeNull();
+  });
+
+  it("returns null diagnostics for a device this driver doesn't manage", () => {
+    expect(driver.getDiagnostics("device-unknown" as DeviceId)).toBeNull();
+  });
 });
 
 describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same link)", () => {

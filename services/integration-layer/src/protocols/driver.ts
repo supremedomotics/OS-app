@@ -4,7 +4,7 @@ import type {
   CapabilityState,
   DeviceId,
 } from "@supreme/domain-model";
-import type { DiscoveredDevice, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
+import type { DiscoveredDevice, DriverDiagnosticsSnapshot, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
 
 /**
  * Native protocol driver contract (blueprint §7, §9, §16).
@@ -66,6 +66,13 @@ export interface INativeProtocolDriver {
    * right after a successful `bind()` so a rich console has real, capability-driven
    * data to render instead of a device with no config at all. */
   getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null;
+
+  /** Optional: this device's real connection/traffic diagnostics (§ Diagnostics
+   * Console) — connection status, last command/response, RX/TX packet counts,
+   * reconnect count, response time, last error. `null` when this driver doesn't
+   * manage the device. Synchronous: reading counters already held in memory, never a
+   * network round-trip. */
+  getDiagnostics?(deviceId: DeviceId): DriverDiagnosticsSnapshot | null;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

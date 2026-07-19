@@ -131,6 +131,39 @@
 - **Complexity:** Medium per brand (protocol research + codec + tests).
 - **Status:** Not started, framework ready.
 
+### Live hardware verification of the Universal AV Driver SDK additions
+- **Description:** Diagnostics Console, Room Assignment Engine, Automatic Zone Generation, and
+  the Media Topology Engine (ADR 0015 addendum) were built and tested against in-process fake
+  TCP/HTTP servers only — never against a real Denon/HEOS/Yamaha unit or a running `hub-compose`
+  stack. The Topology UI has not been Playwright-verified at any responsive tier.
+- **Reason:** this project's own testing standard ("new UI behavior should be Playwright-verified
+  live... not just typechecked") wasn't met for this work — no backend/hardware was available in
+  the session that built it.
+- **Dependencies:** `hub-compose` running, ideally real AVR hardware.
+- **Complexity:** Small (verification only, no new code expected unless something's found).
+- **Status:** Not started.
+
+### Wire more protocols into the generic Room Assignment Engine
+- **Description:** `services/commissioning/src/room-assignment-engine.ts` is protocol-agnostic
+  (takes a generic `LocationHint`) but only AVR/HEOS/Yamaha discovery currently emits one. Matter
+  (Room/Location cluster), KNX live discovery, Zigbee/Z-Wave/BLE could all feed it the same way.
+- **Reason:** explicit product ask — "every SupremeOS driver should provide location hints."
+- **Dependencies:** none — the engine itself needs no changes, only each driver's `discover()`.
+- **Complexity:** Small per protocol.
+- **Status:** Not started; deliberately deferred to avoid touching the working KNX ETS import
+  pipeline and other stable discovery paths in the same session that built the engine.
+
+### Whole-home Media Dashboard topology graph view
+- **Description:** the Media Topology Engine currently renders only a per-device connections list
+  (in the AVR console's sidebar); a whole-home graph view (the brief's worked example — "Living
+  Room AVR ├── HDMI1 → Apple TV …") for the Media dashboard was not built.
+- **Reason:** explicit brief ask ("support Diagnostics, Media Dashboard, Activity Generation,
+  Automation Relationships") — only the diagnostics-adjacent per-device view shipped.
+- **Dependencies:** `MediaTopology` schema (`packages/domain-model/src/media-topology.ts`) already
+  exists and is populated by the per-device editor; a dashboard view just needs to read it.
+- **Complexity:** Medium.
+- **Status:** Not started.
+
 ### Bluetooth pairing management for HEOS/Yamaha
 - **Description:** explicitly called out as out of scope for the current AVR framework.
 - **Reason:** completeness of the AVR control surface.
@@ -164,6 +197,17 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Universal AV Driver SDK completion** (ADR 0015 addendum) — Diagnostics Console
+  (`services/protocols/src/driver-diagnostics.ts`, wired into AVR/HEOS/Yamaha drivers, exposed
+  via a new `INativeProtocolDriver.getDiagnostics?()` seam and `GET /v1/devices/:id/diagnostics`);
+  a generic, protocol-agnostic confidence-based Room Assignment Engine
+  (`services/commissioning/src/room-assignment-engine.ts`, explicitly superseding ADR 0015 §2.3's
+  narrower "installer always assigns the room" position); Automatic Zone Generation for Yamaha's
+  real multi-zone units (`InstallerServices.autoCommissionMedia`, `POST /v1/commissioning/
+  auto-media`); a Media Topology Engine (`packages/domain-model/src/media-topology.ts`,
+  installer-declared HDMI/zone graph, editable in the AVR console). Also fixed a pre-existing gap
+  where `RoutingBackendAdapter` never implemented `getCapabilityConfig`. See `SESSION_HANDOFF.md`
+  and the ADR addendum for full detail; not yet live-verified against real hardware.
 - Infrastructure module, Energy (device #1 of 8) — `features/infrastructure/energy/`
   (capability-mapper/card/detail) plus `infrastructure-energy.tsx` (whole-home dashboard),
   replacing the old plain-`.card.row` Energy tab. New shared `PowerRing` radial-gauge component

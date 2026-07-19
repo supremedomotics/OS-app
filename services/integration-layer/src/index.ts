@@ -8,6 +8,8 @@
 export type {
   BackendStateEvent,
   DiscoveredDevice,
+  DriverConnectionStatus,
+  DriverDiagnosticsSnapshot,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,

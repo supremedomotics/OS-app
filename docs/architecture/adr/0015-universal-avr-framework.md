@@ -134,3 +134,101 @@ than a fabricated queue.
   music-service browser. See `docs/architecture/adding-avr-brands.md` for how a future
   brand (Onkyo, Pioneer, Sony, Arcam, Anthem, NAD, JBL Synthesis, StormAudio, Trinnov)
   plugs into this same seam.
+
+## Addendum (2026-07-19) — Universal AV Driver SDK: Diagnostics, Room Assignment, Zone
+Generation, Topology
+
+A follow-up brief asked for the remaining pieces of a formal "Universal AV Driver SDK":
+a Diagnostics Console, automatic room/zone creation, and a Media Topology Engine. A gap
+analysis (citing exact file:line evidence) confirmed the framework above already covers
+Discovery/Capability Engine/Connection Recovery/Event Engine/multi-zone/manifests — this
+addendum documents only the genuinely new work, and one deliberate policy change.
+
+**Explicitly supersedes §2.3 of `docs/architecture/avr-framework-review.md`** ("AVR
+discovery gives no reliable room signal, installer always assigns the room"). That was
+correct for classic Denon Telnet specifically (still true — verified, no room concept
+on the wire) but was applied as a blanket policy across every AVR/media protocol. The
+new policy: a confidence-based **Room Assignment Engine**
+(`services/commissioning/src/room-assignment-engine.ts`, generic — NOT AVR-specific,
+intentionally reusable by any future protocol's live discovery) auto-creates/auto-assigns
+a room when a driver supplies a trustworthy `LocationHint`, and only falls back to a
+fixed "Unassigned Devices" room when it doesn't — never a silent guess, never a device
+dropped. Three fixed confidence tiers: `explicit_attribute` (100, a real protocol room
+attribute — none of AVR/HEOS/Yamaha have one today, but Matter's Room cluster or a KNX
+ETS room would), `persistent_user_zone_name` (90 — HEOS player names, Yamaha MusicCast
+zone names, both genuinely set by the homeowner/installer during that protocol's own
+setup flow), `friendly_name_heuristic` (70 — a generic SSDP friendlyName, normalized by
+stripping brand/category/zone noise words; below 70 after normalization is never
+auto-applied). This is a **different, complementary** engine from
+`services/commissioning/src/knx/room-assignment-engine.ts` (`assignRooms`), which
+resolves rooms from a parsed ETS **project file's** tree — a different input shape for
+a different job; that engine is untouched.
+
+**Automatic Zone Generation** is honest, not uniform: Yamaha's `discover()` now also
+queries `/system/getFeatures` per candidate (a genuine wire call, same as `bind()`
+already made) and reports every real zone the unit has; `InstallerServices.
+autoCommissionMedia()` (`services/gateway/src/installer-context.ts`, routed at
+`POST /v1/commissioning/auto-media`) auto-creates a sibling Supreme device per extra
+zone, sharing the same physical connection, in the same resolved room. Denon Telnet's
+Zone 2 is **deliberately not auto-generated** — the protocol has no wire-level way to
+detect it (unchanged fact from the original ADR), so it stays the documented manual
+`hasZone2` declaration in `avr-codec.ts`. Auto-commissioning any protocol replays the
+existing `CommissioningService`-adjacent dedup (`registry.reverseLookup`) so a repeat
+run never re-commissions or re-expands an already-bound unit.
+
+**Diagnostics Console**: a shared `DriverDiagnosticsTracker`
+(`services/protocols/src/driver-diagnostics.ts`, generalized from the counter pattern
+already proven in `knx-ultimate-provider.ts`) now backs an optional
+`INativeProtocolDriver.getDiagnostics?(deviceId)`, plumbed through
+`SupremeNativeAdapter`/`RoutingBackendAdapter`/`SupremeIntegrationLayer` exactly like
+the existing `getCapabilityConfig` seam (fixing, in passing, a real pre-existing gap —
+`RoutingBackendAdapter` never actually implemented `getCapabilityConfig`, so a
+routed device's capability config silently never reached the UI; both are now
+implemented together) and surfaced at `GET /v1/devices/:id/diagnostics` →
+`DiagnosticsSection` in the web client. Every field (RX/TX packet counts, last
+command/response + timestamps, response time, reconnect count, last error, model,
+firmware, IP, MAC) is a real counter or an honest `null` — Denon/HEOS/Yamaha genuinely
+expose no firmware field on the wire (verified against all three specs), so that stays
+`null` rather than fabricated. MAC is a best-effort local ARP-table read
+(`services/protocols/src/arp-lookup.ts`, Linux `/proc/net/arp` only, never active
+probing). Model is threaded through from real wire data where it exists (HEOS
+`get_player_info`, Yamaha's UPnP `<modelName>`) and stays `null` for Denon Telnet,
+which has none.
+
+**Media Topology Engine**: `packages/domain-model/src/media-topology.ts` —
+installer-declared HDMI-input/output/zone → connected-thing graph, stored in the
+existing free-form `device.metadata.avrTopology` (no persistence/migration change,
+same pattern as `metadata.climate.kind`). No AVR protocol here reports what's
+physically plugged into a port (verified: none of the three specs models this), so the
+graph is always installer-entered — rendered + edited from the AVR console's sidebar
+(`apps/web-homeowner/src/features/media/detail.tsx`, devMode-gated for editing).
+
+**Discovery enrichment**: multicast-only (SSDP) discovery stands — an active subnet
+scan was deliberately NOT built (SSDP/mDNS already cover every brand in scope
+non-intrusively; a blind scan is the wrong default for a luxury local-first platform).
+What was added: the ARP MAC lookup above, and Yamaha's UPnP description parsing now
+also reads `<modelName>`.
+
+New/changed files this addendum: `services/commissioning/src/room-assignment-engine.ts`
+(+ test), `services/protocols/src/{driver-diagnostics,arp-lookup}.ts` (+ tests),
+`packages/domain-model/src/media-topology.ts` (+ test), `services/gateway/src/
+installer-context.ts` (`autoCommissionMedia`), `services/gateway/src/routes/
+{devices,installer}.ts`, `packages/supreme-contracts/src/rest.ts`
+(`DeviceDriverDiagnostics`), `apps/web-homeowner/src/{api,device-detail-sections,
+features/media/detail}.tsx`, plus the `getDiagnostics` addition across
+`services/integration-layer/src/{adapter,native-adapter,routing-adapter,sil,
+protocols/driver}.ts` and the corresponding `avr-driver.ts`/`heos-driver.ts`/
+`yamaha-driver.ts` wiring. `services/gateway/src/auto-commission-media.e2e.test.ts`
+is the end-to-end proof: discover → confidence-scored room assignment → auto zone
+generation → bind → live control, plus the Unassigned-bucket and repeat-run-is-a-noop
+cases.
+
+**Not done this session** (documented gap, not silently skipped): live verification
+against real Denon/HEOS/Yamaha hardware (this environment has none — every claim above
+is verified against the vendor specs and exercised through in-process fake TCP/HTTP
+servers, the repo's established testing convention); a whole-home Media Dashboard
+topology *graph view* (only the per-device connections list was built); Playwright
+visual verification of the new Topology UI at every responsive tier (the
+`hub-compose` backend stack wasn't running this session — `tsc`/`vite build` both pass
+clean, but that is not a substitute for driving it in a real browser against live
+data, per this project's own testing standard).

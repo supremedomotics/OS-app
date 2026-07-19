@@ -6,7 +6,7 @@ import type {
 } from "@supreme/domain-model";
 import { READONLY_CAPABILITIES } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
-import type { BackendStateEvent, IBackendAdapter, MediaArtwork, MediaQueueItem } from "./adapter.js";
+import type { BackendStateEvent, DriverDiagnosticsSnapshot, IBackendAdapter, MediaArtwork, MediaQueueItem } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { EngineKind } from "./migration.js";
@@ -185,6 +185,12 @@ export class SupremeIntegrationLayer {
   /** Fetch a device+capability's real AudioCapabilityConfig (null if none/unsupported). */
   async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
     return this.adapter.getCapabilityConfig ? this.adapter.getCapabilityConfig(deviceId, capability) : null;
+  }
+
+  /** Fetch a device's real connection/traffic diagnostics from its owning driver
+   * (null if none/unsupported — e.g. an HA-backed or unbound device). */
+  async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
+    return this.adapter.getDiagnostics ? this.adapter.getDiagnostics(deviceId) : null;
   }
 
   /** Subscribe to normalized state changes for all mapped devices. */

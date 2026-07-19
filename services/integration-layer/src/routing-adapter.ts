@@ -8,6 +8,7 @@ import type {
 import type {
   BackendStateEvent,
   DiscoveredDevice,
+  DriverDiagnosticsSnapshot,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,
@@ -104,6 +105,21 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   async getQueue(deviceId: DeviceId): Promise<MediaQueueItem[] | null> {
     if (this.native.manages(deviceId)) return this.native.getQueue(deviceId);
     return this.ha.getQueue ? this.ha.getQueue(deviceId) : null;
+  }
+
+  /** Same routing as {@link getArtwork}: native-engine feature first. Previously
+   * unimplemented here (a routed device never reached its driver's capability config,
+   * only ever `null`) — this was a real gap fixed alongside the identically-shaped
+   * {@link getDiagnostics}, not new surface. */
+  async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
+    if (this.native.manages(deviceId)) return this.native.getCapabilityConfig(deviceId, capability);
+    return this.ha.getCapabilityConfig ? this.ha.getCapabilityConfig(deviceId, capability) : null;
+  }
+
+  /** Same routing as {@link getArtwork}: native-engine feature first. */
+  async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
+    if (this.native.manages(deviceId)) return this.native.getDiagnostics(deviceId);
+    return this.ha.getDiagnostics ? this.ha.getDiagnostics(deviceId) : null;
   }
 
   /**

@@ -8,6 +8,7 @@ import type {
 import type {
   BackendStateEvent,
   DiscoveredDevice,
+  DriverDiagnosticsSnapshot,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,
@@ -250,6 +251,13 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
     const owner = this.ownerByDevice.get(deviceId);
     if (owner?.getCapabilityConfig) return owner.getCapabilityConfig(deviceId, capability);
+    return null;
+  }
+
+  /** Fetch the owning driver's real connection/traffic diagnostics for this device. */
+  async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getDiagnostics) return owner.getDiagnostics(deviceId);
     return null;
   }
 }

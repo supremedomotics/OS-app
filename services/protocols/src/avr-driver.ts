@@ -15,6 +15,12 @@ import {
 import { buildMediaState, commandToAvr, denonCapabilityConfig, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
 import { ReconnectScheduler } from "./avr-reconnect.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
+import { bestEffortMacForIp } from "./arp-lookup.js";
+import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+
+/** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
+ * — surfaced in Diagnostics so an installer can tell which driver build is running. */
+const DRIVER_VERSION = "1.0.0";
 
 export interface AvrDriverOptions {
   /** Default control port (Denon/Marantz Telnet = 23). */
@@ -52,6 +58,7 @@ interface AvrLink {
   ready: boolean;
   buffer: string;
   reconnect: ReconnectScheduler;
+  diagnostics: DriverDiagnosticsTracker;
 }
 
 interface MediaCache {
@@ -146,7 +153,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (!link.ready || !link.socket || link.socket.destroyed) {
       throw new Error(`avr: not connected to ${b.host}:${b.port} — check the receiver's IP and that Network Control/Telnet is enabled`);
     }
-    for (const t of tokens) link.socket.write(`${t}\r`);
+    for (const t of tokens) {
+      link.diagnostics.recordSend(t);
+      link.socket.write(`${t}\r`);
+    }
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -159,6 +169,27 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (!b) return null;
     const hasZone2 = this.bindings.some((x) => x.host === b.host && x.port === b.port && x.zone === "zone2");
     return denonCapabilityConfig({ hasZone2, hasToneControl: b.zone === "main" && b.hasToneControl }) as unknown as Record<string, unknown>;
+  }
+
+  /** Diagnostics Console (§ Universal AV Driver SDK) — real per-link counters/timestamps,
+   * never fabricated. `null` when this device's zone/host has no link yet (never bound or
+   * never connected). MAC is a best-effort local ARP-table read (§ arp-lookup.ts); Denon's
+   * classic Telnet protocol exposes no model/firmware/serial on the wire (verified against
+   * the spec, see avr-codec.ts module doc), so those stay honestly `null`. */
+  getDiagnostics(deviceId: DeviceId): DriverDiagnosticsSnapshot | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    const link = this.links.get(`${b.host}:${b.port}`);
+    const status = !link ? "disconnected" : link.ready ? "connected" : link.socket ? "connecting" : "disconnected";
+    const empty = new DriverDiagnosticsTracker();
+    return (link?.diagnostics ?? empty).snapshot(status, {
+      protocol: this.protocol,
+      driverVersion: DRIVER_VERSION,
+      model: null,
+      firmware: null,
+      ip: b.host,
+      mac: bestEffortMacForIp(b.host),
+    });
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
@@ -198,10 +229,13 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       maxMs: this.opts.reconnectMaxMs,
       reconnect: async () => {
         const l = this.links.get(key);
-        if (l) this.openSocket(l, host, port);
+        if (l) {
+          l.diagnostics.recordReconnect();
+          this.openSocket(l, host, port);
+        }
       },
     });
-    link = { socket: null, ready: false, buffer: "", reconnect };
+    link = { socket: null, ready: false, buffer: "", reconnect, diagnostics: new DriverDiagnosticsTracker() };
     this.links.set(key, link);
     this.openSocket(link, host, port);
     return link;
@@ -217,10 +251,12 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       link.reconnect.reset();
       this.opts.onLog?.("info", `Connected to ${host}:${port}`);
       // Query current state so we start in sync (main zone + zone 2 if bound).
-      socket.write("PW?\rMV?\rMU?\rSI?\rPSTONE CTRL ?\rPSBAS ?\rPSTRE ?\rMS?\r");
+      const initTokens = ["PW?", "MV?", "MU?", "SI?", "PSTONE CTRL ?", "PSBAS ?", "PSTRE ?", "MS?"];
       if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
-        socket.write("Z2?\rZ2MU?\r");
+        initTokens.push("Z2?", "Z2MU?");
       }
+      for (const t of initTokens) link.diagnostics.recordSend(t);
+      socket.write(`${initTokens.join("\r")}\r`);
     });
     socket.on("close", () => {
       const l = this.links.get(`${host}:${port}`);
@@ -233,6 +269,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     socket.on("error", (err) => {
       // The "close" handler still runs right after this (Node always fires close following
       // error) and drives reconnection — this just makes the failure visible instead of silent.
+      link.diagnostics.recordError(err.message);
       this.opts.onLog?.("error", `${host}:${port}: ${err.message}`);
     });
     link.socket = socket;
@@ -244,7 +281,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     link.buffer += chunk;
     const lines = link.buffer.split("\r");
     link.buffer = lines.pop() ?? "";
-    for (const line of lines) this.onLine(host, port, line);
+    for (const line of lines) {
+      if (line.trim()) link.diagnostics.recordReceive(line);
+      this.onLine(host, port, line);
+    }
   }
 
   private onLine(host: string, port: number, line: string): void {
