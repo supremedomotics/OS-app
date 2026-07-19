@@ -11,6 +11,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * Tuya driver (§3). Tuya is a PROPRIETARY ecosystem — devices are controlled either via
@@ -50,6 +51,7 @@ interface TuyaBinding {
   deviceId: DeviceId;
   capability: CapabilityKind;
   client: TuyaDevice;
+  address: string;
   dp: TuyaDp;
 }
 
@@ -99,12 +101,32 @@ export class TuyaProtocolDriver implements INativeProtocolDriver {
       client.onData((dps) => this.onDps(binding.address, dps));
       this.clients.set(binding.address, client);
     }
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, client, dp: dpConfig(config) });
+    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, client, address: binding.address, dp: dpConfig(config) });
     this.devices.add(binding.deviceId);
   }
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state,
+   * and additionally disconnects + forgets its per-device Tuya transport once no other
+   * bound capability (of a different device sharing the same address, or a sibling
+   * capability of this same device) still references it. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    const removed = this.bindings.filter((b) => b.deviceId === deviceId);
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
+    const releasedAddresses = new Set(removed.map((b) => b.address));
+    for (const address of releasedAddresses) {
+      if (this.bindings.some((b) => b.address === address)) continue;
+      const client = this.clients.get(address);
+      if (client) {
+        this.clients.delete(address);
+        await client.disconnect();
+      }
+    }
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

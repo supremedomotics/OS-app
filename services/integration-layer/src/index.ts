@@ -37,6 +37,12 @@ export {
   InMemoryProtocolBindingStore,
   bindingKey,
 } from "./protocols/driver.js";
+export {
+  DriverLifecycleController,
+  InvalidLifecycleTransitionError,
+  type CleanupFn,
+  type DriverLifecycleState,
+} from "./protocols/lifecycle.js";
 export { RoutingBackendAdapter, type RoutingAdapterOptions } from "./routing-adapter.js";
 export { MigrationPolicy, type EngineKind, type IMigrationPolicyStore } from "./migration.js";
 export { applyCommand } from "./apply.js";

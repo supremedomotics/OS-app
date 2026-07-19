@@ -34,6 +34,7 @@ import {
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
 import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /** Kept in sync with `supreme-yamaha`'s manifest `version` (services/drivers/src/manifests.ts). */
 const DRIVER_VERSION = "1.0.0";
@@ -183,6 +184,28 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached
+   * state/media cache, and additionally clears its host's feature-refresh timer +
+   * diagnostics/host-health bookkeeping once no other bound zone on that host still
+   * uses it (the shared UDP event socket stays up — it's driver-wide, not per-host).
+   * Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    const removed = this.bindings.filter((b) => b.deviceId === deviceId);
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
+    this.media.delete(deviceId);
+    const releasedHosts = new Set(removed.map((b) => b.host));
+    for (const host of releasedHosts) {
+      if (this.bindings.some((b) => b.host === host)) continue;
+      const info = this.hosts.get(host);
+      if (info) clearInterval(info.refreshTimer);
+      this.hosts.delete(host);
+      this.diagnostics.delete(host);
+      this.hostDown.delete(host);
+    }
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

@@ -206,6 +206,54 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
   });
 });
 
+describe("AvrProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => {
+  it("keeps the shared TCP link open while a sibling zone is still bound, then closes it once the last device on that host is unbound", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    await driver.connect();
+    const mainDev = "device-avr-unbind-main" as DeviceId;
+    const zone2Dev = "device-avr-unbind-zone2" as DeviceId;
+    await driver.bind({ deviceId: mainDev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.bind({ deviceId: zone2Dev, capability: "onoff", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(1));
+
+    // Unbinding zone2 (not the last device on this host) must NOT tear down the shared link.
+    await driver.unbind(zone2Dev);
+    expect(driver.manages(zone2Dev)).toBe(false);
+    expect(driver.manages(mainDev)).toBe(true);
+    expect(avr.sockets.size).toBe(1); // main zone's command still needs this link
+    await driver.command(mainDev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(avr.received).toContain("PWON"));
+
+    // Unbinding the LAST device on this host must close the real TCP socket.
+    await driver.unbind(mainDev);
+    expect(driver.manages(mainDev)).toBe(false);
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(0));
+
+    // Idempotent — a second unbind is a safe no-op.
+    await expect(driver.unbind(mainDev)).resolves.toBeUndefined();
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("a command for an unbound device fails instead of resurrecting the link", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    await driver.connect();
+    const dev = "device-avr-unbind-solo" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(1));
+
+    await driver.unbind(dev);
+    await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not bound/);
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(0));
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+});
+
 describe("AvrProtocolDriver — auto-reconnect on drop", () => {
   afterEach(() => {
     vi.useRealTimers();

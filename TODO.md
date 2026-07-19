@@ -167,20 +167,23 @@
 
 ### Fleet-wide missing `unbind()` on `INativeProtocolDriver`
 - **Description:** confirmed during the AVR framework's Phase 6 stress-testing audit: no driver
-  in the entire 25-driver fleet (not just AVR/HEOS/Yamaha) implements a way to remove ONE
-  device's bindings without tearing down the whole driver via `disconnect()`. A deleted Supreme
-  device's entry in a driver's internal `bindings`/state Maps is never pruned — slow, bounded
-  memory growth over the life of a long-running hub process with device churn (installs/removals
-  over months/years), not a leak per-command.
-- **Reason:** a real, confirmed architectural gap (see the production audit's Phase 1/6/10
-  findings) — the single largest reason the AVR framework's Architecture Score isn't a clean 10.
-- **Dependencies:** touches the `INativeProtocolDriver` interface contract shared by all 25
-  drivers — a cross-cutting change, correctly out of scope for a single-framework hardening pass.
-- **Complexity:** Medium — one interface addition (`unbind?(deviceId, capability)`), then one
-  small implementation per driver that wants to support it (can be added incrementally; drivers
-  without it keep working exactly as today, since it'd be optional like `getArtwork`/`getQueue`).
-- **Status:** Not started, deliberately deferred — see `docs/architecture/
-  avr-framework-production-audit.md` Phase 6/10 for full reasoning.
+  in the fleet implemented a way to remove ONE device's bindings without tearing down the whole
+  driver via `disconnect()`.
+- **Status:** ✅ **Done** — SupremeOS Driver Lifecycle Completion effort. `unbind?(deviceId):
+  Promise<void>` added to `INativeProtocolDriver` and implemented on all 22 drivers in
+  `@supreme/protocols` (including the 3 flagship AVR/HEOS/Yamaha drivers, which turned out to
+  have no `unbind()` either despite the earlier audit's summary — corrected here, not assumed).
+  Wired through `SupremeNativeAdapter.unbindDevice()` → `IBackendAdapter.unbindDevice?()` →
+  `RoutingBackendAdapter` → `SupremeIntegrationLayer.unmapDevice()`, which previously only cleared
+  SIL bookkeeping and never told the owning driver to release its own resources — that was the
+  root cause. New `DriverLifecycleController` SDK primitive (20-state lifecycle + LIFO
+  fault-tolerant cleanup registry) at `services/integration-layer/src/protocols/lifecycle.ts`.
+  Five real leaks found and fixed along the way (AirPlay/AppleTV/Sonos `disconnect()` never
+  cleaning up at all; Matter/KNX subscriptions with no unsubscribe mechanism; KNX's GA-scoped
+  `unsubscribe()` risking killing a sibling device's subscription; an unbounded offline-command
+  queue per unbound device; `SupremeNativeAdapter.connect()` not being idempotent, causing
+  duplicate state events under a reconnect storm). Full detail: `docs/architecture/
+  Driver-Lifecycle.md`, `Driver-SDK.md`, `Resource-Cleanup.md`, `Driver-Author-Guide.md`.
 
 ### Wire more protocols into the generic Room Assignment Engine
 - **Description:** `services/commissioning/src/room-assignment-engine.ts` is protocol-agnostic

@@ -18,6 +18,7 @@ import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js
 import { bestEffortMacForIp } from "./arp-lookup.js";
 import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
 import { LineAccumulator } from "./line-buffer.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
  * — surfaced in Diagnostics so an installer can tell which driver build is running. */
@@ -138,6 +139,28 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached
+   * state/media cache, and additionally tears down its TCP link (reconnect scheduler +
+   * socket) once no other bound device (e.g. main zone / zone2 sharing the same
+   * host:port) still uses it. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    const removed = this.bindings.filter((b) => b.deviceId === deviceId);
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
+    this.media.delete(deviceId);
+    const releasedKeys = new Set(removed.map((b) => `${b.host}:${b.port}`));
+    for (const key of releasedKeys) {
+      if (this.bindings.some((b) => `${b.host}:${b.port}` === key)) continue;
+      const link = this.links.get(key);
+      if (link) {
+        link.reconnect.stop();
+        link.socket?.destroy();
+        this.links.delete(key);
+      }
+    }
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

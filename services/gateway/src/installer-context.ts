@@ -198,7 +198,17 @@ export type DriverLifecycleTrigger = "boot" | "install" | "reconnect" | "config_
 
 export type DriverLifecycleStage =
   | "registering" | "validating" | "restoring_bindings" | "rebinding_devices"
-  | "recalculating_ownership" | "publishing" | "ready" | "failed";
+  | "recalculating_ownership" | "publishing" | "ready" | "failed"
+  // § Driver Lifecycle Completion — the teardown half (disable/uninstall/no-longer-
+  // desired) previously had no visible transitional stage at all: `runDriverLifecycle`
+  // went straight from whatever stage the driver was last in to being deleted from
+  // `lifecycleStatus` entirely, so a driver mid-teardown looked identical to one that
+  // had never existed. "stopping" is now set immediately before the real
+  // unregister/disconnect work runs, giving Driver Diagnostics a real, observable
+  // "Stop"/"Unbind"/"Destroy" moment (the underlying `SupremeNativeAdapter.
+  // unregisterProtocol()` already releases every owned device's per-driver state
+  // synchronously within this one stage — see native-adapter.ts).
+  | "stopping";
 
 export interface DriverLifecycleStatus {
   protocol: string;
@@ -1011,8 +1021,14 @@ export class InstallerServices {
     trigger: DriverLifecycleTrigger,
   ): Promise<void> {
     if (!driver) {
+      // § Driver Lifecycle Completion — Stop → Unbind → Destroy, made observable
+      // (previously the driver just vanished from `lifecycleStatus` with no visible
+      // transitional state). `unregisterNativeProtocol` is idempotent (a no-op if
+      // already stopped, see `SupremeNativeAdapter.unregisterProtocol`), so repeated
+      // teardown calls for the same protocol are always safe.
+      this.setStage(protocol, { stage: "stopping" });
       const owned = this.d.sil.ownership.devicesOwnedByProtocol(protocol);
-      await this.d.sil.unregisterNativeProtocol(protocol);
+      await this.d.sil.unregisterNativeProtocol(protocol); // Stop + Unbind (every owned device's driver-level state released) + Destroy (driver instance dereferenced)
       for (const deviceId of owned) await this.d.sil.ownership.clear(deviceId);
       this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
       this.lifecycleStatus.delete(protocol);

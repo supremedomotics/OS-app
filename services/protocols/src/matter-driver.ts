@@ -18,6 +18,7 @@ import {
   stateFromAttribute,
 } from "./matter-codec.js";
 import { parseMatterSetupCode, type MatterOnboardingPayload } from "./matter-pairing.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /** A node/endpoint address on the Matter fabric. */
 export interface MatterAddress {
@@ -50,8 +51,10 @@ export interface MatterController {
   disconnect(): Promise<void>;
   /** Invoke a cluster command on a node endpoint. */
   invoke(addr: MatterAddress, cluster: string, command: string, fields: Record<string, unknown>): Promise<void>;
-  /** Subscribe to a node endpoint's attribute reports. */
-  subscribe(addr: MatterAddress, handler: (report: MatterAttributeReport) => void): void;
+  /** Subscribe to a node endpoint's attribute reports. Returns an unsubscribe function
+   * (§ Driver Lifecycle Completion — every driver's per-binding observer must be
+   * releasable without tearing down the whole controller). */
+  subscribe(addr: MatterAddress, handler: (report: MatterAttributeReport) => void): () => void;
   /** Commissioned nodes on the fabric (for discovery). */
   nodes(): Promise<MatterNodeInfo[]>;
   /**
@@ -75,6 +78,7 @@ interface MatterBinding {
   addr: MatterAddress;
   cluster: string;
   config: Record<string, unknown>;
+  unsubscribe?: () => void;
 }
 
 /**
@@ -131,6 +135,19 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — unsubscribes this device's attribute-report
+   * observer(s) from the shared fabric controller (previously leaked: the closure kept
+   * firing and re-populating state for an "unbound" device forever), then releases its
+   * bindings/cached state. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    for (const b of this.bindings) {
+      if (b.deviceId === deviceId) b.unsubscribe?.();
+    }
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
@@ -193,7 +210,7 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
 
   private observe(b: MatterBinding): void {
     if (!this.controller) return;
-    this.controller.subscribe(b.addr, (report) => {
+    b.unsubscribe = this.controller.subscribe(b.addr, (report) => {
       const prev = this.states.get(bindingKey(b.deviceId, b.capability)) ?? null;
       const state = stateFromAttribute(b.capability, report.cluster, report.attribute, report.value, prev, b.config);
       if (state) this.record(b, state);

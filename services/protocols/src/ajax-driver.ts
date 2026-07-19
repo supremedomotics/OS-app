@@ -11,6 +11,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * Ajax security-sensor driver (§3). Ajax is a PROPRIETARY system with no open local
@@ -85,6 +86,14 @@ export class AjaxProtocolDriver implements INativeProtocolDriver {
   }
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared Ajax cloud/hub client. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(_deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

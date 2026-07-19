@@ -12,6 +12,7 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * Sonos transport seam. Sonos local control is UPnP/SOAP on the player (port 1400);
@@ -34,6 +35,10 @@ export interface SonosPlayer {
   setVolume(percent: number): Promise<void>;
   setMute(muted: boolean): Promise<void>;
   getState(): Promise<SonosPlayerState>;
+  /** Optional: release whatever the real UPnP/SOAP transport holds for this player
+   * (sockets, subscriptions) — § Driver Lifecycle Completion. A test fake with
+   * nothing to release simply omits this. */
+  close?(): Promise<void>;
 }
 /** Resolve a player handle for a given Sonos address (room name / IP). */
 export type SonosConnect = (address: string) => Promise<SonosPlayer>;
@@ -79,6 +84,12 @@ export class SonosProtocolDriver implements INativeProtocolDriver {
   async disconnect(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // § Driver Lifecycle Completion: every bound player's own transport resources
+    // must be released too — previously nothing closed these on teardown at all.
+    for (const b of this.bindings) await b.player.close?.();
+    this.bindings.length = 0;
+    this.devices.clear();
+    this.states.clear();
     this.connected = false;
   }
   isConnected(): boolean {
@@ -93,6 +104,18 @@ export class SonosProtocolDriver implements INativeProtocolDriver {
   }
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's real Sonos player
+   * transport (if the injected implementation supports closing one) plus its
+   * bindings/cached state, without touching the shared poll timer. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    for (const b of this.bindings) {
+      if (b.deviceId === deviceId) await b.player.close?.();
+    }
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

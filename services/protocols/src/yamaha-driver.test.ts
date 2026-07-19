@@ -389,6 +389,45 @@ describe("YamahaProtocolDriver — discovery", () => {
   });
 });
 
+describe("YamahaProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => {
+  it("keeps the host's feature cache while a sibling capability is still bound, then clears it (and its refresh timer) once the last binding on that host is gone", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const driver = new YamahaProtocolDriver({ createEventSocket: () => events.socket, eventRefreshMs: 1_000_000 });
+    await driver.connect();
+    const devA = "device-yamaha-unbind-a" as DeviceId;
+    const devB = "device-yamaha-unbind-b" as DeviceId;
+    await driver.bind({ deviceId: devA, capability: "media", address: yam.host, config: { zone: "main" } });
+    await driver.bind({ deviceId: devB, capability: "onoff", address: yam.host, config: { zone: "main" } });
+    expect(yam.calls.filter((c) => c === "system/getFeatures")).toHaveLength(1);
+
+    // Unbinding devB (not the last binding on this host) must leave the cached features
+    // in place — devA's capabilityConfig still resolves without a fresh fetch.
+    await driver.unbind(devB);
+    expect(driver.manages(devB)).toBe(false);
+    expect(driver.manages(devA)).toBe(true);
+    expect(driver.getCapabilityConfig(devA, "media")).not.toBeNull();
+    expect(yam.calls.filter((c) => c === "system/getFeatures")).toHaveLength(1); // no re-fetch
+
+    // Unbinding the LAST binding on this host must clear the feature cache + its timer.
+    await driver.unbind(devA);
+    expect(driver.manages(devA)).toBe(false);
+
+    // Rebind (Unbind → Bind → Continue): binding the SAME host again on the SAME driver
+    // instance re-fetches getFeatures — proof the host entry (and its refresh timer)
+    // were genuinely torn down, not just left dangling.
+    await driver.bind({ deviceId: devA, capability: "media", address: yam.host, config: { zone: "main" } });
+    expect(driver.manages(devA)).toBe(true);
+    expect(yam.calls.filter((c) => c === "system/getFeatures")).toHaveLength(2);
+
+    await expect(driver.unbind(devA)).resolves.toBeUndefined();
+    await expect(driver.unbind(devA)).resolves.toBeUndefined(); // idempotent
+
+    await driver.disconnect();
+    await new Promise<void>((r) => yam.server.close(() => r()));
+  });
+});
+
 describe("YamahaProtocolDriver — concurrency hardening (§ Production Hardening, Phase 6)", () => {
   it("coalesces concurrent bind() calls for the same host into ONE getFeatures request, never a duplicate refresh timer", async () => {
     const yam = await startFakeYamaha();

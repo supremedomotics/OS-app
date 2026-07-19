@@ -13,6 +13,7 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * Apple TV driver (§3) — full media control + rich "now playing" (foreground app and
@@ -72,6 +73,10 @@ export interface AppleTvClient {
   nowPlaying(): Promise<AppleTvNowPlaying>;
   /** Optional: current cover-art bytes (null if none). */
   getArtwork?(): Promise<MediaArtwork | null>;
+  /** Optional: release whatever the real MRP/pairing stack (pyatv) holds for this
+   * Apple TV (sockets, timers) — § Driver Lifecycle Completion. A test fake with
+   * nothing to release simply omits this. */
+  close?(): Promise<void>;
 }
 
 /** Resolve a client for an Apple TV address (IP / host), using stored MRP credentials. */
@@ -138,6 +143,12 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   async disconnect(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // § Driver Lifecycle Completion: every bound client's own MRP/pairing session
+    // must be released too — previously nothing closed these on teardown at all.
+    for (const b of this.bindings) await b.client.close?.();
+    this.bindings.length = 0;
+    this.devices.clear();
+    this.states.clear();
     this.connected = false;
   }
   isConnected(): boolean {
@@ -155,6 +166,18 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   }
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's real MRP client (if
+   * the injected implementation supports closing one) plus its bindings/cached state,
+   * without touching the shared poll timer. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    for (const b of this.bindings) {
+      if (b.deviceId === deviceId) await b.client.close?.();
+    }
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

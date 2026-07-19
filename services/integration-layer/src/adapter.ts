@@ -119,4 +119,10 @@ export interface IBackendAdapter {
    * driver (null if none/unsupported — e.g. this device isn't bound to a native driver
    * that tracks this). */
   getDiagnostics?(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null>;
+
+  /** Optional: release the owning driver's per-device resources (§ Driver Lifecycle
+   * Completion) — called when a Supreme device is deleted. A no-op for backends with
+   * no per-device driver-level state to release (e.g. HA — HA owns its own connection
+   * lifecycle independently of Supreme device deletion). */
+  unbindDevice?(deviceId: DeviceId): Promise<void>;
 }

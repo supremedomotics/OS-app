@@ -42,6 +42,7 @@ import type {
   CoolMasterUnitStatus,
   ResolvedCoolMasterConfig,
 } from "./coolmaster-types.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 export type CoolMasterDriverOptions = CoolMasterDriverConfig;
 
@@ -144,6 +145,15 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared gateway connection/poller (still needed by other
+   * bound units). Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

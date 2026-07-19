@@ -122,6 +122,18 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     return this.ha.getDiagnostics ? this.ha.getDiagnostics(deviceId) : null;
   }
 
+  /** § Driver Lifecycle Completion: unlike the "first side that manages it" routing
+   * above, this deliberately runs on BOTH sides unconditionally — a device being
+   * deleted must have every trace of it released regardless of which backend
+   * currently (or previously) owned it, and both `unbindDevice` implementations are
+   * required to be safe no-ops for a device they don't manage. Over-cleaning is the
+   * safe failure mode here; under-cleaning is the leak this whole effort exists to
+   * close. */
+  async unbindDevice(deviceId: DeviceId): Promise<void> {
+    await this.native.unbindDevice(deviceId);
+    await this.ha.unbindDevice?.(deviceId);
+  }
+
   /**
    * Migrate a domain to the native engine: seed native state from the current
    * (HA) state for every mapped device in the domain, transfer OWNERSHIP for each

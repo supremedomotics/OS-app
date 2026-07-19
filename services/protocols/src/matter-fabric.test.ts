@@ -11,7 +11,9 @@ class FakeController implements MatterController {
   async connect() {}
   async disconnect() {}
   async invoke(_a: MatterAddress, _c: string, _cmd: string, _f: Record<string, unknown>) {}
-  subscribe(_a: MatterAddress, _h: (r: MatterAttributeReport) => void) {}
+  subscribe(_a: MatterAddress, _h: (r: MatterAttributeReport) => void) {
+    return () => {};
+  }
   async nodes(): Promise<MatterNodeInfo[]> {
     return [];
   }

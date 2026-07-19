@@ -147,8 +147,14 @@ export class SupremeIntegrationLayer {
 
   /** Drop every backend mapping AND ownership record for a device (used when the
    * device is deleted) — an orphaned ownership row would otherwise let a future
-   * device reuse the same id (unlikely, but ownership must never lie). */
+   * device reuse the same id (unlikely, but ownership must never lie). Also releases
+   * the owning driver's own per-device resources (§ Driver Lifecycle Completion) —
+   * timers, sockets, subscriptions, diagnostics trackers — BEFORE clearing ownership,
+   * so a driver's `unbind()` can still legitimately answer "do I manage this device"
+   * while it runs. Previously this only cleared Supreme-side bookkeeping and left
+   * every driver's own internal Maps holding the device forever. */
   async unmapDevice(deviceId: DeviceId): Promise<void> {
+    if (this.adapter.unbindDevice) await this.adapter.unbindDevice(deviceId);
     this.registry.unmapDevice(deviceId);
     await this.ownership.clear(deviceId);
   }

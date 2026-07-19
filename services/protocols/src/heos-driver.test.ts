@@ -222,6 +222,33 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
   });
 });
 
+describe("HeosProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => {
+  it("keeps the shared network connection open while a sibling player is still bound, then closes it once the last player is unbound", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver();
+    await driver.connect();
+    const livingRoom = "device-heos-unbind-living" as DeviceId;
+    const theatre = "device-heos-unbind-theatre" as DeviceId;
+    await driver.bind({ deviceId: livingRoom, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "1" } });
+    await driver.bind({ deviceId: theatre, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "2" } });
+    await vi.waitFor(() => expect(heos.sockets.size).toBe(1));
+
+    await driver.unbind(theatre);
+    expect(driver.manages(theatre)).toBe(false);
+    expect(driver.manages(livingRoom)).toBe(true);
+    expect(heos.sockets.size).toBe(1); // living room still needs this connection
+
+    await driver.unbind(livingRoom);
+    expect(driver.manages(livingRoom)).toBe(false);
+    await vi.waitFor(() => expect(heos.sockets.size).toBe(0));
+
+    await expect(driver.unbind(livingRoom)).resolves.toBeUndefined(); // idempotent
+
+    await driver.disconnect();
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+});
+
 describe("HeosProtocolDriver — auto-reconnect on drop", () => {
   afterEach(() => {
     vi.useRealTimers();

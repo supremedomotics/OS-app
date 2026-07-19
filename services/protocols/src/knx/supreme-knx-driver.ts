@@ -19,6 +19,7 @@ import { parseFunctionalBlocks } from "./functional-block-parser.js";
 import { mapUnifiedDevices, type KnxIotDiscoverySignal, type UnifiedKnxDevice, type UnifiedDeviceMapperInput } from "./unified-device-mapper.js";
 import { OfflineCommandQueue, type DrainResult } from "./offline-command-queue.js";
 import type { IKnxProvider, ProviderDiagnostics } from "./provider.js";
+import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
 
 /**
  * Supreme KNX Driver (§ Public Architecture) — the ONLY thing the rest of SupremeOS
@@ -158,6 +159,25 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases everything THIS device holds without
+   * touching the shared provider/task-router/connection (still needed by other bound
+   * devices): unsubscribes its status group address(es) from the KNX Ultimate provider
+   * (only once no other binding still watches the same GA — `unsubscribe` is GA-scoped,
+   * not per-handler), evicts any of its still-queued offline commands, and clears its
+   * bindings/cached state. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    const removed = this.bindings.filter((b) => b.deviceId === deviceId);
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
+    this.offlineQueue.evict((subject) => subject === deviceId);
+    const releasedGas = new Set(removed.map((b) => b.statusGa));
+    for (const ga of releasedGas) {
+      if (this.bindings.some((b) => b.statusGa === ga)) continue;
+      this.ultimate.unsubscribe(ga);
+    }
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
