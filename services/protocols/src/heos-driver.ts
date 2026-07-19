@@ -27,6 +27,7 @@ import { ReconnectScheduler } from "./avr-reconnect.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
 import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import { LineAccumulator } from "./line-buffer.js";
 
 /** Kept in sync with `supreme-heos`'s manifest `version` (services/drivers/src/manifests.ts). */
 const DRIVER_VERSION = "1.0.0";
@@ -70,7 +71,7 @@ interface HeosLink {
    * socket is non-null but not yet connected, so `socket !== null` alone isn't a safe
    * "can I write to this" check (see command()). */
   ready: boolean;
-  buffer: string;
+  buffer: LineAccumulator;
   reconnect: ReconnectScheduler;
   diagnostics: DriverDiagnosticsTracker;
 }
@@ -158,6 +159,9 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
+    // § Production Hardening — Driver Lifecycle audit: same guard as AvrProtocolDriver
+    // — a command after disconnect() must fail loudly, not silently re-open a socket.
+    if (!this.connected) throw new Error(`heos: driver is disconnected — cannot command ${deviceId}`);
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b) throw new Error(`heos: ${deviceId} not bound`);
     const cache = this.media.get(deviceId);
@@ -329,7 +333,13 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
         }
       },
     });
-    link = { socket: null, ready: false, buffer: "", reconnect, diagnostics: new DriverDiagnosticsTracker() };
+    link = {
+      socket: null,
+      ready: false,
+      buffer: new LineAccumulator("\r\n", undefined, () => this.opts.onLog?.("error", `${host}:${port}: inbound buffer overflowed without a delimiter — dropped and reset (possible flood or malformed device response)`)),
+      reconnect,
+      diagnostics: new DriverDiagnosticsTracker(),
+    };
     this.links.set(key, link);
     this.openSocket(link, host, port);
     return link;
@@ -393,9 +403,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   private onData(key: string, chunk: string): void {
     const link = this.links.get(key);
     if (!link) return;
-    link.buffer += chunk;
-    const lines = link.buffer.split("\r\n");
-    link.buffer = lines.pop() ?? "";
+    const lines = link.buffer.feed(chunk);
     for (const line of lines) {
       if (line.trim()) link.diagnostics.recordReceive(line);
       this.onLine(link, line);

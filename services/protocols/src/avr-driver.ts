@@ -17,6 +17,7 @@ import { ReconnectScheduler } from "./avr-reconnect.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
 import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import { LineAccumulator } from "./line-buffer.js";
 
 /** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
  * — surfaced in Diagnostics so an installer can tell which driver build is running. */
@@ -56,7 +57,7 @@ interface AvrLink {
    * socket is non-null but not yet connected, so `socket !== null` alone isn't a safe
    * "can I write to this" check (see command()). */
   ready: boolean;
-  buffer: string;
+  buffer: LineAccumulator;
   reconnect: ReconnectScheduler;
   diagnostics: DriverDiagnosticsTracker;
 }
@@ -140,6 +141,11 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
+    // § Production Hardening — Driver Lifecycle audit: without this, a command issued
+    // after disconnect() silently re-opened a brand-new TCP socket via ensureLink()
+    // instead of failing — the driver is supposed to be torn down at that point, not
+    // quietly resurrect a connection behind the caller's back.
+    if (!this.connected) throw new Error(`avr: driver is disconnected — cannot command ${deviceId}`);
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`avr: ${deviceId} not bound for ${command.capability}`);
     const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
@@ -235,7 +241,13 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         }
       },
     });
-    link = { socket: null, ready: false, buffer: "", reconnect, diagnostics: new DriverDiagnosticsTracker() };
+    link = {
+      socket: null,
+      ready: false,
+      buffer: new LineAccumulator("\r", undefined, () => this.opts.onLog?.("error", `${host}:${port}: inbound buffer overflowed without a delimiter — dropped and reset (possible flood or malformed device response)`)),
+      reconnect,
+      diagnostics: new DriverDiagnosticsTracker(),
+    };
     this.links.set(key, link);
     this.openSocket(link, host, port);
     return link;
@@ -278,9 +290,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   private onData(key: string, host: string, port: number, chunk: string): void {
     const link = this.links.get(key);
     if (!link) return;
-    link.buffer += chunk;
-    const lines = link.buffer.split("\r");
-    link.buffer = lines.pop() ?? "";
+    const lines = link.buffer.feed(chunk);
     for (const line of lines) {
       if (line.trim()) link.diagnostics.recordReceive(line);
       this.onLine(host, port, line);

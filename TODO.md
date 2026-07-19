@@ -135,13 +135,52 @@
 - **Description:** Diagnostics Console, Room Assignment Engine, Automatic Zone Generation, and
   the Media Topology Engine (ADR 0015 addendum) were built and tested against in-process fake
   TCP/HTTP servers only — never against a real Denon/HEOS/Yamaha unit or a running `hub-compose`
-  stack. The Topology UI has not been Playwright-verified at any responsive tier.
+  stack. The Topology UI has not been Playwright-verified at any responsive tier. A full,
+  per-brand checklist now exists: `docs/architecture/avr-framework-production-audit.md` Phase 5
+  — nothing on it is checked yet.
 - **Reason:** this project's own testing standard ("new UI behavior should be Playwright-verified
   live... not just typechecked") wasn't met for this work — no backend/hardware was available in
-  the session that built it.
+  either session that built/hardened it. The production-readiness audit explicitly declines to
+  call the framework production-ready until this is done (currently ~70%, see the audit's Phase
+  10 report).
 - **Dependencies:** `hub-compose` running, ideally real AVR hardware.
 - **Complexity:** Small (verification only, no new code expected unless something's found).
-- **Status:** Not started.
+- **Status:** Not started. One specific open question to resolve while doing this: does a bare
+  Denon `Z2?` query echo Zone 2's current SOURCE as well as power on real hardware (the codec
+  only sends `Z2?`/`Z2MU?` on reconnect, no explicit zone2-source query token)?
+
+### Small, named gaps found by the Universal AV Driver SDK production audit
+- **Description:** Three small, real, unaddressed gaps confirmed during the production-hardening
+  audit (`docs/architecture/avr-framework-production-audit.md`, Phase 1/2/4/10): (1) Yamaha's
+  `setEqualizer` (multi-band EQ) exists in the YXC spec but isn't wired into
+  `yamaha-codec.ts`'s `commandToYamaha`; (2) HEOS's QuickSelect has a working command path
+  (`heos-codec.ts:124`, `play_quickselect`) but `heosCapabilityConfig()` never populates
+  `presets`/`advancedControls`, so there's no UI surface to trigger it; (3) HEOS's Bluetooth
+  surface (if any) isn't modeled at all — `bluetooth` field always absent from
+  `heosCapabilityConfig()`.
+- **Reason:** found by direct code audit against the vendor specs, not guessed — each is a
+  genuine, scoped, low-risk fix, not a design question.
+- **Dependencies:** none.
+- **Complexity:** Small, per item.
+- **Status:** Not started; deliberately not fixed in the same session as the audit that found
+  them, per that session's "no new features, harden only" scope.
+
+### Fleet-wide missing `unbind()` on `INativeProtocolDriver`
+- **Description:** confirmed during the AVR framework's Phase 6 stress-testing audit: no driver
+  in the entire 25-driver fleet (not just AVR/HEOS/Yamaha) implements a way to remove ONE
+  device's bindings without tearing down the whole driver via `disconnect()`. A deleted Supreme
+  device's entry in a driver's internal `bindings`/state Maps is never pruned — slow, bounded
+  memory growth over the life of a long-running hub process with device churn (installs/removals
+  over months/years), not a leak per-command.
+- **Reason:** a real, confirmed architectural gap (see the production audit's Phase 1/6/10
+  findings) — the single largest reason the AVR framework's Architecture Score isn't a clean 10.
+- **Dependencies:** touches the `INativeProtocolDriver` interface contract shared by all 25
+  drivers — a cross-cutting change, correctly out of scope for a single-framework hardening pass.
+- **Complexity:** Medium — one interface addition (`unbind?(deviceId, capability)`), then one
+  small implementation per driver that wants to support it (can be added incrementally; drivers
+  without it keep working exactly as today, since it'd be optional like `getArtwork`/`getQueue`).
+- **Status:** Not started, deliberately deferred — see `docs/architecture/
+  avr-framework-production-audit.md` Phase 6/10 for full reasoning.
 
 ### Wire more protocols into the generic Room Assignment Engine
 - **Description:** `services/commissioning/src/room-assignment-engine.ts` is protocol-agnostic
@@ -197,6 +236,28 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Universal AV Driver SDK production hardening audit** — full 10-phase audit
+  (`docs/architecture/avr-framework-production-audit.md`): architecture/digital-twin/
+  lifecycle audit, protocol coverage matrix, hardware validation checklist (unchecked,
+  honest), stress-testing, performance audit, production readiness report (~70%,
+  explicitly not marked production-ready — see the report for why). Found and fixed
+  two real concurrency bugs (a TOCTOU race + orphaned-timer leak in
+  `YamahaProtocolDriver.ensureHostFeatures()`, and unbounded overlapping HTTP requests
+  in `syncZone()`, both fixed via in-flight-promise coalescing), one real resource-
+  safety gap (no upper bound on `link.buffer` in AVR/HEOS — a misbehaving device could
+  grow memory without limit; fixed with a new shared, bounded `LineAccumulator`
+  (`line-buffer.ts`), which also deduplicated identical buffer-handling code that was
+  previously copy-pasted between the two drivers), and one lifecycle gap (`command()`
+  never checked whether the driver had been `disconnect()`-ed, silently resurrecting a
+  real connection instead of failing — now guarded in all 3 drivers). 15 new tests, all
+  348 protocol-package tests and all 93 monorepo build/typecheck/test tasks pass. New
+  developer docs: `docs/architecture/avr-sdk-developer-guide.md` (SDK/Lifecycle/Digital
+  Twin/Discovery/Capability/Diagnostics/Room-Assignment/Topology reference) and a new
+  §8 in `adding-avr-brands.md` confirming all 9 future brands (Anthem/Arcam/NAD/Sony/
+  Pioneer/Onkyo/JBL Synthesis/StormAudio/Trinnov) are supported without architectural
+  change. Three small named gaps and one fleet-wide architectural gap were found and
+  deliberately NOT fixed (out of "harden, don't add features" scope) — see the new TODO
+  items above.
 - **Universal AV Driver SDK completion** (ADR 0015 addendum) — Diagnostics Console
   (`services/protocols/src/driver-diagnostics.ts`, wired into AVR/HEOS/Yamaha drivers, exposed
   via a new `INativeProtocolDriver.getDiagnostics?()` seam and `GET /v1/devices/:id/diagnostics`);

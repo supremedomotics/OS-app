@@ -250,6 +250,31 @@ describe("HeosProtocolDriver — auto-reconnect on drop", () => {
   });
 });
 
+describe("HeosProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
+  it("rejects a command after disconnect() instead of silently re-opening a socket", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver();
+    const dev = "device-heos-teardown" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "9" } });
+    await vi.waitFor(() => expect(heos.received.some((r) => r.includes("pid=9"))).toBe(true));
+
+    await driver.disconnect();
+    await expect(driver.command(dev, { capability: "media", action: "mute" })).rejects.toThrow(/disconnected/);
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+
+  it("disconnect() is idempotent — calling it twice never throws", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver();
+    await driver.connect();
+    await driver.bind({ deviceId: "device-y" as DeviceId, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "1" } });
+    await driver.disconnect();
+    await expect(driver.disconnect()).resolves.toBeUndefined();
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+});
+
 describe("HeosProtocolDriver — discovery", () => {
   it("resolves real pids via get_players after SSDP, one DiscoveredDevice per player", async () => {
     const heos = await startFakeHeos();

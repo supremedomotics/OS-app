@@ -103,6 +103,22 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   private readonly bindings: YamahaBinding[] = [];
   private readonly devices = new Set<DeviceId>();
   private readonly hosts = new Map<string, YamahaHostInfo>();
+  /** In-flight `ensureHostFeatures()` calls, keyed by host (§ Production Hardening —
+   * Phase 6 concurrency audit). Without this, two concurrent `bind()`/`command()`
+   * calls for a host with no entry in `hosts` yet BOTH pass the `!existing` check
+   * before either resolves (a real TOCTOU race — `hosts.get()` then an `await` then
+   * `hosts.set()`), each firing its own `getFeatures` request and its own
+   * `setInterval` refresh timer; the loser's timer is then silently orphaned forever
+   * (`hosts.set()` overwrites the map entry, but nothing ever clears the first timer).
+   * Coalescing concurrent callers onto the SAME promise makes this impossible instead
+   * of merely unlikely. */
+  private readonly hostFeaturesInFlight = new Map<string, Promise<YamahaHostInfo>>();
+  /** In-flight `syncZone()` calls, keyed by `host:zone` — the same coalescing, for the
+   * same reason, applied to state re-sync: a rapid burst of commands/UDP events for
+   * one zone must never fire overlapping `getStatus`/`getPlayInfo` requests whose
+   * responses can resolve out of order and let a stale response overwrite a fresher
+   * one already applied. */
+  private readonly syncZoneInFlight = new Map<string, Promise<void>>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly media = new Map<DeviceId, YamahaMediaCache>();
   private readonly listeners = new Set<StateListener>();
@@ -135,6 +151,8 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   async disconnect(): Promise<void> {
     for (const info of this.hosts.values()) clearInterval(info.refreshTimer);
     this.hosts.clear();
+    this.hostFeaturesInFlight.clear();
+    this.syncZoneInFlight.clear();
     this.diagnostics.clear();
     this.hostDown.clear();
     this.eventSocket?.close();
@@ -168,6 +186,10 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
+    // § Production Hardening — Driver Lifecycle audit: same guard as AvrProtocolDriver
+    // — a command after disconnect() must fail loudly, not silently re-fetch getFeatures
+    // and re-issue HTTP requests as though the driver were still alive.
+    if (!this.connected) throw new Error(`yamaha: driver is disconnected — cannot command ${deviceId}`);
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`yamaha: ${deviceId} not bound for ${command.capability}`);
     const hostInfo = await this.ensureHostFeatures(b.host);
@@ -289,6 +311,18 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   private async ensureHostFeatures(host: string): Promise<YamahaHostInfo> {
     const existing = this.hosts.get(host);
     if (existing) return existing;
+    // Coalesce concurrent callers (see `hostFeaturesInFlight` doc) instead of each
+    // racing its own getFeatures fetch + refresh timer.
+    const inFlight = this.hostFeaturesInFlight.get(host);
+    if (inFlight) return inFlight;
+    const promise = this.fetchHostFeatures(host).finally(() => {
+      this.hostFeaturesInFlight.delete(host);
+    });
+    this.hostFeaturesInFlight.set(host, promise);
+    return promise;
+  }
+
+  private async fetchHostFeatures(host: string): Promise<YamahaHostInfo> {
     const featuresJson = await this.getJson(host, "system", "getFeatures", {});
     const features = parseYamahaFeatures(featuresJson);
     const refreshMs = this.opts.eventRefreshMs ?? 8 * 60 * 1000;
@@ -303,7 +337,21 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     return info;
   }
 
+  /** Coalesces concurrent re-syncs for the same host+zone (see `syncZoneInFlight`
+   * doc) — a rapid command burst or an overlapping UDP event never fires two
+   * simultaneous `getStatus` requests whose responses could resolve out of order. */
   private async syncZone(host: string, zone: YamahaZone): Promise<void> {
+    const key = `${host}:${zone}`;
+    const inFlight = this.syncZoneInFlight.get(key);
+    if (inFlight) return inFlight;
+    const promise = this.doSyncZone(host, zone).finally(() => {
+      this.syncZoneInFlight.delete(key);
+    });
+    this.syncZoneInFlight.set(key, promise);
+    return promise;
+  }
+
+  private async doSyncZone(host: string, zone: YamahaZone): Promise<void> {
     const statusJson = await this.getJson(host, zone, "getStatus", {});
     const status = parseYamahaZoneStatus(statusJson);
     const inputType = this.hosts.get(host)?.features.systemInputs.find((i) => i.id === status.input)?.playInfoType ?? "none";

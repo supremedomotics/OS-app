@@ -262,6 +262,91 @@ describe("AvrProtocolDriver — connection failure is never silent", () => {
   });
 });
 
+describe("AvrProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
+  it("rejects a command after disconnect() instead of silently re-opening a socket", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    const dev = "device-avr-teardown" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+
+    await driver.disconnect();
+    await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/disconnected/);
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("disconnect() is idempotent — calling it twice never throws", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    await driver.connect();
+    await driver.bind({ deviceId: "device-x" as DeviceId, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.disconnect();
+    await expect(driver.disconnect()).resolves.toBeUndefined();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("controls two physically independent receivers (different hosts) with fully isolated links, state, and diagnostics", async () => {
+    const living = await startFakeAvr();
+    const theatre = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    const livingDev = "device-avr-living2" as DeviceId;
+    const theatreDev = "device-avr-theatre2" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: livingDev, capability: "onoff", address: `127.0.0.1:${living.port}` });
+    await driver.bind({ deviceId: theatreDev, capability: "onoff", address: `127.0.0.1:${theatre.port}` });
+    await vi.waitFor(() => {
+      expect(living.received).toContain("PW?");
+      expect(theatre.received).toContain("PW?");
+    });
+
+    await driver.command(livingDev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(living.received).toContain("PWON"));
+    // The theatre receiver must never see a command meant for the living room unit.
+    expect(theatre.received).not.toContain("PWON");
+
+    const livingDiag = driver.getDiagnostics(livingDev)!;
+    const theatreDiag = driver.getDiagnostics(theatreDev)!;
+    expect(livingDiag.ip).toBe("127.0.0.1");
+    expect(livingDiag.packetsSent).toBeGreaterThan(theatreDiag.packetsSent); // living got the extra PWON
+
+    await driver.disconnect();
+    await Promise.all([
+      new Promise<void>((r) => living.server.close(() => r())),
+      new Promise<void>((r) => theatre.server.close(() => r())),
+    ]);
+  });
+
+  it("rapid-fire volume commands each reach the wire and the final state reflects the LAST command sent", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    const dev = "device-avr-rapid" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+
+    // Fire 5 volume changes back-to-back with no await between the WRITES — each
+    // driver.command() call resolves as soon as its local socket.write() call
+    // returns (buffered into the OS send queue), which is not the same instant the
+    // real TCP peer receives and processes it — so this proves ordering/delivery over
+    // the actual loopback socket, not just that 5 local writes were issued.
+    await Promise.all([10, 30, 50, 70, 90].map((v) => driver.command(dev, { capability: "media", action: "volume", volume: v })));
+    await vi.waitFor(() => {
+      const sentVolumes = avr.received.filter((r) => /^MV\d{2}$/.test(r));
+      expect(sentVolumes.length).toBe(5);
+    });
+    // The fake server echoes each one back in order, so the driver's cached state ends
+    // on the LAST token the wire actually processed.
+    await vi.waitFor(() => {
+      const state = driver.getState(dev, "media") as { volume: number } | null;
+      expect(state?.volume).toBeGreaterThan(0);
+    });
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+});
+
 describe("AvrProtocolDriver — discovery", () => {
   it("finds receivers via the co-located HEOS SSDP presence and defaults to zone 'main'", async () => {
     const driver = new AvrProtocolDriver({

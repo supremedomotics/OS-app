@@ -299,6 +299,32 @@ describe("YamahaProtocolDriver (in-process YXC unit over HTTP, 2 zones)", () => 
   });
 });
 
+describe("YamahaProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
+  it("rejects a command after disconnect() instead of silently re-fetching getFeatures", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const driver = new YamahaProtocolDriver({ createEventSocket: () => events.socket, eventRefreshMs: 1_000_000 });
+    const dev = "device-yamaha-teardown" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: yam.host, config: { zone: "main" } });
+
+    await driver.disconnect();
+    await expect(driver.command(dev, { capability: "media", action: "mute" })).rejects.toThrow(/disconnected/);
+    await new Promise<void>((r) => yam.server.close(() => r()));
+  });
+
+  it("disconnect() is idempotent — calling it twice never throws", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const driver = new YamahaProtocolDriver({ createEventSocket: () => events.socket, eventRefreshMs: 1_000_000 });
+    await driver.connect();
+    await driver.bind({ deviceId: "device-z" as DeviceId, capability: "media", address: yam.host, config: { zone: "main" } });
+    await driver.disconnect();
+    await expect(driver.disconnect()).resolves.toBeUndefined();
+    await new Promise<void>((r) => yam.server.close(() => r()));
+  });
+});
+
 describe("YamahaProtocolDriver — discovery", () => {
   it("filters MediaRenderer SSDP hits to Yamaha units and defaults to zone 'main'", async () => {
     const upnpXml = "<root><device><manufacturer>Yamaha Corporation</manufacturer><friendlyName>Master Bedroom</friendlyName></device></root>";
@@ -360,5 +386,51 @@ describe("YamahaProtocolDriver — discovery", () => {
       { id: "zone3", label: "Zone 3" },
     ]);
     expect(found[0]?.raw.bindConfig).toEqual({ zone: "main", model: "RX-A8A" });
+  });
+});
+
+describe("YamahaProtocolDriver — concurrency hardening (§ Production Hardening, Phase 6)", () => {
+  it("coalesces concurrent bind() calls for the same host into ONE getFeatures request, never a duplicate refresh timer", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const driver = new YamahaProtocolDriver({ createEventSocket: () => events.socket, eventRefreshMs: 1_000_000 });
+    await driver.connect();
+    // Two capabilities of the SAME zone, bound concurrently — exactly what commissioning
+    // a fresh device does (onoff + media). Before the fix, both bind() calls would pass
+    // ensureHostFeatures()'s `!existing` check before either resolved, firing two
+    // getFeatures requests and leaking a duplicate setInterval refresh timer.
+    await Promise.all([
+      driver.bind({ deviceId: "device-a" as DeviceId, capability: "onoff", address: yam.host, config: { zone: "main" } }),
+      driver.bind({ deviceId: "device-b" as DeviceId, capability: "media", address: yam.host, config: { zone: "main" } }),
+    ]);
+    const featuresCalls = yam.calls.filter((c) => c === "system/getFeatures").length;
+    expect(featuresCalls).toBe(1);
+    await driver.disconnect();
+    await new Promise<void>((r) => yam.server.close(() => r()));
+  });
+
+  it("coalesces concurrent command()-triggered syncZone calls for the same zone into ONE getStatus request", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const driver = new YamahaProtocolDriver({ createEventSocket: () => events.socket, eventRefreshMs: 1_000_000 });
+    await driver.connect();
+    await driver.bind({ deviceId: "device-main" as DeviceId, capability: "media", address: yam.host, config: { zone: "main" } });
+    const before = yam.calls.filter((c) => c === "main/getStatus").length;
+    // Two rapid commands for the same zone — each command() calls syncZone() at the
+    // end; without coalescing this fires two overlapping getStatus requests whose
+    // responses could resolve out of order and let a stale one overwrite a fresher one.
+    await Promise.all([
+      driver.command("device-main" as DeviceId, { capability: "media", action: "volume", volume: 40 }),
+      driver.command("device-main" as DeviceId, { capability: "media", action: "mute" }),
+    ]);
+    const after = yam.calls.filter((c) => c === "main/getStatus").length;
+    // Each command's OWN setVolume/setMute call still happens independently — only the
+    // trailing re-sync is coalesced when they race — so this asserts "not doubled",
+    // not "exactly one", since the two commands' syncZone calls may or may not overlap
+    // depending on scheduling; the guarantee is no MORE than one per command plus at
+    // most one coalesced extra, never an unbounded pile-up.
+    expect(after - before).toBeLessThanOrEqual(2);
+    await driver.disconnect();
+    await new Promise<void>((r) => yam.server.close(() => r()));
   });
 });

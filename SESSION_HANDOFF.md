@@ -4,137 +4,128 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-**Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start.
+**Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start. Two
+turns this session: (1) built the Universal AV Driver SDK completion (Diagnostics Console, Room
+Assignment Engine, Automatic Zone Generation, Media Topology Engine — already committed/pushed as
+of the previous handoff), (2) this turn — a full production-verification-and-hardening audit of
+that framework per an explicit 10-phase brief.
 
 ## Current development status
 
-The incoming brief asked for a full "SupremeOS Universal AV Driver SDK." A gap analysis (citing
-exact file:line evidence, not assumption) found the Universal AVR Framework (ADR 0015) was
-already built and shipping in a previous session — Denon/Marantz Telnet, HEOS, and Yamaha YXC
-drivers with real discovery, dynamic capability detection, and reconnect. This session closed the
-genuinely missing pieces confirmed by that gap analysis: a Diagnostics Console, a confidence-based
-Room Assignment Engine (replacing a narrower prior policy, per explicit user direction), Automatic
-Zone Generation, and a Media Topology Engine — plus small, honest discovery enrichment (best-effort
-MAC lookup, real model threading). Full details and rationale live in ADR 0015's new addendum
-(`docs/architecture/adr/0015-universal-avr-framework.md`).
+The brief asked for a commercial-production-readiness audit: architecture audit, Digital Twin
+audit, driver lifecycle audit, protocol coverage matrix, hardware validation checklist, stress
+testing, performance audit, developer documentation, future-driver readiness, and a final
+production readiness report — explicitly "do not add new features, refactor only where
+necessary, do not rewrite working code." Two background research agents were launched for the
+architecture/digital-twin/lifecycle and stress/concurrency audits but both hit the account's
+session usage limit before returning results — the audit was done directly instead, reading the
+actual driver source and citing file:line evidence for every claim, same rigor bar.
+
+**Full report:** `docs/architecture/avr-framework-production-audit.md` (all 10 phases).
+**New developer docs:** `docs/architecture/avr-sdk-developer-guide.md` (SDK/Lifecycle/Digital
+Twin/Discovery/Capability/Diagnostics/Room-Assignment/Topology reference), plus a new §8 in
+`docs/architecture/adding-avr-brands.md` confirming future-brand readiness.
+
+**Bottom line: the framework is NOT marked production-ready (~70%)** — two disqualifiers per the
+brief's own instruction: a confirmed fleet-wide architectural gap (no `unbind()` anywhere in the
+25-driver fleet) and zero hardware verification (this environment has none available). Everything
+that COULD be verified without real hardware was verified and hardened.
 
 ## Completed this session
 
-1. **Diagnostics Console** (§ Universal AV Driver SDK): a shared `DriverDiagnosticsTracker`
-   (`services/protocols/src/driver-diagnostics.ts`, generalized from the counter pattern already
-   proven in `knx-ultimate-provider.ts`) wired into `AvrProtocolDriver`/`HeosProtocolDriver`/
-   `YamahaProtocolDriver` — real RX/TX packet counts, last command/response + timestamps, response
-   time, reconnect count, last error. Exposed via a new optional `INativeProtocolDriver.
-   getDiagnostics?()`, plumbed through `SupremeNativeAdapter`/`RoutingBackendAdapter`/
-   `SupremeIntegrationLayer` (mirroring the existing `getCapabilityConfig` seam exactly — and in
-   the process fixed a real pre-existing gap: `RoutingBackendAdapter` never actually implemented
-   `getCapabilityConfig`, so a routed device's capability config silently never reached the UI;
-   both are now implemented together). New route `GET /v1/devices/:id/diagnostics` → new
-   `DeviceDriverDiagnostics` contract type → `fetchDeviceDiagnostics()` → rendered in
-   `DiagnosticsSection` (`device-detail-sections.tsx`). MAC is a best-effort local ARP-table read
-   (`services/protocols/src/arp-lookup.ts`, Linux `/proc/net/arp` only — never active probing).
-   Firmware stays honestly `null` for all three protocols (verified: none of the specs expose it).
-2. **Room Assignment Engine** (§ Automatic Room Assignment) — a new, generic, protocol-agnostic
-   engine (`services/commissioning/src/room-assignment-engine.ts`), explicitly NOT the same as
-   the existing KNX-ETS-project-tree engine at `knx/room-assignment-engine.ts` (different input
-   shape, different job — both now coexist). Confidence tiers: `explicit_attribute` (100),
-   `persistent_user_zone_name` (90 — HEOS player names, Yamaha MusicCast zone names), `friendly_
-   name_heuristic` (70 — normalized SSDP friendlyName, brand/category/zone noise words stripped).
-   Below 70 → the fixed `"Unassigned Devices"` room, never a silent guess. This **explicitly
-   supersedes** ADR 0015 §2.3's prior "installer always assigns the room" position, per direct
-   user instruction overriding that architecture decision — see the ADR addendum for the full
-   policy text.
-3. **Automatic Zone Generation**: Yamaha's `discover()` now also queries `/system/getFeatures`
-   per candidate (a real wire call) and reports every zone the unit actually has; a new
-   `InstallerServices.autoCommissionMedia()` (`services/gateway/src/installer-context.ts`, routed
-   at `POST /v1/commissioning/auto-media`) auto-creates a sibling Supreme device per extra zone,
-   sharing the physical connection, in the same resolved room. Denon Telnet's Zone 2 stays a
-   deliberate manual step (protocol genuinely can't detect it — unchanged from the original ADR).
-   Dedup via `registry.reverseLookup` so a repeat run never re-commissions/re-expands.
-4. **Media Topology Engine**: `packages/domain-model/src/media-topology.ts` — installer-declared
-   HDMI-input/output/zone → connected-thing graph (`{output, label, connectedDeviceId?,
-   connectedLabel}`), stored in the existing free-form `device.metadata.avrTopology` (no
-   persistence/migration change). Rendered + edited (devMode-gated) in a new `TopologySection`
-   inside the AVR console (`apps/web-homeowner/src/features/media/detail.tsx`).
-5. **Discovery enrichment**: HEOS/Yamaha now thread a real `model` string through to `bindConfig`
-   (HEOS `get_player_info`, Yamaha's UPnP `<modelName>`) — Denon Telnet stays `null` (no wire
-   source). Active subnet scanning was deliberately NOT built (SSDP/mDNS already cover every
-   brand in scope non-intrusively — a blind scan is the wrong default here).
-6. **Tests**: 20 new/changed test files across `services/protocols`, `services/commissioning`,
-   `services/integration-layer`, `services/gateway`, `packages/domain-model` — including a new
-   end-to-end proof (`services/gateway/src/auto-commission-media.e2e.test.ts`): discover →
-   confidence-scored room assignment → auto zone generation → bind → live control, plus the
-   Unassigned-bucket and repeat-run-is-a-noop cases. Full monorepo `pnpm turbo run build /
-   typecheck / test` all pass clean (93/93 tasks each).
+1. **Real bugs found and fixed** (all with new regression tests, all 348 protocol tests +
+   93 monorepo tasks passing):
+   - **Race condition + resource leak**: `YamahaProtocolDriver.ensureHostFeatures()` had a
+     genuine TOCTOU race — two concurrent callers for a host with no cached entry yet (e.g.
+     `bind()` for onoff+media on one freshly-commissioned zone) both passed the `!existing`
+     check before either resolved, firing duplicate `getFeatures` requests AND leaking an
+     orphaned `setInterval` refresh timer forever. Fixed with an in-flight-promise cache
+     (`hostFeaturesInFlight`).
+   - **Same race class in `syncZone()`**: concurrent command/UDP-event-triggered re-syncs for
+     the same zone could fire overlapping `getStatus` requests whose responses could resolve
+     out of order, letting a stale response overwrite a fresher one. Fixed the same way
+     (`syncZoneInFlight`).
+   - **Unbounded memory growth**: `link.buffer` in `avr-driver.ts`/`heos-driver.ts` had no
+     upper bound — a misbehaving/malicious device sending data with no delimiter could grow
+     memory without limit. Fixed with a new shared `LineAccumulator`
+     (`services/protocols/src/line-buffer.ts`, 64KB cap, resets + logs on overflow) — this
+     also deduplicated genuinely-identical buffer-handling code that was copy-pasted between
+     the two drivers (a real Phase 1 "duplicate code" finding fixed by the same change).
+   - **Lifecycle gap**: none of the 3 drivers' `command()` checked whether the driver had
+     been `disconnect()`-ed — a command issued post-teardown silently re-opened a real
+     TCP/HTTP connection instead of failing. Now all 3 throw `"driver is disconnected"`
+     immediately.
+2. **15 new tests**: 2 direct regression tests for the two races, 5 for `LineAccumulator`
+   (including a literal 5,000-byte no-delimiter flood), 8 lifecycle/concurrency edge cases
+   (disconnect-twice idempotency, command-after-disconnect rejection, multi-host isolation,
+   rapid-fire command delivery — one set per driver plus a dedicated multi-AVR test).
+3. **Phase 4 Protocol Coverage Matrix** — full Denon/Marantz/HEOS/Yamaha feature tables with
+   ✓/△/✗/N/A verdicts, each citing file:line. Found one real small gap while building it: HEOS
+   QuickSelect has a working command path with no UI entry point (capability config never
+   populates `presets`/`advancedControls` for it).
+4. **Phase 2 Digital Twin audit** — every requested property (Identity/Firmware/Network/Power/
+   Volume/Mute/Input/Zones/Playback/Metadata/Codec/Sample-Rate/DSP/Tone/EQ/HDMI/Video/HEOS/
+   MusicCast/AirPlay/Bluetooth/Diagnostics/Statistics) checked against the actual domain model
+   and each driver's cache — table in the audit doc. Confirmed AirPlay is a completely separate,
+   pre-existing driver (`airplay-driver.ts`), not part of this framework. Found two real,
+   confirmed gaps: Yamaha's `setEqualizer` (in the YXC spec, not wired into the codec) and HEOS's
+   Bluetooth surface (not modeled at all).
+5. **Phase 5 Hardware Validation Checklist** — per-brand, unchecked, explicit that nothing has
+   run against real hardware (none available in this environment).
+6. **Phase 9 Future Driver Readiness** — verified all 9 listed future brands (Anthem/Arcam/NAD/
+   Sony/Pioneer/Onkyo/JBL Synthesis/StormAudio/Trinnov) are supported without architectural
+   change; documented the one optional one-line follow-up (widening `autoCommissionMedia`'s
+   protocol union to onboard a 4th brand into the one-click auto-commission flow — not required
+   for a new driver to function).
+7. **Phase 10 Production Readiness Report** — architecture 9/10, code quality 9/10, performance
+   not independently ratable (no real hardware), full limitations list, ~70% production-ready,
+   explicitly not marked ready per the brief's own gating instruction.
 
 ## Files touched this session
 
-- New: `services/protocols/src/{driver-diagnostics,arp-lookup}.ts` (+ `.test.ts` each)
-- New: `services/commissioning/src/room-assignment-engine.ts` (+ `.test.ts`)
-- New: `packages/domain-model/src/media-topology.ts` (+ `.test.ts`)
-- New: `services/gateway/src/auto-commission-media.e2e.test.ts`
-- Modified: `services/protocols/src/{avr,heos,yamaha}-driver.ts`, `yamaha-codec.ts`,
-  `{avr,heos,yamaha}-driver.test.ts`
-- Modified: `services/integration-layer/src/{adapter,native-adapter,routing-adapter,sil,
-  protocols/driver}.ts`, `index.ts`
-- Modified: `services/commissioning/src/index.ts` (`DiscoveredView` gains `locationHint`/`zones`)
-- Modified: `services/gateway/src/installer-context.ts`, `routes/{devices,installer}.ts`
-- Modified: `packages/supreme-contracts/src/rest.ts` (`DeviceDriverDiagnostics`)
-- Modified: `packages/domain-model/src/index.ts`
-- Modified: `apps/web-homeowner/src/{api,device-detail-sections,styles}.ts(x/css)`,
-  `features/media/detail.tsx`
-- Docs: `docs/architecture/adr/0015-universal-avr-framework.md` (addendum),
-  `docs/architecture/avr-framework-review.md` (supersede note on §2.3)
+- New: `services/protocols/src/line-buffer.ts` (+ `.test.ts`)
+- Modified: `services/protocols/src/{avr,heos,yamaha}-driver.ts` (disconnect-guard,
+  buffer-bound wiring, in-flight coalescing) and their `.test.ts` files (new hardening tests)
+- New: `docs/architecture/avr-framework-production-audit.md` (the full 10-phase report)
+- New: `docs/architecture/avr-sdk-developer-guide.md`
+- Modified: `docs/architecture/adding-avr-brands.md` (new §8)
 
 ## Architecture decisions made this session
 
-- **Two Room Assignment Engines coexist, deliberately.** The new generic one
-  (`services/commissioning/src/room-assignment-engine.ts`) handles live-discovery hints across
-  any protocol; the existing KNX one (`knx/room-assignment-engine.ts`) resolves an ETS project
-  file's building/floor/room tree — different input shape, different job. Neither was merged into
-  the other; the KNX ETS import pipeline was not touched (working, well-tested, high blast-radius
-  if broken).
-- **`autoCommissionMedia` is a new method, not a rewrite of `autoCommission`.** The existing
-  generic `autoCommission(protocol)` (used by Casambi) takes a bare `raw.room` string with no
-  confidence check and has no zone-expansion concept; extending it in place risked regressing
-  Casambi's working path. A parallel, AVR/HEOS/Yamaha-scoped method was added instead, following
-  the same `discover → resolve room → commission → bind` shape.
-- **Diagnostics is per-physical-link, not per-Supreme-device**, for AVR/HEOS (one TCP socket,
-  many devices) and per-host for Yamaha (HTTP request/response, no persistent socket) — sibling
-  zone devices on the same physical unit correctly report identical RX/TX counters, which is
-  honest (it *is* the same wire traffic), not a bug.
-- **No active subnet scanning.** SSDP/mDNS already cover every brand in scope; a blind scan is
-  intrusive and the wrong default for a local-first luxury platform. MAC enrichment uses the
-  passive local ARP table instead.
+- **In-flight-promise coalescing, not a mutex/lock**, for the two Yamaha races — idiomatic JS
+  concurrency control (no actual threads to lock), and it fixes both "duplicate work" and
+  "stale-overwrites-fresh" in one mechanism since every concurrent caller awaits the exact same
+  result.
+- **`LineAccumulator` extracted, not just bounded in place** — the buffer-handling logic was
+  genuinely byte-for-byte identical between AVR and HEOS (only the delimiter differs), so fixing
+  the bug and deduplicating the code were the same change, not two separate ones.
+- **Fleet-wide `unbind()` gap deliberately NOT fixed** — confirmed real and architectural, but
+  changing the shared `INativeProtocolDriver` interface used by 25 drivers is out of scope for a
+  session scoped to "harden the AVR framework," per the brief's own "do not rewrite working code"
+  instruction. Documented as a new TODO item with full reasoning instead.
+- **Small protocol-completeness gaps (Yamaha EQ, HEOS QuickSelect UI, HEOS Bluetooth) also
+  deliberately NOT fixed** — real and scoped, but the brief said "no new features," and wiring a
+  previously-unwired spec command is arguably a small feature addition, not a hardening fix.
+  Documented as TODO items instead of silently fixed or silently ignored.
 
 ## Known issues / open gaps
 
-- **Not live-verified against real Denon/HEOS/Yamaha hardware or a running `hub-compose` stack**
-  — this environment has neither. Every protocol claim is checked against the vendor specs
-  already cited in ADR 0015 and exercised through in-process fake TCP/HTTP servers (this repo's
-  established testing convention); `tsc`/`vite build` both pass clean, but the new Topology UI has
-  not been Playwright-verified in a real browser at any responsive tier, per this project's own
-  UI testing standard. Do this first if picking AVR work back up.
-- No whole-home Media Dashboard topology *graph view* — only the per-device connections list was
-  built (task explicitly asked for diagnostics/dashboard/automation-relationships support; only
-  the diagnostics-adjacent per-device view shipped this session).
-- The generic Room Assignment Engine is wired for AVR/HEOS/Yamaha only. The brief asked for it to
-  be reusable by Matter/KNX/Zigbee/Z-Wave/BLE/IP drivers too — the engine itself is already
-  protocol-agnostic (takes a generic `LocationHint`), but none of those other drivers were changed
-  to emit one this session (deliberately, to avoid touching working KNX ETS import / other stable
-  pipelines in a single large session).
-- Everything from the previous handoff not touched this session remains open (Infrastructure
-  module device types #2–8, design-polish phase, density-breakpoint remount bug, production-
-  readiness gap — see `TODO.md`).
+- **No hardware verification** — the single largest gate before production-ready. See the audit's
+  Phase 5 checklist.
+- **One specific open protocol question**: does a bare Denon `Z2?` query echo Zone 2's current
+  SOURCE as well as power on real hardware? The codec only sends `Z2?`/`Z2MU?` on reconnect, no
+  explicit zone2-source query token — flagged, not guessed at.
+- Everything from the prior handoff not touched this session remains open (Infrastructure module
+  device types #2-8, design-polish phase, density-breakpoint remount bug, the fleet-wide
+  production-readiness gap in `docs/production-readiness.md`).
 
 ## Immediate priorities for the next session
 
-1. Stand up `hub-compose` and live-verify the Topology UI + Diagnostics Console fields against
-   real device data at every responsive tier (or at minimum against a real Denon/HEOS/Yamaha unit
-   if hardware is available).
-2. If more protocols should feed the Room Assignment Engine, wire a `locationHint` into Matter/
-   KNX/Zigbee discovery the same way AVR/HEOS/Yamaha now do — the engine itself needs no changes.
-3. Continue the Infrastructure module (Solar/Battery Storage next) or the Design Polish phase —
-   both still open from before this session.
+1. Hardware verification (Phase 5 checklist) — the top blocker for calling this production-ready.
+2. If picking small gaps back up: Yamaha EQ wiring, HEOS QuickSelect UI surface, HEOS Bluetooth
+   modeling — all three are small, scoped, and documented in `TODO.md`.
+3. The fleet-wide `unbind()` gap is a bigger, cross-cutting session on its own (touches all 25
+   drivers' shared interface) — worth deliberately scheduling, not bolting onto another framework
+   pass.
 
 See `TODO.md` for the full backlog with priority tiers.
