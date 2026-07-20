@@ -150,6 +150,21 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
     expect(heos.sockets.size).toBe(1);
   });
 
+  it("reports real Diagnostics Console counters shared by both bound players (one connection)", async () => {
+    const before = driver.getDiagnostics(livingRoom);
+    expect(before?.connectionStatus).toBe("connected");
+    expect(before?.protocol).toBe("heos");
+    expect(before?.packetsSent).toBeGreaterThan(0);
+    const sentBefore = before!.packetsSent;
+
+    await driver.command(livingRoom, { capability: "media", action: "volume", volume: 40 });
+    await vi.waitFor(() => expect(driver.getDiagnostics(livingRoom)!.packetsSent).toBeGreaterThan(sentBefore));
+
+    // Living room and theatre share ONE physical connection — diagnostics for both
+    // devices report the same underlying link traffic.
+    expect(driver.getDiagnostics(theatre)?.packetsSent).toBe(driver.getDiagnostics(livingRoom)?.packetsSent);
+  });
+
   it("rejects binding a non-media capability — HEOS has no power surface", async () => {
     await expect(
       driver.bind({ deviceId: "device-heos-bad" as DeviceId, capability: "onoff", address: `127.0.0.1:${heos.port}`, config: { pid: "3" } }),
@@ -207,6 +222,33 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
   });
 });
 
+describe("HeosProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => {
+  it("keeps the shared network connection open while a sibling player is still bound, then closes it once the last player is unbound", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver();
+    await driver.connect();
+    const livingRoom = "device-heos-unbind-living" as DeviceId;
+    const theatre = "device-heos-unbind-theatre" as DeviceId;
+    await driver.bind({ deviceId: livingRoom, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "1" } });
+    await driver.bind({ deviceId: theatre, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "2" } });
+    await vi.waitFor(() => expect(heos.sockets.size).toBe(1));
+
+    await driver.unbind(theatre);
+    expect(driver.manages(theatre)).toBe(false);
+    expect(driver.manages(livingRoom)).toBe(true);
+    expect(heos.sockets.size).toBe(1); // living room still needs this connection
+
+    await driver.unbind(livingRoom);
+    expect(driver.manages(livingRoom)).toBe(false);
+    await vi.waitFor(() => expect(heos.sockets.size).toBe(0));
+
+    await expect(driver.unbind(livingRoom)).resolves.toBeUndefined(); // idempotent
+
+    await driver.disconnect();
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+});
+
 describe("HeosProtocolDriver — auto-reconnect on drop", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -235,6 +277,31 @@ describe("HeosProtocolDriver — auto-reconnect on drop", () => {
   });
 });
 
+describe("HeosProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
+  it("rejects a command after disconnect() instead of silently re-opening a socket", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver();
+    const dev = "device-heos-teardown" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "9" } });
+    await vi.waitFor(() => expect(heos.received.some((r) => r.includes("pid=9"))).toBe(true));
+
+    await driver.disconnect();
+    await expect(driver.command(dev, { capability: "media", action: "mute" })).rejects.toThrow(/disconnected/);
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+
+  it("disconnect() is idempotent — calling it twice never throws", async () => {
+    const heos = await startFakeHeos();
+    const driver = new HeosProtocolDriver();
+    await driver.connect();
+    await driver.bind({ deviceId: "device-y" as DeviceId, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "1" } });
+    await driver.disconnect();
+    await expect(driver.disconnect()).resolves.toBeUndefined();
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+});
+
 describe("HeosProtocolDriver — discovery", () => {
   it("resolves real pids via get_players after SSDP, one DiscoveredDevice per player", async () => {
     const heos = await startFakeHeos();
@@ -247,8 +314,28 @@ describe("HeosProtocolDriver — discovery", () => {
     });
     const found = await driver.discover();
     expect(found).toEqual([
-      { backendId: "1", suggestedName: "Living Room", capabilities: ["media"], raw: { ip: "127.0.0.1", model: "HEOS Bar", bindConfig: { pid: "1" } } },
-      { backendId: "2", suggestedName: "Theatre", capabilities: ["media"], raw: { ip: "127.0.0.1", model: "HEOS Bar", bindConfig: { pid: "2" } } },
+      {
+        backendId: "1",
+        suggestedName: "Living Room",
+        capabilities: ["media"],
+        raw: {
+          ip: "127.0.0.1",
+          model: "HEOS Bar",
+          bindConfig: { pid: "1", model: "HEOS Bar" },
+          locationHint: { raw: "Living Room", source: "persistent_user_zone_name" },
+        },
+      },
+      {
+        backendId: "2",
+        suggestedName: "Theatre",
+        capabilities: ["media"],
+        raw: {
+          ip: "127.0.0.1",
+          model: "HEOS Bar",
+          bindConfig: { pid: "2", model: "HEOS Bar" },
+          locationHint: { raw: "Theatre", source: "persistent_user_zone_name" },
+        },
+      },
     ]);
     await new Promise<void>((r) => heos.server.close(() => r()));
   });

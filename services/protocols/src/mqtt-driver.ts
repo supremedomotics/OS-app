@@ -14,6 +14,7 @@ import {
 } from "@supreme/integration-layer";
 import { payloadFromCommand, stateFromPayload } from "./mqtt-codec.js";
 import { discoveredFromZ2mBridge } from "./mqtt-discovery.js";
+import { removeDeviceStates } from "./binding-cleanup.js";
 
 export interface MqttDriverOptions {
   /** Broker URL, e.g. "mqtt://mqtt:1883". */
@@ -106,6 +107,24 @@ export class MqttProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's topic subscriptions
+   * (unsubscribing a base topic only once no other device's capability still uses
+   * it) and cached state, without touching the shared MQTT client. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    for (const [topic, list] of [...this.byTopic]) {
+      const remaining = list.filter((b) => b.deviceId !== deviceId);
+      if (remaining.length === list.length) continue;
+      if (remaining.length === 0) {
+        this.byTopic.delete(topic);
+        if (this.client) await this.client.unsubscribeAsync(topic);
+      } else {
+        this.byTopic.set(topic, remaining);
+      }
+    }
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

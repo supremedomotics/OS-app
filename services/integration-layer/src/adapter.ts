@@ -54,6 +54,32 @@ export interface MediaQueueItem {
   artworkUrl: string | null;
 }
 
+export type DriverConnectionStatus = "connected" | "connecting" | "disconnected";
+
+/** Real-time connection/traffic health for one device's owning driver link (§ Diagnostics
+ * Console, Universal AV Driver SDK). Every field is either a genuine counter/timestamp or
+ * `null` when the owning protocol truly doesn't expose it (e.g. no AVR protocol in this
+ * fleet reports firmware on the wire) — never a fabricated placeholder. See
+ * `services/protocols/src/driver-diagnostics.ts` for the shared tracker that produces this. */
+export interface DriverDiagnosticsSnapshot {
+  connectionStatus: DriverConnectionStatus;
+  protocol: string;
+  driverVersion: string;
+  model: string | null;
+  firmware: string | null;
+  ip: string | null;
+  mac: string | null;
+  lastCommand: string | null;
+  lastCommandAt: string | null;
+  lastResponse: string | null;
+  lastResponseAt: string | null;
+  responseTimeMs: number | null;
+  packetsSent: number;
+  packetsReceived: number;
+  reconnectCount: number;
+  lastError: string | null;
+}
+
 export interface IBackendAdapter {
   /** Stable identifier for the adapter implementation (e.g. "ha", "supreme-native"). */
   readonly kind: string;
@@ -88,4 +114,15 @@ export interface IBackendAdapter {
   /** Optional: fetch a device+capability's real AudioCapabilityConfig, if the owning
    * driver reports one (null if none/unsupported). */
   getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null>;
+
+  /** Optional: fetch a device's real connection/traffic diagnostics from its owning
+   * driver (null if none/unsupported — e.g. this device isn't bound to a native driver
+   * that tracks this). */
+  getDiagnostics?(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null>;
+
+  /** Optional: release the owning driver's per-device resources (§ Driver Lifecycle
+   * Completion) — called when a Supreme device is deleted. A no-op for backends with
+   * no per-device driver-level state to release (e.g. HA — HA owns its own connection
+   * lifecycle independently of Supreme device deletion). */
+  unbindDevice?(deviceId: DeviceId): Promise<void>;
 }

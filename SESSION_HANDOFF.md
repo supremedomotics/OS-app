@@ -4,114 +4,199 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-**Branch:** `main` — synced to `origin/main` at the start of this session (fast-forwarded from
-90 commits behind); this session's changes are uncommitted local edits, not yet pushed.
+**Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start. This
+branch's work spans four parts: (1) an **AV architecture verification report** (no code changes
+— answered "is AVR/HEOS/Yamaha a real Universal SDK with brand adapters, or three independent
+thick drivers?" honestly: three independent thick drivers, no SDK layer exists in code, only in
+docs); (2) a large **AV SDK refactor** was requested to close that gap, planned in detail (3
+research agents + 1 design-critique agent, full duplication audit, evidence-scoped module design),
+initially **rejected by the user before execution** in favor of a different task; (3)
+**Automation Editor Production Hardening** — executed in place of the rejected refactor; (4) the
+user then **re-requested the AV SDK refactor** with an explicit phase-by-phase brief matching the
+earlier plan almost exactly — this was **fully executed and validated** this turn (see Part 4).
 
-## Current development status
+## Part 1 — AV architecture verification (no code changes)
 
-The **Infrastructure module** initiative has started: **Energy** (device type #1 of 8) is built
-— capability-mapper, Standard Card, per-device Premium Detail Page, and a rebuilt whole-home
-dashboard, replacing the old plain-`.card.row` Energy tab. The remaining 7 Infrastructure device
-types (Solar, Battery Storage, EV Charger, Pool, Irrigation, Water Tank, Generator, Building
-Management/Vehicle) are **not started** but now have a real pattern + a reusable gauge component
-to extend. The Design Polish phase (ambient color identity, layout-rhythm variation per category)
-from the previous handoff is still open and unaffected by this session's work.
+Answered a direct question: does the AV driver layer match a "Universal AV SDK → brand adapter →
+transport → device" architecture? No — `AvrProtocolDriver`/`HeosProtocolDriver`/
+`YamahaProtocolDriver` each independently implement `INativeProtocolDriver` directly; there is no
+SDK layer in code, only in `docs/architecture/avr-sdk-developer-guide.md`'s documentation. Denon
+and Marantz are correctly the SAME driver (identical wire protocol, not a missed consolidation).
+No files changed.
 
-## Completed this session
+## Part 2 — AV SDK Refactor, first attempt (planned in full, then rejected — plan later executed, see Part 4)
 
-1. **Energy feature module** (`apps/web-homeowner/src/features/infrastructure/energy/`):
-   - `capability-mapper.ts` — `EnergyDeviceKind` (`smart_plug`/`power_meter`/`solar_inverter`/
-     `battery_storage`/`ev_charger`/`generator`), classified from `device.metadata.energy.kind`
-     first, falling back to whether the device has an `onoff` capability. `isEnergyDevice()`
-     identifies devices this module owns via a `sensor` capability with `measure: "power"|
-     "energy"` — there is no dedicated energy `CapabilityKind` in `domain-model` yet.
-   - `card.tsx` — `EnergyDeviceCard`, structurally identical to Media/Security's `.media-card`
-     but leads with a small live `PowerRing` instead of a static icon.
-   - `detail.tsx` — `EnergyDeviceDetail`, the same hero→controls→QuickActions→CapabilityGrid→
-     Universal Page Structure skeleton as `SimpleMediaDetail`/`LockDetail`. Hero is a large
-     `PowerRing` reading the device's real live sensor value (never fabricated — devices with no
-     reading show "No live reading", not a fake number). Includes a real consumption sparkline
-     off the existing `/v1/energy/history` endpoint (`fetchEnergyHistory()`, already in
-     `api.ts`, no new endpoint needed). Schedule/Load Priority/Usage Alerts/Efficiency Insights
-     are honestly capability-gated ("Driver required") — no backing capability exists for any of
-     them yet.
-   - `apps/web-homeowner/src/infrastructure-energy.tsx` — the whole-home dashboard that replaces
-     `screens.tsx`'s old `Energy()`. Hero reads real `client.energySummary()` totals (no
-     invented "live power flow" — the backend only reports periodic aggregates); top-consumers
-     list and a room-grouped device grid both reuse `EnergyDeviceCard`; drills into
-     `EnergyDeviceDetail` via the same `selectedId` local-state pattern `media.tsx` uses.
-2. **New shared component — `PowerRing`** (`packages/aureon-web/src/components/PowerRing.tsx`):
-   a generic bounded-value radial SVG gauge (not Energy-specific — usable for battery %, solar
-   output, tank level, etc. on future Infrastructure pages). Animated arc respects
-   `prefers-reduced-motion` (transition disabled, not the ring itself). Exported from
-   `@supreme/aureon-web`'s `index.ts`; CSS added to `components.css`.
-3. **7 new icons** in `Icon.tsx`'s `PATHS`: `plug`, `sun`, `ev`, `generator-unit`, `leaf`,
-   `trend-up`, `flow` — reusable across future Solar/Battery/EV/Generator pages, same pattern as
-   the existing Security/Media icon family.
-4. **`devices.tsx`'s `friendlyType()`** updated with an `isEnergyDevice()` branch before the
-   generic "Sensor" fallback, so the Device Manager's Type column shows the real energy kind
-   label instead of a generic "Sensor".
-5. Deleted the old `Energy()` function from `screens.tsx` (dead code, superseded by
-   `infrastructure-energy.tsx`) and its now-unused `EnergySummaryResponse` import.
+The user first asked for a full "Universal AV SDK" refactor converting AVR/HEOS/Yamaha into thin
+adapters. This was planned rigorously (plan mode, 3 parallel Explore agents + 1 Plan-agent
+critique pass) before any code was touched:
+- **Real audit finding**: the actual duplication is narrow — a ~55-line TCP-link-pool + reconnect
+  + line-buffering pattern between AVR/HEOS, plus `record()` (verbatim identical in all 3
+  drivers), a diagnostics-status ternary, an `onData` skeleton, and one dead-duplicated
+  `parseHostPort()`. Most of the requested 20-subsystem/17-future-brand target architecture either
+  already exists elsewhere as generic fleet infrastructure (Room Assignment Engine, Diagnostics
+  route, the Device/CapabilityState model) or has no evidence to justify building it
+  (Telemetry/Metrics/Subscription-Manager/a unified Zone Engine — AVR/HEOS/Yamaha genuinely model
+  zones incompatibly at the wire level).
+- User confirmed (via `AskUserQuestion`) a scoped, evidence-based extraction plan: one
+  `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`), AVR/HEOS
+  migrated to use it, Yamaha only getting the `record()` extraction ("thinner, not thin" — HTTP
+  transport has no second caller in the fleet, building an HTTP-transport SDK primitive now would
+  be speculative), zero stub adapters for the 17 unbuilt brands (would violate "never fabricate
+  capabilities").
+- **The full plan was written to `/root/.claude/plans/polished-stirring-dongarra.md` and presented
+  via `ExitPlanMode` — the user rejected it at the time** (pasted an entirely different task
+  instead, see Part 3). No code from this plan was applied in this pass. The user later
+  re-requested this exact refactor (Part 4) — this plan file became that pass's executed
+  blueprint, so this section is history, not an open item.
 
-## Files touched this session
+## Part 3 — Automation Editor Production Hardening (executed)
 
-- `packages/aureon-web/src/components/{Icon,PowerRing}.tsx`, `components.css`, `index.ts`
-- `apps/web-homeowner/src/features/infrastructure/energy/{capability-mapper,card,detail}.tsx`
-  (new directory)
-- `apps/web-homeowner/src/infrastructure-energy.tsx` (new)
-- `apps/web-homeowner/src/{App,devices,screens}.tsx`
+The rejected AV SDK task was replaced with a "Automation Editor Production Hardening (ADR-0100)"
+brief. **Critical finding, surfaced to the user twice via `AskUserQuestion` before proceeding**:
+ADR-0016 through ADR-0021 and ADR-0100 do not exist anywhere in this repository (only ADR-0001–15
+do); "Runtime Objects"/"Runtime Events" aren't this codebase's vocabulary; and the requested
+four-level field-resolution pipeline (Driver Command Metadata → Capability Structural
+Configuration → Live-State Inference → Static Capability Table) doesn't exist either — the real
+Automation Editor (`apps/web-homeowner/src/automations.tsx`) has a small hardcoded onoff-only
+field set with no capability-driven resolution at all. User confirmed: proceed against the real
+implementation (governed by **ADR-0005**, "Native automation engine, AI drafts, and append-only
+audit"), document the real gap honestly, present the requested pipeline/metadata contract/
+maturity model as clearly-labeled **future proposals**, don't implement them.
 
-## Architecture decisions made this session
+**What actually changed** (see `docs/architecture/Automation-Editor-Production-Hardening-Report.md`
+for the full report):
+- `apps/web-homeowner/src/automations.tsx`: replaced the loose `Record<string, unknown> & { type:
+  string }` node type with a real `EditorNode` discriminated union — removed 6 unsafe `as` casts,
+  made `defaultNode()`/`nodeSummary()` compiler-enforced-exhaustive switches, added a runtime type
+  guard (`isEditorNodeType`) at the one real untyped boundary (the HTML5 drag-and-drop payload).
+  Fixed one real "obvious" performance issue found during review: the device-picker's room/device
+  fetch was N sequential HTTP round-trips instead of one parallel `Promise.all` batch.
+- `apps/web-homeowner/src/api.ts`: one documentation comment added (no code change) explaining why
+  `AutomationView` is intentionally narrower than the full domain-model `Automation` type.
+- New `apps/web-homeowner/src/automations.test.ts`: 9 tests for the file's pure helper functions —
+  previously **zero** test coverage existed for this file (in fact for the entire
+  `@supreme/web-homeowner` app — no `.test.tsx` anywhere, no `@testing-library/react`/jsdom
+  dependency). Component-level tests were investigated and explicitly NOT added — would require
+  introducing new test infrastructure to an app that's never had any, a real scope decision,
+  documented as a `TODO.md` follow-up rather than silently done or silently skipped.
+- Nothing in `services/automations/`, `packages/domain-model/src/automations-dsl.ts`,
+  `packages/supreme-contracts/src/phase3.ts`, `services/persistence`'s automation repo, or the
+  gateway automation routes was touched — this is the evidence behind the report's "zero
+  serialization/persistence/execution-engine impact" claim, not an inference.
+- Three new docs: `docs/architecture/Automation-Editor.md` (architecture + real current
+  field-resolution pipeline + driver integration guide), `Automation-Editor-Future-Driver-SDK-
+  Roadmap.md` (Command Metadata contract examples, maturity model, extension points — all
+  explicitly labeled unimplemented), `Automation-Editor-Production-Hardening-Report.md` (the full
+  14-part report: code review, performance, type safety, test coverage, backward-compat matrix,
+  serialization/protocol-compatibility validation, release-candidate validation).
 
-- **Infrastructure module lives at `features/infrastructure/<domain>/`**, not
-  `features/<domain>/` — one level deeper than Media/Security, since "Infrastructure" is the
-  product-facing module name for the whole device-type family (Energy, Solar, Battery, …), the
-  same way `Security` groups Lock/Camera/NVR/Alarm.
-- **`PowerRing` is generic, not Energy-specific** — deliberately no "power" semantics baked into
-  its props beyond a default tone, so it's the shared bounded-gauge primitive for every future
-  Infrastructure page rather than something each page reimplements.
-- **No fabricated "live power flow" visualization.** The real `/v1/energy/*` backend reports
-  periodic aggregates (`energySummary()`) and per-device sensor readings — not a continuous
-  instantaneous flow graph between grid/solar/battery/loads. The hero shows what's real (current
-  sensor reading, period totals); it does not simulate a flow animation the backend can't back,
-  per this project's own "never fabricate data or capabilities" rule.
-- Scoped the reusable-component set to what Energy actually needed (`PowerRing` + reuse of
-  existing `Card`/`Grid`/`CapabilityGrid`/`CapabilityGate`) rather than pre-building the full
-  ~15-component wishlist (`EnergyFlowCard`, `ConsumptionChart`, `GridCard`, `SolarCard`, etc.)
-  speculatively for modules that don't exist yet — each will be extracted into a shared
-  component the first time a second Infrastructure page actually needs the same shape, not
-  before (see `ConsumptionSpark` in `detail.tsx`, marked with a `ponytail:` comment for exactly
-  this).
+**Verification**: full monorepo `pnpm build` (54/54 packages), `pnpm typecheck` (93/93 tasks),
+`pnpm test` (all passing, including the 222 pre-existing gateway tests confirming zero regression)
+— all green after the change. No lint gate exists anywhere in this repo (confirmed, not assumed —
+no package defines a `lint` script, no ESLint/Biome config exists); this is reported honestly in
+the hardening report rather than silently skipped.
+
+## Part 4 — AV SDK Refactor, second attempt (executed, validated, committed)
+
+The user re-requested the same refactor with an explicit 9-phase brief, stating the Part 2 audit
+"is considered the authoritative scope — do NOT expand beyond it." Since this matched the
+already-designed (and substantively pre-approved) Part 2 plan almost exactly, and the user's
+message was itself phase-by-phase execution instructions, this was executed directly rather than
+re-entering plan mode.
+
+**New module `services/protocols/src/av-sdk/`** (internal-only — never re-exported from
+`services/protocols/src/index.ts`, so it carries zero public-API risk):
+- `state-cache.ts` — `recordCapabilityState()`, a plain function extracting the verbatim-identical
+  dedupe-then-notify `record()` logic previously copy-pasted in all three AV drivers. 5 tests.
+- `tcp-line-transport.ts` — `TcpLineTransport`, absorbing the genuinely duplicated AVR/HEOS
+  TCP-link-pool + reconnect + line-buffering pattern (`ensureLink`/`disconnectAll`/`releaseKey`/
+  `diagnosticsFor`, plus `onConnect`/`onLine` hooks the driver wires its own protocol logic
+  into). Delegates to the pre-existing `ReconnectScheduler`/`LineAccumulator`/
+  `DriverDiagnosticsTracker` rather than reimplementing them. 8 tests, including a fake-socket
+  ordering test proving link registration happens before any connect handler could observe it.
+- `extensibility.test.ts` — a synthetic, non-real `FakeBrandDriver` (protocol id
+  `"fake-brand-extensibility-proof"`, not exported or registered anywhere) built entirely from
+  `TcpLineTransport` + `recordCapabilityState` against a real embedded fake server, proving the
+  SDK's public surface is sufficient for a from-scratch adapter without fabricating a stub for
+  any real unbuilt brand. 2 tests.
+
+**Driver migrations** (all pre-existing driver test files pass **unmodified** — the regression
+gate):
+- `avr-driver.ts`: 387 → 305 lines (~21% reduction). `AvrLink` interface, `ensureLink`/
+  `openSocket`/`onData` methods, and the diagnostics-status ternary removed; replaced with
+  `TcpLineTransport` + `onLinkConnect()` hook. `record()` now delegates to
+  `recordCapabilityState()`. `avr-driver.test.ts`'s 19 tests pass unmodified.
+- `heos-driver.ts`: 522 → 437 lines (~16% reduction). Same pattern. Also deleted a dead-duplicated
+  local `parseHostPort()`, now importing the one `avr-codec.ts` already exports.
+  `heos-driver.test.ts`'s 21 tests pass unmodified. `queryPlayers()`'s unbounded discovery buffer
+  was deliberately left untouched (separately tracked, see `TODO.md` — a bug fix, not a refactor,
+  out of this pass's scope).
+- `yamaha-driver.ts`: 486 → 481 lines (~1% reduction) — **only** `record()` now delegates to
+  `recordCapabilityState()`. Yamaha stays on its own HTTP+UDP transport code; `TcpLineTransport`
+  doesn't apply (no persistent TCP line protocol) and no second HTTP-transport caller exists in
+  the fleet to justify a speculative primitive. Documented explicitly as "thinner, not thin," not
+  oversold as a third symmetric adapter. `yamaha-driver.test.ts`'s 24 tests pass unmodified.
+
+**New docs**: `docs/architecture/Universal-AV-SDK.md` (SDK architecture, before/after line counts,
+what was deliberately NOT built and why, structural performance-validation reasoning) and
+`docs/architecture/AV-Adapter-Development-Guide.md` (the `INativeProtocolDriver` contract, when to
+use `TcpLineTransport` vs. not, step-by-step wiring guide, the real process for adding a new AV
+brand). Updated `docs/architecture/avr-sdk-developer-guide.md` to correct its now-stale "no
+separate AVR engine" claim and cross-link the two new docs.
+
+**Verification**: `pnpm build` (54/54), `pnpm typecheck` (93/93), `pnpm test` (all green,
+including the full pre-existing `@supreme/protocols` suite — 378 tests — and `@supreme/gateway`'s
+222 tests, all passing **unmodified**, which is the direct evidence of zero runtime/protocol/
+discovery/diagnostics/reconnect behavior change). No public API, manifest, `ProtocolKind` enum, or
+device/entity identifier changed — confirmed by the driver classes' unchanged exported names,
+`protocol` field values, and constructor signatures, and by `native-driver-factory.ts`/
+`bootstrap.ts` requiring no edits.
+
+**What was deliberately NOT built, per the explicit "authoritative scope" constraint**: no
+`DiscoveryEngine`/`CapabilityEngine`/`StateEngine`/`EventEngine`/`DigitalTwin`/`ZoneEngine`/
+`Telemetry`/`Metrics`/`SubscriptionManager` modules (each either already exists elsewhere as
+generic fleet infrastructure, or has no real duplication behind it); no separate `ConnectionManager`/
+`TransportManager`/`ConnectionPool`/`ReconnectManager` as four classes (only one real transport
+variant exists in evidence, so it's one cohesive `TcpLineTransport`, not four wrappers); no
+placeholder adapter files for any of the 17 named future brands (Anthem/Arcam/Pioneer/Sony/NAD/
+StormAudio/JBL Synthesis/Onkyo/Integra/Rotel/McIntosh/Trinnov, etc.) — zero protocol
+implementation exists for any of them, so a stub would violate this repo's "never fabricate
+capabilities" rule.
 
 ## Known issues / open gaps
 
-- **Not live-verified against real device data.** Typecheck passes clean
-  (`pnpm --filter web-homeowner typecheck`) and the dev server boots with zero console/build
-  errors, but the app requires the gateway + Postgres backend (`hub-compose`) to authenticate
-  and load real device data — that stack wasn't running this session, so the Energy hero/cards/
-  detail page have not been visually confirmed against live data or screenshotted at every
-  breakpoint. Do this first next session, before building the next Infrastructure device type.
-- Ring "max" in `EnergyDeviceDetail`/`infrastructure-energy.tsx` is a display-only scaling
-  heuristic (`value * 1.4`) — there's no rated-wattage config to size the gauge against yet
-  (marked `ponytail:` in `detail.tsx`). Not a fabricated reading, just an arbitrary visual scale.
-- No device-category ambient color identity or layout-rhythm variation yet (carried over from
-  the previous handoff, still open, unrelated to this session's work) — see previous gaps below.
-- Everything from the previous handoff not touched this session remains open: the
-  `expanded`↔`comfortable` density-breakpoint remount bug, `device-sheets.tsx`'s generic
-  Climate/Fan/Vacuum/Media quick-sheets still using emoji, and the production-readiness gap
-  (~80% feature-complete, ~25–30% field-deployment ready per `docs/production-readiness.md`).
+- Cross-platform duplication: the web (`automations.tsx`) and mobile
+  (`apps/mobile/lib/screens/automation_editor.dart`) Automation Editors independently hand-
+  implement the identical six-node palette/defaults/field rules — not literal shared code (TS/Dart
+  can't share modules), documented not fixed.
+- The real, honest field-resolution gap: the DSL/engine already support triggers/conditions/
+  actions across every `CapabilityKind` (brightness/color/temperature/position/media/lock/fan/
+  vacuum/sensor) and the full `CapabilityCommand` union; the editor UI only authors `onoff`. A
+  homeowner cannot build "when brightness drops below 20%, run a scene" through either
+  drag-and-drop builder today, even though the backend already executes it. Documented in
+  `Automation-Editor.md` §2; NOT fixed (would be new user-facing functionality, explicitly out of
+  scope for a hardening pass).
+- `AutomationService` (the CRUD layer in `services/automations/src/service.ts`) has no direct unit
+  tests — only one happy-path e2e test covers create + WSS-observed execution; update/delete/
+  enable-toggle/list/runs and validation-error paths are untested. Flagged, not filled (was outside
+  this pass's touched-files scope).
+- `HeosProtocolDriver`'s `queryPlayers()` (discovery-only) reimplements manual line buffering
+  instead of reusing `LineAccumulator`, with no `maxBytes` cap — found during the AV SDK refactor's
+  audit, deliberately left untouched during the Part 4 migration (a bug fix, not a refactor), still
+  real, still unfixed, still in `TODO.md`.
 
 ## Immediate priorities for the next session
 
-1. Stand up the local backend (`hub-compose` or equivalent) and live-verify the Energy module —
-   phone/tablet/desktop/ultrawide screenshots, real device data, zero console errors — before
-   building the next Infrastructure device type.
-2. Continue the Infrastructure module: next device type (Solar or Battery Storage recommended —
-   both would exercise `PowerRing` a second time and validate it as genuinely reusable before
-   more Infrastructure pages are built on top of it).
-3. Device-category ambient color identity + layout-rhythm variation (carried over, still the
-   most-requested remaining polish item).
-4. Finish the emoji migration in `device-sheets.tsx`'s generic quick-sheets.
-
-See `TODO.md` for the full backlog with priority tiers.
+1. The AV SDK refactor (Parts 2 and 4) is complete — no further action needed unless a genuinely
+   new brand or a second HTTP-transport caller shows up (see `AV-Adapter-Development-Guide.md` for
+   the process).
+2. If continuing Automation Editor work: the real field-resolution gap (onoff-only authoring) is
+   the highest-value next step, but is a **feature**, not a hardening task — needs its own scoped
+   session/ADR, not a bolt-on.
+3. Component-test infrastructure for `apps/web-homeowner` (`@testing-library/react` + jsdom) is a
+   real, currently-nonexistent gap worth a dedicated small session before more UI hardening passes
+   rely on "add tests" the same way this one did (pure-function tests only).
+4. The HEOS `queryPlayers()` unbounded-buffer bug fix (see `TODO.md`) is small, low-risk, and ready
+   to pick up whenever a bug-fix pass (not a refactor pass) is in scope.
+5. Everything from the prior (Driver Lifecycle Completion) handoff not touched this session remains
+   open — see `TODO.md` for the full backlog with priority tiers.

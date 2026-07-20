@@ -54,11 +54,14 @@ import {
   knxSignalsFromModel,
   learnRenames,
   parseKnxSource,
+  resolveRoomAssignment,
   runKnxImport,
+  UNASSIGNED_ROOM_NAME,
   unzipKnxproj,
   type EntitySource,
   type IProtocolScanner,
   type KnxImportResultV2,
+  type LocationHint,
   type RecognizedDevice,
 } from "@supreme/commissioning";
 import { issueLicense, validateLicense } from "@supreme/licensing";
@@ -102,6 +105,37 @@ export interface KnxImportResult {
   devices: number;
   roomsCreated: number;
   created: { name: string; room: string | null; capabilities: string[] }[];
+}
+
+/** Result of {@link InstallerServices.autoCommissionMedia} — the confidence-based
+ * Automatic Room Assignment summary (§ Universal AV Driver SDK). `unassigned` counts
+ * how many landed in the fixed "Unassigned Devices" room rather than a real one. */
+export interface MediaAutoCommissionResult {
+  devices: number;
+  roomsCreated: number;
+  unassigned: number;
+  created: { name: string; room: string | null; capabilities: string[]; confidence: number; autoAssigned: boolean }[];
+}
+
+/** Pull the `locationHint` a media driver's `discover()` attached to `raw` (§
+ * Automatic Room Assignment) — same shape `commissioning/index.ts`'s `view()` reads,
+ * duplicated narrowly here because this method reads raw `sil.discover()` output
+ * directly rather than going through `CommissioningService.discover()` (see the
+ * method doc for why). */
+function extractMediaLocationHint(raw: Record<string, unknown> | undefined): LocationHint | null {
+  const h = raw?.locationHint;
+  if (!h || typeof h !== "object") return null;
+  const rec = h as Record<string, unknown>;
+  if (typeof rec.raw !== "string" || typeof rec.source !== "string") return null;
+  if (rec.source !== "explicit_attribute" && rec.source !== "persistent_user_zone_name" && rec.source !== "friendly_name_heuristic") return null;
+  return { raw: rec.raw, source: rec.source };
+}
+
+function extractMediaZones(raw: Record<string, unknown> | undefined): { id: string; label: string }[] {
+  if (!Array.isArray(raw?.zones)) return [];
+  return (raw.zones as unknown[]).filter(
+    (z): z is { id: string; label: string } => !!z && typeof z === "object" && typeof (z as Record<string, unknown>).id === "string" && typeof (z as Record<string, unknown>).label === "string",
+  );
 }
 
 /** Discover Devices workspace sections (§ Phase 5) — every discovered device lands in
@@ -176,7 +210,17 @@ export type DriverLifecycleTrigger = "boot" | "install" | "reconnect" | "config_
 
 export type DriverLifecycleStage =
   | "registering" | "validating" | "restoring_bindings" | "rebinding_devices"
-  | "recalculating_ownership" | "publishing" | "ready" | "failed";
+  | "recalculating_ownership" | "publishing" | "ready" | "failed"
+  // § Driver Lifecycle Completion — the teardown half (disable/uninstall/no-longer-
+  // desired) previously had no visible transitional stage at all: `runDriverLifecycle`
+  // went straight from whatever stage the driver was last in to being deleted from
+  // `lifecycleStatus` entirely, so a driver mid-teardown looked identical to one that
+  // had never existed. "stopping" is now set immediately before the real
+  // unregister/disconnect work runs, giving Driver Diagnostics a real, observable
+  // "Stop"/"Unbind"/"Destroy" moment (the underlying `SupremeNativeAdapter.
+  // unregisterProtocol()` already releases every owned device's per-driver state
+  // synchronously within this one stage — see native-adapter.ts).
+  | "stopping";
 
 export interface DriverLifecycleStatus {
   protocol: string;
@@ -795,6 +839,121 @@ export class InstallerServices {
     return room.id;
   }
 
+  /**
+   * Auto-commission a media protocol's (AVR/HEOS/Yamaha) discovered devices with ZERO
+   * installer interaction — the Universal AV Driver SDK's "Automatic Room Assignment" +
+   * "Automatic Zone Generation" behavior. Unlike {@link autoCommission} (which takes
+   * whatever bare `raw.room` string a driver supplies, with no confidence check), every
+   * device here is resolved through {@link resolveRoomAssignment}: strong signals
+   * (a HEOS/MusicCast persistent zone name) auto-create/auto-assign a room; weak or
+   * absent signals (classic Denon Telnet, which genuinely has none) land in the fixed
+   * "Unassigned Devices" room instead of guessing — never silently dropped, never a
+   * fabricated room. A physical unit's extra zones (Yamaha's real, wire-queried
+   * zone2/3/4 — see `yamaha-driver.ts`'s `discover()`) are auto-commissioned as their
+   * own Supreme devices in the SAME room, sharing the SAME physical connection.
+   *
+   * Deliberately bypasses `CommissioningService.discover()` (like the older
+   * {@link autoCommission}) because that method only queries registered Python
+   * `IProtocolScanner`s when a protocol is given — AVR/HEOS/Yamaha are native TS
+   * drivers surfaced through `sil.discover()` instead, so this reads from there
+   * directly and replicates that method's own dedup (`registry.reverseLookup`) so a
+   * repeat run never re-commissions an already-bound device or re-expands its zones.
+   */
+  async autoCommissionMedia(protocol: "avr" | "heos" | "yamaha"): Promise<MediaAutoCommissionResult> {
+    const discovered = (await this.d.sil.discover())
+      .filter((d) => (typeof d.raw?.protocol === "string" ? d.raw.protocol : "") === protocol)
+      .filter((d) => !this.d.sil.registry.reverseLookup(d.backendId));
+    if (discovered.length === 0) {
+      throw new SupremeError("validation_failed", `no new ${protocol} devices discovered to commission`);
+    }
+
+    const existing = await this.d.home.listRooms();
+    const roomByName = new Map(existing.map((r) => [r.name.toLowerCase(), r] as const));
+    let roomsCreated = 0;
+    let unassigned = 0;
+    const created: MediaAutoCommissionResult["created"] = [];
+
+    const resolveRoom = async (roomName: string): Promise<Room> => {
+      const found = roomByName.get(roomName.toLowerCase());
+      if (found) return found;
+      const newRoom: Room = {
+        id: newId("room") as RoomId,
+        homeId: this.d.homeId,
+        name: roomName,
+        building: null,
+        floor: 0,
+        area: null,
+        areaType: "other",
+        sortOrder: existing.length + roomsCreated,
+        icon: "home",
+        heroImageUrl: null,
+        parentRoomId: null,
+      };
+      await this.d.home.addRoom(newRoom);
+      roomByName.set(roomName.toLowerCase(), newRoom);
+      roomsCreated++;
+      return newRoom;
+    };
+
+    for (const d of discovered) {
+      const capabilities = d.capabilities as CapabilityKind[];
+      const bindConfig = d.raw?.bindConfig && typeof d.raw.bindConfig === "object" && !Array.isArray(d.raw.bindConfig)
+        ? (d.raw.bindConfig as Record<string, unknown>)
+        : undefined;
+      const locationHint = extractMediaLocationHint(d.raw);
+      const decision = resolveRoomAssignment(locationHint, [...roomByName.values()].map((r) => r.name));
+      const roomName = decision.kind === "assign" ? decision.roomName : UNASSIGNED_ROOM_NAME;
+      const room = await resolveRoom(roomName);
+      if (decision.kind === "unassigned") unassigned++;
+
+      const device = await this.commissioning.commission({
+        backendId: d.backendId,
+        name: d.suggestedName,
+        roomId: room.id,
+        capabilities,
+      });
+      for (const capability of capabilities) {
+        await this.bindProtocol({ deviceId: device.id, capability, protocol, address: d.backendId, config: bindConfig });
+      }
+      created.push({
+        name: d.suggestedName,
+        room: room.name,
+        capabilities,
+        confidence: decision.confidence,
+        autoAssigned: decision.kind === "assign",
+      });
+
+      // §Automatic Zone Generation — extra zones this ONE physical unit genuinely has
+      // (a real getFeatures query, see yamaha-driver.ts), each its own Supreme device
+      // in the SAME room, sharing the SAME physical connection (address), differing
+      // only by `config.zone`. Never attempted for a protocol that can't back it
+      // honestly (Denon Telnet's Zone 2 stays a deliberate, documented manual step —
+      // see avr-codec.ts — because the protocol has no wire-level way to detect it).
+      const extraZones = extractMediaZones(d.raw).filter((z) => z.id !== (typeof bindConfig?.zone === "string" ? bindConfig.zone : "main"));
+      for (const zone of extraZones) {
+        const zoneName = `${d.suggestedName} ${zone.label}`;
+        const zoneDevice = await this.commissioning.commission({
+          backendId: `${d.backendId}#${zone.id}`,
+          name: zoneName,
+          roomId: room.id,
+          capabilities,
+        });
+        for (const capability of capabilities) {
+          await this.bindProtocol({
+            deviceId: zoneDevice.id,
+            capability,
+            protocol,
+            address: d.backendId,
+            config: { ...bindConfig, zone: zone.id },
+          });
+        }
+        created.push({ name: zoneName, room: room.name, capabilities, confidence: decision.confidence, autoAssigned: decision.kind === "assign" });
+      }
+    }
+
+    return { devices: created.length, roomsCreated, unassigned, created };
+  }
+
   /** Commission a parsed device list into rooms (creating rooms as needed via
    * {@link resolveOrCreateRoom}) + bind each capability, threading its recognized
    * `config` (real DPT, a separate status address when the source declared one, sensor
@@ -944,8 +1103,14 @@ export class InstallerServices {
     trigger: DriverLifecycleTrigger,
   ): Promise<void> {
     if (!driver) {
+      // § Driver Lifecycle Completion — Stop → Unbind → Destroy, made observable
+      // (previously the driver just vanished from `lifecycleStatus` with no visible
+      // transitional state). `unregisterNativeProtocol` is idempotent (a no-op if
+      // already stopped, see `SupremeNativeAdapter.unregisterProtocol`), so repeated
+      // teardown calls for the same protocol are always safe.
+      this.setStage(protocol, { stage: "stopping" });
       const owned = this.d.sil.ownership.devicesOwnedByProtocol(protocol);
-      await this.d.sil.unregisterNativeProtocol(protocol);
+      await this.d.sil.unregisterNativeProtocol(protocol); // Stop + Unbind (every owned device's driver-level state released) + Destroy (driver instance dereferenced)
       for (const deviceId of owned) await this.d.sil.ownership.clear(deviceId);
       this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
       this.lifecycleStatus.delete(protocol);

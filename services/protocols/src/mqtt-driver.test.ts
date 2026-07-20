@@ -67,4 +67,45 @@ describe("MqttProtocolDriver (embedded broker)", () => {
 
     await spy.endAsync();
   });
+
+  it("unbind releases one device's topic subscription without disturbing a sibling on the same topic (§ Driver Lifecycle Completion)", async () => {
+    const devA = "device-lamp-a" as DeviceId;
+    const devB = "device-lamp-b" as DeviceId;
+    const shared = "zigbee2mqtt/shared_lamp";
+    const solo = "zigbee2mqtt/solo_lamp";
+    await driver.bind({ deviceId: devA, capability: "onoff", address: shared });
+    await driver.bind({ deviceId: devB, capability: "brightness", address: shared });
+    await driver.bind({ deviceId: devA, capability: "brightness", address: solo });
+
+    const spy = await connectAsync(`mqtt://127.0.0.1:${port}`);
+
+    // Unbind devA entirely: its solo topic must be unsubscribed; the shared topic
+    // must stay subscribed because devB still has a capability bound to it.
+    await driver.unbind(devA);
+    expect(driver.manages(devA)).toBe(false);
+    expect(driver.getState(devA, "brightness")).toBeNull();
+
+    const devBEvents: BackendStateEvent[] = [];
+    const devBSeen = new Promise<void>((resolve) => {
+      driver.onState((e) => {
+        if (e.deviceId === devB) {
+          devBEvents.push(e);
+          resolve();
+        }
+      });
+    });
+    await spy.publishAsync(shared, JSON.stringify({ state: "ON", brightness: 254 }));
+    await devBSeen;
+    expect(driver.getState(devB, "brightness")).toEqual({ kind: "brightness", on: true, level: 100 });
+
+    // The solo topic was fully released — a message there must not resurrect devA's state.
+    await spy.publishAsync(solo, JSON.stringify({ state: "ON", brightness: 254 }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(driver.getState(devA, "brightness")).toBeNull();
+
+    await driver.unbind(devB);
+    expect(driver.manages(devB)).toBe(false);
+
+    await spy.endAsync();
+  });
 });

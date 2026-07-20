@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import type { CapabilityCommand, Device, DeviceId, MediaTopologyConnection } from "@supreme/domain-model";
+import { parseMediaTopology } from "@supreme/domain-model";
+import { CollapsibleSection } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry } from "../../api.js";
 import { useLive } from "../../live.js";
 import {
@@ -534,6 +536,98 @@ function MiniPlayer({
   );
 }
 
+/**
+ * Media Topology Engine (§ Universal AV Driver SDK) — the installer-declared graph of
+ * what's physically plugged into this AVR's own inputs/outputs/zones. No AVR protocol
+ * here (Denon/Marantz Telnet, HEOS, Yamaha YXC) reports what's on the other end of a
+ * cable — real-world wiring, not a wire-discoverable fact — so this is always
+ * installer-entered, stored in `device.metadata.avrTopology` (same free-form-metadata
+ * pattern as `metadata.media.kind` above; no schema/persistence change). Read-only
+ * outside devMode; the add/remove form only renders for installers.
+ */
+function TopologySection({
+  device, homeDevices, devMode, onDeviceUpdated,
+}: { device: Device; homeDevices: Device[]; devMode: boolean; onDeviceUpdated?: (d: Device) => void }) {
+  const topology = parseMediaTopology((device.metadata as Record<string, unknown> | undefined)?.avrTopology);
+  const [output, setOutput] = useState("");
+  const [label, setLabel] = useState("");
+  const [connectedDeviceId, setConnectedDeviceId] = useState("");
+  const [connectedLabel, setConnectedLabel] = useState("");
+
+  const save = async (connections: MediaTopologyConnection[]) => {
+    const res = await client.updateDevice(device.id, { metadata: { ...device.metadata, avrTopology: { connections } } });
+    onDeviceUpdated?.(res.device);
+  };
+
+  const addConnection = async () => {
+    if (!output.trim() || !label.trim() || !connectedLabel.trim()) return;
+    const entry: MediaTopologyConnection = {
+      output: output.trim(),
+      label: label.trim(),
+      connectedLabel: connectedLabel.trim(),
+      ...(connectedDeviceId ? { connectedDeviceId: connectedDeviceId as DeviceId } : {}),
+    };
+    await save([...topology.connections, entry]);
+    setOutput(""); setLabel(""); setConnectedDeviceId(""); setConnectedLabel("");
+  };
+
+  const removeConnection = async (index: number) => {
+    await save(topology.connections.filter((_, i) => i !== index));
+  };
+
+  if (!devMode && topology.connections.length === 0) return null;
+
+  return (
+    <CollapsibleSection title="Topology" badge={topology.connections.length || undefined}>
+      {topology.connections.length === 0 ? (
+        <p className="help">No connections declared yet.</p>
+      ) : (
+        <div className="topology-list">
+          {topology.connections.map((c, i) => {
+            const connectedDevice = c.connectedDeviceId ? homeDevices.find((d) => d.id === c.connectedDeviceId) : undefined;
+            return (
+              <div key={`${c.output}-${i}`} className="topology-row">
+                <span className="topology-output">{c.label}</span>
+                <span className="topology-arrow">→</span>
+                <span className="topology-target">{connectedDevice?.name ?? c.connectedLabel}</span>
+                {devMode && (
+                  <button className="topology-remove" aria-label={`Remove ${c.label} connection`} onClick={() => void removeConnection(i)}>×</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {devMode && (
+        <div className="topology-add">
+          <label className="drv-field">
+            <span className="lbl">Connector (e.g. HDMI1, HDMI OUT, Zone2)</span>
+            <input value={label} onChange={(e) => { setLabel(e.target.value); setOutput(e.target.value.toLowerCase().replace(/\s+/g, "")); }} placeholder="HDMI1" />
+          </label>
+          <label className="drv-field">
+            <span className="lbl">Connected to (name)</span>
+            <input value={connectedLabel} onChange={(e) => setConnectedLabel(e.target.value)} placeholder="Apple TV" />
+          </label>
+          <label className="drv-field">
+            <span className="lbl">Or link a Supreme device (optional)</span>
+            <select value={connectedDeviceId} onChange={(e) => {
+              setConnectedDeviceId(e.target.value);
+              const picked = homeDevices.find((d) => d.id === e.target.value);
+              if (picked && !connectedLabel.trim()) setConnectedLabel(picked.name);
+            }}>
+              <option value="">None — free text only</option>
+              {homeDevices.filter((d) => d.id !== device.id).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+          <button className="topology-add-btn" onClick={() => void addConnection()} disabled={!label.trim() || !connectedLabel.trim()}>
+            Add connection
+          </button>
+        </div>
+      )}
+    </CollapsibleSection>
+  );
+}
+
 export function AvrConsole({
   device, allDevices, homeDevices, roomName, onBack, onNavigateDevice, onRemoved, onDeviceUpdated, devMode = false,
 }: {
@@ -715,6 +809,7 @@ export function AvrConsole({
             page shows, capability- and data-driven, never protocol-driven. */}
         <InformationSection device={device} roomName={roomName} />
         {devMode && <DiagnosticsSection device={device} />}
+        <TopologySection device={device} homeDevices={homeDevices} devMode={devMode} onDeviceUpdated={onDeviceUpdated} />
         <AutomationsSection device={device} />
         <HistorySection device={device} />
         <AdvancedSettingsSection device={device} onRemoved={onRemoved}>

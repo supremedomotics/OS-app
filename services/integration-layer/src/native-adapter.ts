@@ -8,6 +8,7 @@ import type {
 import type {
   BackendStateEvent,
   DiscoveredDevice,
+  DriverDiagnosticsSnapshot,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,
@@ -68,6 +69,12 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   }
 
   async connect(): Promise<void> {
+    // § Driver Lifecycle Completion: idempotent — a repeated connect() (e.g. a reconnect
+    // storm at the SIL boundary) must never re-subscribe onState a second time per driver.
+    // Without this guard, each call adds ANOTHER listener to every driver's own listener
+    // set (they never get unsubscribed until disconnect()), duplicating every subsequent
+    // state event once per extra call.
+    if (this.connected) return;
     // Bring up every real protocol driver and re-emit its normalized state upward, so callers can't
     // tell a native engine event from an in-process one. A driver that can't reach its bus at boot
     // must NOT crash the hub — it's skipped and stays disconnected until the bus recovers.
@@ -251,6 +258,29 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     const owner = this.ownerByDevice.get(deviceId);
     if (owner?.getCapabilityConfig) return owner.getCapabilityConfig(deviceId, capability);
     return null;
+  }
+
+  /** Fetch the owning driver's real connection/traffic diagnostics for this device. */
+  async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getDiagnostics) return owner.getDiagnostics(deviceId);
+    return null;
+  }
+
+  /** Release the owning driver's per-device resources (§ Driver Lifecycle Completion)
+   * — called when a Supreme device is deleted while its driver keeps running for
+   * other devices. Safe to call for a device with no native owner (e.g. in-process
+   * model only, or already unbound) — a no-op, never a throw, matching every other
+   * optional per-device driver call in this class. */
+  async unbindDevice(deviceId: DeviceId): Promise<void> {
+    const owner = this.ownerByDevice.get(deviceId);
+    this.ownerByDevice.delete(deviceId);
+    this.managed.delete(deviceId);
+    const prefix = `${deviceId}:`;
+    for (const k of [...this.states.keys()]) {
+      if (k.startsWith(prefix)) this.states.delete(k);
+    }
+    if (owner?.unbind) await owner.unbind(deviceId);
   }
 }
 

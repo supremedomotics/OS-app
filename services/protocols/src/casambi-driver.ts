@@ -27,6 +27,7 @@ import {
   type CasambiTransport,
   type CasambiWire,
 } from "./casambi-transport.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * Real Casambi protocol driver (§3, §7) — Casambi is a Bluetooth-mesh luminaire ecosystem reached
@@ -134,6 +135,15 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared session/wire (still needed by other bound units).
+   * Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

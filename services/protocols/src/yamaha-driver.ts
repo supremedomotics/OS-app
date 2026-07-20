@@ -32,6 +32,13 @@ import {
   type YamahaZone,
 } from "./yamaha-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
+import { bestEffortMacForIp } from "./arp-lookup.js";
+import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
+import { recordCapabilityState } from "./av-sdk/state-cache.js";
+
+/** Kept in sync with `supreme-yamaha`'s manifest `version` (services/drivers/src/manifests.ts). */
+const DRIVER_VERSION = "1.0.0";
 
 /** Minimal UDP listening-socket surface (so tests inject a fake instead of a real
  * `dgram` bind) — mirrors the `SsdpSocket` shape in ssdp.ts. */
@@ -71,6 +78,9 @@ interface YamahaBinding {
   capability: CapabilityKind;
   host: string;
   zone: YamahaZone;
+  /** UPnP device-description `<modelName>`, threaded through from discovery's
+   * `bindConfig.model` when present (§ Diagnostics Console). */
+  model: string | null;
 }
 
 interface YamahaHostInfo {
@@ -95,9 +105,32 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   private readonly bindings: YamahaBinding[] = [];
   private readonly devices = new Set<DeviceId>();
   private readonly hosts = new Map<string, YamahaHostInfo>();
+  /** In-flight `ensureHostFeatures()` calls, keyed by host (§ Production Hardening —
+   * Phase 6 concurrency audit). Without this, two concurrent `bind()`/`command()`
+   * calls for a host with no entry in `hosts` yet BOTH pass the `!existing` check
+   * before either resolves (a real TOCTOU race — `hosts.get()` then an `await` then
+   * `hosts.set()`), each firing its own `getFeatures` request and its own
+   * `setInterval` refresh timer; the loser's timer is then silently orphaned forever
+   * (`hosts.set()` overwrites the map entry, but nothing ever clears the first timer).
+   * Coalescing concurrent callers onto the SAME promise makes this impossible instead
+   * of merely unlikely. */
+  private readonly hostFeaturesInFlight = new Map<string, Promise<YamahaHostInfo>>();
+  /** In-flight `syncZone()` calls, keyed by `host:zone` — the same coalescing, for the
+   * same reason, applied to state re-sync: a rapid burst of commands/UDP events for
+   * one zone must never fire overlapping `getStatus`/`getPlayInfo` requests whose
+   * responses can resolve out of order and let a stale response overwrite a fresher
+   * one already applied. */
+  private readonly syncZoneInFlight = new Map<string, Promise<void>>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly media = new Map<DeviceId, YamahaMediaCache>();
   private readonly listeners = new Set<StateListener>();
+  private readonly diagnostics = new Map<string, DriverDiagnosticsTracker>();
+  /** True once a host has had at least one failed request without a successful one
+   * since — cleared on the next success, at which point that success counts as a
+   * "reconnect" (§ Diagnostics Console). Yamaha has no persistent control socket to
+   * literally reconnect (per-request HTTP, see module doc), so this is the honest
+   * equivalent: "the host stopped answering, then answered again". */
+  private readonly hostDown = new Map<string, boolean>();
   private eventSocket: YamahaEventSocket | null = null;
   private eventPort: number | null = null;
 
@@ -120,6 +153,10 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   async disconnect(): Promise<void> {
     for (const info of this.hosts.values()) clearInterval(info.refreshTimer);
     this.hosts.clear();
+    this.hostFeaturesInFlight.clear();
+    this.syncZoneInFlight.clear();
+    this.diagnostics.clear();
+    this.hostDown.clear();
     this.eventSocket?.close();
     this.eventSocket = null;
     this.eventPort = null;
@@ -134,7 +171,8 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     const host = binding.address;
     const zoneRaw = typeof binding.config?.zone === "string" ? binding.config.zone : "main";
     const zone: YamahaZone = isYamahaZone(zoneRaw) ? zoneRaw : "main";
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, zone });
+    const model = typeof binding.config?.model === "string" ? binding.config.model : null;
+    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, zone, model });
     this.devices.add(binding.deviceId);
     if (!this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { power: false, volume: 0, muted: false, input: "", netusb: null });
@@ -149,7 +187,33 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     return this.devices.has(deviceId);
   }
 
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached
+   * state/media cache, and additionally clears its host's feature-refresh timer +
+   * diagnostics/host-health bookkeeping once no other bound zone on that host still
+   * uses it (the shared UDP event socket stays up — it's driver-wide, not per-host).
+   * Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    const removed = this.bindings.filter((b) => b.deviceId === deviceId);
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
+    this.media.delete(deviceId);
+    const releasedHosts = new Set(removed.map((b) => b.host));
+    for (const host of releasedHosts) {
+      if (this.bindings.some((b) => b.host === host)) continue;
+      const info = this.hosts.get(host);
+      if (info) clearInterval(info.refreshTimer);
+      this.hosts.delete(host);
+      this.diagnostics.delete(host);
+      this.hostDown.delete(host);
+    }
+  }
+
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
+    // § Production Hardening — Driver Lifecycle audit: same guard as AvrProtocolDriver
+    // — a command after disconnect() must fail loudly, not silently re-fetch getFeatures
+    // and re-issue HTTP requests as though the driver were still alive.
+    if (!this.connected) throw new Error(`yamaha: driver is disconnected — cannot command ${deviceId}`);
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`yamaha: ${deviceId} not bound for ${command.capability}`);
     const hostInfo = await this.ensureHostFeatures(b.host);
@@ -185,6 +249,30 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     return zf ? (yamahaCapabilityConfig(zf) as unknown as Record<string, unknown>) : null;
   }
 
+  /** Diagnostics Console (§ Universal AV Driver SDK) — real per-host request/response
+   * counters, never fabricated. Yamaha's UPnP device description genuinely reports a
+   * `<modelName>`; there is no firmware field anywhere in the Basic YXC spec, so that
+   * stays honestly `null`. Yamaha has no persistent control socket (per-request HTTP,
+   * see module doc) — "connection status"/"reconnect" are the closest honest
+   * equivalent: whether the host is currently answering, and how many times it stopped
+   * answering and then answered again. */
+  getDiagnostics(deviceId: DeviceId): DriverDiagnosticsSnapshot | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    const tracker = this.diagnostics.get(b.host);
+    const hasFeatures = this.hosts.has(b.host);
+    const status = this.hostDown.get(b.host) ? "disconnected" : hasFeatures ? "connected" : "connecting";
+    const empty = new DriverDiagnosticsTracker();
+    return (tracker ?? empty).snapshot(status, {
+      protocol: this.protocol,
+      driverVersion: DRIVER_VERSION,
+      model: b.model,
+      firmware: null,
+      ip: b.host,
+      mac: bestEffortMacForIp(b.host),
+    });
+  }
+
   async discover(): Promise<DiscoveredDevice[]> {
     // Real SSDP discovery: MediaRenderer devices, filtered to Yamaha by fetching each
     // one's UPnP description XML and checking <manufacturer> (spec doesn't define a
@@ -198,15 +286,39 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
         const res = await this.fetchImpl(r.location);
         if (!res.ok) continue;
         const xml = await res.text();
-        const { manufacturer, friendlyName } = parseUpnpDescription(xml);
+        const { manufacturer, friendlyName, modelName } = parseUpnpDescription(xml);
         if (!manufacturer || !/yamaha/i.test(manufacturer)) continue;
+        // §Automatic Zone Generation: `/system/getFeatures` is a genuine wire query
+        // (not fabricated — same call `bind()` makes) that lists every zone this
+        // physical unit actually has, so extra zones (zone2/3/4) are discoverable up
+        // front instead of staying a manual second/third/fourth bind.
+        let zones: { id: string; label: string }[] = [{ id: "main", label: "Main Zone" }];
+        try {
+          const featuresJson = await this.getJson(r.address, "system", "getFeatures", {});
+          const parsed = parseYamahaFeatures(featuresJson);
+          if (parsed.zones.length > 0) {
+            zones = parsed.zones.map((z) => ({ id: z.id, label: z.id === "main" ? "Main Zone" : `Zone ${z.id.slice(4)}` }));
+          }
+        } catch {
+          // getFeatures failed but the UPnP description succeeded — still a real find,
+          // just main-zone-only until the next successful discovery/bind.
+        }
         out.push({
           backendId: r.address,
           suggestedName: friendlyName || `Yamaha ${r.address}`,
           capabilities: ["onoff", "media"] as DiscoveredDevice["capabilities"],
-          // Defaults to the main zone — a unit's zone2/3/4 (if any) aren't discoverable
-          // as separate SSDP hits, so they stay a manual second/third/fourth bind.
-          raw: { ip: r.address, location: r.location, manufacturer, friendlyName: friendlyName ?? null, bindConfig: { zone: "main" } },
+          raw: {
+            ip: r.address,
+            location: r.location,
+            manufacturer,
+            friendlyName: friendlyName ?? null,
+            zones,
+            bindConfig: { zone: "main", ...(modelName ? { model: modelName } : {}) },
+            // §Automatic Room Assignment: MusicCast's own setup flow has the installer
+            // name each physical unit by room — a persistent, user-configurable name,
+            // not a generic model string (confirmed in ADR 0015 §2.12).
+            ...(friendlyName ? { locationHint: { raw: friendlyName, source: "persistent_user_zone_name" } } : {}),
+          },
         });
       } catch {
         // tolerate one bad device during discovery
@@ -223,6 +335,18 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   private async ensureHostFeatures(host: string): Promise<YamahaHostInfo> {
     const existing = this.hosts.get(host);
     if (existing) return existing;
+    // Coalesce concurrent callers (see `hostFeaturesInFlight` doc) instead of each
+    // racing its own getFeatures fetch + refresh timer.
+    const inFlight = this.hostFeaturesInFlight.get(host);
+    if (inFlight) return inFlight;
+    const promise = this.fetchHostFeatures(host).finally(() => {
+      this.hostFeaturesInFlight.delete(host);
+    });
+    this.hostFeaturesInFlight.set(host, promise);
+    return promise;
+  }
+
+  private async fetchHostFeatures(host: string): Promise<YamahaHostInfo> {
     const featuresJson = await this.getJson(host, "system", "getFeatures", {});
     const features = parseYamahaFeatures(featuresJson);
     const refreshMs = this.opts.eventRefreshMs ?? 8 * 60 * 1000;
@@ -237,7 +361,21 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     return info;
   }
 
+  /** Coalesces concurrent re-syncs for the same host+zone (see `syncZoneInFlight`
+   * doc) — a rapid command burst or an overlapping UDP event never fires two
+   * simultaneous `getStatus` requests whose responses could resolve out of order. */
   private async syncZone(host: string, zone: YamahaZone): Promise<void> {
+    const key = `${host}:${zone}`;
+    const inFlight = this.syncZoneInFlight.get(key);
+    if (inFlight) return inFlight;
+    const promise = this.doSyncZone(host, zone).finally(() => {
+      this.syncZoneInFlight.delete(key);
+    });
+    this.syncZoneInFlight.set(key, promise);
+    return promise;
+  }
+
+  private async doSyncZone(host: string, zone: YamahaZone): Promise<void> {
     const statusJson = await this.getJson(host, zone, "getStatus", {});
     const status = parseYamahaZoneStatus(statusJson);
     const inputType = this.hosts.get(host)?.features.systemInputs.find((i) => i.id === status.input)?.playInfoType ?? "none";
@@ -304,24 +442,40 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     }
   }
 
+  private diagnosticsFor(host: string): DriverDiagnosticsTracker {
+    let t = this.diagnostics.get(host);
+    if (!t) {
+      t = new DriverDiagnosticsTracker();
+      this.diagnostics.set(host, t);
+    }
+    return t;
+  }
+
   private async getJson(host: string, group: string, method: string, params: Record<string, string | number>): Promise<Record<string, unknown>> {
     const headers: Record<string, string> = {};
     if (this.eventPort !== null) {
       headers["X-AppName"] = this.opts.appName ?? "SupremeOS/1.0";
       headers["X-AppPort"] = String(this.eventPort);
     }
-    const res = await this.fetchImpl(yamahaUrl(host, group, method, params), { method: "GET", headers });
-    if (!res.ok) throw new Error(`yamaha: ${res.status} ${group}/${method}`);
-    return (await res.json()) as Record<string, unknown>;
+    const tracker = this.diagnosticsFor(host);
+    const label = `${group}/${method}`;
+    tracker.recordSend(label);
+    try {
+      const res = await this.fetchImpl(yamahaUrl(host, group, method, params), { method: "GET", headers });
+      if (!res.ok) throw new Error(`yamaha: ${res.status} ${group}/${method}`);
+      const json = (await res.json()) as Record<string, unknown>;
+      tracker.recordReceive(`${label} ${res.status}`);
+      if (this.hostDown.get(host)) tracker.recordReconnect();
+      this.hostDown.set(host, false);
+      return json;
+    } catch (err) {
+      this.hostDown.set(host, true);
+      tracker.recordError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   }
 
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
-    const k = bindingKey(deviceId, capability);
-    const prev = this.states.get(k);
-    if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
-    this.states.set(k, state);
-    for (const l of this.listeners) {
-      l({ deviceId, capability, state, ts: new Date().toISOString() });
-    }
+    recordCapabilityState(this.states, this.listeners, deviceId, capability, state);
   }
 }

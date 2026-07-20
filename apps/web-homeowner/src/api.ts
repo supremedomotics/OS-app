@@ -1,5 +1,5 @@
 import { SupremeClient, SupremeStream } from "@supreme/sdk";
-import type { SystemLogEntry } from "@supreme/contracts";
+import type { DeviceDriverDiagnostics, SystemLogEntry } from "@supreme/contracts";
 export type { SystemLogEntry } from "@supreme/contracts";
 import { activeHome, homeTokenStore } from "./homes.js";
 
@@ -170,6 +170,17 @@ export async function getDriverConfig(id: string): Promise<{ schema: DriverConfi
 export async function setDriverConfig(id: string, config: Record<string, unknown>): Promise<void> {
   const res = await authed(`/v1/drivers/${id}/config`, { method: "PUT", body: JSON.stringify({ config }) });
   if (!res.ok) throw new Error(await errorMessage(res, "Could not save config."));
+}
+/** Diagnostics Console (§ Universal AV Driver SDK): real connection/traffic
+ * diagnostics from a device's owning driver — null when unsupported (HA-backed device,
+ * or a protocol with no diagnostics tracker), never a fabricated all-zero shape. */
+export async function fetchDeviceDiagnostics(deviceId: string): Promise<DeviceDriverDiagnostics | null> {
+  try {
+    const res = await authed(`/v1/devices/${deviceId}/diagnostics`);
+    return res.ok ? ((await res.json()) as { diagnostics: DeviceDriverDiagnostics | null }).diagnostics : null;
+  } catch {
+    return null;
+  }
 }
 export async function fetchDriverHealth(id: string): Promise<Record<string, unknown> | null> {
   try {
@@ -394,6 +405,14 @@ async function authed(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+/**
+ * Client-side display projection of the backend `Automation` (`@supreme/domain-model`'s
+ * full DSL type) — deliberately narrower than the wire shape, since the web UI only ever
+ * renders/summarizes triggers/conditions/actions, never authors the richer per-capability
+ * fields (brightness/color/temperature/…) the DSL already supports. Not a duplicate-by-
+ * accident: the editor's own authoring shape is `EditorNode` in automations.tsx, an
+ * even narrower onoff-only subset — see docs/architecture/Automation-Editor.md.
+ */
 export interface AutomationView {
   id: string;
   name: string;

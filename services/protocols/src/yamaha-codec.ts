@@ -395,8 +395,11 @@ export function parseYamahaEvent(raw: string): YamahaEvent | null {
  * enough to confirm "this MediaRenderer is actually a Yamaha" during discovery (spec
  * doesn't define this; it's the standard UPnP device-description document every
  * MediaRenderer publishes at its SSDP `LOCATION`). */
-export function parseUpnpDescription(xml: string): { manufacturer: string | null; friendlyName: string | null } {
+export function parseUpnpDescription(xml: string): { manufacturer: string | null; friendlyName: string | null; modelName: string | null } {
   const manufacturer = /<manufacturer>([^<]*)<\/manufacturer>/i.exec(xml)?.[1]?.trim() ?? null;
   const friendlyName = /<friendlyName>([^<]*)<\/friendlyName>/i.exec(xml)?.[1]?.trim() ?? null;
-  return { manufacturer, friendlyName };
+  // §Discovery Engine Stage 2 (Metadata Enrichment) — the standard UPnP device-description
+  // field; genuinely present on real MusicCast units, not guessed.
+  const modelName = /<modelName>([^<]*)<\/modelName>/i.exec(xml)?.[1]?.trim() ?? null;
+  return { manufacturer, friendlyName, modelName };
 }

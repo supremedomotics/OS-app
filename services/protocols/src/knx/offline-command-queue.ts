@@ -70,6 +70,20 @@ export class OfflineCommandQueue<TSubject, TCommand> {
     this.byKey.clear();
   }
 
+  /** Removes queued commands whose subject matches `predicate` — e.g. a device that was
+   * just unbound (§ Driver Lifecycle Completion: nothing may remain queued for a device
+   * that no longer exists). Returns the count removed; a no-op if none match. */
+  evict(predicate: (subject: TSubject) => boolean): number {
+    let removed = 0;
+    for (const [key, item] of [...this.byKey]) {
+      if (predicate(item.subject)) {
+        this.byKey.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   /** EXECUTE/EXPIRE — called once the connection returns. Runs `execute` for every
    * still-fresh command (sequentially, so a slow/failing one can't starve the rest via
    * unbounded concurrency) and drops anything past its TTL without running it. Always

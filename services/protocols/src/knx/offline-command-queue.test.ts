@@ -56,6 +56,19 @@ describe("OfflineCommandQueue", () => {
     expect(q.size()).toBe(0); // already cleared before execution — a failure doesn't resurrect it
   });
 
+  it("evict() removes only queued commands matching the predicate, leaving others intact (§ Driver Lifecycle Completion)", async () => {
+    const q = makeQueue();
+    q.enqueue("device-1", { capability: "onoff", value: "on" });
+    q.enqueue("device-1", { capability: "brightness", value: 80 });
+    q.enqueue("device-2", { capability: "onoff", value: "off" });
+    const removed = q.evict((subject) => subject === "device-1");
+    expect(removed).toBe(2);
+    expect(q.size()).toBe(1);
+    const executed: Cmd[] = [];
+    await q.drain(async (_s, c) => { executed.push(c); });
+    expect(executed).toEqual([{ capability: "onoff", value: "off" }]);
+  });
+
   it("executes sequentially, not concurrently — a slow command can't reorder a later one's effect", async () => {
     const q = makeQueue();
     q.enqueue("d1", { capability: "onoff", value: "slow" });

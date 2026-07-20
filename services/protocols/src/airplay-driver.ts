@@ -12,6 +12,7 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * AirPlay 2 driver (§3). IMPORTANT shape note: AirPlay is a *streaming* protocol, not a
@@ -38,6 +39,10 @@ export interface AirPlaySender {
   /** RAOP volume during an active stream (0..100). */
   setVolume(percent: number): Promise<void>;
   getState(): Promise<AirPlaySenderState>;
+  /** Optional: release whatever the real AirPlay 2 streaming/pairing stack holds for
+   * this receiver (sockets, timers) — § Driver Lifecycle Completion. A test fake with
+   * nothing to release simply omits this. */
+  close?(): Promise<void>;
 }
 /** Resolve a sender for a receiver address (IP / host). */
 export type AirPlayConnect = (address: string) => Promise<AirPlaySender>;
@@ -77,6 +82,13 @@ export class AirPlayProtocolDriver implements INativeProtocolDriver {
   async disconnect(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    // § Driver Lifecycle Completion: every bound sender's own resources (a real
+    // deployment's RTSP/pairing session) must be released too, not just this driver's
+    // own poll timer — previously nothing closed these on teardown at all.
+    for (const b of this.bindings) await b.sender.close?.();
+    this.bindings.length = 0;
+    this.devices.clear();
+    this.states.clear();
     this.connected = false;
   }
   isConnected(): boolean {
@@ -92,6 +104,18 @@ export class AirPlayProtocolDriver implements INativeProtocolDriver {
   }
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's real streaming sender
+   * (if the injected implementation supports closing one) plus its bindings/cached
+   * state, without touching the shared poll timer. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    for (const b of this.bindings) {
+      if (b.deviceId === deviceId) await b.sender.close?.();
+    }
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

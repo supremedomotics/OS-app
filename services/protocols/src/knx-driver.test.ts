@@ -15,6 +15,9 @@ class FakeKnxBus implements KnxConnection {
   }
   observe(ga: string, _dpt: string, handler: (v: KnxValue) => void) {
     this.observers.set(ga, handler);
+    return () => {
+      if (this.observers.get(ga) === handler) this.observers.delete(ga);
+    };
   }
   /** Simulate a device reporting on its status group address. */
   push(ga: string, value: KnxValue) {
@@ -142,5 +145,32 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
     await expect(
       driver.command("nope" as DeviceId, { capability: "onoff", action: "on" }),
     ).rejects.toThrow(/not bound/);
+  });
+
+  it("unbind() unsubscribes the status GA observer — a later telegram no longer resurrects state (§ Driver Lifecycle Completion)", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+
+    const dev = "device-knx-light" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "onoff", address: "1/1/0" });
+    expect(driver.getState(dev, "onoff")).toBeNull();
+    bus.push("1/1/0", true);
+    expect(driver.getState(dev, "onoff")).toEqual({ kind: "onoff", on: true });
+
+    await driver.unbind(dev);
+    expect(driver.manages(dev)).toBe(false);
+    expect(driver.getState(dev, "onoff")).toBeNull();
+
+    // The fake's internal observer map is private, but the public contract proves it:
+    // a telegram on the now-unbound GA must not resurrect any state or fire a listener.
+    const events: BackendStateEvent[] = [];
+    driver.onState((e) => events.push(e));
+    bus.push("1/1/0", false);
+    expect(events).toEqual([]);
+    expect(driver.getState(dev, "onoff")).toBeNull();
+
+    // Idempotent — a second unbind is a safe no-op.
+    await expect(driver.unbind(dev)).resolves.toBeUndefined();
   });
 });

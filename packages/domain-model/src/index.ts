@@ -16,3 +16,4 @@ export * from "./automations-dsl.js";
 export * from "./device-grouping.js";
 export * from "./device-vocabulary.js";
 export * from "./device-classification.js";
+export * from "./media-topology.js";

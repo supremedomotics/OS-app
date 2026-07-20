@@ -12,6 +12,7 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./knx-codec.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * KNXnet/IP transport seam. A real KNXnet/IP connection (tunnelling or routing) is
@@ -23,8 +24,11 @@ export interface KnxConnection {
   disconnect(): Promise<void>;
   /** Group-write a decoded value to a group address with the given DPT. */
   write(groupAddress: string, value: KnxValue, dpt: string): Promise<void>;
-  /** Observe a status group address (decoded per DPT); handler runs on each update. */
-  observe(groupAddress: string, dpt: string, handler: (value: KnxValue) => void): void;
+  /** Observe a status group address (decoded per DPT); handler runs on each update.
+   * Returns an unsubscribe function (§ Driver Lifecycle Completion — every driver's
+   * per-binding observer must be releasable without tearing down the whole bus
+   * connection, since other bindings may still be observing other group addresses). */
+  observe(groupAddress: string, dpt: string, handler: (value: KnxValue) => void): () => void;
 }
 
 export interface KnxDriverOptions {
@@ -44,6 +48,7 @@ interface KnxBinding {
   statusGa: string;
   dpt: string;
   config: Record<string, unknown>;
+  unsubscribe?: () => void;
 }
 
 /**
@@ -101,6 +106,19 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
     return this.devices.has(deviceId);
   }
 
+  /** § Driver Lifecycle Completion — unsubscribes this device's group-address
+   * observer(s) from the shared bus connection (previously leaked: the closure kept
+   * firing and re-populating state for an "unbound" device forever), then releases its
+   * bindings/cached state. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    for (const b of this.bindings) {
+      if (b.deviceId === deviceId) b.unsubscribe?.();
+    }
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
+  }
+
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
     if (!this.conn) throw new Error("knx: not connected");
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
@@ -131,7 +149,7 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
 
   private observe(b: KnxBinding): void {
     if (!this.conn) return;
-    this.conn.observe(b.statusGa, b.dpt, (value) => {
+    b.unsubscribe = this.conn.observe(b.statusGa, b.dpt, (value) => {
       const state = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
       if (state) this.record(b, state);
     });
@@ -237,9 +255,17 @@ function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): 
       client.write(ga, value, dpt);
     },
     observe(ga, dpt, handler) {
+      const entry: KnxUltimateObserver = { dpt, handler };
       const handlers = observers.get(ga) ?? [];
-      handlers.push({ dpt, handler });
+      handlers.push(entry);
       observers.set(ga, handlers);
+      return () => {
+        const current = observers.get(ga);
+        if (!current) return;
+        const next = current.filter((o) => o !== entry);
+        if (next.length === 0) observers.delete(ga);
+        else observers.set(ga, next);
+      };
     },
   };
 }

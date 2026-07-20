@@ -62,8 +62,29 @@ export function Automations() {
 }
 
 // ── Drag-and-drop editor ─────────────────────────────────────────────────────────
-type Node = Record<string, unknown> & { type: string };
-const PALETTE: { section: "triggers" | "conditions" | "actions"; type: string; label: string }[] = [
+/**
+ * The editor's own node shapes — a deliberately NARROWER subset of the full
+ * `AutomationTrigger`/`AutomationCondition`/`AutomationAction` DSL (`@supreme/
+ * domain-model`): today the drag-and-drop builder only authors onoff-style device
+ * triggers/conditions/commands, never the richer per-capability fields (brightness/
+ * color/temperature/…) the DSL and backend already accept. See
+ * docs/architecture/Automation-Editor.md for the full field-resolution picture and
+ * this gap, documented honestly rather than silently.
+ */
+export type EditorNode =
+  | { type: "time"; at: string; days: number[] }
+  | { type: "device_state"; deviceId: string | null; capability: "onoff"; field: "on"; op: "eq"; value: boolean }
+  | { type: "device_command"; deviceId: string | null; command: { capability: "onoff"; action: "on" | "off" } }
+  | { type: "scene_activate"; sceneId: string | null }
+  | { type: "notify"; level: "info"; title: string; body: string }
+  | { type: "delay"; ms: number };
+type EditorNodeType = EditorNode["type"];
+const EDITOR_NODE_TYPES: readonly EditorNodeType[] = ["time", "device_state", "device_command", "scene_activate", "notify", "delay"];
+function isEditorNodeType(type: string): type is EditorNodeType {
+  return (EDITOR_NODE_TYPES as readonly string[]).includes(type);
+}
+
+const PALETTE: { section: "triggers" | "conditions" | "actions"; type: EditorNodeType; label: string }[] = [
   { section: "triggers", type: "time", label: "Time" },
   { section: "triggers", type: "device_state", label: "Device" },
   { section: "conditions", type: "device_state", label: "Device is" },
@@ -72,7 +93,7 @@ const PALETTE: { section: "triggers" | "conditions" | "actions"; type: string; l
   { section: "actions", type: "notify", label: "Notify" },
   { section: "actions", type: "delay", label: "Delay" },
 ];
-function defaultNode(type: string): Node {
+export function defaultNode(type: EditorNodeType): EditorNode {
   switch (type) {
     case "time": return { type, at: "07:00", days: [] };
     case "device_state": return { type, deviceId: null, capability: "onoff", field: "on", op: "eq", value: true };
@@ -80,29 +101,31 @@ function defaultNode(type: string): Node {
     case "scene_activate": return { type, sceneId: null };
     case "notify": return { type, level: "info", title: "Alert", body: "" };
     case "delay": return { type, ms: 5000 };
-    default: return { type };
   }
 }
 
 function Editor({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("New automation");
-  const [nodes, setNodes] = useState<{ triggers: Node[]; conditions: Node[]; actions: Node[] }>({ triggers: [], conditions: [], actions: [] });
+  const [nodes, setNodes] = useState<{ triggers: EditorNode[]; conditions: EditorNode[]; actions: EditorNode[] }>({ triggers: [], conditions: [], actions: [] });
   const [sel, setSel] = useState<{ section: keyof typeof nodes; index: number } | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [scenes, setScenes] = useState<Scene[]>([]);
 
   useEffect(() => {
     void client.home().then(async (h) => {
-      const all: Device[] = [];
-      for (const r of h.rooms) all.push(...(await client.devicesInRoom(r.id)).devices);
-      setDevices(all);
+      // Fetch every room's devices in parallel (was sequential — N rooms meant N
+      // serial round-trips before the editor's device picker was usable).
+      const perRoom = await Promise.all(h.rooms.map((r) => client.devicesInRoom(r.id)));
+      setDevices(perRoom.flatMap((r) => r.devices));
     });
     void client.scenes().then((s) => setScenes(s.scenes));
   }, []);
 
-  const add = (section: keyof typeof nodes, type: string) =>
+  const add = (section: keyof typeof nodes, type: string) => {
+    if (!isEditorNodeType(type)) return;
     setNodes((n) => ({ ...n, [section]: [...n[section], defaultNode(type)] }));
-  const update = (patch: Node) => {
+  };
+  const update = (patch: EditorNode) => {
     if (!sel) return;
     setNodes((n) => ({ ...n, [sel.section]: n[sel.section].map((x, i) => (i === sel.index ? patch : x)) }));
   };
@@ -179,44 +202,43 @@ function DropZone({ label, accept, onDrop, children }: { label: string; accept: 
   );
 }
 
-function NodeConfig({ node, devices, scenes, onChange, onDone }: { node: Node; devices: Device[]; scenes: Scene[]; onChange: (n: Node) => void; onDone: () => void }) {
-  const t = node.type;
+function NodeConfig({ node, devices, scenes, onChange, onDone }: { node: EditorNode; devices: Device[]; scenes: Scene[]; onChange: (n: EditorNode) => void; onDone: () => void }) {
   return (
     <div className="node-config">
-      <strong>{actionLabel(t)}</strong>
-      {t === "time" && (
-        <input type="time" value={String(node.at ?? "07:00")} onChange={(e) => onChange({ ...node, at: e.target.value })} />
+      <strong>{actionLabel(node.type)}</strong>
+      {node.type === "time" && (
+        <input type="time" value={node.at} onChange={(e) => onChange({ ...node, at: e.target.value })} />
       )}
-      {t === "delay" && (
-        <label>Delay (s) <input type="number" min={1} max={60} value={Math.round(Number(node.ms ?? 5000) / 1000)} onChange={(e) => onChange({ ...node, ms: Number(e.target.value) * 1000 })} /></label>
+      {node.type === "delay" && (
+        <label>Delay (s) <input type="number" min={1} max={60} value={Math.round(node.ms / 1000)} onChange={(e) => onChange({ ...node, ms: Number(e.target.value) * 1000 })} /></label>
       )}
-      {t === "notify" && (
+      {node.type === "notify" && (
         <>
-          <input placeholder="Title" value={String(node.title ?? "")} onChange={(e) => onChange({ ...node, title: e.target.value })} />
-          <input placeholder="Message" value={String(node.body ?? "")} onChange={(e) => onChange({ ...node, body: e.target.value })} />
+          <input placeholder="Title" value={node.title} onChange={(e) => onChange({ ...node, title: e.target.value })} />
+          <input placeholder="Message" value={node.body} onChange={(e) => onChange({ ...node, body: e.target.value })} />
         </>
       )}
-      {t === "scene_activate" && (
-        <select value={String(node.sceneId ?? "")} onChange={(e) => onChange({ ...node, sceneId: e.target.value })}>
+      {node.type === "scene_activate" && (
+        <select value={node.sceneId ?? ""} onChange={(e) => onChange({ ...node, sceneId: e.target.value })}>
           <option value="">Choose scene…</option>
           {scenes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       )}
-      {(t === "device_command" || t === "device_state") && (
+      {(node.type === "device_command" || node.type === "device_state") && (
         <>
-          <select value={String(node.deviceId ?? "")} onChange={(e) => onChange({ ...node, deviceId: e.target.value })}>
+          <select value={node.deviceId ?? ""} onChange={(e) => onChange({ ...node, deviceId: e.target.value })}>
             <option value="">Choose device…</option>
             {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
           <label className="onoff">
             <input
               type="checkbox"
-              checked={t === "device_command" ? (node.command as { action?: string })?.action === "on" : node.value === true}
+              checked={node.type === "device_command" ? node.command.action === "on" : node.value === true}
               onChange={(e) =>
-                onChange(t === "device_command" ? { ...node, command: { capability: "onoff", action: e.target.checked ? "on" : "off" } } : { ...node, value: e.target.checked })
+                onChange(node.type === "device_command" ? { ...node, command: { capability: "onoff", action: e.target.checked ? "on" : "off" } } : { ...node, value: e.target.checked })
               }
             />
-            {t === "device_command" ? "Turn on" : "Is on"}
+            {node.type === "device_command" ? "Turn on" : "Is on"}
           </label>
         </>
       )}
@@ -225,16 +247,15 @@ function NodeConfig({ node, devices, scenes, onChange, onDone }: { node: Node; d
   );
 }
 
-function nodeSummary(n: Node, devices: Device[], scenes: Scene[]): string {
-  const dev = (id: unknown) => devices.find((d) => d.id === id)?.name ?? "device";
+export function nodeSummary(n: EditorNode, devices: Device[], scenes: Scene[]): string {
+  const dev = (id: string | null) => devices.find((d) => d.id === id)?.name ?? "device";
   switch (n.type) {
     case "time": return `Time · ${n.at}`;
-    case "delay": return `Delay · ${Math.round(Number(n.ms) / 1000)}s`;
+    case "delay": return `Delay · ${Math.round(n.ms / 1000)}s`;
     case "notify": return `Notify · ${n.title}`;
     case "scene_activate": return `Scene · ${scenes.find((s) => s.id === n.sceneId)?.name ?? "…"}`;
-    case "device_command": return `${dev(n.deviceId)} → ${(n.command as { action?: string })?.action ?? ""}`;
+    case "device_command": return `${dev(n.deviceId)} → ${n.command.action}`;
     case "device_state": return `${dev(n.deviceId)} is ${n.value ? "on" : "off"}`;
-    default: return n.type;
   }
 }
 
@@ -345,7 +366,7 @@ function AddBtn({ label }: { label: string }) {
   return <button className="node-add">＋ {label}</button>;
 }
 
-function nodeGlyph(type: string): string {
+export function nodeGlyph(type: string): string {
   return {
     device_state: "⊙",
     time: "◷",
@@ -357,7 +378,7 @@ function nodeGlyph(type: string): string {
     delay: "⏱",
   }[type] ?? "•";
 }
-function actionLabel(type?: string): string {
+export function actionLabel(type?: string): string {
   return {
     device_command: "Adjust Device",
     scene_activate: "Run Scene",
@@ -365,10 +386,10 @@ function actionLabel(type?: string): string {
     delay: "Delay",
   }[type ?? ""] ?? "Action";
 }
-function condTitle(type: string): string {
+export function condTitle(type: string): string {
   return type === "time_window" ? "Time window" : "Device state";
 }
-function triggerTitle(t: AutomationView["triggers"][number]): string {
+export function triggerTitle(t: AutomationView["triggers"][number]): string {
   if (t.type === "time") return `Time · ${t.at ?? ""}`;
   if (t.type === "interval") return `Every ${t.everyMinutes}m`;
   return `Sensor · ${t.capability ?? ""} ${t.field ?? ""}`.trim();
