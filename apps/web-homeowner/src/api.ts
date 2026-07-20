@@ -307,6 +307,14 @@ async function authed(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+/**
+ * Client-side display projection of the backend `Automation` (`@supreme/domain-model`'s
+ * full DSL type) — deliberately narrower than the wire shape, since the web UI only ever
+ * renders/summarizes triggers/conditions/actions, never authors the richer per-capability
+ * fields (brightness/color/temperature/…) the DSL already supports. Not a duplicate-by-
+ * accident: the editor's own authoring shape is `EditorNode` in automations.tsx, an
+ * even narrower onoff-only subset — see docs/architecture/Automation-Editor.md.
+ */
 export interface AutomationView {
   id: string;
   name: string;

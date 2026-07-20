@@ -5,157 +5,127 @@
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
 **Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start. This
-turn: **SupremeOS Driver Lifecycle Completion** — closing the fleet-wide missing-`unbind()` gap
-the previous turn's AVR production audit found (explicitly scoped platform-wide, not
-AVR-specific, per the user's own framing).
+turn had two parts: (1) an **AV architecture verification report** (no code changes — answered
+"is AVR/HEOS/Yamaha a real Universal SDK with brand adapters, or three independent thick
+drivers?" honestly: three independent thick drivers, no SDK layer exists in code, only in docs);
+(2) a large **AV SDK refactor** was then requested to close that gap, planned in detail (3
+research agents + 1 design-critique agent, full duplication audit, evidence-scoped module design)
+but **rejected by the user before execution** in favor of a different task; (3) **Automation
+Editor Production Hardening** — the task actually executed this turn.
 
-## Current development status
+## Part 1 — AV architecture verification (no code changes)
 
-Every one of the 22 native protocol drivers in `@supreme/protocols` now implements
-`unbind(deviceId): Promise<void>` — releasing exactly what that one device holds without
-disturbing any other device the same driver still manages, verified idempotent, and reached
-end-to-end from `DELETE /v1/devices/:id`. **None had it before this turn**, including the 3
-flagship AVR-family drivers (AVR/HEOS/Yamaha) — the prior handoff's summary of "already done" for
-those three was wrong; corrected here by actually reading the files rather than trusting the
-summary.
+Answered a direct question: does the AV driver layer match a "Universal AV SDK → brand adapter →
+transport → device" architecture? No — `AvrProtocolDriver`/`HeosProtocolDriver`/
+`YamahaProtocolDriver` each independently implement `INativeProtocolDriver` directly; there is no
+SDK layer in code, only in `docs/architecture/avr-sdk-developer-guide.md`'s documentation. Denon
+and Marantz are correctly the SAME driver (identical wire protocol, not a missed consolidation).
+No files changed.
 
-**Full documentation:** `docs/architecture/Driver-Lifecycle.md` (the 20-state lifecycle + the two
-distinct lifecycle scopes), `Driver-SDK.md` (the `INativeProtocolDriver` contract + shared
-helpers), `Resource-Cleanup.md` (resource taxonomy, the 4 fleet-wide patterns, the full audit
-table, every bug found and fixed), `Driver-Author-Guide.md` (checklist for writing a new driver
-correctly from day one).
+## Part 2 — AV SDK Refactor (planned in full, then rejected — plan discarded)
 
-## Completed this session
+The user then asked for a full "Universal AV SDK" refactor converting AVR/HEOS/Yamaha into thin
+adapters. This was planned rigorously (plan mode, 3 parallel Explore agents + 1 Plan-agent
+critique pass) before any code was touched:
+- **Real audit finding**: the actual duplication is narrow — a ~55-line TCP-link-pool + reconnect
+  + line-buffering pattern between AVR/HEOS, plus `record()` (verbatim identical in all 3
+  drivers), a diagnostics-status ternary, an `onData` skeleton, and one dead-duplicated
+  `parseHostPort()`. Most of the requested 20-subsystem/17-future-brand target architecture either
+  already exists elsewhere as generic fleet infrastructure (Room Assignment Engine, Diagnostics
+  route, the Device/CapabilityState model) or has no evidence to justify building it
+  (Telemetry/Metrics/Subscription-Manager/a unified Zone Engine — AVR/HEOS/Yamaha genuinely model
+  zones incompatibly at the wire level).
+- User confirmed (via `AskUserQuestion`) a scoped, evidence-based extraction plan: one
+  `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`), AVR/HEOS
+  migrated to use it, Yamaha only getting the `record()` extraction ("thinner, not thin" — HTTP
+  transport has no second caller in the fleet, building an HTTP-transport SDK primitive now would
+  be speculative), zero stub adapters for the 17 unbuilt brands (would violate "never fabricate
+  capabilities").
+- **The full plan was written to `/root/.claude/plans/polished-stirring-dongarra.md` and presented
+  via `ExitPlanMode` — the user rejected it** (pasted an entirely different task instead, see Part
+  3). **No code from this plan was ever applied.** If this work is wanted later, the plan file and
+  the reasoning above are the starting point — the audit findings are still accurate (nothing in
+  `avr-driver.ts`/`heos-driver.ts`/`yamaha-driver.ts` changed this session).
 
-1. **New Driver SDK primitive**: `DriverLifecycleController`
-   (`services/integration-layer/src/protocols/lifecycle.ts`) — the 20-state
-   Created→...→Destroyed lifecycle (deterministic, idempotent same-state transitions, rejects
-   backward/post-destroyed transitions) plus a LIFO, fault-tolerant resource-cleanup registry.
-   Composition-based (not a base class — this fleet has no shared driver base class and
-   introducing one now would mean rewriting 22 working drivers, which was explicitly out of
-   scope). 11 tests, all passing. Exported from `@supreme/integration-layer`.
-2. **The actual wiring fix (the root cause)**: `SupremeIntegrationLayer.unmapDevice()` previously
-   only cleared SIL-level bookkeeping (`registry`/`ownership`) and never told the owning driver to
-   release its own resources. Fixed by adding `unbindDevice?(deviceId)` to `IBackendAdapter`,
-   implementing it on `SupremeNativeAdapter` (calls the owning driver's `unbind()`, then forgets
-   the device) and `RoutingBackendAdapter` (runs both native + HA paths unconditionally — safe
-   over-cleaning), and calling it first thing in `unmapDevice()`.
-3. **`unbind()` implemented on all 22 fleet drivers**, categorized into 4 resource patterns (see
-   `Resource-Cleanup.md` for the full table and code shape of each):
-   - **Pattern 1 (simple bookkeeping-only)**: WiiM, DALI, Devialet, Shelly, Modbus, Lutron, SIP,
-     Zigbee, Ajax, Casambi, CoolMaster (11 drivers) — via new shared helpers
-     `removeDeviceBindings`/`removeDeviceStates` (`services/protocols/src/binding-cleanup.ts`).
-   - **Pattern 2 (per-device transport close)**: AirPlay, Apple TV, Sonos — also fixed a REAL
-     pre-existing bug: their `disconnect()` never cleared `bindings`/`devices`/`states` at all and
-     had no way to close per-device sender/client/player objects (no `close()` on the interface).
-   - **Pattern 3 (shared subscription key)**: MQTT (topic-keyed), KNX `knx-driver.ts` and Matter
-     (both had a real leak — `subscribe()`/`observe()` returned `void` with no unsubscribe
-     mechanism at all; fixed by changing both to return an unsubscribe function), and
-     `knx/supreme-knx-driver.ts` (the parallel/future KNX implementation — also fixed its
-     GA-scoped `unsubscribe()` risk of killing a sibling device's subscription, and added
-     `OfflineCommandQueue.evict()` so a device's queued offline commands don't outlive it).
-   - **Pattern 4 (shared host link)**: AVR, HEOS, Yamaha — release the shared TCP link / cached
-     host features only once the last device on that host is unbound.
-   - **Tuya variant**: per-device-address transport client, closed once no bound capability (of
-     any device) still references that address.
-4. **A 5th real bug found while writing regression tests**: `SupremeNativeAdapter.connect()` was
-   not idempotent — a repeated call re-subscribed a NEW `onState` listener on every driver every
-   time, without ever removing the previous one. A written 20-call reconnect-storm test caught it
-   immediately (21 duplicate events instead of 1). Fixed with a one-line `if (this.connected)
-   return;` guard; verified safe against every real call site and the full gateway (222 tests) +
-   integration-layer (47 tests) suites before and after.
-5. **Regression tests** covering: per-driver unbind (every driver above has at least a
-   basic-unbind + idempotency test; AVR/HEOS/Yamaha/MQTT/KNX/SupremeKnxDriver additionally have
-   shared-resource-isolation tests proving a sibling device's link/subscription survives), repeated
-   bind→unbind cycles (50 iterations, no accumulation), Rebind (unbind→bind on the SAME driver
-   instance, never recreated), reconnect storms (20 rapid `connect()` calls, no duplicate events),
-   and an end-to-end HTTP-API proof (`services/gateway/src/driver-lifecycle-unbind.e2e.test.ts` —
-   discover → commission → `DELETE /v1/devices/:id` → assert the driver's real per-device timer is
-   gone, not just that a callback fired).
-6. **Four new architecture docs** — see `docs/architecture/Driver-Lifecycle.md`, `Driver-SDK.md`,
-   `Resource-Cleanup.md`, `Driver-Author-Guide.md`.
+## Part 3 — Automation Editor Production Hardening (executed)
 
-## Final report
+The rejected AV SDK task was replaced with a "Automation Editor Production Hardening (ADR-0100)"
+brief. **Critical finding, surfaced to the user twice via `AskUserQuestion` before proceeding**:
+ADR-0016 through ADR-0021 and ADR-0100 do not exist anywhere in this repository (only ADR-0001–15
+do); "Runtime Objects"/"Runtime Events" aren't this codebase's vocabulary; and the requested
+four-level field-resolution pipeline (Driver Command Metadata → Capability Structural
+Configuration → Live-State Inference → Static Capability Table) doesn't exist either — the real
+Automation Editor (`apps/web-homeowner/src/automations.tsx`) has a small hardcoded onoff-only
+field set with no capability-driven resolution at all. User confirmed: proceed against the real
+implementation (governed by **ADR-0005**, "Native automation engine, AI drafts, and append-only
+audit"), document the real gap honestly, present the requested pipeline/metadata contract/
+maturity model as clearly-labeled **future proposals**, don't implement them.
 
-- **Drivers audited:** 22 of 22 in `@supreme/protocols` (every driver implementing
-  `INativeProtocolDriver`), plus the parallel/future `knx/supreme-knx-driver.ts` implementation.
-- **Drivers fixed (given a real `unbind()` where none existed):** 22 of 22 — 100%.
-- **Additional real leaks found and fixed beyond "missing `unbind()`":** 5 — (1) AirPlay/Apple
-  TV/Sonos `disconnect()` never cleaning up at all; (2) Matter's `subscribe()` had no unsubscribe
-  mechanism; (3) KNX's `observe()` (native `knx-driver.ts`) had the same gap; (4)
-  `SupremeKnxDriver`'s offline command queue had no per-device eviction; (5)
-  `SupremeNativeAdapter.connect()` was not idempotent, duplicating state events under repeated
-  connect calls.
-- **Lifecycle compliance:** **100%** — every driver in the fleet now implements `unbind()`
-  correctly (idempotent, scoped to one device, shared resources released only once the last
-  reference is gone), verified by driver-specific regression tests plus fleet-wide
-  bind/unbind-cycle, rebind, and reconnect-storm tests, plus one full HTTP-API-to-driver e2e test.
-- **Remaining known issues:**
-  - `HeosProtocolDriver`'s `pendingQueue` (in-flight `get_queue` correlation-id map) is not
-    evicted per-device on `unbind()` — it's bounded and self-clears via a 5-second timeout
-    regardless, so it's not an unbounded leak, but it isn't instantaneous either. Noted, not
-    fixed — genuinely low-risk given the bound.
-  - No hardware verification of any driver's `unbind()` against real devices — all verification
-    is against real embedded/in-process transports (aedes MQTT broker, in-process TCP/HTTP
-    servers, injectable client fakes), consistent with the rest of this codebase's testing
-    convention, but real hardware could theoretically surface a transport-specific edge case
-    (e.g. a device that NAKs an unsubscribe request) that a fake can't.
-  - `SupremeKnxDriver` (`knx/supreme-knx-driver.ts`) is a more elaborate parallel implementation
-    of the KNX driver that is **not currently wired into production boot** (`bootstrap.ts`/
-    `native-driver-factory.ts` both instantiate `KnxProtocolDriver` from `knx-driver.ts`, not
-    `SupremeKnxDriver`) — it's fixed and tested for completeness/consistency, but flagging this
-    so a future session doesn't assume it's the live KNX path.
+**What actually changed** (see `docs/architecture/Automation-Editor-Production-Hardening-Report.md`
+for the full report):
+- `apps/web-homeowner/src/automations.tsx`: replaced the loose `Record<string, unknown> & { type:
+  string }` node type with a real `EditorNode` discriminated union — removed 6 unsafe `as` casts,
+  made `defaultNode()`/`nodeSummary()` compiler-enforced-exhaustive switches, added a runtime type
+  guard (`isEditorNodeType`) at the one real untyped boundary (the HTML5 drag-and-drop payload).
+  Fixed one real "obvious" performance issue found during review: the device-picker's room/device
+  fetch was N sequential HTTP round-trips instead of one parallel `Promise.all` batch.
+- `apps/web-homeowner/src/api.ts`: one documentation comment added (no code change) explaining why
+  `AutomationView` is intentionally narrower than the full domain-model `Automation` type.
+- New `apps/web-homeowner/src/automations.test.ts`: 9 tests for the file's pure helper functions —
+  previously **zero** test coverage existed for this file (in fact for the entire
+  `@supreme/web-homeowner` app — no `.test.tsx` anywhere, no `@testing-library/react`/jsdom
+  dependency). Component-level tests were investigated and explicitly NOT added — would require
+  introducing new test infrastructure to an app that's never had any, a real scope decision,
+  documented as a `TODO.md` follow-up rather than silently done or silently skipped.
+- Nothing in `services/automations/`, `packages/domain-model/src/automations-dsl.ts`,
+  `packages/supreme-contracts/src/phase3.ts`, `services/persistence`'s automation repo, or the
+  gateway automation routes was touched — this is the evidence behind the report's "zero
+  serialization/persistence/execution-engine impact" claim, not an inference.
+- Three new docs: `docs/architecture/Automation-Editor.md` (architecture + real current
+  field-resolution pipeline + driver integration guide), `Automation-Editor-Future-Driver-SDK-
+  Roadmap.md` (Command Metadata contract examples, maturity model, extension points — all
+  explicitly labeled unimplemented), `Automation-Editor-Production-Hardening-Report.md` (the full
+  14-part report: code review, performance, type safety, test coverage, backward-compat matrix,
+  serialization/protocol-compatibility validation, release-candidate validation).
 
-## Files touched this session
+**Verification**: full monorepo `pnpm build` (54/54 packages), `pnpm typecheck` (93/93 tasks),
+`pnpm test` (all passing, including the 222 pre-existing gateway tests confirming zero regression)
+— all green after the change. No lint gate exists anywhere in this repo (confirmed, not assumed —
+no package defines a `lint` script, no ESLint/Biome config exists); this is reported honestly in
+the hardening report rather than silently skipped.
 
-- New: `services/integration-layer/src/protocols/lifecycle.ts` (+ `.test.ts`)
-- New: `services/protocols/src/binding-cleanup.ts` (+ `.test.ts`)
-- New: `services/gateway/src/driver-lifecycle-unbind.e2e.test.ts`
-- New: `docs/architecture/{Driver-Lifecycle,Driver-SDK,Resource-Cleanup,Driver-Author-Guide}.md`
-- Modified (interface/wiring): `services/integration-layer/src/{adapter,index,native-adapter,
-  routing-adapter,sil}.ts` and their `.test.ts` files; `services/integration-layer/src/protocols/
-  driver.ts` (added optional `unbind?()`); `services/gateway/src/installer-context.ts` (added
-  `"stopping"` stage, unrelated orchestration-lifecycle observability improvement)
-- Modified (unbind() added, all with test coverage): `services/protocols/src/{avr,heos,yamaha,
-  wiim,airplay,apple-tv,dali,devialet,sonos,shelly,modbus,mqtt,lutron,sip,zigbee,ajax,casambi,
-  coolmaster,tuya,matter,knx}-driver.ts`, `services/protocols/src/knx/supreme-knx-driver.ts`,
-  `services/protocols/src/knx/offline-command-queue.ts` (+ new `evict()` method)
-- Modified (interface fix — `subscribe`/`observe` now return an unsubscribe fn):
-  `services/protocols/src/matter-driver.ts` + its `.test.ts` and `matter-fabric.test.ts`;
-  `services/protocols/src/knx-driver.ts` + its `.test.ts`
+## Known issues / open gaps (new this turn)
 
-## Architecture decisions made this session
-
-- **`DriverLifecycleController` is composition-based, offered not imposed** — most drivers
-  (pattern 1/2) implement `unbind()` via direct `Map`/`Set`/array manipulation because it's
-  simpler than routing through the controller for 2-3 items with no real ordering dependency.
-  The controller exists for drivers whose resource graph genuinely benefits from LIFO +
-  fault-tolerant release.
-- **`unbind` stays optional (`?`) at the type level** — matches every prior optional addition to
-  `INativeProtocolDriver` (`getArtwork`/`getQueue`/`getCapabilityConfig`/`getDiagnostics`).
-  Functionally mandatory in practice (100% of the current fleet implements it); kept optional so
-  a future driver that skips it degrades gracefully via `unbind?.()` rather than failing to
-  compile, with the regression-test suite (not the type system) as the actual compliance gate
-  going forward.
-- **`RoutingBackendAdapter.unbindDevice()` runs both native + HA paths unconditionally** —
-  deliberate over-cleaning as the safe failure mode, since determining a device's true owner
-  ahead of the call isn't always cheap, and calling `unbind` on the wrong side is defined to be a
-  no-op.
-- **Fixed `subscribe()`/`observe()` return signatures (Matter, KNX) rather than working around the
-  gap** — a per-binding subscription with genuinely no way to unsubscribe is not something
-  `unbind()` can honestly fix from the outside; the transport interface itself had to change to
-  return an unsubscribe function. Both affected test fakes were updated to match.
+- Cross-platform duplication: the web (`automations.tsx`) and mobile
+  (`apps/mobile/lib/screens/automation_editor.dart`) Automation Editors independently hand-
+  implement the identical six-node palette/defaults/field rules — not literal shared code (TS/Dart
+  can't share modules), documented not fixed.
+- The real, honest field-resolution gap: the DSL/engine already support triggers/conditions/
+  actions across every `CapabilityKind` (brightness/color/temperature/position/media/lock/fan/
+  vacuum/sensor) and the full `CapabilityCommand` union; the editor UI only authors `onoff`. A
+  homeowner cannot build "when brightness drops below 20%, run a scene" through either
+  drag-and-drop builder today, even though the backend already executes it. Documented in
+  `Automation-Editor.md` §2; NOT fixed (would be new user-facing functionality, explicitly out of
+  scope for a hardening pass).
+- `AutomationService` (the CRUD layer in `services/automations/src/service.ts`) has no direct unit
+  tests — only one happy-path e2e test covers create + WSS-observed execution; update/delete/
+  enable-toggle/list/runs and validation-error paths are untested. Flagged, not filled (was outside
+  this pass's touched-files scope).
+- `HeosProtocolDriver`'s `queryPlayers()` (discovery-only) reimplements manual line buffering
+  instead of reusing `LineAccumulator`, with no `maxBytes` cap — found during the (discarded) AV
+  SDK refactor's audit, still real, still unfixed, still in `TODO.md`.
+- The AV SDK refactor itself (Part 2 above) remains fully unimplemented — the plan and evidence are
+  preserved in this handoff and the discarded plan file if picked back up later.
 
 ## Immediate priorities for the next session
 
-1. Nothing blocking remains for the Driver Lifecycle Completion effort itself — it's done.
-2. If revisiting HEOS: consider evicting `pendingQueue` entries for an unbound device's `pid` on
-   `unbind()`, even though the current 5s TTL bound makes this low-priority.
-3. Everything from the prior handoff not touched this session remains open: no hardware
-   verification of any driver (AVR framework or otherwise), the small named AV gaps (Yamaha EQ,
-   HEOS QuickSelect UI, HEOS Bluetooth modeling), wiring more protocols into the generic Room
-   Assignment Engine, the whole-home Media Dashboard topology graph view, Bluetooth pairing
-   management, local voice fulfillment, Infrastructure module device types #2-8, design-polish
-   phase, and the density-breakpoint remount bug.
-
-See `TODO.md` for the full backlog with priority tiers.
+1. If the AV SDK refactor is wanted after all: start from Part 2's evidence (still accurate,
+   nothing in the AV drivers changed this session) rather than re-auditing from scratch.
+2. If continuing Automation Editor work: the real field-resolution gap (onoff-only authoring) is
+   the highest-value next step, but is a **feature**, not a hardening task — needs its own scoped
+   session/ADR, not a bolt-on.
+3. Component-test infrastructure for `apps/web-homeowner` (`@testing-library/react` + jsdom) is a
+   real, currently-nonexistent gap worth a dedicated small session before more UI hardening passes
+   rely on "add tests" the same way this one did (pure-function tests only).
+4. Everything from the prior (Driver Lifecycle Completion) handoff not touched this session remains
+   open — see `TODO.md` for the full backlog with priority tiers.

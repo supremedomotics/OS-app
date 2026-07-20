@@ -116,6 +116,43 @@
 - **Complexity:** Medium.
 - **Status:** Logic done, transport not wired.
 
+### Universal AV SDK refactor (AVR/HEOS/Yamaha → thin protocol adapters)
+- **Description:** confirmed via an architecture-verification report that the documented
+  "Universal AV SDK" (`docs/architecture/avr-sdk-developer-guide.md`) exists only in docs — at
+  runtime `AvrProtocolDriver`/`HeosProtocolDriver`/`YamahaProtocolDriver` each independently
+  implement `INativeProtocolDriver` with no shared SDK layer. A full evidence-based duplication
+  audit (3 research agents + 1 design-critique pass) found the real, extractable duplication is
+  narrow: a ~55-line TCP-link-pool + reconnect + line-buffering pattern between AVR/HEOS, a
+  verbatim-identical `record()` in all three drivers, a diagnostics-status ternary and an `onData`
+  skeleton duplicated between AVR/HEOS, and one dead-duplicated `parseHostPort()` in HEOS. A
+  complete, evidence-scoped implementation plan (new `services/protocols/src/av-sdk/` module:
+  `TcpLineTransport` + `state-cache.ts`; AVR/HEOS migrated to use it; Yamaha only gets the
+  `record()` extraction since it's HTTP-based with no second transport caller in the fleet; zero
+  stub adapters for the 17 unbuilt future brands) was written and approved-in-substance by the
+  user via `AskUserQuestion`, but the user then redirected to a different task before the plan was
+  executed.
+- **Reason:** real, evidence-backed duplication exists and is worth closing; the full plan is
+  already done, de-risking a future session significantly.
+- **Dependencies:** none — the plan doesn't touch public APIs, manifests, or protocol identifiers.
+- **Complexity:** Medium (plan already written; execution is 5 sequenced, individually-gated
+  steps — see the plan file referenced in `SESSION_HANDOFF.md`'s Part 2 for the full design and
+  sequencing, or re-derive it from the audit findings above, which remain accurate since nothing
+  in the AV drivers changed after the plan was written).
+- **Status:** Fully planned, not started. Not a redo — start from the existing plan.
+
+### HEOS `queryPlayers()` unbounded discovery buffer
+- **Description:** found during the AV SDK refactor's duplication audit: `heos-driver.ts`'s
+  `queryPlayers()` (used only during `discover()`) reimplements manual `buffer.split("\r\n")` line
+  accumulation instead of reusing the already-imported `LineAccumulator`, and — unlike
+  `LineAccumulator` — has no `maxBytes` cap. A non-HEOS device answering on port 1255 with a flood
+  of undelimited data during discovery could grow this buffer unbounded.
+- **Reason:** real, low-risk, small-scope bug; adjacent to (but not part of) the AV SDK refactor's
+  scope, so deliberately not silently bundled into any other change.
+- **Dependencies:** none.
+- **Complexity:** Small — reuse `LineAccumulator`, matching the pattern already used for AVR/HEOS's
+  main TCP link buffers.
+- **Status:** Not started.
+
 ---
 
 ## Low
@@ -220,6 +257,55 @@
 - **Dependencies:** `cloud/voice`, local intent-routing design.
 - **Complexity:** Large.
 - **Status:** Deferred, not designed.
+
+### Automation Editor: onoff-only field-resolution gap
+- **Description:** confirmed during Automation Editor production hardening
+  (`docs/architecture/Automation-Editor.md` §2): the automation DSL and engine
+  (`packages/domain-model/src/automations-dsl.ts`, `services/automations/`) already support
+  triggers/conditions/actions across every `CapabilityKind` (brightness/color/temperature/
+  position/media/lock/fan/vacuum/sensor) and the full `CapabilityCommand` union — but both the web
+  (`apps/web-homeowner/src/automations.tsx`) and mobile (`apps/mobile/lib/screens/
+  automation_editor.dart`) drag-and-drop editors only ever author onoff-style device triggers/
+  conditions/commands. A homeowner cannot build "when brightness drops below 20%, run a scene"
+  through either builder today, even though the backend already executes it.
+- **Reason:** a real, user-facing functionality gap, not a hardening concern — deliberately not
+  fixed in the hardening pass that found it, per that pass's explicit "no new user-facing
+  features" scope.
+- **Dependencies:** the real, already-shared `getCapabilityConfig()` mechanism
+  (`services/integration-layer/src/protocols/driver.ts`) is the natural foundation for a
+  capability-aware field editor; see `docs/architecture/Automation-Editor-Future-Driver-SDK-
+  Roadmap.md` for a fully-worked (but unimplemented) design proposal — Driver Command Metadata
+  contract, maturity model, extension points — to build from rather than redesigning from scratch.
+- **Complexity:** Large — needs its own scoped session/ADR (a generic, data-driven field-editor
+  renderer for both platforms), not a bolt-on to another task.
+- **Status:** Not started; fully documented as a future proposal, not implemented.
+
+### `AutomationService` unit test coverage
+- **Description:** `services/automations/src/service.ts` (the CRUD layer: create/update/remove/
+  setEnabled/testRun) has no direct unit tests — its only coverage is one happy-path e2e test
+  (`services/gateway/src/phase3.e2e.test.ts`, create + WSS-observed execution). Update/delete/
+  enable-toggle/list/runs and validation-error paths are untested at the service level.
+- **Reason:** found during the Automation Editor hardening pass's test-coverage audit; the engine
+  itself (`engine.ts`) has solid coverage (8 tests), the CRUD wrapper around it does not.
+- **Dependencies:** none.
+- **Complexity:** Small — `InMemoryAutomationStore` already exists as an injectable fake, so this
+  is straightforward unit testing, no new infrastructure needed.
+- **Status:** Not started.
+
+### `@supreme/web-homeowner` has no component-test infrastructure
+- **Description:** confirmed during the Automation Editor hardening pass: the entire
+  `apps/web-homeowner` app has zero `.test.tsx` files and no `@testing-library/react`/jsdom/
+  happy-dom dependency — only plain-function `vitest` tests are possible today. This blocked
+  adding real component/interaction tests (drag-and-drop, click handlers, save-payload
+  correctness) for the Automation Editor; only its pure helper functions got new test coverage.
+- **Reason:** a real, app-wide testing-infrastructure gap, not specific to automations — worth
+  fixing once, deliberately, rather than every future UI hardening pass re-discovering it and
+  settling for pure-function-only coverage.
+- **Dependencies:** none — add `@testing-library/react` + `jsdom` (or `happy-dom`) as dev
+  dependencies and a vitest environment config.
+- **Complexity:** Small to set up; the follow-on value (actually writing component tests for
+  `automations.tsx` and other pages) is separate, larger work.
+- **Status:** Not started.
 
 ---
 
