@@ -4,7 +4,7 @@ import type {
   CapabilityState,
   DeviceId,
 } from "@supreme/domain-model";
-import type { DiscoveredDevice, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
+import type { DiscoveredDevice, DriverDiagnosticsSnapshot, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
 
 /**
  * Native protocol driver contract (blueprint §7, §9, §16).
@@ -43,6 +43,27 @@ export interface INativeProtocolDriver {
   /** True if this driver owns the given device. */
   manages(deviceId: DeviceId): boolean;
 
+  /**
+   * Optional: release EVERY resource this driver holds for ONE device — timers,
+   * sockets/socket references, subscriptions, cached state, diagnostics trackers,
+   * in-flight-promise entries — without tearing down the whole driver instance
+   * (§ Driver Lifecycle Completion). Called when a Supreme device is deleted while
+   * its owning driver keeps running (e.g. one HEOS player removed while the rest of
+   * the network stays bound). Optional because not every driver has been migrated
+   * yet (see `docs/architecture/driver-lifecycle.md`'s compliance report) and because
+   * a driver with truly nothing per-device to release (rare) doesn't need it — but
+   * every driver that owns ANY per-device state (which is nearly all of them) should
+   * implement this. MUST be idempotent: calling it twice for an already-unbound
+   * device must be a safe no-op, never a throw. MUST NOT throw for a device this
+   * driver doesn't currently manage — a caller doesn't need to check `manages()`
+   * first. If this device shares a physical link with other still-bound devices
+   * (HEOS's one-connection-many-players, AVR's zone2-on-the-same-socket), the driver
+   * decides whether to close the shared resource (only when it was the LAST device
+   * referencing it) or just remove this device's own entries — see the Driver Author
+   * Guide for the exact pattern.
+   */
+  unbind?(deviceId: DeviceId): Promise<void>;
+
   /** Translate + write a Supreme command to the bus for a bound device. */
   command(deviceId: DeviceId, command: CapabilityCommand): Promise<void>;
   /** Last normalized state this driver observed for the device capability. */
@@ -66,6 +87,13 @@ export interface INativeProtocolDriver {
    * right after a successful `bind()` so a rich console has real, capability-driven
    * data to render instead of a device with no config at all. */
   getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null;
+
+  /** Optional: this device's real connection/traffic diagnostics (§ Diagnostics
+   * Console) — connection status, last command/response, RX/TX packet counts,
+   * reconnect count, response time, last error. `null` when this driver doesn't
+   * manage the device. Synchronous: reading counters already held in memory, never a
+   * network round-trip. */
+  getDiagnostics?(deviceId: DeviceId): DriverDiagnosticsSnapshot | null;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

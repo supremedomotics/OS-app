@@ -11,6 +11,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
  * SIP door-station driver (§3). SIP (RFC 3261) is real-time comms, not capability
@@ -94,6 +95,14 @@ export class SipProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared SIP user agent. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

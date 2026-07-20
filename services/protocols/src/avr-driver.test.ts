@@ -136,6 +136,30 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     expect(avr.received).toContain("PSTRE 49");
     expect(avr.received).toContain("MSSTEREO");
   });
+
+  it("reports real Diagnostics Console counters for a bound, connected device", async () => {
+    const before = driver.getDiagnostics(dev);
+    expect(before?.connectionStatus).toBe("connected");
+    expect(before?.protocol).toBe("avr");
+    expect(before?.packetsSent).toBeGreaterThan(0); // init query alone counts
+    expect(before?.model).toBeNull(); // Denon Telnet exposes no model on the wire
+    const sentBefore = before!.packetsSent;
+    const receivedBefore = before!.packetsReceived;
+
+    await driver.command(dev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => {
+      const after = driver.getDiagnostics(dev)!;
+      expect(after.packetsSent).toBeGreaterThan(sentBefore);
+      expect(after.packetsReceived).toBeGreaterThan(receivedBefore);
+    });
+    const after = driver.getDiagnostics(dev)!;
+    expect(after.lastCommand).toBe("PWON");
+    expect(after.lastCommandAt).not.toBeNull();
+  });
+
+  it("returns null diagnostics for a device this driver doesn't manage", () => {
+    expect(driver.getDiagnostics("device-unknown" as DeviceId)).toBeNull();
+  });
 });
 
 describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same link)", () => {
@@ -179,6 +203,54 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
 
   it("rejects zone2 volume — no documented Zone 2 volume token on this protocol", async () => {
     await expect(driver.command(zone2Dev, { capability: "media", action: "volume", volume: 50 })).rejects.toThrow();
+  });
+});
+
+describe("AvrProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => {
+  it("keeps the shared TCP link open while a sibling zone is still bound, then closes it once the last device on that host is unbound", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    await driver.connect();
+    const mainDev = "device-avr-unbind-main" as DeviceId;
+    const zone2Dev = "device-avr-unbind-zone2" as DeviceId;
+    await driver.bind({ deviceId: mainDev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.bind({ deviceId: zone2Dev, capability: "onoff", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(1));
+
+    // Unbinding zone2 (not the last device on this host) must NOT tear down the shared link.
+    await driver.unbind(zone2Dev);
+    expect(driver.manages(zone2Dev)).toBe(false);
+    expect(driver.manages(mainDev)).toBe(true);
+    expect(avr.sockets.size).toBe(1); // main zone's command still needs this link
+    await driver.command(mainDev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(avr.received).toContain("PWON"));
+
+    // Unbinding the LAST device on this host must close the real TCP socket.
+    await driver.unbind(mainDev);
+    expect(driver.manages(mainDev)).toBe(false);
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(0));
+
+    // Idempotent — a second unbind is a safe no-op.
+    await expect(driver.unbind(mainDev)).resolves.toBeUndefined();
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("a command for an unbound device fails instead of resurrecting the link", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    await driver.connect();
+    const dev = "device-avr-unbind-solo" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(1));
+
+    await driver.unbind(dev);
+    await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not bound/);
+    await vi.waitFor(() => expect(avr.sockets.size).toBe(0));
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
   });
 });
 
@@ -235,6 +307,91 @@ describe("AvrProtocolDriver — connection failure is never silent", () => {
     await vi.waitFor(async () => {
       await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not connected/);
     });
+  });
+});
+
+describe("AvrProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
+  it("rejects a command after disconnect() instead of silently re-opening a socket", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    const dev = "device-avr-teardown" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+
+    await driver.disconnect();
+    await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/disconnected/);
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("disconnect() is idempotent — calling it twice never throws", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    await driver.connect();
+    await driver.bind({ deviceId: "device-x" as DeviceId, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.disconnect();
+    await expect(driver.disconnect()).resolves.toBeUndefined();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("controls two physically independent receivers (different hosts) with fully isolated links, state, and diagnostics", async () => {
+    const living = await startFakeAvr();
+    const theatre = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    const livingDev = "device-avr-living2" as DeviceId;
+    const theatreDev = "device-avr-theatre2" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: livingDev, capability: "onoff", address: `127.0.0.1:${living.port}` });
+    await driver.bind({ deviceId: theatreDev, capability: "onoff", address: `127.0.0.1:${theatre.port}` });
+    await vi.waitFor(() => {
+      expect(living.received).toContain("PW?");
+      expect(theatre.received).toContain("PW?");
+    });
+
+    await driver.command(livingDev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(living.received).toContain("PWON"));
+    // The theatre receiver must never see a command meant for the living room unit.
+    expect(theatre.received).not.toContain("PWON");
+
+    const livingDiag = driver.getDiagnostics(livingDev)!;
+    const theatreDiag = driver.getDiagnostics(theatreDev)!;
+    expect(livingDiag.ip).toBe("127.0.0.1");
+    expect(livingDiag.packetsSent).toBeGreaterThan(theatreDiag.packetsSent); // living got the extra PWON
+
+    await driver.disconnect();
+    await Promise.all([
+      new Promise<void>((r) => living.server.close(() => r())),
+      new Promise<void>((r) => theatre.server.close(() => r())),
+    ]);
+  });
+
+  it("rapid-fire volume commands each reach the wire and the final state reflects the LAST command sent", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver();
+    const dev = "device-avr-rapid" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+
+    // Fire 5 volume changes back-to-back with no await between the WRITES — each
+    // driver.command() call resolves as soon as its local socket.write() call
+    // returns (buffered into the OS send queue), which is not the same instant the
+    // real TCP peer receives and processes it — so this proves ordering/delivery over
+    // the actual loopback socket, not just that 5 local writes were issued.
+    await Promise.all([10, 30, 50, 70, 90].map((v) => driver.command(dev, { capability: "media", action: "volume", volume: v })));
+    await vi.waitFor(() => {
+      const sentVolumes = avr.received.filter((r) => /^MV\d{2}$/.test(r));
+      expect(sentVolumes.length).toBe(5);
+    });
+    // The fake server echoes each one back in order, so the driver's cached state ends
+    // on the LAST token the wire actually processed.
+    await vi.waitFor(() => {
+      const state = driver.getState(dev, "media") as { volume: number } | null;
+      expect(state?.volume).toBeGreaterThan(0);
+    });
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
   });
 });
 

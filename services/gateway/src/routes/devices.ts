@@ -4,6 +4,7 @@ import {
   SupremeError,
   UpdateDeviceRequest,
   type CommandResponse,
+  type DeviceDiagnosticsResponse,
   type DeviceResponse,
   type MediaQueueResponse,
 } from "@supreme/contracts";
@@ -181,6 +182,26 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "device", deviceId, "view");
       const items = (await ctx.sil.getQueue(deviceId)) ?? [];
       reply.send({ items } satisfies MediaQueueResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Diagnostics Console (§ Universal AV Driver SDK): GET /v1/devices/:id/diagnostics —
+  // real connection/traffic diagnostics (RX/TX counts, last command/response, response
+  // time, reconnect count, last error) from the device's owning driver. `null` when
+  // unsupported (HA-backed device, or a protocol with no diagnostics tracker) rather
+  // than a fabricated all-zero shape. Same "device"/"view" permission as artwork/queue
+  // — this is only ever rendered behind the client's own devMode gate.
+  app.get<{ Params: { id: string } }>("/v1/devices/:id/diagnostics", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "view");
+      const diagnostics = await ctx.sil.getDiagnostics(deviceId);
+      reply.send({ diagnostics } satisfies DeviceDiagnosticsResponse);
     } catch (err) {
       sendError(reply, err);
     }

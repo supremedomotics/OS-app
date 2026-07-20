@@ -13,6 +13,7 @@ import {
 } from "@supreme/integration-layer";
 import { DEVIALET_STATE_PATHS, commandToDevialet, stateFromDevialet } from "./devialet-codec.js";
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /** The Bonjour service type Devialet speakers advertise. */
 const DEVIALET_SERVICE = "_devialet-http._tcp.local";
@@ -72,6 +73,14 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
   }
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared poll timer. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

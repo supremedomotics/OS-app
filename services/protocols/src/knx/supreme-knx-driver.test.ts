@@ -115,6 +115,80 @@ describe("SupremeKnxDriver", () => {
   });
 });
 
+describe("SupremeKnxDriver.unbind (§ Driver Lifecycle Completion)", () => {
+  it("unsubscribes the status GA — a later telegram no longer resurrects state for the unbound device", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    await driver.connect();
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    provider.emit("1/1/1", true);
+    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true });
+
+    await driver.unbind(deviceId);
+    expect(driver.manages(deviceId)).toBe(false);
+    expect(driver.getState(deviceId, "onoff")).toBeNull();
+
+    const events: unknown[] = [];
+    driver.onState((e) => events.push(e));
+    provider.emit("1/1/1", false);
+    expect(events).toEqual([]);
+    expect(driver.getState(deviceId, "onoff")).toBeNull();
+  });
+
+  it("does not unsubscribe a status GA still shared by another bound device/capability", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    await driver.connect();
+    const devA = newId("device") as DeviceId;
+    const devB = newId("device") as DeviceId;
+    // Both devices bound to the same status GA (unusual but possible — a shared sensor GA).
+    await driver.bind({ deviceId: devA, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId: devB, capability: "onoff", address: "1/1/1" });
+
+    await driver.unbind(devA);
+    expect(driver.manages(devA)).toBe(false);
+
+    const events: unknown[] = [];
+    driver.onState((e) => events.push(e));
+    provider.emit("1/1/1", true);
+    expect(events).toHaveLength(1); // devB's binding is still live
+    expect(driver.getState(devB, "onoff")).toMatchObject({ on: true });
+  });
+
+  it("evicts this device's still-queued offline commands, leaving another device's queue intact", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    // Deliberately never connected — both commands queue offline.
+    const devA = newId("device") as DeviceId;
+    const devB = newId("device") as DeviceId;
+    await driver.bind({ deviceId: devA, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId: devB, capability: "onoff", address: "1/1/2" });
+    await driver.command(devA, { capability: "onoff", action: "on" });
+    await driver.command(devB, { capability: "onoff", action: "on" });
+    expect(driver.diagnostics().queuedCommandCount).toBe(2);
+
+    await driver.unbind(devA);
+    expect(driver.diagnostics().queuedCommandCount).toBe(1);
+
+    await driver.connect();
+    const result = await driver.drainOfflineQueue();
+    expect(result).toEqual({ executed: 1, expired: 0 });
+    expect(provider.writes).toHaveLength(1);
+    expect(provider.writes[0]).toMatchObject({ groupAddress: "1/1/2" });
+  });
+
+  it("is idempotent — a second unbind of an already-unbound device is a safe no-op", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    await driver.connect();
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.unbind(deviceId);
+    await expect(driver.unbind(deviceId)).resolves.toBeUndefined();
+  });
+});
+
 /** A fake KNX IoT provider — proves discoverUnified() runs the full pipeline (KNX IoT
  * discovery → functional blocks → grouping → capability detection → merged device)
  * through the driver, without a real CoAP network. */

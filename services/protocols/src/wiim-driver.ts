@@ -13,6 +13,7 @@ import {
 } from "@supreme/integration-layer";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { commandToLinkPlay, stateFromLinkPlay } from "./wiim-codec.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 export interface WiimDriverOptions {
   /** Poll period in ms for player status (default 3000). */
@@ -71,6 +72,15 @@ export class WiimProtocolDriver implements INativeProtocolDriver {
   }
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared poll timer (still needed for any other bound device).
+   * Idempotent: safe to call for a device that's already unbound or never was bound. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

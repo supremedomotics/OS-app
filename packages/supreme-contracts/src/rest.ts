@@ -134,6 +134,34 @@ export type MediaQueueItem = z.infer<typeof MediaQueueItem>;
 export const MediaQueueResponse = z.object({ items: z.array(MediaQueueItem) });
 export type MediaQueueResponse = z.infer<typeof MediaQueueResponse>;
 
+/** Real connection/traffic diagnostics from a device's owning driver (§ Diagnostics
+ * Console, Universal AV Driver SDK) — GET /v1/devices/:id/diagnostics. `null` when the
+ * device isn't bound to a driver that tracks this (e.g. HA-backed, or a protocol with
+ * no diagnostics tracker). Every field is either a genuine counter/timestamp or `null`
+ * when the owning protocol truly doesn't expose it — never a fabricated placeholder. */
+export const DeviceDriverDiagnostics = z.object({
+  connectionStatus: z.enum(["connected", "connecting", "disconnected"]),
+  protocol: z.string(),
+  driverVersion: z.string(),
+  model: z.string().nullable(),
+  firmware: z.string().nullable(),
+  ip: z.string().nullable(),
+  mac: z.string().nullable(),
+  lastCommand: z.string().nullable(),
+  lastCommandAt: z.string().nullable(),
+  lastResponse: z.string().nullable(),
+  lastResponseAt: z.string().nullable(),
+  responseTimeMs: z.number().nullable(),
+  packetsSent: z.number().int().nonnegative(),
+  packetsReceived: z.number().int().nonnegative(),
+  reconnectCount: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+});
+export type DeviceDriverDiagnostics = z.infer<typeof DeviceDriverDiagnostics>;
+
+export const DeviceDiagnosticsResponse = z.object({ diagnostics: DeviceDriverDiagnostics.nullable() });
+export type DeviceDiagnosticsResponse = z.infer<typeof DeviceDiagnosticsResponse>;
+
 // ── Scenes ───────────────────────────────────────────────────────────────────
 
 export const SceneList = z.object({ scenes: z.array(Scene) });

@@ -26,7 +26,11 @@ class FakeFabric implements MatterController {
     this.invokes.push({ addr, cluster, command, fields });
   }
   subscribe(addr: MatterAddress, handler: (r: MatterAttributeReport) => void) {
-    this.subs.set(`${addr.nodeId}/${addr.endpoint}`, handler);
+    const key = `${addr.nodeId}/${addr.endpoint}`;
+    this.subs.set(key, handler);
+    return () => {
+      if (this.subs.get(key) === handler) this.subs.delete(key);
+    };
   }
   async nodes(): Promise<MatterNodeInfo[]> {
     return [

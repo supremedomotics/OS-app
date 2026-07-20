@@ -5,6 +5,7 @@ import {
   automationsForDevice,
   client,
   fetchAutomations,
+  fetchDeviceDiagnostics,
   fetchDriverRegistry,
   fetchEnergyHistory,
   fetchIntelligenceHistory,
@@ -91,24 +92,52 @@ function protocolGlyph(protocol: string): string {
 // here branches per protocol. Only ever mount this when the caller has already gated on
 // devMode — it is never reachable by a homeowner account. Premium fact tiles, same as
 // Information (§ "diagnostics should feel like a professional installer page"). ────────────────
+/** ms → a short human duration ("120ms", "1.4s") — used only for response time, which
+ * is always a small number; never a fabricated reading when the underlying value is null. */
+function formatMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
 export function DiagnosticsSection({ device }: { device: Device }) {
   const [registry] = useAsync(() => fetchDriverRegistry());
   const [bindings] = useAsync(() => client.protocolBindings());
+  const [driverDiagnostics] = useAsync(() => fetchDeviceDiagnostics(device.id), [device.id]);
   const driver = device.driverId
     ? registry?.find((r) => r.installedId === device.driverId || r.key === device.driverId) ?? null
     : null;
   const net = (device.metadata as { network?: { ip?: string; mac?: string; host?: string } } | undefined)?.network;
   const myBindings = (bindings?.bindings ?? []).filter((b) => b.deviceId === device.id);
+  const dd = driverDiagnostics;
 
   const rows: DeviceFactRow[] = [
     { label: "Connection", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) },
   ];
   if (driver) rows.push({ label: "Driver", value: driver.name, icon: "🧩" });
   if (driver?.protocols[0]) rows.push({ label: "Protocol", value: driver.protocols[0].toUpperCase(), icon: protocolGlyph(driver.protocols[0]) });
-  if (net?.ip) rows.push({ label: "IP address", value: net.ip, icon: "🌐" });
-  if (net?.mac) rows.push({ label: "MAC", value: net.mac, icon: "🔗" });
+  // Driver Diagnostics Console (§ Universal AV Driver SDK) — real per-connection fields
+  // from the owning driver's tracker. Absent entirely (not shown as "—") for any device
+  // whose driver doesn't report this (HA-backed devices, protocols with no tracker).
+  if (dd) {
+    rows.push({ label: "Driver version", value: dd.driverVersion, icon: "🏷️" });
+    if (dd.model) rows.push({ label: "Model", value: dd.model, icon: "🔧" });
+    if (dd.firmware) rows.push({ label: "Firmware", value: dd.firmware, icon: "💾" });
+  }
+  if (net?.ip ?? dd?.ip) rows.push({ label: "IP address", value: net?.ip ?? dd!.ip!, icon: "🌐" });
+  if (net?.mac ?? dd?.mac) rows.push({ label: "MAC", value: net?.mac ?? dd!.mac!, icon: "🔗" });
   rows.push({ label: "Capabilities", value: device.capabilities.map((c) => c.kind).join(", "), icon: "⚙️" });
   for (const b of myBindings) rows.push({ label: `${b.protocol.toUpperCase()} · ${b.capability}`, value: b.address, icon: protocolGlyph(b.protocol) });
+  if (dd) {
+    if (dd.lastCommand) rows.push({ label: "Last command", value: dd.lastCommandAt ? `${dd.lastCommand} · ${formatTimestamp(dd.lastCommandAt)}` : dd.lastCommand, icon: "📤" });
+    if (dd.lastResponse) rows.push({ label: "Last response", value: dd.lastResponseAt ? `${dd.lastResponse} · ${formatTimestamp(dd.lastResponseAt)}` : dd.lastResponse, icon: "📥" });
+    if (dd.responseTimeMs !== null) rows.push({ label: "Response time", value: formatMs(dd.responseTimeMs), icon: "⏱️" });
+    rows.push({ label: "Packets sent / received", value: `${dd.packetsSent} / ${dd.packetsReceived}`, icon: "📶" });
+    rows.push({ label: "Reconnect count", value: String(dd.reconnectCount), icon: "🔁" });
+    if (dd.lastError) rows.push({ label: "Last error", value: dd.lastError, icon: "⚠️", tone: "warning" });
+  }
 
   return (
     <CollapsibleSection title="Diagnostics">

@@ -20,6 +20,7 @@ import {
   type DaliAddress,
   type DimmingCurve,
 } from "./dali-codec.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 export interface DaliUnitInfo {
   shortAddress: number;
@@ -118,6 +119,15 @@ export class DaliProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared bus connection or poll timer (still needed for any
+   * other bound fixture). Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

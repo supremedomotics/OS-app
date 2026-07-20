@@ -17,6 +17,7 @@ import {
   stateFromZclReport,
   zclClusterForCapability,
 } from "./zigbee-codec.js";
+import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /** A device endpoint on the Zigbee network. */
 export interface ZigbeeAddress {
@@ -126,6 +127,14 @@ export class ZigbeeProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § Driver Lifecycle Completion — releases this one device's bindings/cached state
+   * without touching the shared coordinator controller. Idempotent. */
+  async unbind(deviceId: DeviceId): Promise<void> {
+    removeDeviceBindings(this.bindings, deviceId);
+    this.devices.delete(deviceId);
+    removeDeviceStates(this.states, deviceId);
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

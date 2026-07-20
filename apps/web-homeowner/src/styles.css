@@ -907,6 +907,19 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .drv-logs { margin-top: 12px; font-size: 12px; }
 .drv-logs summary { cursor: pointer; color: var(--aureon-color-text-secondary); }
 .drv-logs .log { padding: 3px 0; color: var(--aureon-color-text-secondary); }
+
+/* Media Topology Engine (§ Universal AV Driver SDK) — installer-declared HDMI/zone graph. */
+.help { font-size: 12px; color: var(--aureon-color-text-secondary); margin: 4px 0; }
+.topology-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.topology-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); font-size: 13px; }
+.topology-output { font-weight: 600; color: var(--aureon-color-text-primary); min-width: 84px; }
+.topology-arrow { color: var(--aureon-color-text-secondary); }
+.topology-target { flex: 1; color: var(--aureon-color-text-secondary); }
+.topology-remove { background: none; border: none; color: var(--aureon-color-text-secondary); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
+.topology-remove:hover { color: var(--aureon-color-status-critical); }
+.topology-add { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--aureon-color-base-hairline); }
+.topology-add-btn { align-self: flex-start; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface-raised); color: var(--aureon-color-text-primary); border-radius: 999px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
+.topology-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .drv-logs .log .t { color: var(--aureon-color-text-secondary); opacity: 0.7; margin-right: 6px; }
 .drv-logs .log.warn { color: var(--aureon-color-status-warning); }
 .drv-logs .log.error { color: var(--aureon-color-status-critical); }

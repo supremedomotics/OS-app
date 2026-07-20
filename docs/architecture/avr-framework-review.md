@@ -123,6 +123,11 @@ driver always routes there regardless of migration state
 
 ### 2.3 Device lifecycle, discovery, and room assignment — already generic
 
+> **Superseded (2026-07-19):** the "installer always assigns the room" position below
+> was replaced by a confidence-based Room Assignment Engine — see ADR 0015's addendum
+> for the current policy and reasoning. Kept as-written here for the historical record
+> of what Phase 1 actually found on the wire (still accurate: none of it changed).
+
 - **Discovery primitives are real and reusable:** `ssdp.ts` (SSDP M-SEARCH over UDP
   multicast, used today by Sonos/WiiM) and `mdns.ts` (mDNS/Bonjour browse + resolve,
   used today by Shelly/AirPlay/Apple TV) are protocol-agnostic UDP libraries with

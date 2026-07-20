@@ -11,6 +11,7 @@ import {
 import { SupremeError } from "@supreme/contracts";
 import type { DiscoveredDevice, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import type { HomeService } from "@supreme/home";
+import type { LocationHint } from "./room-assignment-engine.js";
 
 /**
  * Commissioning orchestration (§9, Phase 2). Discovery aggregates devices the
@@ -45,6 +46,17 @@ export interface DiscoveredView {
    * HEOS player's `pid`, an AVR/Yamaha `zone`, …) — pass straight through as the bind
    * `config` so commissioning needs no manual entry beyond room + name. */
   bindConfig?: Record<string, unknown>;
+  /** §Automatic Room Assignment — a real location signal this discovery source
+   * genuinely carries (a HEOS/MusicCast zone name, an SSDP friendlyName, …), fed
+   * straight into {@link resolveRoomAssignment}. Any driver can supply this; it isn't
+   * AVR-specific. Absent when the source has no location signal (e.g. classic Denon
+   * Telnet, verified to have none on the wire). */
+  locationHint?: LocationHint;
+  /** §Automatic Zone Generation — extra logical zones this ONE physical unit exposes,
+   * discovered via a genuine wire query (e.g. Yamaha's `getFeatures`), each becoming
+   * its own Supreme device sharing the same physical connection. Absent for
+   * single-zone devices/protocols. */
+  zones?: { id: string; label: string }[];
 }
 
 /**
@@ -166,6 +178,31 @@ export class CommissioningService {
 export { HttpProtocolScanner, type HttpScannerOptions } from "./http-scanner.js";
 export { decryptAesEntry, KnxDecryptError, type AesStrength } from "./knx-crypto.js";
 export * from "./knx/index.js";
+export {
+  normalizeLocationName,
+  resolveRoomAssignment,
+  UNASSIGNED_ROOM_NAME,
+  type LocationHint,
+  type LocationHintSource,
+  type RoomAssignmentDecision,
+} from "./room-assignment-engine.js";
+
+function extractLocationHint(raw: Record<string, unknown> | undefined): LocationHint | undefined {
+  const h = raw?.locationHint;
+  if (!h || typeof h !== "object") return undefined;
+  const rec = h as Record<string, unknown>;
+  if (typeof rec.raw !== "string" || typeof rec.source !== "string") return undefined;
+  if (rec.source !== "explicit_attribute" && rec.source !== "persistent_user_zone_name" && rec.source !== "friendly_name_heuristic") return undefined;
+  return { raw: rec.raw, source: rec.source };
+}
+
+function extractZones(raw: Record<string, unknown> | undefined): { id: string; label: string }[] | undefined {
+  if (!Array.isArray(raw?.zones)) return undefined;
+  const zones = (raw.zones as unknown[]).filter(
+    (z): z is { id: string; label: string } => !!z && typeof z === "object" && typeof (z as Record<string, unknown>).id === "string" && typeof (z as Record<string, unknown>).label === "string",
+  );
+  return zones.length > 0 ? zones : undefined;
+}
 
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;
@@ -174,6 +211,8 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     d.raw?.bindConfig && typeof d.raw.bindConfig === "object" && !Array.isArray(d.raw.bindConfig)
       ? (d.raw.bindConfig as Record<string, unknown>)
       : undefined;
+  const locationHint = extractLocationHint(d.raw);
+  const zones = extractZones(d.raw);
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -183,6 +222,8 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     protocol,
     ...(network ? { network } : {}),
     ...(bindConfig ? { bindConfig } : {}),
+    ...(locationHint ? { locationHint } : {}),
+    ...(zones ? { zones } : {}),
   };
 }
 
