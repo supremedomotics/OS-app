@@ -5,13 +5,15 @@
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
 **Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start. This
-turn had two parts: (1) an **AV architecture verification report** (no code changes — answered
-"is AVR/HEOS/Yamaha a real Universal SDK with brand adapters, or three independent thick
-drivers?" honestly: three independent thick drivers, no SDK layer exists in code, only in docs);
-(2) a large **AV SDK refactor** was then requested to close that gap, planned in detail (3
-research agents + 1 design-critique agent, full duplication audit, evidence-scoped module design)
-but **rejected by the user before execution** in favor of a different task; (3) **Automation
-Editor Production Hardening** — the task actually executed this turn.
+branch's work spans four parts: (1) an **AV architecture verification report** (no code changes
+— answered "is AVR/HEOS/Yamaha a real Universal SDK with brand adapters, or three independent
+thick drivers?" honestly: three independent thick drivers, no SDK layer exists in code, only in
+docs); (2) a large **AV SDK refactor** was requested to close that gap, planned in detail (3
+research agents + 1 design-critique agent, full duplication audit, evidence-scoped module design),
+initially **rejected by the user before execution** in favor of a different task; (3)
+**Automation Editor Production Hardening** — executed in place of the rejected refactor; (4) the
+user then **re-requested the AV SDK refactor** with an explicit phase-by-phase brief matching the
+earlier plan almost exactly — this was **fully executed and validated** this turn (see Part 4).
 
 ## Part 1 — AV architecture verification (no code changes)
 
@@ -22,9 +24,9 @@ SDK layer in code, only in `docs/architecture/avr-sdk-developer-guide.md`'s docu
 and Marantz are correctly the SAME driver (identical wire protocol, not a missed consolidation).
 No files changed.
 
-## Part 2 — AV SDK Refactor (planned in full, then rejected — plan discarded)
+## Part 2 — AV SDK Refactor, first attempt (planned in full, then rejected — plan later executed, see Part 4)
 
-The user then asked for a full "Universal AV SDK" refactor converting AVR/HEOS/Yamaha into thin
+The user first asked for a full "Universal AV SDK" refactor converting AVR/HEOS/Yamaha into thin
 adapters. This was planned rigorously (plan mode, 3 parallel Explore agents + 1 Plan-agent
 critique pass) before any code was touched:
 - **Real audit finding**: the actual duplication is narrow — a ~55-line TCP-link-pool + reconnect
@@ -42,10 +44,10 @@ critique pass) before any code was touched:
   be speculative), zero stub adapters for the 17 unbuilt brands (would violate "never fabricate
   capabilities").
 - **The full plan was written to `/root/.claude/plans/polished-stirring-dongarra.md` and presented
-  via `ExitPlanMode` — the user rejected it** (pasted an entirely different task instead, see Part
-  3). **No code from this plan was ever applied.** If this work is wanted later, the plan file and
-  the reasoning above are the starting point — the audit findings are still accurate (nothing in
-  `avr-driver.ts`/`heos-driver.ts`/`yamaha-driver.ts` changed this session).
+  via `ExitPlanMode` — the user rejected it at the time** (pasted an entirely different task
+  instead, see Part 3). No code from this plan was applied in this pass. The user later
+  re-requested this exact refactor (Part 4) — this plan file became that pass's executed
+  blueprint, so this section is history, not an open item.
 
 ## Part 3 — Automation Editor Production Hardening (executed)
 
@@ -94,7 +96,74 @@ for the full report):
 no package defines a `lint` script, no ESLint/Biome config exists); this is reported honestly in
 the hardening report rather than silently skipped.
 
-## Known issues / open gaps (new this turn)
+## Part 4 — AV SDK Refactor, second attempt (executed, validated, committed)
+
+The user re-requested the same refactor with an explicit 9-phase brief, stating the Part 2 audit
+"is considered the authoritative scope — do NOT expand beyond it." Since this matched the
+already-designed (and substantively pre-approved) Part 2 plan almost exactly, and the user's
+message was itself phase-by-phase execution instructions, this was executed directly rather than
+re-entering plan mode.
+
+**New module `services/protocols/src/av-sdk/`** (internal-only — never re-exported from
+`services/protocols/src/index.ts`, so it carries zero public-API risk):
+- `state-cache.ts` — `recordCapabilityState()`, a plain function extracting the verbatim-identical
+  dedupe-then-notify `record()` logic previously copy-pasted in all three AV drivers. 5 tests.
+- `tcp-line-transport.ts` — `TcpLineTransport`, absorbing the genuinely duplicated AVR/HEOS
+  TCP-link-pool + reconnect + line-buffering pattern (`ensureLink`/`disconnectAll`/`releaseKey`/
+  `diagnosticsFor`, plus `onConnect`/`onLine` hooks the driver wires its own protocol logic
+  into). Delegates to the pre-existing `ReconnectScheduler`/`LineAccumulator`/
+  `DriverDiagnosticsTracker` rather than reimplementing them. 8 tests, including a fake-socket
+  ordering test proving link registration happens before any connect handler could observe it.
+- `extensibility.test.ts` — a synthetic, non-real `FakeBrandDriver` (protocol id
+  `"fake-brand-extensibility-proof"`, not exported or registered anywhere) built entirely from
+  `TcpLineTransport` + `recordCapabilityState` against a real embedded fake server, proving the
+  SDK's public surface is sufficient for a from-scratch adapter without fabricating a stub for
+  any real unbuilt brand. 2 tests.
+
+**Driver migrations** (all pre-existing driver test files pass **unmodified** — the regression
+gate):
+- `avr-driver.ts`: 387 → 305 lines (~21% reduction). `AvrLink` interface, `ensureLink`/
+  `openSocket`/`onData` methods, and the diagnostics-status ternary removed; replaced with
+  `TcpLineTransport` + `onLinkConnect()` hook. `record()` now delegates to
+  `recordCapabilityState()`. `avr-driver.test.ts`'s 19 tests pass unmodified.
+- `heos-driver.ts`: 522 → 437 lines (~16% reduction). Same pattern. Also deleted a dead-duplicated
+  local `parseHostPort()`, now importing the one `avr-codec.ts` already exports.
+  `heos-driver.test.ts`'s 21 tests pass unmodified. `queryPlayers()`'s unbounded discovery buffer
+  was deliberately left untouched (separately tracked, see `TODO.md` — a bug fix, not a refactor,
+  out of this pass's scope).
+- `yamaha-driver.ts`: 486 → 481 lines (~1% reduction) — **only** `record()` now delegates to
+  `recordCapabilityState()`. Yamaha stays on its own HTTP+UDP transport code; `TcpLineTransport`
+  doesn't apply (no persistent TCP line protocol) and no second HTTP-transport caller exists in
+  the fleet to justify a speculative primitive. Documented explicitly as "thinner, not thin," not
+  oversold as a third symmetric adapter. `yamaha-driver.test.ts`'s 24 tests pass unmodified.
+
+**New docs**: `docs/architecture/Universal-AV-SDK.md` (SDK architecture, before/after line counts,
+what was deliberately NOT built and why, structural performance-validation reasoning) and
+`docs/architecture/AV-Adapter-Development-Guide.md` (the `INativeProtocolDriver` contract, when to
+use `TcpLineTransport` vs. not, step-by-step wiring guide, the real process for adding a new AV
+brand). Updated `docs/architecture/avr-sdk-developer-guide.md` to correct its now-stale "no
+separate AVR engine" claim and cross-link the two new docs.
+
+**Verification**: `pnpm build` (54/54), `pnpm typecheck` (93/93), `pnpm test` (all green,
+including the full pre-existing `@supreme/protocols` suite — 378 tests — and `@supreme/gateway`'s
+222 tests, all passing **unmodified**, which is the direct evidence of zero runtime/protocol/
+discovery/diagnostics/reconnect behavior change). No public API, manifest, `ProtocolKind` enum, or
+device/entity identifier changed — confirmed by the driver classes' unchanged exported names,
+`protocol` field values, and constructor signatures, and by `native-driver-factory.ts`/
+`bootstrap.ts` requiring no edits.
+
+**What was deliberately NOT built, per the explicit "authoritative scope" constraint**: no
+`DiscoveryEngine`/`CapabilityEngine`/`StateEngine`/`EventEngine`/`DigitalTwin`/`ZoneEngine`/
+`Telemetry`/`Metrics`/`SubscriptionManager` modules (each either already exists elsewhere as
+generic fleet infrastructure, or has no real duplication behind it); no separate `ConnectionManager`/
+`TransportManager`/`ConnectionPool`/`ReconnectManager` as four classes (only one real transport
+variant exists in evidence, so it's one cohesive `TcpLineTransport`, not four wrappers); no
+placeholder adapter files for any of the 17 named future brands (Anthem/Arcam/Pioneer/Sony/NAD/
+StormAudio/JBL Synthesis/Onkyo/Integra/Rotel/McIntosh/Trinnov, etc.) — zero protocol
+implementation exists for any of them, so a stub would violate this repo's "never fabricate
+capabilities" rule.
+
+## Known issues / open gaps
 
 - Cross-platform duplication: the web (`automations.tsx`) and mobile
   (`apps/mobile/lib/screens/automation_editor.dart`) Automation Editors independently hand-
@@ -112,20 +181,22 @@ the hardening report rather than silently skipped.
   enable-toggle/list/runs and validation-error paths are untested. Flagged, not filled (was outside
   this pass's touched-files scope).
 - `HeosProtocolDriver`'s `queryPlayers()` (discovery-only) reimplements manual line buffering
-  instead of reusing `LineAccumulator`, with no `maxBytes` cap — found during the (discarded) AV
-  SDK refactor's audit, still real, still unfixed, still in `TODO.md`.
-- The AV SDK refactor itself (Part 2 above) remains fully unimplemented — the plan and evidence are
-  preserved in this handoff and the discarded plan file if picked back up later.
+  instead of reusing `LineAccumulator`, with no `maxBytes` cap — found during the AV SDK refactor's
+  audit, deliberately left untouched during the Part 4 migration (a bug fix, not a refactor), still
+  real, still unfixed, still in `TODO.md`.
 
 ## Immediate priorities for the next session
 
-1. If the AV SDK refactor is wanted after all: start from Part 2's evidence (still accurate,
-   nothing in the AV drivers changed this session) rather than re-auditing from scratch.
+1. The AV SDK refactor (Parts 2 and 4) is complete — no further action needed unless a genuinely
+   new brand or a second HTTP-transport caller shows up (see `AV-Adapter-Development-Guide.md` for
+   the process).
 2. If continuing Automation Editor work: the real field-resolution gap (onoff-only authoring) is
    the highest-value next step, but is a **feature**, not a hardening task — needs its own scoped
    session/ADR, not a bolt-on.
 3. Component-test infrastructure for `apps/web-homeowner` (`@testing-library/react` + jsdom) is a
    real, currently-nonexistent gap worth a dedicated small session before more UI hardening passes
    rely on "add tests" the same way this one did (pure-function tests only).
-4. Everything from the prior (Driver Lifecycle Completion) handoff not touched this session remains
+4. The HEOS `queryPlayers()` unbounded-buffer bug fix (see `TODO.md`) is small, low-risk, and ready
+   to pick up whenever a bug-fix pass (not a refactor pass) is in scope.
+5. Everything from the prior (Driver Lifecycle Completion) handoff not touched this session remains
    open — see `TODO.md` for the full backlog with priority tiers.

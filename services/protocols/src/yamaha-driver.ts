@@ -35,6 +35,7 @@ import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js
 import { bestEffortMacForIp } from "./arp-lookup.js";
 import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
+import { recordCapabilityState } from "./av-sdk/state-cache.js";
 
 /** Kept in sync with `supreme-yamaha`'s manifest `version` (services/drivers/src/manifests.ts). */
 const DRIVER_VERSION = "1.0.0";
@@ -475,12 +476,6 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   }
 
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
-    const k = bindingKey(deviceId, capability);
-    const prev = this.states.get(k);
-    if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
-    this.states.set(k, state);
-    for (const l of this.listeners) {
-      l({ deviceId, capability, state, ts: new Date().toISOString() });
-    }
+    recordCapabilityState(this.states, this.listeners, deviceId, capability, state);
   }
 }

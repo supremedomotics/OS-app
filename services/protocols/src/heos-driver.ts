@@ -23,12 +23,13 @@ import {
   type HeosMediaCache,
   type HeosPlayerInfo,
 } from "./heos-codec.js";
-import { ReconnectScheduler } from "./avr-reconnect.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
-import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
-import { LineAccumulator } from "./line-buffer.js";
+import type { DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
+import { recordCapabilityState } from "./av-sdk/state-cache.js";
+import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
+import { parseHostPort } from "./avr-codec.js";
 
 /** Kept in sync with `supreme-heos`'s manifest `version` (services/drivers/src/manifests.ts). */
 const DRIVER_VERSION = "1.0.0";
@@ -66,17 +67,6 @@ interface HeosBinding {
   model: string | null;
 }
 
-interface HeosLink {
-  socket: net.Socket | null;
-  /** True only once THIS socket's "connect" event has actually fired — a freshly-created
-   * socket is non-null but not yet connected, so `socket !== null` alone isn't a safe
-   * "can I write to this" check (see command()). */
-  ready: boolean;
-  buffer: LineAccumulator;
-  reconnect: ReconnectScheduler;
-  diagnostics: DriverDiagnosticsTracker;
-}
-
 /**
  * Real HEOS CLI driver (§3) — Denon/Marantz's whole-home streaming/multi-room layer,
  * distinct from (and complementary to) the classic Denon/Marantz Telnet AVR driver: HEOS
@@ -93,7 +83,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   private readonly defaultPort: number;
   private readonly bindings: HeosBinding[] = [];
   private readonly devices = new Set<DeviceId>();
-  private readonly links = new Map<string, HeosLink>();
+  private readonly transport: TcpLineTransport;
   private readonly states = new Map<string, CapabilityState>();
   private readonly media = new Map<DeviceId, HeosMediaCache>();
   private readonly listeners = new Set<StateListener>();
@@ -106,6 +96,15 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   constructor(opts: HeosDriverOptions = {}) {
     this.opts = opts;
     this.defaultPort = opts.port ?? 1255;
+    this.transport = new TcpLineTransport({
+      delimiter: "\r\n",
+      reconnectBaseMs: opts.reconnectBaseMs,
+      reconnectMaxMs: opts.reconnectMaxMs,
+      createSocket: opts.createSocket,
+      onLog: opts.onLog,
+      onConnect: (link, socket, host, port) => this.onLinkConnect(link, socket, host, port),
+      onLine: (ctx, line) => this.onLine(ctx.link, line),
+    });
   }
 
   async connect(): Promise<void> {
@@ -113,11 +112,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   }
 
   async disconnect(): Promise<void> {
-    for (const link of this.links.values()) {
-      link.reconnect.stop();
-      link.socket?.destroy();
-    }
-    this.links.clear();
+    this.transport.disconnectAll();
     for (const [sequence, pending] of this.pendingQueue) {
       clearTimeout(pending.timer);
       pending.resolve(null);
@@ -150,7 +145,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       });
     }
     if (this.connected) {
-      const link = this.ensureLink(key, host, port);
+      const link = this.transport.ensureLink(key, host, port);
       if (link.socket && !link.socket.destroyed && !link.socket.connecting) this.syncPid(link, pid);
     }
   }
@@ -172,12 +167,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     const releasedKeys = new Set(removed.map((b) => `${b.host}:${b.port}`));
     for (const key of releasedKeys) {
       if (this.bindings.some((b) => `${b.host}:${b.port}` === key)) continue;
-      const link = this.links.get(key);
-      if (link) {
-        link.reconnect.stop();
-        link.socket?.destroy();
-        this.links.delete(key);
-      }
+      this.transport.releaseKey(key);
     }
   }
 
@@ -190,7 +180,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     const cache = this.media.get(deviceId);
     const req = commandToHeos(command, b.pid, { repeat: cache?.repeat ?? "off", shuffle: cache?.shuffle ?? false });
     if (!req) throw new Error(`heos: unsupported command for ${command.capability}/${"action" in command ? command.action : "?"}`);
-    const link = this.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
+    const link = this.transport.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
     // A dropped/never-established/still-connecting socket must fail LOUDLY — silently
     // swallowing the write (the previous behavior) reports "success" for a command the
     // player never saw. `ready` (not just `socket !== null`) matters: ensureLink() may have
@@ -219,10 +209,8 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   getDiagnostics(deviceId: DeviceId): DriverDiagnosticsSnapshot | null {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b) return null;
-    const link = this.links.get(`${b.host}:${b.port}`);
-    const status = !link ? "disconnected" : link.ready ? "connected" : link.socket ? "connecting" : "disconnected";
-    const empty = new DriverDiagnosticsTracker();
-    return (link?.diagnostics ?? empty).snapshot(status, {
+    const { status, diagnostics } = this.transport.diagnosticsFor(`${b.host}:${b.port}`);
+    return diagnostics.snapshot(status, {
       protocol: this.protocol,
       driverVersion: DRIVER_VERSION,
       model: b.model,
@@ -321,7 +309,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   async getQueue(deviceId: DeviceId): Promise<MediaQueueItem[] | null> {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b) return null;
-    const link = this.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
+    const link = this.transport.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
     if (!link.socket || link.socket.destroyed) return null;
     const sequence = String(++this.queueSequence);
     const socket = link.socket;
@@ -338,77 +326,26 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     });
   }
 
-  private ensureLink(key: string, host: string, port: number): HeosLink {
-    let link = this.links.get(key);
-    if (link?.socket && !link.socket.destroyed) return link;
-    if (link) {
-      this.openSocket(link, host, port);
-      return link;
-    }
-    const reconnect = new ReconnectScheduler({
-      baseMs: this.opts.reconnectBaseMs,
-      maxMs: this.opts.reconnectMaxMs,
-      reconnect: async () => {
-        const l = this.links.get(key);
-        if (l) {
-          l.diagnostics.recordReconnect();
-          this.openSocket(l, host, port);
-        }
-      },
-    });
-    link = {
-      socket: null,
-      ready: false,
-      buffer: new LineAccumulator("\r\n", undefined, () => this.opts.onLog?.("error", `${host}:${port}: inbound buffer overflowed without a delimiter — dropped and reset (possible flood or malformed device response)`)),
-      reconnect,
-      diagnostics: new DriverDiagnosticsTracker(),
-    };
-    this.links.set(key, link);
-    this.openSocket(link, host, port);
-    return link;
-  }
-
-  private openSocket(link: HeosLink, host: string, port: number): void {
-    link.ready = false;
-    const socket = this.opts.createSocket ? this.opts.createSocket(host, port) : net.connect(port, host);
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => this.onData(`${host}:${port}`, chunk));
-    socket.on("connect", () => {
-      link.ready = true;
-      link.reconnect.reset();
-      this.opts.onLog?.("info", `Connected to ${host}:${port}`);
-      // Driver-init sequence per spec §2.1.1: un-register events, sync every bound
-      // player's current state, then register for change events.
-      const off = buildHeosCommand("system", "register_for_change_events", { enable: "off" });
-      link.diagnostics.recordSend(off);
-      socket.write(`${off}\r\n`);
-      for (const pid of this.pidsFor(host, port)) this.syncPid(link, pid);
-      const on = buildHeosCommand("system", "register_for_change_events", { enable: "on" });
-      link.diagnostics.recordSend(on);
-      socket.write(`${on}\r\n`);
-    });
-    socket.on("close", () => {
-      const l = this.links.get(`${host}:${port}`);
-      if (l) {
-        l.socket = null;
-        l.ready = false;
-        l.reconnect.notifyDisconnected();
-      }
-    });
-    socket.on("error", (err) => {
-      // The "close" handler still runs right after this (Node always fires close following
-      // error) and drives reconnection — this just makes the failure visible instead of silent.
-      link.diagnostics.recordError(err.message);
-      this.opts.onLog?.("error", `${host}:${port}: ${err.message}`);
-    });
-    link.socket = socket;
+  /** `TcpLineTransport`'s `onConnect` hook — the genuinely HEOS-specific piece of what used
+   * to be `openSocket()`'s connect handler (link readiness/reconnect-reset/the "Connected
+   * to…" log line are now owned by the transport itself). Driver-init sequence per spec
+   * §2.1.1: un-register events, sync every bound player's current state, then register for
+   * change events. */
+  private onLinkConnect(link: TcpLink, socket: net.Socket, host: string, port: number): void {
+    const off = buildHeosCommand("system", "register_for_change_events", { enable: "off" });
+    link.diagnostics.recordSend(off);
+    socket.write(`${off}\r\n`);
+    for (const pid of this.pidsFor(host, port)) this.syncPid(link, pid);
+    const on = buildHeosCommand("system", "register_for_change_events", { enable: "on" });
+    link.diagnostics.recordSend(on);
+    socket.write(`${on}\r\n`);
   }
 
   private pidsFor(host: string, port: number): string[] {
     return [...new Set(this.bindings.filter((b) => b.host === host && b.port === port).map((b) => b.pid))];
   }
 
-  private syncPid(link: HeosLink, pid: string): void {
+  private syncPid(link: TcpLink, pid: string): void {
     if (!link.socket) return;
     const queries = [
       buildHeosCommand("player", "get_play_state", { pid }),
@@ -423,17 +360,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     }
   }
 
-  private onData(key: string, chunk: string): void {
-    const link = this.links.get(key);
-    if (!link) return;
-    const lines = link.buffer.feed(chunk);
-    for (const line of lines) {
-      if (line.trim()) link.diagnostics.recordReceive(line);
-      this.onLine(link, line);
-    }
-  }
-
-  private onLine(link: HeosLink, line: string): void {
+  private onLine(link: TcpLink, line: string): void {
     const update = parseHeosMessage(line);
     if (!update) return;
     switch (update.kind) {
@@ -505,17 +432,6 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   }
 
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
-    const k = bindingKey(deviceId, capability);
-    const prev = this.states.get(k);
-    if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
-    this.states.set(k, state);
-    for (const l of this.listeners) {
-      l({ deviceId, capability, state, ts: new Date().toISOString() });
-    }
+    recordCapabilityState(this.states, this.listeners, deviceId, capability, state);
   }
-}
-
-function parseHostPort(address: string, defaultPort: number): { host: string; port: number } {
-  const [host, port] = address.split(":");
-  return { host: host || address, port: Number(port ?? defaultPort) };
 }

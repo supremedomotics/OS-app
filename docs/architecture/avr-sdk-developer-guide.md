@@ -9,17 +9,32 @@
 
 ## 1. What this SDK actually is
 
-There is no separate "AVR engine." Every piece below is a thin, protocol-specific
-implementation of the SAME seam every one of the 25 drivers in this fleet implements —
-`INativeProtocolDriver` (`services/integration-layer/src/protocols/driver.ts`). The
-"SDK" is the set of SHARED modules that make implementing that seam for a new AV brand
-fast and consistent, not a new abstraction layer above it:
+**Updated 2026-07-20**: when this section was first written, "no separate AVR
+engine" meant the shared modules below were the entire story — genuinely true at
+the time, but read literally it could be mistaken for "there is no runtime SDK at
+all," which a later architecture-verification pass confirmed was NOT quite
+accurate either way: there was no *speculative* engine-shaped abstraction layer
+(still true, see below), but there also wasn't yet a real `av-sdk/` module for the
+one piece of AV-specific logic that actually WAS duplicated (TCP transport
+plumbing). That gap has since been closed by a full evidence-based duplication
+audit — see [Universal-AV-SDK.md](./Universal-AV-SDK.md) for the complete story,
+including exactly what was and wasn't built and why.
+
+There is still no separate "AVR engine" in the sense of a new abstraction layer
+routing between drivers and their transports. Every AV driver is a thin,
+protocol-specific implementation of the SAME seam every one of the 22 drivers in
+this fleet implements — `INativeProtocolDriver`
+(`services/integration-layer/src/protocols/driver.ts`). The "SDK" is the set of
+SHARED modules that make implementing that seam for a new AV brand fast and
+consistent, not a new abstraction layer above it:
 
 | Concern | Shared module | Used by |
 |---|---|---|
-| Reconnect (capped exponential backoff) | `services/protocols/src/avr-reconnect.ts` (`ReconnectScheduler`) | AVR, HEOS |
-| Diagnostics counters | `services/protocols/src/driver-diagnostics.ts` (`DriverDiagnosticsTracker`) | AVR, HEOS, Yamaha |
-| Bounded line buffering | `services/protocols/src/line-buffer.ts` (`LineAccumulator`) | AVR, HEOS |
+| Pooled reconnecting line-buffered TCP transport | `services/protocols/src/av-sdk/tcp-line-transport.ts` (`TcpLineTransport`) | AVR, HEOS |
+| Capability-state record/dedupe/dispatch | `services/protocols/src/av-sdk/state-cache.ts` (`recordCapabilityState`) | AVR, HEOS, Yamaha |
+| Reconnect (capped exponential backoff) | `services/protocols/src/avr-reconnect.ts` (`ReconnectScheduler`) | AVR, HEOS (via `TcpLineTransport`) |
+| Diagnostics counters | `services/protocols/src/driver-diagnostics.ts` (`DriverDiagnosticsTracker`) | AVR, HEOS (via `TcpLineTransport`), Yamaha (direct) |
+| Bounded line buffering | `services/protocols/src/line-buffer.ts` (`LineAccumulator`) | AVR, HEOS (via `TcpLineTransport`) |
 | Best-effort MAC lookup | `services/protocols/src/arp-lookup.ts` | AVR, HEOS, Yamaha |
 | Capability config shape | `services/protocols/src/avr-capabilities.ts` (`AudioCapabilityConfig`) | AVR, HEOS, Yamaha |
 | Discovery transport | `services/protocols/src/ssdp.ts`, `mdns.ts` | AVR, HEOS, Yamaha, + non-AV drivers |
@@ -27,8 +42,11 @@ fast and consistent, not a new abstraction layer above it:
 | Media topology | `packages/domain-model/src/media-topology.ts` | any `media`-capability device |
 
 A driver author writes exactly two files (`<brand>-codec.ts`, `<brand>-driver.ts`),
-composes the shared modules above, and gets discovery, reconnect, diagnostics, room
-assignment, and topology "for free."
+composes the shared modules above (now including `av-sdk/` for a TCP-line-protocol
+brand), and gets transport pooling, reconnect, diagnostics, room assignment, and
+topology "for free." See the
+[AV Adapter Development Guide](./AV-Adapter-Development-Guide.md) for the concrete
+walkthrough.
 
 ## 2. Driver Lifecycle
 

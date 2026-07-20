@@ -116,30 +116,6 @@
 - **Complexity:** Medium.
 - **Status:** Logic done, transport not wired.
 
-### Universal AV SDK refactor (AVR/HEOS/Yamaha → thin protocol adapters)
-- **Description:** confirmed via an architecture-verification report that the documented
-  "Universal AV SDK" (`docs/architecture/avr-sdk-developer-guide.md`) exists only in docs — at
-  runtime `AvrProtocolDriver`/`HeosProtocolDriver`/`YamahaProtocolDriver` each independently
-  implement `INativeProtocolDriver` with no shared SDK layer. A full evidence-based duplication
-  audit (3 research agents + 1 design-critique pass) found the real, extractable duplication is
-  narrow: a ~55-line TCP-link-pool + reconnect + line-buffering pattern between AVR/HEOS, a
-  verbatim-identical `record()` in all three drivers, a diagnostics-status ternary and an `onData`
-  skeleton duplicated between AVR/HEOS, and one dead-duplicated `parseHostPort()` in HEOS. A
-  complete, evidence-scoped implementation plan (new `services/protocols/src/av-sdk/` module:
-  `TcpLineTransport` + `state-cache.ts`; AVR/HEOS migrated to use it; Yamaha only gets the
-  `record()` extraction since it's HTTP-based with no second transport caller in the fleet; zero
-  stub adapters for the 17 unbuilt future brands) was written and approved-in-substance by the
-  user via `AskUserQuestion`, but the user then redirected to a different task before the plan was
-  executed.
-- **Reason:** real, evidence-backed duplication exists and is worth closing; the full plan is
-  already done, de-risking a future session significantly.
-- **Dependencies:** none — the plan doesn't touch public APIs, manifests, or protocol identifiers.
-- **Complexity:** Medium (plan already written; execution is 5 sequenced, individually-gated
-  steps — see the plan file referenced in `SESSION_HANDOFF.md`'s Part 2 for the full design and
-  sequencing, or re-derive it from the audit findings above, which remain accurate since nothing
-  in the AV drivers changed after the plan was written).
-- **Status:** Fully planned, not started. Not a redo — start from the existing plan.
-
 ### HEOS `queryPlayers()` unbounded discovery buffer
 - **Description:** found during the AV SDK refactor's duplication audit: `heos-driver.ts`'s
   `queryPlayers()` (used only during `discover()`) reimplements manual `buffer.split("\r\n")` line
@@ -325,6 +301,23 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Universal AV SDK refactor** (AVR/HEOS/Yamaha → thin protocol adapters) — a new internal-only
+  `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`'s
+  `recordCapabilityState()`) extracting the real, evidence-backed duplication found by a prior
+  architecture audit (a ~55-line TCP-link-pool + reconnect + line-buffering pattern between
+  AVR/HEOS, plus a verbatim-identical `record()` in all three drivers). `AvrProtocolDriver`
+  387→305 lines (~21%) and `HeosProtocolDriver` 522→437 lines (~16%) migrated onto
+  `TcpLineTransport`; `YamahaProtocolDriver` 486→481 lines gets only the `record()` extraction
+  ("thinner, not thin" — HTTP+UDP transport, no second caller in the fleet to justify a
+  speculative HTTP-transport primitive). Zero placeholder adapters created for any of the 17
+  unbuilt future brands — instead, a synthetic `extensibility.test.ts` proves the SDK's public API
+  is sufficient for a from-scratch adapter, backed by a new `AV-Adapter-Development-Guide.md`. All
+  pre-existing driver test suites (AVR 19, HEOS 21, Yamaha 24 tests) pass **unmodified** — the
+  regression evidence that runtime/protocol/discovery/diagnostics/reconnect behavior is unchanged.
+  Full monorepo `pnpm build`/`typecheck`/`test` green (54/54, 93/93, all tasks). New
+  `docs/architecture/Universal-AV-SDK.md` + `AV-Adapter-Development-Guide.md`; updated
+  `avr-sdk-developer-guide.md` to correct its stale "no separate AVR engine" claim. Full detail:
+  `SESSION_HANDOFF.md` Part 4.
 - **Universal AV Driver SDK production hardening audit** — full 10-phase audit
   (`docs/architecture/avr-framework-production-audit.md`): architecture/digital-twin/
   lifecycle audit, protocol coverage matrix, hardware validation checklist (unchecked,
