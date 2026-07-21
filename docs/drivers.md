@@ -7,6 +7,14 @@
 > none start unless its env var(s) are set — and configured via `infra/hub-compose`
 > (`.env.example` + compose).
 
+> **Keypads/input hardware**: none of the drivers below implement the Universal
+> Keypad Framework's optional `getKeypadCapabilities`/`onInputEvent`/
+> `sendKeypadFeedback` members yet (ADR 0016 — Phase 1 shipped the framework only,
+> no real keypad driver). See `Universal-Keypad-Framework.md` and
+> `Keypad-Driver-Author-Guide.md` for the seam a future KNX push-button/Casambi
+> keypad/Lutron Pico/Matter switch/MQTT button/RTI keypad/Zigbee remote/BLE fob/DALI
+> push-button driver plugs into.
+
 ## Legend
 
 - **Authenticity** — *Real wire protocol*: the driver speaks the device's actual

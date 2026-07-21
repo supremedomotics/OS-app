@@ -3,6 +3,9 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadFeedbackCommand,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 import { READONLY_CAPABILITIES } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
@@ -202,6 +205,30 @@ export class SupremeIntegrationLayer {
   /** Subscribe to normalized state changes for all mapped devices. */
   subscribe(listener: (event: BackendStateEvent) => void): () => void {
     return this.adapter.onState(listener);
+  }
+
+  // ── Universal Keypad Framework (§ Driver SDK Extension) ─────────────────────
+  // Same optional-passthrough shape as getArtwork/getCapabilityConfig/getDiagnostics
+  // above: absent on the current adapter → an honest empty/no-op, never fabricated.
+
+  /** Fetch a keypad's real capability declaration (null if none/unsupported). */
+  async getKeypadCapabilities(deviceId: DeviceId): Promise<KeypadCapabilityDeclaration | null> {
+    return this.adapter.getKeypadCapabilities ? this.adapter.getKeypadCapabilities(deviceId) : null;
+  }
+
+  /** Subscribe to normalized keypad input (§ Universal Input Engine) across every
+   * keypad-capable driver this hub has registered. */
+  subscribeKeypadInput(listener: (event: KeypadInputEvent) => void): () => void {
+    return this.adapter.onInputEvent ? this.adapter.onInputEvent(listener) : () => {};
+  }
+
+  /** Issue a generic feedback command to a keypad's owning driver (§ Universal
+   * Feedback Engine, § Feedback Routing). Throws if no adapter/driver supports it. */
+  async sendKeypadFeedback(command: KeypadFeedbackCommand): Promise<void> {
+    if (!this.adapter.sendKeypadFeedback) {
+      throw new SupremeError("backend_unavailable", "no keypad feedback driver is registered on this hub");
+    }
+    await this.adapter.sendKeypadFeedback(command);
   }
 
   discover() {

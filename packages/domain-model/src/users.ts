@@ -55,6 +55,11 @@ export const ResourceType = z.enum([
   "integration",
   "user",
   "home",
+  /** Universal Keypad Framework input→action mappings + feedback subscriptions
+   * (§ Universal Keypad Framework) — deliberately its own resource type rather than
+   * folded into "automation": a keypad mapping is authored/managed as installer
+   * commissioning work (bus binding-adjacent), not a homeowner automation. */
+  "keypad_mapping",
 ]);
 export type ResourceType = z.infer<typeof ResourceType>;
 

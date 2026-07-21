@@ -72,4 +72,7 @@ export class InProcessEventBus implements IEventBus {
 export const subjects = {
   deviceState: (homeId: string): string => `supreme.home.${homeId}.device.state`,
   notification: (homeId: string): string => `supreme.home.${homeId}.notification`,
+  /** Universal Input Engine's normalized keypad input stream (§ Universal Keypad
+   * Framework) — fans out across gateway processes exactly like `deviceState`. */
+  keypadInput: (homeId: string): string => `supreme.home.${homeId}.keypad.input`,
 } as const;

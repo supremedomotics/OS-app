@@ -34,6 +34,43 @@
 
 ## High
 
+### Universal Keypad Framework: first real keypad driver
+- **Description:** ADR 0016 shipped the full protocol-independent input/feedback/mapping
+  framework (Phase 1: architecture only) — no real keypad driver exists yet. `docs/architecture/
+  Keypad-Driver-Author-Guide.md` lists per-protocol hypotheses (KNX push-button, Casambi keypad,
+  Lutron Pico, Matter switch, MQTT button, RTI keypad, Zigbee remote, BLE, DALI push-button unit),
+  explicitly flagged as unverified — no spec-verification research has been done for any of them.
+- **Reason:** the framework has zero real-world value until at least one real driver plugs into it.
+- **Dependencies:** none architecturally — the seam (`getKeypadCapabilities?`/`onInputEvent?`/
+  `sendKeypadFeedback?` on `INativeProtocolDriver`) is ready and proven via a synthetic
+  extensibility test. Lutron is the most natural first target (its LIP transport already exists in
+  `lutron-driver.ts`).
+- **Complexity:** Medium per protocol (spec verification + codec + tests, same shape as adding a
+  new AVR brand).
+- **Status:** Not started, framework ready.
+
+### Universal Keypad Framework: Postgres-backed persistence
+- **Description:** `IKeypadMappingStore`/`IKeypadSubscriptionStore` (`@supreme/keypad-framework`)
+  default to in-memory only (mirrors `InMemoryAutomationStore`'s exact pre-persistence-era shape).
+  A hub restart today loses every keypad mapping/subscription.
+- **Reason:** real deployment readiness — same gap automations had before its own store was wired
+  to `services/persistence`/`cloud/persistence`.
+- **Dependencies:** none — small, additive, follows the automations repo's exact existing pattern.
+- **Complexity:** Small–Medium.
+- **Status:** Not started.
+
+### Universal Keypad Editor (visual UI)
+- **Description:** the Mapping Engine Interface's backend APIs
+  (`/v1/keypad/mappings*`/`/v1/keypad/subscriptions*`) are built and tested; no visual editor
+  exists — explicitly out of Phase 1 scope per the brief.
+- **Reason:** installers/homeowners need a UI to actually author mappings; a homeowner cannot build
+  "KNX button 2 → Casambi light" through any UI today even though the backend already executes it.
+- **Dependencies:** at least one real keypad driver (see above) should exist first — an editor with
+  nothing real to bind to is premature, same reasoning already applied to the Automation Editor's
+  onoff-only gap.
+- **Complexity:** Large — needs its own scoped session/ADR.
+- **Status:** Not started; fully documented as future work in ADR 0016.
+
 ### Finish the UI/UX Design Polish phase
 - **Description:** The user-directed polish brief (Phase 2) is partially done — icon system and
   card/button/capability-chip polish shipped. Remaining: device-category ambient color identity
@@ -301,6 +338,21 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Universal Keypad Framework, Phase 1** (ADR 0016) — a protocol-independent input/feedback/
+  mapping pipeline so any future keypad controls any Supreme device without a protocol-to-protocol
+  mapping: Keypad Capability Model + 13 Universal Input Events + 11 Universal Feedback Commands +
+  `KeypadSubscription`/`KeypadMapping` DSL (`packages/domain-model`); three new optional
+  `INativeProtocolDriver`/`IBackendAdapter` members threaded through
+  `SupremeNativeAdapter`/`RoutingBackendAdapter`/`SupremeIntegrationLayer`, proven via a synthetic
+  extensibility test; new `@supreme/keypad-framework` service (`UniversalInputEngine` with
+  short/long/double/triple-press + hold-start/holding/hold-end derivation,
+  `UniversalFeedbackEngine` with capability-gated rendering, `SubscriptionManager`,
+  `KeypadMappingEngine`/`Service` reusing the existing Automation DSL's conditions/actions verbatim,
+  `expandVariables` for Optional Variables); full gateway REST CRUD wiring + e2e test. Zero real
+  keypad driver, zero visual editor — explicitly Phase 1/architecture-only per the brief. Full
+  monorepo `pnpm build`/`typecheck`/`test` green (55/55, 95/95, 95/95 tasks), every pre-existing
+  suite passing unmodified. Full detail: `SESSION_HANDOFF.md`, ADR 0016, `docs/architecture/
+  Universal-Keypad-Framework.md`, `Keypad-Driver-Author-Guide.md`.
 - **Universal AV SDK refactor** (AVR/HEOS/Yamaha → thin protocol adapters) — a new internal-only
   `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`'s
   `recordCapabilityState()`) extracting the real, evidence-backed duplication found by a prior

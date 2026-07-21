@@ -26,6 +26,7 @@
     { "path": "../../cloud/licensing" },
     { "path": "../backup" },
     { "path": "../automations" },
+    { "path": "../keypad-framework" },
     { "path": "../analytics" },
     { "path": "../intelligence" },
     { "path": "../license" },

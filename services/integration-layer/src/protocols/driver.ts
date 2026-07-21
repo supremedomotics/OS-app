@@ -3,6 +3,9 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadFeedbackCommand,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 import type { DiscoveredDevice, DriverDiagnosticsSnapshot, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
 
@@ -94,6 +97,39 @@ export interface INativeProtocolDriver {
    * manage the device. Synchronous: reading counters already held in memory, never a
    * network round-trip. */
   getDiagnostics?(deviceId: DeviceId): DriverDiagnosticsSnapshot | null;
+
+  // ── Universal Keypad Framework (§ Driver SDK Extension) ─────────────────────
+  // Every member below is OPTIONAL, exactly like getArtwork/getCapabilityConfig/
+  // getDiagnostics above — a driver that isn't a keypad (or hasn't been migrated to
+  // declare keypad support yet) implements none of them and is completely unaffected.
+  // A driver never needs to know any other protocol's keypad implementation exists;
+  // it only ever produces/consumes the protocol-independent types from
+  // `@supreme/domain-model` (`KeypadCapabilityDeclaration`, `KeypadInputEvent`,
+  // `KeypadFeedbackCommand`).
+
+  /** Optional: this device's real keypad capability declaration (buttons/encoders/
+   * their input+feedback capabilities) — called once right after a successful
+   * `bind()`, mirroring `getCapabilityConfig`. `null` when this driver doesn't manage
+   * the device or the device isn't a keypad. Never fabricated: a driver with no real
+   * capability data to report simply omits this member entirely. */
+  getKeypadCapabilities?(deviceId: DeviceId): KeypadCapabilityDeclaration | null;
+
+  /** Optional: subscribe to this driver's raw/derived keypad input (button presses,
+   * encoder rotation, gestures, …), already normalized into {@link KeypadInputEvent}
+   * — the driver is the ONLY place that ever sees the protocol-native payload.
+   * Returns an unsubscribe function, exactly like {@link onState}. */
+  onInputEvent?(listener: (event: KeypadInputEvent) => void): () => void;
+
+  /** Optional: translate + write a generic {@link KeypadFeedbackCommand} to the bus
+   * for a bound keypad — the write-side mirror of `onInputEvent`. A driver whose
+   * keypad has no feedback hardware at all (pure input, no LED/display) simply omits
+   * this member. A driver that HAS some feedback hardware but not every type in the
+   * union (e.g. LED-only, no display) still implements this member and silently
+   * no-ops (or throws a typed, caller-visible error) for feedback types its control
+   * didn't declare in `getKeypadCapabilities` — the Universal Feedback Engine already
+   * gates on the declaration before calling this, so a compliant caller never sends
+   * an undeclared type, but the driver must not crash if one arrives regardless. */
+  sendKeypadFeedback?(command: KeypadFeedbackCommand): Promise<void>;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

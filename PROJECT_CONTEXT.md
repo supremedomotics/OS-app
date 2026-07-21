@@ -68,8 +68,8 @@ services/        gateway            — the one client-facing API (REST + WSS)
                                        AVR/HEOS/Yamaha, CoolMaster, Lutron, Tuya, Shelly, Sonos,
                                        WiiM, Devialet, AirPlay, Apple TV, SIP, Ajax, Casambi)
                  home, identity, permissions, persistence, messaging, notifications,
-                 automations, scenes, security, cameras, audit, backup, drivers, license,
-                 analytics, intelligence, commissioning(+py), ai(+py), appletv-py, homekit
+                 automations, keypad-framework, scenes, security, cameras, audit, backup, drivers,
+                 license, analytics, intelligence, commissioning(+py), ai(+py), appletv-py, homekit
 cloud/           identity, authn, authz, hub-registry, tunnel-broker, fleet, dealer,
                  device-registry, licensing, subscription, notification, voice, matter, ota,
                  backups, telemetry, admin, audit, persistence, schema (SQL migrations)
@@ -128,7 +128,20 @@ yet).
 
 **Explicitly planned, not implemented:** Onkyo/Pioneer, Sony, Arcam, Anthem, NAD, JBL Synthesis,
 StormAudio, Trinnov AVR brands; HRoT/TPM-backed hub identity; local (non-cloud) Alexa/Google
-fulfillment; Bluetooth pairing management for HEOS/Yamaha.
+fulfillment; Bluetooth pairing management for HEOS/Yamaha; any real keypad driver (see next
+paragraph — the framework is real, no protocol implementation is).
+
+**Universal Keypad Framework (ADR 0016, Phase 1 — architecture only):** a protocol-independent
+input/feedback pipeline (`@supreme/keypad-framework`) so any future keypad (KNX push-button,
+Casambi keypad, Lutron Pico, Matter switch, MQTT button, RTI keypad, Zigbee remote, BLE fob, DALI
+push-button unit) can control any Supreme device, never via a protocol-to-protocol mapping. Ships
+a Universal Input Engine (press-timing derivation: short/long/double/triple-press,
+hold-start/holding/hold-end), a Universal Feedback Engine (capability-gated LED/display/haptic
+routing), a Subscription Manager, and a Mapping Engine (reuses the existing Automation DSL's
+`AutomationCondition`/`AutomationAction` verbatim, plus `{{variable}}` expansion at authoring
+time), all wired into the gateway with a full REST CRUD surface — but **no real keypad driver
+ships yet** and **no visual editor exists**; see `docs/architecture/Universal-Keypad-Framework.md`
+and `Keypad-Driver-Author-Guide.md`.
 
 **Major recent UI work (this development cycle — Premium Device Experience Library):**
 A feature-module architecture (`apps/web-homeowner/src/features/<domain>/`) delivering premium,

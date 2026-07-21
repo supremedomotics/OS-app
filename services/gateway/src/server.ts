@@ -15,6 +15,7 @@ import { registerUserRoutes } from "./routes/users.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerInstallerRoutes } from "./routes/installer.js";
 import { registerPhase3Routes } from "./routes/phase3.js";
+import { registerKeypadRoutes } from "./routes/keypad.js";
 import { registerSecurityRoutes } from "./routes/security.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
 import { registerMatterRoutes } from "./routes/matter.js";
@@ -107,6 +108,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerNotificationRoutes(app, ctx);
   registerInstallerRoutes(app, ctx);
   registerPhase3Routes(app, ctx);
+  registerKeypadRoutes(app, ctx);
   registerSecurityRoutes(app, ctx);
   registerMigrationRoutes(app, ctx);
   registerMatterRoutes(app, ctx);
