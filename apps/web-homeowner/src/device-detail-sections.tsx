@@ -45,6 +45,17 @@ function statusLabel(status: Device["status"]): string {
   return status === "online" ? "Online" : status === "offline" ? "Offline" : "Unavailable";
 }
 
+/** The live per-driver connection signal (real socket/link state), distinct from `device.status`
+ * (the device-registry record's own field, set at commission time — it doesn't track whether the
+ * underlying connection is actually up right now). Diagnostics should show the truth about the
+ * wire, not a copy of the same "Status" row Information already shows. */
+function connectionTone(status: "connected" | "connecting" | "disconnected"): "good" | "neutral" | "warning" {
+  return status === "connected" ? "good" : status === "connecting" ? "neutral" : "warning";
+}
+function connectionLabel(status: "connected" | "connecting" | "disconnected"): string {
+  return status === "connected" ? "Connected" : status === "connecting" ? "Connecting…" : "Disconnected";
+}
+
 // ── Information — only fields the platform actually has for this device, same "don't fake it"
 // policy as the Devices list. Premium fact tiles, not a table (§ Premium Device Experience
 // Library — "rich Information cards"). ───────────────────────────────────────────────────────
@@ -113,8 +124,13 @@ export function DiagnosticsSection({ device }: { device: Device }) {
   const myBindings = (bindings?.bindings ?? []).filter((b) => b.deviceId === device.id);
   const dd = driverDiagnostics;
 
+  // Prefer the driver's real, live connectionStatus (a real socket/link signal) over
+  // device.status (a commission-time registry field) — this section exists specifically to
+  // show what's actually happening on the wire, not repeat Information's "Status" row.
   const rows: DeviceFactRow[] = [
-    { label: "Connection", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) },
+    dd
+      ? { label: "Connection", value: connectionLabel(dd.connectionStatus), icon: "📶", tone: connectionTone(dd.connectionStatus) }
+      : { label: "Connection", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) },
   ];
   if (driver) rows.push({ label: "Driver", value: driver.name, icon: "🧩" });
   if (driver?.protocols[0]) rows.push({ label: "Protocol", value: driver.protocols[0].toUpperCase(), icon: protocolGlyph(driver.protocols[0]) });

@@ -13,6 +13,11 @@ import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } fro
  */
 type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string } };
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
+/** A real, targeted reachability + best-effort zone probe result (§ AVR Intelligent Manual
+ * Add) — `zones` is only populated when `reachable`; `detected` is honestly a heuristic
+ * (Denon/Marantz Telnet has no capability-query command), never authoritative. */
+type AvrProbeZone = { id: string; label: string; detected: boolean };
+type AvrProbeResult = { reachable: boolean; error: string | null; mac: string | null; zones: AvrProbeZone[] };
 
 /**
  * Protocols whose devices are added one at a time by IP address rather than found by a
@@ -343,6 +348,215 @@ function FoundDevice({
  * does — this is the *answer* to "where do I enter the IP and pick a room", not a separate
  * lesser tool.
  */
+/**
+ * Guided AVR add (§ AVR Intelligent Manual Add) — replaces free-form JSON zone config with a
+ * real connect-and-detect flow: type an IP, open a real connection, see which zones actually
+ * answered, name and room-assign each one, and create one independent Supreme device per zone.
+ * Reuses the exact commissioning call every other add path uses — one call per selected zone,
+ * each with its own `config: { zone }` binding, so Zone 1 and Zone 2 become fully independent
+ * devices (separate entity, state, automations, room) exactly like two different receivers.
+ */
+function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | undefined; rooms: Room[]; onRoomCreated: () => Promise<void> }) {
+  const [step, setStep] = useState<"address" | "connecting" | "zones" | "creating" | "done">("address");
+  const [ip, setIp] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [probe, setProbe] = useState<AvrProbeResult | null>(null);
+  const [zoneRows, setZoneRows] = useState<Record<string, { checked: boolean; name: string; roomId: string }>>({});
+  const [newRoomOpen, setNewRoomOpen] = useState(false);
+  const [building, setBuilding] = useState("");
+  const [floor, setFloor] = useState("0");
+  const [roomName, setRoomName] = useState("");
+  const [area, setArea] = useState("");
+  const [summary, setSummary] = useState<{ zone: string; name: string; room: string }[] | null>(null);
+
+  function reset() {
+    setStep("address");
+    setIp("");
+    setErr(null);
+    setProbe(null);
+    setZoneRows({});
+    setSummary(null);
+  }
+
+  async function connect() {
+    setErr(null);
+    if (!ip.trim()) { setErr("Enter the receiver's IP address."); return; }
+    setStep("connecting");
+    try {
+      const result = (await client.probe({ protocol: "avr", address: ip.trim() })) as AvrProbeResult;
+      if (!result.reachable) {
+        setErr(result.error ?? "Could not reach this address.");
+        setStep("address");
+        return;
+      }
+      setProbe(result);
+      const rows: typeof zoneRows = {};
+      for (const z of result.zones) rows[z.id] = { checked: z.detected, name: "", roomId: rooms[0]?.id ?? "" };
+      setZoneRows(rows);
+      setStep("zones");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Connection failed.");
+      setStep("address");
+    }
+  }
+
+  async function createRoom() {
+    if (!roomName.trim()) { setErr("Name the room."); return; }
+    setErr(null);
+    await client.createRoom({ name: roomName.trim(), building: building.trim() || null, floor: Number.parseInt(floor, 10) || 0, area: area.trim() || null });
+    await onRoomCreated();
+    setNewRoomOpen(false);
+    setBuilding(""); setFloor("0"); setRoomName(""); setArea("");
+  }
+
+  async function commit() {
+    if (!probe) return;
+    setErr(null);
+    const checked = probe.zones.filter((z) => zoneRows[z.id]?.checked);
+    if (checked.length === 0) { setErr("Select at least one zone."); return; }
+    for (const z of checked) if (!zoneRows[z.id]!.roomId) { setErr(`Pick a room for ${z.label}.`); return; }
+    setStep("creating");
+    try {
+      if (driver && !driver.installed) await installDriverByKey(driver.key);
+      const capabilities = (driver?.capabilities ?? ["onoff", "media"]) as never;
+      const created: { zone: string; name: string; room: string }[] = [];
+      for (const z of checked) {
+        const row = zoneRows[z.id]!;
+        const deviceName = row.name.trim() || `${driver?.name ?? "AVR"} — ${z.label}`;
+        await client.commission({
+          backendId: `manual:avr:${ip.trim()}:${z.id}`,
+          name: deviceName,
+          roomId: row.roomId,
+          capabilities,
+          protocol: "avr",
+          address: ip.trim(),
+          config: { zone: z.id },
+        });
+        created.push({ zone: z.label, name: deviceName, room: rooms.find((r) => r.id === row.roomId)?.name ?? row.roomId });
+      }
+      setSummary(created);
+      setStep("done");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Adding a device failed partway through — zones already created stay created; fix the issue and add the rest separately.");
+      setStep("zones");
+    }
+  }
+
+  if (step === "done" && summary) {
+    return (
+      <>
+        <p className="muted">✓ {summary.length} device{summary.length === 1 ? "" : "s"} added.</p>
+        <ul className="muted" style={{ margin: "0 0 12px", paddingLeft: 18 }}>
+          {summary.map((s) => <li key={s.zone}>{s.name} — {s.zone} — {s.room}</li>)}
+        </ul>
+        <button onClick={reset}>Add another</button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <label className="drv-field"><span className="lbl">Receiver IP address</span>
+        <input
+          value={ip}
+          onChange={(e) => setIp(e.target.value)}
+          placeholder="192.168.1.50"
+          disabled={step !== "address"}
+        />
+      </label>
+
+      {step === "address" && (
+        <div className="drv-actions">
+          <button className="primary" onClick={connect}>Connect</button>
+        </div>
+      )}
+
+      {step === "connecting" && <p className="muted">Connecting to {ip}… checking zones (a few seconds)</p>}
+
+      {(step === "zones" || step === "creating") && probe && (
+        <>
+          <p className="muted">
+            Connected{probe.mac ? ` · ${probe.mac}` : ""}. {probe.zones.filter((z) => z.detected).length} of{" "}
+            {probe.zones.length} zone(s) answered within the check window — detection is best-effort, so every
+            zone stays selectable either way.
+          </p>
+          {probe.zones.map((z) => {
+            const row = zoneRows[z.id];
+            if (!row) return null;
+            return (
+              <div key={z.id} className="drv-field" style={{ border: "1px solid var(--aureon-color-base-hairline, #333)", borderRadius: 8, padding: 12, marginBottom: 8 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={row.checked}
+                    disabled={step === "creating"}
+                    onChange={(e) => setZoneRows((prev) => ({ ...prev, [z.id]: { ...prev[z.id]!, checked: e.target.checked } }))}
+                  />
+                  <strong>{z.label}</strong>
+                  <span className="muted">{z.detected ? "detected" : "not detected — enable if you know it exists"}</span>
+                </label>
+                {row.checked && (
+                  <>
+                    <label className="drv-field"><span className="lbl">Friendly name</span>
+                      <input
+                        value={row.name}
+                        disabled={step === "creating"}
+                        onChange={(e) => setZoneRows((prev) => ({ ...prev, [z.id]: { ...prev[z.id]!, name: e.target.value } }))}
+                        placeholder={`${driver?.name ?? "AVR"} — ${z.label}`}
+                      />
+                    </label>
+                    <label className="drv-field"><span className="lbl">Room</span>
+                      <select
+                        value={row.roomId}
+                        disabled={step === "creating"}
+                        onChange={(e) => setZoneRows((prev) => ({ ...prev, [z.id]: { ...prev[z.id]!, roomId: e.target.value } }))}
+                      >
+                        {rooms.map((r) => <option key={r.id} value={r.id}>{roomLabel(r)}</option>)}
+                      </select>
+                    </label>
+                  </>
+                )}
+              </div>
+            );
+          })}
+
+          {!newRoomOpen ? (
+            <p className="muted"><button className="link" onClick={() => setNewRoomOpen(true)} disabled={step === "creating"}>+ Add a new room</button></p>
+          ) : (
+            <div className="drv-field" style={{ border: "1px solid var(--aureon-color-base-hairline, #333)", borderRadius: 8, padding: 12, marginBottom: 8 }}>
+              <label className="drv-field"><span className="lbl">Room name</span>
+                <input value={roomName} onChange={(e) => setRoomName(e.target.value)} placeholder="e.g. Conference Room" />
+              </label>
+              <label className="drv-field"><span className="lbl">Building</span>
+                <input value={building} onChange={(e) => setBuilding(e.target.value)} placeholder="optional" />
+              </label>
+              <label className="drv-field"><span className="lbl">Floor</span>
+                <input type="number" value={floor} onChange={(e) => setFloor(e.target.value)} />
+              </label>
+              <label className="drv-field"><span className="lbl">Area</span>
+                <input value={area} onChange={(e) => setArea(e.target.value)} placeholder="optional" />
+              </label>
+              <div className="drv-actions">
+                <button className="primary" onClick={createRoom}>Create room</button>
+                <button onClick={() => setNewRoomOpen(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          <div className="drv-actions">
+            <button className="primary" disabled={step === "creating"} onClick={commit}>
+              {step === "creating" ? "Adding…" : "Create device(s)"}
+            </button>
+            <button disabled={step === "creating"} onClick={reset}>Use a different IP</button>
+          </div>
+        </>
+      )}
+
+      {err && <p className="err">{err}</p>}
+    </>
+  );
+}
+
 function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverEntry[]; rooms: Room[]; onRoomCreated: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [protocol, setProtocol] = useState<(typeof MANUAL_PROTOCOLS)[number]>("avr");
@@ -465,6 +679,13 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
               {driver && capabilities.length > 0 && <span className="help">Will add with capabilities: {capabilities.join(", ")}</span>}
             </label>
 
+            {protocol === "avr" ? (
+              <>
+                <AvrGuidedAdd driver={driver} rooms={rooms} onRoomCreated={onRoomCreated} />
+                <div className="drv-actions"><button onClick={() => setOpen(false)}>Close</button></div>
+              </>
+            ) : <>
+
             <label className="drv-field"><span className="lbl">Name</span>
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder={driver ? `${driver.name} — ${address || "…"}` : "Device name"} />
             </label>
@@ -514,6 +735,7 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
               <button disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
             </div>
             {err && <p className="err">{err}</p>}
+            </>}
           </>
         )}
       </div>

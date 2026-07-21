@@ -3,6 +3,7 @@ import {
   BindProtocolRequest,
   CommissionRequest,
   DiscoverRequest,
+  ProbeRequest,
   InstallDriverRequest,
   ApproveDeviceRequest,
   BackupScheduleInput,
@@ -13,6 +14,7 @@ import {
   type CatalogList,
   type DiagnosticsReport,
   type DiscoveryList,
+  type ProbeResult,
   type InstalledDriverList,
   type InstalledDriverResponse,
   type LicenseStatus,
@@ -31,6 +33,7 @@ import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 import { collectSystemHealth } from "../system-health.js";
+import { probeAvr } from "../avr-probe.js";
 import { OtaChecker } from "../ota.js";
 
 /**
@@ -237,6 +240,26 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "device", null, "create");
       const { protocol } = DiscoverRequest.parse(req.body ?? {});
       const body: DiscoveryList = { discovered: await i().discover(protocol) };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // A targeted, single-address reachability probe (§ AVR Intelligent Manual Add) — opens a
+  // real connection to confirm an installer-typed IP before committing to commission anything.
+  // Only "avr" implements a real probe today; HEOS has no zone concept (opaque player pids
+  // instead) and Yamaha's zones are queried through a different mechanism (`/system/
+  // getFeatures`) — both are real, separate follow-ups, not stubbed here.
+  app.post("/v1/commissioning/probe", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { protocol, address } = ProbeRequest.parse(req.body ?? {});
+      if (protocol !== "avr") {
+        throw new SupremeError("validation_failed", `probing is not yet implemented for protocol '${protocol}'`);
+      }
+      const body: ProbeResult = await probeAvr(address);
       reply.send(body);
     } catch (err) {
       sendError(reply, err);

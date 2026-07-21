@@ -123,12 +123,25 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const key = `${host}:${port}`;
     const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
     const hasToneControl = binding.config?.hasToneControl !== false;
+    const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
     this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
     }
-    if (this.connected) this.transport.ensureLink(key, host, port);
+    if (this.connected) {
+      const link = this.transport.ensureLink(key, host, port);
+      // A zone2 device bound AFTER its link already finished connecting (e.g. zone1 and
+      // zone2 added as two separate commission calls, as the guided AVR add wizard does)
+      // never gets `onLinkConnect`'s Z2?/Z2MU? — that init burst already fired without
+      // them, since no zone2 binding existed yet at that moment. Catch up immediately
+      // instead of leaving zone2's state stuck at null until the next reconnect.
+      if (isFirstZone2Binding && link.ready && link.socket && !link.socket.destroyed) {
+        const tokens = ["Z2?", "Z2MU?"];
+        for (const t of tokens) link.diagnostics.recordSend(t);
+        link.socket.write(`${tokens.join("\r")}\r`);
+      }
+    }
   }
 
   manages(deviceId: DeviceId): boolean {

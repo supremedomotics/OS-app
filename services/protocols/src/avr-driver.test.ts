@@ -197,6 +197,19 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
     await new Promise<void>((r) => avr.server.close(() => r()));
   });
 
+  it("queries zone2's initial state even though its binding was added after the link already connected — regression test for the missed Z2? catch-up query", async () => {
+    // This block's own beforeAll already reproduces the exact failure shape: the link
+    // connects (and its init burst fires) while only the main zone is bound; zone2's
+    // binding is added afterward, once the link is already open. Without a catch-up
+    // query, zone2's onoff state stays stuck at null until an explicit command or a
+    // reconnect — exactly what the guided AVR add wizard's sequential per-zone
+    // commission() calls do in production. Runs first in this block, before any other
+    // test issues a zone2 command that would populate the state a different way.
+    await vi.waitFor(() => expect(driver.getState(zone2Dev, "onoff")).not.toBeNull());
+    expect(avr.received).toContain("Z2?");
+    expect(avr.received).toContain("Z2MU?");
+  });
+
   it("commands zone2 power independently of the main zone and attributes state to the zone2 device only", async () => {
     const ev = nextEvent(driver, (e) => e.deviceId === zone2Dev && e.capability === "onoff");
     await driver.command(zone2Dev, { capability: "onoff", action: "on" });
