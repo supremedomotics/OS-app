@@ -27,6 +27,7 @@
     { "path": "../backup" },
     { "path": "../automations" },
     { "path": "../keypad-framework" },
+    { "path": "../intent-engine" },
     { "path": "../analytics" },
     { "path": "../intelligence" },
     { "path": "../license" },

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CapabilityCommand, CapabilityKind } from "./capabilities.js";
 import { AutomationId, DeviceId, HomeId, SceneId, UserId } from "./ids.js";
+import { IntentTarget } from "./intents.js";
 import { NotificationLevel } from "./notifications.js";
 import { ScheduleWindow } from "./users.js";
 
@@ -67,6 +68,23 @@ export const AutomationAction = z.discriminatedUnion("type", [
     userId: UserId.nullable().default(null),
   }),
   z.object({ type: z.literal("delay"), ms: z.number().int().min(0).max(3_600_000) }),
+  /**
+   * § Universal Intent & Capability Engine (Phase 2, ADR 0017) — additive, not a
+   * replacement for `device_command`. Where `device_command` names a device AND a
+   * concrete `CapabilityCommand` explicitly, `intent` names only WHAT the user
+   * means (`"toggleLight"`) and a target; `@supreme/intent-engine` resolves the
+   * concrete command from whichever capability the target device(s) actually
+   * expose at execution time — the same mapping keeps working forever even if
+   * the underlying driver/protocol changes. Executed via
+   * `AutomationExecutors.runIntent`, reusing the exact same dispatch
+   * (`runAutomationAction`) as every other action type — no parallel engine.
+   */
+  z.object({
+    type: z.literal("intent"),
+    intentId: z.string().min(1),
+    target: IntentTarget,
+    params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+  }),
 ]);
 export type AutomationAction = z.infer<typeof AutomationAction>;
 

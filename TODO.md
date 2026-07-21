@@ -34,6 +34,36 @@
 
 ## High
 
+### Universal Keypad Editor / Intent-aware mapping UI
+- **Description:** Phase 1 (ADR 0016) and Phase 2 (ADR 0017) both shipped complete backend
+  architecture — Universal Input/Feedback Engines, Subscription Manager, Mapping Engine, and the
+  Intent & Capability Engine (42-intent registry, capability resolution, REST API) — with
+  explicitly no visual editor. A homeowner/installer cannot author a `ToggleLight`/`Movie Mode`
+  style mapping through any UI today, even though the backend already fully executes it.
+- **Reason:** the backend is now complete enough (both phases) that a real editor has something
+  substantive to build against — this is the natural next UI investment, not a premature one.
+- **Dependencies:** at least one real keypad driver (see below) makes the editor demonstrable
+  end-to-end, but is not strictly required to start (intents can already target existing
+  KNX/Casambi/etc. device capabilities via room/device targets today).
+- **Complexity:** Large — needs its own scoped session/ADR (visual node/pipeline editor, likely
+  extending the existing Automation Editor's canvas rather than a wholly separate surface, given
+  `KeypadMapping`/`Automation` now share one `AutomationAction` vocabulary including `"intent"`).
+- **Status:** Not started; fully documented as future work in both ADR 0016 and ADR 0017.
+
+### Universal Intent & Capability Engine: fill the honest capability gaps
+- **Description:** `swingMode`/`tiltUp`/`tiltDown`/`executeScript`/`webhook` are registered in the
+  Intent Registry but their execution honestly throws — no swing/tilt field exists in
+  `TemperatureState`/`PositionState` yet, and no script engine or webhook dispatcher exists.
+- **Reason:** these are real, named gaps in the capability model / platform infrastructure, not
+  hypothetical — a genuine venetian-blind installation or a "run this automation via webhook"
+  marketplace template would hit them today.
+- **Dependencies:** the tilt/swing gap needs a deliberate `TemperatureState`/`PositionState` schema
+  addition (additive, low risk, but a real capability-model decision, not a one-line fix);
+  executeScript/webhook need actual new infrastructure (a script sandbox, an outbound HTTP
+  dispatcher) — each a meaningfully-sized feature in its own right.
+- **Complexity:** Medium (tilt/swing, per capability) to Large (script engine / webhook dispatcher).
+- **Status:** Not started; honestly documented as incomplete rather than faked, per ADR 0017.
+
 ### Universal Keypad Framework: first real keypad driver
 - **Description:** ADR 0016 shipped the full protocol-independent input/feedback/mapping
   framework (Phase 1: architecture only) — no real keypad driver exists yet. `docs/architecture/
@@ -338,6 +368,25 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Universal Intent & Capability Engine, Phase 2** (ADR 0017) — a protocol- AND
+  device-independent semantic layer decoupling user interactions from drivers entirely:
+  `AutomationAction` gained one additive `"intent"` variant (reused automatically by both the
+  Automation Engine and the Phase 1 Keypad Mapping Engine — zero extra schema/engine work, the
+  direct payoff of Phase 1's "reuse `AutomationAction` verbatim" decision); new
+  `packages/domain-model/src/intents.ts` (`IntentDefinition`/`IntentTarget`); new
+  `@supreme/intent-engine` service (`CapabilityIndex` — O(matching devices), never O(all devices),
+  kept in sync via a new additive `HomeService.onDeviceChanged` event; `IntentRegistry` —
+  extensible-forever catalog pairing serializable definitions with server-only `translate`/
+  `runSystem` handlers, validated at registration; `registerBuiltinIntents` — 42 intents across
+  lighting/climate/av/blinds/security/system, with `swingMode`/`tiltUp`/`tiltDown`/`executeScript`/
+  `webhook` honestly registered-but-throwing where no real capability/infrastructure backs them
+  yet; `IntentEngine` — the Capability Engine itself, 48 tests including a dedicated "migration
+  readiness" proof). Full gateway REST wiring (`GET /v1/intents`, `POST /v1/intents/:id/run`, run
+  history) + 11 e2e tests including a keypad mapping's intent action driving a real device through
+  the same engine a direct REST call uses. Zero visual editor, zero new capability-model fields —
+  explicitly Phase 2/architecture-only per the brief. Full monorepo `pnpm build`/`typecheck`/`test`
+  green (56/56, 97/97, 97/97 tasks), every pre-existing suite passing unmodified. Full detail:
+  `SESSION_HANDOFF.md`, ADR 0017, `docs/architecture/Universal-Intent-Capability-Engine.md`.
 - **Universal Keypad Framework, Phase 1** (ADR 0016) — a protocol-independent input/feedback/
   mapping pipeline so any future keypad controls any Supreme device without a protocol-to-protocol
   mapping: Keypad Capability Model + 13 Universal Input Events + 11 Universal Feedback Commands +

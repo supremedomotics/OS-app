@@ -50,6 +50,13 @@ import {
   type IKeypadMappingStore,
   type IKeypadSubscriptionStore,
 } from "@supreme/keypad-framework";
+import {
+  CapabilityIndex,
+  IntentEngine,
+  IntentRegistry,
+  registerBuiltinIntents,
+  type IntentEngineExecutors,
+} from "@supreme/intent-engine";
 import { AnalyticsService } from "@supreme/analytics";
 import { AuditService } from "@supreme/audit";
 import { AssistantService } from "@supreme/ai";
@@ -174,6 +181,15 @@ export class AppContext {
   /** Routes device state changes to every subscribed keypad control's feedback (§
    * Universal Feedback Engine). */
   private keypadFeedbackEngine!: UniversalFeedbackEngine;
+  /** Universal Intent & Capability Engine (§ Phase 2, ADR 0017): the extensible
+   * catalog of protocol-independent Intents (`GET /v1/intents`). */
+  intentRegistry!: IntentRegistry<IntentEngineExecutors>;
+  /** Resolves an Intent + target into a concrete command against whichever
+   * device capability satisfies it, then dispatches it — the Capability Engine. */
+  intentEngine!: IntentEngine;
+  /** Capability Resolution index backing the Intent Engine — kept in sync via
+   * `HomeService.onDeviceChanged`, never a linear re-scan per lookup. */
+  private capabilityIndex!: CapabilityIndex;
   analytics: AnalyticsService | null = null;
   audit: AuditService | null = null;
   readonly ai: AssistantService;
@@ -536,6 +552,48 @@ export class AppContext {
 
     await this.security.hydrate(this.homeId);
 
+    // Universal Intent & Capability Engine (§ Phase 2, ADR 0017): the Capability
+    // Index is populated from the current device topology and kept in sync via
+    // HomeService's change event — never a linear re-scan of every device per
+    // lookup, only ever the (small) set of devices actually touched.
+    this.capabilityIndex = new CapabilityIndex();
+    this.capabilityIndex.hydrate(await this.home.listDevices());
+    this.home.onDeviceChanged((event) => {
+      if (event.type === "upsert") this.capabilityIndex.upsert(event.device);
+      else this.capabilityIndex.remove(event.deviceId);
+    });
+    this.intentRegistry = new IntentRegistry<IntentEngineExecutors>();
+    registerBuiltinIntents(this.intentRegistry);
+    this.intentEngine = new IntentEngine({
+      registry: this.intentRegistry,
+      capabilityIndex: this.capabilityIndex,
+      executors: {
+        command: (deviceId, command) => this.sil.command(deviceId, command),
+        getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
+        getCapabilityConfig: (deviceId, capability) => this.sil.getCapabilityConfig(deviceId, capability),
+        activateScene: async (sceneId) => {
+          await this.scenes.activate(sceneId);
+        },
+        runAutomation: async (automationId) => {
+          await this.automations.testRun(automationId);
+        },
+        notify: async (input) => {
+          await this.notifications.create({ homeId: this.homeId, userId: input.userId, level: input.level, title: input.title, body: input.body });
+        },
+        security: {
+          arm: async (mode) => {
+            this.security.arm(this.homeId, mode, null);
+          },
+          disarm: async () => {
+            this.security.disarm(this.homeId, null);
+          },
+          panic: async () => {
+            this.security.trigger(this.homeId);
+          },
+        },
+      },
+    });
+
     const executors: AutomationExecutors = {
       command: (deviceId, command) => this.sil.command(deviceId, command),
       activateScene: async (sceneId) => {
@@ -551,6 +609,13 @@ export class AppContext {
         });
       },
       getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
+      // § Universal Intent & Capability Engine: an `"intent"` AutomationAction
+      // (available to BOTH the Automation Engine and the Keypad Mapping Engine,
+      // since they already share this exact executor set) resolves and runs
+      // through the SAME Intent Engine a direct `POST /v1/intents/:id/run` uses.
+      runIntent: async (intentId, target, params) => {
+        await this.intentEngine.run(intentId, target, params);
+      },
     };
     const engine = new AutomationEngine({
       executors,

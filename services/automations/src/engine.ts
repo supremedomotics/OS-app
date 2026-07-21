@@ -7,6 +7,7 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  IntentTarget,
   NotificationLevel,
   SceneId,
   UserId,
@@ -31,6 +32,12 @@ export interface AutomationExecutors {
   }): Promise<void>;
   /** Read current state for condition evaluation. */
   getState(deviceId: DeviceId, capability: CapabilityKind): Promise<CapabilityState | null>;
+  /** § Universal Intent & Capability Engine (Phase 2) — run an `"intent"` action.
+   * Optional: an executor set built before the Intent Engine existed (or a test
+   * fixture that never exercises an `"intent"` action) simply omits it; a
+   * DSL that DOES contain one throws a clear, honest error at execution time
+   * rather than silently no-op'ing (see `runAutomationAction`'s `"intent"` case). */
+  runIntent?(intentId: string, target: IntentTarget, params: Record<string, unknown>): Promise<void>;
 }
 
 export interface DeviceStateEvent {
@@ -275,6 +282,14 @@ export async function runAutomationAction(
     case "delay":
       await sleep(action.ms);
       return;
+    case "intent":
+      if (!ex.runIntent) {
+        throw new Error(
+          `intent action "${action.intentId}" requires a wired Intent Engine — this executor set does not support runIntent`,
+        );
+      }
+      await ex.runIntent(action.intentId, action.target, action.params);
+      return;
   }
 }
 
@@ -290,6 +305,23 @@ export function describeAutomationAction(action: AutomationAction): string {
       return `Notify "${action.title}"`;
     case "delay":
       return `Delay ${action.ms}ms`;
+    case "intent":
+      return `Intent ${action.intentId} → ${describeIntentTarget(action.target)}`;
+  }
+}
+
+function describeIntentTarget(target: IntentTarget): string {
+  switch (target.kind) {
+    case "device":
+      return target.deviceId;
+    case "room":
+      return `room ${target.roomId}`;
+    case "scene":
+      return `scene ${target.sceneId}`;
+    case "automation":
+      return `automation ${target.automationId}`;
+    case "home":
+      return "home";
   }
 }
 

@@ -15,3 +15,4 @@ export * from "./phase3.js";
 export * from "./phase4.js";
 export * from "./fleet.js";
 export * from "./keypad.js";
+export * from "./intents.js";

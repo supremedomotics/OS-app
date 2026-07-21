@@ -14,6 +14,14 @@ import { SupremeError } from "@supreme/contracts";
 import type { SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { InMemoryHomeStore, type IHomeStore } from "./store.js";
 
+/** A device was created/updated, or removed — fired by {@link HomeService.onDeviceChanged}.
+ * Deliberately NOT fired for live-state-only updates (`applyState`) — a state tick changes
+ * a device's reported values, never which capabilities/room it belongs to, so a listener
+ * that only cares about capability/topology membership (§ Universal Intent & Capability
+ * Engine's `CapabilityIndex`) would otherwise be rebuilt on every single state event for no
+ * reason. */
+export type DeviceChangeEvent = { type: "upsert"; device: Device } | { type: "delete"; deviceId: DeviceId };
+
 /**
  * Home service (§4 rooms + devices services, plus favorites). Owns the Supreme
  * topology and binds each device capability to a backend entity in the SIL entity
@@ -21,12 +29,25 @@ import { InMemoryHomeStore, type IHomeStore } from "./store.js";
  */
 export class HomeService {
   private readonly store: IHomeStore;
+  private readonly changeListeners = new Set<(event: DeviceChangeEvent) => void>();
 
   constructor(
     private readonly sil: SupremeIntegrationLayer,
     store?: IHomeStore,
   ) {
     this.store = store ?? new InMemoryHomeStore();
+  }
+
+  /** Subscribe to device topology/capability changes (create, update, move, delete —
+   * never a bare live-state tick). Mirrors `SupremeIntegrationLayer.subscribe`/
+   * `NotificationService.onNotification`'s exact shape. Returns an unsubscribe fn. */
+  onDeviceChanged(listener: (event: DeviceChangeEvent) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private emitChanged(event: DeviceChangeEvent): void {
+    for (const l of this.changeListeners) l(event);
   }
 
   /** Rebind every stored device's capabilities into the SIL registry (on boot). Runs
@@ -86,6 +107,7 @@ export class HomeService {
   async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
     await this.store.putDevice(device, backendIds);
     await this.bind(device, backendIds);
+    this.emitChanged({ type: "upsert", device });
   }
 
   /** Apply a normalized state delta from the SIL onto the cached/persisted device. */
@@ -119,6 +141,7 @@ export class HomeService {
       ...(patch.metadata !== undefined ? { metadata: { ...stored.device.metadata, ...patch.metadata } } : {}),
     };
     await this.store.putDevice(device, stored.backendIds);
+    this.emitChanged({ type: "upsert", device });
     return device;
   }
 
@@ -140,6 +163,7 @@ export class HomeService {
       metadata: { ...src.metadata, clonedFrom: src.id },
     };
     await this.store.putDevice(clone, {});
+    this.emitChanged({ type: "upsert", device: clone });
     return clone;
   }
 
@@ -150,7 +174,9 @@ export class HomeService {
     for (const id of ids) {
       const stored = await this.store.getDevice(id);
       if (stored) {
-        await this.store.putDevice({ ...stored.device, roomId }, stored.backendIds);
+        const device = { ...stored.device, roomId };
+        await this.store.putDevice(device, stored.backendIds);
+        this.emitChanged({ type: "upsert", device });
         moved += 1;
       }
     }
@@ -165,6 +191,7 @@ export class HomeService {
       if (stored) {
         await this.sil.unmapDevice(id);
         await this.store.deleteDevice(id);
+        this.emitChanged({ type: "delete", deviceId: id });
         removed += 1;
       }
     }
@@ -177,6 +204,7 @@ export class HomeService {
     if (!stored) throw new SupremeError("not_found", "device not found");
     await this.sil.unmapDevice(deviceId);
     await this.store.deleteDevice(deviceId);
+    this.emitChanged({ type: "delete", deviceId });
   }
 
   /** Merge a metadata patch onto a device (e.g. a camera's stream/snapshot URLs). */
@@ -185,6 +213,7 @@ export class HomeService {
     if (!stored) return null;
     const device = { ...stored.device, metadata: { ...stored.device.metadata, ...patch } };
     await this.store.putDevice(device, stored.backendIds);
+    this.emitChanged({ type: "upsert", device });
     return device;
   }
 
@@ -197,6 +226,7 @@ export class HomeService {
     const capabilities = stored.device.capabilities.map((c) => (c.kind === capability ? { ...c, config } : c));
     const device = { ...stored.device, capabilities };
     await this.store.putDevice(device, stored.backendIds);
+    this.emitChanged({ type: "upsert", device });
     return device;
   }
 

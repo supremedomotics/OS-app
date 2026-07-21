@@ -68,8 +68,9 @@ services/        gateway            — the one client-facing API (REST + WSS)
                                        AVR/HEOS/Yamaha, CoolMaster, Lutron, Tuya, Shelly, Sonos,
                                        WiiM, Devialet, AirPlay, Apple TV, SIP, Ajax, Casambi)
                  home, identity, permissions, persistence, messaging, notifications,
-                 automations, keypad-framework, scenes, security, cameras, audit, backup, drivers,
-                 license, analytics, intelligence, commissioning(+py), ai(+py), appletv-py, homekit
+                 automations, keypad-framework, intent-engine, scenes, security, cameras, audit,
+                 backup, drivers, license, analytics, intelligence, commissioning(+py), ai(+py),
+                 appletv-py, homekit
 cloud/           identity, authn, authz, hub-registry, tunnel-broker, fleet, dealer,
                  device-registry, licensing, subscription, notification, voice, matter, ota,
                  backups, telemetry, admin, audit, persistence, schema (SQL migrations)
@@ -142,6 +143,23 @@ routing), a Subscription Manager, and a Mapping Engine (reuses the existing Auto
 time), all wired into the gateway with a full REST CRUD surface — but **no real keypad driver
 ships yet** and **no visual editor exists**; see `docs/architecture/Universal-Keypad-Framework.md`
 and `Keypad-Driver-Author-Guide.md`.
+
+**Universal Intent & Capability Engine (ADR 0017, Phase 2 — architecture only):** a protocol- AND
+device-independent semantic layer (`@supreme/intent-engine`) sitting between "something happened"
+(a keypad, an automation, a future AI/voice assistant) and "write this capability command to this
+device." A `KeypadMapping`/`Automation` action can now be `{ type: "intent", intentId, target,
+params }` (additive to the existing `AutomationAction` union) instead of naming a concrete device
++ command — the Capability Engine (`IntentEngine` + `CapabilityIndex`) resolves which device(s)
+and which concrete `CapabilityCommand` satisfy it, dynamically, every time it runs, so replacing a
+device's underlying driver (KNX → Casambi → Matter → …) never touches the mapping. Ships a 42-intent
+built-in catalog across lighting/climate/av/blinds/security/system (`IntentRegistry`, publicly
+extensible at runtime — no core change needed to add an intent), an O(matches)-not-O(all-devices)
+capability lookup index, real parameter validation, and a full REST surface
+(`GET /v1/intents`, `POST /v1/intents/:id/run`). Two categories of built-in intent are registered
+but honestly fail at execution (`swingMode`/`tiltUp`/`tiltDown` — no swing/tilt field exists in the
+capability model yet; `executeScript`/`webhook` — no script engine or webhook dispatcher exists
+yet) — visibly incomplete, never faked. See `docs/architecture/
+Universal-Intent-Capability-Engine.md`.
 
 **Major recent UI work (this development cycle — Premium Device Experience Library):**
 A feature-module architecture (`apps/web-homeowner/src/features/<domain>/`) delivering premium,

@@ -60,6 +60,11 @@ export const ResourceType = z.enum([
    * folded into "automation": a keypad mapping is authored/managed as installer
    * commissioning work (bus binding-adjacent), not a homeowner automation. */
   "keypad_mapping",
+  /** Universal Intent & Capability Engine (§ Phase 2, ADR 0017) — the Intent
+   * Registry (read) and direct intent invocation (control), distinct from
+   * "keypad_mapping"/"automation" since an intent can be invoked directly (a
+   * future AI assistant, a REST test call) with no mapping/automation involved. */
+  "intent",
 ]);
 export type ResourceType = z.infer<typeof ResourceType>;
 

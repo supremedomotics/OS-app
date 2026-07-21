@@ -4,123 +4,122 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-**Branch:** `claude/universal-keypad-framework-7khr2o`, based on `main` at session start. This
-session built the **Universal Keypad Framework, Phase 1** (ADR 0016) — the brief was explicit
-"architecture only, no real driver, no visual editor" — a protocol-independent input/feedback
-pipeline so any future keypad (KNX push-button, Casambi keypad, Lutron Pico, Matter switch, MQTT
-button, RTI keypad, Zigbee remote, BLE fob, DALI push-button unit) can control any Supreme device,
-never via a protocol-to-protocol mapping.
+**Branch:** `claude/universal-keypad-framework-7khr2o`, based on `main` at session start (the
+same branch Phase 1 shipped on — this session's branch instruction named
+`feature/universal-keypad`, but the harness's assigned branch for this session takes precedence,
+per this environment's git-safety convention). This session built the **Universal Intent &
+Capability Engine, Phase 2** (ADR 0017), directly on top of the Universal Keypad Framework (ADR
+0016) shipped last session — the brief's mission: completely decouple user interactions from
+drivers, so `ToggleLight` keeps meaning the same thing forever even if the physical device behind
+it changes from KNX to Casambi to Matter to anything else.
 
 ## What actually shipped
 
-**Domain model** (`packages/domain-model/src/keypad-{capabilities,events,feedback,mapping,
-subscription}.ts`, new): the Keypad Capability Model (input/feedback capability enums + a
-per-control declaration, mirroring `CapabilityKind`'s "advertise, never hardcode protocol"
-discipline), the 13 Universal Input Events (`button_pressed` … `gesture`), the 11 Universal
-Feedback Commands (`led_on` … `buzzer`), `KeypadSubscription` (the Subscription Manager's record),
-and `KeypadMapping` (the Mapping Engine's DSL — deliberately reuses `AutomationCondition`/
-`AutomationAction` **verbatim** from the existing, untouched Automation DSL rather than
-re-declaring an equivalent shape). Also extracted `evaluateComparator`/`readCapabilityField`/
-`isWithinScheduleWindow` out of `@supreme/automations`' `AutomationEngine` into a new shared
-`condition-eval.ts` (pure extract, zero behavior change — `AutomationEngine`'s own 7-test suite
-passed unmodified before and after), and exported `runAutomationAction`/`describeAutomationAction`
-from the same engine so the new Mapping Engine runs actions through the identical dispatch code
-instead of a re-implementation.
+**The single highest-leverage decision**: `AutomationAction`
+(`packages/domain-model/src/automations-dsl.ts`) gained ONE new additive variant — `{ type:
+"intent", intentId, target, params }` — alongside the existing `device_command`/`scene_activate`/
+`notify`/`delay`. Because `KeypadMapping.actions` already reuses `AutomationAction` verbatim (Phase
+1's design), keypad mappings gained full Intent support with **zero** additional schema/engine
+changes — direct payoff of Phase 1's reuse decision. `AutomationExecutors` gained one new optional
+method, `runIntent?`, wired identically for both the Automation Engine and the Keypad Mapping
+Engine (they already share one executor set). `runAutomationAction`/`describeAutomationAction`
+(both previously extracted+shared, see Phase 1) grew an `"intent"` case; `compileToHa` (the
+`engine: "ha"` static-compile path) honestly refuses to compile an intent action — intent
+resolution is inherently dynamic, no static HA config can express it.
 
-**Driver SDK Extension** (`services/integration-layer/src/{adapter,native-adapter,routing-adapter,
-sil,protocols/driver}.ts`): three new **optional** `INativeProtocolDriver`/`IBackendAdapter`
-members — `getKeypadCapabilities?`/`onInputEvent?`/`sendKeypadFeedback?` — mirroring the existing
-`getArtwork?`/`getCapabilityConfig?`/`getDiagnostics?` pattern exactly. Every one of the 22 shipped
-drivers implements none of them and is unaffected (confirmed: `@supreme/protocols`' full 378-test
-suite passes unmodified). A new `services/integration-layer/src/protocols/keypad-extensibility.
-test.ts` proves a synthetic, from-scratch fake driver can implement the seam end-to-end through
-`SupremeNativeAdapter`/`SupremeIntegrationLayer` with zero framework changes — the same
-extensibility-proof pattern ADR 0015 established for the AV SDK.
+**New domain-model** (`packages/domain-model/src/intents.ts`, new + `intents.test.ts`):
+`IntentDefinition` (pure, serializable metadata: id/name/category/description/
+requiredCapabilities/parameters/targetKinds/version/i18nKey — future-proofed for AI/marketplace
+consumption), `IntentTarget` (device/room/scene/automation/home, discriminated union).
+Deliberately NOT a closed `z.enum` of every intent id — the catalog lives as runtime
+`IntentRegistry.register()` calls, extensible forever with zero schema changes, mirroring how
+`DriverManifest`/the Driver Store let a new protocol appear with no core-architecture change.
 
-**New bounded service `@supreme/keypad-framework`** (`services/keypad-framework/`, mirrors
-`services/automations`' layout/conventions exactly, depends only on domain-model/contracts/
-automations/messaging — NOT integration-layer, staying protocol-agnostic by construction):
-- `UniversalInputEngine` — derives short/long/double/triple-press and hold-start/holding/hold-end
-  from raw button press/release pairs via one shared per-control timing state machine (a design
-  decision documented in the file: a long press fires BOTH the continuous hold-start/holding/
-  hold-end stream AND a discrete `long_press` summary on release, so both "dim while held" and
-  "long-press does one thing" mappings are served from the same physical gesture).
-- `UniversalFeedbackEngine` + `renderFeedback` — capability-gated state→feedback rendering (never
-  fabricates a command for an undeclared feedback type), per-subscriber failure isolation.
-- `SubscriptionManager` — device+capability-indexed fan-out (the brief's "Living Room Light
-  subscribed by KNX/Casambi/Lutron/Matter" example, as data).
-- `KeypadMappingEngine` + `KeypadMappingService` — mirrors `AutomationEngine`'s shape (same
-  run-trace type, same condition semantics) but fires on keypad input instead of device state/tick.
-- `expandVariables` — Optional Variables: `{{name}}` substitution happens ONCE at mapping
-  create/update time (before zod validation), never at execution time, because `AutomationAction`'s
-  strict schema can't hold a template string in a numeric field — documented in `variables.ts`.
-- 41 tests across 6 files, all passing.
+**New bounded service `@supreme/intent-engine`** (mirrors `@supreme/automations`/
+`@supreme/keypad-framework`'s conventions — depends only on domain-model/contracts):
+- `CapabilityIndex` — `Map<CapabilityKind, Set<DeviceId>>`, O(matching devices) lookup for
+  `devicesWithCapability`/`devicesWithCapabilityInRoom`, never O(every device on the hub). Kept in
+  sync via a new, additive `HomeService.onDeviceChanged` event (mirrors `SIL.subscribe`/
+  `NotificationService.onNotification`'s exact shape) rather than re-scanning on every lookup or
+  hooking dozens of device-mutation call sites individually.
+- `IntentRegistry` — pairs each `IntentDefinition` with a `translate` (capability-driven: params +
+  current state + capability config → `CapabilityCommand`) or `runSystem` (system-level: direct
+  dispatch, no device resolution) handler, validated to match `requiredCapabilities` **at
+  registration time**, not at first invocation.
+- `validateIntentParams` — real required/type/min/max/enum-options validation + defaults, never
+  trusting a caller (keypad, automation, direct REST, future AI) blindly.
+- `registerBuiltinIntents` (`catalog.ts`) — 42 intents across all 6 brief-specified categories
+  (lighting/climate/av/blinds/security/system). Two categories are honest, registered-but-throwing
+  gaps: `swingMode`/`tiltUp`/`tiltDown` (no swing/tilt field in `TemperatureState`/`PositionState`
+  yet) and `executeScript`/`webhook` (no script engine/webhook dispatcher exists) — same "visibly
+  incomplete, never faked" discipline as ADR 0015's undocumented protocol gaps.
+- `IntentEngine` — the Capability Engine itself: validate target kind → validate params → resolve
+  device(s) via `CapabilityIndex` (or dispatch system-level directly) → translate → command →
+  record an `IntentRun` trace (mirrors `AutomationRun`/`KeypadMappingRun`).
+- 48 tests across 5 files, all passing, including a dedicated "migration readiness" test proving
+  the identical intent+target invocation against two different `executors.command`
+  implementations (standing in for two different drivers) behaves identically.
 
-**Gateway wiring** (`services/gateway/src/{context,server}.ts`, new `routes/keypad.ts`): wired into
-`AppContext.initWithHome()` reusing the SAME `AutomationExecutors` object already built for the
-Automation Engine (one "run a Supreme action" implementation, not two); `onBackendState()` gained
-one line feeding the feedback engine. New REST surface (`/v1/keypad/mappings*`,
-`/v1/keypad/subscriptions*`, `/v1/devices/:id/keypad-capabilities`) mirrors `registerPhase3Routes`'
-automation-CRUD shape, gated by a new `"keypad_mapping"` `ResourceType` (additive enum value,
-baseline permissions added per role in `services/permissions/src/roles.ts`). New
-`subjects.keypadInput` bus subject mirrors `subjects.deviceState`. New `keypad.e2e.test.ts` (7
-tests) proves the full REST surface over a real mock-backend hub, including a manual "run" that
-drives an actual seeded device through the SIL and `{{variable}}` expansion end-to-end.
+**Gateway wiring** (`services/gateway/src/{context,server}.ts`, new `routes/intents.ts`): the
+`CapabilityIndex`/`IntentRegistry`/`IntentEngine` are constructed in `initWithHome()`, wired to the
+SAME executors closures already built for automations/scenes/security/notifications; `runIntent`
+added to the shared `AutomationExecutors` object. New REST surface (`GET /v1/intents`,
+`GET /v1/intents/:id`, `POST /v1/intents/:id/run`, `GET /v1/intents/runs`,
+`GET /v1/intents/:id/runs`), gated by a new additive `"intent"` `ResourceType` (baseline
+permissions mirroring `"keypad_mapping"`'s per-role defaults). New `intents.e2e.test.ts` (11 tests)
+proves the full pipeline over a real mock-backend hub: catalog listing, direct device-target
+invocation, room-target multi-device resolution ("Movie Mode" pattern), param validation
+(422 on missing required param), the honest `executeScript` failure (503), real security
+arm/disarm dispatch, run-history retrieval, AND a keypad mapping whose action is `{type:"intent",
+...}` driving a real device through the exact same Intent Engine a direct REST call uses.
 
-**Documentation**: `docs/architecture/adr/0016-universal-keypad-framework.md`,
-`docs/architecture/Universal-Keypad-Framework.md` (architecture diagram, 3 sequence diagrams,
-service responsibilities, public interfaces, registration flow, lifecycle, thread safety,
-scalability, performance, migration/testing strategy, no-breaking-changes guarantee),
-`docs/architecture/Keypad-Driver-Author-Guide.md` (step-by-step + per-protocol notes for KNX/
-Casambi/Lutron/Matter/MQTT/Zigbee/RTI/BLE/DALI — explicitly flagged as unverified hypotheses, not
-researched specs, since no real driver work happened this session). `docs/drivers.md` and
-`PROJECT_CONTEXT.md` §6 cross-link the new framework.
+**Documentation**: `docs/architecture/adr/0017-universal-intent-capability-engine.md`,
+`docs/architecture/Universal-Intent-Capability-Engine.md` (architecture diagram, 4 sequence
+diagrams — lifecycle/resolution/room-resolution/migration-readiness — Intent Registry spec,
+capability resolution flow, driver integration spec, migration strategy, performance/scalability
+analysis, public APIs, extension points, future roadmap). `PROJECT_CONTEXT.md` §4/§6 updated.
 
-**Verification**: full monorepo `pnpm build` (55/55), `pnpm typecheck` (95/95), `pnpm test` (95/95
-tasks) — all green, including every pre-existing suite (`@supreme/protocols` 378,
-`@supreme/integration-layer` 51, `@supreme/automations` 36, `@supreme/gateway` 229,
-`@supreme/permissions` 10) passing **unmodified**, which is the direct evidence backing the
-"zero breaking changes" claim.
+**Verification**: full monorepo `pnpm build` (56/56), `pnpm typecheck` (97/97), `pnpm test` (97/97
+tasks) — all green, including every pre-existing suite passing **unmodified**
+(`@supreme/automations`' original 36 tests + 3 new for the `"intent"` action = 39,
+`@supreme/protocols`' 378, `@supreme/gateway`'s 229 pre-existing + 11 new = 240,
+`@supreme/permissions`' 10, `@supreme/home`'s 8).
 
-## What was deliberately NOT built (Phase 1 scope, per the brief)
+## What was deliberately NOT built (Phase 2 scope, per the brief)
 
-- **No real keypad driver** — no KNX push-button, Casambi keypad, Lutron Pico, Matter switch, MQTT
-  button, RTI keypad, Zigbee remote, BLE, or DALI push-button protocol implementation. The
-  Driver-Author-Guide's per-protocol notes are documented as unverified starting hypotheses.
-- **No visual Universal Keypad Editor** — only the backend APIs the brief asked for.
-- **No Postgres-backed persistence** for `KeypadMapping`/`KeypadSubscription` — both default to
-  in-memory (mirroring `InMemoryAutomationStore`'s exact pattern); no new
-  `services/persistence`/`cloud/persistence` schema work was in scope. See `TODO.md`.
-- **No idle-eviction** for `UniversalInputEngine`'s per-control timer state map — documented in
-  the architecture doc as negligible at realistic home scale (tens–hundreds of controls), not a
-  silently-accepted leak.
+- **No visual Intent/mapping editor** — backend architecture only, matching Phase 1's scope
+  discipline.
+- **No Postgres persistence** for anything new (the Intent Registry is code-defined, not a
+  user-editable record, so this doesn't apply the way it does to `KeypadMapping`; `IntentEngine`'s
+  run-history is in-memory only, same as the Automation/Mapping engines).
+- **No swing/tilt capability-model addition** — `swingMode`/`tiltUp`/`tiltDown` are registered,
+  honestly throwing intents, not a speculative schema change to invent the field.
+- **No script engine or webhook dispatcher** — `executeScript`/`webhook` are registered, honestly
+  throwing intents, not fabricated infrastructure.
 
 ## Known issues / open gaps
 
-- Persistence gap above — real installations restarting the hub lose keypad mappings/subscriptions
-  today (same limitation automations had before its own store was wired to Postgres in
-  `services/persistence`).
-- No live hardware exists to verify ANY of the per-protocol notes in the Driver Author Guide —
-  every claim there is flagged as unverified, matching this project's own "verify before building"
-  standard applied honestly rather than silently skipped.
-- `KeypadMapping.conditions` reuses `AutomationCondition`'s `time_window` variant, but `variables`
-  expansion currently only exercises `device_command`/`delay`-shaped actions in tests — a
-  `scene_activate`/`notify` action with a templated field is supported by `expandVariables`'s
-  generic JSON walk (proven by its own deep-substitution test) but has no DEDICATED end-to-end test
-  for those two action types specifically. Low risk (same code path), but worth a follow-up test if
-  the Mapping Editor later exposes those action types to installers.
+- `IntentEngine`'s `resolveDevices()` for a `room` target unions across every capability in
+  `requiredCapabilities` — correct today (every built-in intent requires exactly one capability),
+  but untested against a hypothetical future intent requiring more than one simultaneously (no such
+  intent exists in the catalog yet, so this is a latent-but-unexercised path, not a known bug).
+- `CapabilityIndex` has no idle-eviction — same documented, negligible-at-realistic-scale
+  characteristic already accepted for `UniversalInputEngine`'s per-control timer map in Phase 1.
+- The "Optional Variables" mechanism from Phase 1 (`expandVariables`) hasn't been exercised
+  end-to-end with an `"intent"` action's `params` field yet (only with `device_command`'s nested
+  `command` fields) — the underlying recursive JSON walk is generic and should just work, but no
+  dedicated test proves `{{step}}` inside an intent action's `params`.
 
 ## Immediate priorities for the next session
 
-1. Pick ONE real protocol from the Driver Author Guide's list (Lutron is the most natural first
-   target — its LIP transport already exists in `lutron-driver.ts`) and do the actual spec-verification
-   research pass (mirroring ADR 0015's AVR spec-verification rigor) before writing any keypad-specific
-   code against it.
-2. If persistence is prioritized before a real driver: add `KeypadMappingRepo`/
-   `KeypadSubscriptionRepo` to `services/persistence` + `cloud/persistence` schema, wire into
-   `bootstrap.ts`'s `deps.keypadMappingStore`/`deps.keypadSubscriptionStore` — small, mirrors the
-   existing `automations` repo exactly.
-3. The visual Universal Keypad Editor is explicitly future work — needs its own scoped session once
-   at least one real driver exists to build against (an editor with nothing to bind to is premature).
-4. Everything from the prior (AV SDK refactor) handoff not touched this session remains open — see
+1. Pick a real protocol from `Keypad-Driver-Author-Guide.md`'s list (Lutron remains the most
+   natural first target — its LIP transport already exists) and do the actual spec-verification
+   research pass before writing keypad-specific code, exactly as ADR 0015 did for AVR.
+2. If a homeowner-facing "Movie Mode"-style scene/intent authoring surface is prioritized next,
+   this is exactly the point where the visual Universal Keypad Editor (or an Intent-aware
+   extension to the existing Automation Editor) becomes worth its own scoped session — the backend
+   (Phase 1 + Phase 2) is now complete enough to build a real UI against.
+3. Consider extending `KeypadMapping`'s `variables` test coverage to include an `"intent"` action's
+   `params` field (see "Known issues" above) — small, low-risk, closes a coverage gap.
+4. Everything from the prior (Phase 1) handoff not touched this session remains open — see
    `TODO.md` for the full backlog with priority tiers.
