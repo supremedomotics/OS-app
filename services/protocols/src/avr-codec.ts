@@ -83,12 +83,15 @@ export function commandToAvr(
   const z2 = zone === "zone2";
   switch (command.capability) {
     case "onoff": {
+      // Main zone uses `ZM` (Main Zone power) — NOT `PW` (whole-unit power/standby).
+      // `PWSTANDBY` puts the entire receiver into standby, taking every zone down with
+      // it (a real Zone 2 users hit); `ZM` is independent per zone, same as `Z2`/`Z3`.
       if (command.action === "toggle") {
         const on = prev?.kind === "onoff" ? prev.on : false;
-        return [z2 ? (on ? "Z2OFF" : "Z2ON") : on ? "PWSTANDBY" : "PWON"];
+        return [z2 ? (on ? "Z2OFF" : "Z2ON") : on ? "ZMOFF" : "ZMON"];
       }
       const on = command.action === "on";
-      return [z2 ? (on ? "Z2ON" : "Z2OFF") : on ? "PWON" : "PWSTANDBY"];
+      return [z2 ? (on ? "Z2ON" : "Z2OFF") : on ? "ZMON" : "ZMOFF"];
     }
     case "media": {
       switch (command.action) {
@@ -139,8 +142,13 @@ export type AvrUpdate =
 /** Parse one AVR status token into a structured update (null = ignored/unknown). */
 export function parseAvrLine(line: string): AvrUpdate | null {
   const t = line.trim();
+  // `ZM` (Main Zone power) is the authoritative per-zone signal; `PW` (whole-unit
+  // power) still carries real meaning — standby there means every zone is down —
+  // so both are parsed into the same "power" update rather than one replacing the other.
   if (t === "PWON") return { kind: "power", on: true };
   if (t === "PWSTANDBY") return { kind: "power", on: false };
+  if (t === "ZMON") return { kind: "power", on: true };
+  if (t === "ZMOFF") return { kind: "power", on: false };
   if (t === "MUON") return { kind: "mute", muted: true };
   if (t === "MUOFF") return { kind: "mute", muted: false };
   // MVMAX is the max-volume advert, not the current level — ignore it.

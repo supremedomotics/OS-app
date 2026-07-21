@@ -15,6 +15,7 @@ function startFakeAvr(): Promise<{ server: Server; port: number; received: strin
   const sockets = new Set<Socket>();
   return new Promise((resolve) => {
     let power = false;
+    let zm = false;
     let mv = 50;
     let mute = false;
     let z2power = false;
@@ -36,6 +37,12 @@ function startFakeAvr(): Promise<{ server: Server; port: number; received: strin
           if (cmd === "PW?") sock.write(power ? "PWON\r" : "PWSTANDBY\r");
           else if (cmd === "PWON") { power = true; sock.write("PWON\r"); }
           else if (cmd === "PWSTANDBY") { power = false; sock.write("PWSTANDBY\r"); }
+          // ZM (Main Zone power) is a real Denon token, independent of PW (whole-unit) and
+          // Z2 (Zone 2) — this fake mirrors that independence, since it's exactly the
+          // property under test (main zone off must not take zone2 down with it).
+          else if (cmd === "ZM?") sock.write(zm ? "ZMON\r" : "ZMOFF\r");
+          else if (cmd === "ZMON") { zm = true; sock.write("ZMON\r"); }
+          else if (cmd === "ZMOFF") { zm = false; sock.write("ZMOFF\r"); }
           else if (cmd === "MV?") sock.write(`MV${mv}\r`);
           else if (/^MV\d{2}$/.test(cmd)) { mv = Number(cmd.slice(2)); sock.write(`MV${mv}\r`); }
           else if (cmd === "MU?") sock.write(mute ? "MUON\r" : "MUOFF\r");
@@ -80,8 +87,14 @@ const nextEvent = (driver: AvrProtocolDriver, pred: (e: BackendStateEvent) => bo
 
 describe("AVR codec", () => {
   it("encodes commands and parses status tokens", () => {
-    expect(commandToAvr({ capability: "onoff", action: "on" }, null)).toEqual(["PWON"]);
+    // Main zone onoff uses ZM (Main Zone power), not PW (whole-unit power/standby) —
+    // PW would take every zone down with it, defeating zone isolation.
+    expect(commandToAvr({ capability: "onoff", action: "on" }, null)).toEqual(["ZMON"]);
+    expect(commandToAvr({ capability: "onoff", action: "off" }, null)).toEqual(["ZMOFF"]);
     expect(commandToAvr({ capability: "media", action: "volume", volume: 50 }, null)).toEqual(["MV49"]);
+    expect(parseAvrLine("ZMON")).toEqual({ kind: "power", on: true });
+    expect(parseAvrLine("ZMOFF")).toEqual({ kind: "power", on: false });
+    // PW is still parsed (whole-unit standby is still a real, meaningful signal).
     expect(parseAvrLine("PWON")).toEqual({ kind: "power", on: true });
     expect(parseAvrLine("MV60")).toEqual({ kind: "volume", volume: 61, volumeDb: -20 });
     expect(parseAvrLine("MVMAX 98")).toBeNull();
@@ -153,7 +166,7 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
       expect(after.packetsReceived).toBeGreaterThan(receivedBefore);
     });
     const after = driver.getDiagnostics(dev)!;
-    expect(after.lastCommand).toBe("PWON");
+    expect(after.lastCommand).toBe("ZMON");
     expect(after.lastCommandAt).not.toBeNull();
   });
 
@@ -204,6 +217,24 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
   it("rejects zone2 volume — no documented Zone 2 volume token on this protocol", async () => {
     await expect(driver.command(zone2Dev, { capability: "media", action: "volume", volume: 50 })).rejects.toThrow();
   });
+
+  it("turning the main zone OFF does not power off zone2 — regression test for ZM vs PW", async () => {
+    // Bring zone2 up first, independently of the main zone (state-polled, not event-raced,
+    // since an earlier test in this block may have already left zone2 on — a repeat "on"
+    // command is deduped and emits no fresh event).
+    await driver.command(zone2Dev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(driver.getState(zone2Dev, "onoff")).toEqual({ kind: "onoff", on: true }));
+
+    // Turning the main zone off must send ZM (Main Zone power), never PW (whole-unit
+    // power/standby) — PW would take zone2 down with it, which is the exact bug this
+    // guards against.
+    await driver.command(mainDev, { capability: "onoff", action: "off" });
+    await vi.waitFor(() => expect(avr.received).toContain("ZMOFF"));
+    expect(avr.received).not.toContain("PWSTANDBY");
+
+    // zone2's own state must be completely unaffected.
+    expect(driver.getState(zone2Dev, "onoff")).toEqual({ kind: "onoff", on: true });
+  });
 });
 
 describe("AvrProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => {
@@ -223,7 +254,7 @@ describe("AvrProtocolDriver — unbind (§ Driver Lifecycle Completion)", () => 
     expect(driver.manages(mainDev)).toBe(true);
     expect(avr.sockets.size).toBe(1); // main zone's command still needs this link
     await driver.command(mainDev, { capability: "onoff", action: "on" });
-    await vi.waitFor(() => expect(avr.received).toContain("PWON"));
+    await vi.waitFor(() => expect(avr.received).toContain("ZMON"));
 
     // Unbinding the LAST device on this host must close the real TCP socket.
     await driver.unbind(mainDev);
@@ -349,14 +380,14 @@ describe("AvrProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
     });
 
     await driver.command(livingDev, { capability: "onoff", action: "on" });
-    await vi.waitFor(() => expect(living.received).toContain("PWON"));
+    await vi.waitFor(() => expect(living.received).toContain("ZMON"));
     // The theatre receiver must never see a command meant for the living room unit.
-    expect(theatre.received).not.toContain("PWON");
+    expect(theatre.received).not.toContain("ZMON");
 
     const livingDiag = driver.getDiagnostics(livingDev)!;
     const theatreDiag = driver.getDiagnostics(theatreDev)!;
     expect(livingDiag.ip).toBe("127.0.0.1");
-    expect(livingDiag.packetsSent).toBeGreaterThan(theatreDiag.packetsSent); // living got the extra PWON
+    expect(livingDiag.packetsSent).toBeGreaterThan(theatreDiag.packetsSent); // living got the extra ZMON
 
     await driver.disconnect();
     await Promise.all([

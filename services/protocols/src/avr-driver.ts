@@ -237,7 +237,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
    * "Connected to…" log line are now owned by the transport itself). Queries current state
    * so the driver starts in sync (main zone + zone 2 if bound). */
   private onLinkConnect(link: TcpLink, socket: net.Socket, host: string, port: number): void {
-    const initTokens = ["PW?", "MV?", "MU?", "SI?", "PSTONE CTRL ?", "PSBAS ?", "PSTRE ?", "MS?"];
+    const initTokens = ["PW?", "ZM?", "MV?", "MU?", "SI?", "PSTONE CTRL ?", "PSBAS ?", "PSTRE ?", "MS?"];
     if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
       initTokens.push("Z2?", "Z2MU?");
     }
