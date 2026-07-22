@@ -1,6 +1,15 @@
-import { classifyDevice, groupByCircuitName, type DeviceClassification, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
+import { classifyDevice, groupByCircuitName, type CapabilityKind, type DeviceClassification, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
 import type { DiscoveredDevice } from "@supreme/integration-layer";
-import { classifyFromText, classifyFunctionalBlock, mergeCapabilityHints, type KnxDeviceKind } from "./capability-mapper.js";
+import {
+  classifyEtsSignal,
+  classifyFromText,
+  classifyFunctionalBlock,
+  KNX_EXTRA_OPERATION_WORDS,
+  mergeCapabilityHints,
+  roleOfEtsSignal,
+  type CommunicationObjectRole,
+  type KnxDeviceKind,
+} from "./capability-mapper.js";
 import type { FunctionalBlock } from "./functional-block-parser.js";
 import {
   explainMerge,
@@ -39,8 +48,11 @@ export interface KnxIotDiscoverySignal {
 export interface UnifiedDeviceMapperInput {
   knxIot?: KnxIotDiscoverySignal[];
   /** ETS-derived circuit signals (group address + name) — same shape the generic
-   * grouping engine already accepts, so no new signal format is invented. */
-  ets?: (GroupingSignal & { room?: string | null; description?: string | null })[];
+   * grouping engine already accepts, so no new signal format is invented. `dpt` is
+   * optional (KNX IoT-only callers have no DPT concept) and, when present, drives
+   * DPT-priority capability classification (§ classifyEtsSignal) ahead of name-based
+   * keyword matching. */
+  ets?: (GroupingSignal & { room?: string | null; description?: string | null; dpt?: string | null })[];
   /** Installer/user-entered overrides, keyed by the grouping key the device will land
    * under (§ Merge priority: user always wins). */
   userOverrides?: Record<string, Partial<SemanticMetadata>>;
@@ -58,11 +70,23 @@ export interface UnifiedDeviceMapperInput {
 /** A single communication object contributing to this device — a KNX Ultimate group
  * address or a KNX IoT resource (§ Phase 4 Binding Engine input). Kept generic (id+name)
  * rather than protocol-typed so the Binding Engine decides, per-id, whether it looks like
- * a bindable classic group address (`n/n/n`) or an IoT-only resource reference. */
+ * a bindable classic group address (`n/n/n`) or an IoT-only resource reference.
+ *
+ * `capabilities`/`role` are which capability(ies) THIS SPECIFIC object serves and which
+ * of that capability's write/status/step objects it is — populated from the same
+ * per-signal classification `mapUnifiedDevices` already computes (§ production defect:
+ * without this, a merged multi-capability device's Binding Engine had no way to tell a
+ * brightness object from a color-temperature object and silently bound every capability
+ * to whichever object happened to come first). Defaults to the device's full merged
+ * capability list / `"primary"` when no finer-grained signal was available (a pure
+ * functional-block or whole-cluster-keyword classification, same as before this field
+ * existed) — never narrower than what was actually known. */
 export interface CommunicationObject {
   id: string;
   name: string;
   source: "knx_iot" | "ets";
+  capabilities: CapabilityKind[];
+  role: CommunicationObjectRole;
 }
 
 export interface UnifiedKnxDevice extends DiscoveredDevice {
@@ -103,9 +127,16 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
   ];
   if (signals.length === 0) return [];
 
+  // § Universal Device Grouping's own extension contract (packages/domain-model/src/
+  // device-grouping.ts) — the generic engine deliberately knows nothing about protocol-
+  // specific vocabulary; KNX supplies its own abbreviations here rather than the engine
+  // hardcoding them.
   const clusters: (DeviceCluster & { room?: string | null; circuitType?: string | null; operationType?: string | null })[] = input.schemaId
-    ? groupWithSchema(signals, input.schemaId, input.schemaOptions ?? {})
-    : groupByCircuitName(signals);
+    ? groupWithSchema(signals, input.schemaId, {
+        ...input.schemaOptions,
+        stopWords: [...(input.schemaOptions?.stopWords ?? []), ...KNX_EXTRA_OPERATION_WORDS],
+      })
+    : groupByCircuitName(signals, { extraOperationWords: KNX_EXTRA_OPERATION_WORDS });
   const iotByHost = new Map((input.knxIot ?? []).map((d) => [`knx-iot:${d.host}`, d]));
   const etsById = new Map((input.ets ?? []).map((s) => [s.id, s]));
 
@@ -128,10 +159,34 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
     // one copy of (first signal). The raw pre-extraction names still carry every
     // signal's full text, so classification never loses signal to schema stripping.
     const rawNames = [...etsSignals.map((s) => s.name), ...iotSignals.map((s) => s.linkFormat)];
+    // § Priority order: DPT, then name (production KNX import requirement) — classified
+    // per COMMUNICATION OBJECT, not once for the whole blended circuit, so a Tunable
+    // White circuit's absolute/relative/feedback color-temperature objects each
+    // correctly contribute `color` regardless of what its switch/dimming objects
+    // contribute. Functional blocks (richer KNX IoT signal) still take priority when
+    // present; a functional-block-free KNX IoT cluster (no ETS signals at all) keeps the
+    // original whole-cluster keyword classification unchanged.
     const hints = functionalBlocks.length > 0
       ? functionalBlocks.map(classifyFunctionalBlock)
-      : [classifyFromText(cluster.key, ...rawNames)];
+      : etsSignals.length > 0
+        ? etsSignals.map((s) => classifyEtsSignal(s.dpt ?? null, cluster.key, s.name))
+        : [classifyFromText(cluster.key, ...rawNames)];
     const { capabilities, deviceKind, matchedOn } = mergeCapabilityHints(hints);
+
+    // Per-signal capability/role tagging (§ Binding Engine input — see
+    // `CommunicationObject`'s doc comment) — only available in the granular per-ETS-
+    // signal classification branch above; every other branch (functional blocks, or a
+    // whole-cluster keyword fallback) has no finer signal than "this object could serve
+    // any of the device's capabilities", exactly the assumption binding already made
+    // before this field existed, so those objects default to the full merged capability
+    // list and `"primary"` — never claims more precision than was actually computed.
+    const etsTagById = new Map<string, { capabilities: CapabilityKind[]; role: CommunicationObjectRole }>();
+    if (functionalBlocks.length === 0 && etsSignals.length > 0) {
+      etsSignals.forEach((s, i) => {
+        etsTagById.set(s.id, { capabilities: hints[i]!.capabilities, role: roleOfEtsSignal(s.dpt ?? null, s.name) });
+      });
+    }
+    const fallbackTag = { capabilities, role: "primary" as CommunicationObjectRole };
 
     const knxIotTitle = iotSignals[0]?.linkFormat.match(/title="([^"]*)"/)?.[1] ?? null;
     const etsMeta: EtsMetadataSource = {
@@ -154,8 +209,8 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
     const metadata = flattenMergedMetadata(merged);
 
     const communicationObjects: CommunicationObject[] = [
-      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const })),
-      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const })),
+      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const, ...(etsTagById.get(s.id) ?? fallbackTag) })),
+      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const, ...fallbackTag })),
     ];
 
     // Universal Device Intelligence Engine (§ Intelligence Priority): pool circuit name,

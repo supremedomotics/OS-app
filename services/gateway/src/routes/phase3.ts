@@ -2,17 +2,20 @@ import {
   AiAssistRequest,
   CreateAutomationRequest,
   SetAutomationEnabledRequest,
+  SimulateDeviceEventRequest,
   SupremeError,
   UpdateAutomationRequest,
   type AuditList,
   type AuditVerifyResponse,
+  type AutomationDryRunResponse,
+  type AutomationHealthResponse,
   type AutomationList,
   type AutomationRunList,
   type AutomationResponse,
   type DeviceEnergyResponse,
   type EnergySummaryResponse,
 } from "@supreme/contracts";
-import type { AutomationId, DeviceId, RoomId } from "@supreme/domain-model";
+import type { AutomationId, CapabilityKind, CapabilityState, DeviceId, RoomId } from "@supreme/domain-model";
 import { applyGroupCost, bucketCostHistory, budgetStatus, compareGroupCost, computeEnergyCost, costHistoryToCsv, loadShiftDecision, RateError, resolveRateAsync, TariffError } from "@supreme/analytics";
 import { BudgetError, validateBudget, type EnergyBudget } from "../budget-monitor.js";
 import { circadianAt, circadianColorCommand, ClimateProgramError, defaultCircadianProfile, sunTimes, validateClimateProgram } from "@supreme/automations";
@@ -119,6 +122,67 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "automation", id, "delete");
       await ctx.automations.remove(id);
       reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Phase 1 — Dry Run: evaluate real conditions against real state, execute nothing.
+  app.post<{ Params: { id: string } }>("/v1/automations/:id/dry-run", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const id = req.params.id as AutomationId;
+      await enforce(ctx, user, "automation", id, "view");
+      const run = await ctx.automations.dryRun(id);
+      reply.send({ run } satisfies AutomationDryRunResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Phase 1 — Health: plain-language status derived from real run history.
+  app.get<{ Params: { id: string } }>("/v1/automations/:id/health", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const id = req.params.id as AutomationId;
+      await enforce(ctx, user, "automation", id, "view");
+      const health = await ctx.automations.health(id);
+      reply.send(health satisfies AutomationHealthResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Phase 1 — Duplicate: clone an automation, disabled by default until reviewed.
+  app.post<{ Params: { id: string } }>("/v1/automations/:id/duplicate", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const id = req.params.id as AutomationId;
+      await enforce(ctx, user, "automation", id, "create");
+      const name = (req.body as { name?: string } | undefined)?.name;
+      const automation = await ctx.automations.duplicate(id, name);
+      await ctx.audit?.record({ homeId: ctx.homeId, actorUserId: user.id, action: "automation.create", resourceType: "automation", resourceId: automation.id });
+      reply.code(201).send({ automation } satisfies AutomationResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Phase 1 — Test Panel: inject a synthetic device-state event through the REAL Automation
+  // Engine (`ctx.automations.onDeviceState`, the SAME entry point a genuine SIL state delta
+  // uses) — never a fake/mocked execution path. Installer/developer tool for exercising
+  // Motion/Time/Temperature/Presence/Door-shaped triggers without real hardware.
+  app.post("/v1/automations/simulate-event", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "automation", null, "control");
+      const input = SimulateDeviceEventRequest.parse(req.body);
+      await ctx.automations.onDeviceState({
+        deviceId: input.deviceId as DeviceId,
+        capability: input.capability as CapabilityKind,
+        state: input.state as unknown as CapabilityState,
+      });
+      reply.send({ injected: true });
     } catch (err) {
       sendError(reply, err);
     }

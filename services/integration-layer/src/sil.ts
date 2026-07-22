@@ -9,6 +9,7 @@ import { SupremeError } from "@supreme/contracts";
 import type { BackendStateEvent, DriverDiagnosticsSnapshot, IBackendAdapter, MediaArtwork, MediaQueueItem } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
+import type { SupremeNativeAdapter } from "./native-adapter.js";
 import type { EngineKind } from "./migration.js";
 import { OwnershipRegistry, type IDeviceOwnershipStore } from "./ownership.js";
 import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.js";
@@ -206,6 +207,22 @@ export class SupremeIntegrationLayer {
 
   discover() {
     return this.adapter.discover();
+  }
+
+  /** Discovery Driver Selector backend (§ Priority 4) — protocol-filtered, per-driver-
+   * failure-isolated discovery. Falls back to the plain aggregate `discover()` (one
+   * synthetic "complete" result, no per-driver breakdown) when the underlying adapter
+   * isn't a {@link RoutingBackendAdapter} (e.g. a bare native adapter in a unit test) —
+   * never throws just because the richer path isn't wired up. */
+  async discoverWithStatus(protocols?: string[]): ReturnType<SupremeNativeAdapter["discoverWithStatus"]> {
+    const router = this.router;
+    if (router) return router.native.discoverWithStatus(protocols);
+    // A bare (non-routing) adapter has no protocol concept of its own — it can't attribute
+    // its devices to any of the requested protocols, so an explicit filter must exclude it
+    // rather than silently ignore the filter and return everything unfiltered.
+    if (protocols) return { devices: [], driverResults: [] };
+    const devices = await this.adapter.discover();
+    return { devices, driverResults: [] };
   }
 
   /** The live, connected driver instance currently registered for a protocol (e.g.

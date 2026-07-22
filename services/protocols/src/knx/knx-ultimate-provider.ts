@@ -46,6 +46,27 @@ interface KnxUltimateIndication {
 export interface KnxUltimateProviderOptions {
   host: string;
   port?: number;
+  /** Local network interface to bind the tunnel through — plumbed straight to
+   * `knxultimate`'s `KNXClient` `localIPAddress` option (verified present in the
+   * installed `knxultimate@6` typings). Omitted means "let the OS default route
+   * decide", the pre-existing behavior — needed on a multi-homed hub where the wrong
+   * interface silently prevents the tunnel from ever reaching the gateway. */
+  localAddress?: string;
+  /** How long a single connect attempt may take before it's treated as failed and
+   * handed to the Connection Manager's existing backoff/retry (default 10s). Without
+   * this, a connect attempt whose underlying handshake never emits `connected` or
+   * `error` (a dropped UDP packet, wrong interface, unreachable gateway — all real,
+   * observed KNXnet/IP failure modes) hangs indefinitely instead of ever failing. */
+  connectTimeoutMs?: number;
+}
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
+class KnxConnectTimeoutError extends Error {
+  constructor(host: string, port: number, timeoutMs: number) {
+    super(`knx-ultimate: connect to ${host}:${port} timed out after ${timeoutMs}ms`);
+    this.name = "KnxConnectTimeoutError";
+  }
 }
 
 export class KnxUltimateProvider implements IKnxProvider {
@@ -97,6 +118,14 @@ export class KnxUltimateProvider implements IKnxProvider {
     this.connectionManager ??= new ConnectionManager({
       connect: () => this.doConnect(),
       disconnect: () => this.doDisconnect(),
+      // § production defect: a tunnel the gateway drops without a clean
+      // TUNNELING_ACK/DISCONNECT_REQUEST (a real KNXnet/IP failure mode) previously went
+      // undetected until the next write/read happened to fail — `client !== null` is a
+      // real, honestly-known fact (not a fabricated bus ping this codebase can't yet
+      // perform), and it's exactly what closes that gap: any path that nulls `this.client`
+      // (the existing `client.on("error", ...)` handler, or this timeout wrapper) now
+      // gets caught by the heartbeat too, not just by a caller's next command attempt.
+      isHealthy: () => this.client !== null,
       onStateChange: (state, previous, reason) => {
         if (state === "error" || state === "degraded") this.lastError = reason;
         for (const listener of this.stateListeners) listener(state, previous);
@@ -129,14 +158,41 @@ export class KnxUltimateProvider implements IKnxProvider {
       const dptlib = imported.dptlib ?? runtime.dptlib;
       if (!Client || !dptlib) throw new Error("knxultimate did not expose KNXClient and dptlib");
       this.dptlib = dptlib;
-      const client = new Client({ hostProtocol: "TunnelUDP", ipAddr: this.opts.host, ipPort: this.opts.port ?? 3671 });
+      const port = this.opts.port ?? 3671;
+      const client = new Client({
+        hostProtocol: "TunnelUDP",
+        ipAddr: this.opts.host,
+        ipPort: port,
+        ...(this.opts.localAddress ? { localIPAddress: this.opts.localAddress } : {}),
+      });
       this.wireIndications(client, dptlib);
+      const connectTimeoutMs = this.opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
       await new Promise<void>((resolve, reject) => {
         let settled = false;
-        client.on("connected", () => { settled = true; this.client = client; resolve(); });
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          this.lastError = `connect to ${this.opts.host}:${port} timed out after ${connectTimeoutMs}ms`;
+          // Best-effort cleanup of the half-open client so it can't emit a late
+          // "connected"/"error" into a promise nobody's listening to anymore, and so
+          // the next attempt starts from a genuinely fresh client rather than leaking
+          // this one's socket.
+          void client.Disconnect().catch(() => { /* already dead — nothing to clean up */ });
+          reject(new KnxConnectTimeoutError(this.opts.host, port, connectTimeoutMs));
+        }, connectTimeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+        client.on("connected", () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.client = client;
+          resolve();
+        });
         client.on("error", (err) => {
           this.lastError = err instanceof Error ? err.message : String(err);
           if (!settled) {
+            settled = true;
+            clearTimeout(timer);
             reject(err instanceof Error ? err : new Error(String(err)));
             return;
           }

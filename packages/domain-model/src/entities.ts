@@ -130,6 +130,19 @@ export const Scene = z.object({
   icon: z.string().nullable(),
   aiGenerated: z.boolean().default(false),
   steps: z.array(SceneStep),
+  /** § ADR 0101 Part 1 — Scene Runtime. Null/false for every scene authored the existing way
+   * (capture-current-state). Only set when a scene was discovered from an external system
+   * (e.g. an ETS project's DPT 17/18 scene group addresses) — never fabricated for a
+   * hand-authored scene. `sourceDriverId` is the installed driver's id, not a bare protocol
+   * name, so re-import after a driver reinstall can still resolve the same source. */
+  sourceDriverId: z.string().nullable().default(null),
+  /** The scene's identity in the source system (e.g. a KNX scene number) — used to detect the
+   * SAME external scene on re-import instead of creating a duplicate (§ Part 8). */
+  sourceSceneId: z.string().nullable().default(null),
+  imported: z.boolean().default(false),
+  /** Only meaningful when `imported` — whether the last sync still matches the source, or the
+   * source changed/vanished since. Never set for a hand-authored scene. */
+  syncStatus: z.enum(["synced", "stale", "source_missing"]).nullable().default(null),
 });
 export type Scene = z.infer<typeof Scene>;
 

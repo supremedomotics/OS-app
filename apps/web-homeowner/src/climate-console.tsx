@@ -2,6 +2,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
+import { hasCapability } from "./device-ui-capabilities.js";
 import {
   AutomationsSection,
   DeviceManageActions,
@@ -343,7 +344,7 @@ export function ClimateConsole({
   const { states, apply } = useLive();
   const tempCap = device.capabilities.find((c) => c.kind === "temperature");
   const config = (tempCap?.config ?? {}) as ClimateCapabilityConfigView;
-  const onoffSupported = device.capabilities.some((c) => c.kind === "onoff");
+  const onoffSupported = hasCapability(device.capabilities, "onoff");
   const live = (states[device.id]?.temperature ?? (device.state as Record<string, TemperatureStateView>).temperature ?? { ambientC: 21, targetC: 21, mode: "off" }) as TemperatureStateView;
   const power = (states[device.id]?.onoff ?? (device.state as Record<string, { on?: boolean }>).onoff) as { on?: boolean } | undefined;
   const powerOn = power?.on === true;

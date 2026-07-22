@@ -40,6 +40,34 @@ export const BrightnessState = z.object({
   level: Percent,
 });
 
+/**
+ * Structural color-mode metadata for a `color` capability (§ ADR 0017 — Capability Normalization
+ * & the `color` Capability Model). Lives in `DeviceCapability.config` (the SAME generic
+ * capability-config bag every other capability already uses for its own structural metadata —
+ * e.g. a `temperature` capability's `config.modes`/`config.fanSpeeds`) — no schema-breaking
+ * change, purely additive.
+ *
+ * This answers "what can this device do," known at DISCOVERY time from the driver's own
+ * protocol model (a Casambi unit's advertised `controls`, a KNX DPT, a Zigbee cluster's
+ * ColorCapabilities bitmap, …) — never inferred from a live state snapshot. `colorModes` is
+ * `undefined` (the field simply absent) for any driver that hasn't been updated to populate it
+ * yet — the UI's compatibility fallback then infers from live state nullability exactly as it
+ * always has, keeping every existing driver working unmodified (§ Backward Compatibility).
+ */
+export const ColorCapabilityConfig = z.object({
+  /** Explicit, driver-declared support — never both true from a guess, only from the driver's
+   * own real protocol signal. Absent entirely (not `false`/`false`) means "this driver hasn't
+   * adopted structural color-mode reporting yet," which is different from "confirmed neither." */
+  colorModes: z.object({
+    rgb: z.boolean(),
+    cct: z.boolean(),
+  }).optional(),
+  /** Kelvin range this fixture actually supports, when the driver reports it (e.g. KNX DPT
+   * 5.001-adjacent range objects, a Zigbee ColorTempPhysicalMin/MaxMireds pair). */
+  kelvinRange: z.object({ min: z.number().int(), max: z.number().int() }).optional(),
+});
+export type ColorCapabilityConfig = z.infer<typeof ColorCapabilityConfig>;
+
 export const ColorState = z.object({
   on: z.boolean(),
   level: Percent,

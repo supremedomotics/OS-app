@@ -59,6 +59,18 @@ export const NetworkInfo = z.object({
 });
 export type NetworkInfo = z.infer<typeof NetworkInfo>;
 
+/** Per-driver outcome of one discovery run (§ Driver Failure Isolation) — returned
+ * ONLY after each driver's scan completes; true live progress would need a streaming
+ * transport this API doesn't have (a documented limitation, not fabricated progress). */
+export const DriverDiscoveryResult = z.object({
+  protocol: z.string(),
+  driverName: z.string(),
+  status: z.enum(["complete", "failed"]),
+  count: z.number(),
+  error: z.string().optional(),
+});
+export type DriverDiscoveryResult = z.infer<typeof DriverDiscoveryResult>;
+
 export const DiscoveredDeviceView = z.object({
   backendId: z.string(),
   suggestedName: z.string(),
@@ -83,10 +95,25 @@ export const DiscoveredDeviceView = z.object({
    * matching Supreme room without the installer having to pick one by hand.
    */
   roomHint: z.string().nullable().optional(),
+  /** The installed driver's user-facing name (e.g. "Supreme KNX") — NEVER an internal
+   * engine/provider name ("KNX Ultimate", "KNX IoT Provider" stay invisible). Null when
+   * the device came from a source with no installed-driver mapping. */
+  driverName: z.string().nullable().optional(),
+  /** Driver-normalized per-capability config (§ ADR 0017/0018 — Capability Normalization
+   * Pipeline), e.g. `{ color: { colorModes: { rgb, cct } } }` — known from the driver's own
+   * protocol model at discovery time, never a guess. Pass straight through as
+   * `capabilityConfig` on a `CommissionRequest` so manual pairing preserves the exact same
+   * structural signal the auto-commit path already does. */
+  capabilityConfig: z.record(z.record(z.unknown())).optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
-export const DiscoveryList = z.object({ discovered: z.array(DiscoveredDeviceView) });
+export const DiscoveryList = z.object({
+  discovered: z.array(DiscoveredDeviceView),
+  /** Per-driver outcome (§ Driver Failure Isolation) — empty when the backend adapter
+   * doesn't support per-driver breakdown (defensive default, never fabricated). */
+  driverResults: z.array(DriverDiscoveryResult).optional(),
+});
 export type DiscoveryList = z.infer<typeof DiscoveryList>;
 
 /** A device discovered but awaiting installer approval (§ Device Approval). */
@@ -100,6 +127,13 @@ export const PendingDeviceView = z.object({
   network: NetworkInfo.nullable(),
   firstSeen: z.string(),
   lastSeen: z.string(),
+  /** The driver's own room hint, carried from discovery (§ Universal Room Intelligence)
+   * — shown to the installer as the pre-filled/suggested room, never silently applied
+   * without their final approval. */
+  roomHint: z.string().nullable().optional(),
+  /** The installed driver's user-facing name, resolved from `protocol` at read time
+   * (never persisted — always reflects the CURRENT registry, e.g. after a rename). */
+  driverName: z.string().nullable().optional(),
 });
 export type PendingDeviceView = z.infer<typeof PendingDeviceView>;
 
@@ -108,12 +142,21 @@ export type PendingDeviceList = z.infer<typeof PendingDeviceList>;
 
 export const ApproveDeviceRequest = z.object({
   name: z.string().optional(),
-  roomId: z.string(),
+  /** Explicit installer choice — omit to let the Room Assignment Engine resolve one from
+   * the pending record's own roomHint (§ Universal Room Intelligence). */
+  roomId: z.string().optional(),
   capabilities: z.array(CapabilityKind).optional(),
 });
 export type ApproveDeviceRequest = z.infer<typeof ApproveDeviceRequest>;
 
-export const DiscoverRequest = z.object({ protocol: ProtocolKind.optional() });
+export const DiscoverRequest = z.object({
+  protocol: ProtocolKind.optional(),
+  /** Discovery Driver Selector (§ Priority 4) — installed-driver ids (from `/v1/drivers/
+   * registry`'s `installedId`) to scan. Omit to scan every installed, discovery-capable
+   * driver (the previous default behavior — fully backward compatible). An empty array
+   * intentionally scans nothing (a "Deselect All" state), not "scan everything". */
+  driverIds: z.array(z.string()).optional(),
+});
 export type DiscoverRequest = z.infer<typeof DiscoverRequest>;
 
 export const CommissionRequest = z.object({
@@ -139,6 +182,9 @@ export const CommissionRequest = z.object({
   config: z.record(z.unknown()).optional(),
   /** Network coordinates carried over from discovery, persisted onto the device (§ Device Manager). */
   network: NetworkInfo.optional(),
+  /** § ADR 0017/0018 — pass `DiscoveredDeviceView.capabilityConfig` straight through so manual
+   * pairing preserves the same driver-normalized structural signal the auto-commit path does. */
+  capabilityConfig: z.record(z.record(z.unknown())).optional(),
 });
 export type CommissionRequest = z.infer<typeof CommissionRequest>;
 

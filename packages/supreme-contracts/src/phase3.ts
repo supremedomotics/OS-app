@@ -20,6 +20,7 @@ export const CreateAutomationRequest = z.object({
   actions: z.array(AutomationAction).min(1),
   engine: z.enum(["ha", "supreme"]).default("supreme"),
   enabled: z.boolean().default(true),
+  tags: z.array(z.string()).default([]),
 });
 export type CreateAutomationRequest = z.infer<typeof CreateAutomationRequest>;
 
@@ -63,6 +64,28 @@ export type AutomationRun = z.infer<typeof AutomationRun>;
 
 export const AutomationRunList = z.object({ runs: z.array(AutomationRun) });
 export type AutomationRunList = z.infer<typeof AutomationRunList>;
+
+/** Dry-run result (§ Phase 1): the SAME AutomationRun shape the debugger already renders,
+ * with `trigger: "dry_run"` and every action recorded as "would execute", never really run. */
+export const AutomationDryRunResponse = z.object({ run: AutomationRun });
+export type AutomationDryRunResponse = z.infer<typeof AutomationDryRunResponse>;
+
+/** Plain-language health (§ Phase 1) — derived from real run history, never a bare enum alone. */
+export const AutomationHealthResponse = z.object({
+  status: z.enum(["disabled", "waiting", "healthy", "warning", "broken"]),
+  reason: z.string(),
+});
+export type AutomationHealthResponse = z.infer<typeof AutomationHealthResponse>;
+
+/** Test Panel (§ Phase 1): inject a synthetic device-state event through the REAL Automation
+ * Engine — never a fake/mocked execution path, exactly the same `onDeviceState` real triggers
+ * use. Development/installer testing tool, not a production device command. */
+export const SimulateDeviceEventRequest = z.object({
+  deviceId: z.string(),
+  capability: z.string(),
+  state: z.record(z.unknown()),
+});
+export type SimulateDeviceEventRequest = z.infer<typeof SimulateDeviceEventRequest>;
 
 // ── Energy / analytics ───────────────────────────────────────────────────────
 

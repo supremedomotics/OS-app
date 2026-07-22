@@ -25,6 +25,7 @@ export interface CreateAutomationInput {
   engine?: "ha" | "supreme";
   enabled?: boolean;
   aiGenerated?: boolean;
+  tags?: string[];
 }
 
 export class AutomationService {
@@ -65,6 +66,7 @@ export class AutomationService {
       engine: input.engine ?? "supreme",
       externalRef: null,
       aiGenerated: input.aiGenerated ?? false,
+      tags: input.tags ?? [],
     };
     await this.store.put(automation);
     await this.reload();
@@ -81,6 +83,7 @@ export class AutomationService {
       conditions: patch.conditions ?? current.conditions,
       actions: patch.actions ?? current.actions,
       engine: patch.engine ?? current.engine,
+      tags: patch.tags ?? current.tags,
     };
     await this.store.put(next);
     await this.reload();
@@ -100,6 +103,33 @@ export class AutomationService {
   /** Manually run an automation's actions now (the Builder's "Test" button). */
   async testRun(id: AutomationId): Promise<void> {
     await this.engine.run(await this.get(id));
+  }
+
+  /** Dry-run: evaluate triggers/conditions against real state, execute nothing (§ Phase 1). */
+  async dryRun(id: AutomationId) {
+    return this.engine.dryRun(await this.get(id));
+  }
+
+  /** Plain-language health status, derived from real run history (§ Phase 1). */
+  async health(id: AutomationId) {
+    return this.engine.health(await this.get(id));
+  }
+
+  /** Clone an automation under a new id/name. Disabled by default — a duplicate firing
+   * alongside its original on the same triggers is a surprise no installer asked for; the
+   * installer re-enables it explicitly once it's reviewed/edited. */
+  async duplicate(id: AutomationId, name?: string): Promise<Automation> {
+    const source = await this.get(id);
+    return this.create({
+      homeId: source.homeId,
+      name: name ?? `${source.name} (copy)`,
+      triggers: source.triggers,
+      conditions: source.conditions,
+      actions: source.actions,
+      engine: source.engine,
+      enabled: false,
+      tags: source.tags,
+    });
   }
 
   /** Recent execution traces for the Automation Debugger (optionally scoped to one automation). */

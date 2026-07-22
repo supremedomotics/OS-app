@@ -6,18 +6,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * tests can assert exactly one client exists at a time and that stale ones are dropped. */
 class FakeClient extends EventEmitter {
   static instances: FakeClient[] = [];
+  /** When true, `Connect()` never emits `connected`/`error` — simulates the real,
+   * observed failure mode a dropped UDP handshake produces (§ production defect:
+   * "Connection timeout to 192.168.0.21:3671" with no local deadline to catch it). */
+  static hangOnConnect = false;
   connectCalls = 0;
   readCalls: string[] = [];
   writeCalls: { ga: string; value: unknown; dpt: string }[] = [];
   disconnected = false;
+  constructorOpts: Record<string, unknown>;
 
-  constructor() {
+  constructor(opts: Record<string, unknown> = {}) {
     super();
+    this.constructorOpts = opts;
     FakeClient.instances.push(this);
   }
   Connect(): void {
     this.connectCalls++;
-    queueMicrotask(() => this.emit("connected"));
+    if (!FakeClient.hangOnConnect) queueMicrotask(() => this.emit("connected"));
   }
   async Disconnect(): Promise<void> {
     this.disconnected = true;
@@ -48,9 +54,38 @@ vi.mock("knxultimate", () => ({
 describe("KnxUltimateProvider", () => {
   beforeEach(() => {
     FakeClient.instances = [];
+    FakeClient.hangOnConnect = false;
   });
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("passes localAddress through to the underlying client as localIPAddress (§ multi-homed hub interface binding)", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "192.168.0.21", localAddress: "192.168.0.117" });
+    await provider.connect();
+    expect(FakeClient.instances[0]?.constructorOpts.localIPAddress).toBe("192.168.0.117");
+  });
+
+  it("fails a hung connect attempt after connectTimeoutMs instead of hanging forever, and cleans up the stuck client (§ production defect: 'Connection timeout to 192.168.0.21:3671' with no local deadline)", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    FakeClient.hangOnConnect = true;
+    const provider = new KnxUltimateProvider({ host: "192.168.0.21", connectTimeoutMs: 20 });
+
+    await expect(provider.connect()).rejects.toThrow(/timed out after 20ms/);
+    expect(FakeClient.instances[0]?.disconnected).toBe(true); // stuck client cleaned up, not leaked
+  });
+
+  it("recovers via the Connection Manager's existing backoff/retry after a connect timeout, once the underlying transport starts responding again", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    FakeClient.hangOnConnect = true;
+    const provider = new KnxUltimateProvider({ host: "192.168.0.21", connectTimeoutMs: 20 });
+    await expect(provider.connect()).rejects.toThrow();
+
+    // The gateway/hub "comes back" — subsequent connect attempts succeed normally.
+    FakeClient.hangOnConnect = false;
+    await provider.connect(); // second direct call after a failed first — same idempotent path this file already exercises
+    expect(provider.health().connected).toBe(true);
   });
 
   it("executes bus.group_read as a real GroupValueRead request, not a fabricated no-op", async () => {

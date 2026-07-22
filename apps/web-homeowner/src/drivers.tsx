@@ -4,6 +4,7 @@ import {
   discoverKnxGateways,
   type DriverConfigField,
   type DriverEntry,
+  type DriverHealth,
   fetchDriverHealth,
   fetchDriverLogs,
   fetchDriverRegistry,
@@ -49,15 +50,38 @@ export function DriverManager() {
   );
 }
 
-export function statusLabel(d: DriverEntry): { text: string; cls: string } {
+/** `connected` is the driver's REAL native-protocol connection state (§ production
+ * defect: this badge used to read "Active" purely from install/enable bookkeeping,
+ * even when the underlying tunnel/bus had never connected or had dropped — installed
+ * v.s. enabled is a config fact; connected is a runtime fact, and the two can and do
+ * diverge). Omitted/`null` (health hasn't loaded yet, or this driver has no live
+ * protocol instance to check at all) falls back to the install/enable-only verdict
+ * rather than claiming a real-time state that isn't actually known — never a guess in
+ * either direction. */
+export function statusLabel(d: DriverEntry, connected?: boolean | null): { text: string; cls: string } {
   if (!d.installed) return { text: "Not installed", cls: "off" };
   if (!d.enabled) return { text: "Disabled", cls: "off" };
   if (d.status === "error") return { text: "Error", cls: "err" };
+  if (connected === false) return { text: "Disconnected", cls: "err" };
   return { text: "Active", cls: "ok" };
 }
 
 function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEntry; expanded: boolean; onToggle: () => void; onChanged: () => void }) {
-  const s = statusLabel(driver);
+  // Real connection state, not just install/enable — see `statusLabel`'s doc comment.
+  // Only fetched for drivers where it's meaningful (installed + enabled); "Not
+  // installed"/"Disabled" is already the honest, complete answer without a health call.
+  const [connected, setConnected] = useState<boolean | null | undefined>(undefined);
+  useEffect(() => {
+    if (!driver.installed || !driver.enabled || !driver.installedId) return;
+    let cancelled = false;
+    void fetchDriverHealth(driver.installedId).then((h) => {
+      if (!cancelled) setConnected(h?.connected ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [driver.installedId, driver.installed, driver.enabled]);
+  const s = statusLabel(driver, connected);
   return (
     <div className={`drv-row${expanded ? " open" : ""}`}>
       <button className="drv-head" onClick={onToggle}>
@@ -79,7 +103,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const [err, setErr] = useState<string | null>(null);
   const [schema, setSchema] = useState<DriverConfigField[]>(driver.configSchema);
   const [values, setValues] = useState<Record<string, unknown>>(driver.config ?? {});
-  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
+  const [health, setHealth] = useState<DriverHealth | null>(null);
   const [logs, setLogs] = useState<{ ts: string; level: string; message: string }[]>([]);
 
   useEffect(() => {

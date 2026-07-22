@@ -19,6 +19,25 @@ import type { DiscoveredDevice, DriverDiagnosticsSnapshot, MediaArtwork, MediaQu
  * so no protocol library leaks above the adapter.
  */
 
+/** § ADR 0101 Part 1 — Scene Runtime. A scene a driver found in its own external system
+ * (an ETS project's DPT 17/18 scene group addresses, a synchronized cloud API's scene list,
+ * …), described entirely in protocol-agnostic terms so `SceneService` never needs to know
+ * which driver produced it. `steps` are already Supreme capability commands — a driver is the
+ * ONLY place that may translate protocol-native scene actions into them. */
+export interface DiscoveredScene {
+  /** Stable id in the SOURCE system (e.g. a KNX scene number) — used for duplicate-safe
+   * re-import/re-sync, never regenerated per scan. */
+  sourceSceneId: string;
+  name: string;
+  description?: string | null;
+  icon?: string | null;
+  /** Room/area hint from the source system's own metadata, when it has one (an ETS
+   * `<Function>`'s enclosing `<Space>`, a Casambi group's room mapping, …) — resolved to a
+   * real Supreme room the same way device discovery already does; never guessed here. */
+  roomHint?: string | null;
+  steps: { deviceId: DeviceId; capability: CapabilityKind; command: Record<string, unknown> }[];
+}
+
 /** Binds a Supreme device+capability to a concrete protocol address (e.g. an MQTT
  * topic root or a Modbus register). Produced by commissioning; consumed by a driver. */
 export interface ProtocolBinding {
@@ -94,6 +113,14 @@ export interface INativeProtocolDriver {
    * manage the device. Synchronous: reading counters already held in memory, never a
    * network round-trip. */
   getDiagnostics?(deviceId: DeviceId): DriverDiagnosticsSnapshot | null;
+
+  /** § ADR 0101 Part 1 — Optional: scenes this driver's source system genuinely defines
+   * (an ETS project's scene DPTs, a synchronized API's scene list). Absent entirely for any
+   * driver whose protocol has no real scene concept to discover — never implemented with a
+   * stub that returns []  to "complete the interface." Called after `discover()` on
+   * install/commission/refresh, same lifecycle points, so scene import always sees the
+   * devices it needs to map steps onto. */
+  discoverScenes?(): Promise<DiscoveredScene[]>;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

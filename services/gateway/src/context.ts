@@ -541,6 +541,9 @@ export class AppContext {
     });
     this.automations = new AutomationService(engine, deps.automationStore);
     await this.automations.start();
+    // § ADR 0101 Part 1 — scenes execute through this SAME engine from here on (never a second
+    // execution path); attached post-construction since scenes are built before automations.
+    this.scenes.attachEngine(engine);
 
     if (deps.db) {
       this.analytics = new AnalyticsService(deps.db);

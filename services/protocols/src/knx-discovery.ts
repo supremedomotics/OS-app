@@ -1,4 +1,5 @@
 import dgram from "node:dgram";
+import os from "node:os";
 
 /**
  * KNXnet/IP discovery (§3, §7) — the standard way to find KNX IP interfaces/routers on a LAN.
@@ -44,15 +45,50 @@ export interface KnxGateway {
   routingCapable: boolean | null;
 }
 
-/** Minimal UDP socket surface (so tests can inject a fake). */
+/** Minimal UDP socket surface (so tests can inject a fake). `bind`'s address/
+ * `setMulticast`'s interface param are optional so an existing fake that only ever
+ * implements the no-arg forms keeps working unchanged — real interface binding is
+ * additive, never required. */
 export interface KnxDiscoverySocket {
   on(event: "message", cb: (msg: Buffer, rinfo: { address: string }) => void): void;
-  bind(cb: () => void): void;
-  setMulticast?(): void;
+  bind(cb: () => void, address?: string): void;
+  setMulticast?(interfaceAddress?: string): void;
   send(msg: Buffer, port: number, host: string): void;
   close(): void;
 }
 export type KnxDiscoverySocketFactory = () => KnxDiscoverySocket;
+
+/** A real, non-virtual IPv4 network adapter — a SEARCH_REQUEST candidate outgoing
+ * interface. */
+export interface KnxNetworkInterface {
+  name: string;
+  address: string;
+}
+
+/** Adapter-name patterns that are never a real LAN path to a KNX/IP gateway — Docker
+ * bridges/veth pairs, WSL's vEthernet, Hyper-V's Default Switch, VMware/VirtualBox
+ * host-only adapters, and common VPN/tunnel adapter names. Excluded by default, never
+ * hidden from an installer who explicitly wants to pick one (§ "Ignore ... unless
+ * explicitly selected" — {@link listKnxNetworkInterfaces}'s `includeVirtual` opts back
+ * in to the unfiltered list, it never becomes impossible to choose). */
+const VIRTUAL_ADAPTER_NAME_RE = /docker|veth|br-|vethernet|virtualbox|vboxnet|vmware|vmnet|hyper-v|wsl|tap|tun|zerotier|tailscale|ppp/i;
+
+/** Enumerates real network adapters this host could reach a KNX/IP gateway's LAN
+ * through — every non-internal IPv4 adapter, minus the virtual/container/VPN ones by
+ * default (§ Gateway Discovery: "enumerate all active network adapters ... ignore
+ * loopback/Docker/WSL/Hyper-V/VMware/Tailscale unless selected"). Never guesses which
+ * one is "correct" — that choice is the installer's; this only removes adapters that
+ * are never a real path to a physical KNX bus. */
+export function listKnxNetworkInterfaces(opts: { includeVirtual?: boolean } = {}): KnxNetworkInterface[] {
+  const out: KnxNetworkInterface[] = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    if (!opts.includeVirtual && VIRTUAL_ADAPTER_NAME_RE.test(name)) continue;
+    for (const addr of addrs ?? []) {
+      if (addr.family === "IPv4" && !addr.internal) out.push({ name, address: addr.address });
+    }
+  }
+  return out;
+}
 
 /** Build a KNXnet/IP SEARCH_REQUEST. `localIp`/`localPort` tell servers where to reply. */
 export function encodeSearchRequest(localIp = "0.0.0.0", localPort = 0): Buffer {
@@ -132,6 +168,13 @@ export interface KnxSearchOptions {
   localIp?: string;
   localPort?: number;
   createSocket?: KnxDiscoverySocketFactory;
+  /** The local NIC to bind the discovery socket to and send the multicast SEARCH_REQUEST
+   * through — an address from {@link listKnxNetworkInterfaces}. Omitted means "let the OS
+   * default route decide" (the pre-existing behavior), which is exactly what silently
+   * fails on a multi-homed host whose default route doesn't reach the KNX gateway's LAN
+   * segment (§ production defect: "No KNX/IP gateways found on this network" with a real
+   * gateway present, on a host with Docker/other virtual adapters also installed). */
+  interfaceAddress?: string;
 }
 
 /** Multicast a SEARCH_REQUEST and collect KNXnet/IP interfaces until the timeout. Deduped by IA. */
@@ -139,7 +182,7 @@ export function knxSearch(opts: KnxSearchOptions = {}): Promise<KnxGateway[]> {
   const timeoutMs = opts.timeoutMs ?? 3000;
   const socket = (opts.createSocket ?? defaultSocket)();
   const found = new Map<string, KnxGateway>();
-  const request = encodeSearchRequest(opts.localIp, opts.localPort);
+  const request = encodeSearchRequest(opts.localIp ?? opts.interfaceAddress, opts.localPort);
 
   return new Promise<KnxGateway[]>((resolve) => {
     let done = false;
@@ -158,9 +201,9 @@ export function knxSearch(opts: KnxSearchOptions = {}): Promise<KnxGateway[]> {
       if (gw) found.set(`${gw.individualAddress}|${gw.address}`, gw);
     });
     socket.bind(() => {
-      socket.setMulticast?.();
+      socket.setMulticast?.(opts.interfaceAddress);
       socket.send(request, KNX_PORT, KNX_MULTICAST);
-    });
+    }, opts.interfaceAddress);
     const t = setTimeout(finish, timeoutMs);
     (t as { unref?: () => void }).unref?.();
   });
@@ -175,11 +218,19 @@ function defaultSocket(): KnxDiscoverySocket {
   const sock = dgram.createSocket({ type: "udp4", reuseAddr: true });
   return {
     on: (event, cb) => sock.on(event, cb),
-    bind: (cb) => sock.bind(cb),
-    setMulticast: () => {
+    // No address → 0.0.0.0 (every interface), exactly the prior behavior. An explicit
+    // address binds to that one NIC only, so the SEARCH_REQUEST actually leaves through
+    // it rather than whatever the OS's default route happens to pick.
+    bind: (cb, address) => (address ? sock.bind(0, address, cb) : sock.bind(cb)),
+    setMulticast: (interfaceAddress) => {
       try {
         sock.setMulticastTTL(64);
-        sock.addMembership(KNX_MULTICAST);
+        // A membership/outgoing-interface hint is required on a multi-homed host —
+        // without it, the OS chooses which NIC actually carries the multicast join AND
+        // the outgoing SEARCH_REQUEST, independently of which address the socket bound
+        // to, which is exactly what let a real gateway go undiscovered.
+        if (interfaceAddress) sock.setMulticastInterface(interfaceAddress);
+        sock.addMembership(KNX_MULTICAST, interfaceAddress);
       } catch {
         // membership best-effort; unicast replies still arrive on the bound port
       }

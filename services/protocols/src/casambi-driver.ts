@@ -13,6 +13,7 @@ import {
 } from "@supreme/integration-layer";
 import {
   capabilitiesFromUnit,
+  colorConfigFromUnit,
   commandToTargetControls,
   statesFromUnit,
   type CasambiUnit,
@@ -170,10 +171,14 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       const capabilities = capabilitiesFromUnit(unit);
       if (capabilities.length === 0) continue;
       const group = unit.groupId ? this.groups.get(unit.groupId) : undefined;
+      const colorConfig = colorConfigFromUnit(unit);
       out.push({
         backendId: `casambi:${unit.id}`,
         suggestedName: unit.name?.trim() || `Casambi ${unit.id}`,
         capabilities,
+        // § ADR 0017 Capability Normalization — the real RGB/CCT distinction, known from this
+        // unit's advertised controls at discovery time, never guessed from live state.
+        ...(colorConfig ? { capabilityConfig: { color: colorConfig } } : {}),
         // The Casambi group name auto-maps this luminaire to a Supreme room at commissioning.
         raw: {
           unitId: unit.id,

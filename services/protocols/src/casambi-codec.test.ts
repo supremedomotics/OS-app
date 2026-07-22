@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   capabilitiesFromUnit,
+  colorConfigFromUnit,
   commandToTargetControls,
   rgbToHueSat,
   statesFromUnit,
@@ -35,6 +36,38 @@ describe("Casambi codec — capability derivation", () => {
   it("derives a sensor for sensor units", () => {
     const u: CasambiUnit = { id: 5, type: "Sensor", sensors: { lux: 320 } };
     expect(capabilitiesFromUnit(u)).toEqual(["sensor"]);
+  });
+});
+
+describe("Casambi codec — colorConfigFromUnit (§ ADR 0017 Capability Normalization)", () => {
+  it("a unit with no color-related control at all → undefined (nothing to normalize)", () => {
+    const u: CasambiUnit = { id: 10, controls: [{ type: "Dimmer", value: 1 }] };
+    expect(colorConfigFromUnit(u)).toBeUndefined();
+  });
+
+  it("CCT-only fixture (real hardware shape: CCT control, no RGB/XY) → colorModes.cct only", () => {
+    const u: CasambiUnit = { id: 11, controls: [{ type: "Dimmer" }, { type: "CCT", min: 2700, max: 6000 }] };
+    expect(colorConfigFromUnit(u)).toEqual({ colorModes: { rgb: false, cct: true } });
+  });
+
+  it("RGB-only fixture (RGB control, no CCT) → colorModes.rgb only", () => {
+    const u: CasambiUnit = { id: 12, controls: [{ type: "Dimmer" }, { type: "RGB" }] };
+    expect(colorConfigFromUnit(u)).toEqual({ colorModes: { rgb: true, cct: false } });
+  });
+
+  it("XY control counts as RGB (Casambi's alternate color-mode encoding)", () => {
+    const u: CasambiUnit = { id: 13, controls: [{ type: "Dimmer" }, { type: "xy" }] };
+    expect(colorConfigFromUnit(u)).toEqual({ colorModes: { rgb: true, cct: false } });
+  });
+
+  it("RGB+CCT fixture → both true — known structurally, not guessed from state", () => {
+    const u: CasambiUnit = { id: 14, controls: [{ type: "Dimmer" }, { type: "RGB" }, { type: "CCT" }] };
+    expect(colorConfigFromUnit(u)).toEqual({ colorModes: { rgb: true, cct: true } });
+  });
+
+  it("Colortemperature control name variant also maps to cct", () => {
+    const u: CasambiUnit = { id: 15, controls: [{ type: "Colortemperature", min: 2200, max: 6500 }] };
+    expect(colorConfigFromUnit(u)).toEqual({ colorModes: { rgb: false, cct: true } });
   });
 });
 

@@ -12,6 +12,7 @@ import { mediaDeviceKind, usesSimpleMediaDetail } from "./features/media/capabil
 import { EnergyDeviceDetail } from "./features/infrastructure/energy/detail.js";
 import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 import { DeviceSheet } from "./device-sheets.js";
+import { getDeviceUiCapabilities } from "./device-ui-capabilities.js";
 
 /**
  * Canonical Device Detail Router (§ Platform Architecture Rule — "Every device type must
@@ -60,17 +61,19 @@ export interface DeviceDetailContextValue {
 export const DeviceDetailContext = createContext<DeviceDetailContextValue>({ openDevice: () => {}, refreshToken: 0 });
 export const useOpenDevice = () => useContext(DeviceDetailContext);
 
+// § ADR 0016 Capability-Driven UI — routing decisions derive from the SAME shared helper every
+// other capability-visibility decision in the app uses, never a locally reinvented check.
 function isLight(d: Device): boolean {
-  return d.capabilities.some((c) => c.kind === "brightness" || c.kind === "color");
+  return getDeviceUiCapabilities(d.capabilities).showBrightness;
 }
 function isClimate(d: Device): boolean {
-  return d.capabilities.some((c) => c.kind === "temperature");
+  return getDeviceUiCapabilities(d.capabilities).showClimate;
 }
 function isLock(d: Device): boolean {
-  return d.capabilities.some((c) => c.kind === "lock");
+  return getDeviceUiCapabilities(d.capabilities).showLock;
 }
 function isMedia(d: Device): boolean {
-  return d.capabilities.some((c) => c.kind === "media");
+  return getDeviceUiCapabilities(d.capabilities).showMedia;
 }
 
 /** Everything {@link resolveCanonicalDetail} needs beyond the one device being opened —

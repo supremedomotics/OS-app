@@ -143,6 +143,96 @@ export class AutomationEngine {
     await this.execute(automation, "manual", true);
   }
 
+  /**
+   * Best-effort concurrent run (§ ADR 0101 Part 1 — Scene Runtime): the SAME `runAction`/
+   * `record` primitives as {@link run}, just aggregated differently — every action is attempted
+   * regardless of a sibling's failure, instead of stopping at the first one. Scenes need this
+   * (a scene with 12 steps where one light is offline should still apply the other 11), which
+   * `execute()`'s stop-on-first-failure trace intentionally does NOT provide for ordinary
+   * automations. This is not a second engine: same executors, same action dispatch, same run
+   * history ring buffer, same `onRun` last-run hook — only the aggregation strategy differs.
+   */
+  async runConcurrent(automation: Automation, trigger = "manual"): Promise<AutomationRun> {
+    const started = new Date();
+    const t0 = this.now();
+    const actions: AutomationRunAction[] = await Promise.all(
+      automation.actions.map(async (action): Promise<AutomationRunAction> => {
+        const a0 = this.now();
+        try {
+          await this.runAction(action);
+          return { type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAction(action) };
+        } catch (e) {
+          return { type: action.type, ok: false, error: e instanceof Error ? e.message : String(e), durationMs: this.now() - a0, summary: describeAction(action) };
+        }
+      }),
+    );
+    const run: AutomationRun = {
+      id: `run-${started.getTime()}-${this.runSeq++}`,
+      automationId: automation.id,
+      startedAt: started.toISOString(),
+      trigger,
+      conditionsPassed: true,
+      actions,
+      durationMs: this.now() - t0,
+      ok: actions.every((a) => a.ok),
+    };
+    this.record(run);
+    return run;
+  }
+
+  /**
+   * Dry-run (§ Phase 1 — Testing without touching real devices): evaluates the SAME conditions
+   * a real run would, against REAL current state (`this.ex.getState`), but never calls
+   * `runAction` — every action is recorded as "would execute" with no side effect and no
+   * device command. Recorded into the SAME run history as a real run (trigger `"dry_run"`) so
+   * the Automation Debugger shows it identically, just clearly labeled.
+   */
+  async dryRun(automation: Automation): Promise<AutomationRun> {
+    const started = new Date();
+    const t0 = this.now();
+    const { passed: conditionsPassed, failed: failedCondition } = await this.evaluateConditions(automation.conditions, started);
+
+    const actions: AutomationRunAction[] = conditionsPassed
+      ? automation.actions.map((action) => ({ type: action.type, ok: true, durationMs: 0, summary: `Would run: ${describeAction(action)}` }))
+      : [];
+
+    const run: AutomationRun = {
+      id: `dryrun-${started.getTime()}-${this.runSeq++}`,
+      automationId: automation.id,
+      startedAt: started.toISOString(),
+      trigger: "dry_run",
+      conditionsPassed,
+      ...(failedCondition ? { failedCondition } : {}),
+      actions,
+      durationMs: this.now() - t0,
+      ok: conditionsPassed,
+    };
+    this.runs.push(run);
+    if (this.runs.length > this.historyLimit) this.runs.shift();
+    return run;
+  }
+
+  /**
+   * Health (§ Phase 1): a plain-language-explainable status derived ENTIRELY from existing,
+   * already-recorded run history + the automation's own enabled flag — no new tracked state.
+   */
+  health(automation: Automation): { status: "disabled" | "waiting" | "healthy" | "warning" | "broken"; reason: string } {
+    if (!automation.enabled) return { status: "disabled", reason: "Automation is turned off." };
+    // Dry-runs are synthetic (§ Phase 1 — never a real side effect) and share the same history
+    // ring buffer as real runs purely so the debugger can show them inline; Health must reflect
+    // only REAL executions, or a passing dry-run could mask (or a "would fail" dry-run could
+    // falsely report) the automation's actual operational status.
+    const runs = this.recentRuns(automation.id, 20).filter((r) => r.trigger !== "dry_run").slice(0, 5);
+    if (runs.length === 0) return { status: "waiting", reason: "Enabled — hasn't triggered yet." };
+    const last = runs[0]!;
+    if (!last.ok && last.conditionsPassed) {
+      const recentFailures = runs.filter((r) => r.conditionsPassed && !r.ok).length;
+      if (recentFailures >= runs.length) return { status: "broken", reason: `Last ${recentFailures} run(s) failed: ${last.error ?? "an action failed"}.` };
+      return { status: "warning", reason: `Last run failed: ${last.error ?? "an action failed"}.` };
+    }
+    return { status: "healthy", reason: last.conditionsPassed ? "Last run completed successfully." : "Waiting — conditions weren't met last time." };
+  }
+
   private async timeTriggerFires(
     automationId: string,
     index: number,

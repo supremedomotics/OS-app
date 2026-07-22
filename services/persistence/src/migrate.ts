@@ -28,6 +28,10 @@ const MIGRATIONS = [
   "0018_email_verified.sql",
   "0019_webauthn.sql",
   "0020_device_ownership.sql",
+  "0021_pending_devices_room_hint.sql",
+  "0022_pending_devices_capability_config.sql",
+  "0023_automation_tags.sql",
+  "0024_scene_import.sql",
 ] as const;
 
 /**

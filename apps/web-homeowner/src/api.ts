@@ -182,10 +182,27 @@ export async function fetchDeviceDiagnostics(deviceId: string): Promise<DeviceDr
     return null;
   }
 }
-export async function fetchDriverHealth(id: string): Promise<Record<string, unknown> | null> {
+export interface DriverHealth {
+  key: string;
+  name: string;
+  installed: boolean;
+  enabled: boolean;
+  status: string;
+  configComplete: boolean;
+  missing: string[];
+  /** Real native-protocol connection state — null when this driver has no live
+   * protocol instance to check against (e.g. not currently registered), never a
+   * guess. See {@link statusLabel} — this is what tells "installed and enabled" apart
+   * from "actually connected to the bus/gateway right now". */
+  connected: boolean | null;
+  connectError: string | null;
+  verdict: "disabled" | "error" | "not_configured" | "healthy";
+  logCount: number;
+}
+export async function fetchDriverHealth(id: string): Promise<DriverHealth | null> {
   try {
     const res = await authed(`/v1/drivers/${id}/health`);
-    return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
+    return res.ok ? ((await res.json()) as DriverHealth) : null;
   } catch {
     return null;
   }
@@ -418,8 +435,9 @@ export interface AutomationView {
   name: string;
   enabled: boolean;
   triggers: { type: string; deviceId?: string; capability?: string; field?: string; at?: string; everyMinutes?: number }[];
-  conditions: { type: string; deviceId?: string }[];
-  actions: { type: string; deviceId?: string }[];
+  conditions: { type: string; deviceId?: string; capability?: string; field?: string }[];
+  actions: { type: string; deviceId?: string; command?: Record<string, unknown> }[];
+  tags: string[];
 }
 
 /** Every automation with at least one trigger/condition/action referencing this device — there's
@@ -448,6 +466,30 @@ export async function setAutomationEnabled(id: string, enabled: boolean): Promis
 
 export async function runAutomation(id: string): Promise<void> {
   await authed(`/v1/automations/${id}/run`, { method: "POST", body: "{}" });
+}
+
+/** Rename (§ ADR 0100 Management) — PATCH accepts a name-only partial body already. */
+export async function renameAutomation(id: string, name: string): Promise<boolean> {
+  const res = await authed(`/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+  return res.ok;
+}
+
+/** Delete (§ ADR 0100 Management) — existing route, reused as-is. */
+export async function deleteAutomation(id: string): Promise<boolean> {
+  const res = await authed(`/v1/automations/${id}`, { method: "DELETE" });
+  return res.ok;
+}
+
+/** Tags (§ ADR 0100 Management) — PATCH accepts a tags-only partial body already. */
+export async function setAutomationTags(id: string, tags: string[]): Promise<boolean> {
+  const res = await authed(`/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify({ tags }) });
+  return res.ok;
+}
+
+/** Duplicate with an explicit resolved name (§ ADR 0100 Management — bulk duplicate naming). */
+export async function duplicateAutomationAs(id: string, name: string): Promise<AutomationView | null> {
+  const res = await authed(`/v1/automations/${id}/duplicate`, { method: "POST", body: JSON.stringify({ name }) });
+  return res.ok ? ((await res.json()) as { automation: AutomationView }).automation : null;
 }
 
 /** One execution trace for the Automation Debugger. */
@@ -479,8 +521,40 @@ export async function createAutomation(body: {
   triggers: unknown[];
   conditions: unknown[];
   actions: unknown[];
+  tags?: string[];
 }): Promise<boolean> {
   const res = await authed("/v1/automations", { method: "POST", body: JSON.stringify(body) });
+  return res.ok;
+}
+
+/** Dry-run (§ Phase 1): evaluates real conditions against real state, executes nothing. Returns
+ * the same trace shape the Automation Debugger already renders, tagged "dry_run". */
+export async function dryRunAutomation(id: string): Promise<AutomationRunView | null> {
+  const res = await authed(`/v1/automations/${id}/dry-run`, { method: "POST", body: "{}" });
+  return res.ok ? ((await res.json()) as { run: AutomationRunView }).run : null;
+}
+
+export interface AutomationHealth {
+  status: "disabled" | "waiting" | "healthy" | "warning" | "broken";
+  reason: string;
+}
+
+/** Plain-language health (§ Phase 1), derived from real run history. */
+export async function fetchAutomationHealth(id: string): Promise<AutomationHealth | null> {
+  const res = await authed(`/v1/automations/${id}/health`);
+  return res.ok ? ((await res.json()) as AutomationHealth) : null;
+}
+
+/** Clone an automation, disabled by default until reviewed (§ Phase 1). */
+export async function duplicateAutomation(id: string): Promise<AutomationView | null> {
+  const res = await authed(`/v1/automations/${id}/duplicate`, { method: "POST", body: "{}" });
+  return res.ok ? ((await res.json()) as { automation: AutomationView }).automation : null;
+}
+
+/** Test Panel (§ Phase 1): inject a synthetic device-state event through the REAL Automation
+ * Engine — never a fake execution path. */
+export async function simulateDeviceEvent(input: { deviceId: string; capability: string; state: Record<string, unknown> }): Promise<boolean> {
+  const res = await authed("/v1/automations/simulate-event", { method: "POST", body: JSON.stringify(input) });
   return res.ok;
 }
 

@@ -511,19 +511,25 @@ export class SupremeClient {
     return this.request("DELETE", `/v1/drivers/${id}`) as Promise<void>;
   }
 
-  discover(protocol?: ProtocolKind): Promise<DiscoveryList> {
-    return this.request("POST", "/v1/commissioning/discover", { protocol }) as Promise<DiscoveryList>;
+  /** `driverIds` (§ Installed Driver Selector): the installed-driver ids the installer selected —
+   * ONLY those drivers actually execute discovery. Omit to scan every installed driver (legacy
+   * default); pass `[]` to run none (Deselect All). */
+  discover(protocol?: ProtocolKind, driverIds?: string[]): Promise<DiscoveryList> {
+    return this.request("POST", "/v1/commissioning/discover", { protocol, driverIds }) as Promise<DiscoveryList>;
   }
 
   // ── Device Approval (§ Device Approval) ──────────────────────────────────────
   /** Scan every technology and stage results into the pending-approval queue; returns the queue. */
-  scanForApproval(protocol?: string): Promise<PendingDeviceList> {
-    return this.request("POST", "/v1/commissioning/scan", protocol ? { protocol } : {}) as Promise<PendingDeviceList>;
+  scanForApproval(protocol?: string, driverIds?: string[]): Promise<PendingDeviceList> {
+    return this.request("POST", "/v1/commissioning/scan", { protocol, driverIds }) as Promise<PendingDeviceList>;
   }
   pendingDevices(): Promise<PendingDeviceList> {
     return this.request("GET", "/v1/devices/pending") as Promise<PendingDeviceList>;
   }
-  approvePendingDevice(id: string, input: { name?: string; roomId: string; capabilities?: string[] }): Promise<{ device: { id: string; name: string } }> {
+  /** `roomId` omitted (§ Universal Room Intelligence): the backend's shared resolveOrCreateRoom
+   * resolves/creates the room from the pending record's own roomHint instead — an explicit
+   * roomId still always overrides it. */
+  approvePendingDevice(id: string, input: { name?: string; roomId?: string; capabilities?: string[] }): Promise<{ device: { id: string; name: string } }> {
     return this.request("POST", `/v1/devices/pending/${id}/approve`, input) as Promise<{ device: { id: string; name: string } }>;
   }
   async rejectPendingDevice(id: string): Promise<void> {

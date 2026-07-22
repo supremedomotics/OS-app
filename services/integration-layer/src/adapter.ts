@@ -30,6 +30,12 @@ export interface DiscoveredDevice {
   backendId: string;
   suggestedName: string;
   capabilities: CapabilityKind[];
+  /** Structural, driver-normalized per-capability config (§ ADR 0017 — Capability
+   * Normalization), e.g. `{ color: { colorModes: { rgb: true, cct: false } } }` — known from the
+   * driver's own protocol model at discovery time, never inferred from live state. Optional: a
+   * driver that hasn't adopted structural capability metadata yet simply omits it, and the UI's
+   * existing state-inference fallback keeps working unmodified (backward compatible). */
+  capabilityConfig?: Partial<Record<CapabilityKind, Record<string, unknown>>>;
   /** Opaque backend metadata used by the capability mapper. */
   raw: Record<string, unknown>;
 }

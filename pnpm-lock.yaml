@@ -1168,6 +1168,9 @@ importers:
 
   services/protocols:
     dependencies:
+      '@supreme/commissioning':
+        specifier: workspace:*
+        version: link:../commissioning
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
@@ -1206,6 +1209,9 @@ importers:
 
   services/scenes:
     dependencies:
+      '@supreme/automations':
+        specifier: workspace:*
+        version: link:../automations
       '@supreme/contracts':
         specifier: workspace:*
         version: link:../../packages/supreme-contracts

@@ -223,15 +223,36 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
-    // Aggregate discovery across real protocol drivers (none → empty, as before),
-    // tagging each with its owning protocol so commissioning can auto-bind it.
-    const all: DiscoveredDevice[] = [];
-    for (const driver of this.drivers) {
-      for (const d of await driver.discover()) {
-        all.push({ ...d, raw: { ...d.raw, protocol: driver.protocol } });
+    return (await this.discoverWithStatus()).devices;
+  }
+
+  /**
+   * Discovery Driver Selector backend (§ Priority 4): the same aggregation `discover()`
+   * always did, but (1) filterable to a specific set of protocols so an installer's
+   * driver selection actually controls which drivers run — not a frontend-only result
+   * filter — and (2) failure-isolated per driver, so one driver throwing (a real
+   * connection timeout, a bad scan) never discards every other driver's successful
+   * results. True live per-driver progress would need a streaming transport (SSE/WS)
+   * this adapter doesn't have; this returns per-driver status ONLY after each driver's
+   * scan completes — a documented limitation, not fabricated progress.
+   */
+  async discoverWithStatus(protocols?: string[]): Promise<{
+    devices: DiscoveredDevice[];
+    driverResults: { protocol: string; status: "complete" | "failed"; count: number; error?: string }[];
+  }> {
+    const targets = protocols ? this.drivers.filter((d) => protocols.includes(d.protocol)) : this.drivers;
+    const devices: DiscoveredDevice[] = [];
+    const driverResults: { protocol: string; status: "complete" | "failed"; count: number; error?: string }[] = [];
+    for (const driver of targets) {
+      try {
+        const found = await driver.discover();
+        for (const d of found) devices.push({ ...d, raw: { ...d.raw, protocol: driver.protocol } });
+        driverResults.push({ protocol: driver.protocol, status: "complete", count: found.length });
+      } catch (err) {
+        driverResults.push({ protocol: driver.protocol, status: "failed", count: 0, error: (err as Error).message });
       }
     }
-    return all;
+    return { devices, driverResults };
   }
 
   onState(listener: StateListener): () => void {

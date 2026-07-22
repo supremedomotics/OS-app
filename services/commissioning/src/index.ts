@@ -46,6 +46,11 @@ export interface DiscoveredView {
    * HEOS player's `pid`, an AVR/Yamaha `zone`, …) — pass straight through as the bind
    * `config` so commissioning needs no manual entry beyond room + name. */
   bindConfig?: Record<string, unknown>;
+  /** Structural per-capability config the driver already normalized at discovery time (§ ADR
+   * 0017 — Capability Normalization), e.g. `{ color: { colorModes: { rgb, cct } } }` — passed
+   * straight through to `commission()` so the persisted device's capability carries the SAME
+   * structural signal the UI's `getDeviceUiCapabilities()` prefers over state inference. */
+  capabilityConfig?: Partial<Record<CapabilityKind, Record<string, unknown>>>;
   /** Room-name hint the driver's own discovery already resolved (a Casambi Group name,
    * an ETS Function/Space, …) — never a guess invented here, only ever what the driver's
    * `raw.room` genuinely reported. Threaded through to `InstallerServices.commissionDevice()`
@@ -102,13 +107,31 @@ export class CommissioningService {
 
   /** Discover candidate devices from the backend and any registered scanners. */
   async discover(protocol?: ProtocolKind): Promise<DiscoveredView[]> {
-    const out: DiscoveredView[] = [];
+    return (await this.discoverWithStatus(protocol ? [protocol] : undefined)).discovered;
+  }
 
-    if (!protocol) {
-      for (const d of await this.sil.discover()) out.push(view(d, "backend"));
+  /**
+   * Discovery Driver Selector backend (§ Priority 4): the same discovery `discover()`
+   * always did, but when `driverProtocols` is given, ONLY those native-bus protocols
+   * actually run (never a frontend-only result filter — `SupremeIntegrationLayer.
+   * discoverWithStatus` stops the excluded drivers from being scanned at all), and one
+   * driver failing is captured against it without discarding every other driver's
+   * successful results (§ Driver Failure Isolation).
+   */
+  async discoverWithStatus(driverProtocols?: string[]): Promise<{
+    discovered: DiscoveredView[];
+    driverResults: { protocol: string; status: "complete" | "failed"; count: number; error?: string }[];
+  }> {
+    const out: DiscoveredView[] = [];
+    let driverResults: { protocol: string; status: "complete" | "failed"; count: number; error?: string }[] = [];
+
+    if (!driverProtocols || driverProtocols.length > 0) {
+      const result = await this.sil.discoverWithStatus(driverProtocols);
+      for (const d of result.devices) out.push(view(d, "backend"));
+      driverResults = result.driverResults;
     }
-    const scanners = protocol
-      ? [this.scanners.get(protocol)].filter(Boolean)
+    const scanners = driverProtocols
+      ? driverProtocols.map((p) => this.scanners.get(p as ProtocolKind)).filter(Boolean)
       : [...this.scanners.values()];
     for (const scanner of scanners as IProtocolScanner[]) {
       for (const d of await scanner.scan()) out.push(view(d, scanner.protocol));
@@ -123,7 +146,8 @@ export class CommissioningService {
     // same stable backendId on every scan; without this a rescan shows the same physical
     // unit again and pairing it a second time silently creates a duplicate Supreme device
     // for the same hardware — "why are there multiple cards for one AC/light/curtain".
-    return [...seen.values()].filter((v) => !this.sil.registry.reverseLookup(v.backendId));
+    const discovered = [...seen.values()].filter((v) => !this.sil.registry.reverseLookup(v.backendId));
+    return { discovered, driverResults };
   }
 
   /**
@@ -135,6 +159,9 @@ export class CommissioningService {
     name: string;
     roomId: RoomId;
     capabilities: CapabilityKind[];
+    /** § ADR 0017 Capability Normalization — structural per-capability config threaded straight
+     * from discovery (never state-derived) into the persisted device's own capability config. */
+    capabilityConfig?: Partial<Record<CapabilityKind, Record<string, unknown>>>;
     supremeType?: SupremeDeviceType;
     manufacturer?: string | null;
     model?: string | null;
@@ -161,7 +188,7 @@ export class CommissioningService {
       model: input.model ?? null,
       driverId: null,
       status: "online",
-      capabilities: input.capabilities.map((kind) => ({ kind, config: {} })),
+      capabilities: input.capabilities.map((kind) => ({ kind, config: input.capabilityConfig?.[kind] ?? {} })),
       state: {},
       metadata: { commissionedAt: new Date().toISOString(), ...(network ? { network } : {}) },
     };
@@ -232,6 +259,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     ...(roomHint ? { roomHint } : {}),
     ...(locationHint ? { locationHint } : {}),
     ...(zones ? { zones } : {}),
+    ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
   };
 }
 

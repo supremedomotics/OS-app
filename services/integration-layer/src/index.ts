@@ -34,6 +34,7 @@ export {
   type ProtocolBinding,
   type StoredProtocolBinding,
   type IProtocolBindingStore,
+  type DiscoveredScene,
   InMemoryProtocolBindingStore,
   bindingKey,
 } from "./protocols/driver.js";

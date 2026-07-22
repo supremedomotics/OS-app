@@ -13,6 +13,7 @@ interface AutomationRow {
   engine: string;
   external_ref: string | null;
   ai_generated: boolean;
+  tags: string[];
 }
 
 function rowToAutomation(r: AutomationRow): Automation {
@@ -27,6 +28,7 @@ function rowToAutomation(r: AutomationRow): Automation {
     engine: r.engine as Automation["engine"],
     externalRef: r.external_ref,
     aiGenerated: r.ai_generated,
+    tags: r.tags ?? [],
   };
 }
 
@@ -46,12 +48,12 @@ export class AutomationRepo implements IAutomationStore {
   }
   async put(a: Automation): Promise<void> {
     await this.db.query(
-      `INSERT INTO automations (id, home_id, name, enabled, triggers, conditions, actions, engine, external_ref, ai_generated)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10)
+      `INSERT INTO automations (id, home_id, name, enabled, triggers, conditions, actions, engine, external_ref, ai_generated, tags)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10,$11::jsonb)
        ON CONFLICT (id) DO UPDATE SET
          name=$3, enabled=$4, triggers=$5::jsonb, conditions=$6::jsonb, actions=$7::jsonb,
-         engine=$8, external_ref=$9, ai_generated=$10`,
-      [a.id, a.homeId, a.name, a.enabled, J(a.triggers), J(a.conditions), J(a.actions), a.engine, a.externalRef, a.aiGenerated],
+         engine=$8, external_ref=$9, ai_generated=$10, tags=$11::jsonb`,
+      [a.id, a.homeId, a.name, a.enabled, J(a.triggers), J(a.conditions), J(a.actions), a.engine, a.externalRef, a.aiGenerated, J(a.tags)],
     );
   }
   async remove(id: AutomationId): Promise<void> {

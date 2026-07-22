@@ -7,6 +7,7 @@ import { MediaDeviceCard } from "./features/media/card.js";
 import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
+import { getDeviceUiCapabilities, hasCapability } from "./device-ui-capabilities.js";
 
 /**
  * Media (§ Navigation → Media) — the whole-home view of everything that plays: every device the
@@ -42,14 +43,14 @@ export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?:
   useEffect(() => { void load(); }, [refreshToken]);
 
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
-  const media = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "media"));
+  const media = (devices ?? []).filter((d) => getDeviceUiCapabilities(d.capabilities).showMedia);
 
   const byRoom = new Map<string, Device[]>();
   for (const d of media) { const k = roomName(d.roomId); (byRoom.get(k) ?? byRoom.set(k, []).get(k)!).push(d); }
   const groups = [...byRoom.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
   const allPower = async (on: boolean) => {
-    const targets = media.filter((d) => d.capabilities.some((c) => c.kind === "onoff"));
+    const targets = media.filter((d) => hasCapability(d.capabilities, "onoff"));
     await Promise.all(targets.map((d) =>
       client.command(d.id as DeviceId, { capability: "onoff", action: on ? "on" : "off" } as CapabilityCommand),
     ));

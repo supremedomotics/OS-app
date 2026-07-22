@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { describe, expect, it, vi } from "vitest";
 import {
   encodeSearchRequest,
   formatIndividualAddress,
   knxSearch,
+  listKnxNetworkInterfaces,
   parseSearchResponse,
   type KnxDiscoverySocket,
 } from "./knx-discovery.js";
@@ -101,5 +103,60 @@ describe("KNXnet/IP discovery", () => {
     const gateways = await knxSearch({ timeoutMs: 20, createSocket: () => socket });
     expect(gateways).toHaveLength(1);
     expect(gateways[0]).toMatchObject({ address: "10.0.0.9", individualAddress: "1.1.1", name: "Weinzierl 730" });
+  });
+
+  it("binds and joins the multicast group through the SELECTED interface, not the OS default (§ Gateway Discovery: multi-homed host)", async () => {
+    const boundAddresses: (string | undefined)[] = [];
+    const multicastInterfaces: (string | undefined)[] = [];
+    const socket: KnxDiscoverySocket = {
+      on: () => {},
+      bind: (cb, address) => {
+        boundAddresses.push(address);
+        cb();
+      },
+      setMulticast: (interfaceAddress) => {
+        multicastInterfaces.push(interfaceAddress);
+      },
+      send: () => {},
+      close: () => {},
+    };
+    await knxSearch({ timeoutMs: 10, createSocket: () => socket, interfaceAddress: "192.168.0.117" });
+    expect(boundAddresses).toEqual(["192.168.0.117"]);
+    expect(multicastInterfaces).toEqual(["192.168.0.117"]);
+  });
+
+  it("binds to every interface (undefined address) when no interface is selected — unchanged default behavior", async () => {
+    const boundAddresses: (string | undefined)[] = [];
+    const socket: KnxDiscoverySocket = {
+      on: () => {},
+      bind: (cb, address) => {
+        boundAddresses.push(address);
+        cb();
+      },
+      setMulticast: () => {},
+      send: () => {},
+      close: () => {},
+    };
+    await knxSearch({ timeoutMs: 10, createSocket: () => socket });
+    expect(boundAddresses).toEqual([undefined]);
+  });
+
+  it("lists real network adapters and excludes Docker/WSL/Hyper-V/VMware/VPN adapters by default", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      Ethernet: [{ address: "192.168.0.117", netmask: "255.255.255.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: false, cidr: "192.168.0.117/24" }],
+      docker0: [{ address: "172.17.0.1", netmask: "255.255.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: false, cidr: "172.17.0.1/16" }],
+      "vEthernet (WSL)": [{ address: "172.20.0.1", netmask: "255.255.240.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: false, cidr: "172.20.0.1/20" }],
+      "Loopback Pseudo-Interface 1": [{ address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }],
+      tailscale0: [{ address: "100.64.0.5", netmask: "255.192.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: false, cidr: "100.64.0.5/10" }],
+    } as unknown as ReturnType<typeof os.networkInterfaces>);
+
+    expect(listKnxNetworkInterfaces()).toEqual([{ name: "Ethernet", address: "192.168.0.117" }]);
+    // Explicitly opting in still finds the otherwise-excluded adapters — never impossible
+    // to select one, per "unless explicitly selected".
+    const all = listKnxNetworkInterfaces({ includeVirtual: true }).map((i) => i.name);
+    expect(all).toEqual(expect.arrayContaining(["Ethernet", "docker0", "vEthernet (WSL)", "tailscale0"]));
+    expect(all).not.toContain("Loopback Pseudo-Interface 1"); // internal, excluded regardless
+
+    vi.restoreAllMocks();
   });
 });

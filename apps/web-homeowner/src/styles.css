@@ -228,6 +228,32 @@ button:disabled { opacity: 0.5; cursor: default; }
 button.primary.lg { padding: 14px 28px; font-size: 16px; border-radius: 999px; }
 .disc-card .ext-ic { color: var(--aureon-color-gold-400); }
 
+/* Installed Driver Selector (§ Priority 4) */
+.disc-selector { border: 1px solid var(--aureon-color-base-hairline); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px; background: var(--aureon-color-base-surface); }
+.disc-selector-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.disc-selector-head .lbl { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--aureon-color-text-muted); }
+.disc-selector-actions { display: flex; gap: 14px; }
+.disc-selector-actions button.link:disabled { opacity: .4; cursor: default; text-decoration: none; }
+.disc-selector-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.disc-driver-chip { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); cursor: pointer; font-size: 13px; transition: border-color .15s ease, color .15s ease; }
+.disc-driver-chip input { accent-color: var(--aureon-color-gold-400); }
+.disc-driver-chip.on { color: var(--aureon-color-text-primary); border-color: color-mix(in srgb, var(--aureon-color-gold-400) 50%, transparent); }
+
+/* Per-driver discovery status */
+.disc-status-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 18px; }
+.disc-status-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); font-size: 13px; }
+.disc-status-name { color: var(--aureon-color-text-primary); }
+.disc-status-value { color: var(--aureon-color-text-muted); }
+.disc-status-row.status-scanning .disc-status-value { color: var(--aureon-color-gold-400); }
+.disc-status-row.status-complete .disc-status-value { color: var(--aureon-color-status-good); }
+.disc-status-row.status-failed { border-color: color-mix(in srgb, var(--aureon-color-status-critical) 40%, transparent); }
+.disc-status-row.status-failed .disc-status-value { color: var(--aureon-color-status-critical); }
+.disc-status-row.status-not_selected { opacity: .5; }
+
+/* Post-scan source filter */
+.disc-source-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+.disc-source-filter button.tag { cursor: pointer; background: none; }
+
 /* ── Device manager ────────────────────────────────────────────────────────────── */
 .dev-group { margin-bottom: 18px; }
 button.danger { color: var(--aureon-color-status-critical); border-color: color-mix(in srgb, var(--aureon-color-status-critical) 40%, transparent); }
@@ -797,14 +823,53 @@ button.link {
 /* ── Automations ──────────────────────────────────────────────────────────────── */
 .auto-search { width: 100%; padding: 13px 16px; border-radius: 14px; margin: 6px 0 16px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); font-size: 15px; }
 .auto-list { display: flex; flex-direction: column; gap: 10px; }
-.auto-row { display: flex; align-items: center; gap: 16px; padding: 16px 18px; border-radius: 18px; cursor: pointer; text-align: left; background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); }
+.auto-row { display: flex; align-items: stretch; border-radius: 18px; background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); transition: border-color 0.15s ease, background 0.15s ease; }
+.auto-row.selected { border-color: var(--aureon-color-gold-400); background: color-mix(in srgb, var(--aureon-color-gold-400) 8%, var(--aureon-color-base-surface-raised)); }
+.auto-row-hit { display: flex; align-items: center; gap: 16px; width: 100%; min-width: 0; padding: 16px 18px; border-radius: 18px; cursor: pointer; text-align: left; background: none; border: 0; color: var(--aureon-color-text-primary); font: inherit; }
 .auto-ic { width: 44px; height: 44px; border-radius: 12px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 20px; border: 1.5px dashed var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); }
-.auto-meta { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-.auto-meta .nm { font-weight: 600; font-size: 17px; }
+.auto-meta { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.auto-meta .nm { font-weight: 600; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; max-width: 100%; }
 .auto-meta .sum { color: var(--aureon-color-text-secondary); font-size: 14px; display: flex; align-items: center; gap: 8px; }
-.auto-meta .badge { background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); border-radius: 8px; padding: 1px 7px; font-size: 12px; }
-.auto-state { color: var(--aureon-color-text-muted); font-size: 13px; }
+.auto-meta .badge { background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); border-radius: 8px; padding: 1px 7px; font-size: 12px; flex: none; }
+.auto-state { color: var(--aureon-color-text-muted); font-size: 13px; flex: none; }
 .auto-state.on { color: var(--aureon-color-status-good); }
+.auto-kebab {
+  flex: none; width: 40px; align-self: stretch; border: 0; border-left: 1px solid var(--aureon-color-base-hairline);
+  background: none; color: var(--aureon-color-text-secondary); font-size: 18px; cursor: pointer; border-radius: 0 18px 18px 0;
+  opacity: 0.55; transition: opacity 0.15s ease, background 0.15s ease;
+}
+.auto-kebab:hover, .auto-kebab:focus-visible { opacity: 1; background: var(--aureon-color-base-surface); }
+@media (hover: none) { .auto-kebab { opacity: 0.85; } }
+
+/* Loading skeleton (§ UX polish — never flash the empty state before the first fetch resolves). */
+.auto-skeleton { display: flex; flex-direction: column; gap: 10px; }
+.auto-row-skel { height: 76px; border-radius: 18px; background: linear-gradient(100deg, var(--aureon-color-base-surface-raised) 40%, var(--aureon-color-base-surface) 50%, var(--aureon-color-base-surface-raised) 60%); background-size: 200% 100%; animation: auto-shimmer 1.4s ease-in-out infinite; }
+@keyframes auto-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .auto-row-skel { animation: none; } }
+
+/* § ADR 0100 Management — rename, context menu, confirm dialog, undo snackbar. */
+.auto-rename-input { font: inherit; font-weight: 600; font-size: 17px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-gold-400); border-radius: 8px; padding: 4px 8px; color: var(--aureon-color-text-primary); width: 100%; }
+.auto-rename-input.title-input { font-size: clamp(20px, 4vw, 28px); padding: 6px 10px; margin: 8px 0; }
+.ctx-menu { position: fixed; z-index: 60; display: flex; flex-direction: column; min-width: 140px; padding: 6px; border-radius: 12px; background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); box-shadow: 0 12px 32px rgba(0,0,0,0.45); }
+.ctx-menu button { text-align: left; background: none; border: 0; padding: 9px 10px; border-radius: 8px; color: var(--aureon-color-text-primary); cursor: pointer; font-size: 14px; }
+.ctx-menu button:hover { background: var(--aureon-color-base-surface); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); padding: 20px; }
+.modal { max-width: 420px; width: 100%; padding: 22px; border-radius: 18px; background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.modal h3 { margin: 0 0 10px; font-size: 18px; }
+.modal p { margin: 6px 0; }
+.snackbar { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-radius: 14px; background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline); box-shadow: 0 14px 40px rgba(0,0,0,0.5); color: var(--aureon-color-text-primary); }
+.snackbar button { background: none; border: 1px solid var(--aureon-color-gold-400); color: var(--aureon-color-gold-400); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+
+/* § Feature 3 — Tags. Hue is per-tag (deterministic hash), never a stored color. */
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: hsl(var(--tag-hue) 55% 22%); color: hsl(var(--tag-hue) 70% 82%); border: 1px solid hsl(var(--tag-hue) 55% 32%); }
+.tag-chip.removable { display: inline-flex; align-items: center; gap: 4px; }
+.tag-chip.removable button { background: none; border: 0; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
+.tag-suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tag-suggest button { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary); cursor: pointer; }
+.auto-filters select { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); font-size: 13px; }
+.import-list { list-style: none; padding: 0; margin: 6px 0; max-height: 160px; overflow-y: auto; font-size: 13px; color: var(--aureon-color-text-secondary); }
+.import-list li { padding: 4px 0; border-bottom: 1px solid var(--aureon-color-base-hairline); }
 
 /* Node canvas */
 .auto-canvas-wrap { min-height: 70vh; }
@@ -849,6 +914,61 @@ button.link {
 .node-config input, .node-config select { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-primary); }
 .node-config .onoff { display: flex; align-items: center; gap: 8px; }
 .node-config .onoff input { width: auto; }
+
+/* § Capability-Driven Builder (ADR 0016/0017/0020) — one generic control per capability field,
+   never a per-device-type layout. */
+.field-row { display: flex; align-items: center; gap: 10px; }
+.field-row .lbl { flex: none; min-width: 120px; font-size: 13px; color: var(--aureon-color-text-secondary); }
+.field-row select, .field-row input[type="text"], .field-row input[type="number"] { flex: 1; }
+.field-row input[type="range"] { flex: 1; accent-color: var(--aureon-color-gold-500); }
+.field-row .field-val { flex: none; font-size: 13px; color: var(--aureon-color-text-secondary); min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.adv-disclosure { border-top: 1px solid var(--aureon-color-base-hairline); padding-top: 8px; margin-top: 2px; display: flex; flex-direction: column; gap: 10px; }
+.adv-disclosure summary { cursor: pointer; font-size: 13px; color: var(--aureon-color-gold-400); list-style: none; }
+.adv-disclosure summary::-webkit-details-marker { display: none; }
+.adv-disclosure summary::before { content: "▸ "; }
+.adv-disclosure[open] summary::before { content: "▾ "; }
+.adv-toggle { align-self: flex-start; background: none; border: 0; color: var(--aureon-color-gold-400); font-size: 13px; cursor: pointer; padding: 2px 0; }
+
+/* § Domain-specific command-schema-driven widgets — chosen by a param's `widget` hint, never by
+   device type. Same field-row shell as every other control; only the input differs. */
+.fan-selector { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; }
+.fan-opt { flex: 1; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface); color: var(--aureon-color-text-secondary); font-size: 13px; text-transform: capitalize; cursor: pointer; transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+.fan-opt.on { background: var(--aureon-color-gold-500); color: #15161b; border-color: var(--aureon-color-gold-500); font-weight: 600; }
+
+.volume-slider input[type="range"] {
+  -webkit-appearance: none; appearance: none; height: 6px; border-radius: 999px;
+  background: linear-gradient(to right, var(--aureon-color-gold-500) var(--fill, 0%), var(--aureon-color-base-hairline) var(--fill, 0%));
+}
+.volume-slider input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--aureon-color-gold-400); cursor: pointer; }
+
+.cct-slider input[type="range"] {
+  -webkit-appearance: none; appearance: none; height: 6px; border-radius: 999px;
+  background: linear-gradient(to right, #ff9a45 0%, #ffd9a8 35%, #f4f1ea 55%, #cfe2ff 75%, #9dbfff 100%);
+}
+.cct-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; cursor: pointer;
+  background: #fff; border: 2px solid var(--aureon-color-base-void); box-shadow: 0 0 0 1px rgba(255,255,255,0.6);
+}
+
+.color-wheel-row { align-items: flex-start; }
+.color-wheel {
+  position: relative; width: 132px; height: 132px; border-radius: 50%; flex: none; cursor: crosshair;
+  background: radial-gradient(circle at center, #fff 0%, transparent 70%),
+    conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+  border: 1px solid var(--aureon-color-base-hairline);
+  touch-action: none;
+}
+.color-wheel-thumb {
+  position: absolute; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%);
+  border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5); pointer-events: none;
+}
+
+.duration-inputs { display: flex; align-items: center; gap: 6px; flex: 1; color: var(--aureon-color-text-secondary); font-size: 13px; }
+.duration-inputs input[type="number"] { width: 56px; flex: none; }
+
+/* § Part 6 — the live natural-language summary, generated from the same node data the canvas
+   renders, never a separately maintained description. */
+.auto-summary { margin: 10px 0; padding: 12px 16px; border-radius: 14px; background: color-mix(in srgb, var(--aureon-color-gold-400) 6%, var(--aureon-color-base-surface)); border: 1px solid color-mix(in srgb, var(--aureon-color-gold-400) 22%, var(--aureon-color-base-hairline)); color: var(--aureon-color-text-secondary); font-size: 14px; line-height: 1.5; }
 /* Password field with show/hide eye toggle at the right end of the box */
 .pw-field { position: relative; display: block; }
 .pw-field input { width: 100%; padding-right: 44px; box-sizing: border-box; }
@@ -1069,6 +1189,15 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .run-head { font-size: 13px; font-weight: 600; text-transform: capitalize; }
 .run-sub { font-size: 12px; color: var(--aureon-color-text-secondary); }
 .run-sub.err { color: var(--aureon-color-status-critical); }
+
+/* Automation Health (§ Phase 1) — plain-language status badge on the Canvas. */
+.auto-health { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 4px 0 2px; }
+.auto-health .run-dot { background: var(--aureon-color-status-good); }
+.auto-health-disabled .run-dot { background: var(--aureon-color-text-secondary); }
+.auto-health-waiting .run-dot { background: var(--aureon-color-gold-400); }
+.auto-health-warning .run-dot { background: var(--aureon-color-status-warning); }
+.auto-health-broken .run-dot { background: var(--aureon-color-status-critical); }
+.auto-health-conflict .run-dot { background: var(--aureon-color-status-critical); }
 .run-action { font-size: 12px; color: var(--aureon-color-text-secondary); font-family: ui-monospace, monospace; }
 .run-action.bad { color: var(--aureon-color-status-critical); }
 

@@ -1,3 +1,4 @@
+import { groupByCircuitName } from "@supreme/domain-model";
 import { describe, expect, it } from "vitest";
 import { mapUnifiedDevices } from "./unified-device-mapper.js";
 import { parseFunctionalBlocks } from "./functional-block-parser.js";
@@ -40,6 +41,41 @@ describe("mapUnifiedDevices", () => {
     });
     expect(devices).toHaveLength(1);
     expect(devices[0]?.raw.groupingKey).toBe("kitchen light");
+  });
+
+  it("clusters a real ETS group-address export (showroomtest-2.csv.xml) into ONE Tunable White circuit, not five", () => {
+    // The exact 8 communication objects from the real project that reproduced the
+    // production bug: 5 devices instead of 1, with the color-temperature objects
+    // showing "no capability detected". DPTs are the real DPST values, normalized the
+    // same way `ga-export-parser.ts` normalizes them ("DPST-1-1" → "1.001", etc.).
+    const devices = mapUnifiedDevices({
+      ets: [
+        { id: "5/3/0", name: "Conference Hanging SW", dpt: "1.001" },
+        { id: "5/3/1", name: "Conference Hanging SW Status", dpt: "1.001" },
+        { id: "5/3/2", name: "Conference Hanging Dimm", dpt: "3.007" },
+        { id: "5/3/3", name: "Conference Hanging Abs Dim", dpt: "5.001" },
+        { id: "5/3/4", name: "Conference Hanging Abs Dim FB", dpt: "5.001" },
+        { id: "5/3/5", name: "Conference Hanging Abs Col", dpt: "7.600" },
+        { id: "5/3/6", name: "Conference Hanging Abs Col FB", dpt: "7.600" },
+        { id: "5/3/7", name: "Conference Hanging Relative Color", dpt: "3.007" },
+      ],
+    });
+
+    expect(devices).toHaveLength(1);
+    const device = devices[0]!;
+    expect(device.raw.communicationObjects).toHaveLength(8);
+    expect(device.capabilities).toEqual(expect.arrayContaining(["onoff", "brightness", "color"]));
+    expect(device.raw.deviceKind).not.toBe("unknown");
+  });
+
+  it("still splits into separate circuits without KNX vocabulary (regression proof the fix is additive, not a default-behavior change)", () => {
+    const clusters = groupByCircuitName([
+      { id: "5/3/0", name: "Conference Hanging SW" },
+      { id: "5/3/2", name: "Conference Hanging Dimm" },
+      { id: "5/3/5", name: "Conference Hanging Abs Col" },
+      { id: "5/3/7", name: "Conference Hanging Relative Color" },
+    ]);
+    expect(clusters).toHaveLength(4);
   });
 
   it("never duplicates a device across sources for the same circuit name", () => {

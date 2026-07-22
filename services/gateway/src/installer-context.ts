@@ -435,6 +435,10 @@ export class InstallerServices {
      * whatever the SIL's discover() already found, never fabricated. */
     roomNameHint?: string | null;
     capabilities: CapabilityKind[];
+    /** § ADR 0017 Capability Normalization — structural per-capability config a driver already
+     * resolved at discovery time (e.g. Casambi's real RGB/CCT distinction from `unit.controls`),
+     * threaded straight through to the persisted device — never derived from state here. */
+    capabilityConfig?: Parameters<CommissioningService["commission"]>[0]["capabilityConfig"];
     supremeType?: Parameters<CommissioningService["commission"]>[0]["supremeType"];
     manufacturer?: string | null;
     model?: string | null;
@@ -442,11 +446,23 @@ export class InstallerServices {
     protocol?: string;
     address?: string;
     config?: Record<string, unknown>;
+    /** § Universal Commissioning Architecture — per-capability bind targets, for a device
+     * whose capabilities live at DIFFERENT bus addresses (e.g. a KNX device with onoff at
+     * one group address and brightness at another). Every commissioning path (auto-commit,
+     * manual pairing, Pending Approval, KNX live-discovery approval, KNX ETS import) now
+     * funnels through this ONE binding loop instead of each reimplementing it — pass
+     * `bindings` when capabilities need distinct addresses/config; omit it (using the plain
+     * `protocol`/`address`/`config` trio above) for the common single-address case. */
+    bindings?: { capability: CapabilityKind; address: string; config?: Record<string, unknown> }[];
   }): Promise<Awaited<ReturnType<CommissioningService["commission"]>>> {
-    const { protocol, address, config, roomNameHint, ...commissionInput } = input;
-    const roomId = await this.resolveOrCreateRoom(input.roomId, roomNameHint ?? null);
+    const { protocol, address, config, bindings, roomNameHint, ...commissionInput } = input;
+    const roomId = await this.resolveOrCreateRoom(input.roomId, roomNameHint ?? null, input.name);
     const device = await this.commissioning.commission({ ...commissionInput, roomId });
-    if (protocol) {
+    if (bindings && protocol) {
+      for (const b of bindings) {
+        await this.bindProtocol({ deviceId: device.id, capability: b.capability, protocol, address: b.address, config: b.config });
+      }
+    } else if (protocol) {
       const busAddress = address ?? input.backendId;
       for (const capability of input.capabilities) {
         await this.bindProtocol({ deviceId: device.id, capability, protocol, address: busAddress, config });
@@ -595,11 +611,16 @@ export class InstallerServices {
       throw new SupremeError("validation_failed", "this device has no bindable communication object yet — needs installer review, not approval");
     }
 
-    const roomId = await this.resolveOrCreateRoom(input.roomId, input.roomNameHint ?? input.device.raw.metadata.room ?? null);
-    const device = await this.commissioning.commission({
+    // § Universal Commissioning Architecture — converges on the SAME commissionDevice()
+    // every other onboarding flow uses for room-resolution + Device Registry write; the
+    // per-capability bind-with-rollback loop below stays local because it's a genuine,
+    // KNX-specific safety behavior (undo everything on a binding failure) that the generic
+    // wrapper doesn't (and, for other protocols, shouldn't) impose on every caller.
+    const device = await this.commissionDevice({
       backendId: input.device.backendId,
       name: input.name,
-      roomId,
+      roomId: input.roomId,
+      roomNameHint: input.roomNameHint ?? input.device.raw.metadata.room ?? null,
       capabilities: bindablePlans.map((p) => p.capability),
       manufacturer: input.device.raw.metadata.manufacturer ?? undefined,
       model: input.device.raw.metadata.model ?? undefined,
@@ -802,23 +823,37 @@ export class InstallerServices {
    * drivers" means in practice: it's a method on the driver-agnostic installer service,
    * not on `SupremeKnxDriver` or any other protocol driver.
    *
-   * Priority order (only the first two are implemented today — AI inference is a stated
-   * future step, not something to fabricate now):
+   * Priority order:
    *   1. Explicit `roomId` override (installer already picked a real room) — used as-is.
    *   2. Existing SupremeOS room whose name matches `roomNameHint` under
    *      {@link normalizeRoomName} (case/punctuation/whitespace-insensitive — "R&D",
    *      "r&d", and "R & D" all resolve to the same room; "Living" and "Living Room"
    *      deliberately do NOT collapse into each other — normalization only strips
    *      formatting noise, it never drops or merges real words).
-   *   3. Create a new room named `roomNameHint` (or "Unassigned" when no hint at all).
+   *   3. No hint at all (a real gap seen on hardware where a driver reports no group/
+   *      zone, e.g. Casambi luminaires with no Group assigned) — match `deviceName`
+   *      against an EXISTING room name as a substring (longest name wins, so "Master
+   *      Bedroom" beats "Bedroom"), e.g. "Pantry DL-1" → the existing "Pantry" room.
+   *      Deliberately reuse-only: inferring a room from a name is safe when it confirms
+   *      a room the installer already created, but fabricating a brand-new room from an
+   *      arbitrary name substring (e.g. "Ethernet_Gateway_REV2.5_EVO") is not — that step
+   *      needs the device-name vocabulary work, not something to fake here.
+   *   4. Create a new room named `roomNameHint` (or "Unassigned" when no hint/match at all).
    */
-  private async resolveOrCreateRoom(roomId: RoomId | undefined, roomNameHint: string | null): Promise<RoomId> {
+  private async resolveOrCreateRoom(roomId: RoomId | undefined, roomNameHint: string | null, deviceName?: string): Promise<RoomId> {
     if (roomId) {
       await this.d.home.requireRoom(roomId);
       return roomId;
     }
-    const name = (roomNameHint ?? "").trim() || "Unassigned";
     const existing = await this.d.home.listRooms();
+    if (!roomNameHint?.trim() && deviceName) {
+      const dn = deviceName.toLowerCase();
+      const byName = existing
+        .filter((r) => r.name.trim().length > 0 && dn.includes(r.name.trim().toLowerCase()))
+        .sort((a, b) => b.name.length - a.name.length)[0];
+      if (byName) return byName.id;
+    }
+    const name = (roomNameHint ?? "").trim() || "Unassigned";
     const target = normalizeRoomName(name);
     const match = existing.find((r) => normalizeRoomName(r.name) === target);
     if (match) return match.id;
@@ -965,18 +1000,19 @@ export class InstallerServices {
 
     for (const dev of imported) {
       const entity = generateEntities(dev);
-      const roomId = await this.resolveOrCreateRoom(undefined, entity.room);
-      const device = await this.commissioning.commission({
+      // § Universal Commissioning Architecture — KNX ETS Import now converges on the SAME
+      // commissionDevice() every other onboarding flow uses, instead of reimplementing
+      // resolve-room + commission + per-capability-bind itself.
+      const device = await this.commissionDevice({
         backendId: entity.bindings[0]!.address,
         name: entity.name,
-        roomId,
+        roomNameHint: entity.room,
         capabilities: entity.bindings.map((b) => b.capability as CapabilityKind),
+        protocol,
+        bindings: entity.bindings.map((b) => ({ capability: b.capability as CapabilityKind, address: b.address, config: b.config })),
       });
-      for (const b of entity.bindings) {
-        await this.bindProtocol({ deviceId: device.id, capability: b.capability as CapabilityKind, protocol, address: b.address, config: b.config });
-      }
       created.push({ name: entity.name, room: entity.room, capabilities: entity.bindings.map((b) => b.capability) });
-      roomIds.add(roomId);
+      roomIds.add(device.roomId!); // always assigned immediately after commissioning
     }
     return { devices: created.length, roomsCreated: roomIds.size - before.length, created };
   }
@@ -1346,19 +1382,117 @@ export class InstallerServices {
     return this.commissioning.discover(protocol);
   }
 
+  /**
+   * Installed-driver names visible in the registry (§ Discovery Driver Selector) — the
+   * SAME source of truth Extension Center already uses, never a second registry. Only
+   * installed drivers that expose a `protocol` are discovery-relevant (the KNX Group
+   * Address Schema field, for example, has none).
+   */
+  async discoverableDrivers(): Promise<{ installedId: string; key: string; name: string; protocols: string[] }[]> {
+    const reg = await this.drivers.registry();
+    return reg
+      .filter((d) => d.installed && d.installedId && d.protocols.length > 0)
+      .map((d) => ({ installedId: d.installedId!, key: d.key, name: d.name, protocols: d.protocols }));
+  }
+
+  /**
+   * Discovery Driver Selector backend (§ Priority 4): `driverIds` (installed-driver ids
+   * from {@link discoverableDrivers}) resolve to their protocols, which actually gate
+   * which drivers run — `SupremeIntegrationLayer.discoverWithStatus` never scans an
+   * excluded driver, this is not a result filter. Every returned device is tagged with
+   * its SOURCE DRIVER's user-facing name (never an internal engine/provider name — "KNX
+   * Ultimate"/"KNX IoT Provider" stay invisible), and per-driver failures are isolated
+   * (§ Driver Failure Isolation) so one bad connection never discards the rest.
+   */
+  async discoverWithStatus(driverIds?: string[]): Promise<{
+    discovered: (Awaited<ReturnType<CommissioningService["discover"]>>[number] & { driverName: string | null })[];
+    driverResults: { protocol: string; driverName: string; status: "complete" | "failed"; count: number; error?: string }[];
+  }> {
+    const drivers = await this.discoverableDrivers();
+    const nameByProtocol = new Map<string, string>();
+    for (const d of drivers) for (const p of d.protocols) nameByProtocol.set(p, d.name);
+
+    const protocols = driverIds
+      ? drivers.filter((d) => driverIds.includes(d.installedId)).flatMap((d) => d.protocols)
+      : undefined;
+    const { discovered, driverResults } = await this.commissioning.discoverWithStatus(protocols);
+    return {
+      discovered: discovered.map((d) => ({ ...d, driverName: (d.protocol && nameByProtocol.get(d.protocol)) ?? null })),
+      driverResults: driverResults.map((r) => ({ ...r, driverName: nameByProtocol.get(r.protocol) ?? r.protocol })),
+    };
+  }
+
   // ── Device Approval (§ Device Approval) ──────────────────────────────────────
 
   /**
-   * Scan every technology and STAGE the results into the pending-device queue (dedupe by backendId,
-   * refreshing last-seen), then return the current queue. Nothing is trusted/commissioned until an
-   * installer approves it — the security-conscious counterpart to one-tap discovery.
+   * A device is "ordinary" (§ Priority 1 — auto-commission, no installer approval needed) when
+   * it has a real capability set AND a reliable room signal — either the driver's own roomHint,
+   * or its name matching a room that already exists. Genuinely exceptional devices (no usable
+   * capability, or no room signal at all — an ambiguous assignment resolveOrCreateRoom would
+   * otherwise have to dump into "Unassigned") still go to Pending Approval for an installer
+   * decision. Driver-independent: no protocol check anywhere in this method.
    */
-  async scanForApproval(protocol?: ProtocolKind): Promise<PendingDeviceRecord[]> {
-    const found = await this.commissioning.discover(protocol);
+  private canAutoCommission(d: { capabilities: readonly string[]; roomHint?: string | null; suggestedName: string }, rooms: Room[]): boolean {
+    if (d.capabilities.length === 0) return false;
+    if (d.roomHint?.trim()) return true;
+    const dn = d.suggestedName.toLowerCase();
+    return rooms.some((r) => r.name.trim().length > 0 && dn.includes(r.name.trim().toLowerCase()));
+  }
+
+  /**
+   * Scan every technology. Ordinary devices (§ Priority 1 — see {@link canAutoCommission}) are
+   * committed straight through the SAME shared pipeline direct pairing already uses
+   * (commissionDevice -> resolveOrCreateRoom -> Device Registry -> Room -> Category -> Canonical
+   * Device Router) with zero installer action — Pending Approval is reserved for genuine
+   * exceptions (unsupported capabilities, or a room that can't be reliably resolved). Devices
+   * already owned never reach here at all (commissioning's discover() dedupe already excludes
+   * them), so repeated scans neither re-stage nor re-commission anything.
+   */
+  async scanForApproval(protocol?: ProtocolKind, driverIds?: string[]): Promise<PendingDeviceRecord[]> {
+    const found = driverIds ? (await this.discoverWithStatus(driverIds)).discovered : await this.commissioning.discover(protocol);
     const store = this.d.pendingDeviceStore;
+    const rooms = await this.d.home.listRooms();
+    // A device staged as pending BEFORE it became auto-commissionable (a room it now matches
+    // was just created, say) must not stay stuck in the queue forever just because nothing
+    // ever re-evaluates already-staged rows — key by backendId so the auto-commit branch below
+    // can clean up its own stale pending record once it successfully commissions.
+    let existingPending = store ? await store.list(this.d.homeId) : [];
+    // Self-heal: a pending row whose backendId is already OWNED (commissioned some other way —
+    // e.g. auto-committed on a prior scan, or approved directly) is orphaned and would otherwise
+    // sit in the queue forever, since discover() correctly excludes owned devices from `found`
+    // going forward, so the loop below would never reach it again to clean it up.
+    if (store) {
+      for (const p of existingPending) {
+        if (this.d.sil.registry.reverseLookup(p.backendId)) await store.remove(this.d.homeId, p.id);
+      }
+      existingPending = existingPending.filter((p) => !this.d.sil.registry.reverseLookup(p.backendId));
+    }
+    const existingPendingByBackendId = new Map(existingPending.map((p) => [p.backendId, p.id]));
     if (store) {
       const seenAt = new Date().toISOString();
       for (const d of found) {
+        if (this.canAutoCommission(d, rooms)) {
+          try {
+            await this.commissionDevice({
+              backendId: d.backendId,
+              name: d.suggestedName,
+              roomNameHint: d.roomHint,
+              capabilities: d.capabilities as CapabilityKind[],
+              // § ADR 0017 Capability Normalization — same-tick from discovery, never
+              // round-tripped through the pending-device table (that path still falls back to
+              // state inference; see the ADR's disclosed gap).
+              ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
+              ...(d.protocol ? { protocol: d.protocol } : {}),
+              ...(d.network ? { network: d.network } : {}),
+            });
+            const stalePendingId = existingPendingByBackendId.get(d.backendId);
+            if (stalePendingId) await store.remove(this.d.homeId, stalePendingId);
+            continue; // auto-commissioned — never (or no longer) staged as pending
+          } catch {
+            // Fall through to Pending Approval on any commissioning failure — a device is
+            // never silently dropped just because the "ordinary" fast path failed.
+          }
+        }
         await store.upsert({
           homeId: this.d.homeId,
           backendId: d.backendId,
@@ -1369,6 +1503,15 @@ export class InstallerServices {
           network: d.network ?? null,
           seenAt,
           newId: newId("device") as string,
+          // Universal Room Intelligence (§ Priority 4): whatever room hint the driver's
+          // own discovery reported (a Casambi Group, an ETS Function/Space, …) survives
+          // into the pending queue so approval can resolve it the same way the direct-
+          // commission path already does — never dropped here either.
+          roomHint: d.roomHint ?? null,
+          // Capability Normalization Pipeline (§ ADR 0018): a driver-normalized capability
+          // config must survive Pending Approval exactly like roomHint does — never lost just
+          // because a device needed an installer decision instead of auto-committing.
+          capabilityConfig: d.capabilityConfig ?? null,
         });
       }
     }
@@ -1390,13 +1533,21 @@ export class InstallerServices {
    * duplicate device path), carrying over its captured protocol + network, then drop it from the
    * queue. Optional overrides let the installer rename / pick the room at approval time.
    */
-  async approvePendingDevice(id: string, input: { name?: string; roomId: RoomId; capabilities?: CapabilityKind[] }) {
+  async approvePendingDevice(id: string, input: { name?: string; roomId?: RoomId; capabilities?: CapabilityKind[] }) {
     const rec = await this.requirePending(id);
     const device = await this.commissionDevice({
       backendId: rec.backendId,
       name: input.name?.trim() || rec.suggestedName,
+      // Explicit installer choice (priority 1) — omit to let resolveOrCreateRoom find/
+      // create a room from the pending record's own roomHint (§ Universal Room
+      // Intelligence), exactly like the direct-commission path.
       roomId: input.roomId,
+      roomNameHint: rec.roomHint,
       capabilities: (input.capabilities ?? (rec.capabilities as CapabilityKind[])),
+      // § ADR 0018 — the SAME structural capability config discovery resolved, carried through
+      // Pending Approval instead of being lost, producing the identical persisted device the
+      // auto-commit fast path would have produced for this same device.
+      ...(rec.capabilityConfig ? { capabilityConfig: rec.capabilityConfig as Parameters<InstallerServices["commissionDevice"]>[0]["capabilityConfig"] } : {}),
       ...(rec.protocol ? { protocol: rec.protocol } : {}),
       ...(rec.network ? { network: rec.network } : {}),
     });

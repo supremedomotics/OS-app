@@ -11,8 +11,10 @@ import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } fro
  * Building › Floor › Room › Area › Name › Done — in one guided flow. The installer assigns a
  * *place*, never a protocol.
  */
-type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string }; roomHint?: string | null };
+type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string }; roomHint?: string | null; driverName?: string | null; capabilityConfig?: Record<string, Record<string, unknown>> };
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
+type DriverStatus = "pending" | "scanning" | "complete" | "failed" | "not_selected";
+type DriverResult = { protocol: string; driverName: string; status: "complete" | "failed"; count: number; error?: string };
 
 /**
  * Protocols whose devices are added one at a time by IP address rather than found by a
@@ -95,7 +97,12 @@ export function DiscoverDevices() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [phase, setPhase] = useState<"idle" | "scanning" | "results">("idle");
   const [found, setFound] = useState<Discovered[]>([]);
+  const [driverResults, setDriverResults] = useState<DriverResult[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Installed Driver Selector (§ Priority 4 Part 2) — which installed drivers actually
+  // execute on the next scan. Selection state, not a result filter: it never touches `found`.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
 
   const loadRooms = () =>
     client
@@ -106,22 +113,41 @@ export function DiscoverDevices() {
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load rooms."));
 
   useEffect(() => {
-    void fetchDriverRegistry().then(setRegistry);
+    void fetchDriverRegistry().then((reg) => {
+      setRegistry(reg);
+      // Select All by default — a scan with nobody in the selector yet would silently
+      // find nothing, which reads as "discovery is broken," not "nothing is selected."
+      setSelectedIds(new Set(discoverableDrivers(reg).map((d) => d.installedId as string)));
+    });
     void loadRooms();
   }, []);
 
-  // The technologies a scan actually covers — only protocols an INSTALLED+enabled driver
-  // declares, shown in green. Listing every possible protocol regardless of install state
-  // just tells the installer things they haven't set up yet, not what a scan can find.
-  const activeProtocols = new Set(registry.filter((d) => d.installed && d.enabled).flatMap((d) => d.protocols));
-  const protocols = Array.from(activeProtocols).sort();
+  // The technologies a scan actually covers — only an INSTALLED+enabled driver with a real
+  // installedId can be selected/executed. Uninstalled drivers never appear here at all
+  // (Extension Center's installed-driver state is the only source of truth — no second registry).
+  const drivers = discoverableDrivers(registry);
+
+  function toggle(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   async function scan() {
     setPhase("scanning");
     setError(null);
+    // New-scan reset (§ Discovery Device List Reset): clear the previous temporary result
+    // list and per-driver status BEFORE the new scan populates them — never leaves stale
+    // results from a differently-selected previous scan on screen while the new one runs.
+    setFound([]);
+    setDriverResults([]);
+    setSourceFilter("all");
     try {
-      const res = await client.discover();
+      const res = await client.discover(undefined, Array.from(selectedIds));
       setFound(res.discovered as Discovered[]);
+      setDriverResults((res.driverResults ?? []) as DriverResult[]);
       setPhase("results");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scan failed.");
@@ -129,42 +155,46 @@ export function DiscoverDevices() {
     }
   }
 
+  // Post-scan Source Filter (§ Priority 4): a display filter over the CURRENT result set —
+  // separate from the pre-scan Driver Selector above, which controls execution, not display.
+  const sourceCounts = new Map<string, number>();
+  for (const d of found) sourceCounts.set(d.driverName ?? d.protocol ?? d.source, (sourceCounts.get(d.driverName ?? d.protocol ?? d.source) ?? 0) + 1);
+  const visible = sourceFilter === "all" ? found : found.filter((d) => (d.driverName ?? d.protocol ?? d.source) === sourceFilter);
+
   return (
     <div className="page">
       <div className="page-head">
         <h1 className="title">Discover Devices</h1>
-        <p className="sub">One tap scans every supported technology and pairs what it finds — no manual setup.</p>
+        <p className="sub">Pick which extensions to scan with, then find and pair what they see — no manual setup.</p>
       </div>
 
-      {protocols.length > 0 && (
-        <div className="disc-protos">
-          {protocols.map((p) => (
-            <span key={p} className={`tag proto${activeProtocols.has(p) ? " on" : ""}`}>{p.toUpperCase()}</span>
-          ))}
-        </div>
-      )}
+      <DriverSelector drivers={drivers} selectedIds={selectedIds} onToggle={toggle} onSetAll={setSelectedIds} disabled={phase === "scanning"} />
 
       {phase !== "results" && (
         <div className="disc-hero">
           <div className={`disc-radar${phase === "scanning" ? " spin" : ""}`}>◎</div>
-          <button className="primary lg" disabled={phase === "scanning"} onClick={scan}>
-            {phase === "scanning" ? "Scanning all technologies…" : "Discover Devices"}
+          <button className="primary lg" disabled={phase === "scanning" || selectedIds.size === 0} onClick={scan}>
+            {phase === "scanning" ? "Scanning selected extensions…" : "Discover Devices"}
           </button>
+          {selectedIds.size === 0 && <p className="muted">Select at least one extension above to scan.</p>}
           {error && <p className="err">{error}</p>}
         </div>
       )}
+
+      {phase === "scanning" && <DriverStatusList drivers={drivers} selectedIds={selectedIds} results={driverResults} scanning />}
+      {phase === "results" && <DriverStatusList drivers={drivers} selectedIds={selectedIds} results={driverResults} scanning={false} />}
 
       <ManualAddDevice registry={registry} rooms={rooms} onRoomCreated={loadRooms} />
 
       {phase === "results" && (
         <>
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", margin: "6px 0 12px" }}>
-            <span className="muted">{found.length} device{found.length === 1 ? "" : "s"} found</span>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", margin: "6px 0 12px", flexWrap: "wrap", gap: 8 }}>
+            <SourceFilterChips counts={sourceCounts} total={found.length} active={sourceFilter} onSelect={setSourceFilter} />
             <button onClick={scan}>Rescan</button>
           </div>
           {found.length === 0 && <p className="muted">No new devices found. Ensure devices are powered and on the network, then rescan.</p>}
           <div className="grid">
-            {found.map((d) => (
+            {visible.map((d) => (
               <FoundDevice
                 key={d.backendId}
                 device={d}
@@ -177,6 +207,117 @@ export function DiscoverDevices() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** Installed, enabled drivers with a real installedId — the only ones selectable for discovery. */
+function discoverableDrivers(registry: DriverEntry[]): DriverEntry[] {
+  return registry.filter((d) => d.installed && d.enabled && d.installedId && d.protocols.length > 0);
+}
+
+function DriverSelector({
+  drivers,
+  selectedIds,
+  onToggle,
+  onSetAll,
+  disabled,
+}: {
+  drivers: DriverEntry[];
+  selectedIds: Set<string>;
+  onToggle: (id: string) => void;
+  onSetAll: (ids: Set<string>) => void;
+  disabled: boolean;
+}) {
+  if (drivers.length === 0) {
+    return <p className="muted" style={{ margin: "16px 0" }}>No extensions installed yet — install one from the Extension Center to discover devices.</p>;
+  }
+  const allSelected = drivers.every((d) => selectedIds.has(d.installedId as string));
+  return (
+    <div className="disc-selector">
+      <div className="disc-selector-head">
+        <span className="lbl">Discover using</span>
+        <div className="disc-selector-actions">
+          <button className="link" disabled={disabled || allSelected} onClick={() => onSetAll(new Set(drivers.map((d) => d.installedId as string)))}>Select All</button>
+          <button className="link" disabled={disabled || selectedIds.size === 0} onClick={() => onSetAll(new Set())}>Deselect All</button>
+        </div>
+      </div>
+      <div className="disc-selector-grid">
+        {drivers.map((d) => {
+          const id = d.installedId as string;
+          const checked = selectedIds.has(id);
+          return (
+            <label key={id} className={`disc-driver-chip${checked ? " on" : ""}`}>
+              <input type="checkbox" checked={checked} disabled={disabled} onChange={() => onToggle(id)} />
+              <span>{d.name}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const STATUS_LABEL: Record<DriverStatus, string> = {
+  pending: "Pending",
+  scanning: "Scanning…",
+  complete: "Complete",
+  failed: "Failed",
+  not_selected: "Not selected",
+};
+
+/**
+ * Truthful per-driver status (§ Per-Driver Discovery Status). The backend returns results only
+ * after the whole scan finishes — it does not stream progress — so "Scanning…" is shown for every
+ * selected driver for the scan's duration rather than faking incremental live progress, and the
+ * real Pending/Complete/Failed breakdown replaces it the instant the real response lands.
+ */
+function DriverStatusList({
+  drivers,
+  selectedIds,
+  results,
+  scanning,
+}: {
+  drivers: DriverEntry[];
+  selectedIds: Set<string>;
+  results: DriverResult[];
+  scanning: boolean;
+}) {
+  if (drivers.length === 0) return null;
+  const byProtocol = new Map(results.map((r) => [r.protocol, r]));
+  return (
+    <div className="disc-status-list">
+      {drivers.map((d) => {
+        const id = d.installedId as string;
+        const selected = selectedIds.has(id);
+        const result = d.protocols.map((p) => byProtocol.get(p)).find(Boolean);
+        const status: DriverStatus = !selected ? "not_selected" : scanning ? "scanning" : result ? result.status : "pending";
+        return (
+          <div key={id} className={`disc-status-row status-${status}`}>
+            <span className="disc-status-name">{d.name}</span>
+            <span className="disc-status-value">
+              {STATUS_LABEL[status]}
+              {status === "complete" && result ? ` · ${result.count} device${result.count === 1 ? "" : "s"}` : ""}
+              {status === "failed" && result?.error ? ` · ${result.error}` : ""}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Post-scan Source Filter — separate concept from the pre-scan Driver Selector above: this
+ * only changes which already-found devices are displayed, never which drivers execute. */
+function SourceFilterChips({ counts, total, active, onSelect }: { counts: Map<string, number>; total: number; active: string; onSelect: (s: string) => void }) {
+  if (total === 0) return <span className="muted">0 devices found</span>;
+  const sources = Array.from(counts.keys()).sort();
+  return (
+    <div className="disc-source-filter">
+      <button className={`tag proto${active === "all" ? " on" : ""}`} onClick={() => onSelect("all")}>All · {total}</button>
+      {sources.map((s) => (
+        <button key={s} className={`tag proto${active === s ? " on" : ""}`} onClick={() => onSelect(s)}>{s} · {counts.get(s)}</button>
+      ))}
     </div>
   );
 }
@@ -264,6 +405,10 @@ function FoundDevice({
         name: name.trim() || device.suggestedName,
         roomId: targetRoomId,
         capabilities: device.capabilities as never,
+        // § ADR 0017/0018 Capability Normalization — carry the driver's own structural
+        // capability config through manual pairing too, so it produces the identical
+        // persisted device the auto-commit fast path would have.
+        ...(device.capabilityConfig ? { capabilityConfig: device.capabilityConfig } : {}),
         ...(device.protocol ? { protocol: device.protocol } : {}),
         ...(device.network ? { network: device.network } : {}),
       });
@@ -286,7 +431,7 @@ function FoundDevice({
         <span className="ext-meta">
           <span className="ext-name">{device.suggestedName}</span>
           <span className="ext-sub">
-            {device.protocol ? device.protocol.toUpperCase() : device.source} · {device.capabilities.join(", ")}
+            {device.driverName ?? (device.protocol ? device.protocol.toUpperCase() : device.source)} · {device.capabilities.join(", ")}
             {device.network?.ip ? ` · ${device.network.ip}` : ""}
           </span>
           <span className="ext-tags">

@@ -49,7 +49,7 @@ export function parseKnxSource(source: KnxImportSource): KnxProjectModel {
  * Room is resolved from the model's own Function/Space tree when the export carries one
  * (real ETS metadata — not a guess); left null otherwise, exactly like a KNX IoT signal
  * with no room metadata is left null today. */
-export function knxSignalsFromModel(model: KnxProjectModel): { id: string; name: string; room: string | null; description: string | null }[] {
+export function knxSignalsFromModel(model: KnxProjectModel): { id: string; name: string; room: string | null; description: string | null; dpt: string | null }[] {
   const roomByGaId = new Map<string, string>();
   for (const fn of model.functions.values()) {
     const room = fn.spaceId ? model.spaces.get(fn.spaceId)?.name : undefined;
@@ -61,6 +61,7 @@ export function knxSignalsFromModel(model: KnxProjectModel): { id: string; name:
     name: ga.name,
     room: roomByGaId.get(ga.id) ?? null,
     description: ga.description,
+    dpt: ga.dpt,
   }));
 }
 

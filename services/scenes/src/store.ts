@@ -10,6 +10,9 @@ export interface ISceneStore {
   get(id: SceneId): Promise<Scene | null>;
   put(scene: Scene): Promise<void>;
   remove(id: SceneId): Promise<void>;
+  /** § ADR 0101 Part 1 — the duplicate-prevention lookup an importer uses before creating a
+   * new Runtime Scene: has THIS exact source scene already been imported? */
+  findBySource(sourceDriverId: string, sourceSceneId: string): Promise<Scene | null>;
 }
 
 export class InMemorySceneStore implements ISceneStore {
@@ -25,5 +28,11 @@ export class InMemorySceneStore implements ISceneStore {
   }
   async remove(id: SceneId) {
     this.scenes.delete(id);
+  }
+  async findBySource(sourceDriverId: string, sourceSceneId: string) {
+    for (const s of this.scenes.values()) {
+      if (s.sourceDriverId === sourceDriverId && s.sourceSceneId === sourceSceneId) return s;
+    }
+    return null;
   }
 }

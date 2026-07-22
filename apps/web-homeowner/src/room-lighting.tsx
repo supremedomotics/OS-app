@@ -1,7 +1,7 @@
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
-import { colorModes } from "./colormode.js";
+import { getDeviceUiCapabilities } from "./device-ui-capabilities.js";
 import { DeviceTile } from "./device-tile.js";
 import { ColorWheel, TempSlider } from "./lighting.js";
 import { useOpenDevice } from "./device-detail-router.js";
@@ -46,8 +46,12 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
   // as the room being on. Tapping mirrors the same rule: turns everything off from any partial
   // or fully-on state, or everything on from fully off.
   const anyOn = onCount > 0;
-  const rgbLights = lights.filter((d) => colorModes(colorOf(d)).rgb);
-  const cctLights = lights.filter((d) => colorModes(colorOf(d)).cct);
+  // Shared, single-source-of-truth capability derivation (§ Capability-Driven UI Rule) — a
+  // light with no `color` capability at all always resolves rgb/cct to false regardless of
+  // state, closing the exact gap that used to show the ColorWheel/TempSlider in rooms with
+  // zero color lights (mirrors the gate lighting.tsx already uses for a single device).
+  const rgbLights = lights.filter((d) => getDeviceUiCapabilities(d.capabilities, colorOf(d)).showRGB);
+  const cctLights = lights.filter((d) => getDeviceUiCapabilities(d.capabilities, colorOf(d)).showCCT);
   // The group control's thumb position anchors on the room's first light in that mode — simplest
   // honest starting point when the room's lights may currently differ.
   const rgbAnchor = rgbLights.length > 0 ? colorOf(rgbLights[0]!) : undefined;
@@ -55,8 +59,7 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
 
   function setAll(on: boolean) {
     for (const d of lights) {
-      const hasBrightness = d.capabilities.some((c) => c.kind === "brightness");
-      if (hasBrightness) {
+      if (getDeviceUiCapabilities(d.capabilities).showBrightness) {
         apply(d.id, "brightness", { kind: "brightness", on, level: on ? (levelOf(d) > 0 ? levelOf(d) : 100) : 0 });
         void client.command(d.id as DeviceId, { capability: "brightness", action: on ? "on" : "off" } as CapabilityCommand);
       } else {

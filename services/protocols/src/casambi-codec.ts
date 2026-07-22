@@ -66,6 +66,25 @@ export function capabilitiesFromUnit(u: CasambiUnit): CapabilityKind[] {
   return caps;
 }
 
+/**
+ * Structural color-mode normalization (§ ADR 0017 — Capability Normalization). Casambi's own
+ * unit model advertises a real `type` per control (`rgb`/`xy` vs `cct`/`colortemperature`) — a
+ * property of the FIXTURE, known from the network model at discovery time, never from a live
+ * state snapshot. This is the Casambi-specific instance of "Drivers → Capability Normalization
+ * Layer → Supreme Device Capability Model": every driver implements one of these, the UI never
+ * sees Casambi's control-type vocabulary. Returns `undefined` for a unit with no color capability
+ * at all (nothing to normalize) — never a guess.
+ */
+export function colorConfigFromUnit(u: CasambiUnit): { colorModes: { rgb: boolean; cct: boolean } } | undefined {
+  if (!hasControl(u, "color", "rgb", "xy", "cct", "colortemperature")) return undefined;
+  return {
+    colorModes: {
+      rgb: hasControl(u, "color", "rgb", "xy"),
+      cct: hasControl(u, "cct", "colortemperature"),
+    },
+  };
+}
+
 /** Parse "rgb(r, g, b)" into 0–255 components, or null if not parseable. */
 function parseRgb(rgb: string | undefined): { r: number; g: number; b: number } | null {
   if (!rgb) return null;

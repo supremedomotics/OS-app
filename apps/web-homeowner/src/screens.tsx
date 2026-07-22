@@ -31,6 +31,7 @@ import { CameraCard } from "./features/security/camera-card.js";
 import { CameraDetail } from "./features/security/camera-detail.js";
 import { NvrDetail } from "./features/security/nvr-detail.js";
 import { AlarmPanel } from "./features/security/alarm-panel.js";
+import { getDeviceUiCapabilities } from "./device-ui-capabilities.js";
 
 export { useAsync } from "./use-async.js";
 
@@ -606,7 +607,7 @@ export function Security({ devMode: _devMode = false }: { devMode?: boolean } = 
   }
   useEffect(() => { void loadDevices(); }, [refreshToken]);
 
-  const locks = (devices ?? []).filter((d) => d.capabilities.some((c) => c.kind === "lock"));
+  const locks = (devices ?? []).filter((d) => getDeviceUiCapabilities(d.capabilities).showLock);
   const roomName = (id: string | null | undefined) => rooms.find((r) => r.id === id)?.name ?? "Other";
   const selectedCamera = selectedCameraId ? (cameras ?? []).find((c) => c.id === selectedCameraId) ?? null : null;
 

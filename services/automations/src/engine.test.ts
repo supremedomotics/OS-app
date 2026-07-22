@@ -190,8 +190,131 @@ describe("engine selection + HA compile", () => {
       engine: "ha",
       externalRef: null,
       aiGenerated: false,
+      tags: [],
     });
     expect(config.trigger[0]).toMatchObject({ platform: "time", at: "07:00" });
     expect(config.action[0]).toMatchObject({ service: "supreme.command" });
+  });
+});
+
+describe("AutomationEngine — dry-run, health, duplicate (§ Phase 1)", () => {
+  it("dry-run evaluates real conditions but never calls an executor", async () => {
+    const lamp = devId();
+    const guardDev = devId();
+    const ex = executors({ getState: vi.fn(async () => ({ kind: "onoff", on: true }) as CapabilityState) });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+
+    const a = await svc.create({
+      homeId: homeId(),
+      name: "Dry run test",
+      triggers: [{ type: "time", at: "07:00", days: [] }],
+      conditions: [{ type: "device_state", deviceId: guardDev, capability: "onoff", field: "on", op: "eq", value: true }],
+      actions: [{ type: "device_command", deviceId: lamp, command: { capability: "onoff", action: "on" } }],
+    });
+
+    const run = await svc.dryRun(a.id);
+    expect(run.trigger).toBe("dry_run");
+    expect(run.conditionsPassed).toBe(true);
+    expect(run.actions[0]?.summary).toMatch(/^Would run:/);
+    expect(ex.command).not.toHaveBeenCalled(); // no real side effect
+
+    // Dry-run is recorded into the same history the debugger reads.
+    expect(svc.recentRuns(a.id).some((r) => r.trigger === "dry_run")).toBe(true);
+  });
+
+  it("dry-run reports a failed condition exactly like a real run, still with no side effect", async () => {
+    const guardDev = devId();
+    const ex = executors({ getState: vi.fn(async () => ({ kind: "onoff", on: false }) as CapabilityState) });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+
+    const a = await svc.create({
+      homeId: homeId(),
+      name: "Dry run blocked",
+      triggers: [{ type: "time", at: "07:00", days: [] }],
+      conditions: [{ type: "device_state", deviceId: guardDev, capability: "onoff", field: "on", op: "eq", value: true }],
+      actions: [{ type: "device_command", deviceId: devId(), command: { capability: "onoff", action: "on" } }],
+    });
+
+    const run = await svc.dryRun(a.id);
+    expect(run.conditionsPassed).toBe(false);
+    expect(run.failedCondition).toBeTruthy();
+    expect(run.actions).toHaveLength(0);
+  });
+
+  it("health reflects disabled / waiting / healthy / broken from real run history", async () => {
+    const ex = executors({ command: vi.fn(async () => { throw new Error("device offline"); }) });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+
+    const a = await svc.create({
+      homeId: homeId(),
+      name: "Health test",
+      enabled: false,
+      triggers: [{ type: "time", at: "07:00", days: [] }],
+      actions: [{ type: "device_command", deviceId: devId(), command: { capability: "onoff", action: "on" } }],
+    });
+    expect((await svc.health(a.id)).status).toBe("disabled");
+
+    const enabled = await svc.update(a.id, { enabled: true });
+    expect((await svc.health(enabled.id)).status).toBe("waiting"); // no runs yet
+
+    await svc.testRun(enabled.id); // manual run skips conditions, action throws
+    const health = await svc.health(enabled.id);
+    expect(health.status).toBe("broken");
+    expect(health.reason).toContain("device offline");
+  });
+
+  it("a dry-run never masks a real failure in Health — dry-runs are excluded from the health computation entirely", async () => {
+    const ex = executors({ command: vi.fn(async () => { throw new Error("bus offline"); }) });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+
+    const a = await svc.create({
+      homeId: homeId(),
+      name: "Real failure then a passing dry-run",
+      triggers: [{ type: "time", at: "07:00", days: [] }],
+      actions: [{ type: "device_command", deviceId: devId(), command: { capability: "onoff", action: "on" } }],
+    });
+
+    await svc.testRun(a.id); // real run — fails (bus offline)
+    expect((await svc.health(a.id)).status).toBe("broken");
+
+    // A dry-run's action is recorded "ok" (synthetic, never really executed) — it must NOT
+    // overwrite the genuinely broken status just because it's now the most recent history entry.
+    await svc.dryRun(a.id);
+    const health = await svc.health(a.id);
+    expect(health.status).toBe("broken");
+    expect(health.reason).toContain("bus offline");
+  });
+
+  it("duplicate clones an automation, disabled by default, never firing alongside the original unreviewed", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+
+    const original = await svc.create({
+      homeId: homeId(),
+      name: "Original",
+      enabled: true,
+      triggers: [{ type: "time", at: "07:00", days: [] }],
+      actions: [{ type: "device_command", deviceId: devId(), command: { capability: "onoff", action: "on" } }],
+    });
+
+    const copy = await svc.duplicate(original.id);
+    expect(copy.id).not.toBe(original.id);
+    expect(copy.name).toBe("Original (copy)");
+    expect(copy.enabled).toBe(false);
+    expect(copy.triggers).toEqual(original.triggers);
+    expect(copy.actions).toEqual(original.actions);
+
+    const all = await svc.list();
+    expect(all).toHaveLength(2);
   });
 });

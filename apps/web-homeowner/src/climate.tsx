@@ -7,6 +7,7 @@ import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 import { useLive } from "./live.js";
+import { getDeviceUiCapabilities, hasCapability } from "./device-ui-capabilities.js";
 
 /**
  * Climate (§ Navigation → Climate) — the whole-home view of HVAC units: every device the home
@@ -26,7 +27,7 @@ function climateSummary(d: Device, live: Record<string, unknown>): string {
 }
 
 function hasClimateConfig(d: Device): boolean {
-  return d.capabilities.some((c) => c.kind === "temperature");
+  return getDeviceUiCapabilities(d.capabilities).showClimate;
 }
 
 export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
@@ -51,7 +52,7 @@ export function Climate({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode
   const groups = [...byRoom.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
   const allPower = async (on: boolean) => {
-    const targets = units.filter((d) => d.capabilities.some((c) => c.kind === "onoff"));
+    const targets = units.filter((d) => hasCapability(d.capabilities, "onoff"));
     await Promise.all(targets.map((d) =>
       client.command(d.id as DeviceId, { capability: "onoff", action: on ? "on" : "off" } as CapabilityCommand),
     ));

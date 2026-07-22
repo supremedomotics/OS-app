@@ -17,6 +17,7 @@ import {
   type DeviceLite,
   type Tariff,
 } from "./api.js";
+import { hasCapability } from "./device-ui-capabilities.js";
 
 /**
  * Advanced settings (§10/§16): the "pro" hub functions that used to be API-only are now
@@ -143,7 +144,10 @@ function VentilationPanel() {
     void getAllDevices().then((r) => setDevices(r.devices));
     void getVentilation().then((r) => { setFanOn(r.fanOn); if (r.config) { setSensor(r.config.sensorDeviceId); setFan(r.config.fanDeviceId); setHigh(r.config.highThreshold?.toString() ?? ""); setLow(r.config.lowThreshold?.toString() ?? ""); } });
   }, []);
-  const sensors = devices.filter((d) => d.capabilities.some((c) => c.kind === "sensor"));
+  const sensors = devices.filter((d) => hasCapability(d.capabilities, "sensor"));
+  // Deliberately broader than showFan (§ ADR 0016): this populates a ventilation-config device
+  // picker, which also accepts a plain onoff-only fan — a different concern from "show fan
+  // controls on a detail page," not a duplicate of the shared visibility check.
   const fans = devices.filter((d) => d.capabilities.some((c) => ["fan", "onoff"].includes(c.kind)));
 
   async function save() {

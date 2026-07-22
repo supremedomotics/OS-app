@@ -16,6 +16,17 @@ export interface PendingDeviceRecord {
   firstSeen: string;
   lastSeen: string;
   status: string;
+  /** Room-name hint the driver's own discovery reported (a Casambi Group, an ETS
+   * Function/Space, …) — carried through to approval so the shared Room Assignment
+   * Engine can find-or-create the matching room without the installer picking one by
+   * hand (§ Universal Room Intelligence). Never a guess invented here. */
+  roomHint: string | null;
+  /** Driver-normalized per-capability config (§ ADR 0017/0018 — Capability Normalization
+   * Pipeline), e.g. `{ color: { colorModes: { rgb, cct } } }` — carried through to approval so
+   * a device that goes through Pending Approval ends up with the EXACT SAME persisted
+   * capability config the auto-commit fast path already produced. Never derived here, only
+   * ever what the driver's own discovery already resolved. */
+  capabilityConfig: Record<string, Record<string, unknown>> | null;
 }
 
 /** Input for staging a freshly-discovered device (id/firstSeen are assigned on first insert). */
@@ -29,6 +40,8 @@ export interface StagePendingInput {
   network: { ip?: string; mac?: string; host?: string } | null;
   seenAt: string;
   newId: string;
+  roomHint?: string | null;
+  capabilityConfig?: Record<string, Record<string, unknown>> | null;
 }
 
 export interface IPendingDeviceStore {
@@ -52,6 +65,8 @@ interface PendingRow {
   first_seen: string;
   last_seen: string;
   status: string;
+  room_hint: string | null;
+  capability_config: Record<string, Record<string, unknown>> | null;
 }
 
 function rowTo(r: PendingRow): PendingDeviceRecord {
@@ -67,6 +82,8 @@ function rowTo(r: PendingRow): PendingDeviceRecord {
     firstSeen: r.first_seen,
     lastSeen: r.last_seen,
     status: r.status,
+    roomHint: r.room_hint ?? null,
+    capabilityConfig: r.capability_config ?? null,
   };
 }
 
@@ -84,10 +101,10 @@ export class PendingDeviceRepo implements IPendingDeviceStore {
     // at a terminal status forever left no way to reconsider it (§ BUG-005).
     await this.db.query(
       `INSERT INTO pending_devices
-         (id, home_id, backend_id, suggested_name, protocol, source, capabilities, network, first_seen, last_seen, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$9,'pending')
+         (id, home_id, backend_id, suggested_name, protocol, source, capabilities, network, first_seen, last_seen, status, room_hint, capability_config)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$9,'pending',$10,$11::jsonb)
        ON CONFLICT (home_id, backend_id) DO UPDATE SET
-         suggested_name=$4, protocol=$5, source=$6, capabilities=$7::jsonb, network=$8::jsonb, last_seen=$9, status='pending'`,
+         suggested_name=$4, protocol=$5, source=$6, capabilities=$7::jsonb, network=$8::jsonb, last_seen=$9, status='pending', room_hint=$10, capability_config=$11::jsonb`,
       [
         i.newId,
         i.homeId,
@@ -98,6 +115,8 @@ export class PendingDeviceRepo implements IPendingDeviceStore {
         JSON.stringify(i.capabilities),
         i.network ? JSON.stringify(i.network) : null,
         i.seenAt,
+        i.roomHint ?? null,
+        i.capabilityConfig ? JSON.stringify(i.capabilityConfig) : null,
       ],
     );
   }

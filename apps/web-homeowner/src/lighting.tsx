@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
-import { colorModes } from "./colormode.js";
+import { getDeviceUiCapabilities } from "./device-ui-capabilities.js";
 import {
   AdvancedSettingsSection,
   AutomationsSection,
@@ -27,23 +27,24 @@ export function LightingDetail({ device, onClose, onRemoved, roomName, devMode =
   const { states, apply } = useLive();
   const live = states[device.id] as Record<string, unknown> | undefined;
   const merged = { ...device.state, ...live } as Record<string, ColorSt | BrightnessSt | { on?: boolean } | undefined>;
-  const hasColour = device.capabilities.some((c) => c.kind === "color");
   const brightness = merged.brightness as BrightnessSt | undefined;
   const onoff = merged.onoff as { on?: boolean } | undefined;
   const color = merged.color as ColorSt | undefined;
+  // Shared, single-source-of-truth capability derivation (§ ADR 0016 Capability-Driven UI) —
+  // the SAME helper room-lighting.tsx's room-aggregate uses, so both surfaces can never drift.
+  const ui = getDeviceUiCapabilities(device.capabilities, color);
 
   const on = brightness?.on ?? onoff?.on ?? color?.on ?? false;
   const level = brightness?.level ?? color?.level ?? (on ? 100 : 0);
   const hue = color?.hue ?? 40;
   const sat = (color?.saturation ?? 60) / 100;
   const kelvin = color?.kelvin ?? 2700;
-  const modes = colorModes(color);
 
   // Which colour mode is shown — only meaningful when the light supports both; a single-mode
   // light just shows its one control, no tab. Defaults to whichever mode the light is actually
   // in (kelvin set, hue not → white), falling back to colour.
   const [modeOverride, setModeOverride] = useState<"colour" | "white" | null>(null);
-  const defaultMode = !modes.rgb && modes.cct ? "white" : "colour";
+  const defaultMode = !ui.showRGB && ui.showCCT ? "white" : "colour";
   const mode = modeOverride ?? defaultMode;
 
   const cmd = (c: CapabilityCommand) => client.command(device.id as DeviceId, c);
@@ -63,8 +64,8 @@ export function LightingDetail({ device, onClose, onRemoved, roomName, devMode =
   };
   const toggle = () => {
     const n = !on;
-    apply(device.id, hasColour || brightness ? "brightness" : "onoff", hasColour || brightness ? { kind: "brightness", on: n, level: n ? (level > 0 ? level : 100) : 0 } : { kind: "onoff", on: n });
-    void cmd({ capability: hasColour || brightness ? "brightness" : "onoff", action: n ? "on" : "off" } as CapabilityCommand);
+    apply(device.id, ui.showBrightness ? "brightness" : "onoff", ui.showBrightness ? { kind: "brightness", on: n, level: n ? (level > 0 ? level : 100) : 0 } : { kind: "onoff", on: n });
+    void cmd({ capability: ui.showBrightness ? "brightness" : "onoff", action: n ? "on" : "off" } as CapabilityCommand);
   };
 
   return (
@@ -81,7 +82,7 @@ export function LightingDetail({ device, onClose, onRemoved, roomName, devMode =
         <BrightnessBar value={level / 100} hue={hue} sat={sat} mode={mode} kelvin={kelvin} onChange={(v) => setBrightness(v * 100)} />
         <div className="light-right">
           <div className="readout">{Math.round(level)}%</div>
-          {hasColour && modes.rgb && modes.cct && (
+          {ui.showRGB && ui.showCCT && (
             <div className="seg" style={{ marginTop: 8 }}>
               <button className={mode === "colour" ? "on" : ""} onClick={() => setModeOverride("colour")}>Colour</button>
               <button className={mode === "white" ? "on" : ""} onClick={() => setModeOverride("white")}>White</button>
@@ -90,8 +91,8 @@ export function LightingDetail({ device, onClose, onRemoved, roomName, devMode =
         </div>
       </div>
 
-      {hasColour && modes.rgb && mode === "colour" && <ColorWheel hue={hue} sat={sat} onChange={setColour} />}
-      {hasColour && modes.cct && mode === "white" && <TempSlider kelvin={kelvin} onChange={setTemp} />}
+      {ui.showRGB && mode === "colour" && <ColorWheel hue={hue} sat={sat} onChange={setColour} />}
+      {ui.showCCT && mode === "white" && <TempSlider kelvin={kelvin} onChange={setTemp} />}
 
       {/* § Design System — Universal Page Structure: same five sections every device detail
           page shows, capability- and data-driven, never protocol-driven. */}

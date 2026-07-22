@@ -154,7 +154,7 @@ export function App() {
       {tab === "discover" && <DiscoverDevices />}
       {tab === "devices" && <DeviceManager onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "extensions" && <ExtensionCenter />}
-      {tab === "automations" && <Automations />}
+      {tab === "automations" && <Automations devMode={showInstallerDiagnostics} />}
       {tab === "scenes" && <Scenes />}
       {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} devMode={showInstallerDiagnostics} />}
       {tab === "areas" && <AreasScreen onNavigate={go} />}

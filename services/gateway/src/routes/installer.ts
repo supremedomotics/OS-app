@@ -235,8 +235,14 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const { protocol } = DiscoverRequest.parse(req.body ?? {});
-      const body: DiscoveryList = { discovered: await i().discover(protocol) };
+      const { protocol, driverIds } = DiscoverRequest.parse(req.body ?? {});
+      // Discovery Driver Selector (§ Priority 4): `driverIds` (even a `protocol`-only
+      // legacy request) always routes through discoverWithStatus() so driver-name
+      // labeling and failure isolation apply uniformly — never a second discovery path.
+      const { discovered, driverResults } = await i().discoverWithStatus(
+        driverIds ?? (protocol ? (await i().discoverableDrivers()).filter((d) => d.protocols.includes(protocol)).map((d) => d.installedId) : undefined),
+      );
+      const body: DiscoveryList = { discovered, driverResults };
       reply.send(body);
     } catch (err) {
       sendError(reply, err);
@@ -248,8 +254,9 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const { protocol } = DiscoverRequest.parse(req.body ?? {});
-      reply.send({ pending: await i().scanForApproval(protocol) } satisfies PendingDeviceList);
+      const { protocol, driverIds } = DiscoverRequest.parse(req.body ?? {});
+      const resolvedDriverIds = driverIds ?? (protocol ? (await i().discoverableDrivers()).filter((d) => d.protocols.includes(protocol)).map((d) => d.installedId) : undefined);
+      reply.send({ pending: await i().scanForApproval(undefined, resolvedDriverIds) } satisfies PendingDeviceList);
     } catch (err) {
       sendError(reply, err);
     }
@@ -270,7 +277,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
       const input = ApproveDeviceRequest.parse(req.body);
-      const device = await i().approvePendingDevice(req.params.id, { ...input, roomId: input.roomId as RoomId });
+      const device = await i().approvePendingDevice(req.params.id, { ...input, roomId: input.roomId ? (input.roomId as RoomId) : undefined });
       reply.code(201).send({ device });
     } catch (err) {
       sendError(reply, err);

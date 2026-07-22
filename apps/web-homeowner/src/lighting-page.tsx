@@ -7,6 +7,7 @@ import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
 import { EmptyState } from "./empty.js";
 import { useLive } from "./live.js";
+import { getDeviceUiCapabilities, hasCapability } from "./device-ui-capabilities.js";
 
 /**
  * Lighting (§ Navigation → Lighting) — the whole-home view of every dimmable/colour light,
@@ -18,7 +19,7 @@ import { useLive } from "./live.js";
 type Room = { id: string; name: string };
 
 function isLight(d: Device): boolean {
-  return d.capabilities.some((c) => c.kind === "brightness" || c.kind === "color");
+  return getDeviceUiCapabilities(d.capabilities).showBrightness;
 }
 
 function lightSummary(d: Device, live: Record<string, unknown>): string {
@@ -55,7 +56,7 @@ export function Lighting({ onNavigate }: { onNavigate?: (t: Tab) => void; devMod
 
   const allPower = async (on: boolean) => {
     await Promise.all(lights.map((d) => {
-      const capability = d.capabilities.some((c) => c.kind === "brightness") ? "brightness" : d.capabilities.some((c) => c.kind === "color") ? "color" : "onoff";
+      const capability = hasCapability(d.capabilities, "brightness") ? "brightness" : hasCapability(d.capabilities, "color") ? "color" : "onoff";
       return client.command(d.id as DeviceId, { capability, action: on ? "on" : "off" } as CapabilityCommand);
     }));
   };

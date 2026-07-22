@@ -22,6 +22,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@supreme/commissioning": "workspace:*",
     "@supreme/domain-model": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
     "coap": "^1.5.0",

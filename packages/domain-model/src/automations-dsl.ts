@@ -86,5 +86,7 @@ export const Automation = z.object({
   externalRef: z.string().nullable().default(null),
   /** True while the engine is actively running this automation's actions. */
   aiGenerated: z.boolean().default(false),
+  /** § ADR 0100 Management — free-form organizational labels, never a runtime concept. */
+  tags: z.array(z.string()).default([]),
 });
 export type Automation = z.infer<typeof Automation>;
