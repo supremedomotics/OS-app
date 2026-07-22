@@ -20,17 +20,6 @@ import { EmptyState } from "./empty.js";
  */
 type Room = { id: string; name: string };
 
-function nowPlaying(d: Device): string {
-  const s = d.state as Record<string, Record<string, unknown>> | undefined;
-  const m = s?.media;
-  if (!m) return "Idle";
-  const title = (m.title as string) ?? "";
-  const artist = (m.artist as string) ?? "";
-  const playing = m.playback === "playing";
-  if (title) return artist ? `${title} · ${artist}` : title;
-  return playing ? "Playing" : "Idle";
-}
-
 export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -123,7 +112,7 @@ export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) =
               <MediaDeviceCard
                 key={d.id}
                 device={d}
-                status={nowPlaying(d)}
+                driverProtocol={d.driverId ? registry?.find((r) => r.installedId === d.driverId || r.key === d.driverId)?.protocols[0] ?? null : null}
                 onOpen={() => setSelectedId(d.id)}
                 trailing={
                   <FavHeart fav={{ type: "device", deviceId: d.id }}

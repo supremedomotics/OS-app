@@ -69,6 +69,23 @@ export function usesSimpleMediaDetail(kind: MediaDeviceKind): boolean {
   return kind === "television" || kind === "projector";
 }
 
+/** Loose, best-effort icon per input connector type (§ `AvrInput.type` is a display hint
+ * only, never a protocol fact — shared by the device detail console and the Room Device
+ * Card so both surfaces use the same real icon vocabulary instead of two drifting copies. */
+export function inputGlyph(type?: string): string {
+  switch (type) {
+    case "hdmi": return "📺";
+    case "optical": return "🔦";
+    case "analog": return "🔌";
+    case "tuner": return "📻";
+    case "usb": return "🔧";
+    case "bluetooth": return "🔵";
+    case "streaming": return "☁️";
+    case "network": return "🖴";
+    default: return "♪";
+  }
+}
+
 /** Every classification an installer can set, for a "Device type" picker. */
 export const MEDIA_KIND_OPTIONS: MediaKindMeta[] = [
   KIND_META.television,

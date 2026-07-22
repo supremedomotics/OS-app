@@ -206,7 +206,7 @@ export function buildMediaState(cache: {
  * (the protocol has no feature-query command, verified against the spec). `hasZone2` and
  * `hasToneControl` come from the binding config the installer sets at commissioning. */
 export function denonCapabilityConfig(opts: { hasZone2: boolean; hasToneControl: boolean }): AudioCapabilityConfig {
-  const inputs = DENON_INPUTS.map((id) => ({ id, label: id, type: DENON_INPUT_TYPES[id] }));
+  const inputs = DENON_INPUTS.map((id) => ({ id, label: DENON_INPUT_LABELS[id] ?? id, type: DENON_INPUT_TYPES[id] }));
   return {
     source: "installer_declared",
     inputs,
@@ -240,6 +240,28 @@ export const DENON_INPUTS = [
   "TUNER", "DVD", "BD", "TV", "SAT/CBL", "MPLAY", "GAME", "AUX1", "NET",
   "PANDORA", "SIRIUSXM", "LASTFM", "FLICKR", "FAVORITES", "IRADIO", "SERVER", "USB/IPOD",
 ] as const;
+
+/** Human-readable labels for the `SI` tokens Denon's own protocol spec + on-screen display
+ * use (§ HEOS Input investigation — root cause was `denonCapabilityConfig()` displaying the
+ * raw wire token verbatim, e.g. "NET", instead of what the receiver's own front panel/OSD
+ * actually calls it). Sourced from Denon/Marantz's published token reference and standard
+ * on-screen-display naming — never a wire query (the Telnet spec has no label-query command,
+ * see the module doc above), and never a per-unit custom rename (that's genuinely
+ * unqueryable, see the same doc). `NET` is what every HEOS Built-in receiver's front panel
+ * has displayed as "HEOS Music" since HEOS became standard across the Denon/Marantz lineup
+ * (~2014+) — this is the real, documented answer to "why doesn't HEOS appear as an input,"
+ * not a new capability being fabricated. Tokens with no meaningfully different display name
+ * (e.g. "TUNER") are simply absent here and fall back to the raw id. */
+const DENON_INPUT_LABELS: Partial<Record<(typeof DENON_INPUTS)[number], string>> = {
+  BD: "Blu-ray",
+  "SAT/CBL": "Satellite/Cable",
+  MPLAY: "Media Player",
+  AUX1: "AUX",
+  NET: "HEOS Music",
+  IRADIO: "Internet Radio",
+  SERVER: "Media Server",
+  "USB/IPOD": "USB/iPod",
+};
 
 /** Best-guess icon category per input (§ `AvrInput.type` — a display hint only, not a
  * protocol fact; the spec's `SI` table has no notion of physical-connector type). */
