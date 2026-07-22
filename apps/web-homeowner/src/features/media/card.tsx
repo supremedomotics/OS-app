@@ -3,7 +3,7 @@ import type { Device } from "@supreme/domain-model";
 import { Icon } from "@supreme/aureon-web";
 import { useLive } from "../../live.js";
 import { cmd, fmtTime, type AudioCapabilityConfigView, type MediaStateView } from "./detail.js";
-import { inputGlyph, mediaDeviceKind, mediaKindMeta } from "./capability-mapper.js";
+import { currentInputLabel, inputGlyph, mediaDeviceKind, mediaKindMeta } from "./capability-mapper.js";
 
 export interface MediaDeviceCardProps {
   device: Device;
@@ -63,6 +63,11 @@ export function MediaDeviceCard({ device, driverProtocol, onOpen, trailing }: Me
   const playing = live.playback === "playing";
   const hasArt = !!live.artworkUrl;
   const currentInput = config.inputs?.find((i) => i.id === live.source);
+  // § Part 7 — never show a raw protocol token: when `live.source` doesn't match a
+  // declared input (a HEOS streaming service name like "Spotify" resolved live by
+  // network-source-resolver.ts, which by definition isn't in the fixed physical-input
+  // list), fall back to the resolved string itself rather than dropping it silently.
+  const sourceLabel = currentInputLabel(config.inputs, live.source);
   const hasProgress = typeof live.positionSec === "number" && typeof live.durationSec === "number" && live.durationSec > 0;
 
   const setPower = (e: React.MouseEvent) => {
@@ -110,7 +115,7 @@ export function MediaDeviceCard({ device, driverProtocol, onOpen, trailing }: Me
               )}
             </>
           ) : (
-            <span className="room-media-card-idle">{currentInput?.label ?? "Idle"}</span>
+            <span className="room-media-card-idle">{sourceLabel ?? "Idle"}</span>
           )}
         </div>
 
@@ -128,7 +133,7 @@ export function MediaDeviceCard({ device, driverProtocol, onOpen, trailing }: Me
             onChange={(e) => setVolume(Number(e.target.value))}
             aria-label="Volume"
           />
-          {currentInput && <span className="room-media-card-input-chip">{currentInput.label}</span>}
+          {sourceLabel && <span className="room-media-card-input-chip">{sourceLabel}</span>}
         </div>
       </div>
     </button>

@@ -12,7 +12,7 @@ import {
   InformationSection,
 } from "../../device-detail-sections.js";
 import { useAsync } from "../../use-async.js";
-import { inputGlyph, MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
+import { currentInputLabel, inputGlyph, MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
 
 /**
  * The AVR/Receiver console (§ AVR Detail Page) — a rich, capability-driven control
@@ -755,7 +755,7 @@ export function AvrConsole({
               expanding reveals only inputs/modes this exact device actually declares (§
               Capability-Driven UI: never render an unsupported control). */}
           {inputs.length > 0 && (
-            <CollapsibleSection title="Input" badge={inputs.find((i) => i.id === live.source)?.label}>
+            <CollapsibleSection title="Input" badge={currentInputLabel(inputs, live.source)}>
               <InputSelector inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
             </CollapsibleSection>
           )}

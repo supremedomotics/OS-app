@@ -29,6 +29,7 @@ import type { DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
+import { resolveHeosSourceLabel } from "./av-sdk/network-source-resolver.js";
 import { parseHostPort } from "./avr-codec.js";
 
 /** Kept in sync with `supreme-heos`'s manifest `version` (services/drivers/src/manifests.ts). */
@@ -394,7 +395,17 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
           c.artist = update.media.artist ?? null;
           c.album = update.media.album ?? null;
           c.artworkUrl = update.media.imageUrl;
-          if (update.media.type === "station" && update.media.station) c.source = update.media.station;
+          // § Network Source Resolver — resolves the real active service (Spotify, Tidal,
+          // TuneIn station name, …) from the spec's `sid` field instead of leaving `source`
+          // unset for anything but a station. `null` means nothing verified applies; the
+          // device's last explicit input selection (e.g. an AUX pick) is left alone rather
+          // than overwritten with nothing.
+          const resolved = resolveHeosSourceLabel({
+            sourceId: update.media.sourceId,
+            type: update.media.type,
+            station: update.media.station,
+          });
+          if (resolved) c.source = resolved;
         });
         return;
       case "nowPlayingChanged":

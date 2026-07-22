@@ -3,7 +3,7 @@ import type { DeviceId } from "@supreme/domain-model";
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { YamahaProtocolDriver, type YamahaEventSocket } from "./yamaha-driver.js";
-import { commandToYamaha, parseYamahaEvent, parseYamahaFeatures } from "./yamaha-codec.js";
+import { commandToYamaha, parseYamahaEvent, parseYamahaFeatures, yamahaCapabilityConfig } from "./yamaha-codec.js";
 
 interface ZoneState {
   power: "on" | "standby";
@@ -471,5 +471,31 @@ describe("YamahaProtocolDriver — concurrency hardening (§ Production Hardenin
     expect(after - before).toBeLessThanOrEqual(2);
     await driver.disconnect();
     await new Promise<void>((r) => yam.server.close(() => r()));
+  });
+});
+
+describe("yamahaCapabilityConfig — friendly input labels (§ Network Source investigation)", () => {
+  it("gives real streaming-service inputs their actual branded name, not the raw wire id", () => {
+    const features = parseYamahaFeatures({
+      system: { input_list: [] },
+      zone: [{
+        id: "main",
+        func_list: [],
+        input_list: ["spotify", "tidal", "airplay", "net_radio", "bluetooth", "server", "hdmi1"],
+        sound_program_list: [],
+        range_step: [],
+      }],
+    });
+    const config = yamahaCapabilityConfig(features.zones[0]!);
+    const label = (id: string) => config.inputs.find((i) => i.id === id)?.label;
+    expect(label("spotify")).toBe("Spotify");
+    expect(label("tidal")).toBe("Tidal");
+    expect(label("airplay")).toBe("AirPlay");
+    expect(label("net_radio")).toBe("Internet Radio");
+    expect(label("bluetooth")).toBe("Bluetooth");
+    expect(label("server")).toBe("Media Server");
+    // No real distinct branding for a plain HDMI input — falls back to the id itself
+    // (underscore-to-space), same convention as DENON_INPUT_LABELS.
+    expect(label("hdmi1")).toBe("hdmi1");
   });
 });
