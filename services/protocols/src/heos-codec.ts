@@ -13,7 +13,7 @@ import type { AudioCapabilityConfig } from "./avr-capabilities.js";
  * amplifier, and is always reachable once online. This driver therefore never exposes an
  * `onoff` capability; only `media`. Likewise there is no wire-level seek/position-set
  * command — `positionSec` is reported (via `player_now_playing_progress`) but not
- * settable here, exactly like the AVR Telnet driver's Zone 2 volume gap.
+ * settable here.
  */
 
 const PARAM_PCT = /%/g;

@@ -650,6 +650,28 @@ export function AvrConsole({
   const position = seekPreview ?? livePosition;
   const contextItems = useMemo(() => roomStatus(device, live, roomMates), [device, live, roomMates]);
 
+  // § Production Bugfix Sprint — "Apple TV playback shows Idle": root cause was that the
+  // Media Topology graph (device.metadata.avrTopology — an installer-declared record of
+  // what's plugged into each HDMI input, e.g. "HDMI1 -> Apple TV") already existed and
+  // was fully editable in the Topology section below, but nothing ever READ it to enrich
+  // this hero. No AVR/HEOS/Yamaha protocol reports what's playing on a connected HDMI
+  // source (verified — none of the three carry per-input content metadata), so when the
+  // active input is a real, separately-commissioned Supreme device (a real Apple TV
+  // driver instance, not fabricated), borrow ITS OWN live title/artist/album/artwork —
+  // never its playback/position state, since the AVR genuinely cannot control or report
+  // transport for a passthrough HDMI source, only what's plugged into which input.
+  const topology = parseMediaTopology((device.metadata as Record<string, unknown> | undefined)?.avrTopology);
+  const activeConnection = topology.connections.find((c) => c.output === live.source);
+  const connectedDevice = activeConnection?.connectedDeviceId
+    ? homeDevices.find((d) => d.id === activeConnection.connectedDeviceId)
+    : undefined;
+  const connectedLive = connectedDevice
+    ? ((states[connectedDevice.id]?.media ?? (connectedDevice.state as Record<string, MediaStateView> | undefined)?.media) as MediaStateView | undefined)
+    : undefined;
+  const nowPlaying = !live.title && connectedLive?.title
+    ? { title: connectedLive.title, artist: connectedLive.artist, album: connectedLive.album, artworkUrl: connectedLive.artworkUrl, from: connectedDevice }
+    : { title: live.title, artist: live.artist, album: live.album, artworkUrl: live.artworkUrl, from: null as Device | null };
+
   const applyMedia = (patch: Partial<MediaStateView>) => apply(device.id, "media", { ...live, ...patch });
   const toggle = () => { vibrate(10); applyMedia({ playback: playing ? "paused" : "playing" }); void cmd(device.id, { capability: "media", action: playing ? "pause" : "play" }); };
   const setVolume = (v: number) => { applyMedia({ volume: v }); void cmd(device.id, { capability: "media", action: "volume", volume: v }); };
@@ -716,12 +738,12 @@ export function AvrConsole({
             transport all live inside this single card so they visually belong together,
             instead of reading as several stacked panels. */}
         <div className={`avr-now${device.status !== "online" ? " offline" : ""}`}>
-          <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} inputIcon={inputGlyph(inputs.find((i) => i.id === live.source)?.type)} />
+          <AlbumArt url={nowPlaying.artworkUrl ?? null} name={device.name} playing={playing} inputIcon={inputGlyph(inputs.find((i) => i.id === live.source)?.type)} />
           <div className="avr-now-meta">
-            <span className="avr-now-label">NOW PLAYING</span>
-            <h3>{live.title ?? "Idle"}</h3>
-            {live.artist && <p className="avr-now-artist">{live.artist}</p>}
-            {live.album && <p className="avr-now-album">{live.album}</p>}
+            <span className="avr-now-label">{nowPlaying.from ? `NOW PLAYING · ${nowPlaying.from.name.toUpperCase()}` : "NOW PLAYING"}</span>
+            <h3>{nowPlaying.title ?? "Idle"}</h3>
+            {nowPlaying.artist && <p className="avr-now-artist">{nowPlaying.artist}</p>}
+            {nowPlaying.album && <p className="avr-now-album">{nowPlaying.album}</p>}
             <div className="avr-badges">
               {soundMode && <span className="avr-badge">{soundMode}</span>}
               {typeof advanced.audioFormat === "string" && <span className="avr-badge">{advanced.audioFormat as string}</span>}

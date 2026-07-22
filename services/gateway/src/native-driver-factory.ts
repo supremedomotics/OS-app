@@ -69,9 +69,9 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   // (Installer → Bus Binding), same as the pre-existing env-wired instances in
   // bootstrap.ts. The factory therefore always succeeds; installing + enabling the
   // extension is what brings the driver up (§ ADR 0015).
-  avr: (_c, onLog) => new AvrProtocolDriver({ onLog }),
-  heos: (_c, onLog) => new HeosProtocolDriver({ onLog }),
-  yamaha: () => new YamahaProtocolDriver(),
+  avr: (c, onLog) => new AvrProtocolDriver({ onLog, trace: c.trace === true }),
+  heos: (c, onLog) => new HeosProtocolDriver({ onLog, trace: c.trace === true }),
+  yamaha: (c, onLog) => new YamahaProtocolDriver({ onLog, trace: c.trace === true }),
 };
 
 /** Build a native driver instance for a protocol from stored config; null if unsupported/unconfigured.

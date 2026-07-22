@@ -142,6 +142,7 @@ export function DiagnosticsSection({ device }: { device: Device }) {
     rows.push({ label: "Driver version", value: dd.driverVersion, icon: "🏷️" });
     if (dd.model) rows.push({ label: "Model", value: dd.model, icon: "🔧" });
     if (dd.firmware) rows.push({ label: "Firmware", value: dd.firmware, icon: "💾" });
+    if (dd.serial) rows.push({ label: "Serial", value: dd.serial, icon: "🔖" });
   }
   if (net?.ip ?? dd?.ip) rows.push({ label: "IP address", value: net?.ip ?? dd!.ip!, icon: "🌐" });
   if (net?.mac ?? dd?.mac) rows.push({ label: "MAC", value: net?.mac ?? dd!.mac!, icon: "🔗" });

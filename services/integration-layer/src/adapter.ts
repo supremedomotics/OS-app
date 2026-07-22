@@ -73,6 +73,10 @@ export interface DriverDiagnosticsSnapshot {
   driverVersion: string;
   model: string | null;
   firmware: string | null;
+  /** § Production Bugfix Sprint — a real UPnP device-description serial number, when
+   * the owning driver's discovery step fetched one (see `parseUpnpDescription()` in
+   * `@supreme/protocols`). `null` when unsupported/not fetched — never fabricated. */
+  serial: string | null;
   ip: string | null;
   mac: string | null;
   lastCommand: string | null;

@@ -257,7 +257,16 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     changelog: [
       { version: "1.0.0", date: "2026-07-10", notes: "First stable release: power/volume/media, Zone 2, tone/DSP, auto-reconnect (ADR 0015)." },
     ],
-    configSchema: [],
+    configSchema: [
+      {
+        key: "trace",
+        label: "Raw protocol trace logging",
+        type: "boolean",
+        required: false,
+        default: false,
+        secret: false,
+      },
+    ],
   }),
   defineManifest({
     key: "supreme-heos",
@@ -278,7 +287,16 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     changelog: [
       { version: "1.0.0", date: "2026-07-10", notes: "First stable release: multi-pid transport/volume/inputs/queue, auto-reconnect (ADR 0015)." },
     ],
-    configSchema: [],
+    configSchema: [
+      {
+        key: "trace",
+        label: "Raw protocol trace logging",
+        type: "boolean",
+        required: false,
+        default: false,
+        secret: false,
+      },
+    ],
   }),
   defineManifest({
     key: "supreme-yamaha",
@@ -299,7 +317,16 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     changelog: [
       { version: "1.0.0", date: "2026-07-10", notes: "First stable release: multi-zone power/volume/media, getFeatures capability detection, push events (ADR 0015)." },
     ],
-    configSchema: [],
+    configSchema: [
+      {
+        key: "trace",
+        label: "Raw protocol trace logging",
+        type: "boolean",
+        required: false,
+        default: false,
+        secret: false,
+      },
+    ],
   }),
   defineManifest({
     // Internal key kept stable as an API identifier; the user-facing name is Supreme-branded only —

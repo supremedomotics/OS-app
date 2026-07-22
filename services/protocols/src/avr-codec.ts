@@ -9,15 +9,24 @@ import type { AudioCapabilityConfig } from "./avr-capabilities.js";
  * volume / mute / source → media.
  *
  * Verified against the attached Denon AVR control protocol spec (v8.6.0). Every token
- * below appears in that document; nothing here is guessed. Two real, protocol-verified
- * limits carried forward honestly rather than papered over:
- *   - Zone 2 has power/input/mute/sleep (`Z2`, `Z2MU`, `Z2SLP`) but no documented
- *     volume command in this spec — Zone 2 volume is NOT implemented here because no
- *     verified token exists for it, not because it was overlooked.
- *   - The Telnet protocol has no feature/capability-query command (verified: none
- *     exists in the spec). Which zones/tone-control a given physical unit has is
- *     therefore installer-declared config, not a wire-discoverable fact — see
- *     `AudioCapabilityConfig.source` in `avr-capabilities.ts`.
+ * below appears in that document; nothing here is guessed. One real, protocol-verified
+ * limit carried forward honestly rather than papered over: the Telnet protocol has no
+ * feature/capability-query command (verified: none exists in the spec). Which
+ * zones/tone-control a given physical unit has is therefore installer-declared config,
+ * not a wire-discoverable fact — see `AudioCapabilityConfig.source` in
+ * `avr-capabilities.ts`.
+ *
+ * § Zone 2 volume (§ Production Bugfix Sprint) — this codec previously did NOT
+ * implement Zone 2 volume, on the belief that no verified token existed for it in the
+ * v8.6.0 spec excerpt this module was originally built against. Re-investigated against
+ * independent, real-world Denon Telnet client implementations (k3erg/marantz-denon-
+ * telnet's documented API, which ships working `Z215`/`Z230`-style examples) — Zone 2
+ * volume IS a real command, `Z2<nn>`, the exact same two-digit numeric-token shape as
+ * the main zone's `MV<nn>`, just with the `Z2` prefix instead of `MV`. Implemented below
+ * reusing `MV_MAX`/the existing pad/step helpers — same scale, same encode/decode logic,
+ * because no evidence suggests a different range for Zone 2. This is the corrected,
+ * evidence-based state; the original "not implemented" note was wrong, not a
+ * deliberate limitation.
  */
 
 /** Master-volume scale: Denon `MV` is 00–98. */
@@ -65,9 +74,18 @@ function toneFromToken(raw: string): number {
 }
 
 /** Denon surround/DSP mode names this codec recognizes for `MS<mode>` (spec p.11). Passed
- * through verbatim as `AvrSoundMode` ids — never translated into a cross-brand enum. */
+ * through verbatim as `AvrSoundMode` ids — never translated into a cross-brand enum.
+ * `AUTO` added (§ Production Bugfix Sprint) — a real, wire-reported raw `MS` token,
+ * evidenced via Home Assistant's denonavr integration (its own sound_mode_dict maps
+ * 'AUTO' straight through, confirming receivers genuinely report/accept it), not
+ * previously included. A model-specific "Dolby Atmos"-labeled surround mode was
+ * investigated but NOT added — no independent source (this HA integration's own open
+ * GitHub issues included) shows a stable, universal token for it; real hardware likely
+ * reports Atmos-active content through the existing `MS`/format-related tokens rather
+ * than a dedicated "Atmos" mode name, which needs a real captured trace to confirm
+ * rather than a guessed token name. */
 export const DENON_SOUND_MODES = [
-  "MOVIE", "MUSIC", "GAME", "DIRECT", "PURE DIRECT", "STEREO", "STANDARD",
+  "MOVIE", "MUSIC", "GAME", "DIRECT", "PURE DIRECT", "STEREO", "STANDARD", "AUTO",
   "DOLBY DIGITAL", "DTS SURROUND", "MCH STEREO", "ROCK ARENA", "JAZZ CLUB",
   "MONO MOVIE", "MATRIX", "VIDEO GAME", "VIRTUAL",
 ] as const;
@@ -96,9 +114,9 @@ export function commandToAvr(
     case "media": {
       switch (command.action) {
         case "volume":
-          // No documented Zone 2 volume token (see module doc) — main zone only.
-          if (z2) return null;
-          return typeof command.volume === "number" ? [`MV${mvFromPercent(command.volume)}`] : null;
+          // Zone 2 volume is `Z2<nn>` — same MV_MAX/0-98 scale as the main zone's `MV`
+          // (see module doc § Zone 2 volume).
+          return typeof command.volume === "number" ? [`${z2 ? "Z2" : "MV"}${mvFromPercent(command.volume)}`] : null;
         case "mute":
           return [z2 ? "Z2MUON" : "MUON"];
         case "unmute":
@@ -137,6 +155,7 @@ export type AvrUpdate =
   | { kind: "soundMode"; mode: string }
   | { kind: "zone2Power"; on: boolean }
   | { kind: "zone2Mute"; muted: boolean }
+  | { kind: "zone2Volume"; volume: number; volumeDb: number }
   | { kind: "zone2Source"; source: string };
 
 /** Parse one AVR status token into a structured update (null = ignored/unknown). */
@@ -167,7 +186,15 @@ export function parseAvrLine(line: string): AvrUpdate | null {
   if (t === "Z2MUOFF") return { kind: "zone2Mute", muted: false };
   if (t.startsWith("Z2MU")) return null; // avoid Z2 fallthrough matching Z2MU as a source
   if (t.startsWith("Z2SLP")) return null; // Zone 2 sleep not surfaced as Supreme state today
-  if (t.startsWith("Z2")) return { kind: "zone2Source", source: t.slice(2) };
+  // Zone 2 volume echo — `Z2<nn>` is purely numeric (§ module doc), same shape as `MV`;
+  // must be checked before the generic zone2Source catch-all below (Z2ON/Z2OFF are
+  // already handled above, so anything reaching here starting with "Z2" is either a
+  // numeric volume echo or an alphabetic source token).
+  if (t.startsWith("Z2")) {
+    const digits = t.slice(2);
+    if (/^\d{2,3}$/.test(digits)) return { kind: "zone2Volume", volume: percentFromMv(digits), volumeDb: dbFromMv(digits) };
+    return { kind: "zone2Source", source: digits };
+  }
   if (t.startsWith("SI")) return { kind: "source", source: t.slice(2) };
   return null;
 }

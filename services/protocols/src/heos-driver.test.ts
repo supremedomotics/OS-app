@@ -328,6 +328,40 @@ describe("HeosProtocolDriver — Production Hardening (Phase 3/6 audit)", () => 
     await expect(driver.disconnect()).resolves.toBeUndefined();
     await new Promise<void>((r) => heos.server.close(() => r()));
   });
+
+  it("with trace:true, logs every raw command sent/line received and every command/getCapabilityConfig operation (§ Production Bugfix Sprint)", async () => {
+    const heos = await startFakeHeos();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new HeosProtocolDriver({ trace: true, onLog: (level, message) => logs.push({ level, message }) });
+    const dev = "device-heos-traced" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "1" } });
+    await vi.waitFor(() => expect(logs.some((l) => l.message.includes("[trace:heos] -> heos://player/get_volume"))).toBe(true));
+    expect(logs.some((l) => l.message.startsWith("[trace:heos] <- "))).toBe(true);
+
+    await driver.command(dev, { capability: "media", action: "mute" });
+    await vi.waitFor(() => expect(logs.some((l) => l.message.includes("[trace:heos] -> heos://player/set_mute"))).toBe(true));
+    expect(logs.some((l) => l.message.includes("[trace:heos] command") && l.message.includes("media/mute"))).toBe(true);
+
+    driver.getCapabilityConfig(dev, "media");
+    expect(logs.some((l) => l.message.includes("[trace:heos] getCapabilityConfig"))).toBe(true);
+
+    await driver.disconnect();
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
+
+  it("with trace disabled (default), never emits [trace:] log lines even with onLog set", async () => {
+    const heos = await startFakeHeos();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new HeosProtocolDriver({ onLog: (level, message) => logs.push({ level, message }) });
+    const dev = "device-heos-untraced" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "1" } });
+    await vi.waitFor(() => expect(heos.received.some((r) => r.includes("pid=1"))).toBe(true));
+    expect(logs.some((l) => l.message.startsWith("[trace:"))).toBe(false);
+    await driver.disconnect();
+    await new Promise<void>((r) => heos.server.close(() => r()));
+  });
 });
 
 describe("HeosProtocolDriver — discovery", () => {
