@@ -34,12 +34,13 @@ describe("DriverManager", () => {
     expect(keys).toContain("supreme-heos");
     expect(keys).toContain("supreme-yamaha");
 
-    // Each has nothing to configure (per-device host/zone/pid is set later via Bus
-    // Binding) — install + enable alone must be enough to bring the driver up.
+    // Each has nothing REQUIRED to configure (per-device host/zone/pid is set later via
+    // Bus Binding; the only config field is an optional trace-logging toggle) — install +
+    // enable alone must be enough to bring the driver up.
     for (const key of ["supreme-avr", "supreme-heos", "supreme-yamaha"]) {
       const installed = await m.install(key);
       const reg = (await m.registry()).find((r) => r.key === key)!;
-      expect(reg.configSchema).toEqual([]);
+      expect(reg.configSchema.every((f) => f.required !== true)).toBe(true);
       expect(reg.installed).toBe(true);
       expect(reg.status).toBe("active"); // installed drivers are enabled by default
       await m.setConfig(installed.id, {});

@@ -26,6 +26,12 @@ export interface DriverDiagnosticsStaticInfo {
   driverVersion: string;
   model?: string | null;
   firmware?: string | null;
+  /** § Production Bugfix Sprint — a real UPnP-device-description `<serialNumber>` field
+   * (see `parseUpnpDescription()`), when the discovery source fetched one. Optional
+   * because most protocols/drivers have no such field; `null` (not omitted) once a
+   * driver DOES report this concept, so the UI can distinguish "not applicable" from
+   * "not yet threaded through" — same convention as `model`/`firmware`. */
+  serial?: string | null;
   ip?: string | null;
   mac?: string | null;
 }
@@ -78,6 +84,7 @@ export class DriverDiagnosticsTracker {
       driverVersion: info.driverVersion,
       model: info.model ?? null,
       firmware: info.firmware ?? null,
+      serial: info.serial ?? null,
       ip: info.ip ?? null,
       mac: info.mac ?? null,
       lastCommand: this.lastCommand,

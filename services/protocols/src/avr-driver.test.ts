@@ -170,6 +170,20 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     expect(after.lastCommandAt).not.toBeNull();
   });
 
+  it("threads a discovered unit's model/serial (from bindConfig) into Diagnostics — never fabricated when absent, real when supplied (§ Production Bugfix Sprint)", async () => {
+    const enriched = "device-avr-enriched" as DeviceId;
+    await driver.bind({
+      deviceId: enriched,
+      capability: "media",
+      address: `127.0.0.1:${avr.port}`,
+      config: { model: "AVR-X3800H", serial: "ABC123456789" },
+    });
+    const dd = driver.getDiagnostics(enriched);
+    expect(dd?.model).toBe("AVR-X3800H");
+    expect(dd?.serial).toBe("ABC123456789");
+    expect(dd?.firmware).toBeNull(); // still genuinely unavailable from either source
+  });
+
   it("returns null diagnostics for a device this driver doesn't manage", () => {
     expect(driver.getDiagnostics("device-unknown" as DeviceId)).toBeNull();
   });
@@ -239,8 +253,22 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
     expect(avr.received).toContain("Z2MUON");
   });
 
-  it("rejects zone2 volume — no documented Zone 2 volume token on this protocol", async () => {
-    await expect(driver.command(zone2Dev, { capability: "media", action: "volume", volume: 50 })).rejects.toThrow();
+  it("sets zone2 volume via Z2<nn> (§ Production Bugfix Sprint — real token, evidenced) and surfaces it on the zone2 device only", async () => {
+    const ev = nextEvent(driver, (e) => e.deviceId === zone2Dev && e.capability === "media" && (e.state as { volume?: number }).volume !== undefined && (e.state as { volume?: number }).volume! > 0);
+    await driver.command(zone2Dev, { capability: "media", action: "volume", volume: 50 });
+    const state = (await ev).state as { kind: string; volume: number };
+    expect(avr.received).toContain("Z249"); // 50% of 98 ≈ 49
+    expect(state.volume).toBeGreaterThan(45);
+    // Main zone's own volume must be untouched by the zone2 command.
+    expect(driver.getState(mainDev, "media")).not.toMatchObject({ volume: state.volume });
+  });
+
+  it("parses an unsolicited Z2<nn> echo as zone2 volume, not a zone2 source change", async () => {
+    const ev = nextEvent(driver, (e) => e.deviceId === zone2Dev && e.capability === "media" && (e.state as { volume?: number }).volume === 30);
+    await driver.command(zone2Dev, { capability: "media", action: "volume", volume: 30 });
+    const state = (await ev).state as { kind: string; volume: number; source: string | null };
+    expect(state.volume).toBe(30);
+    expect(state.source).toBeNull(); // must NOT have been mis-parsed as a source change
   });
 
   it("turning the main zone OFF does not power off zone2 — regression test for ZM vs PW", async () => {
@@ -364,6 +392,43 @@ describe("AvrProtocolDriver — connection failure is never silent", () => {
       await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not connected/);
     });
   });
+
+  it("with trace:true, logs every raw token sent/received and every discover/command/capability-config operation (§ Production Bugfix Sprint)", async () => {
+    const traceAvr = await startFakeAvr();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new AvrProtocolDriver({ trace: true, onLog: (level, message) => logs.push({ level, message }) });
+    const dev = "device-avr-traced" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${traceAvr.port}` });
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${traceAvr.port}` });
+    await vi.waitFor(() => expect(logs.some((l) => l.message.includes("[trace:avr] -> PW?"))).toBe(true));
+
+    // Every init token was traced as sent, and the receiver's real echoes were traced as received.
+    expect(logs.some((l) => l.message.includes("[trace:avr] <- PWSTANDBY"))).toBe(true);
+
+    await driver.command(dev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(logs.some((l) => l.message.includes("[trace:avr] -> ZMON"))).toBe(true));
+    expect(logs.some((l) => l.message.includes("[trace:avr] command") && l.message.includes("onoff/on"))).toBe(true);
+
+    driver.getCapabilityConfig(dev, "media");
+    expect(logs.some((l) => l.message.includes("[trace:avr] getCapabilityConfig"))).toBe(true);
+
+    await driver.disconnect();
+    await new Promise<void>((r) => traceAvr.server.close(() => r()));
+  });
+
+  it("with trace disabled (default), never emits [trace:] log lines even with onLog set", async () => {
+    const quietAvr = await startFakeAvr();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new AvrProtocolDriver({ onLog: (level, message) => logs.push({ level, message }) });
+    const dev = "device-avr-untraced" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${quietAvr.port}` });
+    await vi.waitFor(() => expect(quietAvr.received).toContain("PW?"));
+    expect(logs.some((l) => l.message.startsWith("[trace:"))).toBe(false);
+    await driver.disconnect();
+    await new Promise<void>((r) => quietAvr.server.close(() => r()));
+  });
 });
 
 describe("AvrProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
@@ -452,12 +517,16 @@ describe("AvrProtocolDriver — Production Hardening (Phase 3/6 audit)", () => {
 });
 
 describe("AvrProtocolDriver — discovery", () => {
-  it("finds receivers via the co-located HEOS SSDP presence and defaults to zone 'main'", async () => {
+  it("finds receivers via the co-located HEOS SSDP presence and defaults to zone 'main' (no UPnP description reachable)", async () => {
     const driver = new AvrProtocolDriver({
       ssdp: async (opts) => {
         expect(opts?.st).toBe("urn:schemas-denon-com:device:ACT-Denon:1");
         return [{ address: "192.168.1.50", server: "Linux/3.10 UPnP/1.0 Denon-Heos/1.0", location: "http://192.168.1.50:60006/desc.xml" }];
       },
+      // A real fetch attempt against an unroutable IP would hang the test — inject a
+      // failing fetch, matching "the UPnP description genuinely wasn't reachable"
+      // (must not fail discovery of the unit itself, just skip the enrichment).
+      fetchImpl: (async () => { throw new Error("unreachable in test"); }) as unknown as typeof fetch,
     });
     const found = await driver.discover();
     expect(found).toEqual([
@@ -473,6 +542,31 @@ describe("AvrProtocolDriver — discovery", () => {
         },
       },
     ]);
+  });
+
+  it("enriches discovery with manufacturer/model/serial from the unit's UPnP device description (§ Production Bugfix Sprint)", async () => {
+    const upnpXml = `<root><device>
+      <manufacturer>Denon</manufacturer>
+      <modelName>AVR-X3800H</modelName>
+      <serialNumber>ABC123456789</serialNumber>
+    </device></root>`;
+    const driver = new AvrProtocolDriver({
+      ssdp: async () => [{ address: "192.168.1.51", location: "http://192.168.1.51:60006/desc.xml" }],
+      fetchImpl: (async () => ({ ok: true, text: async () => upnpXml })) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found).toHaveLength(1);
+    expect(found[0]?.raw.manufacturer).toBe("Denon");
+    expect(found[0]?.raw.bindConfig).toEqual({ zone: "main", model: "AVR-X3800H", serial: "ABC123456789" });
+  });
+
+  it("tolerates a reachable-but-non-2xx UPnP description response — still returns the unit, just unenriched", async () => {
+    const driver = new AvrProtocolDriver({
+      ssdp: async () => [{ address: "192.168.1.52", location: "http://192.168.1.52:60006/desc.xml" }],
+      fetchImpl: (async () => ({ ok: false, text: async () => "" })) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found[0]?.raw.bindConfig).toEqual({ zone: "main" });
   });
 
   it("returns no candidates when nothing answers the SSDP search", async () => {

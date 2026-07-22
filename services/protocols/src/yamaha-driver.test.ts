@@ -360,6 +360,60 @@ describe("YamahaProtocolDriver — Production Hardening (Phase 3/6 audit)", () =
     await expect(driver.disconnect()).resolves.toBeUndefined();
     await new Promise<void>((r) => yam.server.close(() => r()));
   });
+
+  it("with trace:true, logs every HTTP request/response and every command/getCapabilityConfig operation (§ Production Bugfix Sprint)", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new YamahaProtocolDriver({
+      createEventSocket: () => events.socket,
+      eventRefreshMs: 1_000_000,
+      trace: true,
+      onLog: (level, message) => logs.push({ level, message }),
+    });
+    const dev = "device-yamaha-traced" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: yam.host, config: { zone: "main" } });
+    expect(logs.some((l) => l.message.includes("[trace:yamaha] -> GET") && l.message.includes("system/getFeatures"))).toBe(true);
+    expect(logs.some((l) => l.message.startsWith("[trace:yamaha] <- 200"))).toBe(true);
+
+    await driver.command(dev, { capability: "media", action: "mute" });
+    expect(logs.some((l) => l.message.includes("[trace:yamaha] -> GET") && l.message.includes("main/setMute"))).toBe(true);
+
+    driver.getCapabilityConfig(dev, "media");
+    expect(logs.some((l) => l.message.includes("[trace:yamaha] getCapabilityConfig"))).toBe(true);
+
+    const statusCallsBefore = yam.calls.filter((c) => c === "main/getStatus").length;
+    const playInfoCallsBefore = yam.calls.filter((c) => c === "netusb/getPlayInfo").length;
+    events.push(yam.host, { main: { status_updated: true } });
+    await vi.waitFor(() => expect(logs.some((l) => l.message.startsWith("[trace:yamaha] <- UDP event from"))).toBe(true));
+    // The event handler fires an unawaited re-sync fetch (main zone's input is
+    // netusb-typed, so this is TWO requests: getStatus then netusb/getPlayInfo) — wait
+    // for both to actually complete before tearing the server down, or the in-flight
+    // request ECONNRESETs.
+    await vi.waitFor(() => expect(yam.calls.filter((c) => c === "main/getStatus").length).toBeGreaterThan(statusCallsBefore));
+    await vi.waitFor(() => expect(yam.calls.filter((c) => c === "netusb/getPlayInfo").length).toBeGreaterThan(playInfoCallsBefore));
+
+    await driver.disconnect();
+    await new Promise<void>((r) => yam.server.close(() => r()));
+  });
+
+  it("with trace disabled (default), never emits [trace:] log lines even with onLog set", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new YamahaProtocolDriver({
+      createEventSocket: () => events.socket,
+      eventRefreshMs: 1_000_000,
+      onLog: (level, message) => logs.push({ level, message }),
+    });
+    const dev = "device-yamaha-untraced" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: yam.host, config: { zone: "main" } });
+    expect(logs.some((l) => l.message.startsWith("[trace:"))).toBe(false);
+    await driver.disconnect();
+    await new Promise<void>((r) => yam.server.close(() => r()));
+  });
 });
 
 describe("YamahaProtocolDriver — discovery", () => {

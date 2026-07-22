@@ -145,6 +145,10 @@ export const DeviceDriverDiagnostics = z.object({
   driverVersion: z.string(),
   model: z.string().nullable(),
   firmware: z.string().nullable(),
+  /** § Production Bugfix Sprint — a real UPnP device-description serial number, when
+   * the owning driver's discovery step fetched one. `null` when unsupported/not
+   * fetched — never fabricated. */
+  serial: z.string().nullable(),
   ip: z.string().nullable(),
   mac: z.string().nullable(),
   lastCommand: z.string().nullable(),

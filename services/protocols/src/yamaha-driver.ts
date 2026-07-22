@@ -36,6 +36,7 @@ import { bestEffortMacForIp } from "./arp-lookup.js";
 import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
+import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
 
 /** Kept in sync with `supreme-yamaha`'s manifest `version` (services/drivers/src/manifests.ts). */
 const DRIVER_VERSION = "1.0.0";
@@ -71,6 +72,14 @@ export interface YamahaDriverOptions {
   appName?: string;
   /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
   ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
+  /** Surfaces connection lifecycle events (host-down/host-recovered) to the Extension
+   * Center's driver log / system log — mirrors AVR/HEOS's existing `onLog` option
+   * (§ Production Bugfix Sprint; Yamaha previously had none at all). */
+  onLog?: (level: "info" | "warn" | "error", message: string) => void;
+  /** § Production Bugfix Sprint — when true (and `onLog` is set), every HTTP request/
+   * response, every UDP event, and every discover()/getCapabilityConfig() call is
+   * logged in full sequence via `onLog`, prefixed `[trace:yamaha]`. Off by default. */
+  trace?: boolean;
 }
 
 interface YamahaBinding {
@@ -133,10 +142,12 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   private readonly hostDown = new Map<string, boolean>();
   private eventSocket: YamahaEventSocket | null = null;
   private eventPort: number | null = null;
+  private readonly tracer: ProtocolTracer;
 
   constructor(opts: YamahaDriverOptions = {}) {
     this.opts = opts;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    this.tracer = createProtocolTracer("yamaha", opts.trace === true, opts.onLog);
   }
 
   async connect(): Promise<void> {
@@ -246,6 +257,7 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
     if (!b) return null;
     const zf = this.hosts.get(b.host)?.features.zones.find((z) => z.id === b.zone);
+    this.tracer.event(`getCapabilityConfig ${deviceId} — from cached /system/getFeatures (zone=${b.zone}, found=${zf != null})`);
     return zf ? (yamahaCapabilityConfig(zf) as unknown as Record<string, unknown>) : null;
   }
 
@@ -290,16 +302,25 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     // one's UPnP description XML and checking <manufacturer> (spec doesn't define a
     // Yamaha-specific ST, so this is the standard UPnP-level check).
     const search = this.opts.ssdp ?? ssdpSearch;
+    this.tracer.event("discover: SSDP M-SEARCH st=urn:schemas-upnp-org:device:MediaRenderer:1");
     const responses = await search({ st: "urn:schemas-upnp-org:device:MediaRenderer:1" });
+    this.tracer.event(`discover: ${responses.length} candidate(s) — [${responses.map((r) => r.address).join(", ")}]`);
     const out: DiscoveredDevice[] = [];
     for (const r of responses) {
       if (!r.location) continue;
       try {
+        this.tracer.event(`discover: fetching UPnP description ${r.location}`);
         const res = await this.fetchImpl(r.location);
-        if (!res.ok) continue;
+        if (!res.ok) {
+          this.tracer.event(`discover: UPnP description fetch for ${r.address} returned HTTP ${res.status}`);
+          continue;
+        }
         const xml = await res.text();
         const { manufacturer, friendlyName, modelName } = parseUpnpDescription(xml);
-        if (!manufacturer || !/yamaha/i.test(manufacturer)) continue;
+        if (!manufacturer || !/yamaha/i.test(manufacturer)) {
+          this.tracer.event(`discover: ${r.address} manufacturer=${manufacturer ?? "?"} — not Yamaha, skipping`);
+          continue;
+        }
         // §Automatic Zone Generation: `/system/getFeatures` is a genuine wire query
         // (not fabricated — same call `bind()` makes) that lists every zone this
         // physical unit actually has, so extra zones (zone2/3/4) are discoverable up
@@ -449,8 +470,12 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   }
 
   private onEventMessage(sourceIp: string, raw: string): void {
+    this.tracer.receive(`UDP event from ${sourceIp}: ${raw}`);
     const event = parseYamahaEvent(raw);
-    if (!event) return;
+    if (!event) {
+      this.tracer.event(`unrecognized UDP event from ${sourceIp}: ${JSON.stringify(raw)}`);
+      return;
+    }
     const host = this.bindings.find((b) => b.host === sourceIp)?.host;
     if (!host) return; // event from an IP we don't manage — ignore
     for (const zone of YAMAHA_ZONES) {
@@ -503,18 +528,23 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     }
     const tracker = this.diagnosticsFor(host);
     const label = `${group}/${method}`;
+    const url = yamahaUrl(host, group, method, params);
     tracker.recordSend(label);
+    this.tracer.send(`GET ${url}`);
     try {
-      const res = await this.fetchImpl(yamahaUrl(host, group, method, params), { method: "GET", headers });
+      const res = await this.fetchImpl(url, { method: "GET", headers });
       if (!res.ok) throw new Error(`yamaha: ${res.status} ${group}/${method}`);
       const json = (await res.json()) as Record<string, unknown>;
       tracker.recordReceive(`${label} ${res.status}`);
+      this.tracer.receive(`${res.status} ${label} ${JSON.stringify(json)}`);
       if (this.hostDown.get(host)) tracker.recordReconnect();
       this.hostDown.set(host, false);
       return json;
     } catch (err) {
       this.hostDown.set(host, true);
-      tracker.recordError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      tracker.recordError(message);
+      this.tracer.event(`request failed ${label} on ${host} — ${message}`);
       throw err;
     }
   }

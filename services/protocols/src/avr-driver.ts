@@ -13,12 +13,14 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { buildMediaState, commandToAvr, denonCapabilityConfig, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
+import { parseUpnpDescription } from "./yamaha-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
 import type { DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
+import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
 
 /** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
  * — surfaced in Diagnostics so an installer can tell which driver build is running. */
@@ -34,9 +36,19 @@ export interface AvrDriverOptions {
   reconnectMaxMs?: number;
   /** Injectable SSDP searcher (tests); defaults to a real multicast M-SEARCH. */
   ssdp?: (opts?: SsdpSearchOptions) => Promise<SsdpResponse[]>;
+  /** Injectable fetch (tests point at an in-process UPnP description server); defaults
+   * to the real global fetch. Used only to enrich discover() results with manufacturer/
+   * model/serial from the unit's UPnP device description XML (§ Production Bugfix
+   * Sprint) — Telnet itself has no such query. */
+  fetchImpl?: typeof fetch;
   /** Surfaces connection lifecycle events (connect/error) to the Extension Center's driver
    * log / system log — without this a socket that never connects fails completely silently. */
   onLog?: (level: "info" | "warn" | "error", message: string) => void;
+  /** § Production Bugfix Sprint — when true (and `onLog` is set), every raw token sent,
+   * every line received, and every discover()/getCapabilityConfig() call is logged in
+   * full sequence via `onLog`, prefixed `[trace:avr]`. Off by default — this is a
+   * debugging aid, not a normal-operation log level. */
+  trace?: boolean;
 }
 
 interface AvrBinding {
@@ -45,11 +57,18 @@ interface AvrBinding {
   host: string;
   port: number;
   /** Which zone this binding controls — "main" (power/volume/mute/source/tone/DSP) or
-   * "zone2" (power/mute/source only; no documented Zone 2 volume token, see avr-codec.ts). */
+   * "zone2" (power/volume/mute/source; no tone/DSP — those are main-zone-only). */
   zone: AvrZone;
   /** Installer-declared: does this unit have tone control (bass/treble)? Telnet has no
    * feature-query command (see avr-codec.ts), so this can't be wire-detected. */
   hasToneControl: boolean;
+  /** UPnP device-description `<modelName>`/`<serialNumber>`, threaded through from
+   * discovery's `bindConfig.model`/`bindConfig.serial` when present (§ Diagnostics
+   * Console, § Production Bugfix Sprint) — same pattern HEOS's `model` already uses.
+   * `null` for a manually-added device (no discovery step ran) or a unit whose UPnP
+   * description didn't include them. */
+  model: string | null;
+  serial: string | null;
 }
 
 interface MediaCache {
@@ -89,10 +108,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   private readonly states = new Map<string, CapabilityState>();
   private readonly media = new Map<DeviceId, MediaCache>();
   private readonly listeners = new Set<StateListener>();
+  private readonly fetchImpl: typeof fetch;
+  private readonly tracer: ProtocolTracer;
 
   constructor(opts: AvrDriverOptions = {}) {
     this.opts = opts;
     this.defaultPort = opts.port ?? 23;
+    this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    this.tracer = createProtocolTracer("avr", opts.trace === true, opts.onLog);
     this.transport = new TcpLineTransport({
       delimiter: "\r",
       reconnectBaseMs: opts.reconnectBaseMs,
@@ -123,8 +146,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const key = `${host}:${port}`;
     const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
     const hasToneControl = binding.config?.hasToneControl !== false;
+    const model = typeof binding.config?.model === "string" ? binding.config.model : null;
+    const serial = typeof binding.config?.serial === "string" ? binding.config.serial : null;
     const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl });
+    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, model, serial });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
@@ -184,8 +209,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (!link.ready || !link.socket || link.socket.destroyed) {
       throw new Error(`avr: not connected to ${b.host}:${b.port} — check the receiver's IP and that Network Control/Telnet is enabled`);
     }
+    this.tracer.event(`command ${deviceId} ${command.capability}/${"action" in command ? command.action : "?"} -> [${tokens.join(", ")}]`);
     for (const t of tokens) {
       link.diagnostics.recordSend(t);
+      this.tracer.send(t);
       link.socket.write(`${t}\r`);
     }
   }
@@ -199,6 +226,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
     if (!b) return null;
     const hasZone2 = this.bindings.some((x) => x.host === b.host && x.port === b.port && x.zone === "zone2");
+    this.tracer.event(`getCapabilityConfig ${deviceId} — installer_declared (hasZone2=${hasZone2}, hasToneControl=${b.hasToneControl})`);
     return denonCapabilityConfig({ hasZone2, hasToneControl: b.zone === "main" && b.hasToneControl }) as unknown as Record<string, unknown>;
   }
 
@@ -219,9 +247,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
 
   /** Diagnostics Console (§ Universal AV Driver SDK) — real per-link counters/timestamps,
    * never fabricated. `null` when this device's zone/host has no link yet (never bound or
-   * never connected). MAC is a best-effort local ARP-table read (§ arp-lookup.ts); Denon's
-   * classic Telnet protocol exposes no model/firmware/serial on the wire (verified against
-   * the spec, see avr-codec.ts module doc), so those stay honestly `null`. */
+   * never connected). MAC is a best-effort local ARP-table read (§ arp-lookup.ts); the
+   * classic Telnet protocol itself exposes no model/firmware/serial on the wire (verified
+   * against the spec, see avr-codec.ts module doc) — `firmware` stays honestly `null`
+   * always, but `model`/`serial` ARE available when this device was discovered (not
+   * manually added), threaded through from the SAME physical unit's UPnP device
+   * description XML fetched at discovery time (§ Production Bugfix Sprint, see
+   * discover() below) — real data from a real, different wire source, not Telnet
+   * pretending to have a capability it doesn't. */
   getDiagnostics(deviceId: DeviceId): DriverDiagnosticsSnapshot | null {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b) return null;
@@ -229,8 +262,9 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     return diagnostics.snapshot(status, {
       protocol: this.protocol,
       driverVersion: DRIVER_VERSION,
-      model: null,
+      model: b.model,
       firmware: null,
+      serial: b.serial,
       ip: b.host,
       mac: bestEffortMacForIp(b.host),
     });
@@ -246,12 +280,53 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     // capability. An installer should confirm Network Control / Telnet is enabled in
     // the unit's setup menu before binding — some models ship it off by default.
     const search = this.opts.ssdp ?? ssdpSearch;
+    this.tracer.event("discover: SSDP M-SEARCH st=urn:schemas-denon-com:device:ACT-Denon:1");
     const responses = await search({ st: "urn:schemas-denon-com:device:ACT-Denon:1" });
-    return responses.map((r) => ({
-      backendId: r.address,
-      suggestedName: `AVR ${r.address}`,
-      capabilities: ["onoff", "media"] as DiscoveredDevice["capabilities"],
-      raw: { ip: r.address, server: r.server ?? null, location: r.location ?? null, bindConfig: { zone: "main" } },
+    this.tracer.event(`discover: ${responses.length} candidate(s) — [${responses.map((r) => r.address).join(", ")}]`);
+    return Promise.all(responses.map(async (r) => {
+      // § Production Bugfix Sprint — the SAME co-located SSDP response already carries
+      // a `LOCATION` pointing at the unit's standard UPnP device description XML
+      // (every SSDP-answering device publishes one; this isn't Denon-specific), which
+      // genuinely contains <manufacturer>/<modelName>/<serialNumber> — real wire data,
+      // evidenced against the ol-iver/denonavr library's own SSDP parser (the library
+      // Home Assistant's official Denon integration is built on). Telnet itself still
+      // has none of these; this is a different, real source for the same physical box,
+      // not a fabricated Telnet capability. Best-effort: a fetch/parse failure here
+      // must not fail discovery of the unit itself.
+      let manufacturer: string | null = null;
+      let modelName: string | null = null;
+      let serialNumber: string | null = null;
+      if (r.location) {
+        try {
+          this.tracer.event(`discover: fetching UPnP description ${r.location}`);
+          const res = await this.fetchImpl(r.location);
+          if (res.ok) {
+            const xml = await res.text();
+            ({ manufacturer, modelName, serialNumber } = parseUpnpDescription(xml));
+            this.tracer.event(`discover: UPnP description ${r.address} — manufacturer=${manufacturer ?? "?"} model=${modelName ?? "?"} serial=${serialNumber ?? "?"}`);
+          } else {
+            this.tracer.event(`discover: UPnP description fetch for ${r.address} returned HTTP ${res.status}`);
+          }
+        } catch (err) {
+          this.tracer.event(`discover: UPnP description fetch for ${r.address} failed — ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return {
+        backendId: r.address,
+        suggestedName: `AVR ${r.address}`,
+        capabilities: ["onoff", "media"] as DiscoveredDevice["capabilities"],
+        raw: {
+          ip: r.address,
+          server: r.server ?? null,
+          location: r.location ?? null,
+          ...(manufacturer ? { manufacturer } : {}),
+          bindConfig: {
+            zone: "main",
+            ...(modelName ? { model: modelName } : {}),
+            ...(serialNumber ? { serial: serialNumber } : {}),
+          },
+        },
+      };
     }));
   }
 
@@ -269,13 +344,29 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
       initTokens.push("Z2?", "Z2MU?");
     }
-    for (const t of initTokens) link.diagnostics.recordSend(t);
+    this.tracer.event(`connected to ${host}:${port} — sending init query burst: [${initTokens.join(", ")}]`);
+    for (const t of initTokens) {
+      link.diagnostics.recordSend(t);
+      this.tracer.send(t);
+    }
     socket.write(`${initTokens.join("\r")}\r`);
   }
 
   private onLine(host: string, port: number, line: string): void {
+    this.tracer.receive(line);
     const update = parseAvrLine(line);
-    if (!update) return;
+    // § Production Bugfix Sprint ("no realtime feedback for any zone") — a line the
+    // receiver genuinely sent but this codec doesn't recognize is exactly the kind of
+    // thing that needs to be visible during debugging, not silently dropped. Traced
+    // distinctly from a successfully-parsed line so a captured trace immediately shows
+    // whether the receiver is talking at all (lines arriving, none recognized — a real
+    // codec gap) versus not talking at all (no `<-` lines ever appear in the trace —
+    // points at Network Control/Telnet being disabled on the unit, or nothing actually
+    // connected).
+    if (!update) {
+      this.tracer.event(`unrecognized line from ${host}:${port}: ${JSON.stringify(line)}`);
+      return;
+    }
     switch (update.kind) {
       case "power":
         this.emitFor(host, port, "onoff", "main", { kind: "onoff", on: update.on });
@@ -303,6 +394,9 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         return;
       case "zone2Mute":
         this.patchMedia(host, port, "zone2", (c) => { c.muted = update.muted; });
+        return;
+      case "zone2Volume":
+        this.patchMedia(host, port, "zone2", (c) => { c.volume = update.volume; c.volumeDb = update.volumeDb; });
         return;
       case "zone2Source":
         this.patchMedia(host, port, "zone2", (c) => { c.source = update.source; });

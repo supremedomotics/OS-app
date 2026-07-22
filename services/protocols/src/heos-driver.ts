@@ -30,6 +30,7 @@ import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
 import { resolveHeosSourceLabel } from "./av-sdk/network-source-resolver.js";
+import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
 import { parseHostPort } from "./avr-codec.js";
 
 /** Kept in sync with `supreme-heos`'s manifest `version` (services/drivers/src/manifests.ts). */
@@ -51,6 +52,11 @@ export interface HeosDriverOptions {
   /** Surfaces connection lifecycle events (connect/error) to the Extension Center's driver
    * log / system log — without this a socket that never connects fails completely silently. */
   onLog?: (level: "info" | "warn" | "error", message: string) => void;
+  /** § Production Bugfix Sprint — when true (and `onLog` is set), every raw token sent,
+   * every line received, and every discover()/getCapabilityConfig() call is logged in
+   * full sequence via `onLog`, prefixed `[trace:heos]`. Off by default — this is a
+   * debugging aid, not a normal-operation log level. */
+  trace?: boolean;
 }
 
 interface HeosBinding {
@@ -93,10 +99,12 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     { resolve: (items: MediaQueueItem[] | null) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private queueSequence = 0;
+  private readonly tracer: ProtocolTracer;
 
   constructor(opts: HeosDriverOptions = {}) {
     this.opts = opts;
     this.defaultPort = opts.port ?? 1255;
+    this.tracer = createProtocolTracer("heos", opts.trace === true, opts.onLog);
     this.transport = new TcpLineTransport({
       delimiter: "\r\n",
       reconnectBaseMs: opts.reconnectBaseMs,
@@ -191,6 +199,8 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     }
     const line = buildHeosCommand(req.group, req.command, req.params);
     link.diagnostics.recordSend(line);
+    this.tracer.event(`command ${deviceId} ${command.capability}/${"action" in command ? command.action : "?"} -> ${line}`);
+    this.tracer.send(line);
     link.socket.write(`${line}\r\n`);
   }
 
@@ -200,6 +210,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
 
   getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
     if (capability !== "media" || !this.devices.has(deviceId)) return null;
+    this.tracer.event(`getCapabilityConfig ${deviceId} — protocol_fixed (spec §4.4.13)`);
     return heosCapabilityConfig() as unknown as Record<string, unknown>;
   }
 
@@ -246,8 +257,10 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     // that whole network, so results are deduped by pid across all queried hosts —
     // the same player answering via two different SSDP hits must not appear twice.
     const search = this.opts.ssdp ?? ssdpSearch;
+    this.tracer.event("discover: SSDP M-SEARCH st=urn:schemas-denon-com:device:ACT-Denon:1");
     const responses = await search({ st: "urn:schemas-denon-com:device:ACT-Denon:1" });
     const hosts = [...new Set(responses.map((r) => r.address))];
+    this.tracer.event(`discover: ${hosts.length} candidate host(s) — [${hosts.join(", ")}]`);
     const perHost = await Promise.all(hosts.map((host) => this.queryPlayers(host)));
 
     const out: DiscoveredDevice[] = [];
@@ -296,12 +309,18 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       const socket = this.opts.createSocket ? this.opts.createSocket(host, this.defaultPort) : net.connect(this.defaultPort, host);
       socket.setEncoding("utf8");
       let buffer = "";
-      socket.on("connect", () => socket.write(`${buildHeosCommand("player", "get_players", {})}\r\n`));
+      socket.on("connect", () => {
+        const line = buildHeosCommand("player", "get_players", {});
+        this.tracer.event(`discover: querying players on ${host}`);
+        this.tracer.send(line);
+        socket.write(`${line}\r\n`);
+      });
       socket.on("data", (chunk: string) => {
         buffer += chunk;
         const lines = buffer.split("\r\n");
         buffer = lines.pop() ?? "";
         for (const line of lines) {
+          this.tracer.receive(line);
           const update = parseHeosMessage(line);
           if (update?.kind === "players") finish(update.players);
         }
@@ -338,6 +357,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       this.pendingQueue.set(sequence, { resolve: (items) => resolve(items), timer });
       const line = buildHeosCommand("player", "get_queue", { pid: b.pid, range: "0,49", sequence });
       link.diagnostics.recordSend(line);
+      this.tracer.send(line);
       socket.write(`${line}\r\n`);
     });
   }
@@ -348,12 +368,15 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
    * §2.1.1: un-register events, sync every bound player's current state, then register for
    * change events. */
   private onLinkConnect(link: TcpLink, socket: net.Socket, host: string, port: number): void {
+    this.tracer.event(`connected to ${host}:${port} — un-registering, syncing bound players, re-registering for change events`);
     const off = buildHeosCommand("system", "register_for_change_events", { enable: "off" });
     link.diagnostics.recordSend(off);
+    this.tracer.send(off);
     socket.write(`${off}\r\n`);
     for (const pid of this.pidsFor(host, port)) this.syncPid(link, pid);
     const on = buildHeosCommand("system", "register_for_change_events", { enable: "on" });
     link.diagnostics.recordSend(on);
+    this.tracer.send(on);
     socket.write(`${on}\r\n`);
   }
 
@@ -372,13 +395,18 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     ];
     for (const q of queries) {
       link.diagnostics.recordSend(q);
+      this.tracer.send(q);
       link.socket.write(`${q}\r\n`);
     }
   }
 
   private onLine(link: TcpLink, line: string): void {
+    this.tracer.receive(line);
     const update = parseHeosMessage(line);
-    if (!update) return;
+    if (!update) {
+      this.tracer.event(`unrecognized line: ${JSON.stringify(line)}`);
+      return;
+    }
     switch (update.kind) {
       case "playState":
         this.patchMedia(update.pid, (c) => { c.playback = playbackFromHeosState(update.state); });

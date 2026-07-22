@@ -420,15 +420,24 @@ export function parseYamahaEvent(raw: string): YamahaEvent | null {
   return { zones, netusbPlayInfoUpdated: netusb.play_info_updated === true };
 }
 
-/** Extract `<manufacturer>`/`<friendlyName>` from a UPnP device description XML — just
- * enough to confirm "this MediaRenderer is actually a Yamaha" during discovery (spec
- * doesn't define this; it's the standard UPnP device-description document every
- * MediaRenderer publishes at its SSDP `LOCATION`). */
-export function parseUpnpDescription(xml: string): { manufacturer: string | null; friendlyName: string | null; modelName: string | null } {
+/** Extract `<manufacturer>`/`<friendlyName>`/`<modelName>`/`<serialNumber>` from a UPnP
+ * device description XML (spec doesn't define this; it's the standard UPnP device-
+ * description document every MediaRenderer/consumer-AV device publishes at its SSDP
+ * `LOCATION`) — genuinely present on real MusicCast units, not guessed. `serialNumber`
+ * (§ Production Bugfix Sprint) is the same standard UPnP tag, evidenced also present on
+ * real Denon/Marantz units by the ol-iver/denonavr library's own SSDP parser (the
+ * library Home Assistant's official Denon integration is built on) — shared here since
+ * it's a generic UPnP field, not brand-specific, and `avr-driver.ts` reuses this exact
+ * function rather than duplicating XML parsing. */
+export function parseUpnpDescription(xml: string): {
+  manufacturer: string | null;
+  friendlyName: string | null;
+  modelName: string | null;
+  serialNumber: string | null;
+} {
   const manufacturer = /<manufacturer>([^<]*)<\/manufacturer>/i.exec(xml)?.[1]?.trim() ?? null;
   const friendlyName = /<friendlyName>([^<]*)<\/friendlyName>/i.exec(xml)?.[1]?.trim() ?? null;
-  // §Discovery Engine Stage 2 (Metadata Enrichment) — the standard UPnP device-description
-  // field; genuinely present on real MusicCast units, not guessed.
   const modelName = /<modelName>([^<]*)<\/modelName>/i.exec(xml)?.[1]?.trim() ?? null;
-  return { manufacturer, friendlyName, modelName };
+  const serialNumber = /<serialNumber>([^<]*)<\/serialNumber>/i.exec(xml)?.[1]?.trim() ?? null;
+  return { manufacturer, friendlyName, modelName, serialNumber };
 }
