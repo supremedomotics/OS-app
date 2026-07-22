@@ -249,6 +249,18 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
     return zf ? (yamahaCapabilityConfig(zf) as unknown as Record<string, unknown>) : null;
   }
 
+  /** The real, wire-queried zone list for a bound host (§ AVR/Yamaha Intelligent Manual
+   * Add) — reads `bind()`'s own `ensureHostFeatures()` cache, never re-fetches. Unlike
+   * Denon/Marantz's best-effort zone2 heuristic, this is a genuine `/system/getFeatures`
+   * response: every zone this exact unit reported having, nothing guessed. `null` if this
+   * host was never bound (so its features were never queried) yet. */
+  getHostZones(host: string): { id: string; label: string }[] | null {
+    const zones = this.hosts.get(host)?.features.zones;
+    if (!zones) return null;
+    const labels: Record<string, string> = { main: "Zone 1", zone2: "Zone 2", zone3: "Zone 3", zone4: "Zone 4" };
+    return zones.map((z) => ({ id: z.id, label: labels[z.id] ?? z.id }));
+  }
+
   /** Diagnostics Console (§ Universal AV Driver SDK) — real per-host request/response
    * counters, never fabricated. Yamaha's UPnP device description genuinely reports a
    * `<modelName>`; there is no firmware field anywhere in the Basic YXC spec, so that

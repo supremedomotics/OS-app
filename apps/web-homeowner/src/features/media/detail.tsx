@@ -261,7 +261,11 @@ function AmbientHalo({ playing, tint }: { playing: boolean; tint: string | null 
   );
 }
 
-function AlbumArt({ url, name, playing }: { url: string | null; name: string; playing: boolean }) {
+/** `inputIcon` (§ Capability-Driven UI: "no album art → show input icon") is the current
+ * input's real glyph from this device's own declared inputs, never a generic placeholder —
+ * only the device-name initial falls back further, for a device with no input selected at
+ * all (e.g. before the first state sync completes). */
+function AlbumArt({ url, name, playing, inputIcon }: { url: string | null; name: string; playing: boolean; inputIcon?: string }) {
   const tint = useDominantColor(url);
   return (
     <div className="avr-art-wrap">
@@ -270,7 +274,7 @@ function AlbumArt({ url, name, playing }: { url: string | null; name: string; pl
         {url ? (
           <img className="avr-art" src={url} alt="" />
         ) : (
-          <div className="avr-art avr-art-placeholder">{name.charAt(0).toUpperCase()}</div>
+          <div className="avr-art avr-art-placeholder">{inputIcon ?? name.charAt(0).toUpperCase()}</div>
         )}
       </div>
     </div>
@@ -758,7 +762,7 @@ export function AvrConsole({
             transport all live inside this single card so they visually belong together,
             instead of reading as several stacked panels. */}
         <div className={`avr-now${device.status !== "online" ? " offline" : ""}`}>
-          <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} />
+          <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} inputIcon={inputGlyph(inputs.find((i) => i.id === live.source)?.type)} />
           <div className="avr-now-meta">
             <span className="avr-now-label">NOW PLAYING</span>
             <h3>{live.title ?? "Idle"}</h3>
@@ -793,8 +797,19 @@ export function AvrConsole({
         </div>
 
         <div className="avr-fields-row">
-          <InputSelector inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
-          <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
+          {/* Collapsed by default, current value always visible as the section's badge —
+              expanding reveals only inputs/modes this exact device actually declares (§
+              Capability-Driven UI: never render an unsupported control). */}
+          {inputs.length > 0 && (
+            <CollapsibleSection title="Input" badge={inputs.find((i) => i.id === live.source)?.label}>
+              <InputSelector inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
+            </CollapsibleSection>
+          )}
+          {soundModes.length > 0 && (
+            <CollapsibleSection title="Audio Mode" badge={soundModes.find((m) => m.id === soundMode)?.label}>
+              <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
+            </CollapsibleSection>
+          )}
           <ZoneSelector current={device} siblings={siblings} onNavigate={onNavigateDevice} />
         </div>
 

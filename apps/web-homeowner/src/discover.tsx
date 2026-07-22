@@ -11,38 +11,77 @@ import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } fro
  * Building › Floor › Room › Area › Name › Done — in one guided flow. The installer assigns a
  * *place*, never a protocol.
  */
-type Discovered = { backendId: string; suggestedName: string; capabilities: string[]; source: string; protocol?: string; network?: { ip?: string; mac?: string; host?: string } };
+type Discovered = {
+  backendId: string;
+  suggestedName: string;
+  capabilities: string[];
+  source: string;
+  protocol?: string;
+  network?: { ip?: string; mac?: string; host?: string };
+  /** Extra logical zones this one physical unit exposes (§ Discover Devices enrichment) —
+   * a real wire query (Yamaha's getFeatures), never present for a protocol that can't
+   * report it (e.g. AVR's Telnet-only discover()). */
+  zones?: { id: string; label: string }[];
+  /** A real, wire-reported brand string (e.g. Yamaha's UPnP `<manufacturer>`) — absent,
+   * never guessed, for sources that don't report one. */
+  manufacturer?: string;
+  bindConfig?: Record<string, unknown>;
+};
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 /** A real, targeted reachability + best-effort zone probe result (§ AVR Intelligent Manual
- * Add) — `zones` is only populated when `reachable`; `detected` is honestly a heuristic
- * (Denon/Marantz Telnet has no capability-query command), never authoritative. */
+ * Add) — `zones` is only populated when `reachable`. `detected` is authoritative for Yamaha
+ * (a genuine `/system/getFeatures` wire query) but only a best-effort heuristic for AVR
+ * (Denon/Marantz Telnet has no capability-query command) — the wizard never treats either as
+ * more certain than it really is; both stay editable. */
 type AvrProbeZone = { id: string; label: string; detected: boolean };
 type AvrProbeResult = { reachable: boolean; error: string | null; mac: string | null; zones: AvrProbeZone[] };
 
+/** The two AV receiver brands with a real protocol adapter in this fleet today. Every other
+ * brand named in the picker (Onkyo/Pioneer/Sony/Arcam/Anthem/NAD) has zero protocol
+ * implementation anywhere in this codebase — building "support" for them without a real,
+ * verified wire protocol behind it would mean fabricating a control surface that doesn't
+ * work, so they're listed but disabled, never silently attempted. */
+const AV_RECEIVER_BRANDS = [
+  { id: "auto", label: "Auto Detect (Recommended)", protocol: null as "avr" | "yamaha" | null },
+  { id: "denon", label: "Denon", protocol: "avr" as const },
+  { id: "marantz", label: "Marantz", protocol: "avr" as const },
+  { id: "yamaha", label: "Yamaha", protocol: "yamaha" as const },
+  { id: "onkyo", label: "Onkyo", protocol: null },
+  { id: "pioneer", label: "Pioneer", protocol: null },
+  { id: "sony", label: "Sony", protocol: null },
+  { id: "arcam", label: "Arcam", protocol: null },
+  { id: "anthem", label: "Anthem", protocol: null },
+  { id: "nad", label: "NAD", protocol: null },
+  { id: "other", label: "Other", protocol: null },
+] as const;
+type AvBrandId = (typeof AV_RECEIVER_BRANDS)[number]["id"];
+const brandLabel = (id: string): string => AV_RECEIVER_BRANDS.find((b) => b.id === id)?.label ?? id;
+const PROTOCOL_BRAND_LABEL: Record<"avr" | "yamaha", string> = { avr: "Denon/Marantz", yamaha: "Yamaha" };
+
 /**
  * Protocols whose devices are added one at a time by IP address rather than found by a
- * broadcast scan — either because the technology has no discovery protocol at all (AVR/HEOS/
- * Yamaha are Telnet/CLI/HTTP-only), or because a scan can't reach it (SSDP/mDNS don't cross
- * the hub's network boundary on every deployment). Manual entry uses the exact same
- * commission-with-protocol-binding call a scan hit would, so it's a first-class path, not a
- * fallback. KNX/Modbus/MQTT devices are usually better added via the ETS import / Bus Binding
- * power-user tools, but a single manual bind works the same way here too.
+ * broadcast scan — either because the technology has no discovery protocol at all, or
+ * because a scan can't reach it (SSDP/mDNS don't cross the hub's network boundary on every
+ * deployment). Manual entry uses the exact same commission-with-protocol-binding call a scan
+ * hit would, so it's a first-class path, not a fallback. "avr-receiver" is a UI-only grouping
+ * (§ AVR Intelligent Manual Add) — not a real ProtocolKind — covering both real AV-receiver
+ * protocol adapters (avr, yamaha) behind one brand-aware wizard, per "don't expose separate
+ * AVR brands as separate extensions." HEOS stays its own entry (standalone HEOS products, no
+ * zone concept). KNX/Modbus/MQTT devices are usually better added via the ETS import / Bus
+ * Binding power-user tools, but a single manual bind works the same way here too.
  */
-const MANUAL_PROTOCOLS = ["avr", "heos", "yamaha", "knx", "modbus", "mqtt"] as const;
+const MANUAL_PROTOCOLS = ["avr-receiver", "heos", "knx", "modbus", "mqtt"] as const;
 const MANUAL_ADDRESS_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string> = {
-  avr: "Receiver IP e.g. 192.168.1.50 (Telnet, port 23)",
+  "avr-receiver": "Receiver IP e.g. 192.168.1.50",
   heos: "Any one HEOS player's IP e.g. 192.168.1.51 (port 1255)",
-  yamaha: "Unit IP e.g. 192.168.1.52 (HTTP, port 80)",
   knx: "Group address e.g. 1/2/0",
   modbus: "Register e.g. 100",
   mqtt: "Base topic e.g. z2m/lamp",
 };
-// AVR/Yamaha zones default to "main" if omitted; HEOS's player id (pid) is required — get it
-// from the HEOS app's "About This Device" screen for that player.
+// HEOS's player id (pid) is required — get it from the HEOS app's "About This Device" screen.
 const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | null> = {
-  avr: '{"zone":"main"}',
+  "avr-receiver": null,
   heos: '{"pid":"<player id>"}',
-  yamaha: '{"zone":"main"}',
   knx: null,
   modbus: '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
   mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
@@ -266,8 +305,13 @@ function FoundDevice({
         <span className="ext-meta">
           <span className="ext-name">{device.suggestedName}</span>
           <span className="ext-sub">
-            {device.protocol ? device.protocol.toUpperCase() : device.source} · {device.capabilities.join(", ")}
+            {/* Brand: a real wire-reported manufacturer string when the discovery source has
+                one (Yamaha's UPnP description), the protocol's known real brand for avr/heos,
+                or just the protocol/source label — never a guessed brand. */}
+            {device.manufacturer ?? (device.protocol === "avr" ? "Denon/Marantz" : device.protocol ? device.protocol.toUpperCase() : device.source)}
+            {" · "}{device.capabilities.join(", ")}
             {device.network?.ip ? ` · ${device.network.ip}` : ""}
+            {device.zones && device.zones.length > 0 ? ` · ${device.zones.length} zone${device.zones.length === 1 ? "" : "s"}` : ""}
           </span>
           <span className="ext-tags">
             {driver ? <span className="tag ok">Extension: {driver.name}{driver.installed ? "" : " (auto-install)"}</span> : <span className="tag">No matching extension</span>}
@@ -349,17 +393,22 @@ function FoundDevice({
  * lesser tool.
  */
 /**
- * Guided AVR add (§ AVR Intelligent Manual Add) — replaces free-form JSON zone config with a
- * real connect-and-detect flow: type an IP, open a real connection, see which zones actually
- * answered, name and room-assign each one, and create one independent Supreme device per zone.
- * Reuses the exact commissioning call every other add path uses — one call per selected zone,
- * each with its own `config: { zone }` binding, so Zone 1 and Zone 2 become fully independent
- * devices (separate entity, state, automations, room) exactly like two different receivers.
+ * Guided AV Receiver add (§ AVR Intelligent Manual Add) — one brand-aware wizard instead of
+ * free-form JSON zone config. Pick a brand (or Auto Detect), enter an IP, get a real
+ * connection result, review what was actually found, then name and room-assign each real
+ * zone independently. Reuses the exact commissioning call every other add path uses — one
+ * call per selected zone, each with its own `config: { zone }` binding, so Zone 1 and Zone 2
+ * become fully independent devices (separate entity, state, automations, room) exactly like
+ * two different receivers — and routes to whichever real protocol adapter (avr or yamaha)
+ * actually answered, so the installer never has to know which one powers which brand.
  */
-function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | undefined; rooms: Room[]; onRoomCreated: () => Promise<void> }) {
-  const [step, setStep] = useState<"address" | "connecting" | "zones" | "creating" | "done">("address");
+function AvReceiverGuidedAdd({ registry, rooms, onRoomCreated }: { registry: DriverEntry[]; rooms: Room[]; onRoomCreated: () => Promise<void> }) {
+  const [step, setStep] = useState<"setup" | "connecting" | "mismatch" | "detected" | "zones" | "creating" | "done">("setup");
+  const [brand, setBrand] = useState<AvBrandId>("auto");
   const [ip, setIp] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [protocol, setProtocol] = useState<"avr" | "yamaha" | null>(null);
+  const [mismatchProtocol, setMismatchProtocol] = useState<"avr" | "yamaha" | null>(null);
   const [probe, setProbe] = useState<AvrProbeResult | null>(null);
   const [zoneRows, setZoneRows] = useState<Record<string, { checked: boolean; name: string; roomId: string }>>({});
   const [newRoomOpen, setNewRoomOpen] = useState(false);
@@ -370,34 +419,68 @@ function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | 
   const [summary, setSummary] = useState<{ zone: string; name: string; room: string }[] | null>(null);
 
   function reset() {
-    setStep("address");
-    setIp("");
-    setErr(null);
-    setProbe(null);
-    setZoneRows({});
-    setSummary(null);
+    setStep("setup"); setIp(""); setErr(null); setProtocol(null); setMismatchProtocol(null);
+    setProbe(null); setZoneRows({}); setSummary(null);
+  }
+
+  async function tryProtocol(p: "avr" | "yamaha", address: string): Promise<AvrProbeResult> {
+    return (await client.probe({ protocol: p, address })) as AvrProbeResult;
   }
 
   async function connect() {
     setErr(null);
-    if (!ip.trim()) { setErr("Enter the receiver's IP address."); return; }
+    const address = ip.trim();
+    if (!address) { setErr("Enter the receiver's IP address."); return; }
+    const selected = AV_RECEIVER_BRANDS.find((b) => b.id === brand);
+    if (brand !== "auto" && !selected?.protocol) {
+      setErr(`${brandLabel(brand)} isn't supported yet — there's no protocol adapter for it in this build.`);
+      return;
+    }
     setStep("connecting");
     try {
-      const result = (await client.probe({ protocol: "avr", address: ip.trim() })) as AvrProbeResult;
-      if (!result.reachable) {
-        setErr(result.error ?? "Could not reach this address.");
-        setStep("address");
+      if (brand === "auto") {
+        const avrResult = await tryProtocol("avr", address);
+        if (avrResult.reachable) { setProtocol("avr"); setProbe(avrResult); setStep("detected"); return; }
+        const yamahaResult = await tryProtocol("yamaha", address);
+        if (yamahaResult.reachable) { setProtocol("yamaha"); setProbe(yamahaResult); setStep("detected"); return; }
+        setErr(yamahaResult.error ?? avrResult.error ?? "Could not reach this address on either supported protocol.");
+        setStep("setup");
         return;
       }
-      setProbe(result);
-      const rows: typeof zoneRows = {};
-      for (const z of result.zones) rows[z.id] = { checked: z.detected, name: "", roomId: rooms[0]?.id ?? "" };
-      setZoneRows(rows);
-      setStep("zones");
+      const wanted = selected!.protocol!;
+      const result = await tryProtocol(wanted, address);
+      if (result.reachable) { setProtocol(wanted); setProbe(result); setStep("detected"); return; }
+      // Courtesy fallback: try the other real protocol before giving up, so picking the
+      // wrong brand surfaces as "here's what we actually found," never a silent continue.
+      const other = wanted === "avr" ? "yamaha" : "avr";
+      const otherResult = await tryProtocol(other, address);
+      if (otherResult.reachable) {
+        setMismatchProtocol(other);
+        setProbe(otherResult);
+        setStep("mismatch");
+        return;
+      }
+      setErr(result.error ?? "Could not reach this address.");
+      setStep("setup");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Connection failed.");
-      setStep("address");
+      setStep("setup");
     }
+  }
+
+  function useDetected() {
+    if (!mismatchProtocol) return;
+    setProtocol(mismatchProtocol);
+    setMismatchProtocol(null);
+    setStep("detected");
+  }
+
+  function proceedToZones() {
+    if (!probe) return;
+    const rows: typeof zoneRows = {};
+    for (const z of probe.zones) rows[z.id] = { checked: z.detected, name: "", roomId: rooms[0]?.id ?? "" };
+    setZoneRows(rows);
+    setStep("zones");
   }
 
   async function createRoom() {
@@ -410,25 +493,27 @@ function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | 
   }
 
   async function commit() {
-    if (!probe) return;
+    if (!probe || !protocol) return;
     setErr(null);
     const checked = probe.zones.filter((z) => zoneRows[z.id]?.checked);
     if (checked.length === 0) { setErr("Select at least one zone."); return; }
     for (const z of checked) if (!zoneRows[z.id]!.roomId) { setErr(`Pick a room for ${z.label}.`); return; }
     setStep("creating");
     try {
+      const driver = registry.find((d) => d.protocols.includes(protocol as never));
       if (driver && !driver.installed) await installDriverByKey(driver.key);
       const capabilities = (driver?.capabilities ?? ["onoff", "media"]) as never;
+      const brandName = PROTOCOL_BRAND_LABEL[protocol];
       const created: { zone: string; name: string; room: string }[] = [];
       for (const z of checked) {
         const row = zoneRows[z.id]!;
-        const deviceName = row.name.trim() || `${driver?.name ?? "AVR"} — ${z.label}`;
+        const deviceName = row.name.trim() || `${brandName} — ${z.label}`;
         await client.commission({
-          backendId: `manual:avr:${ip.trim()}:${z.id}`,
+          backendId: `manual:${protocol}:${ip.trim()}:${z.id}`,
           name: deviceName,
           roomId: row.roomId,
           capabilities,
-          protocol: "avr",
+          protocol,
           address: ip.trim(),
           config: { zone: z.id },
         });
@@ -456,29 +541,68 @@ function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | 
 
   return (
     <>
-      <label className="drv-field"><span className="lbl">Receiver IP address</span>
-        <input
-          value={ip}
-          onChange={(e) => setIp(e.target.value)}
-          placeholder="192.168.1.50"
-          disabled={step !== "address"}
-        />
-      </label>
+      {(step === "setup" || step === "connecting") && (
+        <>
+          <label className="drv-field"><span className="lbl">Brand</span>
+            <select value={brand} onChange={(e) => setBrand(e.target.value as AvBrandId)} disabled={step === "connecting"}>
+              {AV_RECEIVER_BRANDS.map((b) => <option key={b.id} value={b.id} disabled={b.id !== "auto" && !b.protocol}>{b.label}{b.id !== "auto" && !b.protocol ? " — not yet supported" : ""}</option>)}
+            </select>
+            {brand !== "auto" && !AV_RECEIVER_BRANDS.find((b) => b.id === brand)?.protocol && (
+              <span className="help">No protocol adapter exists for {brandLabel(brand)} yet — pick Auto Detect, Denon/Marantz, or Yamaha, or add it manually via a KNX/Modbus/MQTT bridge if one exists for this unit.</span>
+            )}
+          </label>
+          <label className="drv-field"><span className="lbl">Receiver IP address</span>
+            <input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="192.168.1.50" disabled={step === "connecting"} />
+          </label>
+          {step === "setup" && (
+            <div className="drv-actions">
+              <button className="primary" onClick={connect}>Connect</button>
+            </div>
+          )}
+          {step === "connecting" && (
+            <p className="muted">
+              Connecting to {ip}…{" "}
+              {brand === "auto" ? "trying Denon/Marantz, then Yamaha" : `trying ${brandLabel(brand)}`} (a few seconds)
+            </p>
+          )}
+        </>
+      )}
 
-      {step === "address" && (
-        <div className="drv-actions">
-          <button className="primary" onClick={connect}>Connect</button>
+      {step === "mismatch" && mismatchProtocol && (
+        <div className="drv-field" style={{ border: "1px solid var(--aureon-color-status-warning, #a66)", borderRadius: 8, padding: 12, marginBottom: 8 }}>
+          <p><strong>Selected brand:</strong> {brandLabel(brand)}</p>
+          <p><strong>Detected device:</strong> {PROTOCOL_BRAND_LABEL[mismatchProtocol]} AV Receiver at {ip}</p>
+          <p className="muted">This doesn't match what you picked. Use what was actually found, or cancel and check the IP.</p>
+          <div className="drv-actions">
+            <button className="primary" onClick={useDetected}>Use Detected Device</button>
+            <button onClick={reset}>Cancel</button>
+          </div>
         </div>
       )}
 
-      {step === "connecting" && <p className="muted">Connecting to {ip}… checking zones (a few seconds)</p>}
+      {step === "detected" && probe && protocol && (
+        <div className="drv-field" style={{ border: "1px solid var(--aureon-color-base-hairline, #333)", borderRadius: 8, padding: 12, marginBottom: 8 }}>
+          <h4 style={{ marginTop: 0 }}>Detected device</h4>
+          <p><strong>Brand:</strong> {PROTOCOL_BRAND_LABEL[protocol]}</p>
+          <p><strong>Model:</strong> — <span className="muted">(not reported over this protocol without a broadcast scan)</span></p>
+          <p><strong>Firmware:</strong> — <span className="muted">(not exposed by this protocol)</span></p>
+          <p><strong>IP address:</strong> {ip}</p>
+          <p><strong>MAC address:</strong> {probe.mac ?? "— (not resolvable on this network)"}</p>
+          <p><strong>Available zones:</strong> {probe.zones.map((z) => z.label).join(", ") || "none reported"}</p>
+          <p><strong>Connection status:</strong> <span style={{ color: "var(--aureon-color-status-good, #6a6)" }}>Connected ✓</span></p>
+          <div className="drv-actions">
+            <button className="primary" onClick={proceedToZones}>Continue</button>
+            <button onClick={reset}>Cancel</button>
+          </div>
+        </div>
+      )}
 
-      {(step === "zones" || step === "creating") && probe && (
+      {(step === "zones" || step === "creating") && probe && protocol && (
         <>
           <p className="muted">
-            Connected{probe.mac ? ` · ${probe.mac}` : ""}. {probe.zones.filter((z) => z.detected).length} of{" "}
-            {probe.zones.length} zone(s) answered within the check window — detection is best-effort, so every
-            zone stays selectable either way.
+            {protocol === "yamaha"
+              ? `${probe.zones.length} zone(s) reported directly by the unit — a real query, not a guess.`
+              : `${probe.zones.filter((z) => z.detected).length} of ${probe.zones.length} zone(s) answered within the check window — detection is best-effort, so every zone stays selectable either way.`}
           </p>
           {probe.zones.map((z) => {
             const row = zoneRows[z.id];
@@ -502,7 +626,7 @@ function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | 
                         value={row.name}
                         disabled={step === "creating"}
                         onChange={(e) => setZoneRows((prev) => ({ ...prev, [z.id]: { ...prev[z.id]!, name: e.target.value } }))}
-                        placeholder={`${driver?.name ?? "AVR"} — ${z.label}`}
+                        placeholder={`${PROTOCOL_BRAND_LABEL[protocol]} — ${z.label}`}
                       />
                     </label>
                     <label className="drv-field"><span className="lbl">Room</span>
@@ -559,7 +683,7 @@ function AvrGuidedAdd({ driver, rooms, onRoomCreated }: { driver: DriverEntry | 
 
 function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverEntry[]; rooms: Room[]; onRoomCreated: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
-  const [protocol, setProtocol] = useState<(typeof MANUAL_PROTOCOLS)[number]>("avr");
+  const [protocol, setProtocol] = useState<(typeof MANUAL_PROTOCOLS)[number]>("avr-receiver");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [configText, setConfigText] = useState("");
@@ -673,15 +797,15 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
           <>
             <label className="drv-field"><span className="lbl">Protocol</span>
               <select value={protocol} onChange={(e) => setProtocol(e.target.value as (typeof MANUAL_PROTOCOLS)[number])}>
-                {MANUAL_PROTOCOLS.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
+                {MANUAL_PROTOCOLS.map((p) => <option key={p} value={p}>{p === "avr-receiver" ? "AV RECEIVER" : p.toUpperCase()}</option>)}
               </select>
-              {!driver && <span className="help">No installed extension covers {protocol.toUpperCase()} yet — install it from the Extension Center first.</span>}
-              {driver && capabilities.length > 0 && <span className="help">Will add with capabilities: {capabilities.join(", ")}</span>}
+              {protocol !== "avr-receiver" && !driver && <span className="help">No installed extension covers {protocol.toUpperCase()} yet — install it from the Extension Center first.</span>}
+              {protocol !== "avr-receiver" && driver && capabilities.length > 0 && <span className="help">Will add with capabilities: {capabilities.join(", ")}</span>}
             </label>
 
-            {protocol === "avr" ? (
+            {protocol === "avr-receiver" ? (
               <>
-                <AvrGuidedAdd driver={driver} rooms={rooms} onRoomCreated={onRoomCreated} />
+                <AvReceiverGuidedAdd registry={registry} rooms={rooms} onRoomCreated={onRoomCreated} />
                 <div className="drv-actions"><button onClick={() => setOpen(false)}>Close</button></div>
               </>
             ) : <>

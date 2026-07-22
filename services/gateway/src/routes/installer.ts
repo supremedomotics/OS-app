@@ -34,6 +34,7 @@ import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 import { collectSystemHealth } from "../system-health.js";
 import { probeAvr } from "../avr-probe.js";
+import { probeYamaha } from "../yamaha-probe.js";
 import { OtaChecker } from "../ota.js";
 
 /**
@@ -248,18 +249,21 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
 
   // A targeted, single-address reachability probe (§ AVR Intelligent Manual Add) — opens a
   // real connection to confirm an installer-typed IP before committing to commission anything.
-  // Only "avr" implements a real probe today; HEOS has no zone concept (opaque player pids
-  // instead) and Yamaha's zones are queried through a different mechanism (`/system/
-  // getFeatures`) — both are real, separate follow-ups, not stubbed here.
+  // "avr" (Denon/Marantz Telnet) and "yamaha" (YXC/MusicCast) implement a real probe — the
+  // only two AV protocols with a real driver in this fleet. HEOS has no zone concept (opaque
+  // player pids instead), so it isn't probed the same way. Every other AV brand named in the
+  // manual-add UI (Onkyo/Pioneer/Sony/Arcam/Anthem/NAD) has zero protocol implementation
+  // anywhere in this codebase — probing them here would mean fabricating a result, so they're
+  // rejected explicitly instead.
   app.post("/v1/commissioning/probe", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
       const { protocol, address } = ProbeRequest.parse(req.body ?? {});
-      if (protocol !== "avr") {
-        throw new SupremeError("validation_failed", `probing is not yet implemented for protocol '${protocol}'`);
-      }
-      const body: ProbeResult = await probeAvr(address);
+      let body: ProbeResult;
+      if (protocol === "avr") body = await probeAvr(address);
+      else if (protocol === "yamaha") body = await probeYamaha(address);
+      else throw new SupremeError("validation_failed", `probing is not yet implemented for protocol '${protocol}'`);
       reply.send(body);
     } catch (err) {
       sendError(reply, err);

@@ -75,6 +75,13 @@ export const DiscoveredDeviceView = z.object({
    * Absent when the protocol needs no config (KNX group address, Modbus register, …).
    */
   bindConfig: z.record(z.unknown()).optional(),
+  /** §Automatic Zone Generation — extra logical zones this ONE physical unit exposes,
+   * discovered via a genuine wire query (e.g. Yamaha's `getFeatures`). Absent for
+   * single-zone devices/protocols — never fabricated for one that can't report it. */
+  zones: z.array(z.object({ id: z.string(), label: z.string() })).optional(),
+  /** A real, wire-reported brand string (§ Discover Devices enrichment) — e.g. fetched from
+   * a unit's UPnP description XML. Absent for sources that report no such field. */
+  manufacturer: z.string().optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
