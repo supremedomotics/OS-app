@@ -4,6 +4,7 @@ import {
   SupremeError,
   UpdateDeviceRequest,
   type CommandResponse,
+  type DeviceCapabilitiesRefreshResponse,
   type DeviceDiagnosticsResponse,
   type DeviceResponse,
   type MediaQueueResponse,
@@ -14,6 +15,28 @@ import { authenticate, enforce } from "../auth.js";
 import { ArtworkCache } from "../artwork-cache.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+
+/** Order-independent deep-equality check for two capability-config objects, via a
+ * key-sorted JSON.stringify (§ Capability Refresh). Plain `JSON.stringify(a) ===
+ * JSON.stringify(b)` — used elsewhere in this codebase for capability-STATE dedup
+ * (`av-sdk/state-cache.ts`), where both sides always come from the same driver code
+ * path so key order is stable — is NOT safe here: one side is a driver's freshly
+ * re-computed object literal, the other has round-tripped through storage, and
+ * nothing guarantees identical key insertion order between them even when every
+ * value is identical. A false "changed" would misreport "Capabilities refreshed"
+ * for a protocol (e.g. Denon/Marantz Telnet) that returns byte-for-byte the same
+ * deterministic config every time. */
+function sameCapabilityConfig(a: unknown, b: unknown): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 /** The core control verb (§6): POST /v1/devices/:id/command. */
 export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -202,6 +225,45 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "device", deviceId, "view");
       const diagnostics = await ctx.sil.getDiagnostics(deviceId);
       reply.send({ diagnostics } satisfies DeviceDiagnosticsResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Capability Refresh (§ Part 2): POST /v1/devices/:id/capabilities/refresh —
+  // re-query the owning driver's real capabilities in place and persist whatever it
+  // reports. Never recreates the device (only `home.setCapabilityConfig` is touched,
+  // the same call `bindProtocol()` already makes at first-commission time), so room
+  // assignment/automations/history are all untouched. `refreshed` means the config
+  // GENUINELY CHANGED, not merely "a config was returned" — a protocol with no live
+  // capability query (e.g. Denon/Marantz Telnet) returns the exact same deterministic
+  // config every time, so `refreshed: false` there is the honest, expected outcome
+  // (a real reconnect happened, nothing new was discoverable), not an error.
+  app.post<{ Params: { id: string } }>("/v1/devices/:id/capabilities/refresh", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "control");
+      await ctx.sil.refreshCapabilities(deviceId);
+      let refreshedConfig: Record<string, unknown> | null = null;
+      let changed = false;
+      let updatedDevice = device;
+      for (const cap of device.capabilities) {
+        const config = await ctx.sil.getCapabilityConfig(deviceId, cap.kind);
+        if (config) {
+          if (!sameCapabilityConfig(config, cap.config)) changed = true;
+          const saved = await ctx.home.setCapabilityConfig(deviceId, cap.kind, config);
+          if (saved) updatedDevice = saved;
+          if (cap.kind === "media") refreshedConfig = config;
+        }
+      }
+      reply.send({
+        refreshed: changed,
+        config: refreshedConfig,
+        device: updatedDevice,
+      } satisfies DeviceCapabilitiesRefreshResponse);
     } catch (err) {
       sendError(reply, err);
     }

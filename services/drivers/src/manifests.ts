@@ -231,8 +231,16 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
   }),
   defineManifest({
     key: "supreme-avr",
-    name: "Supreme AVR (Denon/Marantz)",
-    description: "Denon/Marantz AV receivers over the classic Telnet IP-control protocol.",
+    // § AVR Intelligent Manual Add — one brand-neutral extension in the Extension Center;
+    // the manual-add wizard is what's brand-aware (routes to whichever real protocol
+    // adapter — this one, or the separate Yamaha extension — actually matches what the
+    // installer selects/what answers). The backend `ref`/`protocols` stay literally "avr"
+    // (Denon/Marantz Telnet) since that's the one real implementation behind this listing
+    // today — renaming the manifest never means claiming new brand support that doesn't
+    // exist. See docs/architecture/AV-Adapter-Development-Guide.md for what a genuinely
+    // new brand's protocol adapter would need before it could join this same listing.
+    name: "AV Receivers",
+    description: "Denon and Marantz AV receivers over the classic Telnet IP-control protocol.",
     category: "media",
     channel: "official",
     publisher: PUBLISHER,
@@ -244,7 +252,7 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     operations: [...PROTO_OPS],
     documentationUrl: "https://docs.supreme.local/extensions/avr",
     releaseNotes:
-      "Real Denon/Marantz Telnet control: power, volume, mute, source, Zone 2 (as an independent device on the same connection), tone/DSP, sleep timer, and auto-reconnect. Each receiver is added by IP address through Bus Binding after enabling — there's nothing to configure here.",
+      "Real Denon/Marantz Telnet control: power, volume, mute, source, Zone 2 (as an independent device on the same connection), tone/DSP, sleep timer, and auto-reconnect. Each receiver is added by IP address through Bus Binding after enabling — there's nothing to configure here. Yamaha AVRs are supported through the separate Yamaha extension; the guided add wizard routes to whichever brand you pick automatically.",
     changelog: [
       { version: "1.0.0", date: "2026-07-10", notes: "First stable release: power/volume/media, Zone 2, tone/DSP, auto-reconnect (ADR 0015)." },
     ],

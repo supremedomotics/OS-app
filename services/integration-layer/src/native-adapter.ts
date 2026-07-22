@@ -267,6 +267,15 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     return null;
   }
 
+  /** § Capability Refresh — ask the owning driver to re-query whatever it can
+   * genuinely re-discover over the wire, in place, without recreating the device. A
+   * no-op (not a throw) for a driver that doesn't implement this or doesn't own the
+   * device — matching every other optional per-device driver call in this class. */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.refreshCapabilities) await owner.refreshCapabilities(deviceId);
+  }
+
   /** Release the owning driver's per-device resources (§ Driver Lifecycle Completion)
    * — called when a Supreme device is deleted while its driver keeps running for
    * other devices. Safe to call for a device with no native owner (e.g. in-process

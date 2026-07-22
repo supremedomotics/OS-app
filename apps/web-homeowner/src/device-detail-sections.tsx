@@ -9,6 +9,7 @@ import {
   fetchDriverRegistry,
   fetchEnergyHistory,
   fetchIntelligenceHistory,
+  refreshDeviceCapabilities,
 } from "./api.js";
 import { friendlyType } from "./devices.js";
 import { useAsync } from "./use-async.js";
@@ -43,6 +44,17 @@ function statusTone(status: Device["status"]): "good" | "neutral" | "warning" {
 }
 function statusLabel(status: Device["status"]): string {
   return status === "online" ? "Online" : status === "offline" ? "Offline" : "Unavailable";
+}
+
+/** The live per-driver connection signal (real socket/link state), distinct from `device.status`
+ * (the device-registry record's own field, set at commission time — it doesn't track whether the
+ * underlying connection is actually up right now). Diagnostics should show the truth about the
+ * wire, not a copy of the same "Status" row Information already shows. */
+function connectionTone(status: "connected" | "connecting" | "disconnected"): "good" | "neutral" | "warning" {
+  return status === "connected" ? "good" : status === "connecting" ? "neutral" : "warning";
+}
+function connectionLabel(status: "connected" | "connecting" | "disconnected"): string {
+  return status === "connected" ? "Connected" : status === "connecting" ? "Connecting…" : "Disconnected";
 }
 
 // ── Information — only fields the platform actually has for this device, same "don't fake it"
@@ -113,8 +125,13 @@ export function DiagnosticsSection({ device }: { device: Device }) {
   const myBindings = (bindings?.bindings ?? []).filter((b) => b.deviceId === device.id);
   const dd = driverDiagnostics;
 
+  // Prefer the driver's real, live connectionStatus (a real socket/link signal) over
+  // device.status (a commission-time registry field) — this section exists specifically to
+  // show what's actually happening on the wire, not repeat Information's "Status" row.
   const rows: DeviceFactRow[] = [
-    { label: "Connection", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) },
+    dd
+      ? { label: "Connection", value: connectionLabel(dd.connectionStatus), icon: "📶", tone: connectionTone(dd.connectionStatus) }
+      : { label: "Connection", value: statusLabel(device.status), icon: "📶", tone: statusTone(device.status) },
   ];
   if (driver) rows.push({ label: "Driver", value: driver.name, icon: "🧩" });
   if (driver?.protocols[0]) rows.push({ label: "Protocol", value: driver.protocols[0].toUpperCase(), icon: protocolGlyph(driver.protocols[0]) });
@@ -277,10 +294,53 @@ export function DeviceManageActions({ device, onRemoved, onRenamed }: { device: 
   );
 }
 
-export function AdvancedSettingsSection({ device, onRemoved, children }: { device: Device; onRemoved?: () => void; children?: ReactNode }) {
+/** § Capability Refresh — reconnects to this device's owning driver and re-reads
+ * whatever real capabilities it can genuinely re-discover (inputs, friendly names,
+ * sound/zone lists, …), in place: never recreates the device, never touches its room
+ * assignment, automations, or history — only `POST .../capabilities/refresh`, which
+ * persists via the exact same `setCapabilityConfig` call commissioning itself uses.
+ * Shown for any device with at least one already-populated capability config — the
+ * real signal that SOME driver backs this device (`device.driverId` is a DIFFERENT,
+ * Driver-Manager-install concept and stays `null` for the `bindProtocol()` native-
+ * binding path every AVR/HEOS/Yamaha device actually commissions through — verified
+ * live, not assumed, gating on it would have hidden this action for every one of
+ * them). Harmless, honest "Nothing new found" for a protocol with no live capability
+ * query (e.g. classic Denon/Marantz Telnet), never fabricated. */
+function RefreshCapabilitiesAction({ device, onDeviceUpdated }: { device: Device; onDeviceUpdated?: (d: Device) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function refresh() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await refreshDeviceCapabilities(device.id);
+      if (res.device) onDeviceUpdated?.(res.device);
+      setResult(res.refreshed ? "Capabilities refreshed." : "Reconnected — nothing new to report from this device's protocol.");
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "Could not refresh capabilities.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasDriverBackedConfig = device.capabilities.some((c) => Object.keys(c.config ?? {}).length > 0);
+  if (!hasDriverBackedConfig) return null;
+  return (
+    <div className="drv-actions">
+      <button disabled={busy} aria-busy={busy} onClick={() => void refresh()}>Refresh Capabilities</button>
+      {result && <p className="hint">{result}</p>}
+    </div>
+  );
+}
+
+export function AdvancedSettingsSection({
+  device, onRemoved, onDeviceUpdated, children,
+}: { device: Device; onRemoved?: () => void; onDeviceUpdated?: (d: Device) => void; children?: ReactNode }) {
   return (
     <CollapsibleSection title="Advanced Settings">
       {children}
+      <RefreshCapabilitiesAction device={device} onDeviceUpdated={onDeviceUpdated} />
       <DeviceManageActions device={device} onRemoved={onRemoved} />
     </CollapsibleSection>
   );

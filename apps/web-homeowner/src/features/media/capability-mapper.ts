@@ -69,6 +69,38 @@ export function usesSimpleMediaDetail(kind: MediaDeviceKind): boolean {
   return kind === "television" || kind === "projector";
 }
 
+/** Loose, best-effort icon per input connector type (§ `AvrInput.type` is a display hint
+ * only, never a protocol fact — shared by the device detail console and the Room Device
+ * Card so both surfaces use the same real icon vocabulary instead of two drifting copies. */
+/** Resolve what to actually display for the current source. Prefers the matching
+ * `config.inputs` entry's label (a physical/logical input the device declared); when
+ * `source` doesn't match any declared input — e.g. a HEOS streaming service name like
+ * "Spotify"/"TuneIn" resolved live by `network-source-resolver.ts`, which by definition
+ * isn't one of the fixed physical inputs in `HEOS_INPUTS` — falls back to the raw value
+ * itself, since by the time it reaches here it's already a real, resolved display string,
+ * not a protocol token (§ Part 7: never expose a raw protocol name like "NET"). */
+export function currentInputLabel(
+  inputs: { id: string; label: string }[] | undefined,
+  source: string | null | undefined,
+): string | undefined {
+  if (!source) return undefined;
+  return inputs?.find((i) => i.id === source)?.label ?? source;
+}
+
+export function inputGlyph(type?: string): string {
+  switch (type) {
+    case "hdmi": return "📺";
+    case "optical": return "🔦";
+    case "analog": return "🔌";
+    case "tuner": return "📻";
+    case "usb": return "🔧";
+    case "bluetooth": return "🔵";
+    case "streaming": return "☁️";
+    case "network": return "🖴";
+    default: return "♪";
+  }
+}
+
 /** Every classification an installer can set, for a "Device type" picker. */
 export const MEDIA_KIND_OPTIONS: MediaKindMeta[] = [
   KIND_META.television,

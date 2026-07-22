@@ -125,4 +125,9 @@ export interface IBackendAdapter {
    * no per-device driver-level state to release (e.g. HA — HA owns its own connection
    * lifecycle independently of Supreme device deletion). */
   unbindDevice?(deviceId: DeviceId): Promise<void>;
+
+  /** Optional: ask the owning driver to re-query whatever real capability data it can
+   * genuinely re-discover over the wire, in place (§ Capability Refresh) — never
+   * recreates the device. A no-op for backends/drivers with nothing to re-query. */
+  refreshCapabilities?(deviceId: DeviceId): Promise<void>;
 }

@@ -123,12 +123,25 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const key = `${host}:${port}`;
     const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
     const hasToneControl = binding.config?.hasToneControl !== false;
+    const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
     this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
     }
-    if (this.connected) this.transport.ensureLink(key, host, port);
+    if (this.connected) {
+      const link = this.transport.ensureLink(key, host, port);
+      // A zone2 device bound AFTER its link already finished connecting (e.g. zone1 and
+      // zone2 added as two separate commission calls, as the guided AVR add wizard does)
+      // never gets `onLinkConnect`'s Z2?/Z2MU? — that init burst already fired without
+      // them, since no zone2 binding existed yet at that moment. Catch up immediately
+      // instead of leaving zone2's state stuck at null until the next reconnect.
+      if (isFirstZone2Binding && link.ready && link.socket && !link.socket.destroyed) {
+        const tokens = ["Z2?", "Z2MU?"];
+        for (const t of tokens) link.diagnostics.recordSend(t);
+        link.socket.write(`${tokens.join("\r")}\r`);
+      }
+    }
   }
 
   manages(deviceId: DeviceId): boolean {
@@ -189,6 +202,21 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     return denonCapabilityConfig({ hasZone2, hasToneControl: b.zone === "main" && b.hasToneControl }) as unknown as Record<string, unknown>;
   }
 
+  /** § Capability Refresh (Part 2) — the classic Denon/Marantz Telnet protocol has no
+   * feature-query command at all (verified against the spec, see avr-codec.ts module
+   * doc), so there is no new capability data to discover over the wire; `hasZone2`/
+   * `hasToneControl` stay whatever the installer declared at commissioning. What this
+   * genuinely does: force the link closed and immediately re-open it, which re-runs
+   * `onLinkConnect`'s init query burst — the same real state resync a natural
+   * reconnect performs, just triggered on demand instead of waiting for a drop. */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !this.connected) return;
+    const key = `${b.host}:${b.port}`;
+    this.transport.releaseKey(key);
+    this.transport.ensureLink(key, b.host, b.port);
+  }
+
   /** Diagnostics Console (§ Universal AV Driver SDK) — real per-link counters/timestamps,
    * never fabricated. `null` when this device's zone/host has no link yet (never bound or
    * never connected). MAC is a best-effort local ARP-table read (§ arp-lookup.ts); Denon's
@@ -237,7 +265,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
    * "Connected to…" log line are now owned by the transport itself). Queries current state
    * so the driver starts in sync (main zone + zone 2 if bound). */
   private onLinkConnect(link: TcpLink, socket: net.Socket, host: string, port: number): void {
-    const initTokens = ["PW?", "MV?", "MU?", "SI?", "PSTONE CTRL ?", "PSBAS ?", "PSTRE ?", "MS?"];
+    const initTokens = ["PW?", "ZM?", "MV?", "MU?", "SI?", "PSTONE CTRL ?", "PSBAS ?", "PSTRE ?", "MS?"];
     if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
       initTokens.push("Z2?", "Z2MU?");
     }

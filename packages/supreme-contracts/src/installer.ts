@@ -75,6 +75,13 @@ export const DiscoveredDeviceView = z.object({
    * Absent when the protocol needs no config (KNX group address, Modbus register, …).
    */
   bindConfig: z.record(z.unknown()).optional(),
+  /** §Automatic Zone Generation — extra logical zones this ONE physical unit exposes,
+   * discovered via a genuine wire query (e.g. Yamaha's `getFeatures`). Absent for
+   * single-zone devices/protocols — never fabricated for one that can't report it. */
+  zones: z.array(z.object({ id: z.string(), label: z.string() })).optional(),
+  /** A real, wire-reported brand string (§ Discover Devices enrichment) — e.g. fetched from
+   * a unit's UPnP description XML. Absent for sources that report no such field. */
+  manufacturer: z.string().optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
@@ -107,6 +114,32 @@ export type ApproveDeviceRequest = z.infer<typeof ApproveDeviceRequest>;
 
 export const DiscoverRequest = z.object({ protocol: ProtocolKind.optional() });
 export type DiscoverRequest = z.infer<typeof DiscoverRequest>;
+
+/**
+ * A targeted, single-address reachability probe (§ AVR Intelligent Manual Add) — distinct
+ * from {@link DiscoverRequest}'s broadcast scan. For protocols with no broadcast presence
+ * (or a scan that hasn't reached a device yet), the installer types in an address and this
+ * opens a real connection to confirm it before committing to commission anything.
+ */
+export const ProbeRequest = z.object({ protocol: ProtocolKind, address: z.string().min(1) });
+export type ProbeRequest = z.infer<typeof ProbeRequest>;
+
+/** One zone/endpoint found (or not) during a probe — honestly labeled as detected, not guaranteed. */
+export const ProbeZone = z.object({
+  id: z.string(),
+  label: z.string(),
+  detected: z.boolean(),
+});
+export type ProbeZone = z.infer<typeof ProbeZone>;
+
+export const ProbeResult = z.object({
+  reachable: z.boolean(),
+  error: z.string().nullable(),
+  mac: z.string().nullable(),
+  /** Empty for protocols/errors where zone detection doesn't apply. */
+  zones: z.array(ProbeZone),
+});
+export type ProbeResult = z.infer<typeof ProbeResult>;
 
 export const CommissionRequest = z.object({
   backendId: z.string(),
