@@ -131,7 +131,14 @@ export class TcpLineTransport {
     });
     socket.on("close", () => {
       const l = this.links.get(key);
-      if (l) {
+      // § Capability Refresh — `close` fires asynchronously, on a later tick than
+      // `destroy()` was called on it. If this exact key was released and immediately
+      // re-established in between (e.g. `releaseKey()` followed straight away by
+      // `ensureLink()` for a forced reconnect), `l` is now a DIFFERENT link object
+      // whose own, already-connecting-or-connected socket must not be clobbered by
+      // this stale socket's belated close event — only mutate when it's genuinely
+      // still this socket's own link.
+      if (l && l.socket === socket) {
         l.socket = null;
         l.ready = false;
         l.reconnect.notifyDisconnected();

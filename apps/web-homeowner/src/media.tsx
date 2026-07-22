@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
 import { Button, Grid } from "@supreme/aureon-web";
 import type { Tab } from "./App.js";
-import { client } from "./api.js";
+import { client, fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { MediaDeviceCard } from "./features/media/card.js";
 import { useOpenDevice } from "./device-detail-router.js";
 import { FavHeart, useFavorites } from "./favorites.js";
@@ -18,27 +18,18 @@ import { getDeviceUiCapabilities, hasCapability } from "./device-ui-capabilities
  */
 type Room = { id: string; name: string };
 
-function nowPlaying(d: Device): string {
-  const s = d.state as Record<string, Record<string, unknown>> | undefined;
-  const m = s?.media;
-  if (!m) return "Idle";
-  const title = (m.title as string) ?? "";
-  const artist = (m.artist as string) ?? "";
-  const playing = m.playback === "playing";
-  if (title) return artist ? `${title} · ${artist}` : title;
-  return playing ? "Playing" : "Idle";
-}
-
-export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
+export function Media({ onNavigate, devMode = false }: { onNavigate?: (t: Tab) => void; devMode?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [registry, setRegistry] = useState<DriverEntry[] | null>(null);
   const fav = useFavorites();
   const { openDevice, refreshToken } = useOpenDevice();
 
   async function load() {
-    const [devs, home] = await Promise.all([client.devices(), client.home()]);
+    const [devs, home, drivers] = await Promise.all([client.devices(), client.home(), fetchDriverRegistry()]);
     setDevices(devs.devices);
     setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
+    setRegistry(drivers);
   }
   useEffect(() => { void load(); }, [refreshToken]);
 
@@ -85,7 +76,7 @@ export function Media({ onNavigate }: { onNavigate?: (t: Tab) => void; devMode?:
               <MediaDeviceCard
                 key={d.id}
                 device={d}
-                status={nowPlaying(d)}
+                driverProtocol={d.driverId ? registry?.find((r) => r.installedId === d.driverId || r.key === d.driverId)?.protocols[0] ?? null : null}
                 onOpen={() => openDevice(d.id)}
                 trailing={
                   <FavHeart fav={{ type: "device", deviceId: d.id }}

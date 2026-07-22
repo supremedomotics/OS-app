@@ -162,6 +162,23 @@ export type DeviceDriverDiagnostics = z.infer<typeof DeviceDriverDiagnostics>;
 export const DeviceDiagnosticsResponse = z.object({ diagnostics: DeviceDriverDiagnostics.nullable() });
 export type DeviceDiagnosticsResponse = z.infer<typeof DeviceDiagnosticsResponse>;
 
+/** POST /v1/devices/:id/capabilities/refresh (§ Capability Refresh) — re-query the
+ * owning driver in place (never recreates the device, never touches its room
+ * assignment/automations/history) and persist whatever fresh AudioCapabilityConfig it
+ * reports. `refreshed: false` is an honest, non-error outcome — some protocols
+ * genuinely have no live capability query (e.g. classic Denon/Marantz Telnet), so
+ * "nothing new to apply" is the correct, expected result, not a failure. */
+export const DeviceCapabilitiesRefreshResponse = z.object({
+  refreshed: z.boolean(),
+  config: z.record(z.unknown()).nullable(),
+  /** The device as it stands after the refresh, so a caller can update its own local
+   * copy in one round trip instead of a separate re-fetch. Same object `setCapability
+   * Config` already returns at first-commission time — never a re-fetched/re-derived
+   * shape. */
+  device: Device.nullable(),
+});
+export type DeviceCapabilitiesRefreshResponse = z.infer<typeof DeviceCapabilitiesRefreshResponse>;
+
 // ── Scenes ───────────────────────────────────────────────────────────────────
 
 export const SceneList = z.object({ scenes: z.array(Scene) });

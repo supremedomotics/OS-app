@@ -20,6 +20,7 @@ function startFakeHeos(): Promise<{ server: Server; port: number; received: stri
   const players = new Map<string, { state: "play" | "pause" | "stop"; volume: number; muted: boolean; repeat: string; shuffle: string }>();
   players.set("1", { state: "stop", volume: 40, muted: false, repeat: "off", shuffle: "off" });
   players.set("2", { state: "stop", volume: 20, muted: false, repeat: "off", shuffle: "off" });
+  players.set("3", { state: "stop", volume: 30, muted: false, repeat: "off", shuffle: "off" });
 
   return new Promise((resolve) => {
     const server = createServer((sock: Socket) => {
@@ -63,6 +64,10 @@ function startFakeHeos(): Promise<{ server: Server; port: number; received: stri
             p.repeat = params.repeat;
             p.shuffle = params.shuffle;
             sock.write(`${heosOk("player/set_play_mode", `pid=${pid}&repeat=${p.repeat}&shuffle=${p.shuffle}`)}\r\n`);
+          } else if (g === "player" && c === "get_now_playing_media" && p && pid === "3") {
+            // § Network Source Resolver — a song-type response carrying a real HEOS `sid`
+            // (4 = Spotify, verified table in network-source-resolver.ts), no station name.
+            sock.write(`${heosOk("player/get_now_playing_media", `pid=${pid}`, { type: "song", song: "Track X", sid: 4, artist: "Artist X", album: "Album X", image_url: "https://art.example/3.jpg" })}\r\n`);
           } else if (g === "player" && c === "get_now_playing_media" && p) {
             sock.write(`${heosOk("player/get_now_playing_media", `pid=${pid}`, { type: "station", song: "Song A", station: "Jazz FM", artist: "Artist A", image_url: "https://art.example/1.jpg" })}\r\n`);
           } else if (g === "player" && c === "play_next" && p) {
@@ -171,6 +176,19 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
     ).rejects.toThrow();
   });
 
+  it("refreshCapabilities forces a real reconnect that re-syncs both bound players (§ Capability Refresh)", async () => {
+    const registersBefore = heos.received.filter((r) => r.includes("register_for_change_events?enable=on")).length;
+    await driver.refreshCapabilities(livingRoom);
+    await vi.waitFor(() => {
+      expect(heos.received.filter((r) => r.includes("register_for_change_events?enable=on")).length).toBeGreaterThan(registersBefore);
+    });
+    // Both players sharing this connection are still bound and controllable — this
+    // never recreated either device or dropped its binding.
+    expect(driver.manages(livingRoom)).toBe(true);
+    expect(driver.manages(theatre)).toBe(true);
+    await vi.waitFor(() => expect(driver.getDiagnostics(livingRoom)?.connectionStatus).toBe("connected"));
+  });
+
   it("plays living room and leaves theatre untouched", async () => {
     const ev = nextEvent(driver, (e) => e.deviceId === livingRoom && (e.state as { playback?: string }).playback === "playing");
     await driver.command(livingRoom, { capability: "media", action: "play" });
@@ -219,6 +237,16 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
 
   it("getQueue on an unbound device resolves null rather than throwing", async () => {
     await expect(driver.getQueue("device-nope" as DeviceId)).resolves.toBeNull();
+  });
+
+  it("resolves the real streaming service name from a song-type get_now_playing_media response (§ Network Source Resolver)", async () => {
+    const den = "device-heos-den" as DeviceId;
+    await driver.bind({ deviceId: den, capability: "media", address: `127.0.0.1:${heos.port}`, config: { pid: "3" } });
+    await vi.waitFor(() => {
+      const s = driver.getState(den, "media") as { title?: string | null; source?: string | null } | null;
+      expect(s?.title).toBe("Track X");
+      expect(s?.source).toBe("Spotify");
+    });
   });
 });
 

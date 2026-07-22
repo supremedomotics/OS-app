@@ -28,18 +28,21 @@ const scene = (overrides: Partial<Scene> = {}): Scene =>
 describe("defaultNode — one default shape per editor node type", () => {
   it("produces the exhaustive, DSL-compatible default for every EditorNode type", () => {
     expect(defaultNode("time")).toEqual({ type: "time", at: "07:00", days: [] });
+    // § Capability-Driven Builder — no capability is assumed at creation time; the
+    // field/action pickers populate themselves the moment a real device is chosen,
+    // from THAT device's own real capabilities (see automations.tsx's defaultNode).
     expect(defaultNode("device_state")).toEqual({
       type: "device_state",
       deviceId: null,
-      capability: "onoff",
-      field: "on",
+      capability: null,
+      field: null,
       op: "eq",
-      value: true,
+      value: null,
     });
     expect(defaultNode("device_command")).toEqual({
       type: "device_command",
       deviceId: null,
-      command: { capability: "onoff", action: "on" },
+      command: null,
     });
     expect(defaultNode("scene_activate")).toEqual({ type: "scene_activate", sceneId: null });
     expect(defaultNode("notify")).toEqual({ type: "notify", level: "info", title: "Alert", body: "" });
@@ -71,7 +74,7 @@ describe("nodeSummary — human-readable node labels for the canvas", () => {
         devices,
         scenes,
       ),
-    ).toBe("Living Room Lamp is on");
+    ).toBe("Living Room Lamp power on");
   });
 
   it("falls back to a generic label when a device/scene reference doesn't resolve (deleted device/scene)", () => {
@@ -121,9 +124,9 @@ describe("nodeGlyph / actionLabel / condTitle — display glyphs and labels", ()
   });
 
   it("labels time_window distinctly from every other condition (currently only device_state)", () => {
-    expect(condTitle("time_window")).toBe("Time window");
-    expect(condTitle("device_state")).toBe("Device state");
-    expect(condTitle("anything-else")).toBe("Device state");
+    expect(condTitle({ type: "time_window" })).toBe("Time window");
+    expect(condTitle({ type: "device_state" })).toBe("Device · …");
+    expect(condTitle({ type: "anything-else" })).toBe("Device · …");
   });
 });
 
@@ -134,11 +137,11 @@ describe("triggerTitle — Canvas view's read-only trigger summary", () => {
     const sensor: AutomationView["triggers"][number] = { type: "device_state", capability: "onoff", field: "on" };
     expect(triggerTitle(time)).toBe("Time · 22:00");
     expect(triggerTitle(interval)).toBe("Every 15m");
-    expect(triggerTitle(sensor)).toBe("Sensor · onoff on");
+    expect(triggerTitle(sensor)).toBe("Power · Power");
   });
 
   it("tolerates a device_state trigger missing capability/field (never fabricates a placeholder value)", () => {
     const bare: AutomationView["triggers"][number] = { type: "device_state" };
-    expect(triggerTitle(bare)).toBe("Sensor ·");
+    expect(triggerTitle(bare)).toBe("Device ·");
   });
 });

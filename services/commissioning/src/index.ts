@@ -68,6 +68,10 @@ export interface DiscoveredView {
    * its own Supreme device sharing the same physical connection. Absent for
    * single-zone devices/protocols. */
   zones?: { id: string; label: string }[];
+  /** A real, wire-reported brand string (§ Discover Devices enrichment) — e.g. Yamaha's
+   * discover() genuinely fetches this from the unit's UPnP description XML. Absent (never
+   * guessed) for sources that report no such field, like AVR's Telnet-only discover(). */
+  manufacturer?: string;
 }
 
 /**
@@ -237,6 +241,15 @@ function extractZones(raw: Record<string, unknown> | undefined): { id: string; l
   return zones.length > 0 ? zones : undefined;
 }
 
+/** A real, wire-reported brand string (§ Discover Devices enrichment) — e.g. Yamaha's
+ * discover() genuinely fetches `<manufacturer>` from the unit's UPnP description XML.
+ * Absent (not guessed) for sources that report no such field, like AVR's Telnet-only
+ * discover() — the UI must never fabricate a brand for those. */
+function extractManufacturer(raw: Record<string, unknown> | undefined): string | undefined {
+  const m = raw?.manufacturer;
+  return typeof m === "string" && m.trim().length > 0 ? m.trim() : undefined;
+}
+
 function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const protocol = typeof d.raw?.protocol === "string" ? d.raw.protocol : undefined;
   const network = extractNetwork(d.raw);
@@ -247,6 +260,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const roomHint = typeof d.raw?.room === "string" && d.raw.room.trim().length > 0 ? d.raw.room : undefined;
   const locationHint = extractLocationHint(d.raw);
   const zones = extractZones(d.raw);
+  const manufacturer = extractManufacturer(d.raw);
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -260,6 +274,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     ...(locationHint ? { locationHint } : {}),
     ...(zones ? { zones } : {}),
     ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
+    ...(manufacturer ? { manufacturer } : {}),
   };
 }
 

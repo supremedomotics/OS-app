@@ -145,6 +145,10 @@ export interface HeosNowPlaying {
   album: string | null;
   artist: string | null;
   imageUrl: string | null;
+  /** The spec's `sid` (source id) field — identifies which music service is actually
+   * playing (Pandora/Spotify/Tidal/…), distinct from `type`'s generic song/station split.
+   * Absent on responses that don't include it (verified: not every payload carries one). */
+  sourceId: number | null;
 }
 
 export type HeosUpdate =
@@ -243,6 +247,7 @@ export function parseHeosMessage(raw: string): HeosUpdate | null {
           album: typeof p.album === "string" ? p.album : null,
           artist: typeof p.artist === "string" ? p.artist : null,
           imageUrl: typeof p.image_url === "string" && p.image_url ? p.image_url : null,
+          sourceId: typeof p.sid === "number" ? p.sid : typeof p.sid === "string" && p.sid !== "" ? Number(p.sid) : null,
         },
       };
     }

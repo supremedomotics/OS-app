@@ -12,7 +12,7 @@ import {
   InformationSection,
 } from "../../device-detail-sections.js";
 import { useAsync } from "../../use-async.js";
-import { MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
+import { currentInputLabel, inputGlyph, MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
 
 /**
  * The AVR/Receiver console (§ AVR Detail Page) — a rich, capability-driven control
@@ -27,8 +27,9 @@ import { MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKin
  * brand (Onkyo/Pioneer/Anthem/Arcam/NAD/Sonos/BluOS/WiiM/…) that reports this config.
  */
 
-// ── Capability-config types (mirrors @supreme/protocols' AudioCapabilityConfig) ──────
-interface AvrInputCfg { id: string; label: string; type?: string }
+// ── Capability-config types (mirrors @supreme/protocols' AudioCapabilityConfig) — exported
+// so the Room Device Card (card.tsx) reads the exact same shapes, not a drifting copy. ──────
+export interface AvrInputCfg { id: string; label: string; type?: string }
 interface AvrSoundModeCfg { id: string; label: string }
 interface AvrRangeCfg { min: number; max: number; step: number }
 interface AvrAdvancedControlCfg {
@@ -40,7 +41,7 @@ interface AvrAdvancedControlCfg {
   range?: AvrRangeCfg;
 }
 interface AvrZoneCfg { id: string; label: string; inputs: AvrInputCfg[] }
-interface AudioCapabilityConfigView {
+export interface AudioCapabilityConfigView {
   source?: string;
   inputs?: AvrInputCfg[];
   soundModes?: AvrSoundModeCfg[];
@@ -52,7 +53,7 @@ interface AudioCapabilityConfigView {
   bluetooth?: boolean;
   advancedControls?: AvrAdvancedControlCfg[];
 }
-interface MediaStateView {
+export interface MediaStateView {
   playback: "playing" | "paused" | "stopped" | "idle";
   volume: number;
   muted: boolean;
@@ -68,7 +69,7 @@ interface MediaStateView {
   advanced?: Record<string, unknown> | null;
 }
 
-const cmd = (id: string, c: CapabilityCommand) => client.command(id as DeviceId, c);
+export const cmd = (id: string, c: CapabilityCommand) => client.command(id as DeviceId, c);
 
 /** Haptic feedback on the (mostly mobile-web) browsers that support it — a genuine
  * physical cue on transport/mute/source taps, silently a no-op everywhere else
@@ -81,7 +82,7 @@ function vibrate(ms: number): void {
   }
 }
 
-function fmtTime(sec: number): string {
+export function fmtTime(sec: number): string {
   const s = Math.max(0, Math.round(sec));
   return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 }
@@ -89,20 +90,6 @@ function fmtTime(sec: number): string {
 /** Loose, unvalidated icon hint → glyph. Unknown/absent types fall back to a generic
  * note — never a hard requirement, matching AvrInput.type's own "display hint only"
  * contract. */
-function inputGlyph(type?: string): string {
-  switch (type) {
-    case "hdmi": return "📺";
-    case "optical": return "🔦";
-    case "analog": return "🔌";
-    case "tuner": return "📻";
-    case "usb": return "🔧";
-    case "bluetooth": return "🔵";
-    case "streaming": return "☁️";
-    case "network": return "🖴";
-    default: return "♪";
-  }
-}
-
 /** Loose, unvalidated icon hint for a listening-mode/sound-program name — matches common
  * substrings across brands' DSP vocabularies (Denon's "MOVIE"/"PURE DIRECT", Yamaha's
  * "sci-fi"/"straight", …) so hardware-style mode buttons get a sensible glyph without
@@ -261,7 +248,11 @@ function AmbientHalo({ playing, tint }: { playing: boolean; tint: string | null 
   );
 }
 
-function AlbumArt({ url, name, playing }: { url: string | null; name: string; playing: boolean }) {
+/** `inputIcon` (§ Capability-Driven UI: "no album art → show input icon") is the current
+ * input's real glyph from this device's own declared inputs, never a generic placeholder —
+ * only the device-name initial falls back further, for a device with no input selected at
+ * all (e.g. before the first state sync completes). */
+function AlbumArt({ url, name, playing, inputIcon }: { url: string | null; name: string; playing: boolean; inputIcon?: string }) {
   const tint = useDominantColor(url);
   return (
     <div className="avr-art-wrap">
@@ -270,7 +261,7 @@ function AlbumArt({ url, name, playing }: { url: string | null; name: string; pl
         {url ? (
           <img className="avr-art" src={url} alt="" />
         ) : (
-          <div className="avr-art avr-art-placeholder">{name.charAt(0).toUpperCase()}</div>
+          <div className="avr-art avr-art-placeholder">{inputIcon ?? name.charAt(0).toUpperCase()}</div>
         )}
       </div>
     </div>
@@ -424,9 +415,8 @@ function InputSelector({
  * brand-specific quick action (Sleep Timer, …) reaches this UI. A device that declares
  * none (HEOS today) simply shows Mute alone. */
 function QuickActions({
-  muted, onMuteToggle, controls, advanced, onSetAdvanced,
+  controls, advanced, onSetAdvanced,
 }: {
-  muted: boolean; onMuteToggle: () => void;
   controls: AvrAdvancedControlCfg[]; advanced: Record<string, unknown>;
   onSetAdvanced: (key: string, value: unknown) => void;
 }) {
@@ -435,10 +425,6 @@ function QuickActions({
     <div className="avr-quick">
       <span className="avr-field-label">Quick Actions</span>
       <div className="avr-quick-grid">
-        <button className={`avr-quick-tile${muted ? " on" : ""}`} onClick={onMuteToggle}>
-          <span className="avr-quick-ic">{muted ? "🔇" : "🔈"}</span>
-          <span>Audio Mute</span>
-        </button>
         {controls.map((ctl) => {
           const current = advanced[ctl.key];
           const currentOption = ctl.options?.find((o) => o.id === String(current));
@@ -468,34 +454,6 @@ function QuickActions({
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function SourceRail({
-  inputs, active, pending, onSelect,
-}: { inputs: AvrInputCfg[]; active: string | null; pending: string | null; onSelect: (id: string) => void }) {
-  if (inputs.length === 0) return null;
-  return (
-    <div className="avr-source-rail">
-      <span className="avr-field-label">Source</span>
-      <div className="avr-source-list">
-        {inputs.map((i) => (
-          <button
-            key={i.id}
-            className={`avr-source-row${active === i.id ? " on" : ""}${pending === i.id ? " loading" : ""}`}
-            onClick={() => onSelect(i.id)}
-            disabled={pending === i.id}
-          >
-            <span className="avr-source-ic">{inputGlyph(i.type)}</span>
-            <span className="avr-source-meta">
-              <span className="avr-source-name">{i.label}</span>
-              {i.type && <span className="avr-source-type">{i.type.toUpperCase()}</span>}
-            </span>
-            {pending === i.id ? <span className="avr-source-spinner" aria-hidden="true" /> : active === i.id ? <span className="avr-source-check">✓</span> : null}
-          </button>
-        ))}
       </div>
     </div>
   );
@@ -758,7 +716,7 @@ export function AvrConsole({
             transport all live inside this single card so they visually belong together,
             instead of reading as several stacked panels. */}
         <div className={`avr-now${device.status !== "online" ? " offline" : ""}`}>
-          <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} />
+          <AlbumArt url={live.artworkUrl ?? null} name={device.name} playing={playing} inputIcon={inputGlyph(inputs.find((i) => i.id === live.source)?.type)} />
           <div className="avr-now-meta">
             <span className="avr-now-label">NOW PLAYING</span>
             <h3>{live.title ?? "Idle"}</h3>
@@ -793,8 +751,19 @@ export function AvrConsole({
         </div>
 
         <div className="avr-fields-row">
-          <InputSelector inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
-          <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
+          {/* Collapsed by default, current value always visible as the section's badge —
+              expanding reveals only inputs/modes this exact device actually declares (§
+              Capability-Driven UI: never render an unsupported control). */}
+          {inputs.length > 0 && (
+            <CollapsibleSection title="Input" badge={currentInputLabel(inputs, live.source)}>
+              <InputSelector inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
+            </CollapsibleSection>
+          )}
+          {soundModes.length > 0 && (
+            <CollapsibleSection title="Audio Mode" badge={soundModes.find((m) => m.id === soundMode)?.label}>
+              <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
+            </CollapsibleSection>
+          )}
           <ZoneSelector current={device} siblings={siblings} onNavigate={onNavigateDevice} />
         </div>
 
@@ -802,8 +771,12 @@ export function AvrConsole({
       </div>
 
       <aside className="avr-sidebar">
-        <SourceRail inputs={inputs} active={live.source ?? null} pending={pendingSource} onSelect={setSource} />
-        <QuickActions muted={live.muted ?? false} onMuteToggle={setMuted} controls={advancedControls} advanced={advanced} onSetAdvanced={setAdvanced} />
+        {/* § Overview trim: the input list already lives in the collapsed "Input" section
+            above (§ Capability-Driven UI) — a second, always-expanded copy here was the
+            exact "too many buttons" duplication being fixed, not a second real control. */}
+        {advancedControls.length > 0 && (
+          <QuickActions controls={advancedControls} advanced={advanced} onSetAdvanced={setAdvanced} />
+        )}
 
         {/* § Design System — Universal Page Structure: same sections every device detail
             page shows, capability- and data-driven, never protocol-driven. */}
@@ -812,7 +785,7 @@ export function AvrConsole({
         <TopologySection device={device} homeDevices={homeDevices} devMode={devMode} onDeviceUpdated={onDeviceUpdated} />
         <AutomationsSection device={device} />
         <HistorySection device={device} />
-        <AdvancedSettingsSection device={device} onRemoved={onRemoved}>
+        <AdvancedSettingsSection device={device} onRemoved={onRemoved} onDeviceUpdated={onDeviceUpdated}>
           {/* Television/Speaker/AVR/Projector is an installer classification, not a driver-
               reported fact (§ capability-mapper.ts) — same "installer-entered" pattern as
               ClimateConsole's brand/unit type, editable right alongside rename/remove. */}

@@ -1,5 +1,5 @@
 import { SupremeClient, SupremeStream } from "@supreme/sdk";
-import type { DeviceDriverDiagnostics, SystemLogEntry } from "@supreme/contracts";
+import type { DeviceCapabilitiesRefreshResponse, DeviceDriverDiagnostics, SystemLogEntry } from "@supreme/contracts";
 export type { SystemLogEntry } from "@supreme/contracts";
 import { activeHome, homeTokenStore } from "./homes.js";
 
@@ -181,6 +181,18 @@ export async function fetchDeviceDiagnostics(deviceId: string): Promise<DeviceDr
   } catch {
     return null;
   }
+}
+/** § Capability Refresh — POST /v1/devices/:id/capabilities/refresh: re-query the
+ * device's owning driver in place and persist whatever fresh AudioCapabilityConfig it
+ * reports. `refreshed: false` is an honest, non-error outcome for a protocol with no
+ * live capability query (e.g. classic Denon/Marantz Telnet) — never recreates the
+ * device, never touches room assignment/automations/history. Throws on a genuine
+ * network/server failure so the caller can show a real error instead of silently
+ * doing nothing. */
+export async function refreshDeviceCapabilities(deviceId: string): Promise<DeviceCapabilitiesRefreshResponse> {
+  const res = await authed(`/v1/devices/${deviceId}/capabilities/refresh`, { method: "POST" });
+  if (!res.ok) throw new Error(`Failed to refresh capabilities (${res.status})`);
+  return (await res.json()) as DeviceCapabilitiesRefreshResponse;
 }
 export interface DriverHealth {
   key: string;

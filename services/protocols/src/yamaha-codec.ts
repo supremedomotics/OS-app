@@ -120,11 +120,40 @@ function yamahaInputType(id: string): string | undefined {
   return undefined;
 }
 
+/** Friendly display names for MusicCast input ids that are real, publicly-branded
+ * services (§ Network Source investigation — unlike Denon Telnet, `/system/getFeatures`
+ * already reports each streaming service as its OWN distinct input id, so there's no
+ * runtime ambiguity to resolve here the way HEOS's `sid` needs `network-source-
+ * resolver.ts` for; the only real gap was cosmetic — `id.replace(/_/g, " ")` alone
+ * produced "net radio"/"spotify" instead of each service's actual name). Every key here
+ * is a real MusicCast input id already read off the wire (see `yamahaInputType()` above,
+ * which already recognized these same ids); this only supplies the display name, it
+ * never invents a new id. Ids with no distinct branding (hdmi1, audio2, tuner, …) are
+ * absent and fall back to the id itself, exactly like `DENON_INPUT_LABELS`. */
+const YAMAHA_INPUT_LABELS: Partial<Record<string, string>> = {
+  net_radio: "Internet Radio",
+  spotify: "Spotify",
+  tidal: "Tidal",
+  airplay: "AirPlay",
+  server: "Media Server",
+  napster: "Napster",
+  juke: "Juke",
+  qobuz: "Qobuz",
+  deezer: "Deezer",
+  bluetooth: "Bluetooth",
+  usb: "USB",
+  mc_link: "MusicCast Link",
+  main_sync: "Main Zone Sync",
+  am: "AM Radio",
+  fm: "FM Radio",
+  tuner: "Tuner",
+};
+
 /** The AudioCapabilityConfig for one zone — `device_reported` because every field here
  * genuinely comes off the wire via `/system/getFeatures` (unlike Denon Telnet's
  * installer-declared fallback). */
 export function yamahaCapabilityConfig(zf: YamahaZoneFeatures): AudioCapabilityConfig {
-  const label = (id: string) => id.replace(/_/g, " ");
+  const label = (id: string) => YAMAHA_INPUT_LABELS[id] ?? id.replace(/_/g, " ");
   return {
     source: "device_reported",
     inputs: zf.inputList.map((id) => ({ id, label: label(id), type: yamahaInputType(id) })),

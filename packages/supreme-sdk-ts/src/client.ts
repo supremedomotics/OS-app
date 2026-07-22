@@ -11,6 +11,8 @@ import {
   type CommissionRequest,
   type DiagnosticsReport,
   type DiscoveryList,
+  type ProbeRequest,
+  type ProbeResult,
   type InstalledDriverList,
   type InstalledDriverResponse,
   type LicenseStatus,
@@ -516,6 +518,12 @@ export class SupremeClient {
    * default); pass `[]` to run none (Deselect All). */
   discover(protocol?: ProtocolKind, driverIds?: string[]): Promise<DiscoveryList> {
     return this.request("POST", "/v1/commissioning/discover", { protocol, driverIds }) as Promise<DiscoveryList>;
+  }
+
+  /** A targeted, single-address reachability probe (§ AVR Intelligent Manual Add) — opens a
+   * real connection to confirm an installer-typed IP before committing to commission anything. */
+  probe(input: ProbeRequest): Promise<ProbeResult> {
+    return this.request("POST", "/v1/commissioning/probe", input) as Promise<ProbeResult>;
   }
 
   // ── Device Approval (§ Device Approval) ──────────────────────────────────────
