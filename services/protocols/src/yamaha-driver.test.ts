@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { DeviceId } from "@supreme/domain-model";
 import type { BackendStateEvent } from "@supreme/integration-layer";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { YamahaProtocolDriver, type YamahaEventSocket } from "./yamaha-driver.js";
 import { commandToYamaha, parseYamahaEvent, parseYamahaFeatures, yamahaCapabilityConfig } from "./yamaha-codec.js";
 
@@ -296,6 +296,43 @@ describe("YamahaProtocolDriver (in-process YXC unit over HTTP, 2 zones)", () => 
 
   it("rejects a command for an unbound device", async () => {
     await expect(driver.command("device-nope" as DeviceId, { capability: "media", action: "play" })).rejects.toThrow();
+  });
+
+  it("refreshCapabilities re-fetches getFeatures on demand without disturbing the existing keep-alive timer or losing bindings (§ Capability Refresh)", async () => {
+    const before = yam.calls.filter((c) => c === "system/getFeatures").length;
+    await driver.refreshCapabilities(main);
+    expect(yam.calls.filter((c) => c === "system/getFeatures").length).toBe(before + 1);
+    // Both zones sharing this host are still fully bound and their capability config
+    // still resolves — this never recreated the device or touched its bindings.
+    expect(driver.manages(main)).toBe(true);
+    expect(driver.manages(zone2)).toBe(true);
+    expect(driver.getCapabilityConfig(main, "media")).not.toBeNull();
+    expect(driver.getCapabilityConfig(zone2, "media")).not.toBeNull();
+  });
+});
+
+describe("YamahaProtocolDriver — periodic keep-alive refresh actually updates the feature cache (§ Capability Refresh)", () => {
+  it("re-queries getFeatures on its own schedule AND applies the result, not just fetches and discards it", async () => {
+    const yam = await startFakeYamaha();
+    const events = fakeEventSocket();
+    // A short interval so the test doesn't wait 8 real minutes — the interval's own
+    // documented purpose (keep the event-push registration alive) is unaffected by
+    // how short this is; only the test cadence changes.
+    const driver = new YamahaProtocolDriver({ createEventSocket: () => events.socket, eventRefreshMs: 30 });
+    const dev = "device-yamaha-periodic-refresh" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: yam.host, config: { zone: "main" } });
+    const callsAtBind = yam.calls.filter((c) => c === "system/getFeatures").length;
+
+    await vi.waitFor(() => {
+      expect(yam.calls.filter((c) => c === "system/getFeatures").length).toBeGreaterThan(callsAtBind);
+    });
+    // The re-fetched result must still be genuinely applied — capability config keeps
+    // resolving correctly off the SAME cache the periodic timer just updated.
+    expect(driver.getCapabilityConfig(dev, "media")).not.toBeNull();
+
+    await driver.disconnect();
+    await new Promise<void>((r) => yam.server.close(() => r()));
   });
 });
 

@@ -359,18 +359,50 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
   }
 
   private async fetchHostFeatures(host: string): Promise<YamahaHostInfo> {
-    const featuresJson = await this.getJson(host, "system", "getFeatures", {});
-    const features = parseYamahaFeatures(featuresJson);
+    const features = await this.queryHostFeatures(host);
     const refreshMs = this.opts.eventRefreshMs ?? 8 * 60 * 1000;
+    // § Capability Refresh — this interval's real, spec-driven purpose is keeping the
+    // event-push registration alive (§11.2: it times out after 10 minutes of silence);
+    // any request carrying the X-AppName/X-AppPort headers re-arms it, and getFeatures
+    // is a convenient, read-only choice. It genuinely also re-queries live capabilities
+    // (inputs/zones/sound programs) as a side effect — previously the parsed result was
+    // discarded instead of replacing the cache, so a receiver's capabilities drifting
+    // (e.g. firmware adding an input) between binds was never picked up short of an
+    // unbind+rebind. Now it actually updates `this.hosts`, same as an explicit refresh.
     const refreshTimer = setInterval(() => {
-      void this.getJson(host, "system", "getFeatures", {}).catch(() => {
-        // transient network error — the next scheduled refresh tries again
-      });
+      void this.queryHostFeatures(host)
+        .then((refreshed) => {
+          const existing = this.hosts.get(host);
+          if (existing) existing.features = refreshed;
+        })
+        .catch(() => {
+          // transient network error — the next scheduled refresh tries again
+        });
     }, refreshMs);
     (refreshTimer as { unref?: () => void }).unref?.();
     const info: YamahaHostInfo = { features, refreshTimer };
     this.hosts.set(host, info);
     return info;
+  }
+
+  private async queryHostFeatures(host: string): Promise<YamahaFeatures> {
+    const featuresJson = await this.getJson(host, "system", "getFeatures", {});
+    return parseYamahaFeatures(featuresJson);
+  }
+
+  /** § Capability Refresh (Part 2) — force an immediate, on-demand re-query of this
+   * device's real capabilities (inputs/friendly names/sound programs/zones/volume &
+   * tone ranges) without recreating the device, losing its room assignment, or
+   * disturbing its automations/history — this only replaces the cached
+   * `YamahaFeatures` the SAME host entry already holds; the existing keep-alive timer
+   * for that host is left running untouched (this does not create or leak a second
+   * one). Returns silently if the device isn't bound to a live host yet. */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !this.hosts.has(b.host)) return;
+    const features = await this.queryHostFeatures(b.host);
+    const existing = this.hosts.get(b.host);
+    if (existing) existing.features = features;
   }
 
   /** Coalesces concurrent re-syncs for the same host+zone (see `syncZoneInFlight`

@@ -785,7 +785,7 @@ export function AvrConsole({
         <TopologySection device={device} homeDevices={homeDevices} devMode={devMode} onDeviceUpdated={onDeviceUpdated} />
         <AutomationsSection device={device} />
         <HistorySection device={device} />
-        <AdvancedSettingsSection device={device} onRemoved={onRemoved}>
+        <AdvancedSettingsSection device={device} onRemoved={onRemoved} onDeviceUpdated={onDeviceUpdated}>
           {/* Television/Speaker/AVR/Projector is an installer classification, not a driver-
               reported fact (§ capability-mapper.ts) — same "installer-entered" pattern as
               ClimateConsole's brand/unit type, editable right alongside rename/remove. */}

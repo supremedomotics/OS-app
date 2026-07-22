@@ -203,6 +203,21 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     return heosCapabilityConfig() as unknown as Record<string, unknown>;
   }
 
+  /** § Capability Refresh (Part 2) — HEOS's `browse/play_input` input enum is a fixed
+   * protocol-level fact (spec §4.4.13, see heos-codec.ts), not something an individual
+   * unit reports differently, so there's no per-device capability query to re-run.
+   * What this genuinely does: force the shared HEOS connection closed and immediately
+   * re-open it, re-running `onLinkConnect`'s un-register/re-sync-every-bound-player/
+   * re-register sequence — the same real resync (now-playing, volume, mute, play
+   * mode) a natural reconnect performs, on demand. */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !this.connected) return;
+    const key = `${b.host}:${b.port}`;
+    this.transport.releaseKey(key);
+    this.transport.ensureLink(key, b.host, b.port);
+  }
+
   /** Diagnostics Console (§ Universal AV Driver SDK) — real per-connection counters,
    * never fabricated. HEOS's `player/get_player_info` genuinely reports a model over
    * the wire (unlike Denon Telnet), threaded through from discovery; firmware is not

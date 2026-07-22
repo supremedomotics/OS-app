@@ -202,6 +202,21 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     return denonCapabilityConfig({ hasZone2, hasToneControl: b.zone === "main" && b.hasToneControl }) as unknown as Record<string, unknown>;
   }
 
+  /** § Capability Refresh (Part 2) — the classic Denon/Marantz Telnet protocol has no
+   * feature-query command at all (verified against the spec, see avr-codec.ts module
+   * doc), so there is no new capability data to discover over the wire; `hasZone2`/
+   * `hasToneControl` stay whatever the installer declared at commissioning. What this
+   * genuinely does: force the link closed and immediately re-open it, which re-runs
+   * `onLinkConnect`'s init query burst — the same real state resync a natural
+   * reconnect performs, just triggered on demand instead of waiting for a drop. */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !this.connected) return;
+    const key = `${b.host}:${b.port}`;
+    this.transport.releaseKey(key);
+    this.transport.ensureLink(key, b.host, b.port);
+  }
+
   /** Diagnostics Console (§ Universal AV Driver SDK) — real per-link counters/timestamps,
    * never fabricated. `null` when this device's zone/host has no link yet (never bound or
    * never connected). MAC is a best-effort local ARP-table read (§ arp-lookup.ts); Denon's

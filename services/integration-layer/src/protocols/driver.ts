@@ -94,6 +94,20 @@ export interface INativeProtocolDriver {
    * manage the device. Synchronous: reading counters already held in memory, never a
    * network round-trip. */
   getDiagnostics?(deviceId: DeviceId): DriverDiagnosticsSnapshot | null;
+
+  /** Optional: force an on-demand, in-place re-query of this device's real
+   * capabilities (§ Capability Refresh) — never recreates the device, never touches
+   * its room assignment/automations/history, only refreshes whatever THIS driver can
+   * genuinely re-discover over the wire. What "refresh" honestly means is protocol-
+   * specific and MUST NOT be embellished: a driver with a genuine feature-query
+   * command (e.g. Yamaha's `/system/getFeatures`) re-fetches and replaces its cached
+   * capability data; a driver with NO such command (e.g. Denon/Marantz Telnet, which
+   * has no feature-query command at all — verified against the spec) has nothing new
+   * to discover, so this is a no-op or, at most, a reconnect that re-syncs live STATE
+   * — it must never fabricate a "new" capability that didn't come off the wire.
+   * Callers should still re-read `getCapabilityConfig()` afterward — that's what
+   * actually reflects whatever this call did or didn't change. */
+  refreshCapabilities?(deviceId: DeviceId): Promise<void>;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */

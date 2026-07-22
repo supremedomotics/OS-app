@@ -122,6 +122,16 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     return this.ha.getDiagnostics ? this.ha.getDiagnostics(deviceId) : null;
   }
 
+  /** § Capability Refresh — same routing as {@link getArtwork}: native-engine feature
+   * first. Without this, a routed device's refresh request would silently no-op here
+   * (this class's own missing method, not the underlying native adapter's) even
+   * though `SupremeNativeAdapter.refreshCapabilities` is fully implemented — the same
+   * class of gap {@link getCapabilityConfig}'s own doc comment already flags. */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    if (this.native.manages(deviceId)) return this.native.refreshCapabilities(deviceId);
+    await this.ha.refreshCapabilities?.(deviceId);
+  }
+
   /** § Driver Lifecycle Completion: unlike the "first side that manages it" routing
    * above, this deliberately runs on BOTH sides unconditionally — a device being
    * deleted must have every trace of it released regardless of which backend

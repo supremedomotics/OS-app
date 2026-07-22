@@ -176,6 +176,19 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
     ).rejects.toThrow();
   });
 
+  it("refreshCapabilities forces a real reconnect that re-syncs both bound players (§ Capability Refresh)", async () => {
+    const registersBefore = heos.received.filter((r) => r.includes("register_for_change_events?enable=on")).length;
+    await driver.refreshCapabilities(livingRoom);
+    await vi.waitFor(() => {
+      expect(heos.received.filter((r) => r.includes("register_for_change_events?enable=on")).length).toBeGreaterThan(registersBefore);
+    });
+    // Both players sharing this connection are still bound and controllable — this
+    // never recreated either device or dropped its binding.
+    expect(driver.manages(livingRoom)).toBe(true);
+    expect(driver.manages(theatre)).toBe(true);
+    await vi.waitFor(() => expect(driver.getDiagnostics(livingRoom)?.connectionStatus).toBe("connected"));
+  });
+
   it("plays living room and leaves theatre untouched", async () => {
     const ev = nextEvent(driver, (e) => e.deviceId === livingRoom && (e.state as { playback?: string }).playback === "playing");
     await driver.command(livingRoom, { capability: "media", action: "play" });

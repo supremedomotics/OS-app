@@ -199,6 +199,13 @@ export class SupremeIntegrationLayer {
     return this.adapter.getDiagnostics ? this.adapter.getDiagnostics(deviceId) : null;
   }
 
+  /** § Capability Refresh — ask the owning driver to re-query whatever it can
+   * genuinely re-discover, in place. A no-op for backends/drivers with nothing to
+   * re-query (never a throw). */
+  async refreshCapabilities(deviceId: DeviceId): Promise<void> {
+    if (this.adapter.refreshCapabilities) await this.adapter.refreshCapabilities(deviceId);
+  }
+
   /** Subscribe to normalized state changes for all mapped devices. */
   subscribe(listener: (event: BackendStateEvent) => void): () => void {
     return this.adapter.onState(listener);

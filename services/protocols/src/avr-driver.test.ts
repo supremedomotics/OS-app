@@ -173,6 +173,18 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
   it("returns null diagnostics for a device this driver doesn't manage", () => {
     expect(driver.getDiagnostics("device-unknown" as DeviceId)).toBeNull();
   });
+
+  it("refreshCapabilities forces a real reconnect that re-syncs live state (§ Capability Refresh)", async () => {
+    const initQueriesBefore = avr.received.filter((r) => r === "PW?").length;
+    await driver.refreshCapabilities(dev);
+    await vi.waitFor(() => {
+      expect(avr.received.filter((r) => r === "PW?").length).toBeGreaterThan(initQueriesBefore);
+    });
+    // The device is still fully bound and controllable after the forced reconnect —
+    // this never recreated it or dropped its binding.
+    expect(driver.manages(dev)).toBe(true);
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.connectionStatus).toBe("connected"));
+  });
 });
 
 describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same link)", () => {
