@@ -86,6 +86,54 @@ verbose backend-log capture) — the ring buffer is cheap, in-memory, and always
 available for the Diagnostics UI's new "Protocol Trace" panel
 (`GET /v1/devices/:id/diagnostics/trace`).
 
+### § Second pass — official PDFs + a real RTI driver export un-gate the Audyssey family
+
+The user directly supplied three primary sources this round: the official Denon AVR
+control protocol PDF (Ver.8.6.0), the official HEOS CLI Protocol Specification PDF
+(v1.17), and a real, exported RTI commercial driver file. Reading the Denon PDF
+directly (not a summary) revealed Dynamic EQ / Audyssey MultEQ mode / Reference
+Level Offset / Dynamic Volume / Dynamic Range Compression are documented as
+**Telnet** `PS`-prefixed commands with exact, literal parameter tokens (p.13-14) —
+not the unverified HTTP AppCommand `SetAudyssey*` family the previous pass gated on
+"command name confirmed, encoding unverified." Since each is a closed, spec-quoted
+enum rather than a guessed numeric range, the safety concern that gated them no
+longer applies, and all five are now live, tested, wired capabilities:
+
+- `avr-codec.ts` gained `DENON_AUDYSSEY_MODES`/`DENON_REFERENCE_LEVELS`/
+  `DENON_DYNAMIC_VOLUME_MODES`/`DENON_DRC_MODES` fixed enums, encode/parse support,
+  and five new `denonCapabilityConfig()` `advancedControls` entries — every one a
+  `kind: "select"`, reusing the exact generic UI mechanism `sleepMinutes` already
+  proved out, so **zero new UI code** was needed (the `QuickActions` component only
+  wires up `"select"` interactivity today; `"toggle"`/`"range"` kinds exist in the
+  type but aren't rendered yet, so Dynamic EQ is modeled as a two-option select
+  rather than a toggle to stay inside what's actually interactive).
+- Gated behind a new `hasAudyssey` installer-declared flag (default `false`,
+  opt-in) — same reasoning as `hasToneControl` (Telnet has no feature-query
+  command, so presence isn't wire-discoverable) but opt-in rather than opt-out,
+  because Audyssey calibration is genuinely absent on lower-tier models where tone
+  control is universal.
+- Channel-volume trims (`CV<ch> <nn>`, same PDF p.7) got the same evidence
+  upgrade — exact 38–62/50=0dB encoding confirmed — but were **not** wired this
+  round: the six-channel range-slider UI it needs is separate, UI-verification-
+  bound scope, tracked honestly as a follow-up rather than silently dropped (see
+  the capability matrix).
+- The RTI driver export (`Denon_Marantz_Receiver.rtidriver`, a real OLE2/CFB
+  compound document, extracted stream-by-stream with Python's `olefile` and read
+  directly) was used **only** as a behavioral cross-check, per the user's explicit
+  "never copy proprietary code" instruction — no RTI script or table content
+  appears in any SupremeOS source file. It surfaced real gaps worth naming even
+  though none were implemented this round: additional channel-trim targets
+  (Front Height/Wide L/R, dual subwoofer, Surround Back) beyond the six the Denon
+  PDF confirms, per-zone bass/treble/HPF for Zones 3/4 (SupremeOS models Zone 2
+  only), and a "Connection State"/"Connections" diagnostic concept RTI's own
+  variable model tracks explicitly.
+- `HeosProtocolDriver` gained `heartbeat(deviceId)`, wrapping the official HEOS
+  CLI spec's `system/heart_beat` (§4.1.5) — an explicit, on-demand liveness/
+  round-trip probe distinct from the passive per-command latency
+  `DriverDiagnosticsTracker` already measures. Correlated per shared link (the
+  response carries no `pid`) with a 5s timeout, cleaned up on `disconnect()`/
+  `unbind()` like every other pending-promise map in this fleet.
+
 ## Where it lives, and why it's internal-only
 
 `services/protocols/src/av-sdk/` — **not** re-exported from
@@ -263,6 +311,56 @@ Per the evidence-based scoping decision (confirmed explicitly, not assumed): no
   exists in evidence (pooled TCP + reconnect + line-buffering, shared by AVR/HEOS
   only), so it's one cohesive class, not four thin wrappers manufactured for
   symmetry with a diagram that had no second implementation to justify the split.
+
+## § Universal Protocol Discovery Framework — what was requested vs. what's honest to build here
+
+A later pass asked for a full **Universal Protocol Discovery Framework**: a multi-protocol
+recorder (simultaneously capturing Telnet/HTTP/AppCommand/AppCommand0300/HEOS/XML/UPnP/SSDP,
+every request/response timestamped), a **protocol correlation engine** (correlate an IR-remote
+button press across every interface, determine which updates first, which is authoritative,
+measure cross-interface latency/consistency), and a **guided hardware verification mode**
+(prompt an installer for a physical action, record every interface, correlate, auto-update the
+capability database).
+
+**What shipped instead, and why, stated plainly rather than silently scoped down:**
+
+- The **timestamped multi-transport capture** piece is real and already shipped, just not as a
+  separate "recorder" module: every driver's `DriverDiagnosticsTracker.recordSend`/
+  `recordReceive` (§ Universal AVR SDK pass, above) timestamps every raw token on every
+  transport (Telnet, HTTP, UDP) automatically, and the trace ring buffer
+  (`recentTrace()`/`GET /v1/devices/:id/diagnostics/trace`) already captures Telnet **and**
+  HTTP AppCommand traffic for the same device side-by-side, in arrival order. What's missing
+  relative to the ask is SSDP/UPnP GENA eventing in that same buffer (SSDP is one-shot at
+  discovery time, not an ongoing channel this driver holds open — see the deferred-items table
+  in `AVR-Universal-Capability-Matrix.md`) and HEOS (a HEOS-routed device is a *separate*
+  Supreme device today, with its own trace buffer, not merged into the AVR device's).
+- The **protocol correlation engine** and **guided hardware verification mode** were **not
+  built this pass**, and the honest reason is environmental, not a scoping shortcut: both
+  require a real receiver to correlate against. "Press Volume Up once on the IR remote, then
+  compare which interface updated first" is meaningless without a physical remote and a
+  physical receiver in front of whoever runs it — this sandbox has neither, and no prior
+  evidence in this session (the official Denon/HEOS PDFs, the RTI driver export) substitutes
+  for a live capture. Building the engine's *code* without ever running it against a real
+  device would mean shipping unverified correlation logic — the same category of risk this
+  SDK's own "never guess a parameter encoding" rule exists to prevent, just at the diagnostics
+  layer instead of the control layer.
+- What a **real** guided verification mode needs, concretely, so this isn't just a deferral
+  with no path forward: (1) the trace buffer already described, extended to hold HEOS +
+  UPnP/SSDP alongside Telnet/HTTP for one physical unit; (2) a start/stop capture window (a
+  thin wrapper around the existing tracer — genuinely small, once there's hardware to run it
+  against); (3) a diff pass over the four buffers keyed by timestamp to find "what changed and
+  in what order"; (4) a UI prompt/timer, which is pure frontend work with no protocol risk.
+  None of this is speculative architecture — it's the natural extension of infrastructure
+  that already exists, gated on the one thing that can't be faked: real hardware in the loop.
+- A **driver validator** that automatically diffs SupremeOS against RTI/Crestron/Control4/
+  Savant/official docs/Home Assistant/openHAB, as requested, already exists in the one form
+  that's honest to produce without live access to four proprietary systems: the capability
+  matrix itself (`AVR-Universal-Capability-Matrix.md`), maintained as a hand-authored,
+  evidence-cited table rather than an automated "diff tool" whose only real inputs (four
+  NDA-gated driver formats) aren't available to automate against. The RTI driver file the
+  user supplied this pass *is* now real evidence (see the matrix's methodology section) —
+  used to find gaps (extra channel names, per-zone tone control, a "Connection State"
+  diagnostic concept), never to auto-generate a checkmark grid.
 
 ## Performance validation
 

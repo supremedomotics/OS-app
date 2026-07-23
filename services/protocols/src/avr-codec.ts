@@ -27,6 +27,30 @@ import type { AudioCapabilityConfig } from "./avr-capabilities.js";
  * because no evidence suggests a different range for Zone 2. This is the corrected,
  * evidence-based state; the original "not implemented" note was wrong, not a
  * deliberate limitation.
+ *
+ * § Universal AVR SDK — Audyssey-family commands (§ user-supplied official Denon AVR
+ * control protocol PDF, "DENON AVR control protocol Ver.8.6.0", application model
+ * AVR-1713/AVR-1613, page 13). A previous pass on this SDK gated Dynamic EQ, Audyssey
+ * MultEQ mode, Reference Level Offset, and Dynamic Volume as "command names plausible,
+ * parameter encodings unverifiable" — reachable only via the unverified HTTP AppCommand
+ * `SetAudyssey*` family. This official PDF (directly fetched/read this session, not a
+ * summary) documents these as **Telnet** `PS`-prefixed commands with exact, literal
+ * parameter tokens: `PSDYNEQ ON`/`OFF`; `PSMULTEQ:AUDYSSEY`/`BYP.LR`/`FLAT`/`MANUAL`/`OFF`;
+ * `PSREFLEV 0`/`5`/`10`/`15`; `PSDYNVOL HEV`/`MED`/`LIT`/`OFF`. Dynamic Range Compression
+ * (`PSDRC AUTO`/`LOW`/`MID`/`HI`/`OFF`, same page) ships alongside them for the same
+ * reason. These are fixed-enum toggles/selects, not guessed numeric ranges — the one
+ * safety concern from the prior gate (a wrong guessed *write* value misconfiguring real
+ * speaker calibration) does not apply to a closed set of literal, spec-quoted tokens.
+ * Model caveat, stated honestly rather than glossed over: the source PDF targets the
+ * 2012-era AVR-1713/1613. Whether a specific bound unit *has* Audyssey calibration at all
+ * is genuinely not wire-discoverable (no feature-query command exists at all — see above)
+ * and varies by model tier, so `denonCapabilityConfig`'s `hasAudyssey` stays an explicit,
+ * installer-declared opt-in (default `false`) rather than assumed present, unlike
+ * `hasToneControl` (near-universal, defaults on). Channel-level trims (`CV<ch> **`, same
+ * PDF p.7, confirmed exact 38–62/50=0dB encoding) are NOT implemented this pass — the
+ * encoding is now real evidence too, but wiring a 6-channel trim UI is separate,
+ * UI-verification-bound scope not taken up here; tracked as a follow-up, not silently
+ * dropped.
  */
 
 /** Master-volume scale: Denon `MV` is 00–98. */
@@ -90,6 +114,15 @@ export const DENON_SOUND_MODES = [
   "MONO MOVIE", "MATRIX", "VIDEO GAME", "VIRTUAL",
 ] as const;
 
+/** Audyssey MultEQ mode tokens (`PSMULTEQ:<mode>`, spec p.13) — fixed enum, verbatim. */
+export const DENON_AUDYSSEY_MODES = ["AUDYSSEY", "BYP.LR", "FLAT", "MANUAL", "OFF"] as const;
+/** Reference Level Offset tokens (`PSREFLEV <n>`, spec p.13) — fixed enum, verbatim. */
+export const DENON_REFERENCE_LEVELS = [0, 5, 10, 15] as const;
+/** Dynamic Volume tokens (`PSDYNVOL <mode>`, spec p.13) — fixed enum, verbatim. */
+export const DENON_DYNAMIC_VOLUME_MODES = ["HEV", "MED", "LIT", "OFF"] as const;
+/** Dynamic Range Compression tokens (`PSDRC <mode>`, spec p.14) — fixed enum, verbatim. */
+export const DENON_DRC_MODES = ["AUTO", "LOW", "MID", "HI", "OFF"] as const;
+
 /** Translate a Supreme command into AVR control tokens (null = unsupported). `zone`
  * selects which zone's token prefix to use — only "main" carries volume/tone/DSP, per
  * the spec (see module doc). */
@@ -133,6 +166,21 @@ export function commandToAvr(
           if (typeof adv.sleepMinutes === "number") {
             tokens.push(adv.sleepMinutes <= 0 ? "SLPOFF" : `SLP${String(Math.min(120, adv.sleepMinutes)).padStart(3, "0")}`);
           }
+          // § Universal AVR SDK — Audyssey-family (see module doc). Each is a closed,
+          // spec-quoted enum — pass the value straight through as the wire token.
+          if (typeof adv.dynamicEq === "string") tokens.push(`PSDYNEQ ${adv.dynamicEq === "on" ? "ON" : "OFF"}`);
+          if (typeof adv.audysseyMode === "string" && (DENON_AUDYSSEY_MODES as readonly string[]).includes(adv.audysseyMode)) {
+            tokens.push(`PSMULTEQ:${adv.audysseyMode}`);
+          }
+          if (typeof adv.referenceLevel === "number" && (DENON_REFERENCE_LEVELS as readonly number[]).includes(adv.referenceLevel)) {
+            tokens.push(`PSREFLEV ${adv.referenceLevel}`);
+          }
+          if (typeof adv.dynamicVolume === "string" && (DENON_DYNAMIC_VOLUME_MODES as readonly string[]).includes(adv.dynamicVolume)) {
+            tokens.push(`PSDYNVOL ${adv.dynamicVolume}`);
+          }
+          if (typeof adv.drc === "string" && (DENON_DRC_MODES as readonly string[]).includes(adv.drc)) {
+            tokens.push(`PSDRC ${adv.drc}`);
+          }
           return tokens.length > 0 ? tokens : null;
         }
         default:
@@ -156,7 +204,12 @@ export type AvrUpdate =
   | { kind: "zone2Power"; on: boolean }
   | { kind: "zone2Mute"; muted: boolean }
   | { kind: "zone2Volume"; volume: number; volumeDb: number }
-  | { kind: "zone2Source"; source: string };
+  | { kind: "zone2Source"; source: string }
+  | { kind: "dynamicEq"; on: boolean }
+  | { kind: "audysseyMode"; mode: string }
+  | { kind: "referenceLevel"; db: number }
+  | { kind: "dynamicVolume"; mode: string }
+  | { kind: "drc"; mode: string };
 
 /** Parse one AVR status token into a structured update (null = ignored/unknown). */
 export function parseAvrLine(line: string): AvrUpdate | null {
@@ -179,6 +232,26 @@ export function parseAvrLine(line: string): AvrUpdate | null {
   if (/^SLP\d{3}$/.test(t)) return { kind: "sleep", minutes: Number(t.slice(3)) };
   if (/^PSBAS \d{2}$/.test(t)) return { kind: "bass", bass: toneFromToken(t.slice(6)) };
   if (/^PSTRE \d{2}$/.test(t)) return { kind: "treble", treble: toneFromToken(t.slice(6)) };
+  // § Universal AVR SDK — Audyssey-family (see module doc). Checked before the generic
+  // "MS"-prefix soundMode fallthrough below since none of these share that prefix.
+  if (t === "PSDYNEQ ON") return { kind: "dynamicEq", on: true };
+  if (t === "PSDYNEQ OFF") return { kind: "dynamicEq", on: false };
+  if (t.startsWith("PSMULTEQ:")) {
+    const mode = t.slice("PSMULTEQ:".length);
+    if ((DENON_AUDYSSEY_MODES as readonly string[]).includes(mode)) return { kind: "audysseyMode", mode };
+  }
+  if (t.startsWith("PSREFLEV ")) {
+    const db = Number(t.slice("PSREFLEV ".length));
+    if ((DENON_REFERENCE_LEVELS as readonly number[]).includes(db)) return { kind: "referenceLevel", db };
+  }
+  if (t.startsWith("PSDYNVOL ")) {
+    const mode = t.slice("PSDYNVOL ".length);
+    if ((DENON_DYNAMIC_VOLUME_MODES as readonly string[]).includes(mode)) return { kind: "dynamicVolume", mode };
+  }
+  if (t.startsWith("PSDRC ")) {
+    const mode = t.slice("PSDRC ".length);
+    if ((DENON_DRC_MODES as readonly string[]).includes(mode)) return { kind: "drc", mode };
+  }
   if (t.startsWith("MS") && !t.startsWith("MSQUICK")) return { kind: "soundMode", mode: t.slice(2) };
   if (t === "Z2ON") return { kind: "zone2Power", on: true };
   if (t === "Z2OFF") return { kind: "zone2Power", on: false };
@@ -214,6 +287,11 @@ export function buildMediaState(cache: {
   treble?: number;
   soundMode?: string;
   sleepMinutes?: number | null;
+  dynamicEq?: boolean;
+  audysseyMode?: string;
+  referenceLevel?: number;
+  dynamicVolume?: string;
+  drc?: string;
 }, artworkUrl: string | null = null): CapabilityState {
   const advanced: Record<string, unknown> = {};
   if (cache.volumeDb !== undefined) advanced.volumeDb = cache.volumeDb;
@@ -221,6 +299,11 @@ export function buildMediaState(cache: {
   if (cache.treble !== undefined) advanced.treble = cache.treble;
   if (cache.soundMode !== undefined) advanced.soundMode = cache.soundMode;
   if (cache.sleepMinutes !== undefined) advanced.sleepMinutes = cache.sleepMinutes ?? 0;
+  if (cache.dynamicEq !== undefined) advanced.dynamicEq = cache.dynamicEq ? "on" : "off";
+  if (cache.audysseyMode !== undefined) advanced.audysseyMode = cache.audysseyMode;
+  if (cache.referenceLevel !== undefined) advanced.referenceLevel = cache.referenceLevel;
+  if (cache.dynamicVolume !== undefined) advanced.dynamicVolume = cache.dynamicVolume;
+  if (cache.drc !== undefined) advanced.drc = cache.drc;
   return {
     kind: "media",
     playback: "idle",
@@ -246,10 +329,20 @@ export function buildMediaState(cache: {
  * the selectable list entirely, matching the receiver's own front panel. `source` flips
  * to `"device_reported"` once either is genuinely non-empty — otherwise this returns
  * byte-for-byte what it always has, so a unit this enrichment hasn't run against yet (or
- * that has no HTTP interface at all) behaves identically to before this feature existed. */
+ * that has no HTTP interface at all) behaves identically to before this feature existed.
+ *
+ * `hasAudyssey` (§ Universal AVR SDK) — same installer-declared nature as `hasToneControl`,
+ * but defaults `false` (opt-in) rather than `true` (opt-out): Audyssey calibration is
+ * genuinely absent on lower-tier Denon/Marantz models, unlike tone control which is
+ * near-universal, and Telnet has no feature-query command to tell them apart (see module
+ * doc). When declared, advertises the Dynamic EQ / Audyssey MultEQ mode / Reference Level
+ * Offset / Dynamic Volume / DRC controls — every one a fixed, spec-quoted enum (never a
+ * guessed numeric range), each rendered through the existing generic `advancedControls`
+ * "select" mechanism (same one `sleepMinutes` already uses) with zero new UI code. */
 export function denonCapabilityConfig(opts: {
   hasZone2: boolean;
   hasToneControl: boolean;
+  hasAudyssey?: boolean;
   renamedInputs?: Map<string, string>;
   hiddenInputs?: Set<string>;
 }): AudioCapabilityConfig {
@@ -285,6 +378,65 @@ export function denonCapabilityConfig(opts: {
           { id: "120", label: "120 min" },
         ],
       },
+      ...(opts.hasAudyssey
+        ? [
+            {
+              key: "dynamicEq",
+              label: "Dynamic EQ",
+              kind: "select" as const,
+              options: [
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ],
+            },
+            {
+              key: "audysseyMode",
+              label: "Audyssey MultEQ",
+              kind: "select" as const,
+              options: [
+                { id: "AUDYSSEY", label: "Audyssey" },
+                { id: "BYP.LR", label: "Bypass L/R" },
+                { id: "FLAT", label: "Flat" },
+                { id: "MANUAL", label: "Manual" },
+                { id: "OFF", label: "Off" },
+              ],
+            },
+            {
+              key: "referenceLevel",
+              label: "Reference Level Offset",
+              kind: "select" as const,
+              options: [
+                { id: "0", label: "0 dB" },
+                { id: "5", label: "+5 dB" },
+                { id: "10", label: "+10 dB" },
+                { id: "15", label: "+15 dB" },
+              ],
+            },
+            {
+              key: "dynamicVolume",
+              label: "Dynamic Volume",
+              kind: "select" as const,
+              options: [
+                { id: "OFF", label: "Off" },
+                { id: "LIT", label: "Light" },
+                { id: "MED", label: "Medium" },
+                { id: "HEV", label: "Heavy" },
+              ],
+            },
+            {
+              key: "drc",
+              label: "Dynamic Compression",
+              kind: "select" as const,
+              options: [
+                { id: "OFF", label: "Off" },
+                { id: "AUTO", label: "Auto" },
+                { id: "LOW", label: "Low" },
+                { id: "MID", label: "Mid" },
+                { id: "HI", label: "High" },
+              ],
+            },
+          ]
+        : []),
     ],
   };
 }

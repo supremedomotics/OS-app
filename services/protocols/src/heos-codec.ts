@@ -165,6 +165,7 @@ export type HeosUpdate =
   | { kind: "source"; pid: string; source: string }
   | { kind: "queue"; pid: string; sequence: string | null; items: HeosQueueItem[] }
   | { kind: "playersChanged" }
+  | { kind: "heartbeat" }
   | { kind: "error"; command: string; text: string };
 
 export interface HeosQueueItem {
@@ -278,6 +279,11 @@ export function parseHeosMessage(raw: string): HeosUpdate | null {
       return attrs.pid && attrs.input ? { kind: "source", pid: attrs.pid, source: attrs.input } : null;
     case "event/players_changed":
       return { kind: "playersChanged" };
+    // § Universal AVR SDK — official HEOS CLI spec §4.1.5 `system/heart_beat`: a real,
+    // documented liveness/round-trip probe distinct from any player-specific query
+    // (carries no pid — this is a whole-connection check, not per-device state).
+    case "system/heart_beat":
+      return { kind: "heartbeat" };
     default:
       return null;
   }

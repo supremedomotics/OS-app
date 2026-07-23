@@ -100,6 +100,15 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
   >();
   private queueSequence = 0;
   private readonly tracer: ProtocolTracer;
+  /** § Universal AVR SDK — one in-flight `system/heart_beat` probe per shared HEOS link
+   * (keyed by `host:port`, same key `TcpLineTransport` uses). The response carries no pid
+   * (spec §4.1.5 — a whole-connection check, not per-player state), so this can't reuse
+   * `pendingQueue`'s per-sequence correlation; a link only ever has one outstanding probe
+   * at a time, which is all a liveness/round-trip check needs. */
+  private readonly pendingHeartbeats = new Map<
+    string,
+    { resolve: (result: { ok: boolean; latencyMs: number | null }) => void; sentAt: number; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(opts: HeosDriverOptions = {}) {
     this.opts = opts;
@@ -112,7 +121,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       createSocket: opts.createSocket,
       onLog: opts.onLog,
       onConnect: (link, socket, host, port) => this.onLinkConnect(link, socket, host, port),
-      onLine: (ctx, line) => this.onLine(ctx.link, line),
+      onLine: (ctx, line) => this.onLine(ctx.key, ctx.link, line),
     });
   }
 
@@ -126,6 +135,11 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       clearTimeout(pending.timer);
       pending.resolve(null);
       this.pendingQueue.delete(sequence);
+    }
+    for (const [key, pending] of this.pendingHeartbeats) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, latencyMs: null });
+      this.pendingHeartbeats.delete(key);
     }
     this.connected = false;
   }
@@ -177,6 +191,12 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     for (const key of releasedKeys) {
       if (this.bindings.some((b) => `${b.host}:${b.port}` === key)) continue;
       this.transport.releaseKey(key);
+      const pending = this.pendingHeartbeats.get(key);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pending.resolve({ ok: false, latencyMs: null });
+        this.pendingHeartbeats.delete(key);
+      }
     }
   }
 
@@ -370,6 +390,42 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     });
   }
 
+  /** § Universal AVR SDK — official HEOS CLI spec §4.1.5 `system/heart_beat`: an explicit,
+   * on-demand liveness/round-trip probe for this device's shared HEOS connection, distinct
+   * from the passive per-command latency `DriverDiagnosticsTracker` already measures on
+   * every real interaction. Useful when a link has been otherwise idle (nothing playing,
+   * no volume changes) and a developer-diagnostics "ping now" action wants a fresh number
+   * without waiting for the next real command. Resolves `{ ok: false, latencyMs: null }`
+   * on a dropped socket or a 5s timeout rather than hanging the caller — same shape
+   * `getQueue()` already uses for "device didn't answer." */
+  async heartbeat(deviceId: DeviceId): Promise<{ ok: boolean; latencyMs: number | null }> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !this.connected) return { ok: false, latencyMs: null };
+    const key = `${b.host}:${b.port}`;
+    const link = this.transport.ensureLink(key, b.host, b.port);
+    if (!link.socket || link.socket.destroyed) return { ok: false, latencyMs: null };
+    const socket = link.socket;
+    const existing = this.pendingHeartbeats.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.resolve({ ok: false, latencyMs: null });
+      this.pendingHeartbeats.delete(key);
+    }
+    return new Promise((resolve) => {
+      const sentAt = Date.now();
+      const timer = setTimeout(() => {
+        this.pendingHeartbeats.delete(key);
+        resolve({ ok: false, latencyMs: null });
+      }, 5_000);
+      (timer as { unref?: () => void }).unref?.();
+      this.pendingHeartbeats.set(key, { resolve, sentAt, timer });
+      const line = buildHeosCommand("system", "heart_beat", {});
+      link.diagnostics.recordSend(line);
+      this.tracer.send(line);
+      socket.write(`${line}\r\n`);
+    });
+  }
+
   /** `TcpLineTransport`'s `onConnect` hook — the genuinely HEOS-specific piece of what used
    * to be `openSocket()`'s connect handler (link readiness/reconnect-reset/the "Connected
    * to…" log line are now owned by the transport itself). Driver-init sequence per spec
@@ -408,7 +464,7 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
     }
   }
 
-  private onLine(link: TcpLink, line: string): void {
+  private onLine(key: string, link: TcpLink, line: string): void {
     this.tracer.receive(line);
     const update = parseHeosMessage(line);
     if (!update) {
@@ -473,6 +529,14 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
         pending.resolve(
           update.items.map((i) => ({ id: i.qid, title: i.song, artist: i.artist, album: i.album, artworkUrl: i.imageUrl })),
         );
+        return;
+      }
+      case "heartbeat": {
+        const pending = this.pendingHeartbeats.get(key);
+        if (!pending) return; // unsolicited or already-timed-out heart_beat reply — ignore
+        clearTimeout(pending.timer);
+        this.pendingHeartbeats.delete(key);
+        pending.resolve({ ok: true, latencyMs: Date.now() - pending.sentAt });
         return;
       }
       case "players":

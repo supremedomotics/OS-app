@@ -7,10 +7,17 @@
 
 ## Methodology and honest constraints (read before the table)
 
-This matrix was produced without access to real Denon/Marantz hardware and without access to
-the official Denon protocol PDF spec (every fetch attempt to `assets.denon.com` and similar
-hosts returned HTTP 403 in this sandbox, repeatedly, across the session). Every "Official
-Interface" claim below is instead backed by one or more of:
+This matrix was originally produced without access to real Denon/Marantz hardware and without
+access to the official Denon protocol PDF spec (every fetch attempt to `assets.denon.com` and
+similar hosts returned HTTP 403 in this sandbox). **Updated in a later pass**: the user directly
+supplied three primary sources — "DENON AVR control protocol Ver.8.6.0" (application model
+AVR-1713/AVR-1613, official Denon PDF), the official "HEOS CLI Protocol Specification" v1.17 PDF,
+and a real, exported RTI (Remote Technologies Inc.) commercial driver file
+(`Denon_Marantz_Receiver.rtidriver`, an OLE2/CFB compound document — extracted and read stream-
+by-stream: `SystemVariables.xml`, `SystemFunctions.xml`, `DeviceDescription.xml`,
+`ConfigSettings.xml`, `DriverManifest`). These are now cited directly, by page/section, wherever
+they back a claim — no fetch-403 workaround needed for those three documents specifically. Every
+"Official Interface" claim below is backed by one or more of:
 
 1. **The existing, already-tested SupremeOS Telnet codec** (`services/protocols/src/avr-codec.ts`),
    itself verified against the official Denon AVR control protocol spec v8.6.0 in an earlier
@@ -30,17 +37,39 @@ Interface" claim below is instead backed by one or more of:
    decade-old, actively maintained binding, used as a second independent cross-check: if a
    10-year-old mature project hasn't stabilized a field into a typed channel, that's real signal
    the field is genuinely unstable/unpublished, not just overlooked.
-5. **HEOS CLI Protocol Specification** (cited in this codebase's existing `heos-codec.ts`) and
-   **Yamaha MusicCast YXC** (`yamaha-codec.ts`'s existing `getFeatures` implementation) — both
-   already real, tested, working interfaces in this fleet, cited here only for capabilities where
-   HEOS/Yamaha genuinely provide something Denon Telnet+AppCommand cannot.
+5. **HEOS CLI Protocol Specification** (cited in this codebase's existing `heos-codec.ts`, now
+   directly cross-checked against the official v1.17 PDF) and **Yamaha MusicCast YXC**
+   (`yamaha-codec.ts`'s existing `getFeatures` implementation) — both already real, tested,
+   working interfaces in this fleet, cited here only for capabilities where HEOS/Yamaha genuinely
+   provide something Denon Telnet+AppCommand cannot.
+6. **The official Denon AVR control protocol PDF** (Ver.8.6.0, AVR-1713/AVR-1613) — the direct
+   primary source, superseding "existing tested codec" as the citation wherever a command it
+   documents was re-verified against it this pass (Audyssey-family `PS` commands, channel-volume
+   `CV` commands).
+7. **The real RTI `Denon_Marantz_Receiver.rtidriver`** — used strictly as a **behavioral**
+   reference per the user's explicit instruction ("never copy proprietary code... use them to
+   identify missing capabilities"). Its `SystemVariables.xml`/`SystemFunctions.xml` were read to
+   discover what a commercial driver models (e.g. Front Height/Wide/dual-subwoofer channel trims
+   beyond what the Denon PDF's example model exposes, per-zone bass/treble/HPF for Zones 2-4,
+   "Connection State" diagnostics) — cited only to flag capabilities SupremeOS doesn't yet cover,
+   never as a source for a command token or parameter encoding (no RTI script/table content is
+   reproduced here or in any implementation file).
 
-**RTI / Crestron / Control4 / Savant**: this session has **no access** to any of these four
-systems' driver source code, SDKs, or dealer documentation — they are proprietary/NDA-gated. The
-user was asked whether they could share any such material; the question was declined. Per this
-session's established pattern (state the default, proceed), these four columns are marked
-**N/S (not independently sourced)** throughout — used only as the feature-completeness bar the
-user named, never as fabricated evidence. A checkmark never appears in these columns.
+**RTI**: as of this pass, this session **does** have a real, user-supplied RTI driver export —
+used exclusively per item 7 above (behavioral gap-finding, zero code/token reuse). The RTI column
+in the tables below is **still marked N/S**, not filled in with checkmarks: confirming "RTI
+implements X" for every row would require a systematic, row-by-row audit of its
+`SystemFunctions.xml`/`SystemVariables.xml` against this matrix, which this pass did not do —
+only a targeted read for the specific gaps cited above. Marking N/S here is the honest
+reflection of "not yet independently, systematically cross-checked," not "no evidence exists."
+
+**Crestron / Control4 / Savant**: this session has **no access** to any of these three systems'
+driver source code, SDKs, or dealer documentation — they remain proprietary/NDA-gated. The
+user was asked whether they could share any such material; the question was declined for the
+initial pass. Per this session's established pattern (state the default, proceed), these three
+columns (plus RTI, per the note above) are marked **N/S (not independently sourced)** throughout
+— used only as the feature-completeness bar the user named, never as fabricated evidence. A
+checkmark never appears in these columns.
 
 **Confidence** reflects how directly the "Official Interface" claim is cited, not whether
 SupremeOS implements it: **High** = a real XML/token shape was fetched and read verbatim this
@@ -94,11 +123,13 @@ verified.
 | Tone defeat (tone control on/off) | Telnet `PSTONE CTRL ?`/`PSTONE CTRL ON`/`OFF` — queried at connect, not currently exposed as a settable control | N/S | N/S | N/S | N/S | Partial — queried but not surfaced as a homeowner toggle | Telnet event | Medium |
 | Dialog enhancer | HTTP AppCommand — no confirmed dedicated command; likely folded into `SetAudyssey`/tone family, unverified | N/S | N/S | N/S | N/S | ✗ Not implemented — no verified command | — | Low |
 | Subwoofer level | HTTP AppCommand — command family confirmed to exist in general (Audyssey/channel-level commands reference sub level), exact command name/encoding not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Low |
-| Channel trims (per-speaker level) | HTTP AppCommand `SetChLevel` — command referenced across multiple sources as real; exact parameter encoding not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — **safety-gated**: a wrong guessed encoding here could misconfigure a real receiver's real speaker calibration | HTTP AppCommand (unverified — do not guess) | Medium (name) / Low (encoding) |
+| Channel trims (per-speaker level, FL/FR/C/SW/SL/SR) | **Telnet `CV<ch> <nn>`** — official Denon AVR control protocol PDF (Ver.8.6.0, p.7), directly supplied and read this session: exact encoding confirmed (`38`–`62` ASCII, `50`=0dB, `00`=OFF for SW). Superseded HTTP AppCommand `SetChLevel` as the cited interface — Telnet is both confirmed AND the existing realtime channel. | N/S | N/S | N/S | N/S | ✗ **Not yet wired** — encoding is now real evidence, not guessed, but implementing the 6-channel trim range UI is separate, UI-verification-bound scope not taken up this pass (tracked as a follow-up, not silently dropped). RTI's own driver (`SystemVariables.xml`, directly inspected this session) models additional channels this PDF doesn't confirm (Front Height/Wide, dual subwoofer, Surr Back) — those stay unimplemented since no equivalent SupremeOS evidence exists for them. | Telnet `CV` | **High** (protocol evidence) / gated on UI work |
 | Speaker layout / channel activity | HTTP AppCommand `GetActiveSpeaker` — command referenced as real; exact response schema not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Medium (name) / Low (schema) |
-| Dynamic EQ | HTTP AppCommand `SetAudysseyDynamicEQ` — confirmed real command name via `denonavr`'s actual `AppCommands` enum (cmd_id "3"); parameter values not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — **safety-gated**, same reasoning as channel trims | HTTP AppCommand0300 (unverified) | Medium (name) / Low (encoding) |
-| Dynamic Volume | HTTP AppCommand `SetAudysseyDynamicvol` — confirmed real command name (cmd_id "3"); parameter values not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — safety-gated | HTTP AppCommand0300 (unverified) | Medium (name) / Low (encoding) |
-| Audyssey (MultEQ/Reference level offset) | HTTP AppCommand `GetAudyssey`/`SetAudysseyMultiEQ`/`SetAudysseyReflevoffset` — confirmed real command names (cmd_id "3"); response/parameter schema not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — safety-gated | HTTP AppCommand0300 (unverified) | Medium (name) / Low (encoding) |
+| Dynamic EQ | **Telnet `PSDYNEQ ON`/`OFF`** — official Denon AVR control protocol PDF (Ver.8.6.0, p.13), directly supplied and read this session. A fixed on/off enum, not a guessed numeric range — the safety concern that gated this via HTTP AppCommand's `SetAudysseyDynamicEQ` doesn't apply to a closed, spec-quoted token set. | N/S | N/S | N/S | N/S | ✓ **Implemented** this pass, live push + write, via `denonCapabilityConfig`'s installer-declared `hasAudyssey` opt-in (defaults `false` — Telnet has no feature-query command, so presence isn't wire-discoverable; see Reference Level row for the same caveat) | Telnet `PSDYNEQ` | **High** |
+| Dynamic Volume | **Telnet `PSDYNVOL HEV`/`MED`/`LIT`/`OFF`** — same PDF, p.13. Fixed enum. | N/S | N/S | N/S | N/S | ✓ **Implemented** this pass, live push + write, gated on `hasAudyssey` | Telnet `PSDYNVOL` | **High** |
+| Dynamic Range Compression (DRC) | **Telnet `PSDRC AUTO`/`LOW`/`MID`/`HI`/`OFF`** — same PDF, p.14. Fixed enum. Not previously in this matrix at all (newly discovered this pass, not merely un-gated). | N/S | N/S | N/S | N/S | ✓ **Implemented** this pass, live push + write, gated on `hasAudyssey` | Telnet `PSDRC` | **High** |
+| Audyssey MultEQ mode | **Telnet `PSMULTEQ:AUDYSSEY`/`BYP.LR`/`FLAT`/`MANUAL`/`OFF`** — same PDF, p.13. Fixed enum. | N/S | N/S | N/S | N/S | ✓ **Implemented** this pass, live push + write, gated on `hasAudyssey` | Telnet `PSMULTEQ:` | **High** |
+| Reference Level Offset | **Telnet `PSREFLEV 0`/`5`/`10`/`15`** — same PDF, p.13. Fixed enum (dB). | N/S | N/S | N/S | N/S | ✓ **Implemented** this pass, live push + write, gated on `hasAudyssey`. **Model caveat, stated honestly**: the source PDF targets the 2012-era AVR-1713/1613; whether a specific bound unit has Audyssey calibration at all still isn't wire-discoverable, so this stays an explicit installer opt-in rather than assumed present on every Denon/Marantz. | Telnet `PSREFLEV` | **High** (command evidence) / installer-declared (presence) |
 
 ## Video
 
@@ -144,7 +175,8 @@ verified.
 | Packet loss | **Not a meaningful metric over Telnet/HTTP** — both are reliable-delivery TCP; there is no "packet" to lose the way there would be over UDP/wireless | N/S | N/S | N/S | N/S | ✗ Deliberately not implemented — reconnect count + last error + average latency are the honest equivalent | — | High (the reason, not the absence, is the point) |
 | RX/sec, TX/sec | SupremeOS-side — derivable from `packetsSent`/`packetsReceived` + a time window; not implemented as a distinct rate field this pass | N/S | N/S | N/S | N/S | Partial — raw counters implemented (`packetsSent`/`packetsReceived`), a derived per-second rate is not | — | High |
 | Last command / last event | SupremeOS-side | N/S | N/S | N/S | N/S | ✓ Implemented (`lastCommand`/`lastCommandAt`, `lastResponse`/`lastResponseAt`) | — | High |
-| Heartbeat | Telnet's own unsolicited status echoes serve this role (a receiver that's gone silent stops updating `lastResponseAt`) | N/S | N/S | N/S | N/S | ✓ Implicit via `lastResponseAt`/`connectionStatus` — no dedicated keepalive ping exists in the Telnet spec to build a separate heartbeat from | Telnet's own traffic | Medium |
+| Heartbeat (Telnet/AVR) | Telnet's own unsolicited status echoes serve this role (a receiver that's gone silent stops updating `lastResponseAt`) | N/S | N/S | N/S | N/S | ✓ Implicit via `lastResponseAt`/`connectionStatus` — no dedicated keepalive ping exists in the Telnet spec to build a separate heartbeat from | Telnet's own traffic | Medium |
+| Heartbeat (HEOS) | **`system/heart_beat`** — official HEOS CLI Protocol Specification v1.17 §4.1.5, directly supplied and read this session: a real, documented, on-demand liveness/round-trip command distinct from any player query. | N/S | N/S | N/S | N/S | ✓ **Implemented** this pass — `HeosProtocolDriver.heartbeat(deviceId)` sends it and resolves `{ ok, latencyMs }`, correlated per shared link (no pid in the response) with a 5s timeout | HEOS `system/heart_beat` | High |
 | Capability report | Installer-declared config + real HTTP-sourced input enrichment, surfaced via `getCapabilityConfig()` | N/S | N/S | N/S | N/S | ✓ Implemented | Mixed (installer + HTTP) | High |
 | Protocol trace | SupremeOS-side ring buffer, automatically fed by every real `recordSend`/`recordReceive` call | N/S | N/S | N/S | N/S | ✓ Implemented this sprint (`GET /v1/devices/:id/diagnostics/trace`, UI panel) | — | High |
 | Realtime event log | Same mechanism as Protocol trace | N/S | N/S | N/S | N/S | ✓ Implemented (same trace buffer/panel) | — | High |

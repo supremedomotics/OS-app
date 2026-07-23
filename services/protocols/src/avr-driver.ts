@@ -75,6 +75,11 @@ interface AvrBinding {
   /** Installer-declared: does this unit have tone control (bass/treble)? Telnet has no
    * feature-query command (see avr-codec.ts), so this can't be wire-detected. */
   hasToneControl: boolean;
+  /** Installer-declared: does this unit have Audyssey calibration (Dynamic EQ/MultEQ
+   * mode/Reference Level/Dynamic Volume/DRC)? Defaults `false` — see
+   * `denonCapabilityConfig`'s doc for why this is opt-in rather than opt-out like
+   * `hasToneControl`. */
+  hasAudyssey: boolean;
   /** UPnP device-description `<modelName>`/`<serialNumber>`, threaded through from
    * discovery's `bindConfig.model`/`bindConfig.serial` when present (§ Diagnostics
    * Console, § Production Bugfix Sprint) — same pattern HEOS's `model` already uses.
@@ -93,6 +98,11 @@ interface MediaCache {
   treble?: number;
   soundMode?: string;
   sleepMinutes?: number | null;
+  dynamicEq?: boolean;
+  audysseyMode?: string;
+  referenceLevel?: number;
+  dynamicVolume?: string;
+  drc?: string;
 }
 
 /**
@@ -178,6 +188,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const key = `${host}:${port}`;
     const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
     const hasToneControl = binding.config?.hasToneControl !== false;
+    const hasAudyssey = binding.config?.hasAudyssey === true;
     const model = typeof binding.config?.model === "string" ? binding.config.model : null;
     const serial = typeof binding.config?.serial === "string" ? binding.config.serial : null;
     const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
@@ -194,7 +205,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         hidden: Array.isArray(hiddenRaw) ? new Set(hiddenRaw as string[]) : new Set(),
       });
     }
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, model, serial });
+    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, hasAudyssey, model, serial });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
@@ -290,6 +301,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     return denonCapabilityConfig({
       hasZone2,
       hasToneControl: b.zone === "main" && b.hasToneControl,
+      hasAudyssey: b.zone === "main" && b.hasAudyssey,
       renamedInputs: enrichment?.renamed,
       hiddenInputs: enrichment?.hidden,
     }) as unknown as Record<string, unknown>;
@@ -528,6 +540,13 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
       initTokens.push("Z2?", "Z2MU?");
     }
+    // § Universal AVR SDK — Audyssey-family (see avr-codec.ts module doc). Only queried
+    // when the installer has declared this unit has Audyssey — an unnecessary query on a
+    // unit without it just gets silently ignored by the receiver, but there's no reason
+    // to spend the round-trip on every connect for a control this binding won't expose.
+    if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "main" && b.hasAudyssey)) {
+      initTokens.push("PSDYNEQ ?", "PSMULTEQ: ?", "PSREFLEV ?", "PSDYNVOL ?", "PSDRC ?");
+    }
     this.tracer.event(`connected to ${host}:${port} — sending init query burst: [${initTokens.join(", ")}]`);
     for (const t of initTokens) {
       link.diagnostics.recordSend(t);
@@ -587,6 +606,21 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         return;
       case "sleep":
         this.patchMedia(host, port, "main", (c) => { c.sleepMinutes = update.minutes; });
+        return;
+      case "dynamicEq":
+        this.patchMedia(host, port, "main", (c) => { c.dynamicEq = update.on; });
+        return;
+      case "audysseyMode":
+        this.patchMedia(host, port, "main", (c) => { c.audysseyMode = update.mode; });
+        return;
+      case "referenceLevel":
+        this.patchMedia(host, port, "main", (c) => { c.referenceLevel = update.db; });
+        return;
+      case "dynamicVolume":
+        this.patchMedia(host, port, "main", (c) => { c.dynamicVolume = update.mode; });
+        return;
+      case "drc":
+        this.patchMedia(host, port, "main", (c) => { c.drc = update.mode; });
         return;
     }
   }

@@ -42,6 +42,8 @@ function startFakeHeos(): Promise<{ server: Server; port: number; received: stri
           const p = pid ? players.get(pid) : undefined;
           if (g === "system" && c === "register_for_change_events") {
             sock.write(`${heosOk("system/register_for_change_events", `enable=${params.enable}`)}\r\n`);
+          } else if (g === "system" && c === "heart_beat") {
+            sock.write(`${heosOk("system/heart_beat", "")}\r\n`);
           } else if (g === "player" && c === "get_play_state" && p) {
             sock.write(`${heosOk("player/get_play_state", `pid=${pid}&state=${p.state}`)}\r\n`);
           } else if (g === "player" && c === "set_play_state" && p) {
@@ -237,6 +239,17 @@ describe("HeosProtocolDriver (in-process HEOS network over TCP, one connection m
 
   it("getQueue on an unbound device resolves null rather than throwing", async () => {
     await expect(driver.getQueue("device-nope" as DeviceId)).resolves.toBeNull();
+  });
+
+  it("heartbeat() round-trips a real system/heart_beat probe with a measured latency (§ Universal AVR SDK)", async () => {
+    const result = await driver.heartbeat(livingRoom);
+    expect(result.ok).toBe(true);
+    expect(typeof result.latencyMs).toBe("number");
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("heartbeat() on an unbound device resolves { ok: false } rather than throwing", async () => {
+    await expect(driver.heartbeat("device-nope" as DeviceId)).resolves.toEqual({ ok: false, latencyMs: null });
   });
 
   it("resolves the real streaming service name from a song-type get_now_playing_media response (§ Network Source Resolver)", async () => {
