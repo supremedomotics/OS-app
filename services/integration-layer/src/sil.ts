@@ -6,7 +6,7 @@ import type {
 } from "@supreme/domain-model";
 import { READONLY_CAPABILITIES } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
-import type { BackendStateEvent, DriverDiagnosticsSnapshot, IBackendAdapter, MediaArtwork, MediaQueueItem } from "./adapter.js";
+import type { BackendStateEvent, DriverDiagnosticsSnapshot, DriverTraceEntry, IBackendAdapter, MediaArtwork, MediaQueueItem } from "./adapter.js";
 import { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 import { RoutingBackendAdapter } from "./routing-adapter.js";
 import type { SupremeNativeAdapter } from "./native-adapter.js";
@@ -198,6 +198,12 @@ export class SupremeIntegrationLayer {
    * (null if none/unsupported — e.g. an HA-backed or unbound device). */
   async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
     return this.adapter.getDiagnostics ? this.adapter.getDiagnostics(deviceId) : null;
+  }
+
+  /** Fetch a device's owning driver's recent raw protocol trace (null if
+   * unsupported, or trace logging isn't enabled for that driver instance). */
+  async getTrace(deviceId: DeviceId): Promise<DriverTraceEntry[] | null> {
+    return this.adapter.getTrace ? this.adapter.getTrace(deviceId) : null;
   }
 
   /** § Capability Refresh — ask the owning driver to re-query whatever it can

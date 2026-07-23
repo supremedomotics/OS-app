@@ -1,4 +1,5 @@
 import { createServer, type Server, type Socket } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import type { DeviceId } from "@supreme/domain-model";
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -84,6 +85,57 @@ const nextEvent = (driver: AvrProtocolDriver, pred: (e: BackendStateEvent) => bo
       }
     });
   });
+
+/** A tiny in-process HTTP AppCommand server (§ Universal AVR SDK) — answers
+ * `POST /goform/AppCommand.xml` with real-shaped `<functionrename>`/`<functiondelete>`
+ * XML (mirrors `denonavr/input.py`'s actual parsing target, confirmed this sprint), and
+ * `GET /img/album%20art_S.png` with a tiny fake image — real `http` throughout. */
+function startFakeAppCommand(opts: {
+  renamed?: Record<string, string>;
+  hidden?: string[];
+  albumArt?: { contentType: string; body: string } | null;
+} = {}): Promise<{ server: import("node:http").Server; port: number; postBodies: string[]; artRequests: number }> {
+  const postBodies: string[] = [];
+  const state = { artRequests: 0 };
+  return new Promise((resolve) => {
+    const server = createHttpServer((req, res) => {
+      if (req.method === "POST" && req.url === "/goform/AppCommand.xml") {
+        let body = "";
+        req.on("data", (c) => { body += c; });
+        req.on("end", () => {
+          postBodies.push(body);
+          const renameList = Object.entries(opts.renamed ?? {})
+            .map(([name, rename]) => `<list><name>${name}</name><rename>${rename}</rename></list>`)
+            .join("");
+          const deleteList = (opts.hidden ?? [])
+            .map((name) => `<list><FuncName>${name}</FuncName><use>0</use></list>`)
+            .join("");
+          res.setHeader("content-type", "text/xml");
+          res.end(`<rx><cmd id="1"><functionrename>${renameList}</functionrename></cmd><cmd id="1"><functiondelete>${deleteList}</functiondelete></cmd></rx>`);
+        });
+        return;
+      }
+      if (req.method === "GET" && req.url === "/img/album%20art_S.png") {
+        state.artRequests += 1;
+        if (!opts.albumArt) {
+          res.statusCode = 404;
+          res.end();
+          return;
+        }
+        res.setHeader("content-type", opts.albumArt.contentType);
+        res.end(opts.albumArt.body);
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      resolve({ server, port, postBodies, get artRequests() { return state.artRequests; } });
+    });
+  });
+}
 
 describe("AVR codec", () => {
   it("encodes commands and parses status tokens", () => {
@@ -186,6 +238,22 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
 
   it("returns null diagnostics for a device this driver doesn't manage", () => {
     expect(driver.getDiagnostics("device-unknown" as DeviceId)).toBeNull();
+  });
+
+  it("getTrace() reflects the same automatically-captured send/receive lines getDiagnostics() draws from (§ Universal AVR SDK)", async () => {
+    const before = driver.getTrace(dev);
+    expect(before).not.toBeNull();
+    const beforeLength = before!.length;
+    await driver.command(dev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => {
+      const trace = driver.getTrace(dev)!;
+      expect(trace.length).toBeGreaterThan(beforeLength);
+      expect(trace.some((t) => t.line === "-> ZMON")).toBe(true);
+    });
+  });
+
+  it("returns null trace for a device this driver doesn't manage", () => {
+    expect(driver.getTrace("device-unknown" as DeviceId)).toBeNull();
   });
 
   it("refreshCapabilities forces a real reconnect that re-syncs live state (§ Capability Refresh)", async () => {
@@ -572,5 +640,240 @@ describe("AvrProtocolDriver — discovery", () => {
   it("returns no candidates when nothing answers the SSDP search", async () => {
     const driver = new AvrProtocolDriver({ ssdp: async () => [] });
     expect(await driver.discover()).toEqual([]);
+  });
+
+  it("enriches discovery with real renamed/hidden inputs via HTTP AppCommand (§ Universal AVR SDK)", async () => {
+    const http = await startFakeAppCommand({ renamed: { "SAT/CBL": "DIRECTV" }, hidden: ["TUNER"] });
+    const driver = new AvrProtocolDriver({
+      httpPort: http.port,
+      ssdp: async () => [{ address: "127.0.0.1" }],
+      fetchImpl: (async (url: string, init?: RequestInit) => {
+        // No UPnP location this time — only the AppCommand fetch (127.0.0.1:<http.port>) should succeed.
+        if (String(url).includes(String(http.port))) return globalThis.fetch(url, init);
+        throw new Error("unreachable");
+      }) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found[0]?.raw.renamedInputs).toEqual({ "SAT/CBL": "DIRECTV" });
+    expect(found[0]?.raw.hiddenInputs).toEqual(["TUNER"]);
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+
+  it("omits renamedInputs/hiddenInputs from discovery raw when the receiver reports none — never an empty-object placeholder", async () => {
+    const http = await startFakeAppCommand({});
+    const driver = new AvrProtocolDriver({
+      httpPort: http.port,
+      ssdp: async () => [{ address: "127.0.0.1" }],
+      fetchImpl: globalThis.fetch,
+    });
+    const found = await driver.discover();
+    expect(found[0]?.raw.renamedInputs).toBeUndefined();
+    expect(found[0]?.raw.hiddenInputs).toBeUndefined();
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+});
+
+describe("AvrProtocolDriver — HTTP AppCommand input enrichment (§ Universal AVR SDK)", () => {
+  it("bind() fetches real renamed/hidden inputs and getCapabilityConfig() reflects them — device_reported, not installer_declared", async () => {
+    const avr = await startFakeAvr();
+    const http = await startFakeAppCommand({ renamed: { DVD: "Blu-ray Player", AUX1: "Turntable" }, hidden: ["GAME"] });
+    const driver = new AvrProtocolDriver({ httpPort: http.port, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-enriched-live" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(http.postBodies.length).toBeGreaterThan(0));
+    expect(http.postBodies[0]).toContain("GetRenameSource");
+    expect(http.postBodies[0]).toContain("GetDeletedSource");
+
+    const config = driver.getCapabilityConfig(dev, "media") as { source: string; inputs: { id: string; label: string }[] };
+    expect(config.source).toBe("device_reported");
+    expect(config.inputs.find((i) => i.id === "DVD")?.label).toBe("Blu-ray Player");
+    expect(config.inputs.find((i) => i.id === "AUX1")?.label).toBe("Turntable");
+    expect(config.inputs.some((i) => i.id === "GAME")).toBe(false); // hidden — filtered out entirely
+    expect(config.inputs.some((i) => i.id === "TUNER")).toBe(true); // untouched input keeps its default label
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+
+  it("a host with no reachable HTTP AppCommand interface (older non-2016 unit) falls back to installer_declared, exactly as before this feature existed", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({
+      httpPort: 1, // nothing listens here — every AppCommand fetch fails
+      fetchImpl: globalThis.fetch,
+    });
+    const dev = "device-avr-no-http" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.connectionStatus).toBe("connected"));
+    const config = driver.getCapabilityConfig(dev, "media") as { source: string; inputs: { id: string }[] };
+    expect(config.source).toBe("installer_declared");
+    expect(config.inputs.length).toBeGreaterThan(0); // full default input list, untouched
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("refreshCapabilities() re-fetches real input enrichment on demand", async () => {
+    const avr = await startFakeAvr();
+    const http = await startFakeAppCommand({ renamed: {} });
+    const driver = new AvrProtocolDriver({ httpPort: http.port, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-refresh-enrichment" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(http.postBodies.length).toBe(1));
+    await driver.refreshCapabilities(dev);
+    await vi.waitFor(() => expect(http.postBodies.length).toBe(2));
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+
+  it("seeds enrichment synchronously from binding.config (discovery preview data) — real labels visible before any async fetch resolves", async () => {
+    const avr = await startFakeAvr();
+    // No HTTP server at all — this test proves the SYNCHRONOUS seed works even when the
+    // subsequent async refresh (which will fail, nothing listening) never overwrites it usefully.
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-seeded" as DeviceId;
+    await driver.connect();
+    await driver.bind({
+      deviceId: dev,
+      capability: "media",
+      address: `127.0.0.1:${avr.port}`,
+      config: { renamedInputs: { DVD: "Blu-ray Player" }, hiddenInputs: ["GAME"] },
+    });
+    // Synchronous — no vi.waitFor needed, this must be true immediately after bind() resolves.
+    const config = driver.getCapabilityConfig(dev, "media") as { source: string; inputs: { id: string; label: string }[] };
+    expect(config.source).toBe("device_reported");
+    expect(config.inputs.find((i) => i.id === "DVD")?.label).toBe("Blu-ray Player");
+    expect(config.inputs.some((i) => i.id === "GAME")).toBe(false);
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("unbind()'s last release for a host stops the enrichment poller and releases the HTTP client key", async () => {
+    const avr = await startFakeAvr();
+    const http = await startFakeAppCommand({});
+    const driver = new AvrProtocolDriver({ httpPort: http.port, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-unbind-http" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(http.postBodies.length).toBeGreaterThan(0));
+    await driver.unbind(dev);
+    expect(driver.getCapabilityConfig(dev, "media")).toBeNull(); // device is genuinely gone
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+
+  it("the slow adaptive poller re-fetches input enrichment on its own schedule while connected", async () => {
+    vi.useFakeTimers();
+    try {
+      const avr = await startFakeAvr();
+      const http = await startFakeAppCommand({});
+      const driver = new AvrProtocolDriver({ httpPort: http.port, fetchImpl: globalThis.fetch });
+      const dev = "device-avr-poll" as DeviceId;
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+      await vi.waitFor(() => expect(http.postBodies.length).toBeGreaterThanOrEqual(1));
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      await vi.waitFor(() => expect(http.postBodies.length).toBeGreaterThanOrEqual(2));
+      await driver.disconnect();
+      await new Promise<void>((r) => avr.server.close(() => r()));
+      await new Promise<void>((r) => http.server.close(() => r()));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("AvrProtocolDriver — getArtwork() (§ Universal AVR SDK)", () => {
+  it("fetches real album art bytes from the receiver's confirmed-static HTTP endpoint", async () => {
+    const avr = await startFakeAvr();
+    const http = await startFakeAppCommand({ albumArt: { contentType: "image/png", body: "fake-png-bytes" } });
+    const driver = new AvrProtocolDriver({ httpPort: http.port, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-artwork" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    const art = await driver.getArtwork(dev);
+    expect(art?.contentType).toBe("image/png");
+    expect(new TextDecoder().decode(art?.data)).toBe("fake-png-bytes");
+    expect(http.artRequests).toBe(1);
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+
+  it("returns null (never fabricated bytes) when the receiver has no album art to serve", async () => {
+    const avr = await startFakeAvr();
+    const http = await startFakeAppCommand({ albumArt: null });
+    const driver = new AvrProtocolDriver({ httpPort: http.port, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-artwork-none" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    expect(await driver.getArtwork(dev)).toBeNull();
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => http.server.close(() => r()));
+  });
+
+  it("returns null for a device this driver doesn't manage, and never throws on a connection failure", async () => {
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    expect(await driver.getArtwork("device-unknown" as DeviceId)).toBeNull();
+  });
+});
+
+describe("AvrProtocolDriver — artworkUrlFor advertisement (§ Universal AVR SDK)", () => {
+  it("advertises the gateway's proxy URL on the main zone's media state when artworkUrlFor is configured", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({
+      httpPort: 1,
+      fetchImpl: globalThis.fetch,
+      artworkUrlFor: (id) => `https://hub.local/v1/devices/${id}/media/artwork`,
+    });
+    const dev = "device-avr-artwork-url" as DeviceId;
+    await driver.connect();
+    const ev = nextEvent(driver, (e) => e.deviceId === dev && e.capability === "media");
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.connectionStatus).toBe("connected"));
+    await driver.command(dev, { capability: "media", action: "mute" });
+    const state = (await ev).state as { artworkUrl: string | null };
+    expect(state.artworkUrl).toBe(`https://hub.local/v1/devices/${dev}/media/artwork`);
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("zone2's media state never advertises artwork — it's a whole-unit, front-panel concept", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({
+      httpPort: 1,
+      fetchImpl: globalThis.fetch,
+      artworkUrlFor: (id) => `https://hub.local/v1/devices/${id}/media/artwork`,
+    });
+    const dev = "device-avr-z2-no-artwork" as DeviceId;
+    await driver.connect();
+    const ev = nextEvent(driver, (e) => e.deviceId === dev && e.capability === "media");
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.connectionStatus).toBe("connected"));
+    await driver.command(dev, { capability: "media", action: "mute" });
+    const state = (await ev).state as { artworkUrl: string | null };
+    expect(state.artworkUrl).toBeNull();
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("no artwork is advertised at all when artworkUrlFor isn't configured — unchanged from before this feature existed", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-no-artwork-opt" as DeviceId;
+    await driver.connect();
+    const ev = nextEvent(driver, (e) => e.deviceId === dev && e.capability === "media");
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.connectionStatus).toBe("connected"));
+    await driver.command(dev, { capability: "media", action: "mute" });
+    const state = (await ev).state as { artworkUrl: string | null };
+    expect(state.artworkUrl).toBeNull();
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
   });
 });

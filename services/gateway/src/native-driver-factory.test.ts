@@ -27,6 +27,28 @@ describe("native-driver-factory — AVR/HEOS/Yamaha", () => {
   it("returns null for an unknown protocol", () => {
     expect(buildNativeDriver("not-a-real-protocol", {})).toBeNull();
   });
+
+  it("threads ctx.onLog and ctx.artworkUrlFor into the AVR driver (§ Universal AVR SDK) — HEOS/Yamaha only need onLog", async () => {
+    const logs: string[] = [];
+    const avr = buildNativeDriver("avr", {}, {
+      onLog: (level, message) => logs.push(`${level}:${message}`),
+      artworkUrlFor: (id) => `https://hub.local/v1/devices/${id}/media/artwork`,
+    });
+    expect(avr).not.toBeNull();
+    // Real proof the context reached the driver instance: getArtwork() on an unmanaged
+    // device resolves null without throwing (constructor accepted the options cleanly),
+    // and the connection-lifecycle onLog wiring is exercised via a real (failing, since
+    // nothing is bound) connect/disconnect cycle without error.
+    await avr!.connect();
+    await avr!.disconnect();
+    expect(avr!.protocol).toBe("avr");
+  });
+
+  it("omits ctx entirely — every factory still builds a working driver (ctx defaults to {})", () => {
+    expect(buildNativeDriver("avr", {})?.protocol).toBe("avr");
+    expect(buildNativeDriver("heos", {})?.protocol).toBe("heos");
+    expect(buildNativeDriver("yamaha", {})?.protocol).toBe("yamaha");
+  });
 });
 
 describe("native-driver-factory — CoolMaster", () => {

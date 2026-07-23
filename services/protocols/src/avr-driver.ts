@@ -9,18 +9,21 @@ import {
   bindingKey,
   type DiscoveredDevice,
   type INativeProtocolDriver,
+  type MediaArtwork,
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
 import { buildMediaState, commandToAvr, denonCapabilityConfig, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
+import { albumArtUrl, buildAppCommandRequests, parseDeletedSource, parseRenameSource } from "./avr-http-codec.js";
 import { parseUpnpDescription } from "./yamaha-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
-import type { DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import type { DriverDiagnosticsSnapshot, DriverTraceEntry } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
 import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
+import { AdaptivePoller, HttpPollClient } from "./av-sdk/http-poll-client.js";
 
 /** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
  * — surfaced in Diagnostics so an installer can tell which driver build is running. */
@@ -49,6 +52,16 @@ export interface AvrDriverOptions {
    * full sequence via `onLog`, prefixed `[trace:avr]`. Off by default — this is a
    * debugging aid, not a normal-operation log level. */
   trace?: boolean;
+  /** § Universal AVR SDK — port for the unit's HTTP AppCommand control interface
+   * (renamed input names, hidden-input filtering, album art). Real, confirmed via
+   * `denonavr`'s actual source: 8080 on 2016+ models. Pre-2016 units may use port 80
+   * instead or lack this interface entirely — all use of it is best-effort and never
+   * blocks Telnet control, matching this driver's existing UPnP-enrichment posture. */
+  httpPort?: number;
+  /** § Universal AVR SDK — builds the gateway's own artwork-proxy URL for a device
+   * (`/v1/devices/:id/media/artwork`), same pattern the Apple TV driver already uses.
+   * Absent (no artwork advertised) when the gateway has no public base URL configured. */
+  artworkUrlFor?: (deviceId: DeviceId) => string;
 }
 
 interface AvrBinding {
@@ -110,12 +123,29 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   private readonly listeners = new Set<StateListener>();
   private readonly fetchImpl: typeof fetch;
   private readonly tracer: ProtocolTracer;
+  private readonly httpPort: number;
+  /** § Universal AVR SDK — the second, HTTP-based transport (renamed inputs,
+   * hidden-input filtering, album art) that makes this a genuinely multi-transport
+   * driver: `TcpLineTransport` above stays the sole realtime-event channel (nothing
+   * about it changes), this covers the one real gap Telnet cannot fill. */
+  private readonly httpClient: HttpPollClient;
+  /** Real, receiver-reported input enrichment, keyed by `host:port` (shared by every
+   * zone binding on that host — renamed/hidden inputs are a whole-unit concept, not
+   * per-zone). Absent for a host never successfully enriched yet — callers fall back to
+   * the installer-declared default labels, exactly as before this feature existed. */
+  private readonly inputEnrichment = new Map<string, { renamed: Map<string, string>; hidden: Set<string> }>();
+  /** One slow, adaptive-backoff poller per host — the concrete mechanism keeping
+   * renamed/hidden inputs in sync with changes made via the OEM Denon Remote app
+   * (Telnet has no push notification for a rename; see module doc). */
+  private readonly enrichmentPollers = new Map<string, AdaptivePoller>();
 
   constructor(opts: AvrDriverOptions = {}) {
     this.opts = opts;
     this.defaultPort = opts.port ?? 23;
+    this.httpPort = opts.httpPort ?? 8080;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.tracer = createProtocolTracer("avr", opts.trace === true, opts.onLog);
+    this.httpClient = new HttpPollClient({ fetchImpl: this.fetchImpl, tracer: this.tracer });
     this.transport = new TcpLineTransport({
       delimiter: "\r",
       reconnectBaseMs: opts.reconnectBaseMs,
@@ -134,6 +164,8 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
 
   async disconnect(): Promise<void> {
     this.transport.disconnectAll();
+    for (const poller of this.enrichmentPollers.values()) poller.stop();
+    this.enrichmentPollers.clear();
     this.connected = false;
   }
 
@@ -149,6 +181,19 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const model = typeof binding.config?.model === "string" ? binding.config.model : null;
     const serial = typeof binding.config?.serial === "string" ? binding.config.serial : null;
     const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
+    const isFirstBindingForHost = !this.bindings.some((b) => `${b.host}:${b.port}` === key);
+    // § Universal AVR SDK — seed enrichment synchronously from discover()'s preview
+    // data when the wizard already fetched it, so a freshly-commissioned device shows
+    // real renamed labels immediately rather than waiting for the async refresh below
+    // to resolve. Same pattern `model`/`serial` already use.
+    if (isFirstBindingForHost && (binding.config?.renamedInputs || binding.config?.hiddenInputs)) {
+      const renamedRaw = binding.config?.renamedInputs;
+      const hiddenRaw = binding.config?.hiddenInputs;
+      this.inputEnrichment.set(key, {
+        renamed: renamedRaw && typeof renamedRaw === "object" ? new Map(Object.entries(renamedRaw as Record<string, string>)) : new Map(),
+        hidden: Array.isArray(hiddenRaw) ? new Set(hiddenRaw as string[]) : new Set(),
+      });
+    }
     this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, model, serial });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
@@ -165,6 +210,13 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         const tokens = ["Z2?", "Z2MU?"];
         for (const t of tokens) link.diagnostics.recordSend(t);
         link.socket.write(`${tokens.join("\r")}\r`);
+      }
+      // § Universal AVR SDK — first binding for this host: fetch real renamed/hidden
+      // inputs (best-effort, never blocks Telnet binding) and start the slow
+      // consistency poller that keeps catching OEM-app-driven renames.
+      if (isFirstBindingForHost) {
+        void this.refreshInputEnrichment(host, port);
+        this.ensureEnrichmentPoller(host, port);
       }
     }
   }
@@ -187,6 +239,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     for (const key of releasedKeys) {
       if (this.bindings.some((b) => `${b.host}:${b.port}` === key)) continue;
       this.transport.releaseKey(key);
+      this.httpClient.releaseKey(key);
+      this.inputEnrichment.delete(key);
+      this.enrichmentPollers.get(key)?.stop();
+      this.enrichmentPollers.delete(key);
     }
   }
 
@@ -226,8 +282,17 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
     if (!b) return null;
     const hasZone2 = this.bindings.some((x) => x.host === b.host && x.port === b.port && x.zone === "zone2");
-    this.tracer.event(`getCapabilityConfig ${deviceId} — installer_declared (hasZone2=${hasZone2}, hasToneControl=${b.hasToneControl})`);
-    return denonCapabilityConfig({ hasZone2, hasToneControl: b.zone === "main" && b.hasToneControl }) as unknown as Record<string, unknown>;
+    const enrichment = this.inputEnrichment.get(`${b.host}:${b.port}`);
+    this.tracer.event(
+      `getCapabilityConfig ${deviceId} — hasZone2=${hasZone2}, hasToneControl=${b.hasToneControl}, ` +
+        `renamedInputs=${enrichment?.renamed.size ?? 0}, hiddenInputs=${enrichment?.hidden.size ?? 0}`,
+    );
+    return denonCapabilityConfig({
+      hasZone2,
+      hasToneControl: b.zone === "main" && b.hasToneControl,
+      renamedInputs: enrichment?.renamed,
+      hiddenInputs: enrichment?.hidden,
+    }) as unknown as Record<string, unknown>;
   }
 
   /** § Capability Refresh (Part 2) — the classic Denon/Marantz Telnet protocol has no
@@ -236,13 +301,77 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
    * `hasToneControl` stay whatever the installer declared at commissioning. What this
    * genuinely does: force the link closed and immediately re-open it, which re-runs
    * `onLinkConnect`'s init query burst — the same real state resync a natural
-   * reconnect performs, just triggered on demand instead of waiting for a drop. */
+   * reconnect performs, just triggered on demand instead of waiting for a drop. Also
+   * (§ Universal AVR SDK) force-refreshes real renamed/hidden inputs over HTTP —
+   * unlike Telnet, this genuinely CAN report new data on demand. */
   async refreshCapabilities(deviceId: DeviceId): Promise<void> {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b || !this.connected) return;
     const key = `${b.host}:${b.port}`;
     this.transport.releaseKey(key);
     this.transport.ensureLink(key, b.host, b.port);
+    void this.refreshInputEnrichment(b.host, b.port);
+  }
+
+  /** § Universal AVR SDK — fetches real renamed/hidden inputs via the confirmed-real
+   * HTTP AppCommand interface. Best-effort: any failure (older non-2016 unit with no
+   * HTTP interface on this port, network hiccup, …) leaves the existing enrichment (or
+   * none) untouched rather than clearing real data on a transient error — matches this
+   * driver's existing UPnP-enrichment posture in `discover()`. */
+  private async refreshInputEnrichment(host: string, port: number): Promise<void> {
+    const key = `${host}:${port}`;
+    try {
+      const [body] = buildAppCommandRequests([
+        { id: "1", text: "GetRenameSource" },
+        { id: "1", text: "GetDeletedSource" },
+      ]);
+      this.tracer.event(`refreshInputEnrichment: POST AppCommand.xml to ${host}:${this.httpPort}`);
+      const xml = await this.httpClient.request(`${key}:appcommand`, `http://${host}:${this.httpPort}/goform/AppCommand.xml`, {
+        method: "POST",
+        headers: { "content-type": "text/xml" },
+        body,
+      });
+      const renamed = parseRenameSource(xml);
+      const hidden = parseDeletedSource(xml);
+      this.inputEnrichment.set(key, { renamed, hidden });
+      this.tracer.event(`refreshInputEnrichment: ${host} — ${renamed.size} renamed, ${hidden.size} hidden`);
+    } catch (err) {
+      this.tracer.event(`refreshInputEnrichment: ${host} failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** § Universal AVR SDK — one slow (15-minute), adaptive-backoff poller per host that
+   * keeps renamed/hidden inputs in sync with changes made via the OEM Denon Remote app
+   * (Telnet has no push notification for a rename). Pauses automatically (no ticking)
+   * while this host's link isn't connected, and resumes on its own once it reconnects —
+   * `AdaptivePoller`'s `intervalMs` is re-evaluated fresh on every scheduling decision. */
+  private ensureEnrichmentPoller(host: string, port: number): void {
+    const key = `${host}:${port}`;
+    if (this.enrichmentPollers.has(key)) return;
+    const poller = new AdaptivePoller({
+      intervalMs: () => (this.transport.diagnosticsFor(key).status === "connected" ? 15 * 60 * 1000 : null),
+      tick: () => this.refreshInputEnrichment(host, port),
+    });
+    this.enrichmentPollers.set(key, poller);
+    poller.start();
+  }
+
+  /** § Universal AVR SDK — real album art, fetched from the unit's own confirmed-static
+   * HTTP endpoint (`albumArtUrl()`, no XML/schema involved). `null` on any failure
+   * (older non-2016 unit with no HTTP interface, network hiccup, nothing currently
+   * displayed) — never fabricated placeholder bytes. */
+  async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
+    if (!b) return null;
+    try {
+      const res = await this.fetchImpl(albumArtUrl(b.host, this.httpPort));
+      if (!res.ok) return null;
+      const contentType = res.headers.get("content-type") ?? "image/png";
+      const data = new Uint8Array(await res.arrayBuffer());
+      return { contentType, data };
+    } catch {
+      return null;
+    }
   }
 
   /** Diagnostics Console (§ Universal AV Driver SDK) — real per-link counters/timestamps,
@@ -268,6 +397,30 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       ip: b.host,
       mac: bestEffortMacForIp(b.host),
     });
+  }
+
+  /** § Universal AVR SDK — this device's raw renamed/hidden input enrichment, keyed
+   * only by which HOST it's bound to (NOT by capability, unlike `getCapabilityConfig()`
+   * which requires a `media` binding) — used by the manual-add probe, which only binds
+   * `onoff` for a fast reachability check but still benefits from showing real renamed
+   * labels during commissioning. `null` when this device isn't bound, or the host's
+   * enrichment hasn't resolved yet (still in flight, or genuinely unreachable). */
+  getInputEnrichment(deviceId: DeviceId): { renamed: Record<string, string>; hidden: string[] } | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    const enrichment = this.inputEnrichment.get(`${b.host}:${b.port}`);
+    if (!enrichment) return null;
+    return { renamed: Object.fromEntries(enrichment.renamed), hidden: [...enrichment.hidden] };
+  }
+
+  /** § Universal AVR SDK — this device's owning link's recent raw protocol trace, read
+   * straight off the SAME `DriverDiagnosticsTracker` `getDiagnostics()` already reads
+   * (its ring buffer is populated automatically by every real `recordSend`/
+   * `recordReceive` call, independent of the separate opt-in `trace`/`onLog` option). */
+  getTrace(deviceId: DeviceId): DriverTraceEntry[] | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return this.transport.diagnosticsFor(`${b.host}:${b.port}`).diagnostics.recentTrace();
   }
 
   async discover(): Promise<DiscoveredDevice[]> {
@@ -311,6 +464,35 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
           this.tracer.event(`discover: UPnP description fetch for ${r.address} failed — ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+      // § Universal AVR SDK — best-effort real renamed/hidden inputs during discovery
+      // itself, so the guided wizard can show an installer's real "DIRECTV"/"Blu-ray
+      // Player" labels before they even finish commissioning, not just after the first
+      // bind. Same non-fatal posture as the UPnP step above — a fetch failure (older
+      // unit with no HTTP interface, wrong port) never fails discovery of the unit.
+      let renamedInputs: Record<string, string> | undefined;
+      let hiddenInputs: string[] | undefined;
+      try {
+        const [body] = buildAppCommandRequests([
+          { id: "1", text: "GetRenameSource" },
+          { id: "1", text: "GetDeletedSource" },
+        ]);
+        this.tracer.event(`discover: fetching AppCommand input enrichment for ${r.address}`);
+        const res = await this.fetchImpl(`http://${r.address}:${this.httpPort}/goform/AppCommand.xml`, {
+          method: "POST",
+          headers: { "content-type": "text/xml" },
+          body,
+        });
+        if (res.ok) {
+          const xml = await res.text();
+          const renamed = parseRenameSource(xml);
+          const hidden = parseDeletedSource(xml);
+          if (renamed.size > 0) renamedInputs = Object.fromEntries(renamed);
+          if (hidden.size > 0) hiddenInputs = [...hidden];
+          this.tracer.event(`discover: AppCommand input enrichment for ${r.address} — ${renamed.size} renamed, ${hidden.size} hidden`);
+        }
+      } catch (err) {
+        this.tracer.event(`discover: AppCommand input enrichment for ${r.address} failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
       return {
         backendId: r.address,
         suggestedName: `AVR ${r.address}`,
@@ -320,6 +502,8 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
           server: r.server ?? null,
           location: r.location ?? null,
           ...(manufacturer ? { manufacturer } : {}),
+          ...(renamedInputs ? { renamedInputs } : {}),
+          ...(hiddenInputs ? { hiddenInputs } : {}),
           bindConfig: {
             zone: "main",
             ...(modelName ? { model: modelName } : {}),
@@ -413,7 +597,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const cache = this.media.get(mediaBinding.deviceId) ?? { volume: 0, muted: false, source: null };
     patch(cache);
     this.media.set(mediaBinding.deviceId, cache);
-    this.record(mediaBinding.deviceId, "media", buildMediaState(cache));
+    // § Universal AVR SDK — album art is a whole-unit, front-panel-display concept
+    // (Zone 2 has no display of its own), so only the main zone ever advertises it.
+    // Advertises the gateway's OWN proxy URL (never the receiver's raw LAN URL — see
+    // module doc/capability matrix for why: remote-access/mTLS-tunnel clients aren't
+    // guaranteed to share a network with the receiver) — real bytes only flow through
+    // `getArtwork()` on an actual client request, this never fetches eagerly.
+    const artworkUrl = zone === "main" && this.opts.artworkUrlFor ? this.opts.artworkUrlFor(mediaBinding.deviceId) : null;
+    this.record(mediaBinding.deviceId, "media", buildMediaState(cache, artworkUrl));
   }
 
   private emitFor(host: string, port: number, capability: CapabilityKind, zone: AvrZone, state: CapabilityState): void {

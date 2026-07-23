@@ -1,5 +1,5 @@
 import { SupremeClient, SupremeStream } from "@supreme/sdk";
-import type { DeviceCapabilitiesRefreshResponse, DeviceDriverDiagnostics, SystemLogEntry } from "@supreme/contracts";
+import type { DeviceCapabilitiesRefreshResponse, DeviceDriverDiagnostics, DeviceTraceEntry, SystemLogEntry } from "@supreme/contracts";
 export type { SystemLogEntry } from "@supreme/contracts";
 import { activeHome, homeTokenStore } from "./homes.js";
 
@@ -178,6 +178,17 @@ export async function fetchDeviceDiagnostics(deviceId: string): Promise<DeviceDr
   try {
     const res = await authed(`/v1/devices/${deviceId}/diagnostics`);
     return res.ok ? ((await res.json()) as { diagnostics: DeviceDriverDiagnostics | null }).diagnostics : null;
+  } catch {
+    return null;
+  }
+}
+/** § Universal AVR SDK — the device's owning driver's recent raw protocol trace (every
+ * real send/receive line, automatically captured). `null` when unsupported, same
+ * "never a fabricated placeholder" posture as `fetchDeviceDiagnostics`. */
+export async function fetchDeviceTrace(deviceId: string): Promise<DeviceTraceEntry[] | null> {
+  try {
+    const res = await authed(`/v1/devices/${deviceId}/diagnostics/trace`);
+    return res.ok ? ((await res.json()) as { trace: DeviceTraceEntry[] | null }).trace : null;
   } catch {
     return null;
   }

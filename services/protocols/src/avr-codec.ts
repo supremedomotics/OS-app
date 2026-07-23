@@ -199,7 +199,12 @@ export function parseAvrLine(line: string): AvrUpdate | null {
   return null;
 }
 
-/** Build a full Supreme MediaState from the driver's per-device media cache. */
+/** Build a full Supreme MediaState from the driver's per-device media cache.
+ * `artworkUrl` (§ Universal AVR SDK) — Telnet itself has no concept of album art, so
+ * this always defaults to `null`; a driver that has real, different-source artwork
+ * (the HTTP AppCommand interface's confirmed-static album-art URL, proxied through the
+ * gateway) passes it in explicitly rather than mutating the returned object, which
+ * would require unsafely widening `CapabilityState`'s union. */
 export function buildMediaState(cache: {
   volume: number;
   volumeDb?: number;
@@ -209,7 +214,7 @@ export function buildMediaState(cache: {
   treble?: number;
   soundMode?: string;
   sleepMinutes?: number | null;
-}): CapabilityState {
+}, artworkUrl: string | null = null): CapabilityState {
   const advanced: Record<string, unknown> = {};
   if (cache.volumeDb !== undefined) advanced.volumeDb = cache.volumeDb;
   if (cache.bass !== undefined) advanced.bass = cache.bass;
@@ -224,18 +229,40 @@ export function buildMediaState(cache: {
     title: null,
     artist: null,
     source: cache.source,
-    artworkUrl: null,
+    artworkUrl,
     advanced: Object.keys(advanced).length > 0 ? advanced : null,
   };
 }
 
-/** The AudioCapabilityConfig for a Denon/Marantz Telnet device — always installer-declared
- * (the protocol has no feature-query command, verified against the spec). `hasZone2` and
- * `hasToneControl` come from the binding config the installer sets at commissioning. */
-export function denonCapabilityConfig(opts: { hasZone2: boolean; hasToneControl: boolean }): AudioCapabilityConfig {
-  const inputs = DENON_INPUTS.map((id) => ({ id, label: DENON_INPUT_LABELS[id] ?? id, type: DENON_INPUT_TYPES[id] }));
+/** The AudioCapabilityConfig for a Denon/Marantz Telnet device. `hasZone2` and
+ * `hasToneControl` always come from the binding config the installer sets at
+ * commissioning (Telnet has no feature-query command, verified against the spec).
+ *
+ * `renamedInputs`/`hiddenInputs` (§ Universal AVR SDK) are the one real exception: real,
+ * receiver-reported data fetched over HTTP AppCommand (`avr-http-codec.ts`'s
+ * `parseRenameSource`/`parseDeletedSource`, confirmed exact XML shape this sprint) —
+ * Telnet's own `SI` table has no rename/delete concept. `renamedInputs` overrides the
+ * spec-derived default label per wire token; `hiddenInputs` filters those tokens out of
+ * the selectable list entirely, matching the receiver's own front panel. `source` flips
+ * to `"device_reported"` once either is genuinely non-empty — otherwise this returns
+ * byte-for-byte what it always has, so a unit this enrichment hasn't run against yet (or
+ * that has no HTTP interface at all) behaves identically to before this feature existed. */
+export function denonCapabilityConfig(opts: {
+  hasZone2: boolean;
+  hasToneControl: boolean;
+  renamedInputs?: Map<string, string>;
+  hiddenInputs?: Set<string>;
+}): AudioCapabilityConfig {
+  const renamed = opts.renamedInputs;
+  const hidden = opts.hiddenInputs;
+  const hasEnrichment = (renamed && renamed.size > 0) || (hidden && hidden.size > 0);
+  const inputs = DENON_INPUTS.filter((id) => !hidden?.has(id)).map((id) => ({
+    id,
+    label: renamed?.get(id) ?? DENON_INPUT_LABELS[id] ?? id,
+    type: DENON_INPUT_TYPES[id],
+  }));
   return {
-    source: "installer_declared",
+    source: hasEnrichment ? "device_reported" : "installer_declared",
     inputs,
     soundModes: DENON_SOUND_MODES.map((id) => ({ id, label: id })),
     ...(opts.hasToneControl ? { toneControl: { bass: { min: -6, max: 6, step: 1 }, treble: { min: -6, max: 6, step: 1 } } } : {}),

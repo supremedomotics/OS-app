@@ -10,6 +10,7 @@ import {
   DiagnosticsSection,
   HistorySection,
   InformationSection,
+  ProtocolTraceSection,
 } from "../../device-detail-sections.js";
 import { useAsync } from "../../use-async.js";
 import { currentInputLabel, inputGlyph, MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
@@ -366,6 +367,43 @@ function ListeningModeSelector({ modes, active, onSelect }: { modes: AvrSoundMod
   );
 }
 
+/** Tone Control (§ Universal AVR SDK) — bass/treble sliders driven by `config.toneControl`'s
+ * real, installer-declared range (never a guessed -6..+6 hardcoded in the UI). The VALUES
+ * themselves have flowed over Telnet into `advanced.bass`/`advanced.treble` since before
+ * this pass; only the rendering surface was missing (§ Capability-Driven UI — this device
+ * simply had a real capability with no UI reading it). Only ever rendered for a device
+ * that declares `toneControl` at all — a HEOS/Yamaha unit with no tone control renders
+ * nothing here, exactly like every other capability-gated section in this console. */
+function ToneControl({
+  range, bass, treble, onChange,
+}: { range: { bass: AvrRangeCfg; treble: AvrRangeCfg }; bass: number | null; treble: number | null; onChange: (key: "bass" | "treble", value: number) => void }) {
+  const fmt = (v: number | null) => (v === null ? "—" : v > 0 ? `+${v}` : `${v}`);
+  return (
+    <div className="avr-tone-grid">
+      <div className="avr-field">
+        <span className="avr-field-label">Bass · {fmt(bass)}</span>
+        <input
+          type="range"
+          min={range.bass.min} max={range.bass.max} step={range.bass.step}
+          value={bass ?? Math.round((range.bass.min + range.bass.max) / 2)}
+          onChange={(e) => onChange("bass", Number(e.target.value))}
+          aria-label="Bass"
+        />
+      </div>
+      <div className="avr-field">
+        <span className="avr-field-label">Treble · {fmt(treble)}</span>
+        <input
+          type="range"
+          min={range.treble.min} max={range.treble.max} step={range.treble.step}
+          value={treble ?? Math.round((range.treble.min + range.treble.max) / 2)}
+          onChange={(e) => onChange("treble", Number(e.target.value))}
+          aria-label="Treble"
+        />
+      </div>
+    </div>
+  );
+}
+
 function ZoneSelector({ current, siblings, onNavigate }: { current: Device; siblings: Device[]; onNavigate: (d: Device) => void }) {
   if (siblings.length === 0) return null;
   return (
@@ -622,6 +660,12 @@ export function AvrConsole({
   const volumeDb = typeof advanced.volumeDb === "number" ? (advanced.volumeDb as number) : null;
   const duration = live.durationSec ?? null;
   const soundMode = typeof advanced.soundMode === "string" ? (advanced.soundMode as string) : null;
+  // § Universal AVR SDK — bass/treble have flowed over Telnet into `advanced.bass`/
+  // `advanced.treble` since before this pass (avr-codec.ts's buildMediaState), but had
+  // no UI anywhere — `config.toneControl` was typed and populated, never rendered. Real
+  // data, zero new protocol work; this is purely the missing UI surface.
+  const bass = typeof advanced.bass === "number" ? (advanced.bass as number) : null;
+  const treble = typeof advanced.treble === "number" ? (advanced.treble as number) : null;
 
   // A real receiver only reports positionSec on its own cadence (HEOS pushes progress
   // every few seconds; Yamaha/Denon only on poll) — ticking it forward locally between
@@ -786,6 +830,11 @@ export function AvrConsole({
               <ListeningModeSelector modes={soundModes} active={soundMode} onSelect={setSoundMode} />
             </CollapsibleSection>
           )}
+          {config.toneControl && (
+            <CollapsibleSection title="Tone Control" badge={bass !== null || treble !== null ? `${bass ?? 0}/${treble ?? 0}` : undefined}>
+              <ToneControl range={config.toneControl} bass={bass} treble={treble} onChange={setAdvanced} />
+            </CollapsibleSection>
+          )}
           <ZoneSelector current={device} siblings={siblings} onNavigate={onNavigateDevice} />
         </div>
 
@@ -804,6 +853,7 @@ export function AvrConsole({
             page shows, capability- and data-driven, never protocol-driven. */}
         <InformationSection device={device} roomName={roomName} />
         {devMode && <DiagnosticsSection device={device} />}
+        {devMode && <ProtocolTraceSection device={device} />}
         <TopologySection device={device} homeDevices={homeDevices} devMode={devMode} onDeviceUpdated={onDeviceUpdated} />
         <AutomationsSection device={device} />
         <HistorySection device={device} />

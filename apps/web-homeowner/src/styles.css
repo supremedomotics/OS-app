@@ -1157,6 +1157,28 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .topology-target { flex: 1; color: var(--aureon-color-text-secondary); }
 .topology-remove { background: none; border: none; color: var(--aureon-color-text-secondary); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
 .topology-remove:hover { color: var(--aureon-color-status-critical); }
+
+/* Protocol Trace (§ Universal AVR SDK) — the raw send/receive log surfaced to
+   developer diagnostics. Monospace, bounded height with its own scroll so a full
+   200-line trace never blows out the page; oldest-first, newest visible without
+   scrolling since the panel auto-scrolls to bottom is intentionally NOT done (an
+   installer reading top-to-bottom for a specific command shouldn't get yanked away). */
+.trace-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.trace-refresh {
+  padding: 4px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-secondary);
+}
+.trace-refresh:hover { border-color: var(--aureon-color-gold-500); color: var(--aureon-color-text-primary); }
+.trace-log {
+  max-height: 320px; overflow-y: auto; overflow-x: auto; padding: 10px; border-radius: 10px;
+  background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.6;
+}
+.trace-line { display: flex; gap: 10px; white-space: pre; }
+.trace-line.out .trace-text { color: var(--aureon-color-gold-400); }
+.trace-line.in .trace-text { color: var(--aureon-color-text-primary); }
+.trace-at { color: var(--aureon-color-text-secondary); flex-shrink: 0; }
+.trace-text { overflow-wrap: anywhere; white-space: pre-wrap; }
 .topology-add { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--aureon-color-base-hairline); }
 .topology-add-btn { align-self: flex-start; border: 1px solid var(--aureon-color-base-hairline); background: var(--aureon-color-base-surface-raised); color: var(--aureon-color-text-primary); border-radius: 999px; padding: 8px 16px; cursor: pointer; font-size: 13px; }
 .topology-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -1593,6 +1615,12 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 }
 .avr-field { display: flex; flex-direction: column; gap: 9px; }
 .avr-field-label { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--aureon-color-text-secondary); font-weight: 600; }
+/* Tone Control (§ Universal AVR SDK) — two real range sliders (bass/treble), same
+   gold-accent range-input treatment `.avr-progress` already establishes. Stacks to one
+   column below `comfortable` density so it never cramps on a phone-width card. */
+.avr-tone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+[data-density="compact"] .avr-tone-grid { grid-template-columns: 1fr; }
+.avr-tone-grid input[type="range"] { width: 100%; accent-color: var(--aureon-color-gold-400); }
 /* Premium input tiles (§ Input Selection): icon + name + connection type + an active
    glow, replacing a plain <select>. A quick horizontal picker in the main flow; the
    fuller Source list in the sidebar shows the same data with more detail. */

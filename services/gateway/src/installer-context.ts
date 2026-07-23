@@ -28,7 +28,7 @@ import {
   type IInstalledDriverStore,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
-import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
+import { buildNativeDriver, hasNativeFactory, type NativeDriverFactoryContext } from "./native-driver-factory.js";
 import {
   knxSearch,
   SupremeKnxDriver,
@@ -1081,6 +1081,21 @@ export class InstallerServices {
     await this.reconcileManifestDrivers(trigger);
   }
 
+  /** § Universal AVR SDK — the per-driver context every manifest-driven native factory
+   * call gets: connection-lifecycle logging (unchanged) plus an artwork-proxy URL
+   * builder, same real `publicBaseUrl`-based pattern `bootstrap.ts` already wires for
+   * the env-only Apple TV driver — now available to any manifest-driven driver too
+   * (AVR is the first to use it). `artworkUrlFor` is omitted entirely when
+   * `publicBaseUrl` isn't configured (dev/local) rather than building a broken URL. */
+  private nativeDriverContext(key: string): NativeDriverFactoryContext {
+    return {
+      onLog: (level, message) => this.appendLog(key, level, message),
+      ...(this.d.config.publicBaseUrl
+        ? { artworkUrlFor: (id: string) => `${this.d.config.publicBaseUrl}/v1/devices/${id}/media/artwork` }
+        : {}),
+    };
+  }
+
   /**
    * Reconcile installed+enabled+configured manifest drivers with their runtime native
    * protocol stacks: start what should run and isn't, stop what shouldn't. Runs on
@@ -1097,7 +1112,7 @@ export class InstallerServices {
     }
     for (const [protocol, { config, key }] of desired) {
       this.desiredProtocols.set(protocol, { key, config });
-      const driver = buildNativeDriver(protocol, config, (level, message) => this.appendLog(key, level, message));
+      const driver = buildNativeDriver(protocol, config, this.nativeDriverContext(key));
       await this.runDriverLifecycle(protocol, driver, key, trigger);
     }
     for (const [protocol, { key }] of [...this.desiredProtocols]) {
@@ -1118,7 +1133,7 @@ export class InstallerServices {
     for (const protocol of entry.protocols) {
       if (!hasNativeFactory(protocol)) continue;
       const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config).complete;
-      const driver = runnable ? buildNativeDriver(protocol, entry.config, (level, message) => this.appendLog(key, level, message)) : null;
+      const driver = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key)) : null;
       if (runnable) this.desiredProtocols.set(protocol, { key, config: entry.config });
       else this.desiredProtocols.delete(protocol);
       await this.runDriverLifecycle(protocol, driver, key, "config_change");

@@ -6,6 +6,7 @@ import {
   client,
   fetchAutomations,
   fetchDeviceDiagnostics,
+  fetchDeviceTrace,
   fetchDriverRegistry,
   fetchEnergyHistory,
   fetchIntelligenceHistory,
@@ -152,6 +153,10 @@ export function DiagnosticsSection({ device }: { device: Device }) {
     if (dd.lastCommand) rows.push({ label: "Last command", value: dd.lastCommandAt ? `${dd.lastCommand} · ${formatTimestamp(dd.lastCommandAt)}` : dd.lastCommand, icon: "📤" });
     if (dd.lastResponse) rows.push({ label: "Last response", value: dd.lastResponseAt ? `${dd.lastResponse} · ${formatTimestamp(dd.lastResponseAt)}` : dd.lastResponse, icon: "📥" });
     if (dd.responseTimeMs !== null) rows.push({ label: "Response time", value: formatMs(dd.responseTimeMs), icon: "⏱️" });
+    // § Universal AVR SDK — a real rolling average, distinct from the single
+    // most-recent `responseTimeMs` sample above; absent until at least one round trip
+    // has actually been measured (never a fabricated starting value).
+    if (dd.averageLatencyMs !== null) rows.push({ label: "Avg. latency", value: formatMs(dd.averageLatencyMs), icon: "📊" });
     rows.push({ label: "Packets sent / received", value: `${dd.packetsSent} / ${dd.packetsReceived}`, icon: "📶" });
     rows.push({ label: "Reconnect count", value: String(dd.reconnectCount), icon: "🔁" });
     if (dd.lastError) rows.push({ label: "Last error", value: dd.lastError, icon: "⚠️", tone: "warning" });
@@ -160,6 +165,34 @@ export function DiagnosticsSection({ device }: { device: Device }) {
   return (
     <CollapsibleSection title="Diagnostics">
       <DeviceFacts rows={rows} />
+    </CollapsibleSection>
+  );
+}
+
+// ── Protocol Trace (§ Universal AVR SDK — "capture and log the raw protocol responses
+// for every discovery, capability, command, and event operation") — the raw send/
+// receive log a driver's `DriverDiagnosticsTracker` automatically captures, surfaced
+// here as the concrete "protocol trace" / "realtime event log" developer diagnostic.
+// Absent entirely for a device whose driver doesn't support this, or that has never
+// exchanged a single command/response yet — never a fabricated "no data" placeholder
+// row inside an otherwise-empty panel. devMode-gated by the caller, same as
+// Diagnostics. ─────────────────────────────────────────────────────────────────────
+export function ProtocolTraceSection({ device }: { device: Device }) {
+  const [trace, refresh] = useAsync(() => fetchDeviceTrace(device.id), [device.id]);
+  if (!trace || trace.length === 0) return null;
+  return (
+    <CollapsibleSection title="Protocol Trace" badge={trace.length}>
+      <div className="trace-toolbar">
+        <button className="trace-refresh" onClick={refresh}>Refresh</button>
+      </div>
+      <div className="trace-log">
+        {trace.map((t, i) => (
+          <div key={i} className={`trace-line${t.line.startsWith("->") ? " out" : t.line.startsWith("<-") ? " in" : ""}`}>
+            <span className="trace-at">{new Date(t.at).toLocaleTimeString()}</span>
+            <span className="trace-text">{t.line}</span>
+          </div>
+        ))}
+      </div>
     </CollapsibleSection>
   );
 }

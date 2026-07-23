@@ -189,6 +189,11 @@ export const ProbeResult = z.object({
   mac: z.string().nullable(),
   /** Empty for protocols/errors where zone detection doesn't apply. */
   zones: z.array(ProbeZone),
+  /** § Universal AVR SDK — real renamed/hidden inputs fetched over HTTP AppCommand
+   * during the probe (AVR only; every other protocol simply omits these, same
+   * optional-field convention as `mac`/zone detection being protocol-specific). */
+  renamedInputs: z.record(z.string()).optional(),
+  hiddenInputs: z.array(z.string()).optional(),
 });
 export type ProbeResult = z.infer<typeof ProbeResult>;
 

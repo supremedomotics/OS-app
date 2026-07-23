@@ -9,6 +9,7 @@ import type {
   BackendStateEvent,
   DiscoveredDevice,
   DriverDiagnosticsSnapshot,
+  DriverTraceEntry,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,
@@ -120,6 +121,12 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
     if (this.native.manages(deviceId)) return this.native.getDiagnostics(deviceId);
     return this.ha.getDiagnostics ? this.ha.getDiagnostics(deviceId) : null;
+  }
+
+  /** Same routing as {@link getArtwork}: native-engine feature first. */
+  async getTrace(deviceId: DeviceId): Promise<DriverTraceEntry[] | null> {
+    if (this.native.manages(deviceId)) return this.native.getTrace(deviceId);
+    return this.ha.getTrace ? this.ha.getTrace(deviceId) : null;
   }
 
   /** § Capability Refresh — same routing as {@link getArtwork}: native-engine feature

@@ -156,6 +156,7 @@ export const DeviceDriverDiagnostics = z.object({
   lastResponse: z.string().nullable(),
   lastResponseAt: z.string().nullable(),
   responseTimeMs: z.number().nullable(),
+  averageLatencyMs: z.number().nullable(),
   packetsSent: z.number().int().nonnegative(),
   packetsReceived: z.number().int().nonnegative(),
   reconnectCount: z.number().int().nonnegative(),
@@ -165,6 +166,14 @@ export type DeviceDriverDiagnostics = z.infer<typeof DeviceDriverDiagnostics>;
 
 export const DeviceDiagnosticsResponse = z.object({ diagnostics: DeviceDriverDiagnostics.nullable() });
 export type DeviceDiagnosticsResponse = z.infer<typeof DeviceDiagnosticsResponse>;
+
+/** § Universal AVR SDK — one recorded raw protocol-trace line ("capture and log the raw
+ * protocol responses for every discovery, capability, command, and event operation"). */
+export const DeviceTraceEntry = z.object({ at: z.string(), line: z.string() });
+export type DeviceTraceEntry = z.infer<typeof DeviceTraceEntry>;
+
+export const DeviceTraceResponse = z.object({ trace: z.array(DeviceTraceEntry).nullable() });
+export type DeviceTraceResponse = z.infer<typeof DeviceTraceResponse>;
 
 /** POST /v1/devices/:id/capabilities/refresh (§ Capability Refresh) — re-query the
  * owning driver in place (never recreates the device, never touches its room

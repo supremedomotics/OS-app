@@ -84,10 +84,23 @@ export interface DriverDiagnosticsSnapshot {
   lastResponse: string | null;
   lastResponseAt: string | null;
   responseTimeMs: number | null;
+  /** § Universal AVR SDK — rolling average of recent round-trip times, distinct from
+   * `responseTimeMs` (the single most-recent sample). `null` until at least one
+   * real round-trip has been measured. */
+  averageLatencyMs: number | null;
   packetsSent: number;
   packetsReceived: number;
   reconnectCount: number;
   lastError: string | null;
+}
+
+/** One recorded protocol-trace line (§ Universal AVR SDK — "capture and log the raw
+ * protocol responses for every discovery, capability, command, and event operation").
+ * Fed by a driver's `ProtocolTracer` into a bounded ring buffer — see
+ * `services/protocols/src/driver-diagnostics.ts`'s `recordTrace`/`recentTrace`. */
+export interface DriverTraceEntry {
+  at: string;
+  line: string;
 }
 
 export interface IBackendAdapter {
@@ -129,6 +142,11 @@ export interface IBackendAdapter {
    * driver (null if none/unsupported — e.g. this device isn't bound to a native driver
    * that tracks this). */
   getDiagnostics?(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null>;
+
+  /** Optional: fetch a device's owning driver's recent raw protocol trace (null if
+   * unsupported, or if trace logging isn't enabled for that driver instance — see
+   * each protocol's `trace` config option, off by default). */
+  getTrace?(deviceId: DeviceId): Promise<DriverTraceEntry[] | null>;
 
   /** Optional: release the owning driver's per-device resources (§ Driver Lifecycle
    * Completion) — called when a Supreme device is deleted. A no-op for backends with

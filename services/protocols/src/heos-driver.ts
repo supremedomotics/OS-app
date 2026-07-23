@@ -25,7 +25,7 @@ import {
 } from "./heos-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
-import type { DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import type { DriverDiagnosticsSnapshot, DriverTraceEntry } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
@@ -245,6 +245,14 @@ export class HeosProtocolDriver implements INativeProtocolDriver {
       ip: b.host,
       mac: bestEffortMacForIp(b.host),
     });
+  }
+
+  /** § Universal AVR SDK — same ring buffer `getDiagnostics()` already reads from,
+   * populated automatically by every real `recordSend`/`recordReceive` call. */
+  getTrace(deviceId: DeviceId): DriverTraceEntry[] | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return this.transport.diagnosticsFor(`${b.host}:${b.port}`).diagnostics.recentTrace();
   }
 
   async discover(): Promise<DiscoveredDevice[]> {

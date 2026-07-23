@@ -4,7 +4,7 @@ import type {
   CapabilityState,
   DeviceId,
 } from "@supreme/domain-model";
-import type { DiscoveredDevice, DriverDiagnosticsSnapshot, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
+import type { DiscoveredDevice, DriverDiagnosticsSnapshot, DriverTraceEntry, MediaArtwork, MediaQueueItem, StateListener } from "../adapter.js";
 
 /**
  * Native protocol driver contract (blueprint §7, §9, §16).
@@ -113,6 +113,13 @@ export interface INativeProtocolDriver {
    * manage the device. Synchronous: reading counters already held in memory, never a
    * network round-trip. */
   getDiagnostics?(deviceId: DeviceId): DriverDiagnosticsSnapshot | null;
+
+  /** Optional: this device's owning link's recent raw protocol trace (§ Universal AVR
+   * SDK — "capture and log the raw protocol responses for every discovery, capability,
+   * command, and event operation"). `null` when this driver doesn't manage the device.
+   * Synchronous, same reasoning as {@link getDiagnostics} — reads an in-memory ring
+   * buffer, never a network round-trip. */
+  getTrace?(deviceId: DeviceId): DriverTraceEntry[] | null;
 
   /** § ADR 0101 Part 1 — Optional: scenes this driver's source system genuinely defines
    * (an ETS project's scene DPTs, a synchronized API's scene list). Absent entirely for any

@@ -1,4 +1,5 @@
 import { createServer, type Server, type Socket } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { describe, expect, it } from "vitest";
 import { probeAvr } from "./avr-probe.js";
 
@@ -84,6 +85,40 @@ describe("probeAvr", () => {
       await probeAvr(`127.0.0.1:${fake.port}`);
       await new Promise((r) => setTimeout(r, 100)); // let the socket's close event settle
       expect(fake.sockets.size).toBe(0);
+    } finally {
+      await new Promise<void>((r) => fake.server.close(() => r()));
+    }
+  }, 10_000);
+
+  it("includes real renamed/hidden inputs (§ Universal AVR SDK) when the unit's HTTP AppCommand interface answers within the window", async () => {
+    const fake = await startFakeAvr({ answerZone2: true });
+    const http = createHttpServer((req, res) => {
+      res.setHeader("content-type", "text/xml");
+      res.end(
+        "<rx><cmd id=\"1\"><functionrename><list><name>SAT/CBL</name><rename>DIRECTV</rename></list></functionrename></cmd>" +
+          "<cmd id=\"1\"><functiondelete><list><FuncName>TUNER</FuncName><use>0</use></list></functiondelete></cmd></rx>",
+      );
+    });
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+    const httpPort = (http.address() as { port: number }).port;
+    try {
+      const result = await probeAvr(`127.0.0.1:${fake.port}`, { httpPort, fetchImpl: globalThis.fetch });
+      expect(result.reachable).toBe(true);
+      expect(result.renamedInputs).toEqual({ "SAT/CBL": "DIRECTV" });
+      expect(result.hiddenInputs).toEqual(["TUNER"]);
+    } finally {
+      await new Promise<void>((r) => fake.server.close(() => r()));
+      await new Promise<void>((r) => http.close(() => r()));
+    }
+  }, 10_000);
+
+  it("omits renamedInputs/hiddenInputs entirely when no HTTP AppCommand interface is reachable — never an empty placeholder", async () => {
+    const fake = await startFakeAvr({ answerZone2: true });
+    try {
+      const result = await probeAvr(`127.0.0.1:${fake.port}`, { httpPort: 1, fetchImpl: globalThis.fetch });
+      expect(result.reachable).toBe(true);
+      expect(result.renamedInputs).toBeUndefined();
+      expect(result.hiddenInputs).toBeUndefined();
     } finally {
       await new Promise<void>((r) => fake.server.close(() => r()));
     }

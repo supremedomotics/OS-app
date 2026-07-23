@@ -23,8 +23,8 @@ function sleep(ms: number): Promise<void> {
  * unit that's slow to answer within the window may show as "not detected" even though Zone 2
  * exists — callers must present this as editable, never authoritative.
  */
-export async function probeAvr(address: string): Promise<ProbeResult> {
-  const driver = new AvrProtocolDriver();
+export async function probeAvr(address: string, opts: { httpPort?: number; fetchImpl?: typeof fetch } = {}): Promise<ProbeResult> {
+  const driver = new AvrProtocolDriver({ httpPort: opts.httpPort, fetchImpl: opts.fetchImpl });
   const mainId = newId("device") as DeviceId;
   const zone2Id = newId("device") as DeviceId;
   try {
@@ -47,6 +47,18 @@ export async function probeAvr(address: string): Promise<ProbeResult> {
         ]
       : [];
 
+    // § Universal AVR SDK — bind() already kicked off a best-effort HTTP AppCommand
+    // fetch for real renamed/hidden inputs the moment the Telnet link connected; give
+    // it a short remaining window to land (it's typically much faster than the Telnet
+    // handshake this loop already waited out) rather than requiring a second probe
+    // round-trip once the installer actually commissions the unit.
+    let enrichment = reachable ? driver.getInputEnrichment(mainId) : null;
+    const enrichmentDeadline = Date.now() + 1_500;
+    while (reachable && !enrichment && Date.now() < enrichmentDeadline) {
+      await sleep(POLL_INTERVAL_MS);
+      enrichment = driver.getInputEnrichment(mainId);
+    }
+
     return {
       reachable,
       error: reachable
@@ -55,6 +67,8 @@ export async function probeAvr(address: string): Promise<ProbeResult> {
           "No response within the timeout — check the IP and that Network Control/Telnet is enabled on the receiver."),
       mac: diag?.mac ?? null,
       zones,
+      ...(enrichment && Object.keys(enrichment.renamed).length > 0 ? { renamedInputs: enrichment.renamed } : {}),
+      ...(enrichment && enrichment.hidden.length > 0 ? { hiddenInputs: enrichment.hidden } : {}),
     };
   } finally {
     await driver.unbind(mainId);

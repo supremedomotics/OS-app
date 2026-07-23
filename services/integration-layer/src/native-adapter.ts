@@ -9,6 +9,7 @@ import type {
   BackendStateEvent,
   DiscoveredDevice,
   DriverDiagnosticsSnapshot,
+  DriverTraceEntry,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,
@@ -285,6 +286,13 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
     const owner = this.ownerByDevice.get(deviceId);
     if (owner?.getDiagnostics) return owner.getDiagnostics(deviceId);
+    return null;
+  }
+
+  /** Fetch the owning driver's recent raw protocol trace for this device. */
+  async getTrace(deviceId: DeviceId): Promise<DriverTraceEntry[] | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getTrace) return owner.getTrace(deviceId);
     return null;
   }
 

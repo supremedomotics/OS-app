@@ -1,0 +1,166 @@
+# AVR Universal Capability Matrix — Denon/Marantz Reference Implementation
+
+> Companion to [Universal-AV-SDK.md](./Universal-AV-SDK.md) (the architecture this matrix
+> justifies) and [avr-sdk-developer-guide.md](./avr-sdk-developer-guide.md). Every row below is
+> either implemented and tested against real, cited evidence, or explicitly gated with a
+> documented reason — nothing here is guessed or fabricated.
+
+## Methodology and honest constraints (read before the table)
+
+This matrix was produced without access to real Denon/Marantz hardware and without access to
+the official Denon protocol PDF spec (every fetch attempt to `assets.denon.com` and similar
+hosts returned HTTP 403 in this sandbox, repeatedly, across the session). Every "Official
+Interface" claim below is instead backed by one or more of:
+
+1. **The existing, already-tested SupremeOS Telnet codec** (`services/protocols/src/avr-codec.ts`),
+   itself verified against the official Denon AVR control protocol spec v8.6.0 in an earlier
+   session (that spec excerpt is no longer directly re-fetchable, but the resulting token table
+   is real, working, and covered by 44 passing integration tests against a protocol-accurate fake
+   receiver).
+2. **`ol-iver/denonavr`** (`raw.githubusercontent.com/ol-iver/denonavr`, fetched and read directly
+   this session, file by file — not summarized secondhand) — the Python library Home Assistant's
+   own official `denonavr` integration is built on. Its real `appcommand.py` (`AppCommands` enum,
+   verbatim cmd_id/cmd_text pairs), `input.py` (actual XML parsing code), `api.py` (actual request-
+   body builder), and `const.py` (actual URL/string constants) are the primary source for every
+   HTTP AppCommand claim in this matrix.
+3. **A dedicated XML-dump tool** (`ol-iver/misc_python_tools/denonavr/denon_receiver_xml.py`, same
+   author, fetched directly) — used specifically to confirm what is *not* parsed by anyone,
+   corroborating genuine absence rather than under-research.
+4. **`openhab/openhab-addons`'s `org.openhab.binding.denonmarantz`** (fetched directly) — a
+   decade-old, actively maintained binding, used as a second independent cross-check: if a
+   10-year-old mature project hasn't stabilized a field into a typed channel, that's real signal
+   the field is genuinely unstable/unpublished, not just overlooked.
+5. **HEOS CLI Protocol Specification** (cited in this codebase's existing `heos-codec.ts`) and
+   **Yamaha MusicCast YXC** (`yamaha-codec.ts`'s existing `getFeatures` implementation) — both
+   already real, tested, working interfaces in this fleet, cited here only for capabilities where
+   HEOS/Yamaha genuinely provide something Denon Telnet+AppCommand cannot.
+
+**RTI / Crestron / Control4 / Savant**: this session has **no access** to any of these four
+systems' driver source code, SDKs, or dealer documentation — they are proprietary/NDA-gated. The
+user was asked whether they could share any such material; the question was declined. Per this
+session's established pattern (state the default, proceed), these four columns are marked
+**N/S (not independently sourced)** throughout — used only as the feature-completeness bar the
+user named, never as fabricated evidence. A checkmark never appears in these columns.
+
+**Confidence** reflects how directly the "Official Interface" claim is cited, not whether
+SupremeOS implements it: **High** = a real XML/token shape was fetched and read verbatim this
+session, or an existing tested codec already implements it. **Medium** = a command/token is
+confirmed to exist (verbatim source), but its exact parameter encoding/response schema was not
+independently verified. **Low** = inferred from protocol-family convention, not directly
+verified.
+
+## Power, Zones, Volume, Mute
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Power (main zone) | Telnet `ZM?`/`ZMON`/`ZMOFF` | N/S | N/S | N/S | N/S | ✓ Implemented, live push | Telnet event | High |
+| Power (whole-unit standby) | Telnet `PW?`/`PWON`/`PWSTANDBY` | N/S | N/S | N/S | N/S | ✓ Implemented (distinct from `ZM`, never conflated) | Telnet event | High |
+| Zone 2 power | Telnet `Z2?`/`Z2ON`/`Z2OFF` | N/S | N/S | N/S | N/S | ✓ Implemented, live push | Telnet event | High |
+| Zones (presence/enumeration) | None — no feature-query command anywhere in Telnet or AppCommand | N/S | N/S | N/S | N/S | Installer-declared at commissioning (`AudioCapabilityConfig.source: "installer_declared"`) | Installer config | High (absence confirmed, not assumed) |
+| Master volume | Telnet `MV?`/`MV<nn>` | N/S | N/S | N/S | N/S | ✓ Implemented, live push | Telnet event | High |
+| Zone 2 volume | Telnet `Z2<nn>` (same 0–98 scale as `MV`) | N/S | N/S | N/S | N/S | ✓ Implemented, live push (corrected this codebase's own earlier false-negative) | Telnet event | High |
+| Mute (main) | Telnet `MU?`/`MUON`/`MUOFF` | N/S | N/S | N/S | N/S | ✓ Implemented, live push | Telnet event | High |
+| Zone 2 mute | Telnet `Z2MU?`/`Z2MUON`/`Z2MUOFF` | N/S | N/S | N/S | N/S | ✓ Implemented, live push | Telnet event | High |
+
+## Input / Source
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Input selection | Telnet `SI?`/`SI<token>` | N/S | N/S | N/S | N/S | ✓ Implemented, live push | Telnet event | High |
+| Friendly source names (spec-derived) | Telnet `SI` token table + Denon's own OSD naming convention | N/S | N/S | N/S | N/S | ✓ Implemented (`DENON_INPUT_LABELS`, e.g. `NET`→"HEOS Music") | Static label map | High |
+| Renamed input labels (installer-set, via OEM app) | HTTP AppCommand `GetRenameSource` — real XML shape `<functionrename>/<list>/<name>+<rename>` (verified verbatim from `denonavr/input.py`) | N/S | N/S | N/S | N/S | ✓ Implemented — fetched on bind, refreshed every 15 min while connected, filtered/relabeled into `AudioCapabilityConfig.inputs` | HTTP AppCommand (POST) | High |
+| Hidden/deleted inputs | HTTP AppCommand `GetDeletedSource` — real XML shape `<functiondelete>/<list>/<FuncName>+<use>` (`use="0"`→hidden, verified verbatim) | N/S | N/S | N/S | N/S | ✓ Implemented — filtered out of the selectable input list entirely | HTTP AppCommand (POST) | High |
+| Network source names (streaming service identity) | HEOS `player/get_now_playing_media`'s `sid` field (HEOS CLI spec, cross-verified against `pyheos`) | N/S | N/S | N/S | N/S | ✓ Implemented on the sibling HEOS device (`av-sdk/network-source-resolver.ts`) — genuinely out of scope for Telnet/AppCommand, which carry no per-stream service identity | HEOS event | High |
+| Bluetooth (as an input) | Telnet `SI` — no dedicated BT token confirmed in this codebase's existing spec-derived table | N/S | N/S | N/S | N/S | Not implemented — no verified token | — | Low |
+| AirPlay | No dedicated token/sid — confirmed via Denon's own published support docs: AirPlay rides the same `NET`/"HEOS Music" input as every other HEOS-routed service | N/S | N/S | N/S | N/S | Correctly represented as "HEOS Music" (not a gap — this *is* what the receiver's own front panel shows) | — | High |
+| Spotify (Spotify Connect) | HEOS `sid` (Spotify Connect) | N/S | N/S | N/S | N/S | ✓ Implemented via HEOS's now-playing `sid` resolution | HEOS event | High |
+| HEOS (whole subsystem) | HEOS CLI protocol (TCP port 1255) | N/S | N/S | N/S | N/S | ✓ Fully implemented as a separate, real, tested driver (`heos-driver.ts`) | HEOS CLI (TCP push) | High |
+| Tuner | Telnet `SI TUNER` (selection only — no station-name query confirmed) | N/S | N/S | N/S | N/S | ✓ Selection implemented; station/preset name not implemented (no verified query) | Telnet event (selection only) | Medium |
+| USB | Telnet `SI USB/IPOD` (selection only) | N/S | N/S | N/S | N/S | ✓ Selection implemented | Telnet event | High |
+| Media Server (DLNA) | Telnet `SI SERVER` (selection only) | N/S | N/S | N/S | N/S | ✓ Selection implemented | Telnet event | High |
+
+## Sound Mode / DSP / Tone
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Sound mode (set/read current) | Telnet `MS?`/`MS<mode>` | N/S | N/S | N/S | N/S | ✓ Implemented, live push, fixed spec-derived list including evidenced `AUTO` | Telnet event | High |
+| Supported-sound-mode-list (per-unit, filter to only what this model supports) | **No command exists** — confirmed absent from `denonavr`'s complete, real `AppCommands` enum; Telnet has no feature-query command either | N/S | N/S | N/S | N/S | ✗ Not implemented — genuinely unavailable, not a gap in research | — | High (absence confirmed) |
+| Listening mode (alias for sound mode in this fleet) | Same as Sound mode | N/S | N/S | N/S | N/S | ✓ Same implementation (`ListeningModeSelector` UI) | Telnet event | High |
+| Decoder mode / incoming audio format (e.g. "Dolby Atmos", "DTS:X", sample rate/bit depth) | HTTP AppCommand `GetAudioInfo` — command confirmed to exist (referenced across multiple sources); exact response XML tag names not independently verified anywhere reachable this session | N/S | N/S | N/S | N/S | ✗ Not implemented — UI slot (`advanced.audioFormat`/`sampleRateKHz`/`bitDepth`) already exists and renders defensively, stays dormant until a verified source lands | HTTP AppCommand (unverified schema) | Medium (command exists) / Low (schema) |
+| Pure Direct / Direct / Stereo | Telnet `MS` tokens (`PURE DIRECT`, `DIRECT`, `STEREO` — already in the spec-derived mode list) | N/S | N/S | N/S | N/S | ✓ Implemented, same mechanism as Sound mode | Telnet event | High |
+| DSP modes (Movie/Music/Game/Matrix/…) | Telnet `MS` tokens | N/S | N/S | N/S | N/S | ✓ Implemented, same mechanism as Sound mode | Telnet event | High |
+| Bass | Telnet `PSBAS ?`/`PSBAS <nn>` | N/S | N/S | N/S | N/S | ✓ Implemented, live push. **UI added this sprint** — real data existed with zero rendering surface until now | Telnet event | High |
+| Treble | Telnet `PSTRE ?`/`PSTRE <nn>` | N/S | N/S | N/S | N/S | ✓ Implemented, live push. **UI added this sprint** | Telnet event | High |
+| Tone defeat (tone control on/off) | Telnet `PSTONE CTRL ?`/`PSTONE CTRL ON`/`OFF` — queried at connect, not currently exposed as a settable control | N/S | N/S | N/S | N/S | Partial — queried but not surfaced as a homeowner toggle | Telnet event | Medium |
+| Dialog enhancer | HTTP AppCommand — no confirmed dedicated command; likely folded into `SetAudyssey`/tone family, unverified | N/S | N/S | N/S | N/S | ✗ Not implemented — no verified command | — | Low |
+| Subwoofer level | HTTP AppCommand — command family confirmed to exist in general (Audyssey/channel-level commands reference sub level), exact command name/encoding not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Low |
+| Channel trims (per-speaker level) | HTTP AppCommand `SetChLevel` — command referenced across multiple sources as real; exact parameter encoding not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — **safety-gated**: a wrong guessed encoding here could misconfigure a real receiver's real speaker calibration | HTTP AppCommand (unverified — do not guess) | Medium (name) / Low (encoding) |
+| Speaker layout / channel activity | HTTP AppCommand `GetActiveSpeaker` — command referenced as real; exact response schema not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Medium (name) / Low (schema) |
+| Dynamic EQ | HTTP AppCommand `SetAudysseyDynamicEQ` — confirmed real command name via `denonavr`'s actual `AppCommands` enum (cmd_id "3"); parameter values not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — **safety-gated**, same reasoning as channel trims | HTTP AppCommand0300 (unverified) | Medium (name) / Low (encoding) |
+| Dynamic Volume | HTTP AppCommand `SetAudysseyDynamicvol` — confirmed real command name (cmd_id "3"); parameter values not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — safety-gated | HTTP AppCommand0300 (unverified) | Medium (name) / Low (encoding) |
+| Audyssey (MultEQ/Reference level offset) | HTTP AppCommand `GetAudyssey`/`SetAudysseyMultiEQ`/`SetAudysseyReflevoffset` — confirmed real command names (cmd_id "3"); response/parameter schema not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented — safety-gated | HTTP AppCommand0300 (unverified) | Medium (name) / Low (encoding) |
+
+## Video
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Video format | HTTP AppCommand `GetVideoInfo` — command confirmed to exist; exact response schema not independently verified | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Medium (command) / Low (schema) |
+| HDR mode | Same `GetVideoInfo` family — not independently confirmed to include HDR flags specifically | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Low |
+| Resolution | Same `GetVideoInfo` family | N/S | N/S | N/S | N/S | ✗ Not implemented | HTTP AppCommand (unverified) | Low |
+
+## Now-Playing Metadata, Artwork, Transport
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Track / Title | HEOS `player/get_now_playing_media` (real, tested) for HEOS-routed content; **no verified source for non-HEOS inputs** (Tuner presets, USB) — no library, including a dedicated XML-dump tool by the endpoint's own documenting author, parses this from any AppCommand/Status XML endpoint | N/S | N/S | N/S | N/S | ✓ Implemented for HEOS-routed content (sibling HEOS device); ✗ not implemented for Tuner/USB (genuinely unavailable) | HEOS event (HEOS-routed only) | High (HEOS) / High-absence (non-HEOS) |
+| Artist | Same as Track | N/S | N/S | N/S | N/S | Same as Track | HEOS event (HEOS-routed only) | High (HEOS) / High-absence (non-HEOS) |
+| Album | Same as Track | N/S | N/S | N/S | N/S | Same as Track | HEOS event (HEOS-routed only) | High (HEOS) / High-absence (non-HEOS) |
+| Genre | Not present in the HEOS `get_now_playing_media` response shape this codebase's `heos-codec.ts` already parses, nor anywhere else confirmed | N/S | N/S | N/S | N/S | ✗ Not implemented | — | High (absence confirmed for the interfaces checked) |
+| Elapsed / remaining time | HEOS progress events (real, tested, `heos-codec.ts`) | N/S | N/S | N/S | N/S | ✓ Implemented for HEOS-routed content | HEOS event | High |
+| Album art | HTTP static URL `http://{host}:{port}/img/album%20art_S.png` — confirmed real, literal string constant (`denonavr/const.py`), no XML/schema involved at all; also `http://{host}:{port}/NetAudio/art.asp-jpg?{hash}` for station-type sources | N/S | N/S | N/S | N/S | ✓ Implemented — `getArtwork()` fetches this directly, proxied through the gateway (`ArtworkCache`, same pattern as the Apple TV driver) | HTTP static fetch | High |
+| Artwork cache | SupremeOS's own `ArtworkCache` (LRU + 60s TTL, `services/gateway/src/artwork-cache.ts`) — a SupremeOS-side concern, not a receiver capability | N/S | N/S | N/S | N/S | ✓ Implemented (pre-existing, reused unmodified) | Gateway-side cache | High |
+| Queue | HEOS `player/get_queue` (real, tested) | N/S | N/S | N/S | N/S | ✓ Implemented (HEOS device only — Telnet/AppCommand have no queue concept) | HEOS event/request | High |
+| Transport (play/pause/next/seek) | HEOS transport commands (real, tested); **not available at all via Telnet/AppCommand** — confirmed no such commands in either interface | N/S | N/S | N/S | N/S | ✓ Implemented (HEOS device only) | HEOS command | High |
+
+## Device Info
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Manufacturer | UPnP device description XML (`<manufacturer>`) — standard UPnP, confirmed via `ol-iver/denonavr`'s own SSDP parser | N/S | N/S | N/S | N/S | ✓ Implemented at discovery | UPnP description | High |
+| Model | UPnP device description XML (`<modelName>`) | N/S | N/S | N/S | N/S | ✓ Implemented at discovery, threaded into Diagnostics | UPnP description | High |
+| Serial | UPnP device description XML (`<serialNumber>`) | N/S | N/S | N/S | N/S | ✓ Implemented at discovery, threaded into Diagnostics | UPnP description | High |
+| Firmware | **No source found anywhere** — not in Telnet, not in the UPnP description, not in any AppCommand response this session could verify | N/S | N/S | N/S | N/S | ✗ Genuinely unavailable — stays honestly `null`, never fabricated | — | High (absence confirmed) |
+| MAC | Local ARP-table best-effort read (`arp-lookup.ts`) — a host-side technique, not a receiver capability | N/S | N/S | N/S | N/S | ✓ Implemented (best-effort; correct on the same L2 segment, `null` otherwise) | Local ARP table | High |
+| IP | The address the installer/discovery already has | N/S | N/S | N/S | N/S | ✓ Implemented | — | High |
+| Temperature (internal) | No command found in Telnet, UPnP, or AppCommand | N/S | N/S | N/S | N/S | ✗ Not implemented — genuinely unavailable | — | High (absence confirmed) |
+
+## Diagnostics
+
+| Property | Official Interface | RTI | Crestron | Control4 | Savant | Current SupremeOS | Recommended Interface | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| Connected interface / active protocol | SupremeOS-side (which transport this link is using) | N/S | N/S | N/S | N/S | ✓ Implemented (`protocol`/`connectionStatus` in `DriverDiagnosticsSnapshot`) | — | High |
+| Reconnect count | SupremeOS-side (`ReconnectScheduler`) | N/S | N/S | N/S | N/S | ✓ Implemented | — | High |
+| Average latency | SupremeOS-side — real rolling window computed from `recordSend`/`recordReceive` timestamps, automatic for every driver | N/S | N/S | N/S | N/S | ✓ Implemented this sprint (`averageLatencyMs`, distinct from the pre-existing single-shot `responseTimeMs`) | — | High |
+| Packet loss | **Not a meaningful metric over Telnet/HTTP** — both are reliable-delivery TCP; there is no "packet" to lose the way there would be over UDP/wireless | N/S | N/S | N/S | N/S | ✗ Deliberately not implemented — reconnect count + last error + average latency are the honest equivalent | — | High (the reason, not the absence, is the point) |
+| RX/sec, TX/sec | SupremeOS-side — derivable from `packetsSent`/`packetsReceived` + a time window; not implemented as a distinct rate field this pass | N/S | N/S | N/S | N/S | Partial — raw counters implemented (`packetsSent`/`packetsReceived`), a derived per-second rate is not | — | High |
+| Last command / last event | SupremeOS-side | N/S | N/S | N/S | N/S | ✓ Implemented (`lastCommand`/`lastCommandAt`, `lastResponse`/`lastResponseAt`) | — | High |
+| Heartbeat | Telnet's own unsolicited status echoes serve this role (a receiver that's gone silent stops updating `lastResponseAt`) | N/S | N/S | N/S | N/S | ✓ Implicit via `lastResponseAt`/`connectionStatus` — no dedicated keepalive ping exists in the Telnet spec to build a separate heartbeat from | Telnet's own traffic | Medium |
+| Capability report | Installer-declared config + real HTTP-sourced input enrichment, surfaced via `getCapabilityConfig()` | N/S | N/S | N/S | N/S | ✓ Implemented | Mixed (installer + HTTP) | High |
+| Protocol trace | SupremeOS-side ring buffer, automatically fed by every real `recordSend`/`recordReceive` call | N/S | N/S | N/S | N/S | ✓ Implemented this sprint (`GET /v1/devices/:id/diagnostics/trace`, UI panel) | — | High |
+| Realtime event log | Same mechanism as Protocol trace | N/S | N/S | N/S | N/S | ✓ Implemented (same trace buffer/panel) | — | High |
+
+## Known operational constraint (not a bug)
+
+**Denon/Marantz Telnet allows exactly one concurrent connection.** If SupremeOS holds it (which
+it does, continuously, for realtime push), the OEM Denon Remote app cannot also open a Telnet
+session to the same receiver at the same time (confirmed via community source). The HEOS app is
+unaffected — it speaks the separate HEOS CLI protocol on its own port. This is a real, documented
+protocol limitation to make visible to installers, not something SupremeOS can or should "fix."
+
+## What "N/S" does NOT mean
+
+An "N/S" cell is not a claim that RTI/Crestron/Control4/Savant lack the capability — it means
+this session has no legitimate way to know either way. Where the user's brief named a specific,
+verifiable behavior from one of these systems (none were provided), this matrix would cite it
+directly; none were available. Treat the four columns as the *feature-completeness bar* the user
+asked for, not as absent competitor data being hidden.

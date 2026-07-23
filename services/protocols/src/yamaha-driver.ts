@@ -33,7 +33,7 @@ import {
 } from "./yamaha-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
-import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot } from "./driver-diagnostics.js";
+import { DriverDiagnosticsTracker, type DriverDiagnosticsSnapshot, type DriverTraceEntry } from "./driver-diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
@@ -295,6 +295,14 @@ export class YamahaProtocolDriver implements INativeProtocolDriver {
       ip: b.host,
       mac: bestEffortMacForIp(b.host),
     });
+  }
+
+  /** § Universal AVR SDK — same ring buffer `getDiagnostics()` already reads from,
+   * populated automatically by every real `recordSend`/`recordReceive` call. */
+  getTrace(deviceId: DeviceId): DriverTraceEntry[] | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return (this.diagnostics.get(b.host) ?? null)?.recentTrace() ?? null;
   }
 
   async discover(): Promise<DiscoveredDevice[]> {

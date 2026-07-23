@@ -10,6 +10,7 @@ export type {
   DiscoveredDevice,
   DriverConnectionStatus,
   DriverDiagnosticsSnapshot,
+  DriverTraceEntry,
   IBackendAdapter,
   MediaArtwork,
   MediaQueueItem,

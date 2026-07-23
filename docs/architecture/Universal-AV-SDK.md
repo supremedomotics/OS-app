@@ -2,18 +2,89 @@
 
 > The real, runtime `services/protocols/src/av-sdk/` module. Companion to
 > [AV-Adapter-Development-Guide.md](./AV-Adapter-Development-Guide.md) (how to build a new
-> adapter against it) and the architecture-verification + duplication-audit history that
-> produced it (see `SESSION_HANDOFF.md` for the full trail: a prior turn confirmed no runtime
-> SDK existed, only documentation claiming one; a full evidence-based audit then found and
-> scoped the real, extractable duplication this module closes).
+> adapter against it), [AVR-Universal-Capability-Matrix.md](./AVR-Universal-Capability-Matrix.md)
+> (the full per-capability sourcing/evidence record), and the architecture-verification +
+> duplication-audit history that produced it (see `SESSION_HANDOFF.md` for the full trail: a
+> prior turn confirmed no runtime SDK existed, only documentation claiming one; a full
+> evidence-based audit then found and scoped the real, extractable duplication this module
+> closes).
 
 ## What this is, in one sentence
 
-Two small, internal-only modules — `TcpLineTransport` and `recordCapabilityState` —
-extracted from `AvrProtocolDriver` and `HeosProtocolDriver`'s genuinely duplicated
-transport plumbing, plus `YamahaProtocolDriver`'s independently-duplicated state
-recorder. **Nothing more was built.** This is deliberate, not incomplete — read §4
-before wondering where the rest of a "Universal AV SDK" you might expect is.
+Four small, internal-only modules — `TcpLineTransport`, `recordCapabilityState`,
+`HttpPollClient`, and `AdaptivePoller` — extracted from real, evidenced duplication (or,
+for the latter two, justified by a genuine second real caller once one existed) across
+`AvrProtocolDriver`, `HeosProtocolDriver`, and `YamahaProtocolDriver`. **Nothing
+speculative was built.** This is deliberate, not incomplete — read §4 before wondering
+where the rest of a "Universal AV SDK" you might expect is.
+
+## § Universal AVR SDK pass — `AvrProtocolDriver` becomes genuinely multi-transport
+
+The Denon/Marantz driver is the SDK's reference implementation for a driver that
+combines TWO transports to fully populate the universal capability surface — not
+because the SDK grew a "multi-transport" concept, but because Denon/Marantz's real,
+evidenced wire behavior genuinely has two: Telnet (port 23, the sole realtime-push
+channel — unchanged by this pass) and a second, real, HTTP AppCommand interface
+(confirmed via fetching and reading `denonavr`'s actual source this sprint) that
+covers the one thing Telnet structurally cannot: renamed/hidden input names and
+static album art. See `AVR-Universal-Capability-Matrix.md` for exactly which
+commands were verified vs. gated, with citations.
+
+### `http-poll-client.ts` — `HttpPollClient` + `AdaptivePoller`
+
+Generalizes `YamahaProtocolDriver`'s own ad hoc `getJson()`/`diagnosticsFor()`/
+in-flight-coalescing pattern (`hostFeaturesInFlight`/`syncZoneInFlight`) into a
+reusable primitive — extraction is justified now by a genuine second real caller
+(the new AVR HTTP AppCommand layer), meeting this SDK's own established "extract
+only with 2+ real callers" bar from the original `TcpLineTransport` extraction.
+
+- **`HttpPollClient`**: `request(key, url, init)` (any HTTP method — AppCommand.xml
+  is `POST` with an XML body, unlike Yamaha's `GET`-only query-param API, so this
+  isn't GET-only the way an initial Yamaha-only design might have been) — in-flight
+  de-duplication per key, a `DriverDiagnosticsTracker` per key (so the SAME
+  automatic latency/trace capture `TcpLineTransport`'s links already get applies to
+  HTTP traffic too), `ProtocolTracer` integration, `fetchImpl` injection (same
+  convention `AvrDriverOptions`/`YamahaDriverOptions` already use).
+- **`AdaptivePoller`**: `intervalMs()` is a function, re-evaluated fresh on every
+  scheduling decision — returning `null` pauses ticking entirely without the caller
+  needing to call `stop()`/`start()` again; it resumes on its own once the function
+  stops returning `null`. This is the concrete "never poll when an event exists,
+  only poll when absolutely unavoidable, back off automatically when idle"
+  mechanism. AVR uses it for exactly one thing: a slow (15-minute) re-poll of
+  renamed/hidden inputs while connected — the honest answer to "must stay
+  synchronized even when controlled by the Denon Remote App" for the one field
+  class Telnet has no push notification for.
+- **Not migrating Yamaha onto this in this pass** — its existing polling is
+  working and tested; force-migrating it for consistency alone risks regressing a
+  working driver for no functional gain, contradicting "never break working
+  functionality." Documented here as a real, recommended, separate follow-up.
+
+### `avr-http-codec.ts` — narrower than first scoped, and why (a real self-correction)
+
+Mid-implementation, fetching `denonavr`'s actual `AppCommands` enum (not a
+description of it) revealed an earlier, less rigorous research pass had
+over-claimed `GetSoundModeList` as a real command — it does not exist. The same
+fetch settled that no source anywhere — including a dedicated XML-dump tool by the
+same author — parses now-playing title/artist/album from any endpoint either. Both
+were cut from scope rather than shipped as guesses. What survived, with an exact
+confirmed XML shape (fetched from `denonavr/input.py`'s real parsing code):
+`parseRenameSource()`, `parseDeletedSource()`, and `buildAppCommandRequests()` (the
+real `<tx><cmd id="…">…</cmd></tx>` envelope, capped at 5 commands per request — a
+real, documented Denon limit). `albumArtUrl()` is not a parser at all — a literal,
+confirmed-static URL string, so it carries none of the schema-verification risk the
+cut commands did.
+
+### Diagnostics: automatic, not driver-opted-in
+
+`DriverDiagnosticsTracker.recordSend()`/`recordReceive()` now also populate a
+rolling `averageLatencyMs` window and a bounded (200-line) trace ring buffer
+(`recordTrace()`/`recentTrace()`) — **automatically, for every driver that already
+calls these methods**, not just the new HTTP layer. AVR/HEOS/Yamaha's existing
+Telnet/UDP/HTTP call sites needed zero changes to benefit. This is deliberately
+decoupled from the separate, heavier, opt-in `trace`/`onLog` config flag (meant for
+verbose backend-log capture) — the ring buffer is cheap, in-memory, and always
+available for the Diagnostics UI's new "Protocol Trace" panel
+(`GET /v1/devices/:id/diagnostics/trace`).
 
 ## Where it lives, and why it's internal-only
 
@@ -135,6 +206,13 @@ transport:
 | `avr-driver.ts` | 387 lines | 305 lines | ~21% |
 | `heos-driver.ts` | 522 lines | 437 lines | ~16% |
 | `yamaha-driver.ts` | 486 lines | 481 lines | ~1% (only `record()`) |
+
+*(Historical — as of the original `TcpLineTransport` extraction. The § Universal AVR
+SDK pass above subsequently grew `avr-driver.ts` back to ~618 lines by adding the real
+second HTTP transport, its enrichment/polling/artwork methods, and their doc comments
+— a genuine, evidenced feature addition, not a regression of this refactor's own
+reduction; the transport-plumbing duplication this table measures was never
+reintroduced.)*
 
 **This is a real but modest reduction, not a dramatic rewrite.** The win is
 "~70-90 lines of copy-pasted socket/reconnect/buffer plumbing per driver becomes

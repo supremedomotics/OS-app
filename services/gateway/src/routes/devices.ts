@@ -7,6 +7,7 @@ import {
   type DeviceCapabilitiesRefreshResponse,
   type DeviceDiagnosticsResponse,
   type DeviceResponse,
+  type DeviceTraceResponse,
   type MediaQueueResponse,
 } from "@supreme/contracts";
 import type { DeviceId, RoomId } from "@supreme/domain-model";
@@ -225,6 +226,24 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "device", deviceId, "view");
       const diagnostics = await ctx.sil.getDiagnostics(deviceId);
       reply.send({ diagnostics } satisfies DeviceDiagnosticsResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Universal AVR SDK: GET /v1/devices/:id/diagnostics/trace — the device's owning
+  // driver's recent raw protocol trace (every real send/receive line, automatically
+  // captured — see `DriverDiagnosticsTracker.recordTrace`). `null` when unsupported.
+  // Same permission posture as `/diagnostics` — devMode-gated on the client.
+  app.get<{ Params: { id: string } }>("/v1/devices/:id/diagnostics/trace", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "view");
+      const trace = await ctx.sil.getTrace(deviceId);
+      reply.send({ trace } satisfies DeviceTraceResponse);
     } catch (err) {
       sendError(reply, err);
     }
