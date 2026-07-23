@@ -1104,27 +1104,136 @@ see each finding above for that nuance).
 
 ---
 
-## Crestron Home comparison — blocked, no file supplied
+## Comparison — Official Protocol / RTI / SupremeOS
 
-The user's request asks for the identical forensic pass against a Crestron Home driver, then a
-final side-by-side table (`Official Protocol | RTI | Crestron | SupremeOS`) across capabilities
-like Live Power, Friendly Names, Album Art, Source Rename, Dynamic EQ, Diagnostics.
+Per instruction, Crestron (and Control4/Savant) are **skipped** — no such driver file was ever
+supplied in this session, so those columns would have had to be fabricated. This table is built
+strictly from the three sources this session actually has: the official Denon AVR control protocol
+PDF (Ver.8.6.0, AVR-1713/AVR-1613, pages 1–18, read in full), the official HEOS CLI Protocol
+Specification (v1.17, read in full), and the RTI driver analyzed above. Every non-`✓`/`✗` cell has
+a footnote reference explaining the nuance rather than collapsing it into a checkmark.
 
-**This cannot be done yet — no Crestron Home driver file has been supplied in this session.** Only
-three files exist in this session's uploads: the Denon/Marantz `.rtidriver` analyzed above, the
-official Denon AVR control protocol PDF, and the official HEOS CLI Protocol Specification PDF —
-none of which is a Crestron driver export.
+**Legend**: `✓` confirmed/implemented · `Partial` confirmed/implemented but incomplete · `✗` not
+found / not implemented · `—` not applicable to that column.
 
-Per this codebase's own standing rule ("never fabricate capabilities... verify by inspecting the
-actual code first," `CLAUDE.md`), the Crestron column of any comparison table **cannot be populated
-without a real Crestron Home driver export** (or equivalent official documentation) to analyze the
-same way. Marking it "✓" across the board — as the example table in the request sketches — would be
-exactly the fabrication this project's own rules, and this document's own methodology section,
-exist to prevent.
+### Power, Zones, Volume
 
-**To continue exactly as requested**: supply a Crestron Home driver export (a `.c4z`/Crestron
-Home-specific package, or equivalent SIMPL/EISC module, or official Crestron Denon driver
-documentation) and the same forensic pass — Observation → Evidence → Possible SupremeOS
-implementation → Confidence → Missing evidence, organized under the same 19 categories — will be
-run against it, followed by the four-column comparison table. Until then, this document stands as
-the complete RTI half of that comparison, ready to merge once Crestron evidence exists.
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Main zone power (`ZM`) | ✓ (p.9) | ✓ | ✓ |
+| Whole-unit power/standby (`PW`) | ✓ (p.7) | ✓ | ✓ |
+| Zone 2 power | ✓ (p.17, "valid at AVR-1913 NA model only") | ✓ | ✓ |
+| Zone 3 / Zone 4 power | ✗ [^1] | ✓ | ✗ |
+| Master volume | ✓ (p.7) | ✓ | ✓ |
+| Zone 2 volume | ✓ (p.17, `Z2CV`) | ✓ | ✓ |
+| Zone 3 / Zone 4 volume | ✗ [^1] | ✓ | ✗ |
+| Mute (main zone) | ✓ (p.8) | ✓ | ✓ |
+| Zone 2 mute | ✓ (p.17) | ✓ | ✓ |
+| Channel trims — 6 base channels (FL/FR/C/SW/SL/SR) | ✓ (p.7, exact `38–62`/`50`=0dB encoding) | ✓ | ✗ (deferred — UI-bound, not a protocol gap) |
+| Channel trims — 8 extra channels (SW2/SBL/SBR/SB/FHL/FHR/FWL/FWR) | ✗ [^1] | ✓ | ✗ |
+| Subwoofer on/off (`PSSWR`) | ✓ (p.15) | ✓ | ✗ (not implemented — real gap, not previously flagged in the capability matrix) |
+
+### Source / Input Model
+
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Fixed source list (`SI`) | ✓ (p.8) | ✓ | ✓ |
+| Friendly/renamed input names | ✓ [^2] | ✗ (no AppCommand usage anywhere in this driver) | ✓ — **SupremeOS exceeds RTI here** |
+| Hidden inputs | ✓ [^2] | ✗ | ✓ — **SupremeOS exceeds RTI here** |
+| Live Power feedback (unsolicited push) | ✓ (p.4, EVENT mechanism) | ✓ | ✓ |
+
+### Sound Mode / DSP / Tone
+
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Surround/sound mode (`MS`) | ✓ (p.11) | ✓ | ✓ |
+| Supported-sound-mode-list filtering (per unit) | ✗ (confirmed absent, no feature-query command) | ✗ (RTI just offers its full fixed list, no per-unit filtering either) | ✗ |
+| Bass / Treble (`PSBAS`/`PSTRE`) | ✓ (p.14) | ✓ | ✓ |
+| Tone defeat/control on-off | Partial [^3] | ✓ (two variant commands for different generations) | Partial (queried at connect, not exposed as a toggle) |
+| Cinema/Music/Game/Pro-Logic mode (`PSMODE:`) | ✓ (p.12) | ✓ | ✗ |
+| Cinema EQ on/off | ✓ (p.12) | ✓ | ✗ |
+| Loudness Management (`PSLOM`) | ✓ (p.12) | ✓ | ✗ |
+| All Zone Stereo | ✗ [^1] | ✓ | ✗ |
+| Surround Back speaker mode / Front A+B speaker select | ✗ [^1] | ✓ | ✗ |
+
+### Audyssey Family
+
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Dynamic EQ (`PSDYNEQ`) | ✓ (p.13) | ✗ — **not found anywhere in this RTI driver's functions, variables, or startup query burst** [^4] | ✓ (this session) — **SupremeOS exceeds RTI here** |
+| Audyssey MultEQ mode (`PSMULTEQ:`) | ✓ (p.13) | ✓ ("Room Eq Mode") | ✓ (this session) |
+| Reference Level Offset (`PSREFLEV`) | ✓ (p.13) | ✗ — **not found anywhere in this RTI driver** [^4] | ✓ (this session) — **SupremeOS exceeds RTI here** |
+| Dynamic Volume (`PSDYNVOL`) | ✓ (p.13) | ✓ | ✓ (this session) |
+| Dynamic Range Compression (`PSDRC`) | ✓ (p.14) | ✓ | ✓ (this session) |
+| D.Comp (`PSDCO` — a distinct, separate compression family) | ✗ [^1] | ✓ | ✗ |
+
+### Video
+
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Video scaling / aspect ratio / output resolution / HDMI audio routing | ✗ [^1] | ✓ (5 functions, confirmed live-queried in the startup burst) | ✗ |
+| HDR / decoder-format / incoming-audio-format display | ✗ (no confirmed source in either) | ✗ (not found) | ✗ |
+
+### Metadata, Album Art, HEOS
+
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Album art | ✓ [^5] | ✓ (dedicated `image`-type variable, HTTP fetch) | ✓ (proxied via `ArtworkCache`) |
+| Non-HEOS now-playing title/artist/album (NET/USB/internet radio) | ✗ (confirmed genuinely unavailable — no structured fields exist) | Partial — raw positional OSD-line text only, by installer convention, with a vendor-documented "gotcha" about menu desync | ✗ (correctly gated, doubly corroborated by this RTI finding) |
+| HEOS now-playing (title/artist/album/artwork) | ✓ (HEOS CLI spec §4.2.5) | ✗ (no HEOS CLI usage found — this driver predates or never adopted it) | ✓ — **SupremeOS exceeds RTI here** |
+| HEOS queue / transport | ✓ (HEOS CLI spec §4.2.15–4.2.22) | ✗ | ✓ — **SupremeOS exceeds RTI here** |
+
+### Diagnostics, Connection Health, Discovery
+
+| Capability | Official Protocol | RTI | SupremeOS |
+|---|---|---|---|
+| Diagnostics (connection state, reconnects, latency, RX/TX, trace) | — (SupremeOS/RTI-side concern, not a wire capability) | Partial — 3 variables only (`ConnectionStatus`/`Discovery`/`CurrentIP`) | ✓ — **substantially richer**: protocol/connectionStatus/reconnectCount/averageLatencyMs/responseTimeMs/packet counters/last-command/last-response/trace ring buffer |
+| Connection-ready state machine (readiness distinct from raw socket connect) | — | ✓ (4-state machine, dedicated `CNCT` event — Finding 3.1/4.1) | ✗ — real, evidenced gap |
+| Init-burst pacing (response-paced vs. single write) | — | ✓ (response-paced) | ✗ — real, evidenced gap (single `socket.write()`) |
+| Explicit keepalive/heartbeat probe (AVR/Telnet) | — (no protocol-native ping exists) | ✓ (`PW?` used as the probe, framework-provided cadence) | ✗ for AVR/Telnet; ✓ for HEOS (`heartbeat()`, this session) |
+| UPnP/SSDP discovery | ✓ (HEOS: spec §2, `ST=urn:schemas-denon-com:device:ACT-Denon:1`) | ✓ (debounced against a live device list, falls back to re-discovery on disconnect) | ✓ (one-shot search-and-collect on demand — architecturally different, not necessarily worse, given SupremeOS's hub-based persistent-binding model vs. RTI's processor-reboot model) |
+| Raw/escape-hatch command string | — | ✓ | ✗ |
+
+[^1]: Not covered by the one official PDF this session has (AVR-1713/1613, Ver.8.6.0, 2012). These
+    are real commands on newer receiver generations RTI's driver was extended to support
+    (up through the AVR-X8500, per its revision history) — genuinely plausible, but not
+    independently confirmed by an official source this session possesses. See the RTI Knowledge
+    Base findings above (§1.4, §2.2, §Video, §Audyssey Family) for the specific caveat on each.
+
+[^2]: Confirmed via direct reading of `denonavr`'s actual `appcommand.py`/`input.py`/`api.py`
+    source (an independent, Home-Assistant-adjacent open-source project), not the Telnet PDF —
+    the HTTP AppCommand interface is a separate, real Denon interface the classic Telnet spec
+    doesn't cover. See `AVR-Universal-Capability-Matrix.md` for the full citation chain.
+
+[^3]: The Telnet PDF covers `PSTONE CTRL ON/OFF` (Marantz-generation tone control) but this
+    session's specific 18-page excerpt doesn't include a `PSTONE DEFEAT` entry for the
+    Denon-generation variant RTI also implements — the *command family* is confirmed, the older
+    variant's exact page citation is not.
+
+[^4]: This is a precise, re-verified negative: `Dynamic EQ` and `Reference Level Offset` were
+    grepped directly against the extracted `SystemFunctions.xml`, `SystemVariables.xml`, and the
+    decompressed `Den4308.js` (including its full 24-token startup query burst, which does include
+    `PSDYNVOL ?` and `PSMULTEQ: ?` but not `PSDYNEQ ?` or `PSREFLEV ?`). Absence in a single driver
+    export is not proof the capability doesn't exist on RTI's newer product lines — only that this
+    specific, dated (v2.01) export doesn't implement it.
+
+[^5]: Confirmed via `denonavr`'s `const.py` (the literal static URL strings), independently
+    corroborated by RTI's own `image`-type `CoverArt` variable and its vendor documentation's
+    description of the HTTP-based fetch mechanism — two independent sources agreeing.
+
+### What this comparison shows, plainly
+
+- **SupremeOS now exceeds this specific RTI driver export** on: friendly/renamed/hidden input
+  names, Dynamic EQ, Reference Level Offset, HEOS now-playing/queue/transport, and diagnostics
+  richness. All five are protocol-evidenced, not guessed.
+- **This RTI driver export exceeds SupremeOS** on: 4-zone support, the extra 8 channel-trim
+  targets, video-output routing (scaling/aspect/resolution/HDMI-audio-out), several
+  Cinema/Loudness/Compression-family toggles, the connection-readiness state machine, init-burst
+  pacing, an explicit AVR/Telnet keepalive probe, and a raw-command escape hatch. Every one of
+  these is a real, evidenced, honestly-recorded gap — not a new feature built in response to this
+  request, per the "do not implement any new features yet" instruction this analysis was scoped
+  under.
+- **Both agree** on: core power/volume/mute/source/sound-mode, tone control, DRC, Audyssey MultEQ
+  mode, Dynamic Volume, album art, and — most importantly — the *absence* of structured
+  non-HEOS now-playing metadata, which this RTI evidence independently corroborates rather than
+  contradicts.
