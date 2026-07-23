@@ -1237,3 +1237,7 @@ found / not implemented · `—` not applicable to that column.
   mode, Dynamic Volume, album art, and — most importantly — the *absence* of structured
   non-HEOS now-playing metadata, which this RTI evidence independently corroborates rather than
   contradicts.
+
+Every item in the "RTI leads" bullet above is re-audited, one by one, with an A/B/C/D
+implementability classification, in the companion
+[RTI-Only / RTI-Leads Capability Audit](./RTI-Capability-Audit.md).
