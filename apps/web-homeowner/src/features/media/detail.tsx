@@ -11,6 +11,7 @@ import {
   HistorySection,
   InformationSection,
   ProtocolTraceSection,
+  RawCommandSection,
 } from "../../device-detail-sections.js";
 import { useAsync } from "../../use-async.js";
 import { currentInputLabel, inputGlyph, MEDIA_KIND_OPTIONS, mediaDeviceKind, mediaKindMeta, type MediaDeviceKind } from "./capability-mapper.js";
@@ -854,6 +855,7 @@ export function AvrConsole({
         <InformationSection device={device} roomName={roomName} />
         {devMode && <DiagnosticsSection device={device} />}
         {devMode && <ProtocolTraceSection device={device} />}
+        {devMode && <RawCommandSection device={device} />}
         <TopologySection device={device} homeDevices={homeDevices} devMode={devMode} onDeviceUpdated={onDeviceUpdated} />
         <AutomationsSection device={device} />
         <HistorySection device={device} />

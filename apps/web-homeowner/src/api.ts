@@ -193,6 +193,15 @@ export async function fetchDeviceTrace(deviceId: string): Promise<DeviceTraceEnt
     return null;
   }
 }
+/** § RTI Capability Audit, Category C.4 — POST /v1/devices/:id/raw-command: devMode-only
+ * raw-token escape hatch. Writes `token` verbatim to the device's owning driver,
+ * bypassing the typed capability-command dispatch entirely. Throws on any failure
+ * (including a device whose driver doesn't support this at all — 422) so the caller
+ * can surface a real error rather than silently doing nothing. */
+export async function sendRawDeviceCommand(deviceId: string, token: string): Promise<void> {
+  const res = await authed(`/v1/devices/${deviceId}/raw-command`, { method: "POST", body: JSON.stringify({ token }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Raw command failed."));
+}
 /** § Capability Refresh — POST /v1/devices/:id/capabilities/refresh: re-query the
  * device's owning driver in place and persist whatever fresh AudioCapabilityConfig it
  * reports. `refreshed: false` is an honest, non-error outcome for a protocol with no

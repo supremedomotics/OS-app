@@ -296,6 +296,18 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     return null;
   }
 
+  /** § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch. Throws
+   * (rather than silently no-op-ing) when the owning driver doesn't support one, since this
+   * is a write an installer explicitly asked for, not an optional read. */
+  async sendRaw(deviceId: DeviceId, token: string): Promise<void> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.sendRaw) {
+      await owner.sendRaw(deviceId, token);
+      return;
+    }
+    throw new SupremeError("validation_failed", `device ${deviceId}'s driver does not support raw commands`);
+  }
+
   /** § Capability Refresh — ask the owning driver to re-query whatever it can
    * genuinely re-discover over the wire, in place, without recreating the device. A
    * no-op (not a throw) for a driver that doesn't implement this or doesn't own the

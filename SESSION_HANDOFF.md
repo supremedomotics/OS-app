@@ -4,199 +4,133 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-**Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start. This
-branch's work spans four parts: (1) an **AV architecture verification report** (no code changes
-— answered "is AVR/HEOS/Yamaha a real Universal SDK with brand adapters, or three independent
-thick drivers?" honestly: three independent thick drivers, no SDK layer exists in code, only in
-docs); (2) a large **AV SDK refactor** was requested to close that gap, planned in detail (3
-research agents + 1 design-critique agent, full duplication audit, evidence-scoped module design),
-initially **rejected by the user before execution** in favor of a different task; (3)
-**Automation Editor Production Hardening** — executed in place of the rejected refactor; (4) the
-user then **re-requested the AV SDK refactor** with an explicit phase-by-phase brief matching the
-earlier plan almost exactly — this was **fully executed and validated** this turn (see Part 4).
+**Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start.
 
-## Part 1 — AV architecture verification (no code changes)
+This handoff was rewritten from scratch — the previous version had drifted several sessions out
+of date (it stopped at the original `TcpLineTransport`/`state-cache.ts` extraction and never
+recorded the subsequent HTTP AppCommand layer, the Audyssey-family command pass, the RTI
+Capability Audit, or this session's work). The detailed history of each of those passes lives in
+its own architecture doc, cross-linked below — this file only needs to describe current state and
+what changed most recently.
 
-Answered a direct question: does the AV driver layer match a "Universal AV SDK → brand adapter →
-transport → device" architecture? No — `AvrProtocolDriver`/`HeosProtocolDriver`/
-`YamahaProtocolDriver` each independently implement `INativeProtocolDriver` directly; there is no
-SDK layer in code, only in `docs/architecture/avr-sdk-developer-guide.md`'s documentation. Denon
-and Marantz are correctly the SAME driver (identical wire protocol, not a missed consolidation).
-No files changed.
+## Current state of the AV SDK
 
-## Part 2 — AV SDK Refactor, first attempt (planned in full, then rejected — plan later executed, see Part 4)
+- `services/protocols/src/av-sdk/` is the real, runtime shared module: `TcpLineTransport`
+  (pooled/reconnecting/line-buffered TCP, shared by AVR+HEOS), `HttpPollClient`/`AdaptivePoller`
+  (shared in-flight-deduped HTTP + adaptive polling, shared by AVR's AppCommand layer), `state-
+  cache.ts` (`recordCapabilityState`, shared by all three AV drivers), `init-handshake.ts`
+  (`InitHandshake` — new this session, see below), `protocol-tracer.ts`, `network-source-
+  resolver.ts`.
+- `avr-driver.ts` (Denon/Marantz) is the SDK's reference implementation — the only driver
+  combining two transports (Telnet realtime push + HTTP AppCommand for renamed/hidden inputs and
+  album art) through shared SDK primitives.
+- Full architecture: `docs/architecture/Universal-AV-SDK.md`. Full per-capability wire evidence:
+  `docs/architecture/AVR-Universal-Capability-Matrix.md`. Engine-level roadmap (what's ✓/Partial/
+  Planned across the whole SDK, honest Denon/Yamaha/Anthem reuse mapping): **new this session**,
+  `docs/architecture/Universal-AVR-SDK-Roadmap.md`.
 
-The user first asked for a full "Universal AV SDK" refactor converting AVR/HEOS/Yamaha into thin
-adapters. This was planned rigorously (plan mode, 3 parallel Explore agents + 1 Plan-agent
-critique pass) before any code was touched:
-- **Real audit finding**: the actual duplication is narrow — a ~55-line TCP-link-pool + reconnect
-  + line-buffering pattern between AVR/HEOS, plus `record()` (verbatim identical in all 3
-  drivers), a diagnostics-status ternary, an `onData` skeleton, and one dead-duplicated
-  `parseHostPort()`. Most of the requested 20-subsystem/17-future-brand target architecture either
-  already exists elsewhere as generic fleet infrastructure (Room Assignment Engine, Diagnostics
-  route, the Device/CapabilityState model) or has no evidence to justify building it
-  (Telemetry/Metrics/Subscription-Manager/a unified Zone Engine — AVR/HEOS/Yamaha genuinely model
-  zones incompatibly at the wire level).
-- User confirmed (via `AskUserQuestion`) a scoped, evidence-based extraction plan: one
-  `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`), AVR/HEOS
-  migrated to use it, Yamaha only getting the `record()` extraction ("thinner, not thin" — HTTP
-  transport has no second caller in the fleet, building an HTTP-transport SDK primitive now would
-  be speculative), zero stub adapters for the 17 unbuilt brands (would violate "never fabricate
-  capabilities").
-- **The full plan was written to `/root/.claude/plans/polished-stirring-dongarra.md` and presented
-  via `ExitPlanMode` — the user rejected it at the time** (pasted an entirely different task
-  instead, see Part 3). No code from this plan was applied in this pass. The user later
-  re-requested this exact refactor (Part 4) — this plan file became that pass's executed
-  blueprint, so this section is history, not an open item.
+## This session's work — RTI Capability Audit, Phases 1–4
 
-## Part 3 — Automation Editor Production Hardening (executed)
+Prior session produced `docs/architecture/RTI-Capability-Audit.md`: an evidence-based audit of 16
+capabilities RTI's driver has that SupremeOS didn't, classified A (officially confirmed, ready to
+build) / B (officially-adjacent, one piece of evidence missing) / C (RTI application-layer pattern
+buildable from already-confirmed commands) / D (RTI-only, no official corroboration). This
+session executed the user's 4-phase instruction against that audit:
 
-The rejected AV SDK task was replaced with a "Automation Editor Production Hardening (ADR-0100)"
-brief. **Critical finding, surfaced to the user twice via `AskUserQuestion` before proceeding**:
-ADR-0016 through ADR-0021 and ADR-0100 do not exist anywhere in this repository (only ADR-0001–15
-do); "Runtime Objects"/"Runtime Events" aren't this codebase's vocabulary; and the requested
-four-level field-resolution pipeline (Driver Command Metadata → Capability Structural
-Configuration → Live-State Inference → Static Capability Table) doesn't exist either — the real
-Automation Editor (`apps/web-homeowner/src/automations.tsx`) has a small hardcoded onoff-only
-field set with no capability-driven resolution at all. User confirmed: proceed against the real
-implementation (governed by **ADR-0005**, "Native automation engine, AI drafts, and append-only
-audit"), document the real gap honestly, present the requested pipeline/metadata contract/
-maturity model as clearly-labeled **future proposals**, don't implement them.
+**Phase 1 — Category A (5 items), all shipped:**
+Subwoofer On/Off (`PSSWR`), Cinema/Music/Game/Pro Logic mode (`PSMODE:`), Cinema EQ (`PSCINEMA
+EQ.`), Loudness Management (`PSLOM`), Tone Control On/Off (`PSTONE CTRL`) — all in `avr-codec.ts`,
+each an official-PDF-cited exact token, wired into `denonCapabilityConfig()`'s `advancedControls`
+(reusing the existing generic `select` UI renderer, zero new frontend code needed). New
+`hasExtendedAudio` installer-declared gate flag. 30 tests in `avr-codec.test.ts`.
 
-**What actually changed** (see `docs/architecture/Automation-Editor-Production-Hardening-Report.md`
-for the full report):
-- `apps/web-homeowner/src/automations.tsx`: replaced the loose `Record<string, unknown> & { type:
-  string }` node type with a real `EditorNode` discriminated union — removed 6 unsafe `as` casts,
-  made `defaultNode()`/`nodeSummary()` compiler-enforced-exhaustive switches, added a runtime type
-  guard (`isEditorNodeType`) at the one real untyped boundary (the HTML5 drag-and-drop payload).
-  Fixed one real "obvious" performance issue found during review: the device-picker's room/device
-  fetch was N sequential HTTP round-trips instead of one parallel `Promise.all` batch.
-- `apps/web-homeowner/src/api.ts`: one documentation comment added (no code change) explaining why
-  `AutomationView` is intentionally narrower than the full domain-model `Automation` type.
-- New `apps/web-homeowner/src/automations.test.ts`: 9 tests for the file's pure helper functions —
-  previously **zero** test coverage existed for this file (in fact for the entire
-  `@supreme/web-homeowner` app — no `.test.tsx` anywhere, no `@testing-library/react`/jsdom
-  dependency). Component-level tests were investigated and explicitly NOT added — would require
-  introducing new test infrastructure to an app that's never had any, a real scope decision,
-  documented as a `TODO.md` follow-up rather than silently done or silently skipped.
-- Nothing in `services/automations/`, `packages/domain-model/src/automations-dsl.ts`,
-  `packages/supreme-contracts/src/phase3.ts`, `services/persistence`'s automation repo, or the
-  gateway automation routes was touched — this is the evidence behind the report's "zero
-  serialization/persistence/execution-engine impact" claim, not an inference.
-- Three new docs: `docs/architecture/Automation-Editor.md` (architecture + real current
-  field-resolution pipeline + driver integration guide), `Automation-Editor-Future-Driver-SDK-
-  Roadmap.md` (Command Metadata contract examples, maturity model, extension points — all
-  explicitly labeled unimplemented), `Automation-Editor-Production-Hardening-Report.md` (the full
-  14-part report: code review, performance, type safety, test coverage, backward-compat matrix,
-  serialization/protocol-compatibility validation, release-candidate validation).
+**Phase 2 — Category C (all 4 items), all shipped:**
+- **C.1/C.2 (connection-readiness state machine + paced init-burst)**: new `InitHandshake` class
+  (`av-sdk/init-handshake.ts`) — sends one init token, waits for any reply, sends the next, rather
+  than one blind burst write. New `DriverDiagnosticsSnapshot.fullySynced: boolean` (three-file
+  sync: `adapter.ts` → `rest.ts` → `driver-diagnostics.ts`), wired into `avr-driver.ts`'s
+  `onLinkConnect()`.
+- **C.3 (keepalive probe)**: `AvrProtocolDriver.heartbeat()` — `PW?` probe, `{ ok, latencyMs }`,
+  structurally identical to the existing `HeosProtocolDriver.heartbeat()`.
+- **C.4 (raw command escape hatch)**: `AvrProtocolDriver.sendRaw()`, threaded through 6 interface/
+  adapter touch points (`INativeProtocolDriver` → `IBackendAdapter` → `avr-driver.ts` →
+  `native-adapter.ts` → `routing-adapter.ts` → `sil.ts`) to a new `POST /v1/devices/:id/raw-
+  command` gateway route (`validation_failed`/422 when the owning backend doesn't support it), plus
+  a new devMode-gated **Raw Command** UI section (`device-detail-sections.tsx`, wired into the AVR
+  console). New `services/gateway/src/raw-command.e2e.test.ts` (4 tests) covers both the success
+  path (fake native driver) and the unsupported-backend 422 path (HA-owned device).
+- Two real race-condition bugs were found and fixed via test-driven debugging while wiring this
+  (not guessed, not papered over — see `RTI-Capability-Audit.md`'s git history / the full session
+  transcript for the exact repro): a test-harness ECONNRESET gap (fixed in the test helper) and a
+  genuine `fullySynced` default-value race in `avr-driver.ts`'s `bind()` (fixed with `if
+  (!link.ready) link.diagnostics.setFullySynced(false);` right after `ensureLink()`).
 
-**Verification**: full monorepo `pnpm build` (54/54 packages), `pnpm typecheck` (93/93 tasks),
-`pnpm test` (all passing, including the 222 pre-existing gateway tests confirming zero regression)
-— all green after the change. No lint gate exists anywhere in this repo (confirmed, not assumed —
-no package defines a `lint` script, no ESLint/Biome config exists); this is reported honestly in
-the hardening report rather than silently skipped.
+**Phase 3 — honest response on hardware access:**
+This sandboxed environment has no LAN reachability to any physical Denon/Marantz receiver — there
+is no real hardware to verify Category B (Zone 3/4, 8 extra channel-trim targets, Tone Defeat)
+against. Rather than fabricate a live capture, `RTI-Capability-Audit.md` got a new closing section
+documenting this plainly and laying out a concrete, self-serve **guided capture procedure**: with
+`devMode` on, send each Category B probe token via the new Raw Command box and read the reply in
+the existing Protocol Trace panel — the exact tooling built in Phase 2 is what a real Category B
+verification pass needs, no new engineering. Category B/D stay unbuilt, as they should.
 
-## Part 4 — AV SDK Refactor, second attempt (executed, validated, committed)
+**Phase 4 — Universal AVR SDK Roadmap (the explicitly-flagged most important deliverable):**
+New `docs/architecture/Universal-AVR-SDK-Roadmap.md` — an engine-level (not brand-level) roadmap:
+a ✓/Partial/Planned status for each of 17 engines (Core Transport, Realtime Event Engine,
+Diagnostics, Capability Engine, Protocol Recorder, Connection State Machine, Keepalive Framework,
+Zone Engine, Media Engine, Artwork Engine, Metadata Engine, Audio/Video Processing Engine,
+Calibration Engine, Developer Console, Capability Discovery, Hardware Verification Mode), each
+cited against real code. Includes a Denon "Uses:" mapping, and — deliberately correcting the
+user's own illustrative "reuses 95%" framing rather than parroting it — an **honest** Yamaha reuse
+assessment (real, measured reuse is low: only `state-cache.ts` + the shared `DriverDiagnosticsTracker`
+class; `Universal-AV-SDK.md`'s own before/after table already recorded Yamaha's SDK-extraction
+line-count reduction at ~1%, not 95%) with a concrete 3-step path to raise it, and an Anthem
+mapping framed honestly as **not yet built** — a projection based on Phase 9's readiness findings
+(transport/diagnostics tier likely near-total reuse; command-vocabulary tier 100% unevidenced,
+zero shortcuts).
 
-The user re-requested the same refactor with an explicit 9-phase brief, stating the Part 2 audit
-"is considered the authoritative scope — do NOT expand beyond it." Since this matched the
-already-designed (and substantively pre-approved) Part 2 plan almost exactly, and the user's
-message was itself phase-by-phase execution instructions, this was executed directly rather than
-re-entering plan mode.
+## Verification this session
 
-**New module `services/protocols/src/av-sdk/`** (internal-only — never re-exported from
-`services/protocols/src/index.ts`, so it carries zero public-API risk):
-- `state-cache.ts` — `recordCapabilityState()`, a plain function extracting the verbatim-identical
-  dedupe-then-notify `record()` logic previously copy-pasted in all three AV drivers. 5 tests.
-- `tcp-line-transport.ts` — `TcpLineTransport`, absorbing the genuinely duplicated AVR/HEOS
-  TCP-link-pool + reconnect + line-buffering pattern (`ensureLink`/`disconnectAll`/`releaseKey`/
-  `diagnosticsFor`, plus `onConnect`/`onLine` hooks the driver wires its own protocol logic
-  into). Delegates to the pre-existing `ReconnectScheduler`/`LineAccumulator`/
-  `DriverDiagnosticsTracker` rather than reimplementing them. 8 tests, including a fake-socket
-  ordering test proving link registration happens before any connect handler could observe it.
-- `extensibility.test.ts` — a synthetic, non-real `FakeBrandDriver` (protocol id
-  `"fake-brand-extensibility-proof"`, not exported or registered anywhere) built entirely from
-  `TcpLineTransport` + `recordCapabilityState` against a real embedded fake server, proving the
-  SDK's public surface is sufficient for a from-scratch adapter without fabricating a stub for
-  any real unbuilt brand. 2 tests.
+`pnpm build` — 54/54 (now includes the new `raw-command.e2e.test.ts`, `init-handshake.ts`/`.test.ts`).
+`pnpm typecheck` — 93/93. `pnpm test` — full monorepo green (a `pnpm test` run under maximum
+turbo parallelism transiently failed 3 unrelated, pre-existing timing-sensitive tests in
+`avr-driver.test.ts`/`heos-driver.test.ts` due to CPU contention across ~50 concurrently-running
+packages; confirmed non-reproducible via 3 repeated isolated re-runs and a scoped
+`--filter @supreme/protocols --filter @supreme/gateway` run, both 100% green — not a regression
+from this session's changes). Frontend (`apps/web-homeowner`) `typecheck`/`build` both clean for
+the new `RawCommandSection`/`sendRawDeviceCommand` wiring; **not** Playwright-verified live this
+session (no running dev server/backend in this sandbox) — flagged honestly rather than claimed.
 
-**Driver migrations** (all pre-existing driver test files pass **unmodified** — the regression
-gate):
-- `avr-driver.ts`: 387 → 305 lines (~21% reduction). `AvrLink` interface, `ensureLink`/
-  `openSocket`/`onData` methods, and the diagnostics-status ternary removed; replaced with
-  `TcpLineTransport` + `onLinkConnect()` hook. `record()` now delegates to
-  `recordCapabilityState()`. `avr-driver.test.ts`'s 19 tests pass unmodified.
-- `heos-driver.ts`: 522 → 437 lines (~16% reduction). Same pattern. Also deleted a dead-duplicated
-  local `parseHostPort()`, now importing the one `avr-codec.ts` already exports.
-  `heos-driver.test.ts`'s 21 tests pass unmodified. `queryPlayers()`'s unbounded discovery buffer
-  was deliberately left untouched (separately tracked, see `TODO.md` — a bug fix, not a refactor,
-  out of this pass's scope).
-- `yamaha-driver.ts`: 486 → 481 lines (~1% reduction) — **only** `record()` now delegates to
-  `recordCapabilityState()`. Yamaha stays on its own HTTP+UDP transport code; `TcpLineTransport`
-  doesn't apply (no persistent TCP line protocol) and no second HTTP-transport caller exists in
-  the fleet to justify a speculative primitive. Documented explicitly as "thinner, not thin," not
-  oversold as a third symmetric adapter. `yamaha-driver.test.ts`'s 24 tests pass unmodified.
+## Known issues / open gaps (carried forward, still real, still unfixed)
 
-**New docs**: `docs/architecture/Universal-AV-SDK.md` (SDK architecture, before/after line counts,
-what was deliberately NOT built and why, structural performance-validation reasoning) and
-`docs/architecture/AV-Adapter-Development-Guide.md` (the `INativeProtocolDriver` contract, when to
-use `TcpLineTransport` vs. not, step-by-step wiring guide, the real process for adding a new AV
-brand). Updated `docs/architecture/avr-sdk-developer-guide.md` to correct its now-stale "no
-separate AVR engine" claim and cross-link the two new docs.
-
-**Verification**: `pnpm build` (54/54), `pnpm typecheck` (93/93), `pnpm test` (all green,
-including the full pre-existing `@supreme/protocols` suite — 378 tests — and `@supreme/gateway`'s
-222 tests, all passing **unmodified**, which is the direct evidence of zero runtime/protocol/
-discovery/diagnostics/reconnect behavior change). No public API, manifest, `ProtocolKind` enum, or
-device/entity identifier changed — confirmed by the driver classes' unchanged exported names,
-`protocol` field values, and constructor signatures, and by `native-driver-factory.ts`/
-`bootstrap.ts` requiring no edits.
-
-**What was deliberately NOT built, per the explicit "authoritative scope" constraint**: no
-`DiscoveryEngine`/`CapabilityEngine`/`StateEngine`/`EventEngine`/`DigitalTwin`/`ZoneEngine`/
-`Telemetry`/`Metrics`/`SubscriptionManager` modules (each either already exists elsewhere as
-generic fleet infrastructure, or has no real duplication behind it); no separate `ConnectionManager`/
-`TransportManager`/`ConnectionPool`/`ReconnectManager` as four classes (only one real transport
-variant exists in evidence, so it's one cohesive `TcpLineTransport`, not four wrappers); no
-placeholder adapter files for any of the 17 named future brands (Anthem/Arcam/Pioneer/Sony/NAD/
-StormAudio/JBL Synthesis/Onkyo/Integra/Rotel/McIntosh/Trinnov, etc.) — zero protocol
-implementation exists for any of them, so a stub would violate this repo's "never fabricate
-capabilities" rule.
-
-## Known issues / open gaps
-
-- Cross-platform duplication: the web (`automations.tsx`) and mobile
+- Cross-platform duplication: web (`automations.tsx`) and mobile
   (`apps/mobile/lib/screens/automation_editor.dart`) Automation Editors independently hand-
-  implement the identical six-node palette/defaults/field rules — not literal shared code (TS/Dart
-  can't share modules), documented not fixed.
-- The real, honest field-resolution gap: the DSL/engine already support triggers/conditions/
-  actions across every `CapabilityKind` (brightness/color/temperature/position/media/lock/fan/
-  vacuum/sensor) and the full `CapabilityCommand` union; the editor UI only authors `onoff`. A
-  homeowner cannot build "when brightness drops below 20%, run a scene" through either
-  drag-and-drop builder today, even though the backend already executes it. Documented in
-  `Automation-Editor.md` §2; NOT fixed (would be new user-facing functionality, explicitly out of
-  scope for a hardening pass).
-- `AutomationService` (the CRUD layer in `services/automations/src/service.ts`) has no direct unit
-  tests — only one happy-path e2e test covers create + WSS-observed execution; update/delete/
-  enable-toggle/list/runs and validation-error paths are untested. Flagged, not filled (was outside
-  this pass's touched-files scope).
-- `HeosProtocolDriver`'s `queryPlayers()` (discovery-only) reimplements manual line buffering
-  instead of reusing `LineAccumulator`, with no `maxBytes` cap — found during the AV SDK refactor's
-  audit, deliberately left untouched during the Part 4 migration (a bug fix, not a refactor), still
-  real, still unfixed, still in `TODO.md`.
+  implement the identical six-node palette/defaults/field rules.
+- Automation DSL/engine supports triggers/conditions/actions across every `CapabilityKind`; the
+  editor UI only authors `onoff`. Documented in `Automation-Editor.md` §2, not fixed (new
+  user-facing functionality, out of scope for a hardening pass).
+- `AutomationService` has no direct unit tests beyond one happy-path e2e test.
+- `HeosProtocolDriver.queryPlayers()` (discovery-only) reimplements manual line buffering instead
+  of reusing `LineAccumulator`, no `maxBytes` cap. Still real, still unfixed, still in `TODO.md`.
+- Yamaha's real SDK-primitive reuse is low (see Phase 4 roadmap doc) — `HttpPollClient`/
+  `AdaptivePoller` migration and a `heartbeat()` addition are documented, scoped, NOT started.
+- Category B (Zone 3/4, 8 extra channel-trim targets, Tone Defeat) and Category D (All Zone
+  Stereo, Surround Back mode/Front A+B select, D.Comp, video-output routing) remain unbuilt —
+  correctly so, pending either an official spec update or a real-hardware guided capture (see the
+  Phase 3 procedure above).
+- Raw Command UI (`RawCommandSection`) was typecheck/build-verified but not live-browser-verified
+  at the project's required phone/tablet/desktop/ultrawide breakpoints this session.
 
 ## Immediate priorities for the next session
 
-1. The AV SDK refactor (Parts 2 and 4) is complete — no further action needed unless a genuinely
-   new brand or a second HTTP-transport caller shows up (see `AV-Adapter-Development-Guide.md` for
-   the process).
-2. If continuing Automation Editor work: the real field-resolution gap (onoff-only authoring) is
-   the highest-value next step, but is a **feature**, not a hardening task — needs its own scoped
-   session/ADR, not a bolt-on.
-3. Component-test infrastructure for `apps/web-homeowner` (`@testing-library/react` + jsdom) is a
-   real, currently-nonexistent gap worth a dedicated small session before more UI hardening passes
-   rely on "add tests" the same way this one did (pure-function tests only).
-4. The HEOS `queryPlayers()` unbounded-buffer bug fix (see `TODO.md`) is small, low-risk, and ready
-   to pick up whenever a bug-fix pass (not a refactor pass) is in scope.
-5. Everything from the prior (Driver Lifecycle Completion) handoff not touched this session remains
-   open — see `TODO.md` for the full backlog with priority tiers.
+1. If a real Denon/Marantz unit becomes reachable: run the Phase 3 guided capture procedure
+   against Category B's three items — this is the single highest-value next step, since the
+   tooling to do it already exists and is tested.
+2. Live Playwright verification of the new Raw Command UI section (`ProtocolTraceSection`'s
+   sibling in `media/detail.tsx`) at all 4 required breakpoints — genuinely not done this session.
+3. Yamaha's `HttpPollClient`/`AdaptivePoller`/`heartbeat()` migration (Phase 4 roadmap doc, "Roadmap
+   ordering" step 5) — independently valuable, not blocked on anything.
+4. Wire the two existing `heartbeat()` methods (AVR, HEOS) into an actual scheduler + gateway
+   route/UI affordance — currently callable but never automatically invoked (roadmap step 3).
+5. The HEOS `queryPlayers()` unbounded-buffer bug fix (`TODO.md`) remains small, low-risk, ready
+   whenever a bug-fix pass is in scope.

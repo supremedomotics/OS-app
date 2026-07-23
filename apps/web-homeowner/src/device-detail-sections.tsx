@@ -11,6 +11,7 @@ import {
   fetchEnergyHistory,
   fetchIntelligenceHistory,
   refreshDeviceCapabilities,
+  sendRawDeviceCommand,
 } from "./api.js";
 import { friendlyType } from "./devices.js";
 import { useAsync } from "./use-async.js";
@@ -193,6 +194,54 @@ export function ProtocolTraceSection({ device }: { device: Device }) {
           </div>
         ))}
       </div>
+    </CollapsibleSection>
+  );
+}
+
+// ── Raw Command (§ RTI Capability Audit, Category C.4) — devMode-only escape hatch:
+// writes a token verbatim to the device's owning driver, bypassing the typed capability
+// command dispatch entirely. Only ever surfaced behind the same devMode gate as
+// Diagnostics/Protocol Trace — never reachable by a homeowner account. A driver that
+// doesn't support this (most protocols don't opt in) fails the request with a real
+// error message rather than the control silently doing nothing. ─────────────────────
+export function RawCommandSection({ device }: { device: Device }) {
+  const [token, setToken] = useState("");
+  const [status, setStatus] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
+  const [sending, setSending] = useState(false);
+
+  async function send() {
+    const trimmed = token.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    setStatus(null);
+    try {
+      await sendRawDeviceCommand(device.id, trimmed);
+      setStatus({ kind: "ok", message: `Sent "${trimmed}".` });
+      setToken("");
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Raw command failed." });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <CollapsibleSection title="Raw Command">
+      <div className="raw-cmd-row">
+        <input
+          className="raw-cmd-input"
+          type="text"
+          value={token}
+          placeholder="e.g. PSCINEMA EQ.ON"
+          spellCheck={false}
+          onChange={(e) => setToken(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+        />
+        <button className="raw-cmd-send" onClick={send} disabled={sending || !token.trim()}>
+          {sending ? "Sending…" : "Send"}
+        </button>
+      </div>
+      {status && <div className={`raw-cmd-status ${status.kind}`}>{status.message}</div>}
     </CollapsibleSection>
   );
 }

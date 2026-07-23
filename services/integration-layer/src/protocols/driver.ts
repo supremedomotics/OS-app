@@ -121,6 +121,16 @@ export interface INativeProtocolDriver {
    * buffer, never a network round-trip. */
   getTrace?(deviceId: DeviceId): DriverTraceEntry[] | null;
 
+  /** § RTI Capability Audit, Category C.4 — optional, devMode-only escape hatch: write a
+   * literal, installer-supplied token straight to this device's wire connection, bypassing
+   * the driver's own typed `commandToAvr()`-style dispatch and its safety net entirely.
+   * Legitimate only because the token vocabulary itself is already the same one every typed
+   * command in this driver already sends — this adds no new protocol surface, only a
+   * generic pass-through for a command this driver's typed surface hasn't caught up to yet.
+   * Absent for any driver that doesn't offer one (most won't). MUST reject/throw for a
+   * device it doesn't manage rather than silently no-op. */
+  sendRaw?(deviceId: DeviceId, token: string): Promise<void>;
+
   /** § ADR 0101 Part 1 — Optional: scenes this driver's source system genuinely defines
    * (an ETS project's scene DPTs, a synchronized API's scene list). Absent entirely for any
    * driver whose protocol has no real scene concept to discover — never implemented with a

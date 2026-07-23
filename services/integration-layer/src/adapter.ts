@@ -92,6 +92,18 @@ export interface DriverDiagnosticsSnapshot {
   packetsReceived: number;
   reconnectCount: number;
   lastError: string | null;
+  /** § RTI Capability Audit, Category C — a genuine connection-*readiness* signal, distinct
+   * from `connectionStatus` (raw transport state): `true` once the driver's initial
+   * state-sync handshake has fully drained (every startup query answered), `false` while a
+   * fresh connect/reconnect's handshake is still in flight. Defaults `true` for any driver
+   * that never opts into the paced-handshake primitive (`InitHandshake` in
+   * `@supreme/protocols`'s `av-sdk`) — such a driver has no "still syncing" window to report,
+   * so it should never appear falsely un-ready. Modeled on the RTI Denon driver's own
+   * `ConnectionStatus` state machine (Starting Up/Initializing/Connected/Disconnected,
+   * gated on a fully-drained init burst — see `docs/architecture/RTI-Driver-Knowledge-Base.md`
+   * Finding 3.1/4.1), reproduced here as a boolean rather than a 4-value enum since
+   * `connectionStatus` already covers the connected/connecting/disconnected axis. */
+  fullySynced: boolean;
 }
 
 /** One recorded protocol-trace line (§ Universal AVR SDK — "capture and log the raw
@@ -147,6 +159,11 @@ export interface IBackendAdapter {
    * unsupported, or if trace logging isn't enabled for that driver instance — see
    * each protocol's `trace` config option, off by default). */
   getTrace?(deviceId: DeviceId): Promise<DriverTraceEntry[] | null>;
+
+  /** Optional: § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch,
+   * see `INativeProtocolDriver.sendRaw` for the full rationale. Absent for any adapter/
+   * driver that doesn't offer one. */
+  sendRaw?(deviceId: DeviceId, token: string): Promise<void>;
 
   /** Optional: release the owning driver's per-device resources (§ Driver Lifecycle
    * Completion) — called when a Supreme device is deleted. A no-op for backends with

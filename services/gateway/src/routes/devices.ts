@@ -1,6 +1,7 @@
 import {
   BulkDeviceRequest,
   CommandRequest,
+  DeviceRawCommandRequest,
   SupremeError,
   UpdateDeviceRequest,
   type CommandResponse,
@@ -244,6 +245,28 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "device", deviceId, "view");
       const trace = await ctx.sil.getTrace(deviceId);
       reply.send({ trace } satisfies DeviceTraceResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § RTI Capability Audit, Category C.4: POST /v1/devices/:id/raw-command — devMode-only
+  // raw-token escape hatch. Writes `token` verbatim to the device's owning driver,
+  // bypassing the typed CapabilityCommand dispatch entirely. `control` permission (same as
+  // the typed /command route) since this is a real write, not a read — but this route
+  // exists at all only for a driver that opted in via `sendRaw` (validation_failed
+  // otherwise), and is only ever surfaced behind the client's own devMode gate, same
+  // posture as /diagnostics/trace.
+  app.post<{ Params: { id: string }; Body: unknown }>("/v1/devices/:id/raw-command", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "control");
+      const body = DeviceRawCommandRequest.parse(req.body);
+      await ctx.sil.sendRaw(deviceId, body.token);
+      reply.send({ ok: true });
     } catch (err) {
       sendError(reply, err);
     }

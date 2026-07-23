@@ -24,6 +24,7 @@ import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
 import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
 import { AdaptivePoller, HttpPollClient } from "./av-sdk/http-poll-client.js";
+import { InitHandshake } from "./av-sdk/init-handshake.js";
 
 /** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
  * — surfaced in Diagnostics so an installer can tell which driver build is running. */
@@ -80,6 +81,10 @@ interface AvrBinding {
    * `denonCapabilityConfig`'s doc for why this is opt-in rather than opt-out like
    * `hasToneControl`. */
   hasAudyssey: boolean;
+  /** Installer-declared: does this unit expose the subwoofer on/off, Cinema/Music/Game/Pro
+   * Logic mode, Cinema EQ, and Loudness Management controls (§ RTI Capability Audit, Category
+   * A)? Defaults `false` — same opt-in reasoning as `hasAudyssey`, a distinct feature cluster. */
+  hasExtendedAudio: boolean;
   /** UPnP device-description `<modelName>`/`<serialNumber>`, threaded through from
    * discovery's `bindConfig.model`/`bindConfig.serial` when present (§ Diagnostics
    * Console, § Production Bugfix Sprint) — same pattern HEOS's `model` already uses.
@@ -103,6 +108,11 @@ interface MediaCache {
   referenceLevel?: number;
   dynamicVolume?: string;
   drc?: string;
+  toneControlEnabled?: boolean;
+  subwoofer?: boolean;
+  cinemaMode?: string;
+  cinemaEq?: boolean;
+  loudnessManagement?: boolean;
 }
 
 /**
@@ -148,6 +158,20 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
    * renamed/hidden inputs in sync with changes made via the OEM Denon Remote app
    * (Telnet has no push notification for a rename; see module doc). */
   private readonly enrichmentPollers = new Map<string, AdaptivePoller>();
+  /** § RTI Capability Audit, Category C — one paced init-sync handshake per host:port link
+   * (see `av-sdk/init-handshake.ts`'s module doc). Replaces the previous single-write init
+   * burst with the response-paced pattern RTI's own Denon driver uses, and drives the new
+   * `fullySynced` diagnostics field. */
+  private readonly initHandshakes = new Map<string, InitHandshake>();
+  /** § RTI Capability Audit, Category C.3 — one in-flight `PW?` heartbeat probe per shared
+   * host:port link, mirroring `HeosProtocolDriver.pendingHeartbeats` exactly. Resolved by
+   * ANY received line for that link (not just a `PWON`/`PWSTANDBY` echo specifically) —
+   * matching RTI's own observed behavior (Finding 7.3 in the RTI Knowledge Base): real
+   * traffic of any kind counts as proof of life, not just a reply to the exact probe sent. */
+  private readonly pendingHeartbeats = new Map<
+    string,
+    { resolve: (result: { ok: boolean; latencyMs: number | null }) => void; sentAt: number; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(opts: AvrDriverOptions = {}) {
     this.opts = opts;
@@ -176,6 +200,13 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     this.transport.disconnectAll();
     for (const poller of this.enrichmentPollers.values()) poller.stop();
     this.enrichmentPollers.clear();
+    for (const handshake of this.initHandshakes.values()) handshake.reset();
+    this.initHandshakes.clear();
+    for (const [key, pending] of this.pendingHeartbeats) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, latencyMs: null });
+      this.pendingHeartbeats.delete(key);
+    }
     this.connected = false;
   }
 
@@ -189,6 +220,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
     const hasToneControl = binding.config?.hasToneControl !== false;
     const hasAudyssey = binding.config?.hasAudyssey === true;
+    const hasExtendedAudio = binding.config?.hasExtendedAudio === true;
     const model = typeof binding.config?.model === "string" ? binding.config.model : null;
     const serial = typeof binding.config?.serial === "string" ? binding.config.serial : null;
     const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
@@ -205,13 +237,21 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         hidden: Array.isArray(hiddenRaw) ? new Set(hiddenRaw as string[]) : new Set(),
       });
     }
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, hasAudyssey, model, serial });
+    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, hasAudyssey, hasExtendedAudio, model, serial });
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
     }
     if (this.connected) {
       const link = this.transport.ensureLink(key, host, port);
+      // § RTI Capability Audit, Category C — closes a real race: `DriverDiagnosticsTracker`
+      // defaults `fullySynced` to `true` (correct for a driver that never touches this
+      // field), but for THIS driver, `onLinkConnect`'s `setFullySynced(false)` only fires
+      // once the async TCP "connect" event lands — a window where `ensureLink()` has
+      // already created the link but no one has told it it's mid-handshake yet, so a
+      // reader could see a stale, misleadingly-`true` default. A link that isn't `ready`
+      // by definition isn't fully synced either, so this closes the gap immediately.
+      if (!link.ready) link.diagnostics.setFullySynced(false);
       // A zone2 device bound AFTER its link already finished connecting (e.g. zone1 and
       // zone2 added as two separate commission calls, as the guided AVR add wizard does)
       // never gets `onLinkConnect`'s Z2?/Z2MU? — that init burst already fired without
@@ -254,7 +294,48 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       this.inputEnrichment.delete(key);
       this.enrichmentPollers.get(key)?.stop();
       this.enrichmentPollers.delete(key);
+      this.initHandshakes.get(key)?.reset();
+      this.initHandshakes.delete(key);
+      const pending = this.pendingHeartbeats.get(key);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pending.resolve({ ok: false, latencyMs: null });
+        this.pendingHeartbeats.delete(key);
+      }
     }
+  }
+
+  /** § RTI Capability Audit, Category C.3 — an explicit, on-demand liveness/round-trip
+   * probe, mirroring `HeosProtocolDriver.heartbeat()`. AVR/Telnet has no protocol-native
+   * no-op ping (verified — see avr-codec.ts module doc), so this reuses `PW?` (whole-unit
+   * power query, already a real, parsed, necessary command) as RTI's own driver does for
+   * exactly this purpose. Resolves `{ ok: false, latencyMs: null }` on a dropped socket or
+   * a 5s timeout rather than hanging the caller. */
+  async heartbeat(deviceId: DeviceId): Promise<{ ok: boolean; latencyMs: number | null }> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !this.connected) return { ok: false, latencyMs: null };
+    const key = `${b.host}:${b.port}`;
+    const link = this.transport.ensureLink(key, b.host, b.port);
+    if (!link.ready || !link.socket || link.socket.destroyed) return { ok: false, latencyMs: null };
+    const socket = link.socket;
+    const existing = this.pendingHeartbeats.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.resolve({ ok: false, latencyMs: null });
+      this.pendingHeartbeats.delete(key);
+    }
+    return new Promise((resolve) => {
+      const sentAt = Date.now();
+      const timer = setTimeout(() => {
+        this.pendingHeartbeats.delete(key);
+        resolve({ ok: false, latencyMs: null });
+      }, 5_000);
+      (timer as { unref?: () => void }).unref?.();
+      this.pendingHeartbeats.set(key, { resolve, sentAt, timer });
+      link.diagnostics.recordSend("PW?");
+      this.tracer.send("PW?");
+      socket.write("PW?\r");
+    });
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
@@ -284,6 +365,25 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     }
   }
 
+  /** § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch (see
+   * `INativeProtocolDriver.sendRaw`'s doc for the full rationale). Deliberately bypasses
+   * `commandToAvr()`'s typed dispatch entirely — this is the ONE place in this driver that
+   * writes a token it hasn't itself validated the shape of. Same connection-readiness
+   * guard as `command()`, so a raw command fails loudly rather than silently vanishing. */
+  async sendRaw(deviceId: DeviceId, token: string): Promise<void> {
+    if (!this.connected) throw new Error(`avr: driver is disconnected — cannot send raw command to ${deviceId}`);
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) throw new Error(`avr: ${deviceId} not bound`);
+    const link = this.transport.ensureLink(`${b.host}:${b.port}`, b.host, b.port);
+    if (!link.ready || !link.socket || link.socket.destroyed) {
+      throw new Error(`avr: not connected to ${b.host}:${b.port} — check the receiver's IP and that Network Control/Telnet is enabled`);
+    }
+    this.tracer.event(`raw command ${deviceId} -> ${token}`);
+    link.diagnostics.recordSend(token);
+    this.tracer.send(token);
+    link.socket.write(`${token}\r`);
+  }
+
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
   }
@@ -302,6 +402,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       hasZone2,
       hasToneControl: b.zone === "main" && b.hasToneControl,
       hasAudyssey: b.zone === "main" && b.hasAudyssey,
+      hasExtendedAudio: b.zone === "main" && b.hasExtendedAudio,
       renamedInputs: enrichment?.renamed,
       hiddenInputs: enrichment?.hidden,
     }) as unknown as Record<string, unknown>;
@@ -547,16 +648,54 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "main" && b.hasAudyssey)) {
       initTokens.push("PSDYNEQ ?", "PSMULTEQ: ?", "PSREFLEV ?", "PSDYNVOL ?", "PSDRC ?");
     }
-    this.tracer.event(`connected to ${host}:${port} — sending init query burst: [${initTokens.join(", ")}]`);
-    for (const t of initTokens) {
-      link.diagnostics.recordSend(t);
-      this.tracer.send(t);
+    // § RTI Capability Audit, Category A — same opt-in pattern as hasAudyssey above.
+    // `PSTONE CTRL ?` is NOT added here since it's already unconditionally queried
+    // (folded into `hasToneControl`, not this flag — see avr-codec.ts module doc).
+    if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "main" && b.hasExtendedAudio)) {
+      initTokens.push("PSSWR ?", "PSMODE: ?", "PSCINEMA EQ. ?", "PSLOM ?");
     }
-    socket.write(`${initTokens.join("\r")}\r`);
+    this.tracer.event(`connected to ${host}:${port} — starting paced init-sync handshake: [${initTokens.join(", ")}]`);
+    const key = `${host}:${port}`;
+    let handshake = this.initHandshakes.get(key);
+    if (!handshake) {
+      handshake = new InitHandshake();
+      this.initHandshakes.set(key, handshake);
+    }
+    link.diagnostics.setFullySynced(false);
+    handshake.start(
+      initTokens,
+      (t) => {
+        // A later token in the queue can be dispatched well after the initial connect —
+        // guard against writing to a socket that's since been closed/torn down (a real race
+        // the previous single-burst-write approach barely had a window for).
+        if (socket.destroyed) return;
+        link.diagnostics.recordSend(t);
+        this.tracer.send(t);
+        socket.write(`${t}\r`);
+      },
+      () => {
+        link.diagnostics.setFullySynced(true);
+        this.tracer.event(`connected to ${host}:${port} — init-sync handshake complete, fully synced`);
+      },
+    );
   }
 
   private onLine(host: string, port: number, line: string): void {
     this.tracer.receive(line);
+    // § RTI Capability Audit, Category C — advances the paced init-sync handshake on ANY
+    // received line, recognized or not (matching RTI's own observed behavior — Telnet has
+    // no per-command request id to correlate a specific reply to a specific query with).
+    const key = `${host}:${port}`;
+    this.initHandshakes.get(key)?.onLineReceived();
+    // § RTI Capability Audit, Category C.3 — same "any traffic counts as proof of life"
+    // reasoning resolves a pending heartbeat probe, not just a literal `PWON`/`PWSTANDBY`
+    // echo of the `PW?` that was sent.
+    const pendingHb = this.pendingHeartbeats.get(key);
+    if (pendingHb) {
+      clearTimeout(pendingHb.timer);
+      this.pendingHeartbeats.delete(key);
+      pendingHb.resolve({ ok: true, latencyMs: Date.now() - pendingHb.sentAt });
+    }
     const update = parseAvrLine(line);
     // § Production Bugfix Sprint ("no realtime feedback for any zone") — a line the
     // receiver genuinely sent but this codec doesn't recognize is exactly the kind of
@@ -621,6 +760,21 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         return;
       case "drc":
         this.patchMedia(host, port, "main", (c) => { c.drc = update.mode; });
+        return;
+      case "toneControlEnabled":
+        this.patchMedia(host, port, "main", (c) => { c.toneControlEnabled = update.on; });
+        return;
+      case "subwoofer":
+        this.patchMedia(host, port, "main", (c) => { c.subwoofer = update.on; });
+        return;
+      case "cinemaMode":
+        this.patchMedia(host, port, "main", (c) => { c.cinemaMode = update.mode; });
+        return;
+      case "cinemaEq":
+        this.patchMedia(host, port, "main", (c) => { c.cinemaEq = update.on; });
+        return;
+      case "loudnessManagement":
+        this.patchMedia(host, port, "main", (c) => { c.loudnessManagement = update.on; });
         return;
     }
   }

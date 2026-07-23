@@ -51,6 +51,23 @@ import type { AudioCapabilityConfig } from "./avr-capabilities.js";
  * encoding is now real evidence too, but wiring a 6-channel trim UI is separate,
  * UI-verification-bound scope not taken up here; tracked as a follow-up, not silently
  * dropped.
+ *
+ * § RTI Capability Audit, Category A (docs/architecture/RTI-Capability-Audit.md) — five more
+ * commands confirmed on the same official PDF, each a closed enum/boolean, none requiring a
+ * guessed encoding: `PSSWR ON`/`OFF` (subwoofer on/off, p.15); `PSMODE:MUSIC`/`CINEMA`/`GAME`/
+ * `PRO LOGIC` (Cinema/Music/Game/Pro Logic mode, p.12); `PSCINEMA EQ.ON`/`PSCINEMA EQ.OFF`
+ * (Cinema EQ, p.12 — note NO space before ON/OFF in the PDF's own worked example, unlike the
+ * `PSCINEMA EQ. ?` query form, which DOES have one; RTI's own driver uses a space for all three
+ * forms, a discrepancy noted here rather than silently resolved in either direction — the PDF's
+ * literal worked-example column is treated as authoritative since it's the one thing in either
+ * source explicitly labeled as the exact bytes to send); `PSLOM ON`/`OFF` (Loudness Management,
+ * p.12); `PSTONE CTRL ON`/`OFF` (Marantz-generation tone-control master switch, p.12 — already
+ * queried unconditionally in `avr-driver.ts`'s init burst, this pass only adds the write side and
+ * exposes it as a control). Gated behind a new `hasExtendedAudio` opt-in (subwoofer/cinema-mode/
+ * cinema-EQ/loudness — a distinct feature cluster from Audyssey calibration, see
+ * `denonCapabilityConfig`'s doc) except tone-control-on/off, which is folded into the existing
+ * `hasToneControl` flag since it's the master switch for the same tone-shaping subsystem
+ * bass/treble already live under.
  */
 
 /** Master-volume scale: Denon `MV` is 00–98. */
@@ -122,6 +139,12 @@ export const DENON_REFERENCE_LEVELS = [0, 5, 10, 15] as const;
 export const DENON_DYNAMIC_VOLUME_MODES = ["HEV", "MED", "LIT", "OFF"] as const;
 /** Dynamic Range Compression tokens (`PSDRC <mode>`, spec p.14) — fixed enum, verbatim. */
 export const DENON_DRC_MODES = ["AUTO", "LOW", "MID", "HI", "OFF"] as const;
+/** Cinema/Music/Game/Pro Logic mode tokens (`PSMODE:<mode>`, spec p.12) — fixed enum, verbatim.
+ * The spec notes legal values interact with the currently-selected DSP mode (e.g. GAME can mean
+ * PL2 or PL2x depending on a separate setting) — this codec doesn't pre-validate that
+ * interaction, matching the existing "never guess device-side legality, let the receiver reject
+ * or silently ignore an illegal combination" posture used elsewhere in this file. */
+export const DENON_CINEMA_MODES = ["MUSIC", "CINEMA", "GAME", "PRO LOGIC"] as const;
 
 /** Translate a Supreme command into AVR control tokens (null = unsupported). `zone`
  * selects which zone's token prefix to use — only "main" carries volume/tone/DSP, per
@@ -181,6 +204,22 @@ export function commandToAvr(
           if (typeof adv.drc === "string" && (DENON_DRC_MODES as readonly string[]).includes(adv.drc)) {
             tokens.push(`PSDRC ${adv.drc}`);
           }
+          // § RTI Capability Audit, Category A (see module doc). Same closed-enum pattern.
+          if (typeof adv.toneControlEnabled === "string") {
+            tokens.push(`PSTONE CTRL ${adv.toneControlEnabled === "on" ? "ON" : "OFF"}`);
+          }
+          if (typeof adv.subwoofer === "string") {
+            tokens.push(`PSSWR ${adv.subwoofer === "on" ? "ON" : "OFF"}`);
+          }
+          if (typeof adv.cinemaMode === "string" && (DENON_CINEMA_MODES as readonly string[]).includes(adv.cinemaMode)) {
+            tokens.push(`PSMODE:${adv.cinemaMode}`);
+          }
+          if (typeof adv.cinemaEq === "string") {
+            tokens.push(`PSCINEMA EQ.${adv.cinemaEq === "on" ? "ON" : "OFF"}`);
+          }
+          if (typeof adv.loudnessManagement === "string") {
+            tokens.push(`PSLOM ${adv.loudnessManagement === "on" ? "ON" : "OFF"}`);
+          }
           return tokens.length > 0 ? tokens : null;
         }
         default:
@@ -209,7 +248,12 @@ export type AvrUpdate =
   | { kind: "audysseyMode"; mode: string }
   | { kind: "referenceLevel"; db: number }
   | { kind: "dynamicVolume"; mode: string }
-  | { kind: "drc"; mode: string };
+  | { kind: "drc"; mode: string }
+  | { kind: "toneControlEnabled"; on: boolean }
+  | { kind: "subwoofer"; on: boolean }
+  | { kind: "cinemaMode"; mode: string }
+  | { kind: "cinemaEq"; on: boolean }
+  | { kind: "loudnessManagement"; on: boolean };
 
 /** Parse one AVR status token into a structured update (null = ignored/unknown). */
 export function parseAvrLine(line: string): AvrUpdate | null {
@@ -252,6 +296,19 @@ export function parseAvrLine(line: string): AvrUpdate | null {
     const mode = t.slice("PSDRC ".length);
     if ((DENON_DRC_MODES as readonly string[]).includes(mode)) return { kind: "drc", mode };
   }
+  // § RTI Capability Audit, Category A (see module doc). Same closed-enum pattern.
+  if (t === "PSTONE CTRL ON") return { kind: "toneControlEnabled", on: true };
+  if (t === "PSTONE CTRL OFF") return { kind: "toneControlEnabled", on: false };
+  if (t === "PSSWR ON") return { kind: "subwoofer", on: true };
+  if (t === "PSSWR OFF") return { kind: "subwoofer", on: false };
+  if (t.startsWith("PSMODE:")) {
+    const mode = t.slice("PSMODE:".length);
+    if ((DENON_CINEMA_MODES as readonly string[]).includes(mode)) return { kind: "cinemaMode", mode };
+  }
+  if (t === "PSCINEMA EQ.ON") return { kind: "cinemaEq", on: true };
+  if (t === "PSCINEMA EQ.OFF") return { kind: "cinemaEq", on: false };
+  if (t === "PSLOM ON") return { kind: "loudnessManagement", on: true };
+  if (t === "PSLOM OFF") return { kind: "loudnessManagement", on: false };
   if (t.startsWith("MS") && !t.startsWith("MSQUICK")) return { kind: "soundMode", mode: t.slice(2) };
   if (t === "Z2ON") return { kind: "zone2Power", on: true };
   if (t === "Z2OFF") return { kind: "zone2Power", on: false };
@@ -292,6 +349,11 @@ export function buildMediaState(cache: {
   referenceLevel?: number;
   dynamicVolume?: string;
   drc?: string;
+  toneControlEnabled?: boolean;
+  subwoofer?: boolean;
+  cinemaMode?: string;
+  cinemaEq?: boolean;
+  loudnessManagement?: boolean;
 }, artworkUrl: string | null = null): CapabilityState {
   const advanced: Record<string, unknown> = {};
   if (cache.volumeDb !== undefined) advanced.volumeDb = cache.volumeDb;
@@ -304,6 +366,11 @@ export function buildMediaState(cache: {
   if (cache.referenceLevel !== undefined) advanced.referenceLevel = cache.referenceLevel;
   if (cache.dynamicVolume !== undefined) advanced.dynamicVolume = cache.dynamicVolume;
   if (cache.drc !== undefined) advanced.drc = cache.drc;
+  if (cache.toneControlEnabled !== undefined) advanced.toneControlEnabled = cache.toneControlEnabled ? "on" : "off";
+  if (cache.subwoofer !== undefined) advanced.subwoofer = cache.subwoofer ? "on" : "off";
+  if (cache.cinemaMode !== undefined) advanced.cinemaMode = cache.cinemaMode;
+  if (cache.cinemaEq !== undefined) advanced.cinemaEq = cache.cinemaEq ? "on" : "off";
+  if (cache.loudnessManagement !== undefined) advanced.loudnessManagement = cache.loudnessManagement ? "on" : "off";
   return {
     kind: "media",
     playback: "idle",
@@ -338,11 +405,19 @@ export function buildMediaState(cache: {
  * doc). When declared, advertises the Dynamic EQ / Audyssey MultEQ mode / Reference Level
  * Offset / Dynamic Volume / DRC controls — every one a fixed, spec-quoted enum (never a
  * guessed numeric range), each rendered through the existing generic `advancedControls`
- * "select" mechanism (same one `sleepMinutes` already uses) with zero new UI code. */
+ * "select" mechanism (same one `sleepMinutes` already uses) with zero new UI code.
+ *
+ * `hasExtendedAudio` (§ RTI Capability Audit, Category A) — same installer-declared,
+ * opt-in-defaults-false nature as `hasAudyssey`, covering a distinct feature cluster
+ * (subwoofer on/off, Cinema/Music/Game/Pro Logic mode, Cinema EQ, Loudness Management) that
+ * isn't part of Audyssey calibration and shouldn't be bundled under that flag. Tone-control
+ * on/off is NOT part of this flag — it's folded into `hasToneControl` instead, since it's the
+ * master switch for the same bass/treble subsystem already gated there. */
 export function denonCapabilityConfig(opts: {
   hasZone2: boolean;
   hasToneControl: boolean;
   hasAudyssey?: boolean;
+  hasExtendedAudio?: boolean;
   renamedInputs?: Map<string, string>;
   hiddenInputs?: Set<string>;
 }): AudioCapabilityConfig {
@@ -378,6 +453,61 @@ export function denonCapabilityConfig(opts: {
           { id: "120", label: "120 min" },
         ],
       },
+      ...(opts.hasToneControl
+        ? [
+            {
+              key: "toneControlEnabled",
+              label: "Tone Control",
+              kind: "select" as const,
+              options: [
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ],
+            },
+          ]
+        : []),
+      ...(opts.hasExtendedAudio
+        ? [
+            {
+              key: "subwoofer",
+              label: "Subwoofer",
+              kind: "select" as const,
+              options: [
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ],
+            },
+            {
+              key: "cinemaMode",
+              label: "Cinema / Music / Game Mode",
+              kind: "select" as const,
+              options: [
+                { id: "MUSIC", label: "Music" },
+                { id: "CINEMA", label: "Cinema" },
+                { id: "GAME", label: "Game" },
+                { id: "PRO LOGIC", label: "Pro Logic" },
+              ],
+            },
+            {
+              key: "cinemaEq",
+              label: "Cinema EQ",
+              kind: "select" as const,
+              options: [
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ],
+            },
+            {
+              key: "loudnessManagement",
+              label: "Loudness Management",
+              kind: "select" as const,
+              options: [
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ],
+            },
+          ]
+        : []),
       ...(opts.hasAudyssey
         ? [
             {

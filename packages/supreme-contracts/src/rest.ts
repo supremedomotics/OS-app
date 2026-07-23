@@ -161,6 +161,9 @@ export const DeviceDriverDiagnostics = z.object({
   packetsReceived: z.number().int().nonnegative(),
   reconnectCount: z.number().int().nonnegative(),
   lastError: z.string().nullable(),
+  /** § RTI Capability Audit, Category C — true once the driver's initial state-sync
+   * handshake has fully drained; defaults true for drivers that don't track this. */
+  fullySynced: z.boolean(),
 });
 export type DeviceDriverDiagnostics = z.infer<typeof DeviceDriverDiagnostics>;
 
@@ -174,6 +177,15 @@ export type DeviceTraceEntry = z.infer<typeof DeviceTraceEntry>;
 
 export const DeviceTraceResponse = z.object({ trace: z.array(DeviceTraceEntry).nullable() });
 export type DeviceTraceResponse = z.infer<typeof DeviceTraceResponse>;
+
+/** POST /v1/devices/:id/raw-command (§ RTI Capability Audit, Category C.4) — devMode-only
+ * raw-token escape hatch. `token` is written verbatim to the device's wire connection by
+ * whichever driver owns it (only drivers that opt in via `sendRaw` support this at all —
+ * the route returns validation_failed otherwise). No response payload beyond success/failure
+ * since the resulting state change (if any) arrives the normal way, through the device's own
+ * state stream. */
+export const DeviceRawCommandRequest = z.object({ token: z.string().min(1).max(256) });
+export type DeviceRawCommandRequest = z.infer<typeof DeviceRawCommandRequest>;
 
 /** POST /v1/devices/:id/capabilities/refresh (§ Capability Refresh) — re-query the
  * owning driver in place (never recreates the device, never touches its room

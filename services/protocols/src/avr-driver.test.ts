@@ -27,6 +27,12 @@ function startFakeAvr(): Promise<{ server: Server; port: number; received: strin
     const server = createServer((sock: Socket) => {
       sockets.add(sock);
       sock.on("close", () => sockets.delete(sock));
+      // § RTI Capability Audit, Category C — the paced init-sync handshake means writes to
+      // this fake server can still be in flight right as a test's own driver.disconnect()
+      // destroys the client socket; without this handler that abrupt close surfaces here as
+      // an uncaught ECONNRESET (a test-harness gap, not a production code issue — the real
+      // client-side `TcpLineTransport` already has its own `socket.on("error", …)` handler).
+      sock.on("error", () => {});
       sock.setEncoding("utf8");
       let buf = "";
       sock.on("data", (chunk: string) => {
@@ -196,7 +202,9 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
       advanced: { bass: 2, treble: -1, soundMode: "STEREO" },
     });
     const state = (await ev).state as { advanced: Record<string, unknown> };
-    expect(state.advanced).toEqual({ volumeDb: -2, bass: 2, treble: -1, soundMode: "STEREO" });
+    // toneControlEnabled is already present because PSTONE CTRL ? is queried unconditionally
+    // in the init burst (§ RTI Capability Audit, Category A) — the fake receiver answers it.
+    expect(state.advanced).toEqual({ volumeDb: -2, bass: 2, treble: -1, soundMode: "STEREO", toneControlEnabled: "on" });
     expect(avr.received).toContain("PSBAS 52");
     expect(avr.received).toContain("PSTRE 49");
     expect(avr.received).toContain("MSSTEREO");
@@ -220,6 +228,10 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     const after = driver.getDiagnostics(dev)!;
     expect(after.lastCommand).toBe("ZMON");
     expect(after.lastCommandAt).not.toBeNull();
+  });
+
+  it("fullySynced becomes true once the paced init-sync handshake fully drains (§ RTI Capability Audit, Category C)", async () => {
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
   });
 
   it("threads a discovered unit's model/serial (from bindConfig) into Diagnostics — never fabricated when absent, real when supplied (§ Production Bugfix Sprint)", async () => {
@@ -784,6 +796,63 @@ describe("AvrProtocolDriver — HTTP AppCommand input enrichment (§ Universal A
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("AvrProtocolDriver — heartbeat() (§ RTI Capability Audit, Category C.3)", () => {
+  it("round-trips a real PW? probe with a measured latency", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({});
+    const dev = "device-avr-heartbeat" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
+    const result = await driver.heartbeat(dev);
+    expect(result.ok).toBe(true);
+    expect(typeof result.latencyMs).toBe("number");
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(avr.received).toContain("PW?");
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("resolves { ok: false } on an unbound device rather than throwing", async () => {
+    const driver = new AvrProtocolDriver({});
+    await expect(driver.heartbeat("device-nope" as DeviceId)).resolves.toEqual({ ok: false, latencyMs: null });
+  });
+});
+
+describe("AvrProtocolDriver — sendRaw() (§ RTI Capability Audit, Category C.4)", () => {
+  it("writes the raw token verbatim to the wire, bypassing commandToAvr entirely", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({});
+    const dev = "device-avr-raw" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
+
+    await driver.sendRaw(dev, "MVUP");
+    await vi.waitFor(() => expect(avr.received).toContain("MVUP"));
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("throws instead of silently no-op'ing for an unbound device", async () => {
+    const driver = new AvrProtocolDriver({});
+    await driver.connect();
+    await expect(driver.sendRaw("device-nope" as DeviceId, "MVUP")).rejects.toThrow(/not bound/);
+  });
+
+  it("throws instead of silently no-op'ing once the driver is disconnected", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({});
+    const dev = "device-avr-raw-disconnected" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.disconnect();
+    await expect(driver.sendRaw(dev, "MVUP")).rejects.toThrow(/driver is disconnected/);
+    await new Promise<void>((r) => avr.server.close(() => r()));
   });
 });
 

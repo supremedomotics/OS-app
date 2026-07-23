@@ -3,11 +3,13 @@
 > The real, runtime `services/protocols/src/av-sdk/` module. Companion to
 > [AV-Adapter-Development-Guide.md](./AV-Adapter-Development-Guide.md) (how to build a new
 > adapter against it), [AVR-Universal-Capability-Matrix.md](./AVR-Universal-Capability-Matrix.md)
-> (the full per-capability sourcing/evidence record), and the architecture-verification +
-> duplication-audit history that produced it (see `SESSION_HANDOFF.md` for the full trail: a
-> prior turn confirmed no runtime SDK existed, only documentation claiming one; a full
-> evidence-based audit then found and scoped the real, extractable duplication this module
-> closes).
+> (the full per-capability sourcing/evidence record),
+> [Universal-AVR-SDK-Roadmap.md](./Universal-AVR-SDK-Roadmap.md) (the engine-level roadmap —
+> what's ✓/Partial/Planned across the SDK as a whole, and the honest Denon/Yamaha/Anthem reuse
+> mapping), and the architecture-verification + duplication-audit history that produced it (see
+> `SESSION_HANDOFF.md` for the full trail: a prior turn confirmed no runtime SDK existed, only
+> documentation claiming one; a full evidence-based audit then found and scoped the real,
+> extractable duplication this module closes).
 
 ## What this is, in one sentence
 

@@ -356,3 +356,53 @@ four Category C architecture patterns — 9 of 16 total). 3 items need one more 
 evidence before implementation should proceed (Category B). 4 items remain genuinely unconfirmed
 and are correctly left unbuilt (Category D) — consistent with this project's standing rule to
 never guess a wire command, doubly important for anything that writes state to real hardware.
+
+---
+
+## Phase 1–4 status update (Category A shipped, Category C shipped, Category B verification)
+
+Category A (5 items) and Category C (all four items — C.1/C.2 as a shared `InitHandshake`
+primitive, C.3 as `AvrProtocolDriver.heartbeat()`, C.4 as the devMode-gated raw-command escape
+hatch) are now implemented, tested, and wired end-to-end — see `services/protocols/src/avr-codec.ts`,
+`services/protocols/src/av-sdk/init-handshake.ts`, `services/protocols/src/avr-driver.ts`, and the
+`POST /v1/devices/:id/raw-command` gateway route. Category D remains correctly unbuilt; nothing new
+changes that assessment.
+
+**Category B ("use a real Denon AVR to verify") could not be performed this session.** This
+sandboxed Claude Code environment has no LAN reachability to any physical device — there is no
+real Denon/Marantz receiver on the network this container can reach, and no such hardware exists
+in this environment to connect to. Claiming to have run a live capture against real hardware would
+violate this project's "never fabricate capabilities" rule (`CLAUDE.md`, Development Principles);
+B.1/B.2/B.3 stay exactly as classified above: plausible by structural analogy to already-confirmed
+sibling commands, not independently evidenced, not implemented.
+
+### A guided capture procedure the user (or an installer) can run
+
+The C.4 raw-command escape hatch and the existing Protocol Trace panel, both built this session,
+are the concrete tools for someone with physical access to a unit to close each Category B gap
+without writing any code:
+
+1. Commission the real receiver in SupremeOS normally (Telnet, port 23) and open its device page
+   with `devMode` enabled (installer/developer account).
+2. Open **Protocol Trace** — every raw send/receive line is now logged automatically.
+3. Open **Raw Command** and send each probe token below, one at a time, watching Protocol Trace
+   for the reply:
+   - **B.1 (Zone 3/4)**: send `Z3?` and `Z4?`. A real reply in the `Z3.../Z4...` shape (mirroring
+     the confirmed `Z2` grammar) confirms the zone exists on this model and promotes B.1 → A for
+     that token family. Silence or an error/ignore response is equally informative — it means this
+     unit doesn't expose Zone 3/4 over Telnet, which is itself a useful negative result.
+   - **B.2 (extra channel trims)**: send `CVSW2 ?`, `CVSBL ?`, `CVSBR ?`, `CVSB ?`, `CVFHL ?`,
+     `CVFHR ?`, `CVFWL ?`, `CVFWR ?`. A reply in the same `CV<channel> <nn>` shape already confirmed
+     for the 6 base channels confirms the encoding generalizes for that specific channel code.
+   - **B.3 (Tone Defeat)**: send `PSTONE DEFEAT ?`. A reply distinct from `PSTONE CTRL`'s own reply
+     confirms it's a genuinely separate command (not just an older name for the same toggle); no
+     reply at all is evidence it's the wrong token for this generation of unit.
+4. Copy the exact reply lines (or lack thereof) out of Protocol Trace and report them back — that
+   raw capture is what promotes an item from Category B to Category A in this document, per the
+   classification rules at the top of this file. The same procedure works for any future Category D
+   item too, if a specific unit is ever available to probe.
+
+This keeps the "never guess a wire command" rule intact: no B-category command is ever sent by a
+driver automatically or by default — only manually, once, by someone knowingly probing their own
+hardware through the explicit devMode escape hatch, with the reply inspected before anything is
+promoted to a real, driver-encoded capability.

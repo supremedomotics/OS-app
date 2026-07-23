@@ -160,7 +160,50 @@
 - **Complexity:** Small (verification only, no new code expected unless something's found).
 - **Status:** Not started. One specific open question to resolve while doing this: does a bare
   Denon `Z2?` query echo Zone 2's current SOURCE as well as power on real hardware (the codec
-  only sends `Z2?`/`Z2MU?` on reconnect, no explicit zone2-source query token)?
+  only sends `Z2?`/`Z2MU?` on reconnect, no explicit zone2-source query token)? **A concrete,
+  written guided-capture procedure now exists** for the three RTI Capability Audit Category B
+  items specifically (Zone 3/4, 8 extra channel-trim targets, Tone Defeat) —
+  `RTI-Capability-Audit.md`'s closing section: with `devMode` on, send each probe token via the
+  new Raw Command box and read the reply in the Protocol Trace panel. No code changes needed to
+  run it, only physical access to a unit.
+
+### Live Playwright verification of the Raw Command UI section
+- **Description:** `RawCommandSection` (`device-detail-sections.tsx`, wired into
+  `media/detail.tsx` as a devMode-gated sibling of Diagnostics/Protocol Trace) was built this
+  session — typecheck/build clean, backed by a tested gateway route
+  (`raw-command.e2e.test.ts`) — but never opened in a real browser.
+- **Reason:** no running dev server/backend was available in this sandbox this session; per
+  this project's UI verification standard, that's a real gap, not a completed item.
+- **Dependencies:** `hub-compose` running (or the local dev server), an AVR device (real or the
+  fake in-process test server) bound as native.
+- **Complexity:** Small — verification only.
+- **Status:** Not started.
+
+### Wire `heartbeat()` into an automatic keepalive scheduler
+- **Description:** `AvrProtocolDriver.heartbeat()` and `HeosProtocolDriver.heartbeat()` both
+  exist, are tested, and return `{ ok, latencyMs }` — but nothing calls either one
+  automatically. No scheduler, no interval, no gateway route, no UI affordance.
+- **Reason:** flagged as "Partial" (not "✓") for the Keepalive Framework engine in
+  `docs/architecture/Universal-AVR-SDK-Roadmap.md` — the primitive exists, the framework
+  around it doesn't.
+- **Dependencies:** none — both `heartbeat()` methods are ready to be called.
+- **Complexity:** Small-Medium (interval scheduler + a health-degradation signal + surfacing it
+  somewhere a user/installer can see it).
+- **Status:** Not started.
+
+### Raise Yamaha's real SDK-primitive reuse
+- **Description:** `YamahaProtocolDriver` only adopted `state-cache.ts` from the AV SDK — it
+  never migrated onto `HttpPollClient`/`AdaptivePoller` (built for and currently only used by
+  AVR's HTTP AppCommand layer), and has no `heartbeat()`.
+- **Reason:** documented honestly in `Universal-AVR-SDK-Roadmap.md`'s Yamaha mapping section as
+  a concrete, scoped 3-step follow-up, deliberately not attempted this session (Yamaha's
+  existing polling is working and tested; force-migrating "for consistency alone" was
+  explicitly rejected as unjustified churn in the original SDK extraction pass).
+- **Dependencies:** none.
+- **Complexity:** Medium (migrate `getJson()`/`diagnosticsFor()`/`hostFeaturesInFlight` onto
+  `HttpPollClient`; adopt `AdaptivePoller` for the existing zone-sync loop; add `heartbeat()`
+  once a real Yamaha no-op-equivalent command is evidenced from official docs).
+- **Status:** Not started.
 
 ### Small, named gaps found by the Universal AV Driver SDK production audit
 - **Description:** Three small, real, unaddressed gaps confirmed during the production-hardening
@@ -301,6 +344,24 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **RTI Capability Audit, Phases 1–4** — executed the user's 4-phase instruction against the
+  prior `RTI-Capability-Audit.md` A/B/C/D classification. Phase 1: all 5 Category A commands
+  shipped (Subwoofer, Cinema/Music/Game/Pro Logic mode, Cinema EQ, Loudness Management, Tone
+  Control On/Off — all official-PDF-cited). Phase 2: all 4 Category C application-layer patterns
+  shipped — a new `InitHandshake` primitive (`av-sdk/init-handshake.ts`) for paced, response-
+  driven init-sync plus a new `fullySynced` diagnostics field (C.1/C.2); `AvrProtocolDriver
+  .heartbeat()` (C.3); a devMode-gated raw-command escape hatch threaded through 6 backend touch
+  points to a new `POST /v1/devices/:id/raw-command` route plus a new `RawCommandSection` UI
+  (C.4). Two real race-condition bugs were found and fixed via test-driven debugging while
+  wiring this (a test-harness ECONNRESET gap, and a genuine `fullySynced` default-value race in
+  `bind()`). Phase 3: an honest, non-fabricated response that this sandbox has no real Denon
+  hardware to verify Category B against, plus a concrete guided-capture procedure using the new
+  Raw Command + Protocol Trace tooling for someone with physical access to run themselves. Phase
+  4: `docs/architecture/Universal-AVR-SDK-Roadmap.md` — an engine-level (not brand-level)
+  roadmap across 17 engines, each cited against real code, plus a Denon/Yamaha/Anthem reuse
+  mapping that deliberately corrects the user's own "reuses 95%" framing with real, measured
+  numbers (Yamaha's actual SDK-primitive reuse is low) rather than repeating an unverified
+  estimate. Full monorepo `pnpm build`/`typecheck`/`test` green.
 - **Universal AV SDK refactor** (AVR/HEOS/Yamaha → thin protocol adapters) — a new internal-only
   `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`'s
   `recordCapabilityState()`) extracting the real, evidence-backed duplication found by a prior

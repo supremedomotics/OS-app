@@ -64,6 +64,11 @@ export class DriverDiagnosticsTracker {
    * one real round-trip has been measured (never a fabricated starting value). */
   private latencySamples: number[] = [];
   private trace: DriverTraceEntry[] = [];
+  /** § RTI Capability Audit, Category C — defaults `true` (no "still syncing" window to
+   * report) so a driver that never calls `setFullySynced` behaves exactly as before this
+   * field existed. A driver that opts into the paced-handshake primitive
+   * (`InitHandshake`) sets this `false` on connect and `true` once the handshake drains. */
+  private fullySynced = true;
 
   /** A command/request was written to the wire. */
   recordSend(command: string): void {
@@ -122,6 +127,12 @@ export class DriverDiagnosticsTracker {
     this.lastError = message;
   }
 
+  /** § RTI Capability Audit, Category C — the driver calls this `false` when a fresh
+   * connect/reconnect's init-sync handshake starts, and `true` once it fully drains. */
+  setFullySynced(value: boolean): void {
+    this.fullySynced = value;
+  }
+
   snapshot(status: DriverConnectionStatus, info: DriverDiagnosticsStaticInfo): DriverDiagnosticsSnapshot {
     return {
       connectionStatus: status,
@@ -142,6 +153,7 @@ export class DriverDiagnosticsTracker {
       packetsReceived: this.packetsReceived,
       reconnectCount: this.reconnectCount,
       lastError: this.lastError,
+      fullySynced: this.fullySynced,
     };
   }
 }

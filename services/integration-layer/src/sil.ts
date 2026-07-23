@@ -206,6 +206,13 @@ export class SupremeIntegrationLayer {
     return this.adapter.getTrace ? this.adapter.getTrace(deviceId) : null;
   }
 
+  /** § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch. Throws
+   * (validation_failed) when the underlying adapter/driver doesn't support one. */
+  async sendRaw(deviceId: DeviceId, token: string): Promise<void> {
+    if (!this.adapter.sendRaw) throw new SupremeError("validation_failed", `device ${deviceId}'s backend does not support raw commands`);
+    await this.adapter.sendRaw(deviceId, token);
+  }
+
   /** § Capability Refresh — ask the owning driver to re-query whatever it can
    * genuinely re-discover, in place. A no-op for backends/drivers with nothing to
    * re-query (never a throw). */

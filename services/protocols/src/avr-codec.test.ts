@@ -87,3 +87,94 @@ describe("avr-codec: denonCapabilityConfig hasAudyssey gating", () => {
     expect(keys).toEqual(expect.arrayContaining(["dynamicEq", "audysseyMode", "referenceLevel", "dynamicVolume", "drc"]));
   });
 });
+
+/**
+ * § RTI Capability Audit, Category A (docs/architecture/RTI-Capability-Audit.md) — Subwoofer
+ * On/Off, Cinema/Music/Game/Pro Logic mode, Cinema EQ, Loudness Management, and Tone Control
+ * on/off. All five confirmed via the same official Denon PDF (Ver.8.6.0, p.12/p.15).
+ */
+describe("avr-codec: RTI Capability Audit Category A commands", () => {
+  it("encodes Tone Control on/off", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { toneControlEnabled: "on" } }, null)).toEqual(["PSTONE CTRL ON"]);
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { toneControlEnabled: "off" } }, null)).toEqual(["PSTONE CTRL OFF"]);
+  });
+
+  it("encodes Subwoofer on/off", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { subwoofer: "on" } }, null)).toEqual(["PSSWR ON"]);
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { subwoofer: "off" } }, null)).toEqual(["PSSWR OFF"]);
+  });
+
+  it("encodes Cinema/Music/Game/Pro Logic mode, rejecting unknown values", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { cinemaMode: "GAME" } }, null)).toEqual(["PSMODE:GAME"]);
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { cinemaMode: "PRO LOGIC" } }, null)).toEqual(["PSMODE:PRO LOGIC"]);
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { cinemaMode: "BOGUS" } }, null)).toBeNull();
+  });
+
+  it("encodes Cinema EQ on/off with no space before ON/OFF, matching the PDF's literal worked example", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { cinemaEq: "on" } }, null)).toEqual(["PSCINEMA EQ.ON"]);
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { cinemaEq: "off" } }, null)).toEqual(["PSCINEMA EQ.OFF"]);
+  });
+
+  it("encodes Loudness Management on/off", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { loudnessManagement: "on" } }, null)).toEqual(["PSLOM ON"]);
+  });
+
+  it("never encodes Category A tokens for zone2 (main-zone only)", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { subwoofer: "on" } }, null, "zone2")).toBeNull();
+  });
+
+  it("parses PSTONE CTRL echoes", () => {
+    expect(parseAvrLine("PSTONE CTRL ON")).toEqual({ kind: "toneControlEnabled", on: true });
+    expect(parseAvrLine("PSTONE CTRL OFF")).toEqual({ kind: "toneControlEnabled", on: false });
+  });
+
+  it("parses PSSWR echoes", () => {
+    expect(parseAvrLine("PSSWR ON")).toEqual({ kind: "subwoofer", on: true });
+    expect(parseAvrLine("PSSWR OFF")).toEqual({ kind: "subwoofer", on: false });
+  });
+
+  it("parses PSMODE: echoes, ignoring unrecognized modes", () => {
+    expect(parseAvrLine("PSMODE:CINEMA")).toEqual({ kind: "cinemaMode", mode: "CINEMA" });
+    expect(parseAvrLine("PSMODE:NOTAREALMODE")).toBeNull();
+  });
+
+  it("parses PSCINEMA EQ echoes", () => {
+    expect(parseAvrLine("PSCINEMA EQ.ON")).toEqual({ kind: "cinemaEq", on: true });
+    expect(parseAvrLine("PSCINEMA EQ.OFF")).toEqual({ kind: "cinemaEq", on: false });
+  });
+
+  it("parses PSLOM echoes", () => {
+    expect(parseAvrLine("PSLOM ON")).toEqual({ kind: "loudnessManagement", on: true });
+    expect(parseAvrLine("PSLOM OFF")).toEqual({ kind: "loudnessManagement", on: false });
+  });
+
+  it("does not misparse pre-existing tokens after adding the new PSMODE:/PSCINEMA/PSLOM/PSSWR/PSTONE CTRL prefixes", () => {
+    expect(parseAvrLine("PSMULTEQ:AUDYSSEY")).toEqual({ kind: "audysseyMode", mode: "AUDYSSEY" });
+    expect(parseAvrLine("MSSTEREO")).toEqual({ kind: "soundMode", mode: "STEREO" });
+  });
+});
+
+describe("avr-codec: denonCapabilityConfig hasExtendedAudio / tone-control-enabled gating", () => {
+  it("omits Category A advancedControls when hasExtendedAudio is false (default) and hasToneControl is false", () => {
+    const config = denonCapabilityConfig({ hasZone2: false, hasToneControl: false });
+    const keys = (config.advancedControls ?? []).map((c) => c.key);
+    expect(keys).not.toContain("subwoofer");
+    expect(keys).not.toContain("cinemaMode");
+    expect(keys).not.toContain("cinemaEq");
+    expect(keys).not.toContain("loudnessManagement");
+    expect(keys).not.toContain("toneControlEnabled");
+  });
+
+  it("advertises toneControlEnabled when hasToneControl is true, independent of hasExtendedAudio", () => {
+    const config = denonCapabilityConfig({ hasZone2: false, hasToneControl: true });
+    const keys = (config.advancedControls ?? []).map((c) => c.key);
+    expect(keys).toContain("toneControlEnabled");
+    expect(keys).not.toContain("subwoofer");
+  });
+
+  it("advertises subwoofer/cinemaMode/cinemaEq/loudnessManagement when hasExtendedAudio is true", () => {
+    const config = denonCapabilityConfig({ hasZone2: false, hasToneControl: false, hasExtendedAudio: true });
+    const keys = (config.advancedControls ?? []).map((c) => c.key);
+    expect(keys).toEqual(expect.arrayContaining(["subwoofer", "cinemaMode", "cinemaEq", "loudnessManagement"]));
+  });
+});

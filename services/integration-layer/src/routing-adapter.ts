@@ -129,6 +129,13 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     return this.ha.getTrace ? this.ha.getTrace(deviceId) : null;
   }
 
+  /** § RTI Capability Audit, Category C.4 — same routing as {@link getArtwork}. */
+  async sendRaw(deviceId: DeviceId, token: string): Promise<void> {
+    if (this.native.manages(deviceId)) return this.native.sendRaw(deviceId, token);
+    if (this.ha.sendRaw) return this.ha.sendRaw(deviceId, token);
+    throw new SupremeError("validation_failed", `device ${deviceId}'s adapter does not support raw commands`);
+  }
+
   /** § Capability Refresh — same routing as {@link getArtwork}: native-engine feature
    * first. Without this, a routed device's refresh request would silently no-op here
    * (this class's own missing method, not the underlying native adapter's) even
