@@ -28,7 +28,28 @@
  * Album art is NOT parsed from any XML at all — `albumArtUrl()` builds a literal, real,
  * static URL string (confirmed via `denonavr/const.py`'s actual string constants), no
  * schema involved.
+ *
+ * § Denon Cheat Sheet Audit — also covers the receiver's legacy, pre-`AppCommand.xml`
+ * HTTP interface (port 80 on units that predate the 2016 `AppCommand.xml` generation).
+ * `DEVICE_INFO_URL` and `MAIN_ZONE_STATUS_URL` are both real, independently confirmed via
+ * `denonavr/const.py`/`foundation.py`'s actual source: `denonavr` uses the former to
+ * detect which HTTP generation a unit answers on, and the latter as its OWN fallback
+ * full-zone-state read for units that don't support `AppCommand.xml` at all. See
+ * `docs/architecture/Denon-CheatSheet-Audit.md` for the full evidence trail — this was
+ * NOT sourced from any cheat sheet, only independently re-derived from `denonavr`'s
+ * source and cross-checked against this project's own already-shipped Telnet codec.
  */
+
+/** Real, independently confirmed via `denonavr/foundation.py`'s actual
+ * `async_identify_receiver()`: a small, static XML document every AVR-X-class unit
+ * serves, used purely to detect which HTTP generation (and thus which port) a unit
+ * answers on. Not used for anything else — no field on it is parsed by this codec. */
+export const DEVICE_INFO_URL = "/goform/Deviceinfo.xml";
+
+/** Real, independently confirmed via `denonavr/const.py`'s `MAINZONE_URL` constant — a
+ * sibling of `STATUS_URL`, used by `denonavr` as its own fallback full-zone-state read
+ * for receivers that do NOT support `AppCommand.xml` (pre-2016 units). */
+export const MAIN_ZONE_STATUS_URL = "/goform/formMainZone_MainZoneXml.xml";
 
 /** Real request-body shape confirmed via `denonavr/api.py`'s actual
  * `prepare_appcommand_body()`: `<tx><cmd id="…">CommandText</cmd>…</tx>`. Denon's
@@ -119,4 +140,45 @@ export function parseDeletedSource(xml: string): Set<string> {
  * that could be "wrong" the way a guessed tag name could be. */
 export function albumArtUrl(host: string, port: number): string {
   return `http://${host}:${port}/img/album%20art_S.png`;
+}
+
+/** Reads `<ParentTag><value>TEXT</value>...</ParentTag>` — the legacy status XML's one
+ * consistent shape (confirmed via `denonavr`'s own `./Power/value`-style search strings
+ * in `foundation.py`/`volume.py`/`input.py`). Returns `null` for a missing or empty
+ * value rather than an empty string, so callers never mistake "absent" for "blank". */
+function findNestedValue(xml: string, parentTag: string): string | null {
+  const m = new RegExp(`<${parentTag}>\\s*<value>([^<]*)<\\/value>`, "i").exec(xml);
+  const text = m?.[1]?.trim();
+  return text ? text : null;
+}
+
+/** § Denon Cheat Sheet Audit — the legacy full-zone-state snapshot's four fields with an
+ * independently-confirmed shape: power, mute, master volume (dB), and the current input.
+ * Deliberately narrow — does NOT read the embedded partial input-rename list this
+ * endpoint also carries, because `denonavr` itself never treats that list as a rename
+ * source (its own primary mechanism stays `GetRenameSource`/`GetDeletedSource`, gated to
+ * 2016+ units) and its own text is explicit that the list is incomplete. See
+ * `docs/architecture/Denon-CheatSheet-Audit.md` for why that specific field is
+ * documented-only rather than implemented. */
+export interface MainZoneStatus {
+  power: "ON" | "STANDBY" | null;
+  muted: boolean | null;
+  volumeDb: number | null;
+  input: string | null;
+}
+
+export function parseMainZoneStatus(xml: string): MainZoneStatus {
+  const powerRaw = findNestedValue(xml, "Power") ?? findNestedValue(xml, "ZonePower");
+  const power = powerRaw === "ON" || powerRaw === "STANDBY" ? powerRaw : null;
+  const muteRaw = findNestedValue(xml, "Mute");
+  const muted = muteRaw === null ? null : muteRaw.toLowerCase() === "on";
+  const volumeRaw = findNestedValue(xml, "MasterVolume");
+  const volumeDb = volumeRaw === null ? null : Number(volumeRaw);
+  const input = findNestedValue(xml, "InputFuncSelect");
+  return {
+    power,
+    muted,
+    volumeDb: volumeDb !== null && Number.isFinite(volumeDb) ? volumeDb : null,
+    input,
+  };
 }

@@ -205,6 +205,53 @@
   once a real Yamaha no-op-equivalent command is evidenced from official docs).
 - **Status:** Not started.
 
+### Legacy NetAudio now-playing metadata (Denon Cheat Sheet Audit bonus finding)
+- **Description:** `docs/architecture/Denon-CheatSheet-Audit.md` found — while independently
+  verifying the cheat sheet's claims, not from the cheat sheet itself — that `denonavr`'s source
+  confirms a real, working now-playing metadata path (`formNetAudio_StatusXml.xml`'s `szLine`
+  array) for its own legacy "NetAudio"-category sources (AirPlay, Media Server, iPod/USB,
+  Bluetooth — a pre-HEOS streaming module, distinct from modern HEOS). This directly extends,
+  not contradicts, `AVR-Universal-Capability-Matrix.md`'s existing "no verified source for
+  non-HEOS inputs" finding, which was scoped to Tuner/USB checked against the 2016+
+  `AppCommand.xml` path specifically.
+- **Reason:** genuinely new, real, evidenced capability at the same evidentiary tier as the
+  already-shipped `GetRenameSource`/`GetDeletedSource` (single independently-read OSS source,
+  no official PDF, matching this project's own established bar for that kind of evidence) — but
+  out of scope for a cheat-sheet audit pass and needs its own design decision (a second,
+  legacy-only metadata source class feeding the existing Metadata Engine).
+- **Dependencies:** none.
+- **Complexity:** Medium (new parser in `avr-http-codec.ts`, a decision on how it composes with
+  the existing HEOS-routed metadata path in `MediaCache`, tests).
+- **Status:** Not started.
+
+### Verify the pre-2016 legacy rename-list fallback on real hardware
+- **Description:** `Denon-CheatSheet-Audit.md` classified the legacy full-zone-state snapshot's
+  embedded partial input-rename list as "Needs Hardware Verification" rather than implementing
+  it as an equal-confidence fallback to the already-shipped `GetRenameSource`/`GetDeletedSource`
+  mechanism — both the cheat sheet's own text and `denonavr`'s source (which never uses it as a
+  rename source either) flag it as incomplete.
+- **Reason:** a real pre-2016 unit is needed to determine how incomplete it actually is in
+  practice before ever surfacing it as installer-facing `device_reported` data.
+- **Dependencies:** a real pre-2016 (port-80) Denon/Marantz receiver.
+- **Complexity:** Small (verification only) — procedure is written in
+  `Denon-CheatSheet-Audit.md`'s "Hardware verification tasks created" section: with `devMode` on,
+  trigger a refresh/reconnect and compare the driver's `MainZoneStatus.input` read against the
+  unit's real current input name.
+- **Status:** Not started.
+
+### An HTTP-request equivalent of the Raw Command devMode tool
+- **Description:** The existing Raw Command escape hatch (`AvrProtocolDriver.sendRaw()`, §
+  RTI Capability Audit Category C.4) only writes to the Telnet socket. There is no equivalent
+  devMode tool for sending an arbitrary one-off HTTP request and inspecting the response.
+- **Reason:** surfaced while trying to write a hardware-verification task for the Denon Cheat
+  Sheet Audit's uncorroborated generic-keypress-endpoint finding — verifying it today requires a
+  manual, out-of-band request (browser/`curl`) run by whoever has the hardware, since the
+  in-app tooling doesn't cover it. Recorded honestly rather than silently worked around.
+- **Dependencies:** none.
+- **Complexity:** Small-Medium (mirrors the existing Raw Command route/UI shape — a devMode-gated
+  method/route/UI-input triple — but for an HTTP GET/POST instead of a Telnet write).
+- **Status:** Not started.
+
 ### Small, named gaps found by the Universal AV Driver SDK production audit
 - **Description:** Three small, real, unaddressed gaps confirmed during the production-hardening
   audit (`docs/architecture/avr-framework-production-audit.md`, Phase 1/2/4/10): (1) Yamaha's
@@ -344,6 +391,31 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
+  Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
+  project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the
+  user specified. Nothing from the cheat sheet's text/tables/examples/code was copied — every
+  finding was independently re-derived by fetching and reading `denonavr`'s real source
+  (MIT-licensed) and SupremeOS's own existing Telnet/AppCommand code, with citations pointing to
+  those, never the cheat sheet. New `docs/architecture/Denon-CheatSheet-Audit.md`: a full
+  per-capability table (official-protocol status / HEOS status / implemented / missing /
+  hardware-verification-needed / recommendation / confidence), a gap matrix, and an SDK-layer
+  placement review. Net result: most of the cheat sheet's write-path claims were already fully
+  redundant with the already-shipped, universal Telnet control path; several things SupremeOS
+  already does (renamed inputs, volume shown as dB) are independently confirmed to already be
+  *better* than the cheat sheet's own described workflow; the one genuine, previously-silent gap
+  it led to finding — pre-2016 Denon/Marantz units getting zero HTTP-sourced data (no album art,
+  no renamed inputs) because the driver assumed every unit answered on port 8080 — was
+  implemented: a new best-effort, cached-per-host `resolveHttpPort()`/`detectHttpGeneration()`
+  probe (independently confirmed via `denonavr/foundation.py`'s own real `async_identify_
+  receiver()`), a new legacy full-zone-state XML parser (`avr-http-codec.ts`'s
+  `parseMainZoneStatus()`, used only for diagnostics, never as an equal-confidence rename
+  source), and a fix so `getArtwork()` uses the detected port. An uncorroborated finding (a
+  generic HTTP keypress-simulation endpoint) and an explicitly-unreliable one (HTML-scraping a
+  SETUP page) were documented only, not implemented, per the stated evidence rules. A bonus
+  finding unrelated to the cheat sheet itself (legacy `formNetAudio_StatusXml.xml` now-playing
+  metadata for pre-HEOS NetAudio sources) was documented and recorded as a follow-up, not
+  implemented this pass. Full monorepo `pnpm build`/`typecheck`/`test` green.
 - **RTI Capability Audit, Phases 1–4** — executed the user's 4-phase instruction against the
   prior `RTI-Capability-Audit.md` A/B/C/D classification. Phase 1: all 5 Category A commands
   shipped (Subwoofer, Cinema/Music/Game/Pro Logic mode, Cinema EQ, Loudness Management, Tone

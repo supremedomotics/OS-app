@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { albumArtUrl, buildAppCommandRequests, parseDeletedSource, parseRenameSource } from "./avr-http-codec.js";
+import {
+  albumArtUrl,
+  buildAppCommandRequests,
+  DEVICE_INFO_URL,
+  MAIN_ZONE_STATUS_URL,
+  parseDeletedSource,
+  parseMainZoneStatus,
+  parseRenameSource,
+} from "./avr-http-codec.js";
 
 // Fixture XML shapes mirror the REAL structure confirmed by fetching and reading
 // `denonavr/input.py`'s actual parsing code this session — not guessed.
@@ -114,5 +122,56 @@ describe("parseDeletedSource (§ Universal AVR SDK) — real shape from denonavr
 describe("albumArtUrl (§ Universal AVR SDK) — a literal URL builder, no XML/schema involved", () => {
   it("builds the real, confirmed-static album-art path", () => {
     expect(albumArtUrl("192.168.1.50", 8080)).toBe("http://192.168.1.50:8080/img/album%20art_S.png");
+  });
+});
+
+// Fixture mirrors the REAL <ParentTag><value>TEXT</value></ParentTag> shape confirmed
+// via denonavr's own `./Power/value`-style search strings in foundation.py/volume.py/
+// input.py — built from scratch against that confirmed field list, not copied from any
+// third-party cheat sheet (see docs/architecture/Denon-CheatSheet-Audit.md).
+const MAIN_ZONE_STATUS_XML = `<?xml version="1.0" encoding="utf-8" ?>
+<item>
+<Power><value>ON</value></Power>
+<ZonePower><value>ON</value></ZonePower>
+<InputFuncSelect><value>DVD</value></InputFuncSelect>
+<MasterVolume><value>-28.0</value></MasterVolume>
+<Mute><value>off</value></Mute>
+</item>`;
+
+describe("DEVICE_INFO_URL / MAIN_ZONE_STATUS_URL (§ Denon Cheat Sheet Audit) — real, independently confirmed via denonavr/const.py", () => {
+  it("are the real static paths, not guessed", () => {
+    expect(DEVICE_INFO_URL).toBe("/goform/Deviceinfo.xml");
+    expect(MAIN_ZONE_STATUS_URL).toBe("/goform/formMainZone_MainZoneXml.xml");
+  });
+});
+
+describe("parseMainZoneStatus (§ Denon Cheat Sheet Audit) — real shape from denonavr/foundation.py, volume.py, input.py", () => {
+  it("extracts power, mute, volume (dB), and current input from the legacy full-zone-state snapshot", () => {
+    const status = parseMainZoneStatus(MAIN_ZONE_STATUS_XML);
+    expect(status).toEqual({ power: "ON", muted: false, volumeDb: -28.0, input: "DVD" });
+  });
+
+  it("falls back to ZonePower when Power is absent", () => {
+    const xml = `<item><ZonePower><value>STANDBY</value></ZonePower></item>`;
+    expect(parseMainZoneStatus(xml).power).toBe("STANDBY");
+  });
+
+  it("returns null fields (never fabricated defaults) for a document with none of the confirmed tags", () => {
+    expect(parseMainZoneStatus("<item></item>")).toEqual({ power: null, muted: null, volumeDb: null, input: null });
+  });
+
+  it("treats an empty <value></value> as absent, not as an empty string", () => {
+    const xml = `<item><InputFuncSelect><value></value></InputFuncSelect></item>`;
+    expect(parseMainZoneStatus(xml).input).toBeNull();
+  });
+
+  it("returns all-null fields for garbage input rather than throwing", () => {
+    expect(() => parseMainZoneStatus("not xml at all")).not.toThrow();
+    expect(parseMainZoneStatus("not xml at all").power).toBeNull();
+  });
+
+  it("mute value comparison is case-insensitive, matching denonavr's own STATE_ON check", () => {
+    const xml = `<item><Mute><value>ON</value></Mute></item>`;
+    expect(parseMainZoneStatus(xml).muted).toBe(true);
   });
 });

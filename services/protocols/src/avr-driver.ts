@@ -14,7 +14,15 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { buildMediaState, commandToAvr, denonCapabilityConfig, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
-import { albumArtUrl, buildAppCommandRequests, parseDeletedSource, parseRenameSource } from "./avr-http-codec.js";
+import {
+  albumArtUrl,
+  buildAppCommandRequests,
+  DEVICE_INFO_URL,
+  MAIN_ZONE_STATUS_URL,
+  parseDeletedSource,
+  parseMainZoneStatus,
+  parseRenameSource,
+} from "./avr-http-codec.js";
 import { parseUpnpDescription } from "./yamaha-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
@@ -57,7 +65,11 @@ export interface AvrDriverOptions {
    * (renamed input names, hidden-input filtering, album art). Real, confirmed via
    * `denonavr`'s actual source: 8080 on 2016+ models. Pre-2016 units may use port 80
    * instead or lack this interface entirely — all use of it is best-effort and never
-   * blocks Telnet control, matching this driver's existing UPnP-enrichment posture. */
+   * blocks Telnet control, matching this driver's existing UPnP-enrichment posture.
+   * When omitted (the normal case), the driver auto-detects the right port per host
+   * instead of assuming 8080 (§ Denon Cheat Sheet Audit — see `resolveHttpPort()`).
+   * Set this explicitly only to force a specific port (tests; a known non-standard
+   * setup) — an explicit value always wins over auto-detection. */
   httpPort?: number;
   /** § Universal AVR SDK — builds the gateway's own artwork-proxy URL for a device
    * (`/v1/devices/:id/media/artwork`), same pattern the Apple TV driver already uses.
@@ -143,7 +155,13 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   private readonly listeners = new Set<StateListener>();
   private readonly fetchImpl: typeof fetch;
   private readonly tracer: ProtocolTracer;
-  private readonly httpPort: number;
+  /** Explicit override from `opts.httpPort`, when given — always wins over
+   * auto-detection (§ Denon Cheat Sheet Audit). `undefined` is the normal case. */
+  private readonly explicitHttpPort: number | undefined;
+  /** Per-host auto-detected HTTP generation, cached for the driver's lifetime (cleared
+   * in `unbind()`'s per-host cleanup, same as every other per-host Map here). Only
+   * populated when `explicitHttpPort` is unset. */
+  private readonly detectedHttpPort = new Map<string, { port: number; generation: "2016+" | "legacy" }>();
   /** § Universal AVR SDK — the second, HTTP-based transport (renamed inputs,
    * hidden-input filtering, album art) that makes this a genuinely multi-transport
    * driver: `TcpLineTransport` above stays the sole realtime-event channel (nothing
@@ -176,7 +194,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   constructor(opts: AvrDriverOptions = {}) {
     this.opts = opts;
     this.defaultPort = opts.port ?? 23;
-    this.httpPort = opts.httpPort ?? 8080;
+    this.explicitHttpPort = opts.httpPort;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.tracer = createProtocolTracer("avr", opts.trace === true, opts.onLog);
     this.httpClient = new HttpPollClient({ fetchImpl: this.fetchImpl, tracer: this.tracer });
@@ -303,6 +321,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         this.pendingHeartbeats.delete(key);
       }
     }
+    // § Denon Cheat Sheet Audit — `detectedHttpPort` is keyed by host (HTTP has no
+    // meaningful "port" component in the key the way Telnet links do), so a host is only
+    // safe to clear once truly no binding anywhere still references it — a re-added unit
+    // later re-detects fresh rather than trusting a stale cached generation forever.
+    for (const host of new Set(removed.map((b) => b.host))) {
+      if (this.bindings.some((b) => b.host === host)) continue;
+      this.detectedHttpPort.delete(host);
+    }
   }
 
   /** § RTI Capability Audit, Category C.3 — an explicit, on-demand liveness/round-trip
@@ -426,20 +452,76 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     void this.refreshInputEnrichment(b.host, b.port);
   }
 
+  /** § Denon Cheat Sheet Audit — best-effort receiver-generation probe, real and
+   * independently confirmed via `denonavr/foundation.py`'s actual
+   * `async_identify_receiver()`: try the static `Deviceinfo.xml` document on port 8080
+   * (2016+, `AppCommand.xml`-capable) first, then port 80 (pre-2016, legacy-only);
+   * default to legacy/80 if neither answers, matching `denonavr`'s own fallback exactly.
+   * Cached per host for this driver's lifetime — this is the only place a slow/hanging
+   * fetch can occur, and only once per host, never on the hot path. Never throws. */
+  private async detectHttpGeneration(host: string): Promise<{ port: number; generation: "2016+" | "legacy" }> {
+    for (const [port, generation] of [[8080, "2016+"], [80, "legacy"]] as const) {
+      try {
+        const res = await this.fetchImpl(`http://${host}:${port}${DEVICE_INFO_URL}`);
+        if (res.ok) return { port, generation };
+      } catch {
+        // try the next candidate
+      }
+    }
+    return { port: 80, generation: "legacy" };
+  }
+
+  /** Resolves which HTTP port/generation to use for a host. An explicit
+   * `opts.httpPort` always wins (preserves exact pre-existing behavior for every test
+   * and any installer override) and is treated as "generation unknown" — always attempt
+   * `AppCommand.xml`, exactly as before this audit. Otherwise auto-detects once per host
+   * and caches the result (§ Denon Cheat Sheet Audit). */
+  private async resolveHttpPort(host: string): Promise<{ port: number; generation: "2016+" | "legacy" | "unknown" }> {
+    if (this.explicitHttpPort !== undefined) return { port: this.explicitHttpPort, generation: "unknown" };
+    const cached = this.detectedHttpPort.get(host);
+    if (cached) return cached;
+    const detected = await this.detectHttpGeneration(host);
+    this.detectedHttpPort.set(host, detected);
+    return detected;
+  }
+
   /** § Universal AVR SDK — fetches real renamed/hidden inputs via the confirmed-real
    * HTTP AppCommand interface. Best-effort: any failure (older non-2016 unit with no
    * HTTP interface on this port, network hiccup, …) leaves the existing enrichment (or
    * none) untouched rather than clearing real data on a transient error — matches this
-   * driver's existing UPnP-enrichment posture in `discover()`. */
+   * driver's existing UPnP-enrichment posture in `discover()`.
+   *
+   * § Denon Cheat Sheet Audit — on a host auto-detected as legacy (pre-2016, no
+   * `AppCommand.xml` at all), skips the AppCommand attempt entirely (it would fail every
+   * time — no point retrying a doomed request on every 15-minute poll forever) and
+   * instead does a best-effort read of the legacy full-zone-state snapshot purely for
+   * diagnostics (trace-logged, never written into `inputEnrichment` — that endpoint's
+   * embedded rename list is independently confirmed incomplete, see
+   * `docs/architecture/Denon-CheatSheet-Audit.md`, so it is not treated as equal-
+   * confidence data to the real `GetRenameSource`/`GetDeletedSource` mechanism). */
   private async refreshInputEnrichment(host: string, port: number): Promise<void> {
     const key = `${host}:${port}`;
+    const { port: httpPort, generation } = await this.resolveHttpPort(host);
+    if (generation === "legacy") {
+      try {
+        this.tracer.event(`refreshInputEnrichment: ${host} detected as legacy (no AppCommand.xml) — reading ${MAIN_ZONE_STATUS_URL} on port ${httpPort} for diagnostics only`);
+        const res = await this.fetchImpl(`http://${host}:${httpPort}${MAIN_ZONE_STATUS_URL}`);
+        if (res.ok) {
+          const status = parseMainZoneStatus(await res.text());
+          this.tracer.event(`refreshInputEnrichment: ${host} legacy status — power=${status.power ?? "?"} input=${status.input ?? "?"} volumeDb=${status.volumeDb ?? "?"}`);
+        }
+      } catch (err) {
+        this.tracer.event(`refreshInputEnrichment: ${host} legacy status read failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
     try {
       const [body] = buildAppCommandRequests([
         { id: "1", text: "GetRenameSource" },
         { id: "1", text: "GetDeletedSource" },
       ]);
-      this.tracer.event(`refreshInputEnrichment: POST AppCommand.xml to ${host}:${this.httpPort}`);
-      const xml = await this.httpClient.request(`${key}:appcommand`, `http://${host}:${this.httpPort}/goform/AppCommand.xml`, {
+      this.tracer.event(`refreshInputEnrichment: POST AppCommand.xml to ${host}:${httpPort}`);
+      const xml = await this.httpClient.request(`${key}:appcommand`, `http://${host}:${httpPort}/goform/AppCommand.xml`, {
         method: "POST",
         headers: { "content-type": "text/xml" },
         body,
@@ -472,12 +554,19 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   /** § Universal AVR SDK — real album art, fetched from the unit's own confirmed-static
    * HTTP endpoint (`albumArtUrl()`, no XML/schema involved). `null` on any failure
    * (older non-2016 unit with no HTTP interface, network hiccup, nothing currently
-   * displayed) — never fabricated placeholder bytes. */
+   * displayed) — never fabricated placeholder bytes.
+   *
+   * § Denon Cheat Sheet Audit — uses the auto-detected port instead of a fixed 8080, so
+   * this now genuinely works on pre-2016 (port-80) units too: the static album-art file
+   * is served by the receiver's embedded web server on whichever port it actually
+   * listens on, independently confirmed via `denonavr`'s own port-templated usage of the
+   * same URL (not gated to `AppCommand.xml`-capable units the way input enrichment is). */
   async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
     if (!b) return null;
     try {
-      const res = await this.fetchImpl(albumArtUrl(b.host, this.httpPort));
+      const { port: httpPort } = await this.resolveHttpPort(b.host);
+      const res = await this.fetchImpl(albumArtUrl(b.host, httpPort));
       if (!res.ok) return null;
       const contentType = res.headers.get("content-type") ?? "image/png";
       const data = new Uint8Array(await res.arrayBuffer());
@@ -582,29 +671,37 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       // Player" labels before they even finish commissioning, not just after the first
       // bind. Same non-fatal posture as the UPnP step above — a fetch failure (older
       // unit with no HTTP interface, wrong port) never fails discovery of the unit.
+      //
+      // § Denon Cheat Sheet Audit — resolves the real port/generation first (also
+      // pre-warms the cache `refreshInputEnrichment` will reuse once this device is
+      // bound) rather than assuming 8080; a unit detected as legacy skips the doomed
+      // AppCommand attempt entirely, same reasoning as `refreshInputEnrichment`.
       let renamedInputs: Record<string, string> | undefined;
       let hiddenInputs: string[] | undefined;
-      try {
-        const [body] = buildAppCommandRequests([
-          { id: "1", text: "GetRenameSource" },
-          { id: "1", text: "GetDeletedSource" },
-        ]);
-        this.tracer.event(`discover: fetching AppCommand input enrichment for ${r.address}`);
-        const res = await this.fetchImpl(`http://${r.address}:${this.httpPort}/goform/AppCommand.xml`, {
-          method: "POST",
-          headers: { "content-type": "text/xml" },
-          body,
-        });
-        if (res.ok) {
-          const xml = await res.text();
-          const renamed = parseRenameSource(xml);
-          const hidden = parseDeletedSource(xml);
-          if (renamed.size > 0) renamedInputs = Object.fromEntries(renamed);
-          if (hidden.size > 0) hiddenInputs = [...hidden];
-          this.tracer.event(`discover: AppCommand input enrichment for ${r.address} — ${renamed.size} renamed, ${hidden.size} hidden`);
+      const { port: discoveryHttpPort, generation: discoveryGeneration } = await this.resolveHttpPort(r.address);
+      if (discoveryGeneration !== "legacy") {
+        try {
+          const [body] = buildAppCommandRequests([
+            { id: "1", text: "GetRenameSource" },
+            { id: "1", text: "GetDeletedSource" },
+          ]);
+          this.tracer.event(`discover: fetching AppCommand input enrichment for ${r.address}`);
+          const res = await this.fetchImpl(`http://${r.address}:${discoveryHttpPort}/goform/AppCommand.xml`, {
+            method: "POST",
+            headers: { "content-type": "text/xml" },
+            body,
+          });
+          if (res.ok) {
+            const xml = await res.text();
+            const renamed = parseRenameSource(xml);
+            const hidden = parseDeletedSource(xml);
+            if (renamed.size > 0) renamedInputs = Object.fromEntries(renamed);
+            if (hidden.size > 0) hiddenInputs = [...hidden];
+            this.tracer.event(`discover: AppCommand input enrichment for ${r.address} — ${renamed.size} renamed, ${hidden.size} hidden`);
+          }
+        } catch (err) {
+          this.tracer.event(`discover: AppCommand input enrichment for ${r.address} failed — ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err) {
-        this.tracer.event(`discover: AppCommand input enrichment for ${r.address} failed — ${err instanceof Error ? err.message : String(err)}`);
       }
       return {
         backendId: r.address,

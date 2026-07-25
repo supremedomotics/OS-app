@@ -6,7 +6,11 @@
 > (the full per-capability sourcing/evidence record),
 > [Universal-AVR-SDK-Roadmap.md](./Universal-AVR-SDK-Roadmap.md) (the engine-level roadmap —
 > what's ✓/Partial/Planned across the SDK as a whole, and the honest Denon/Yamaha/Anthem reuse
-> mapping), and the architecture-verification + duplication-audit history that produced it (see
+> mapping), [Denon-CheatSheet-Audit.md](./Denon-CheatSheet-Audit.md) (an installer cheat sheet
+> audited against the official protocols and this SDK — what it got right, what SupremeOS
+> already does better, and the one real gap it led to finding: pre-2016 units silently getting
+> zero HTTP-sourced data because the driver assumed every unit was on port 8080), and the
+> architecture-verification + duplication-audit history that produced it (see
 > `SESSION_HANDOFF.md` for the full trail: a prior turn confirmed no runtime SDK existed, only
 > documentation claiming one; a full evidence-based audit then found and scoped the real,
 > extractable duplication this module closes).

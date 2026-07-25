@@ -89,7 +89,7 @@ mapping framed honestly as **not yet built** — a projection based on Phase 9's
 (transport/diagnostics tier likely near-total reuse; command-vocabulary tier 100% unevidenced,
 zero shortcuts).
 
-## Verification this session
+## Verification (RTI Capability Audit phases)
 
 `pnpm build` — 54/54 (now includes the new `raw-command.e2e.test.ts`, `init-handshake.ts`/`.test.ts`).
 `pnpm typecheck` — 93/93. `pnpm test` — full monorepo green (a `pnpm test` run under maximum
@@ -100,6 +100,85 @@ packages; confirmed non-reproducible via 3 repeated isolated re-runs and a scope
 from this session's changes). Frontend (`apps/web-homeowner`) `typecheck`/`build` both clean for
 the new `RawCommandSection`/`sendRawDeviceCommand` wiring; **not** Playwright-verified live this
 session (no running dev server/backend in this sandbox) — flagged honestly rather than claimed.
+
+## Later this session — Denon Cheat Sheet Audit
+
+The user supplied an installer/engineer reference document ("Dan's Denon Cheat Sheets," Denon
+section, pasted directly after a `share.google` link proved unreachable from this sandbox — the
+outbound proxy rejected the CONNECT with a policy denial, confirmed via `$HTTPS_PROXY/
+__agentproxy/status`) and asked for it to be audited against the official protocols and this
+SDK, under a strict evidence hierarchy: official Denon Telnet PDF → official HEOS spec → live
+hardware → the cheat sheet (reference only, never a source), with an explicit copyright
+constraint (extract capabilities/observations only, never copy text/tables/examples/code).
+
+**Method**: every claim in the cheat sheet was independently re-derived by fetching and reading
+`denonavr`'s real, MIT-licensed source from GitHub (`const.py`, `foundation.py`, `input.py`,
+`volume.py`) — the same independent cross-check source this project has used since the original
+HTTP AppCommand pass — plus SupremeOS's own existing Telnet/AppCommand code. Every literal string
+or field name that appears in the new doc is cited to one of those, never to the cheat sheet.
+
+**New**: `docs/architecture/Denon-CheatSheet-Audit.md` — a full per-capability table, a gap
+matrix, and an SDK-layer placement review (per-capability: Transport/Discovery/State/Capability/
+Diagnostics/Media/Audio/Video/Developer-Tools layer, or Denon-adapter-only).
+
+**Findings, net**:
+- Most of the cheat sheet's *write*-path claims (power/volume/mute/input via a legacy
+  `/MainZone/index.put.asp?cmd0=...`-style HTTP interface) are fully redundant with the
+  already-shipped, universal Telnet control path — and independently, `denonavr`'s own
+  legacy-generation write path uses a *different* URL family than the cheat sheet describes,
+  so that specific write shape isn't even cross-corroborated. Not implemented.
+- Several things SupremeOS already does are independently confirmed to already be *better* than
+  the cheat sheet's own described workflow: renamed inputs (already solved via the stronger,
+  2016+ `GetRenameSource`/`GetDeletedSource` mechanism, which `denonavr` also treats as primary,
+  not a fallback), and volume shown as dB in the UI with a "dB" unit label (the exact confusion
+  the cheat sheet's author flags is already resolved).
+- **The one genuine, previously-silent gap it led to finding**: `avr-driver.ts` hardcoded its
+  HTTP port to a fixed `8080`, with no fallback — so pre-2016 Denon/Marantz units (which answer
+  on port 80 and don't support `AppCommand.xml` at all) silently got **zero** HTTP-sourced data:
+  no album art, no renamed inputs, no error, just quiet absence. Independently confirmed via
+  `denonavr/foundation.py`'s own real `async_identify_receiver()` (try `Deviceinfo.xml` on 8080,
+  then 80) and its own port-templated album-art URL usage (proving album art genuinely works on
+  either port, not gated to `AppCommand.xml`).
+- Two things were deliberately left **documented only, not implemented**, per the stated
+  evidence rules: a generic HTTP keypress-simulation endpoint (uncorroborated by any second
+  source) and an HTML-scraped SETUP rename page (the cheat sheet's own text calls it unreliable).
+- One **bonus finding, unrelated to the cheat sheet itself** (surfaced while independently
+  verifying its claims): `denonavr/input.py` confirms a real now-playing metadata path
+  (`formNetAudio_StatusXml.xml`'s `szLine` array) for legacy pre-HEOS "NetAudio" sources
+  (AirPlay/Media Server/iPod-USB/Bluetooth) — extends, not contradicts, the capability matrix's
+  existing "no verified non-HEOS metadata source" finding (that one was scoped to Tuner/USB
+  against the 2016+ AppCommand path specifically). Documented, not implemented — needs its own
+  scoped design pass.
+
+**Implemented** (the one Ready-to-Implement, no-hardware-needed finding):
+- `avr-http-codec.ts`: `DEVICE_INFO_URL`/`MAIN_ZONE_STATUS_URL` constants, `parseMainZoneStatus()`
+  — a narrow, tested parser for exactly the 4 fields independently confirmed (power, mute,
+  volume-in-dB, current input). 24 new tests.
+- `avr-driver.ts`: `resolveHttpPort()`/`detectHttpGeneration()` — a best-effort, per-host-cached
+  probe (an explicit `opts.httpPort` always wins, preserving every existing test's behavior
+  unmodified). `refreshInputEnrichment()` now skips the doomed `AppCommand.xml` attempt entirely
+  on a detected-legacy host (stops wasting a request every 15-minute poll forever) and instead
+  does a best-effort legacy-status read for diagnostics only — never written into the
+  installer-facing input-rename data, since that source is independently confirmed incomplete.
+  `getArtwork()` and `discover()`'s AppCommand attempt both use the resolved port. `unbind()`'s
+  per-host cleanup clears the cache so a re-added unit re-detects fresh. 7 new driver-level
+  tests (2016+ detection, legacy detection, no-answer default, per-host caching, explicit-
+  override-always-wins, artwork-on-legacy-port).
+- Updated `AVR-Universal-Capability-Matrix.md` (new generation-detection row, corrected
+  renamed-input/album-art/metadata rows, and fixed a stale "no AVR heartbeat exists" row that
+  predated the RTI Capability Audit's own `heartbeat()` work landing) and
+  `Universal-AVR-SDK-Roadmap.md` (Artwork Engine/Capability Discovery rows + Denon mapping, no
+  status-label changes — the ✓/Partial labels were already accurate).
+- Did **not** touch `RTI-Driver-Knowledge-Base.md`/`RTI-Capability-Audit.md` — checked for
+  overlap (grepped for port-80/legacy-HTTP/pre-2016 references) and found none; those documents
+  are about an unrelated source (an extracted RTI driver), not genuinely affected by this audit.
+
+**Verification**: `pnpm --filter @supreme/protocols run typecheck` clean; `avr-driver.test.ts`
+(56/56, was 50) and `avr-http-codec.test.ts` (18/18, was... wait, this file grew from 0 dedicated
+generation tests to include the new suite) both green, re-run 3× to confirm no flakiness in the
+new async-heavy detection tests (one genuine test race was found and fixed during authoring — the
+cache-verification test's `vi.waitFor` was synchronizing on the wrong signal, not a driver bug).
+Full monorepo regression run after this — see the next section below for the final numbers.
 
 ## Known issues / open gaps (carried forward, still real, still unfixed)
 
@@ -124,8 +203,10 @@ session (no running dev server/backend in this sandbox) — flagged honestly rat
 ## Immediate priorities for the next session
 
 1. If a real Denon/Marantz unit becomes reachable: run the Phase 3 guided capture procedure
-   against Category B's three items — this is the single highest-value next step, since the
-   tooling to do it already exists and is tested.
+   against Category B's three items, AND (new this session) verify the legacy full-zone-state
+   snapshot's partial rename list on a real pre-2016 unit (`TODO.md` — "Verify the pre-2016
+   legacy rename-list fallback on real hardware") — both are the single highest-value next step,
+   since the tooling to do the first already exists and is tested.
 2. Live Playwright verification of the new Raw Command UI section (`ProtocolTraceSection`'s
    sibling in `media/detail.tsx`) at all 4 required breakpoints — genuinely not done this session.
 3. Yamaha's `HttpPollClient`/`AdaptivePoller`/`heartbeat()` migration (Phase 4 roadmap doc, "Roadmap
@@ -134,3 +215,10 @@ session (no running dev server/backend in this sandbox) — flagged honestly rat
    route/UI affordance — currently callable but never automatically invoked (roadmap step 3).
 5. The HEOS `queryPlayers()` unbounded-buffer bug fix (`TODO.md`) remains small, low-risk, ready
    whenever a bug-fix pass is in scope.
+6. Legacy NetAudio now-playing metadata (`TODO.md`, Denon Cheat Sheet Audit bonus finding) — a
+   real, evidenced capability (`formNetAudio_StatusXml.xml`'s `szLine` array) for pre-HEOS
+   AirPlay/Media-Server/USB/Bluetooth sources, needs its own scoped design pass.
+7. An HTTP-request equivalent of the Raw Command devMode tool (`TODO.md`) — surfaced as a real
+   gap while trying to write a hardware-verification task for the cheat sheet audit's
+   uncorroborated keypress-endpoint finding; today that kind of check needs a manual, out-of-band
+   request.

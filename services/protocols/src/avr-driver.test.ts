@@ -799,6 +799,144 @@ describe("AvrProtocolDriver — HTTP AppCommand input enrichment (§ Universal A
   });
 });
 
+/** § Denon Cheat Sheet Audit — a routing `fetchImpl` that simulates the real
+ * receiver-generation probe (`Deviceinfo.xml` on port 8080 vs 80) without needing a
+ * literal listener on those exact privileged/well-known ports: `Deviceinfo.xml`
+ * requests are answered per `answersOn8080`/`answersOn80`, `AppCommand.xml`/album-art
+ * requests are transparently redirected to a real, dynamically-ported fake server
+ * (`appCommandPort`), and the legacy `formMainZone_MainZoneXml.xml` snapshot is answered
+ * directly. Every call's URL is recorded in `calls` for assertions. */
+function makeGenerationFetch(opts: {
+  answersOn8080?: boolean;
+  answersOn80?: boolean;
+  legacyStatusXml?: string;
+  appCommandPort?: number;
+  calls?: string[];
+}): typeof fetch {
+  return (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    opts.calls?.push(u);
+    if (u.includes("/goform/Deviceinfo.xml")) {
+      const on8080 = u.includes(":8080/") && opts.answersOn8080;
+      const on80 = u.includes(":80/") && opts.answersOn80;
+      return { ok: !!(on8080 || on80), text: async () => "" } as Response;
+    }
+    if (u.includes("/goform/formMainZone_MainZoneXml.xml")) {
+      return { ok: true, text: async () => opts.legacyStatusXml ?? "<item></item>" } as Response;
+    }
+    if (opts.appCommandPort && u.includes("/goform/AppCommand.xml")) {
+      return globalThis.fetch(`http://127.0.0.1:${opts.appCommandPort}/goform/AppCommand.xml`, init);
+    }
+    if (opts.appCommandPort && u.includes("/img/album%20art_S.png")) {
+      return globalThis.fetch(`http://127.0.0.1:${opts.appCommandPort}/img/album%20art_S.png`, init);
+    }
+    throw new Error(`unreachable in test: ${u}`);
+  }) as unknown as typeof fetch;
+}
+
+describe("AvrProtocolDriver — HTTP generation auto-detection (§ Denon Cheat Sheet Audit)", () => {
+  it("detects a 2016+ unit (Deviceinfo.xml answers on 8080) and uses AppCommand.xml for input enrichment, never the legacy snapshot", async () => {
+    const avr = await startFakeAvr();
+    const appCmd = await startFakeAppCommand({ renamed: { DVD: "Blu-ray Player" } });
+    const calls: string[] = [];
+    const driver = new AvrProtocolDriver({ fetchImpl: makeGenerationFetch({ answersOn8080: true, appCommandPort: appCmd.port, calls }) });
+    const dev = "device-avr-gen-2016" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => {
+      const config = driver.getCapabilityConfig(dev, "media") as { inputs: { id: string; label: string }[] } | null;
+      expect(config?.inputs.find((i) => i.id === "DVD")?.label).toBe("Blu-ray Player");
+    });
+    expect(calls.some((c) => c.includes(":8080/goform/Deviceinfo.xml"))).toBe(true);
+    expect(calls.some((c) => c.includes("formMainZone_MainZoneXml.xml"))).toBe(false);
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => appCmd.server.close(() => r()));
+  });
+
+  it("detects a legacy unit (Deviceinfo.xml only answers on 80) and skips AppCommand.xml entirely, reading the legacy snapshot for diagnostics instead", async () => {
+    const avr = await startFakeAvr();
+    const calls: string[] = [];
+    const driver = new AvrProtocolDriver({
+      fetchImpl: makeGenerationFetch({ answersOn80: true, legacyStatusXml: "<item><Power><value>ON</value></Power><InputFuncSelect><value>DVD</value></InputFuncSelect></item>", calls }),
+    });
+    const dev = "device-avr-gen-legacy" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(calls.some((c) => c.includes("formMainZone_MainZoneXml.xml"))).toBe(true));
+    expect(calls.some((c) => c.includes("AppCommand.xml"))).toBe(false);
+    // Never treated as an equal-confidence rename source — installer_declared stays in effect.
+    const config = driver.getCapabilityConfig(dev, "media") as { source: string } | null;
+    expect(config?.source).toBe("installer_declared");
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("defaults to legacy when Deviceinfo.xml answers on neither port, matching denonavr's own fallback", async () => {
+    const avr = await startFakeAvr();
+    const calls: string[] = [];
+    const driver = new AvrProtocolDriver({ fetchImpl: makeGenerationFetch({ calls }) });
+    const dev = "device-avr-gen-none" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(calls.some((c) => c.includes("formMainZone_MainZoneXml.xml"))).toBe(true));
+    expect(calls.some((c) => c.includes(":80/goform/formMainZone_MainZoneXml.xml"))).toBe(true);
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("caches the detected generation per host — probes Deviceinfo.xml only once across multiple enrichment refreshes", async () => {
+    const avr = await startFakeAvr();
+    const calls: string[] = [];
+    const driver = new AvrProtocolDriver({ fetchImpl: makeGenerationFetch({ answersOn80: true, calls }) });
+    const dev = "device-avr-gen-cached" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    // Wait for the legacy status read itself (not just the Deviceinfo.xml calls) — that
+    // only happens AFTER `resolveHttpPort()` has fully resolved and cached the result,
+    // so this is the correct synchronization point; waiting on the Deviceinfo.xml call
+    // count alone can observe it mid-flight, before the cache write lands.
+    await vi.waitFor(() => expect(calls.filter((c) => c.includes("formMainZone_MainZoneXml.xml")).length).toBe(1));
+    expect(calls.filter((c) => c.includes("Deviceinfo.xml")).length).toBe(2); // one full detection round
+    await driver.refreshCapabilities(dev);
+    await vi.waitFor(() => expect(calls.filter((c) => c.includes("formMainZone_MainZoneXml.xml")).length).toBe(2));
+    expect(calls.filter((c) => c.includes("Deviceinfo.xml")).length).toBe(2); // still just the one detection round — cache hit
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("an explicit httpPort always wins over auto-detection — never probes Deviceinfo.xml", async () => {
+    const avr = await startFakeAvr();
+    const appCmd = await startFakeAppCommand({ renamed: { DVD: "Explicit Port" } });
+    const driver = new AvrProtocolDriver({ httpPort: appCmd.port, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-gen-explicit" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => {
+      const config = driver.getCapabilityConfig(dev, "media") as { inputs: { id: string; label: string }[] } | null;
+      expect(config?.inputs.find((i) => i.id === "DVD")?.label).toBe("Explicit Port");
+    });
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => appCmd.server.close(() => r()));
+  });
+
+  it("getArtwork() uses the auto-detected port too, unlocking album art on a legacy unit", async () => {
+    const avr = await startFakeAvr();
+    const appCmd = await startFakeAppCommand({ albumArt: { contentType: "image/png", body: "fake-legacy-png" } });
+    const driver = new AvrProtocolDriver({ fetchImpl: makeGenerationFetch({ answersOn80: true, appCommandPort: appCmd.port }) });
+    const dev = "device-avr-gen-artwork" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    const art = await driver.getArtwork(dev);
+    expect(art?.contentType).toBe("image/png");
+    expect(new TextDecoder().decode(art?.data)).toBe("fake-legacy-png");
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+    await new Promise<void>((r) => appCmd.server.close(() => r()));
+  });
+});
+
 describe("AvrProtocolDriver — heartbeat() (§ RTI Capability Audit, Category C.3)", () => {
   it("round-trips a real PW? probe with a measured latency", async () => {
     const avr = await startFakeAvr();
