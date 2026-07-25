@@ -4,6 +4,9 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadFeedbackCommand,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 import type {
   BackendStateEvent,
@@ -55,6 +58,7 @@ export class RoutingBackendAdapter implements IBackendAdapter {
   readonly policy: MigrationPolicy;
   private readonly registry: EntityRegistryMirror;
   private readonly listeners = new Set<StateListener>();
+  private readonly inputListeners = new Set<(event: KeypadInputEvent) => void>();
 
   constructor(opts: RoutingAdapterOptions) {
     this.ha = opts.ha;
@@ -65,6 +69,12 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     // State from either engine flows up unchanged.
     this.ha.onState((e) => this.fanout(e));
     this.native.onState((e) => this.fanout(e));
+    // Universal Keypad Framework: keypad input from either engine flows up the same
+    // way — HA has none today (no HA integration reports button/encoder events
+    // through this adapter), but the fan-out is symmetric with onState so a future
+    // HA-side keypad integration needs zero change here.
+    this.ha.onInputEvent?.((e) => this.fanoutInput(e));
+    this.native.onInputEvent((e) => this.fanoutInput(e));
   }
 
   async connect(): Promise<void> {
@@ -146,6 +156,29 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     await this.ha.refreshCapabilities?.(deviceId);
   }
 
+  // ── Universal Keypad Framework (§ Driver SDK Extension) ─────────────────────
+
+  /** Same routing as {@link getArtwork}: native-engine feature first. */
+  async getKeypadCapabilities(deviceId: DeviceId): Promise<KeypadCapabilityDeclaration | null> {
+    if (this.native.manages(deviceId)) return this.native.getKeypadCapabilities(deviceId);
+    return this.ha.getKeypadCapabilities ? this.ha.getKeypadCapabilities(deviceId) : null;
+  }
+
+  onInputEvent(listener: (event: KeypadInputEvent) => void): () => void {
+    this.inputListeners.add(listener);
+    return () => this.inputListeners.delete(listener);
+  }
+
+  /** Feedback always targets a specific keypad device, so — unlike `command()`,
+   * which must pick a side for an arbitrary deviceId — this routes on whichever side
+   * actually owns `command.keypadId`, falling loudly to native's own
+   * `backend_unavailable` error when neither owns it. */
+  async sendKeypadFeedback(command: KeypadFeedbackCommand): Promise<void> {
+    if (this.native.manages(command.keypadId)) return this.native.sendKeypadFeedback(command);
+    if (this.ha.sendKeypadFeedback) return this.ha.sendKeypadFeedback(command);
+    throw new SupremeError("backend_unavailable", `keypad ${command.keypadId} has no assigned owner`);
+  }
+
   /** § Driver Lifecycle Completion: unlike the "first side that manages it" routing
    * above, this deliberately runs on BOTH sides unconditionally — a device being
    * deleted must have every trace of it released regardless of which backend
@@ -210,5 +243,9 @@ export class RoutingBackendAdapter implements IBackendAdapter {
 
   private fanout(event: BackendStateEvent): void {
     for (const l of this.listeners) l(event);
+  }
+
+  private fanoutInput(event: KeypadInputEvent): void {
+    for (const l of this.inputListeners) l(event);
   }
 }

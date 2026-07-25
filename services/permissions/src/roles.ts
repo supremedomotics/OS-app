@@ -24,6 +24,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     camera: ALL,
     integration: ALL,
     user: ALL,
+    keypad_mapping: ALL,
+    intent: ALL,
   },
   admin: {
     home: ["view", "update", "admin"],
@@ -34,6 +36,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     camera: ALL,
     integration: ALL,
     user: ["view", "create", "update"],
+    keypad_mapping: ALL,
+    intent: ALL,
   },
   homeowner: {
     // The primary resident of a self-managed home: full day-to-day control PLUS the ability to
@@ -47,6 +51,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     camera: VIEW_CONTROL,
     integration: ["view", "control", "create", "update", "delete"],
     user: ["view"],
+    keypad_mapping: ["view", "control", "create", "update"],
+    intent: ["view", "control"],
   },
   family: {
     home: ["view"],
@@ -55,6 +61,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     scene: ["view", "control", "create", "update"],
     automation: ["view", "control"],
     camera: ["view"],
+    keypad_mapping: ["view"],
+    intent: ["view"],
   },
   child: {
     home: ["view"],
@@ -79,6 +87,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     automation: ALL,
     integration: ALL,
     camera: ALL,
+    keypad_mapping: ALL,
+    intent: ALL,
   },
   service_engineer: {
     // Diagnostics + maintenance: can view/control to test devices and inspect
@@ -89,6 +99,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     automation: ["view"],
     integration: ["view"],
     camera: ["view"],
+    keypad_mapping: ["view"],
+    intent: ["view"],
   },
   developer: {
     // Same shape as installer (full build/debug access to everything except home
@@ -101,6 +113,8 @@ export const BASELINE_ROLES: Record<UserType, RolePolicy> = {
     automation: ALL,
     integration: ALL,
     camera: ALL,
+    keypad_mapping: ALL,
+    intent: ALL,
   },
 };
 

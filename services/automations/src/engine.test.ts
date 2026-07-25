@@ -195,6 +195,65 @@ describe("engine selection + HA compile", () => {
     expect(config.trigger[0]).toMatchObject({ platform: "time", at: "07:00" });
     expect(config.action[0]).toMatchObject({ service: "supreme.command" });
   });
+
+  it("refuses to compile an intent action to HA — intents require the Supreme-native engine", () => {
+    const d = devId();
+    expect(() =>
+      compileToHa({
+        id: newId("automation") as never,
+        homeId: homeId(),
+        name: "x",
+        enabled: true,
+        triggers: [{ type: "time", at: "07:00", days: [] }],
+        conditions: [],
+        actions: [{ type: "intent", intentId: "toggleLight", target: { kind: "device", deviceId: d }, params: {} }],
+        engine: "ha",
+        externalRef: null,
+        aiGenerated: false,
+      }),
+    ).toThrow(/cannot compile to a Home Assistant automation/);
+  });
+});
+
+describe("intent actions (§ Universal Intent & Capability Engine, Phase 2)", () => {
+  it("dispatches an intent action through the injected runIntent executor", async () => {
+    const runIntent = vi.fn(async () => {});
+    const ex = executors({ runIntent });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const d = devId();
+    await svc.create({
+      homeId: homeId(),
+      name: "Intent-driven toggle",
+      triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+      actions: [{ type: "intent", intentId: "toggleLight", target: { kind: "device", deviceId: d }, params: { step: 10 } }],
+    });
+
+    await svc.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
+
+    expect(runIntent).toHaveBeenCalledWith("toggleLight", { kind: "device", deviceId: d }, { step: 10 });
+  });
+
+  it("throws a clear error when an intent action runs with no runIntent executor wired", async () => {
+    const ex = executors(); // no runIntent
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const d = devId();
+    await svc.create({
+      homeId: homeId(),
+      name: "Unwired intent",
+      triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+      actions: [{ type: "intent", intentId: "toggleLight", target: { kind: "device", deviceId: d }, params: {} }],
+    });
+
+    await svc.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
+
+    const runs = svc.recentRuns();
+    expect(runs[0]!.ok).toBe(false);
+    expect(runs[0]!.error).toMatch(/requires a wired Intent Engine/);
+  });
 });
 
 describe("AutomationEngine — dry-run, health, duplicate (§ Phase 1)", () => {

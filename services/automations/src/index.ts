@@ -4,6 +4,8 @@
  */
 export {
   AutomationEngine,
+  runAutomationAction,
+  describeAutomationAction,
   type AutomationExecutors,
   type DeviceStateEvent,
   type EngineOptions,

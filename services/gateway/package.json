@@ -40,6 +40,8 @@
     "@supreme/licensing": "workspace:*",
     "@supreme/backup": "workspace:*",
     "@supreme/automations": "workspace:*",
+    "@supreme/keypad-framework": "workspace:*",
+    "@supreme/intent-engine": "workspace:*",
     "@supreme/analytics": "workspace:*",
     "@supreme/intelligence": "workspace:*",
     "@supreme/license-service": "workspace:*",

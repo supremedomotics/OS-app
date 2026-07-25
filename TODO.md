@@ -34,6 +34,73 @@
 
 ## High
 
+### Universal Keypad Editor / Intent-aware mapping UI
+- **Description:** Phase 1 (ADR 0016) and Phase 2 (ADR 0017) both shipped complete backend
+  architecture — Universal Input/Feedback Engines, Subscription Manager, Mapping Engine, and the
+  Intent & Capability Engine (42-intent registry, capability resolution, REST API) — with
+  explicitly no visual editor. A homeowner/installer cannot author a `ToggleLight`/`Movie Mode`
+  style mapping through any UI today, even though the backend already fully executes it.
+- **Reason:** the backend is now complete enough (both phases) that a real editor has something
+  substantive to build against — this is the natural next UI investment, not a premature one.
+- **Dependencies:** at least one real keypad driver (see below) makes the editor demonstrable
+  end-to-end, but is not strictly required to start (intents can already target existing
+  KNX/Casambi/etc. device capabilities via room/device targets today).
+- **Complexity:** Large — needs its own scoped session/ADR (visual node/pipeline editor, likely
+  extending the existing Automation Editor's canvas rather than a wholly separate surface, given
+  `KeypadMapping`/`Automation` now share one `AutomationAction` vocabulary including `"intent"`).
+- **Status:** Not started; fully documented as future work in both ADR 0016 and ADR 0017.
+
+### Universal Intent & Capability Engine: fill the honest capability gaps
+- **Description:** `swingMode`/`tiltUp`/`tiltDown`/`executeScript`/`webhook` are registered in the
+  Intent Registry but their execution honestly throws — no swing/tilt field exists in
+  `TemperatureState`/`PositionState` yet, and no script engine or webhook dispatcher exists.
+- **Reason:** these are real, named gaps in the capability model / platform infrastructure, not
+  hypothetical — a genuine venetian-blind installation or a "run this automation via webhook"
+  marketplace template would hit them today.
+- **Dependencies:** the tilt/swing gap needs a deliberate `TemperatureState`/`PositionState` schema
+  addition (additive, low risk, but a real capability-model decision, not a one-line fix);
+  executeScript/webhook need actual new infrastructure (a script sandbox, an outbound HTTP
+  dispatcher) — each a meaningfully-sized feature in its own right.
+- **Complexity:** Medium (tilt/swing, per capability) to Large (script engine / webhook dispatcher).
+- **Status:** Not started; honestly documented as incomplete rather than faked, per ADR 0017.
+
+### Universal Keypad Framework: first real keypad driver
+- **Description:** ADR 0016 shipped the full protocol-independent input/feedback/mapping
+  framework (Phase 1: architecture only) — no real keypad driver exists yet. `docs/architecture/
+  Keypad-Driver-Author-Guide.md` lists per-protocol hypotheses (KNX push-button, Casambi keypad,
+  Lutron Pico, Matter switch, MQTT button, RTI keypad, Zigbee remote, BLE, DALI push-button unit),
+  explicitly flagged as unverified — no spec-verification research has been done for any of them.
+- **Reason:** the framework has zero real-world value until at least one real driver plugs into it.
+- **Dependencies:** none architecturally — the seam (`getKeypadCapabilities?`/`onInputEvent?`/
+  `sendKeypadFeedback?` on `INativeProtocolDriver`) is ready and proven via a synthetic
+  extensibility test. Lutron is the most natural first target (its LIP transport already exists in
+  `lutron-driver.ts`).
+- **Complexity:** Medium per protocol (spec verification + codec + tests, same shape as adding a
+  new AVR brand).
+- **Status:** Not started, framework ready.
+
+### Universal Keypad Framework: Postgres-backed persistence
+- **Description:** `IKeypadMappingStore`/`IKeypadSubscriptionStore` (`@supreme/keypad-framework`)
+  default to in-memory only (mirrors `InMemoryAutomationStore`'s exact pre-persistence-era shape).
+  A hub restart today loses every keypad mapping/subscription.
+- **Reason:** real deployment readiness — same gap automations had before its own store was wired
+  to `services/persistence`/`cloud/persistence`.
+- **Dependencies:** none — small, additive, follows the automations repo's exact existing pattern.
+- **Complexity:** Small–Medium.
+- **Status:** Not started.
+
+### Universal Keypad Editor (visual UI)
+- **Description:** the Mapping Engine Interface's backend APIs
+  (`/v1/keypad/mappings*`/`/v1/keypad/subscriptions*`) are built and tested; no visual editor
+  exists — explicitly out of Phase 1 scope per the brief.
+- **Reason:** installers/homeowners need a UI to actually author mappings; a homeowner cannot build
+  "KNX button 2 → Casambi light" through any UI today even though the backend already executes it.
+- **Dependencies:** at least one real keypad driver (see above) should exist first — an editor with
+  nothing real to bind to is premature, same reasoning already applied to the Automation Editor's
+  onoff-only gap.
+- **Complexity:** Large — needs its own scoped session/ADR.
+- **Status:** Not started; fully documented as future work in ADR 0016.
+
 ### Finish the UI/UX Design Polish phase
 - **Description:** The user-directed polish brief (Phase 2) is partially done — icon system and
   card/button/capability-chip polish shipped. Remaining: device-category ambient color identity
@@ -434,6 +501,40 @@
   mapping that deliberately corrects the user's own "reuses 95%" framing with real, measured
   numbers (Yamaha's actual SDK-primitive reuse is low) rather than repeating an unverified
   estimate. Full monorepo `pnpm build`/`typecheck`/`test` green.
+- **Universal Intent & Capability Engine, Phase 2** (ADR 0017) — a protocol- AND
+  device-independent semantic layer decoupling user interactions from drivers entirely:
+  `AutomationAction` gained one additive `"intent"` variant (reused automatically by both the
+  Automation Engine and the Phase 1 Keypad Mapping Engine — zero extra schema/engine work, the
+  direct payoff of Phase 1's "reuse `AutomationAction` verbatim" decision); new
+  `packages/domain-model/src/intents.ts` (`IntentDefinition`/`IntentTarget`); new
+  `@supreme/intent-engine` service (`CapabilityIndex` — O(matching devices), never O(all devices),
+  kept in sync via a new additive `HomeService.onDeviceChanged` event; `IntentRegistry` —
+  extensible-forever catalog pairing serializable definitions with server-only `translate`/
+  `runSystem` handlers, validated at registration; `registerBuiltinIntents` — 42 intents across
+  lighting/climate/av/blinds/security/system, with `swingMode`/`tiltUp`/`tiltDown`/`executeScript`/
+  `webhook` honestly registered-but-throwing where no real capability/infrastructure backs them
+  yet; `IntentEngine` — the Capability Engine itself, 48 tests including a dedicated "migration
+  readiness" proof). Full gateway REST wiring (`GET /v1/intents`, `POST /v1/intents/:id/run`, run
+  history) + 11 e2e tests including a keypad mapping's intent action driving a real device through
+  the same engine a direct REST call uses. Zero visual editor, zero new capability-model fields —
+  explicitly Phase 2/architecture-only per the brief. Full monorepo `pnpm build`/`typecheck`/`test`
+  green (56/56, 97/97, 97/97 tasks), every pre-existing suite passing unmodified. Full detail:
+  `SESSION_HANDOFF.md`, ADR 0017, `docs/architecture/Universal-Intent-Capability-Engine.md`.
+- **Universal Keypad Framework, Phase 1** (ADR 0016) — a protocol-independent input/feedback/
+  mapping pipeline so any future keypad controls any Supreme device without a protocol-to-protocol
+  mapping: Keypad Capability Model + 13 Universal Input Events + 11 Universal Feedback Commands +
+  `KeypadSubscription`/`KeypadMapping` DSL (`packages/domain-model`); three new optional
+  `INativeProtocolDriver`/`IBackendAdapter` members threaded through
+  `SupremeNativeAdapter`/`RoutingBackendAdapter`/`SupremeIntegrationLayer`, proven via a synthetic
+  extensibility test; new `@supreme/keypad-framework` service (`UniversalInputEngine` with
+  short/long/double/triple-press + hold-start/holding/hold-end derivation,
+  `UniversalFeedbackEngine` with capability-gated rendering, `SubscriptionManager`,
+  `KeypadMappingEngine`/`Service` reusing the existing Automation DSL's conditions/actions verbatim,
+  `expandVariables` for Optional Variables); full gateway REST CRUD wiring + e2e test. Zero real
+  keypad driver, zero visual editor — explicitly Phase 1/architecture-only per the brief. Full
+  monorepo `pnpm build`/`typecheck`/`test` green (55/55, 95/95, 95/95 tasks), every pre-existing
+  suite passing unmodified. Full detail: `SESSION_HANDOFF.md`, ADR 0016, `docs/architecture/
+  Universal-Keypad-Framework.md`, `Keypad-Driver-Author-Guide.md`.
 - **Universal AV SDK refactor** (AVR/HEOS/Yamaha → thin protocol adapters) — a new internal-only
   `services/protocols/src/av-sdk/` module (`TcpLineTransport` + `state-cache.ts`'s
   `recordCapabilityState()`) extracting the real, evidence-backed duplication found by a prior

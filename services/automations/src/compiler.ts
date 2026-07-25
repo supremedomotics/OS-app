@@ -33,6 +33,18 @@ export function compileToHa(a: Automation): HaAutomationConfig {
       if (act.type === "scene_activate") return { service: "scene.turn_on", target: { entity_id: `supreme.${act.sceneId}` } };
       if (act.type === "delay") return { delay: { milliseconds: act.ms } };
       if (act.type === "notify") return { service: "notify.supreme", data: { title: act.title, message: act.body } };
+      if (act.type === "intent") {
+        // § Universal Intent & Capability Engine (Phase 2): intent resolution (which
+        // device, which concrete CapabilityCommand) happens dynamically inside
+        // @supreme/intent-engine at run time — there is no static HA automation
+        // config that could express "resolve the best device for this capability
+        // right now." An automation with an intent action can only run on the
+        // Supreme-native engine (engine: "supreme"), never compile to HA — honest
+        // failure here, not a silently-wrong HA config.
+        throw new Error(
+          `automation "${a.id}" has an "intent" action ("${act.intentId}") — intents require the Supreme-native engine and cannot compile to a Home Assistant automation`,
+        );
+      }
       return { service: "supreme.command", data: { device: act.deviceId, command: act.command } };
     }),
   };

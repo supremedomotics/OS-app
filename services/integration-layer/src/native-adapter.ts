@@ -4,6 +4,9 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadFeedbackCommand,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 import type {
   BackendStateEvent,
@@ -47,8 +50,11 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   private readonly drivers: INativeProtocolDriver[];
   /** deviceId → the protocol driver that owns it (when bound to a real bus). */
   private readonly ownerByDevice = new Map<DeviceId, INativeProtocolDriver>();
-  /** protocol → its onState unsubscribe, so a driver can be added/removed at runtime. */
+  /** protocol → its onState/onInputEvent unsubscribe, so a driver can be added/removed at runtime. */
   private readonly unsubByProtocol = new Map<string, () => void>();
+  /** Universal Keypad Framework (§ Driver SDK Extension): aggregated keypad input
+   * across every registered driver, mirroring `listeners`/`onState` exactly. */
+  private readonly inputListeners = new Set<(event: KeypadInputEvent) => void>();
 
   constructor(opts: SupremeNativeAdapterOptions = {}) {
     this.drivers = opts.drivers ?? [];
@@ -62,11 +68,20 @@ export class SupremeNativeAdapter implements IBackendAdapter {
       this.connectErrors.push({ protocol: driver.protocol, error: err as Error });
       return;
     }
-    const unsub = driver.onState((event) => {
+    const unsubState = driver.onState((event) => {
       this.states.set(key(event.deviceId, event.capability), event.state);
       for (const l of this.listeners) l(event);
     });
-    this.unsubByProtocol.set(driver.protocol, unsub);
+    // Universal Input Engine feed: a keypad-capable driver's raw/derived input is
+    // re-emitted upward exactly like state, so callers can't tell which protocol a
+    // given KeypadInputEvent came from.
+    const unsubInput = driver.onInputEvent?.((event) => {
+      for (const l of this.inputListeners) l(event);
+    });
+    this.unsubByProtocol.set(driver.protocol, () => {
+      unsubState();
+      unsubInput?.();
+    });
   }
 
   async connect(): Promise<void> {
@@ -315,6 +330,36 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   async refreshCapabilities(deviceId: DeviceId): Promise<void> {
     const owner = this.ownerByDevice.get(deviceId);
     if (owner?.refreshCapabilities) await owner.refreshCapabilities(deviceId);
+  }
+
+  // ── Universal Keypad Framework (§ Driver SDK Extension) ─────────────────────
+
+  /** Fetch the owning driver's real keypad capability declaration for this device. */
+  async getKeypadCapabilities(deviceId: DeviceId): Promise<KeypadCapabilityDeclaration | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getKeypadCapabilities) return owner.getKeypadCapabilities(deviceId);
+    return null;
+  }
+
+  /** Subscribe to normalized keypad input from every driver this engine fronts. */
+  onInputEvent(listener: (event: KeypadInputEvent) => void): () => void {
+    this.inputListeners.add(listener);
+    return () => this.inputListeners.delete(listener);
+  }
+
+  /** Route a generic feedback command to its target keypad's owning driver. Fails
+   * loudly (mirroring `command()`) rather than silently dropping a write the caller
+   * believes reached the hardware — a compliant caller (the Universal Feedback
+   * Engine) only calls this after confirming the driver via `getKeypadCapabilities`. */
+  async sendKeypadFeedback(command: KeypadFeedbackCommand): Promise<void> {
+    const owner = this.ownerByDevice.get(command.keypadId);
+    if (!owner?.sendKeypadFeedback) {
+      throw new SupremeError(
+        "backend_unavailable",
+        `keypad ${command.keypadId} has no bound driver supporting feedback`,
+      );
+    }
+    await owner.sendKeypadFeedback(command);
   }
 
   /** Release the owning driver's per-device resources (§ Driver Lifecycle Completion)

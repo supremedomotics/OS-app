@@ -32,6 +32,10 @@ export const DriverId = idPattern("drv").brand<"DriverId">();
 export const NotificationId = idPattern("ntf").brand<"NotificationId">();
 export const LicenseId = idPattern("lic").brand<"LicenseId">();
 export const BackupId = idPattern("bak").brand<"BackupId">();
+/** A Universal Keypad Framework input→action mapping (§ Universal Keypad Framework). */
+export const KeypadMappingId = idPattern("kpm").brand<"KeypadMappingId">();
+/** A Universal Keypad Framework feedback subscription (§ Universal Keypad Framework). */
+export const KeypadSubscriptionId = idPattern("kps").brand<"KeypadSubscriptionId">();
 
 export type HomeId = z.infer<typeof HomeId>;
 export type RoomId = z.infer<typeof RoomId>;
@@ -45,6 +49,8 @@ export type DriverId = z.infer<typeof DriverId>;
 export type NotificationId = z.infer<typeof NotificationId>;
 export type LicenseId = z.infer<typeof LicenseId>;
 export type BackupId = z.infer<typeof BackupId>;
+export type KeypadMappingId = z.infer<typeof KeypadMappingId>;
+export type KeypadSubscriptionId = z.infer<typeof KeypadSubscriptionId>;
 
 const PREFIXES = {
   home: "home",
@@ -62,6 +68,8 @@ const PREFIXES = {
   sample: "smp",
   audit: "aud",
   sie: "sie",
+  keypadMapping: "kpm",
+  keypadSubscription: "kps",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

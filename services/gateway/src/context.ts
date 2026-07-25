@@ -40,6 +40,23 @@ import {
   type AutomationExecutors,
   type IAutomationStore,
 } from "@supreme/automations";
+import {
+  InMemoryKeypadSubscriptionStore,
+  KeypadMappingEngine,
+  KeypadMappingService,
+  SubscriptionManager,
+  UniversalFeedbackEngine,
+  UniversalInputEngine,
+  type IKeypadMappingStore,
+  type IKeypadSubscriptionStore,
+} from "@supreme/keypad-framework";
+import {
+  CapabilityIndex,
+  IntentEngine,
+  IntentRegistry,
+  registerBuiltinIntents,
+  type IntentEngineExecutors,
+} from "@supreme/intent-engine";
 import { AnalyticsService } from "@supreme/analytics";
 import { AuditService } from "@supreme/audit";
 import { AssistantService } from "@supreme/ai";
@@ -104,6 +121,9 @@ export interface AppDeps {
   notificationStore?: INotificationStore;
   driverStore?: IInstalledDriverStore;
   automationStore?: IAutomationStore;
+  /** Universal Keypad Framework (§ Universal Keypad Framework) persistence — mappings + feedback subscriptions. */
+  keypadMappingStore?: IKeypadMappingStore;
+  keypadSubscriptionStore?: IKeypadSubscriptionStore;
   securityStore?: ISecurityStore;
   protocolBindingStore?: IProtocolBindingStore;
   pushTokenStore?: IPushTokenStore;
@@ -150,6 +170,26 @@ export class AppContext {
   installer!: InstallerServices;
   /** Intelligence & scale (§16): automations, energy analytics, audit, AI assistant. */
   automations!: AutomationService;
+  /** Universal Keypad Framework (§ Universal Keypad Framework): input→action mapping
+   * CRUD + the engine that executes them. */
+  keypadMappings!: KeypadMappingService;
+  /** Feedback subscription registry: which keypad controls mirror which device+capability. */
+  keypadSubscriptions!: SubscriptionManager;
+  /** Normalizes raw keypad driver input into protocol-independent events (§ Universal
+   * Input Engine), then feeds the bus + the Mapping Engine. */
+  private keypadInputEngine!: UniversalInputEngine;
+  /** Routes device state changes to every subscribed keypad control's feedback (§
+   * Universal Feedback Engine). */
+  private keypadFeedbackEngine!: UniversalFeedbackEngine;
+  /** Universal Intent & Capability Engine (§ Phase 2, ADR 0017): the extensible
+   * catalog of protocol-independent Intents (`GET /v1/intents`). */
+  intentRegistry!: IntentRegistry<IntentEngineExecutors>;
+  /** Resolves an Intent + target into a concrete command against whichever
+   * device capability satisfies it, then dispatches it — the Capability Engine. */
+  intentEngine!: IntentEngine;
+  /** Capability Resolution index backing the Intent Engine — kept in sync via
+   * `HomeService.onDeviceChanged`, never a linear re-scan per lookup. */
+  private capabilityIndex!: CapabilityIndex;
   analytics: AnalyticsService | null = null;
   audit: AuditService | null = null;
   readonly ai: AssistantService;
@@ -512,6 +552,48 @@ export class AppContext {
 
     await this.security.hydrate(this.homeId);
 
+    // Universal Intent & Capability Engine (§ Phase 2, ADR 0017): the Capability
+    // Index is populated from the current device topology and kept in sync via
+    // HomeService's change event — never a linear re-scan of every device per
+    // lookup, only ever the (small) set of devices actually touched.
+    this.capabilityIndex = new CapabilityIndex();
+    this.capabilityIndex.hydrate(await this.home.listDevices());
+    this.home.onDeviceChanged((event) => {
+      if (event.type === "upsert") this.capabilityIndex.upsert(event.device);
+      else this.capabilityIndex.remove(event.deviceId);
+    });
+    this.intentRegistry = new IntentRegistry<IntentEngineExecutors>();
+    registerBuiltinIntents(this.intentRegistry);
+    this.intentEngine = new IntentEngine({
+      registry: this.intentRegistry,
+      capabilityIndex: this.capabilityIndex,
+      executors: {
+        command: (deviceId, command) => this.sil.command(deviceId, command),
+        getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
+        getCapabilityConfig: (deviceId, capability) => this.sil.getCapabilityConfig(deviceId, capability),
+        activateScene: async (sceneId) => {
+          await this.scenes.activate(sceneId);
+        },
+        runAutomation: async (automationId) => {
+          await this.automations.testRun(automationId);
+        },
+        notify: async (input) => {
+          await this.notifications.create({ homeId: this.homeId, userId: input.userId, level: input.level, title: input.title, body: input.body });
+        },
+        security: {
+          arm: async (mode) => {
+            this.security.arm(this.homeId, mode, null);
+          },
+          disarm: async () => {
+            this.security.disarm(this.homeId, null);
+          },
+          panic: async () => {
+            this.security.trigger(this.homeId);
+          },
+        },
+      },
+    });
+
     const executors: AutomationExecutors = {
       command: (deviceId, command) => this.sil.command(deviceId, command),
       activateScene: async (sceneId) => {
@@ -527,6 +609,13 @@ export class AppContext {
         });
       },
       getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
+      // § Universal Intent & Capability Engine: an `"intent"` AutomationAction
+      // (available to BOTH the Automation Engine and the Keypad Mapping Engine,
+      // since they already share this exact executor set) resolves and runs
+      // through the SAME Intent Engine a direct `POST /v1/intents/:id/run` uses.
+      runIntent: async (intentId, target, params) => {
+        await this.intentEngine.run(intentId, target, params);
+      },
     };
     const engine = new AutomationEngine({
       executors,
@@ -544,6 +633,48 @@ export class AppContext {
     // § ADR 0101 Part 1 — scenes execute through this SAME engine from here on (never a second
     // execution path); attached post-construction since scenes are built before automations.
     this.scenes.attachEngine(engine);
+
+    // Universal Keypad Framework (§ Universal Keypad Framework): the Mapping Engine
+    // reuses the SAME executors as the Automation Engine above — a keypad mapping's
+    // actions ARE automation actions, by design (see `KeypadMapping` in
+    // `@supreme/domain-model`), so there is exactly one "run a Supreme action"
+    // implementation for the gateway to wire up, not two.
+    const keypadMappingEngine = new KeypadMappingEngine({
+      executors,
+      onRun: (id, ok) => {
+        void this.audit?.record({
+          homeId: this.homeId,
+          action: ok ? "keypad_mapping.run" : "keypad_mapping.error",
+          resourceType: "keypad_mapping",
+          resourceId: id,
+        });
+      },
+    });
+    this.keypadMappings = new KeypadMappingService(keypadMappingEngine, deps.keypadMappingStore);
+    await this.keypadMappings.start();
+
+    this.keypadSubscriptions = new SubscriptionManager(deps.keypadSubscriptionStore ?? new InMemoryKeypadSubscriptionStore());
+    await this.keypadSubscriptions.hydrate();
+
+    // Universal Feedback Engine (§ Feedback Routing): every state change already flows
+    // through `onBackendState` below; this just fans it out to subscribed keypad
+    // controls via the SIL's keypad seam, never a protocol write directly.
+    this.keypadFeedbackEngine = new UniversalFeedbackEngine({
+      subscriptions: this.keypadSubscriptions,
+      getKeypadCapabilities: (keypadId) => this.sil.getKeypadCapabilities(keypadId),
+      sendFeedback: (command) => this.sil.sendKeypadFeedback(command),
+    });
+
+    // Universal Input Engine (§ Universal Input Engine): normalizes every keypad-
+    // capable driver's raw/derived input, publishes it for cross-process WSS-style
+    // fan-out on the bus, and drives the Mapping Engine.
+    this.keypadInputEngine = new UniversalInputEngine({
+      publish: (event) => {
+        void this.bus.publish(subjects.keypadInput(this.homeId), event);
+        void this.keypadMappings.onInputEvent(event);
+      },
+    });
+    this.sil.subscribeKeypadInput((event) => this.keypadInputEngine.ingest(event));
 
     if (deps.db) {
       this.analytics = new AnalyticsService(deps.db);
@@ -620,6 +751,11 @@ export class AppContext {
     this.homekit?.pushState(event.deviceId, event.capability, event.state as unknown as Record<string, unknown>);
     await this.maybeNotifyEvent(event);
     await this.automations.onDeviceState({
+      deviceId: event.deviceId,
+      capability: event.capability,
+      state: event.state,
+    });
+    await this.keypadFeedbackEngine.onDeviceState({
       deviceId: event.deviceId,
       capability: event.capability,
       state: event.state,

@@ -3,6 +3,9 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadFeedbackCommand,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 
 /**
@@ -175,4 +178,18 @@ export interface IBackendAdapter {
    * genuinely re-discover over the wire, in place (§ Capability Refresh) — never
    * recreates the device. A no-op for backends/drivers with nothing to re-query. */
   refreshCapabilities?(deviceId: DeviceId): Promise<void>;
+
+  // ── Universal Keypad Framework (§ Driver SDK Extension) — mirrors the optional
+  // INativeProtocolDriver members exactly, so the SIL facade can expose keypad
+  // support uniformly regardless of which adapter/router is underneath. ──────────
+
+  /** Optional: fetch a device's real keypad capability declaration (null if none/unsupported). */
+  getKeypadCapabilities?(deviceId: DeviceId): Promise<KeypadCapabilityDeclaration | null>;
+
+  /** Optional: subscribe to normalized keypad input events from every keypad-capable
+   * driver this adapter fronts. Returns an unsubscribe fn, mirroring `onState`. */
+  onInputEvent?(listener: (event: KeypadInputEvent) => void): () => void;
+
+  /** Optional: issue a generic keypad feedback command to its owning driver. */
+  sendKeypadFeedback?(command: KeypadFeedbackCommand): Promise<void>;
 }

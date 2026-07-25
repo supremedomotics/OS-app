@@ -6,13 +6,13 @@ import type {
   CapabilityCommand,
   CapabilityKind,
   CapabilityState,
-  Comparator,
   DeviceId,
+  IntentTarget,
   NotificationLevel,
   SceneId,
-  ScheduleWindow,
   UserId,
 } from "@supreme/domain-model";
+import { evaluateComparator, isWithinScheduleWindow, readCapabilityField } from "@supreme/domain-model";
 
 /**
  * Native Supreme automation engine (§10) — executes the engine-agnostic DSL on the
@@ -32,6 +32,12 @@ export interface AutomationExecutors {
   }): Promise<void>;
   /** Read current state for condition evaluation. */
   getState(deviceId: DeviceId, capability: CapabilityKind): Promise<CapabilityState | null>;
+  /** § Universal Intent & Capability Engine (Phase 2) — run an `"intent"` action.
+   * Optional: an executor set built before the Intent Engine existed (or a test
+   * fixture that never exercises an `"intent"` action) simply omits it; a
+   * DSL that DOES contain one throws a clear, honest error at execution time
+   * rather than silently no-op'ing (see `runAutomationAction`'s `"intent"` case). */
+  runIntent?(intentId: string, target: IntentTarget, params: Record<string, unknown>): Promise<void>;
 }
 
 export interface DeviceStateEvent {
@@ -118,7 +124,7 @@ export class AutomationEngine {
           t.type === "device_state" &&
           t.deviceId === event.deviceId &&
           t.capability === event.capability &&
-          compare(readField(event.state, t.field), t.op, t.value),
+          evaluateComparator(readCapabilityField(event.state, t.field), t.op, t.value),
       );
       if (fired) await this.execute(a, "device_state");
     }
@@ -160,9 +166,9 @@ export class AutomationEngine {
         const a0 = this.now();
         try {
           await this.runAction(action);
-          return { type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAction(action) };
+          return { type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAutomationAction(action) };
         } catch (e) {
-          return { type: action.type, ok: false, error: e instanceof Error ? e.message : String(e), durationMs: this.now() - a0, summary: describeAction(action) };
+          return { type: action.type, ok: false, error: e instanceof Error ? e.message : String(e), durationMs: this.now() - a0, summary: describeAutomationAction(action) };
         }
       }),
     );
@@ -193,7 +199,7 @@ export class AutomationEngine {
     const { passed: conditionsPassed, failed: failedCondition } = await this.evaluateConditions(automation.conditions, started);
 
     const actions: AutomationRunAction[] = conditionsPassed
-      ? automation.actions.map((action) => ({ type: action.type, ok: true, durationMs: 0, summary: `Would run: ${describeAction(action)}` }))
+      ? automation.actions.map((action) => ({ type: action.type, ok: true, durationMs: 0, summary: `Would run: ${describeAutomationAction(action)}` }))
       : [];
 
     const run: AutomationRun = {
@@ -281,11 +287,11 @@ export class AutomationEngine {
         const a0 = this.now();
         try {
           await this.runAction(action);
-          actions.push({ type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAction(action) });
+          actions.push({ type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAutomationAction(action) });
         } catch (e) {
           ok = false;
           error = e instanceof Error ? e.message : String(e);
-          actions.push({ type: action.type, ok: false, error, durationMs: this.now() - a0, summary: describeAction(action) });
+          actions.push({ type: action.type, ok: false, error, durationMs: this.now() - a0, summary: describeAutomationAction(action) });
           break; // stop the run on the first failing action (as before)
         }
       }
@@ -319,43 +325,67 @@ export class AutomationEngine {
     for (const c of conditions) {
       if (c.type === "device_state") {
         const state = await this.ex.getState(c.deviceId, c.capability);
-        if (!state || !compare(readField(state, c.field), c.op, c.value)) {
+        if (!state || !evaluateComparator(readCapabilityField(state, c.field), c.op, c.value)) {
           return { passed: false, failed: `${c.capability}.${c.field} ${c.op} ${JSON.stringify(c.value)} on ${c.deviceId}` };
         }
       } else if (c.type === "time_window") {
-        if (!inWindow(c.window, now)) return { passed: false, failed: `outside window ${c.window.start}–${c.window.end}` };
+        if (!isWithinScheduleWindow(c.window, now)) return { passed: false, failed: `outside window ${c.window.start}–${c.window.end}` };
       }
     }
     return { passed: true };
   }
 
   private async runAction(action: AutomationAction): Promise<void> {
-    switch (action.type) {
-      case "device_command":
-        await this.ex.command(action.deviceId, action.command);
-        return;
-      case "scene_activate":
-        await this.ex.activateScene(action.sceneId);
-        return;
-      case "notify":
-        await this.ex.notify({
-          level: action.level,
-          title: action.title,
-          body: action.body,
-          userId: action.userId,
-        });
-        return;
-      case "delay":
-        await this.sleep(action.ms);
-        return;
-    }
+    await runAutomationAction(action, this.ex, this.sleep);
   }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** A short human summary of an action for the debugger timeline. */
-function describeAction(action: AutomationAction): string {
+/**
+ * Execute one {@link AutomationAction} against a set of executors — extracted so
+ * `@supreme/keypad-framework`'s Mapping Engine (§ Universal Keypad Framework) can run
+ * the exact same reused `AutomationAction` union without re-implementing this
+ * dispatch (a keypad mapping's actions ARE automation actions, by design — see
+ * `KeypadMapping` in `@supreme/domain-model`).
+ */
+export async function runAutomationAction(
+  action: AutomationAction,
+  ex: AutomationExecutors,
+  sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  switch (action.type) {
+    case "device_command":
+      await ex.command(action.deviceId, action.command);
+      return;
+    case "scene_activate":
+      await ex.activateScene(action.sceneId);
+      return;
+    case "notify":
+      await ex.notify({
+        level: action.level,
+        title: action.title,
+        body: action.body,
+        userId: action.userId,
+      });
+      return;
+    case "delay":
+      await sleep(action.ms);
+      return;
+    case "intent":
+      if (!ex.runIntent) {
+        throw new Error(
+          `intent action "${action.intentId}" requires a wired Intent Engine — this executor set does not support runIntent`,
+        );
+      }
+      await ex.runIntent(action.intentId, action.target, action.params);
+      return;
+  }
+}
+
+/** A short human summary of an action for the debugger timeline — also reused by the
+ * Mapping Engine's own run traces. */
+export function describeAutomationAction(action: AutomationAction): string {
   switch (action.type) {
     case "device_command":
       return `Command ${action.command.capability} → ${action.deviceId}`;
@@ -365,41 +395,26 @@ function describeAction(action: AutomationAction): string {
       return `Notify "${action.title}"`;
     case "delay":
       return `Delay ${action.ms}ms`;
+    case "intent":
+      return `Intent ${action.intentId} → ${describeIntentTarget(action.target)}`;
   }
 }
 
-function readField(state: CapabilityState, field: string): unknown {
-  return (state as unknown as Record<string, unknown>)[field];
-}
-
-function compare(actual: unknown, op: Comparator, value: unknown): boolean {
-  switch (op) {
-    case "changed":
-      return true;
-    case "eq":
-      return actual === value;
-    case "ne":
-      return actual !== value;
-    case "gt":
-      return Number(actual) > Number(value);
-    case "lt":
-      return Number(actual) < Number(value);
-    case "gte":
-      return Number(actual) >= Number(value);
-    case "lte":
-      return Number(actual) <= Number(value);
+function describeIntentTarget(target: IntentTarget): string {
+  switch (target.kind) {
+    case "device":
+      return target.deviceId;
+    case "room":
+      return `room ${target.roomId}`;
+    case "scene":
+      return `scene ${target.sceneId}`;
+    case "automation":
+      return `automation ${target.automationId}`;
+    case "home":
+      return "home";
   }
 }
 
-function inWindow(w: ScheduleWindow, now: Date): boolean {
-  if (!w.days.includes(now.getDay())) return false;
-  const mins = now.getHours() * 60 + now.getMinutes();
-  return mins >= toMin(w.start) && mins < toMin(w.end);
-}
-function toMin(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number);
-  return (h ?? 0) * 60 + (m ?? 0);
-}
 function pad(n: number): string {
   return n.toString().padStart(2, "0");
 }
