@@ -49,6 +49,13 @@ describe("native-driver-factory — AVR/HEOS/Yamaha", () => {
     expect(buildNativeDriver("heos", {})?.protocol).toBe("heos");
     expect(buildNativeDriver("yamaha", {})?.protocol).toBe("yamaha");
   });
+
+  it("§ AVR Diagnostic Mode — threads ctx.avrDiagnostics into the AVR driver; off by default", () => {
+    const off = buildNativeDriver("avr", {});
+    expect(off?.exportDiagnosticsLog?.()).toBeNull();
+    const on = buildNativeDriver("avr", {}, { avrDiagnostics: true });
+    expect(on?.exportDiagnosticsLog?.()).not.toBeNull();
+  });
 });
 
 describe("native-driver-factory — CoolMaster", () => {

@@ -613,6 +613,14 @@ export class AppContext {
     // Publish to the bus; the bus subscription (subscribeBus) drives WSS fan-out —
     // in-process today, cross-process under NATS.
     await this.bus.publish(subjects.deviceState(this.homeId), event);
+    // § AVR Diagnostic Mode — append the `[Gateway]` stage to whichever driver started this
+    // event's correlation-ID trace (see `BackendStateEvent.traceId`). `undefined` for every
+    // event from every driver that doesn't opt in, so this is a no-op for the entire fleet
+    // except AVR-with-diagnostics-on. `getNativeDriver("avr")` returns the SAME driver
+    // instance that emitted the event, since only one driver owns the "avr" protocol slot.
+    if (event.traceId) {
+      this.sil.getNativeDriver("avr")?.recordDiagnosticStage?.(event.traceId, "Gateway", { published: true });
+    }
     if (!this.ready) return;
     // Proactive voice reporting: tell the cloud (debounced) so Alexa/Google stay in sync (ADR 0010).
     this.voicePublisher?.publish(event);

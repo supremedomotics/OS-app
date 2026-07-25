@@ -15,6 +15,17 @@ import { bindingKey, type StateListener } from "@supreme/integration-layer";
  * Deliberately NOT a stateful class owning its own `Map`/`Set` — each driver keeps its own
  * `states`/`listeners` fields exactly as before, so `getState()`, `onState()`, and each driver's
  * existing `unbind()`-time `removeDeviceStates()` cleanup call are untouched by this extraction.
+ *
+ * `traceId` (§ AVR Diagnostic Mode) — optional, purely additive: when a caller passes one
+ * (only `AvrProtocolDriver`, only when diagnostics is enabled, does today), it rides on the
+ * dispatched `BackendStateEvent` so gateway-layer code can append its own stage to the same
+ * per-event trace. `undefined` for every other caller — zero behavior change.
+ *
+ * Returns whether the state actually changed (and was therefore dispatched to listeners) —
+ * added so `AvrProtocolDriver`'s diagnostics can report an accurate `changed`/dedupe result
+ * without re-implementing this function's own dedupe comparison a second time (which would
+ * risk the two silently drifting apart). Existing callers that ignore the return value are
+ * unaffected.
  */
 export function recordCapabilityState(
   states: Map<string, CapabilityState>,
@@ -22,12 +33,14 @@ export function recordCapabilityState(
   deviceId: DeviceId,
   capability: CapabilityKind,
   state: CapabilityState,
-): void {
+  traceId?: string,
+): boolean {
   const k = bindingKey(deviceId, capability);
   const prev = states.get(k);
-  if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
+  if (prev && JSON.stringify(prev) === JSON.stringify(state)) return false;
   states.set(k, state);
   for (const l of listeners) {
-    l({ deviceId, capability, state, ts: new Date().toISOString() });
+    l({ deviceId, capability, state, ts: new Date().toISOString(), ...(traceId ? { traceId } : {}) });
   }
+  return true;
 }

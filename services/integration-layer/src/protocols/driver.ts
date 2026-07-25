@@ -131,6 +131,20 @@ export interface INativeProtocolDriver {
    * device it doesn't manage rather than silently no-op. */
   sendRaw?(deviceId: DeviceId, token: string): Promise<void>;
 
+  /** § AVR Diagnostic Mode — optional: append one more stage to an in-flight event's
+   * correlation-ID trace (see `BackendStateEvent.traceId`). Called by gateway-layer
+   * code (never by another driver) once it's done its own part of handling an event
+   * that carried a `traceId` — e.g. `{ published: true }` after a bus publish,
+   * `{ sent: true, subscribedRooms: 2 }` after a WebSocket send. A no-op for any driver
+   * that doesn't implement diagnostics (i.e. everything but AVR-with-diagnostics-on). */
+  recordDiagnosticStage?(traceId: string, stage: string, fields: Record<string, unknown>): void;
+
+  /** § AVR Diagnostic Mode — optional: the complete, human-readable trace log this
+   * driver has buffered since diagnostics was enabled, ending with a session summary
+   * (counters + top unknown commands). `null` when diagnostics isn't enabled/supported.
+   * Synchronous — reads an in-memory buffer, never a network round-trip. */
+  exportDiagnosticsLog?(): string | null;
+
   /** § ADR 0101 Part 1 — Optional: scenes this driver's source system genuinely defines
    * (an ETS project's scene DPTs, a synchronized API's scene list). Absent entirely for any
    * driver whose protocol has no real scene concept to discover — never implemented with a

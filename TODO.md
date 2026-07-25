@@ -79,6 +79,22 @@
 
 ## Medium
 
+### AVR renamed-input capability-config race condition
+- **Description:** `AvrProtocolDriver.refreshInputEnrichment()` is called fire-and-forget (`void
+  this.refreshInputEnrichment(...)`) at both `installer-context.ts:412` and
+  `routes/devices.ts:291-299`, immediately followed by a synchronous `getCapabilityConfig()` read
+  in the same code path. The HTTP AppCommand round-trip that populates renamed/hidden inputs
+  hasn't resolved yet when that read happens, so the caller can observe stale (installer-declared
+  default) input labels instead of the receiver's real renamed ones — narrow window, no data
+  corruption, just a stale read.
+- **Reason:** proven via a static, code-level audit (exact file/line citations above); not yet
+  fixed, since the audit that found it was scoped to "identify only, propose the smallest fix,
+  don't implement" and no follow-up session has picked it up yet.
+- **Dependencies:** none.
+- **Complexity:** Small — likely fixable by awaiting `refreshInputEnrichment()` before the
+  read, or by having the read wait on the in-flight promise if one exists.
+- **Status:** Diagnosed, not fixed.
+
 ### Wire real Redis/NATS backends behind the messaging seam
 - **Description:** `services/messaging` uses in-process fakes for the event bus (NATS) and
   ephemeral/presence store (Redis) by default; real backends exist behind config but aren't
@@ -391,6 +407,23 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **AVR Diagnostic Mode** — after a static audit and a full runtime-instrumented pipeline trace
+  (both against a fake AVR, since this environment has no access to real hardware) found no
+  pipeline break, the user asked for a permanent, production-safe diagnostic facility installers
+  can enable against their OWN real Denon/Marantz receiver and hand the resulting log back for
+  analysis. Shipped: `SUPREME_AVR_DIAGNOSTICS` (off by default) — every real receiver event gets
+  a correlation ID; every stage it passes through (TCP/Parser/patchMedia/emitFor/StateCache/
+  Gateway/WebSocket) logs a tagged line; unrecognized lines capture hex/ascii/length/firstToken/
+  sender/frequency (never a bare "unrecognized" message); exact session counters throughout;
+  `GET /v1/devices/:id/diagnostics/export` streams the complete trace as a downloadable
+  `diagnostic.log`. New `avr-diagnostics.ts` (`AvrDiagnosticsRecorder`, pure/no I/O, bounded
+  buffers). Zero overhead when disabled (optional-chaining short-circuit, real JS/TS semantics).
+  Correlation ID crosses the driver→gateway→WebSocket boundary via a new optional `traceId` field
+  on `BackendStateEvent` and a new optional `INativeProtocolDriver.recordDiagnosticStage?()`
+  method — no new cross-package coupling. No feature/protocol/parser changes — diagnostics only.
+  13 new tests (recorder unit tests, driver wiring incl. a real unrecognized-line capture over
+  real TCP, factory wiring, export-route e2e). Full monorepo build/typecheck/test green.
+  `docs/architecture/AVR-Diagnostic-Mode.md` has the full enable/export walkthrough.
 - **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
   Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
   project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the

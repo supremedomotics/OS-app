@@ -206,6 +206,12 @@ export class SupremeIntegrationLayer {
     return this.adapter.getTrace ? this.adapter.getTrace(deviceId) : null;
   }
 
+  /** § AVR Diagnostic Mode — export a device's owning driver's complete diagnostic trace
+   * log (null if unsupported, or diagnostics isn't enabled for that driver instance). */
+  async exportDiagnosticsLog(deviceId: DeviceId): Promise<string | null> {
+    return this.adapter.exportDiagnosticsLog ? this.adapter.exportDiagnosticsLog(deviceId) : null;
+  }
+
   /** § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch. Throws
    * (validation_failed) when the underlying adapter/driver doesn't support one. */
   async sendRaw(deviceId: DeviceId, token: string): Promise<void> {

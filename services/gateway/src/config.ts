@@ -106,6 +106,11 @@ export interface GatewayConfig {
   daliPort: string;
   /** Enable the AVR IP-control driver (Denon/Marantz); receivers are added by IP at bind time. */
   avrEnabled: boolean;
+  /** § AVR Diagnostic Mode — off by default. When true, the AVR driver traces the complete
+   * lifecycle of every real receiver event under a correlation ID, for export/analysis (see
+   * `docs/architecture/AVR-Diagnostic-Mode.md`). Adapted from the requested `AVR_DIAGNOSTICS`
+   * name to match this file's `SUPREME_`-prefixed convention. */
+  avrDiagnostics: boolean;
   /** Enable the HEOS CLI driver (Denon/Marantz whole-home streaming); the HEOS network is added
    * by any one player's IP at bind time — one connection then reaches every player by pid. */
   heosEnabled: boolean;
@@ -238,6 +243,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     zigbeeAdapter: env.SUPREME_ZIGBEE_ADAPTER ?? "zstack",
     daliPort: env.SUPREME_DALI_PORT ?? "",
     avrEnabled: env.SUPREME_AVR_ENABLED === "1" || env.SUPREME_AVR_ENABLED === "true",
+    avrDiagnostics: env.SUPREME_AVR_DIAGNOSTICS === "1" || env.SUPREME_AVR_DIAGNOSTICS === "true",
     heosEnabled: env.SUPREME_HEOS_ENABLED === "1" || env.SUPREME_HEOS_ENABLED === "true",
     yamahaEnabled: env.SUPREME_YAMAHA_ENABLED === "1" || env.SUPREME_YAMAHA_ENABLED === "true",
     coolMasterHost: env.SUPREME_COOLMASTER_HOST ?? "",

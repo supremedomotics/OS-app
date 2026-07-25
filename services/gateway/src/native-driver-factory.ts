@@ -25,6 +25,9 @@ export interface NativeDriverFactoryContext {
    * env-only Apple TV driver. Absent when the gateway has no `publicBaseUrl` configured
    * (dev/local) — a driver that needs this treats absence as "don't proxy," never throws. */
   artworkUrlFor?: (deviceId: string) => string;
+  /** § AVR Diagnostic Mode — off by default; forwarded only to the `avr` factory below (the
+   * only driver that currently implements diagnostics). See `GatewayConfig.avrDiagnostics`. */
+  avrDiagnostics?: boolean;
 }
 export type NativeDriverFactory = (config: Record<string, unknown>, ctx: NativeDriverFactoryContext) => INativeProtocolDriver | null;
 
@@ -77,7 +80,7 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   // (Installer → Bus Binding), same as the pre-existing env-wired instances in
   // bootstrap.ts. The factory therefore always succeeds; installing + enabling the
   // extension is what brings the driver up (§ ADR 0015).
-  avr: (c, ctx) => new AvrProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, artworkUrlFor: ctx.artworkUrlFor }),
+  avr: (c, ctx) => new AvrProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, artworkUrlFor: ctx.artworkUrlFor, diagnostics: ctx.avrDiagnostics === true }),
   heos: (c, ctx) => new HeosProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true }),
   yamaha: (c, ctx) => new YamahaProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true }),
 };

@@ -50,6 +50,7 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
       const seq = (seqByDevice.get(event.deviceId) ?? 0) + 1;
       seqByDevice.set(event.deviceId, seq);
       const home = await ctx.home.getHome();
+      const sent = socket.readyState === socket.OPEN;
       send(socket, {
         type: "state",
         homeId: home?.id ?? "",
@@ -59,6 +60,15 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
         seq,
         ts: event.ts,
       });
+      // § AVR Diagnostic Mode — append the `[WebSocket]` stage for this ONE client's send
+      // outcome; a single event fans out to every subscribed client, so this stage line
+      // can appear more than once per correlation ID (once per client that received it) —
+      // that's real, not a duplicate-logging bug.
+      if (event.traceId) {
+        ctx.sil.getNativeDriver("avr")?.recordDiagnosticStage?.(event.traceId, "WebSocket", {
+          sent, subscribedRooms: subscribedRooms.size,
+        });
+      }
     })();
   });
 
