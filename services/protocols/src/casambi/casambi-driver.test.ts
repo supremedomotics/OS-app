@@ -11,6 +11,8 @@ import type {
   CasambiWireHandlers,
 } from "./cloud-transport.js";
 import type { CasambiUnit } from "./entity-mapper.js";
+import type { CasambiUdpSocketLike } from "./local-transport/index.js";
+import type { CasambiDriverEvent } from "./event-engine.js";
 
 /** A captured WebSocket wire — records every framed message the driver sends. */
 class FakeWire implements CasambiWire {
@@ -185,5 +187,167 @@ describe("CasambiProtocolDriver (fake transport)", () => {
     await vi.advanceTimersByTimeAsync(3_500);
     expect(transport.wire.pings).toBe(3);
     await driver.disconnect();
+  });
+});
+
+/** A real event-emitting fake UDP socket for Local-mode driver tests — see `local-transport/
+ * udp-engine.test.ts` for the same pattern used directly against `CasambiUdpEngine`. */
+class FakeUdpSocket implements CasambiUdpSocketLike {
+  sent: string[] = [];
+  private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  closed = false;
+
+  on(event: string, listener: (...args: unknown[]) => void): this {
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
+    this.listeners.get(event)!.add(listener);
+    return this;
+  }
+  removeListener(event: string, listener: (...args: unknown[]) => void): this {
+    this.listeners.get(event)?.delete(listener);
+    return this;
+  }
+  bind(): void {
+    queueMicrotask(() => this.emit("listening"));
+  }
+  send(msg: string, _port: number, _address: string, callback?: (error: Error | null) => void): void {
+    this.sent.push(msg);
+    callback?.(null);
+  }
+  close(callback?: () => void): void {
+    this.closed = true;
+    callback?.();
+  }
+  emit(event: string, ...args: unknown[]): void {
+    for (const l of this.listeners.get(event) ?? []) l(...args);
+  }
+  receive(raw: string): void {
+    this.emit("message", Buffer.from(raw, "ascii"), { address: "192.168.1.90", port: 5100 });
+  }
+}
+
+describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
+  function makeLocalDriver() {
+    const socket = new FakeUdpSocket();
+    const driver = new CasambiProtocolDriver({
+      connectionMode: "local",
+      local: { gatewayIp: "192.168.1.90", restPort: 80, udpPort: 5100, netId: 0, udpSocketFactory: () => socket },
+    });
+    return { socket, driver };
+  }
+
+  it("connect() binds the UDP socket and reports isConnected() true", async () => {
+    const { driver } = makeLocalDriver();
+    await driver.connect();
+    expect(driver.isConnected()).toBe(true);
+    await driver.disconnect();
+  });
+
+  it("connect() sends the SetDefaultMask/Subscribe/NotifyButtonEvent bootstrap sequence", async () => {
+    const { socket, driver } = makeLocalDriver();
+    await driver.connect();
+    expect(socket.sent).toEqual([
+      "0.72.8.4b.3.0.0.ff.ff.ff.ff\r\n", // SetDefaultMask
+      "0.72.4.4b.1.0.fa\r\n", // Subscribe target ids 0..250
+      "0.72.2.50.fd\r\n", // NotifyButtonEvent enable
+    ]);
+    await driver.disconnect();
+  });
+
+  it("disconnect() sends the teardown sequence and stops the socket", async () => {
+    const { socket, driver } = makeLocalDriver();
+    await driver.connect();
+    socket.sent.length = 0;
+    await driver.disconnect();
+    expect(socket.sent).toEqual(["0.72.2.50.0\r\n", "0.72.4.4b.0.0.fa\r\n"]);
+    expect(socket.closed).toBe(true);
+    expect(driver.isConnected()).toBe(false);
+  });
+
+  it("an incoming NotifyControlValues packet updates state for a bound device", async () => {
+    const { socket, driver } = makeLocalDriver();
+    const dev = "local-dev-5" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "brightness", address: "casambi:5" });
+    await driver.connect();
+
+    const changed = new Promise<BackendStateEvent>((resolve) => {
+      const off = driver.onState((e) => {
+        if (e.deviceId === dev) {
+          off();
+          resolve(e);
+        }
+      });
+    });
+    // 0x4B: Target_ID=5, TYPE=1 (dimmerChannel)=200
+    socket.receive("0.70.4.4b.5.1.c8\r\n");
+    const state = (await changed).state;
+    expect(state).toEqual({ kind: "brightness", on: true, level: Math.round((200 / 255) * 100) });
+    await driver.disconnect();
+  });
+
+  it("command() sends a real UDP packet for a bound device", async () => {
+    const { socket, driver } = makeLocalDriver();
+    const dev = "local-dev-5" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "onoff", address: "casambi:5" });
+    await driver.connect();
+    socket.sent.length = 0;
+
+    await driver.command(dev, { capability: "onoff", action: "on" });
+    expect(socket.sent).toEqual(["0.72.4.20.ff.1.5\r\n"]);
+    await driver.disconnect();
+  });
+
+  it("command() refuses when the UDP socket is not listening", async () => {
+    const { driver } = makeLocalDriver();
+    const dev = "local-dev-5" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "onoff", address: "casambi:5" });
+    await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not connected/);
+  });
+
+  it("command() refuses an unsupported capability (position) rather than fabricating a mapping", async () => {
+    const { driver } = makeLocalDriver();
+    const dev = "local-dev-6" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
+    await driver.connect();
+    await expect(driver.command(dev, { capability: "position", action: "open" })).rejects.toThrow(/unsupported command/);
+    await driver.disconnect();
+  });
+
+  it("a 0x51 button event publishes a typed ButtonEvent on the driver event bus", async () => {
+    const { socket, driver } = makeLocalDriver();
+    await driver.connect();
+    const events: CasambiDriverEvent[] = [];
+    driver.onDriverEvent((e) => events.push(e));
+    // 0x51: Unit_ID=9, Source=1, Button=0, Event=2 (short press)
+    socket.receive("0.70.5.51.9.1.0.2\r\n");
+    expect(events).toContainEqual({ type: "button", unitId: 9, action: "short_press", ts: expect.any(String) });
+    await driver.disconnect();
+  });
+
+  it("a 0x3A Notify Node removed forgets the unit and publishes a networkUpdated event", async () => {
+    const { socket, driver } = makeLocalDriver();
+    const dev = "local-dev-7" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "brightness", address: "casambi:7" });
+    await driver.connect();
+    socket.receive("0.70.4.4b.7.1.c8\r\n"); // discover unit 7 first
+    expect(driver.getState(dev, "brightness")).not.toBeNull();
+
+    const events: CasambiDriverEvent[] = [];
+    driver.onDriverEvent((e) => events.push(e));
+    socket.receive("0.70.2.3a.7\r\n"); // Notify Node removed, Unit_ID=7
+    expect(events).toContainEqual({ type: "network", kind: "networkUpdated", detail: "unit 7 removed", ts: expect.any(String) });
+    await driver.disconnect();
+  });
+
+  it("getHealth()/getCasambiDiagnostics() reflect the real Local connection state", async () => {
+    const { driver } = makeLocalDriver();
+    await driver.connect();
+    expect(driver.getHealth().connected).toBe(true);
+    expect(driver.getHealth().connectionType).toBe("local");
+    const diag = driver.getCasambiDiagnostics();
+    expect(diag.udpStatus).toBe("connected");
+    expect(diag.restStatus).toBe("not_configured");
+    expect(diag.gateway).toBe("192.168.1.90:80");
+    await driver.disconnect();
+    expect(driver.getCasambiDiagnostics().udpStatus).toBe("disconnected");
   });
 });

@@ -329,7 +329,7 @@ export interface CasambiDiagnostics {
   reconnectCount: number;
   lastEventAt: string | null;
   restStatus: "connected" | "disconnected" | "not_configured" | "not_implemented";
-  udpStatus: "not_implemented" | "not_configured";
+  udpStatus: "connected" | "disconnected" | "not_configured" | "not_implemented";
   health: "healthy" | "degraded" | "error" | "not_implemented";
 }
 export async function fetchCasambiDiagnostics(driverId: string): Promise<CasambiDiagnostics | null> {
@@ -340,16 +340,35 @@ export async function fetchCasambiDiagnostics(driverId: string): Promise<Casambi
     return null;
   }
 }
-/** Local Gateway setup wizard actions — both honestly report `implemented: false` until
- * PR-2/PR-3 land the real Local REST/UDP protocol; never a fabricated success. */
+/** Local Gateway setup wizard — "Test Connection" params, matching the Local Gateway config
+ * fields on the manifest (`gatewayIp`/`restPort`/`udpPort`/`netId`/`dataFormat`). */
+export interface CasambiTestConnectionParams {
+  gatewayIp: string;
+  restPort: number;
+  udpPort: number;
+  netId?: number;
+  dataFormat?: "hex-dot" | "dec-hash";
+}
+export interface CasambiTestConnectionResult {
+  implemented: true;
+  reachable: boolean;
+  rest: boolean;
+  udp: boolean;
+  message: string;
+}
+export async function testCasambiLocalConnection(params: CasambiTestConnectionParams): Promise<CasambiTestConnectionResult> {
+  const res = await authed("/v1/commissioning/casambi/test-connection", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Test connection failed."));
+  return (await res.json()) as CasambiTestConnectionResult;
+}
+/** Gateway auto-discovery honestly reports `implemented: false` — no discovery endpoint is
+ * documented for the Lithernet Gateway; never a fabricated success. */
 export interface CasambiNotImplementedResult {
   implemented: false;
   message: string;
-}
-export async function testCasambiLocalConnection(): Promise<CasambiNotImplementedResult & { reachable: boolean | null }> {
-  const res = await authed("/v1/commissioning/casambi/test-connection", { method: "POST", body: "{}" });
-  if (!res.ok) throw new Error(await errorMessage(res, "Test connection failed."));
-  return (await res.json()) as CasambiNotImplementedResult & { reachable: boolean | null };
 }
 export async function discoverCasambiLocalGateway(): Promise<CasambiNotImplementedResult & { gateways: unknown[] }> {
   const res = await authed("/v1/commissioning/casambi/discover-gateway", { method: "POST", body: "{}" });

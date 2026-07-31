@@ -59,7 +59,7 @@ export interface SensorEvent extends CasambiEventBase {
 /** Network/connection-level occurrence (wire status, network model refresh, socket loss). */
 export interface NetworkEvent extends CasambiEventBase {
   type: "network";
-  kind: "networkUpdated" | "wireStatus" | "disconnected";
+  kind: "networkUpdated" | "wireStatus" | "disconnected" | "connected";
   detail?: string;
 }
 

@@ -58,9 +58,18 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
       const restPort = int(c.restPort, NaN);
       const udpPort = int(c.udpPort, NaN);
       if (!gatewayIp || !Number.isFinite(restPort) || !Number.isFinite(udpPort)) return null;
+      const dataFormat = str(c.dataFormat) === "dec-hash" ? "dec-hash" : "hex-dot";
       return new CasambiProtocolDriver({
         connectionMode: "local",
-        local: { gatewayIp, restPort, udpPort, gatewayName: str(c.gatewayName), autoDiscover: c.autoDiscover === true },
+        local: {
+          gatewayIp,
+          restPort,
+          udpPort,
+          netId: int(c.netId, 0),
+          dataFormat,
+          gatewayName: str(c.gatewayName),
+          autoDiscover: c.autoDiscover === true,
+        },
         onLog,
         trace: c.logging === true,
       });

@@ -9,10 +9,10 @@ import { CasambiLocalTransport, type CasambiLocalGatewayConfig } from "./local-t
  * unified entity model, multiple connection methods" goal of this refactor.
  *
  * Cloud is the default and existing, fully-working path — unchanged behavior, unchanged wire
- * shapes. Local is architecture-only in this release: selecting it produces a real
- * {@link CasambiLocalTransport} (REST Client + UDP Engine already wired together), but every
- * operation on it honestly rejects until PR-2/PR-3 implement the protocol — never a fabricated
- * connection.
+ * shapes. Local produces a real {@link CasambiLocalTransport}: a real UDP Casambi Command engine
+ * (§ Casambi Driver Refactor — PR-2, Local Gateway Foundation) plus the one documented REST write
+ * endpoint. What Local honestly cannot do — because no such endpoint exists in the supplied
+ * Lithernet reference set — is REST-based network/device discovery; see `local-discovery.ts`.
  */
 export type CasambiConnectionMode = "cloud" | "local";
 

@@ -48,12 +48,15 @@ export {
   CasambiLocalRestClient,
   CasambiLocalRestNotImplementedError,
   CasambiUdpEngine,
-  CasambiUdpNotImplementedError,
   CasambiLocalTransport,
   type CasambiLocalRestClientOptions,
+  type CasambiSetTargetValueParams,
+  type CasambiSetTargetValueResult,
   type CasambiUdpEngineOptions,
   type CasambiUdpPacket,
   type CasambiLocalGatewayConfig,
+  type CasambiWireFormat,
+  type CasambiPacket,
 } from "./local-transport/index.js";
 export { buildDiscoveredDevices } from "./discovery-engine.js";
 export { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";

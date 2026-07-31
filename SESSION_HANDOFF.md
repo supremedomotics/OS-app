@@ -4,125 +4,159 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
-## Session: Casambi Driver Refactor (Foundation)
+## Session: Casambi Driver Refactor — PR-2 Core Architecture + Local Gateway Foundation
 
-**Branch:** `claude/casambi-driver-refactor-lvu23e`, based on `main` at session start. Scope was
-explicitly an **architecture-only refactor** — the working Casambi Cloud driver's behavior must
-stay byte-for-byte unchanged, no Local REST/UDP protocol implementation in this PR (that's PR-2/
-PR-3/PR-4/PR-5, per the brief's stated roadmap).
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the Foundation session below — same
+branch, same effort). This session's brief: build the cross-driver **SupremeOS Core** (Event Bus,
+Capability Engine, Packet Recorder Framework, Driver Health Engine, Driver Metrics Engine) and
+implement the **real** Casambi Local Gateway protocol wherever it is fully documented — grounded in
+the 7 attached Lithernet reference PDFs (re-read in full this session; `Lithernet_UDP_Developer_
+Reference.pdf`'s §5.10 "UDP Casambi Command" and `Lithernet_WebAPI.pdf`'s §5.14 are the two that
+matter for wire protocol). Foundation's explicit constraint carries forward unchanged: **Cloud
+behavior must stay byte-for-byte identical** — nothing in `cloud-transport.ts`, `connection-
+manager.ts`'s cloud branch, or the Cloud half of `casambi-driver.ts` was touched.
 
-**What shipped:** the Casambi driver moved from three flat files
-(`casambi-driver.ts`/`casambi-transport.ts`/`casambi-codec.ts`) into
-`services/protocols/src/casambi/`, a 10-module architecture matching the brief's tree exactly:
+### SupremeOS Core (`services/protocols/src/core/`, new)
 
-- `connection-manager.ts` — the ONE place that picks Cloud vs Local and builds the matching
-  connection. `CasambiDriverOptions` is now a discriminated union on `connectionMode` (`"cloud"`
-  default | `"local"`) — every existing caller (`bootstrap.ts`'s env wiring, tests, the new
-  `native-driver-factory.ts` path) that never set `connectionMode` still gets the exact same
-  cloud construction as before.
-- `cloud-transport.ts` (renamed from `casambi-transport.ts`) — the existing, working REST +
-  WebSocket transport, contents unchanged beyond the file move/import-path fix.
-- `local-transport/{rest-client,udp-engine,local-gateway-transport}.ts` — new, architecture-only.
-  Every method honestly throws `CasambiLocalRestNotImplementedError`/`CasambiUdpNotImplementedError`
-  rather than faking a connection — matches this codebase's "visibly incomplete, never silently
-  faked" capability-gating discipline exactly.
-- `entity-mapper.ts` (renamed from `casambi-codec.ts`) — unchanged capability/state/command logic,
-  plus one new additive pure function (`describeCasambiEntityKind`) mapping a unit onto the
-  brief's unified entity vocabulary (light/switch/tunable_white/position/presence/lux/sensor/relay)
-  for Diagnostics-only labeling — never used by discovery/state/command.
-- `discovery-engine.ts` — `buildDiscoveredDevices()`, the driver's old `discover()` loop extracted
-  verbatim (same output for the same input).
-- `feedback-engine.ts` — `CasambiFeedbackEngine`, the driver's old `command()` wire-write extracted
-  verbatim; also owns the shared `WIRE_ID` constant.
-- `event-engine.ts` — new, additive `CasambiEventBus` + the brief's exact taxonomy
-  (`DeviceEvent`/`ButtonEvent`/`SceneEvent`/`SensorEvent`/`NetworkEvent`/`DiagnosticEvent`).
-  `ButtonEvent` is honestly unused — no Casambi unit type decodes to a button yet. `SceneEvent`
-  is real (fires off the unit model's actual `activeSceneId` field). Alongside, never replacing,
-  the existing `onState`/`StateListener` contract `INativeProtocolDriver` requires.
-- `diagnostics.ts` + `health-monitor.ts` — the dedicated Casambi Diagnostics snapshot (Connection
-  Type, Gateway, Latency, Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP
-  Status, Health) and the Health Monitor framework it's built from (per-subsystem status +
-  one-verdict computation). Real heartbeat/reconnect timers stayed untouched inside
-  `casambi-driver.ts` itself — deliberately NOT routed through an extra layer, since
-  `casambi-driver.test.ts`'s fake-timer reconnect/heartbeat assertions are the regression net for
-  Cloud behavior and refactoring that code was unnecessary risk for this PR's goal.
-- `driver-settings.ts` — the settings shape (`CasambiDriverSettings`: connectionType/cloud/local/
-  advanced) driving the Driver Store manifest's config schema by convention (that package has no
-  dependency on `@supreme/protocols`, matching every other driver's manifest/factory pair already).
-- `casambi-driver.ts` — same public class name/shape, now the orchestrator wiring the above
-  together. New real (not fabricated) additions: measured heartbeat round-trip `latencyMs`, an
-  `everConnected` flag for an honest Health Monitor verdict, `onLog`/`trace` options reusing the
-  existing shared `createProtocolTracer` (AVR/HEOS/Yamaha's own opt-in tracer, not a new logging
-  subsystem) for "Logging"/"Packet Capture (placeholder)". In Local mode, `connect()` fails fast
-  and honestly (`CasambiLocalRestNotImplementedError`) instead of looping a reconnect against a
-  transport that can't succeed yet.
+Five modules, none Casambi-specific, all with real unit tests:
 
-**Driver Store** (`services/drivers/src/manifests.ts`): Casambi's manifest bumped 1.0.0 → 1.1.0,
-description updated to "Supports both Casambi Cloud and Lithernet Local Gateway.", config schema
-gained `connectionType` (select, default `"cloud"`, shown first — Setup Wizard Step 1) + the new
-Local fields (`gatewayIp`/`restPort`/`udpPort`/`gatewayName`/`autoDiscover`) + one real `logging`
-field wired to the driver's tracer. The four pre-existing Cloud fields (`apiKey`/`email`/
-`password`/`networkId`) are byte-for-byte unchanged.
+- `event-bus.ts` — `CoreEventBus` + the brief's exact 13-category taxonomy (Device/Button/Sensor/
+  Lighting/Media/Climate/Automation/Scene/Group/Diagnostic/Driver/Network/Health). Every interface's
+  doc comment states plainly which driver actually emits it today; most are honestly reserved for a
+  future protocol. **Not yet wired into `casambi-driver.ts`** — the driver still publishes through
+  the pre-existing, Casambi-only `event-engine.ts`/`CasambiEventBus` (Foundation-session code, left
+  alone deliberately to avoid re-touching tested Cloud event-emission paths in the same PR that adds
+  Local). Migrating the driver onto `CoreEventBus` is real, scoped follow-up work — see TODO.md.
+- `capability-engine.ts` — `computeEntityCapabilities()`/`computeDriverCapabilities()`, pure
+  functions turning a device's real `CapabilityKind[]` + structural color config into flat boolean
+  flags. `supportsRGBW` is hard-coded `false` with a doc comment explaining why (no domain-model
+  white-channel field exists — not this session's gap to invent one).
+- `packet-recorder.ts` — `PacketRecorder`, a bounded ring buffer with query/filter/export. Framework
+  only, as scoped: no protocol-specific parsing lives here, and nothing wires the real UDP engine's
+  raw datagrams into it yet (see TODO.md).
+- `driver-health-engine.ts` — `computeDriverHealth()`, generalizing Foundation's Casambi-only
+  Health Monitor into a reusable score+verdict engine any future driver can reuse.
+- `driver-metrics-engine.ts` — `DriverMetricsEngine`, sliding-window rate counters (packets/
+  commands/events per sec) + cumulative counters (REST requests/UDP events/reconnects/dropped) +
+  latency tracking.
 
-**Gateway** (`services/gateway/src/native-driver-factory.ts`, `routes/installer.ts`): the casambi
-factory now reads `connectionType` from stored config (absent → `"cloud"`, so every driver
-installed before this refactor keeps working identically) and builds either connection mode. New
-routes: `GET /v1/drivers/:id/casambi/diagnostics` (via `sil.getNativeDriver("casambi") instanceof
-CasambiProtocolDriver`), `POST /v1/commissioning/casambi/test-connection` and
-`.../discover-gateway` — both honest, structured `{ implemented: false, message }` 200 responses
-(the Local protocol doesn't exist yet, so there is nothing to test/discover), never a fabricated
-success. Confirmed via `SupremeNativeAdapter.registerDriver()`'s "push before wire" order that a
-Local-mode driver whose `connect()` always throws stays registered/reachable via
-`getNativeDriver()` — the Diagnostics route still resolves it and reports the honest
-not-implemented statuses, rather than 404ing.
+### Casambi Local Gateway — now a real protocol, not architecture-only
 
-**UI** (`apps/web-homeowner/src/drivers.tsx`, `api.ts`): the Driver Manager's schema-driven config
-page now special-cases `casambi` (same pattern already established for `knx`'s
-`KnxGatewayDiscoveryPanel`): `connectionType` always renders first (Setup Wizard Step 1); picking
-Cloud shows exactly the four pre-existing fields and nothing else; picking Local Gateway swaps in
-the five new fields plus a `CasambiLocalGatewayPanel` (Auto Discover / Test Connection buttons,
-both surfacing the honest "not implemented yet" message from the new routes). A
-`CasambiAdvancedPlaceholders` block shows Developer Mode / Packet Capture as visibly **disabled**
-checkboxes with an explicit "not implemented yet" label — deliberately NOT wired to real config,
-since a checkbox that silently does nothing would itself be a fabricated capability. A new
-`CasambiDiagnosticsPanel` (installed Casambi drivers only) renders the full Diagnostics snapshot
-via the new `fetchCasambiDiagnostics()` client call, reusing the existing `drv-about`/`drv-badge`
-Aureon classes — no new CSS, no new design tokens.
+- `local-transport/udp-codec.ts` (new) — byte-exact encode/decode for the "UDP Casambi Command"
+  wire format (`hex-dot`/`dec-hash`), grounded directly in the reference PDF's opcode tables and
+  worked examples. Every encoder/parser is unit-tested against a real documented example where one
+  exists. **Three documentation inconsistencies found and flagged in code comments (never silently
+  resolved):** (1) §5.10.2.1.2's section heading says opcode 0x1A but its own body says 0x1B — same
+  opcode 0x1B is *also* used for the unrelated ParametersComplete marker; disambiguated by the
+  declared Length field, exactly as both sections themselves specify. (2) §5.10.2.2.18's heading
+  says 0x3F (SetTargetElements) but its body says opcode 0x3E — identical to SetTargetDimmers
+  immediately above it; resolved by following the section title, flagged as a judgment call. (3)
+  0x2F (Set color via RGBW) and 0x3D (Set color via Hue/Sat) both have a worked example whose
+  Length token undercounts by exactly one relative to the doc's own universal framing formula
+  (`length = opcode + arguments`, p.264) — this codec always derives Length from that formula, not
+  a per-opcode caption, so it does not reproduce the doc's apparent typo.
+- `local-transport/udp-engine.ts` (real, was a stub) — a real `node:dgram` UDP4 socket (injectable
+  `socketFactory` for tests), send via the codec's encoders, decode incoming datagrams via the
+  codec's parsers, and a `probe()` method for the Setup Wizard's "Test Connection" using opcode
+  0x39 with `Request=0xFF` ("own node") — the one documented request value that can never actuate a
+  real device/group/scene.
+- `local-transport/rest-client.ts` (real, was a stub) — implements exactly the one documented REST
+  endpoint, `GET /set/target_value` (`Lithernet_WebAPI.pdf` §5.14.1). `fetchNetwork`/`fetchState`
+  honestly still reject — no such endpoint exists anywhere in the supplied reference set.
+  `testConnection()` never calls the write endpoint (that always actuates); it's a plain reachability
+  GET to the gateway's HTTP root.
+- `local-discovery.ts` (new) — `updateUnitFromControlValues()`, the mechanism Local-mode discovery
+  actually uses: no REST device-listing endpoint is documented anywhere, so units are inferred
+  progressively from UDP NotifyControlValues (opcode 0x4B) subscription responses, folded into the
+  SAME `CasambiUnit` shape `entity-mapper.ts`'s `capabilitiesFromUnit`/`statesFromUnit` already
+  know how to read — additive to the unified entity model, not a parallel implementation of it.
+  Maps dimmer (type 1), on/off (16), battery (7), device temperature (6), lux (20), and presence
+  (21). Deliberately does NOT map the color-related types (2/3/4/5/11) — type 2's single-byte
+  "Color Temperature" has no documented Kelvin range/normalization at the NotifyControlValues
+  layer (unlike the SET-side opcode 0x48, which does document one) — an honest, disclosed gap.
+- `local-command-mapper.ts` (new) — `localCommandToUdpPacket()`, the Local-mode analogue of
+  `entity-mapper.ts`'s `commandToTargetControls()`. Maps onoff/brightness/color(hue-sat, kelvin) to
+  real UDP opcodes (0x20, 0x3D, 0x48). `position` is deliberately unmapped — no opcode in the
+  reference set documents a shade/cover position control.
+- `casambi-driver.ts` — Local mode's `connect()` no longer throws
+  `CasambiLocalRestNotImplementedError`. It now really starts the UDP engine, sends the documented
+  bootstrap sequence (SetDefaultMask → Subscribe → NotifyButtonEvent enable, all best-effort since
+  Subscribe/NotifyButtonEvent are firmware-gated ≥37.90/≥39.50 and there's no way to detect an
+  older-firmware no-op without real hardware), and routes incoming packets: 0x4B →
+  `local-discovery.ts` → the SAME `applyUnit()`/`record()` machinery Cloud already uses (so state
+  listeners/diagnostics/events all work identically regardless of transport); 0x51 → a typed
+  `ButtonEvent`; 0x3A → forgets the unit + a `networkUpdated` event; 0x0D (Scene called) is logged
+  via the tracer only — its 8-bit, installer-app-configured payload has no unitId/sceneId
+  equivalent to `SceneEvent`, an honest gap rather than a forced mapping. `command()` now really
+  sends a UDP packet for onoff/brightness/color; `position` (and anything else `local-command-
+  mapper.ts` returns `null` for) surfaces the driver's existing "unsupported command" error.
+  `isConnected()` reflects the real UDP socket's `listening` state. UDP being connectionless means
+  there is still no reconnect loop for Local — a disclosed, deliberate scope boundary, see TODO.md.
+- `health-monitor.ts` — `computeHealthVerdict`/`restSubsystemStatus`/`udpSubsystemStatus` no longer
+  hard-code Local to `"not_implemented"`. UDP status now reflects the real socket state
+  (`connected`/`disconnected`); REST status for Local reports `"not_configured"` (honestly: the
+  documented REST surface is one stateless write endpoint, nothing with a live connection state to
+  report — not a placeholder for "unimplemented").
 
-**Verification:** full monorepo `pnpm install` (fresh container) + `turbo run build typecheck test`
-across all 113 build/typecheck tasks and all 97 test-suite tasks — 100% green, including every
-pre-existing Casambi test (`casambi-driver.test.ts` 7, `entity-mapper.test.ts` 22, formerly
-`casambi-codec.test.ts`) passing **unmodified** except for their import paths. **Not** done this
-session: live Playwright verification of the new Driver Manager UI (no running `hub-compose`
-stack/backend in this sandbox) — flagged honestly per this project's testing standard rather than
-claimed. `typecheck`/`build` are clean for every touched package (`@supreme/protocols`,
-`@supreme/drivers`, `@supreme/gateway`, `@supreme/web-homeowner`) and the full monorepo.
+### Driver Store, Gateway routes, UI
 
-**Deliberately NOT done, per the brief's explicit scope:** no Local REST implementation, no UDP
-engine, no real Lithernet Gateway wire protocol of any kind. Selecting "Local Gateway" anywhere in
-the product today produces an honest "not implemented yet" result — never a fake connection, never
-fabricated diagnostics.
+- `services/drivers/src/manifests.ts` — Casambi bumped 1.1.0 → 1.2.0. New config fields: `netId`
+  (0-254, must match the gateway's own Net ID) and `dataFormat` (`hex-dot`/`dec-hash` select, must
+  match the gateway's own "DEC or HEX" setting). `autoDiscover`'s help text now honestly says why
+  it's unimplemented (no discovery endpoint) rather than "architecture-only."
+- `services/gateway/src/native-driver-factory.ts` — reads `netId`/`dataFormat` from stored config
+  and passes them through to `CasambiLocalGatewayConfig`.
+- `services/gateway/src/routes/installer.ts` — `POST /v1/commissioning/casambi/test-connection` is
+  now REAL: parses `{gatewayIp, restPort, udpPort, netId, dataFormat}` from the request body, runs a
+  REST reachability check + a safe UDP probe, returns `{implemented: true, reachable, rest, udp,
+  message}`. `discover-gateway` stays honestly `implemented: false` with updated wording (no
+  enumeration/discovery endpoint is documented for this gateway at all).
+- `apps/web-homeowner/src/api.ts`/`drivers.tsx` — `testCasambiLocalConnection()` now sends real
+  connection params (reads them from the wizard's own in-progress field values) and renders
+  `rest`/`udp` reachability separately. New `netId`/`dataFormat` fields render in the Local Gateway
+  section. Diagnostics panel's UDP status no longer says "(placeholder)".
+
+### Verification
+
+Full `turbo run build typecheck test` across `@supreme/protocols`, `@supreme/drivers`,
+`@supreme/gateway`, `@supreme/web-homeowner` (and their dependency closure) — 46/46 tasks green.
+`@supreme/protocols`' own suite: **67 test files, 644 tests, all passing**, including every
+pre-existing Cloud-mode Casambi test unmodified (confirms zero Cloud regression) plus this
+session's new coverage: `core/*.test.ts` (5 files), `casambi/local-transport/udp-codec.test.ts` (39
+tests, several byte-exact against the PDF's own worked examples), `udp-engine.test.ts` (13, fake
+`dgram` socket), `rest-client.test.ts` (6, fake `fetch`), `local-discovery.test.ts` (8),
+`local-command-mapper.test.ts` (10), and 12 new Local-mode integration tests appended to
+`casambi-driver.test.ts` (connect/disconnect bootstrap+teardown sequences, NotifyControlValues →
+state, command → UDP packet, button events, node removal, diagnostics). **Not done this session:**
+live Playwright verification of the updated Driver Manager UI (no running `hub-compose` stack in
+this sandbox, same honest gap as the Foundation session) — flagged, not claimed. Real Lithernet
+hardware verification of anything firmware-gated (≥37.90/≥39.50 NotifyControlValues/NotifyButtonEvent,
+≥36.70 Target Color/Status) is also unverifiable without hardware — see TODO.md.
 
 ## Immediate priorities for the next session
 
-1. **PR-2: Local REST implementation** — fill in `local-transport/rest-client.ts`'s real Lithernet
-   WebAPI calls (`fetchNetwork`/`fetchState`/`sendCommand`/`testConnection`), reusing the same
-   `entity-mapper.ts`/`discovery-engine.ts`/`feedback-engine.ts` pure functions the Cloud path
-   already uses — they're transport-independent by design, so this should be additive, not a
-   rewrite.
-2. **PR-3: UDP Engine + realtime feedback** — fill in `local-transport/udp-engine.ts`'s real socket
-   bind/packet-decode/reconnect, wire it into the Event Bus's `NetworkEvent`/`DeviceEvent` publish
-   points already built this session.
-3. **PR-4: Hybrid REST + UDP with automatic failover** — once PR-2/PR-3 both exist, per the brief's
-   stated ordering.
-4. **PR-5: Advanced diagnostics, packet capture, performance tuning** — the `packetCapture`
-   placeholder in `CasambiAdvancedPlaceholders`/`driver-settings.ts` is the seam; a real packet
-   capture needs the UDP Engine (PR-3) first.
-5. Live Playwright verification of the new Driver Manager wizard/diagnostics UI at all four
-   required breakpoints (phone/tablet/desktop/ultrawide) — genuinely not done this session (no
-   backend running in this sandbox).
-6. Consider a dedicated `native-driver-factory.test.ts` case for the new `connectionType: "local"`
-   branch (today only the pre-existing cloud-shape tests run against this factory).
+1. **RGBW/CCT capability inference for Local mode** — `local-discovery.ts` currently omits color
+   entirely (documented gap: NotifyControlValues type 2's byte has no known Kelvin range). If a
+   real gateway can be tested, confirm the actual encoding and complete the mapping.
+2. **Wire `casambi-driver.ts` onto `core/event-bus.ts`** — today the driver still uses the
+   Foundation-session `CasambiEventBus`; migrating to the new cross-driver `CoreEventBus` was
+   deliberately deferred this session to avoid re-touching tested Cloud event paths in the same PR
+   that added Local. Do this as its own scoped change with its own regression pass.
+3. **Wire the real UDP engine into `core/packet-recorder.ts`** — the framework exists; nothing
+   records real datagrams into it yet. Needed before "Packet Capture" in the UI can go from
+   disabled placeholder to real.
+4. **Local mode reconnect/health-recovery loop** — UDP being connectionless means a lost socket
+   today has no automatic recovery the way Cloud's WebSocket does. Decide what "reconnect" even
+   means for a connectionless protocol on a LAN gateway before building it.
+5. **0x0D Scene called → a real driver event** — currently only logged via the tracer. Its 8-bit,
+   installer-app-configured payload has no unitId/sceneId; decide on a shape (maybe a new,
+   Local-only event type) before wiring it into `CoreEventBus`/`CasambiEventBus`.
+6. Live Playwright verification of the updated Driver Manager wizard/diagnostics UI at all four
+   required breakpoints — genuinely not done this session (no backend running in this sandbox).
+7. Verify every firmware-gated opcode (0x39/0x45/0x46/0x49/0x4B/0x50/0x51, gated ≥33.22 through
+   ≥39.50 across different features) against a real Lithernet Gateway once hardware is available —
+   this session's implementation is byte-exact against the documentation but has never touched a
+   real device.
 
 ---
 

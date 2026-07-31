@@ -27,8 +27,7 @@ export interface CasambiDiagnosticsSnapshot {
   reconnectCount: number;
   lastEventAt: string | null;
   restStatus: CasambiSubsystemStatus;
-  /** Always `"not_implemented"` until PR-3 — never fabricated. */
-  udpStatus: "not_implemented" | "not_configured";
+  udpStatus: CasambiSubsystemStatus;
   health: CasambiHealthVerdict;
 }
 
@@ -64,7 +63,7 @@ export function buildDiagnosticsSnapshot(inputs: CasambiDiagnosticsInputs): Casa
     reconnectCount: inputs.reconnects,
     lastEventAt: inputs.lastEventAt,
     restStatus: restSubsystemStatus(inputs.mode, inputs.connected),
-    udpStatus: udpSubsystemStatus(inputs.mode),
+    udpStatus: udpSubsystemStatus(inputs.mode, inputs.connected),
     health: computeHealthVerdict({
       mode: inputs.mode,
       connected: inputs.connected,

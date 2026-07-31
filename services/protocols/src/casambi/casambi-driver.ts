@@ -27,7 +27,21 @@ import {
   type CasambiWire,
 } from "./cloud-transport.js";
 import { createConnection, type CasambiConnectionMode } from "./connection-manager.js";
-import { CasambiLocalRestNotImplementedError, type CasambiLocalGatewayConfig, type CasambiLocalTransport } from "./local-transport/index.js";
+import {
+  encodeNotifyButtonEvent,
+  encodeNotifyControlValuesSetDefaultMask,
+  encodeNotifyControlValuesSubscribe,
+  encodeNotifyControlValuesUnsubscribe,
+  parseButtonEvent,
+  parseNodeRemoved,
+  parseNotifyControlValues,
+  parseSceneCalled,
+  type CasambiLocalGatewayConfig,
+  type CasambiLocalTransport,
+  type CasambiUdpPacket,
+} from "./local-transport/index.js";
+import { updateUnitFromControlValues } from "./local-discovery.js";
+import { localCommandToUdpPacket } from "./local-command-mapper.js";
 import { buildDiscoveredDevices } from "./discovery-engine.js";
 import { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";
 import { CasambiEventBus, type CasambiEventListener } from "./event-engine.js";
@@ -35,20 +49,28 @@ import { buildDiagnosticsSnapshot, type CasambiDiagnosticsSnapshot } from "./dia
 import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
 
 /**
- * Real Casambi protocol driver (§3, §7; § Casambi Driver Refactor — Foundation) — Casambi is a
- * Bluetooth-mesh luminaire ecosystem reachable two ways: Casambi Cloud (REST + WebSocket, the
- * existing, fully-working implementation below) or a local Lithernet Gateway (REST + UDP,
- * architecture-only in this release — see `local-transport/*`). The Connection Manager
- * (`connection-manager.ts`) is the ONLY place that picks between them; everything below — Entity
- * Mapper, Discovery Engine, Feedback Engine, Event Bus, Diagnostics, Health Monitor — is written
- * against ONE unified entity model regardless of which mode is active, exactly this refactor's
- * goal. Cloud behavior is byte-for-byte unchanged from before this refactor: same REST/WebSocket
- * calls, same reconnect/heartbeat timing, same capability mapping.
+ * Real Casambi protocol driver (§3, §7; § Casambi Driver Refactor — Foundation + PR-2 Local
+ * Gateway Foundation) — Casambi is a Bluetooth-mesh luminaire ecosystem reachable two ways:
+ * Casambi Cloud (REST + WebSocket, the existing, fully-working implementation below) or a local
+ * Lithernet Gateway (real UDP Casambi Command protocol — `local-transport/udp-engine.ts` +
+ * `udp-codec.ts` — plus the one documented REST write endpoint, `local-transport/rest-client.ts`).
+ * The Connection Manager (`connection-manager.ts`) is the ONLY place that picks between them;
+ * everything below — Entity Mapper, Discovery Engine, Feedback Engine, Event Bus, Diagnostics,
+ * Health Monitor — is written against ONE unified entity model regardless of which mode is
+ * active, exactly this refactor's goal. Cloud behavior is byte-for-byte unchanged from before
+ * this refactor: same REST/WebSocket calls, same reconnect/heartbeat timing, same capability
+ * mapping.
  *
  * Reliability (Cloud): the wire is heartbeated (PING within the 5-minute keep-alive window) and
  * auto-reconnected with capped exponential backoff. A dropped socket or an expired session triggers
  * a full re-auth + re-fetch + re-open so no state is lost. Capabilities are derived dynamically from
  * each unit's advertised controls — never hard-coded per fixture model.
+ *
+ * Local mode has no equivalent reconnect loop yet (UDP is connectionless — see the "Local Gateway
+ * lifecycle" section near the bottom of this class for why, and TODO.md for the honest follow-up).
+ * Local discovery is also honestly progressive rather than instant: it has no REST device-listing
+ * endpoint to enumerate from, so units appear as their first NotifyControlValues packet arrives
+ * (`local-discovery.ts`).
  *
  * Secrets: the API key, e-mail, password and session id live only inside the injected transport and
  * this instance; they are never written to logs or embedded in thrown errors.
@@ -64,10 +86,11 @@ export interface CasambiCommonDriverOptions {
   /** § Driver Settings → Advanced → Logging: lifecycle events surfaced into the Driver
    * Manager's per-driver log, same pipeline every other native driver already uses. */
   onLog?: (level: "info" | "warn" | "error", message: string) => void;
-  /** § Driver Settings → Advanced → Packet Capture (placeholder). Off by default; when on
-   * (and `onLog` is set) records a lightweight, log-line trace of wire traffic via the same
-   * shared tracer AVR/HEOS/Yamaha use — a real binary packet capture needs the Local UDP
-   * Engine (PR-3), so this is honestly a placeholder today. */
+  /** § Driver Settings → Advanced → Packet Capture. Off by default; when on (and `onLog` is
+   * set) records a lightweight, log-line trace of wire traffic via the same shared tracer
+   * AVR/HEOS/Yamaha use. This is a text trace, not the binary `PacketRecorder` framework
+   * (`core/packet-recorder.ts`) — wiring the real UDP engine's raw datagrams into that recorder
+   * is a documented follow-up, not yet done (see TODO.md). */
   trace?: boolean;
 }
 
@@ -123,6 +146,8 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   private session: CasambiSession | null = null;
   private wire: CasambiWire | null = null;
+  private localUnsubscribePacket: (() => void) | null = null;
+  private localUnsubscribeError: (() => void) | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closing = false;
@@ -154,9 +179,8 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     this.closing = false;
     if (this.mode === "local") {
-      // § Casambi Driver Refactor — Foundation: architecture only. Fails fast and honestly
-      // rather than looping a reconnect against a transport that can't succeed yet.
-      throw new CasambiLocalRestNotImplementedError("connect");
+      await this.connectLocal();
+      return;
     }
     await this.establish();
   }
@@ -164,12 +188,17 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   async disconnect(): Promise<void> {
     this.closing = true;
     this.clearTimers();
+    if (this.mode === "local") {
+      await this.disconnectLocal();
+      return;
+    }
     this.wire?.close();
     this.wire = null;
     this.session = null;
   }
 
   isConnected(): boolean {
+    if (this.mode === "local") return this.localTransport?.udp.listening ?? false;
     return this.session !== null && (this.wire?.connected ?? false);
   }
 
@@ -205,6 +234,16 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`casambi: ${deviceId} not bound for ${command.capability}`);
+    if (this.mode === "local") {
+      if (!this.localTransport?.udp.listening) throw new Error("casambi: not connected");
+      const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
+      const netId = this.localTransport.config.netId ?? 0;
+      const packet = localCommandToUdpPacket(netId, b.unitId, command, prev);
+      if (!packet) throw new Error(`casambi: unsupported command for ${command.capability}`);
+      this.tracer.send(`local controlUnit ${b.unitId}`);
+      await this.localTransport.udp.send(packet);
+      return;
+    }
     if (!this.wire?.connected) throw new Error("casambi: not connected");
     const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
     const targetControls = commandToTargetControls(command, prev);
@@ -474,6 +513,110 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // `address` is the canonical binding target; accept "casambi:45" or a bare "45".
     const raw = binding.address.replace(/^casambi:/, "");
     return Number(raw);
+  }
+
+  // --- Local Gateway lifecycle (§ Casambi Driver Refactor — PR-2, Local Gateway Foundation) ----
+  // UDP is connectionless by design (no session/wire handshake like Cloud's WebSocket) — "connected"
+  // here means the local UDP socket is bound and this driver is listening, not that a specific
+  // gateway/network has acknowledged anything. There is no reconnect loop yet: a lost UDP socket
+  // has no natural "reconnect" the way a dropped WebSocket does, and the gateway is on the same
+  // LAN rather than across the internet — see TODO.md for the honest follow-up on detecting and
+  // recovering from a socket error mid-session.
+
+  private async connectLocal(): Promise<void> {
+    const local = this.localTransport;
+    if (!local) return; // unreachable — createConnection always builds one in local mode
+    await local.udp.start();
+    this.localUnsubscribePacket = local.udp.onPacket((pkt) => this.onLocalPacket(pkt));
+    this.localUnsubscribeError = local.udp.onError((err) => {
+      this.lastError = sanitizeError(err);
+      this.events.publish({ type: "diagnostic", kind: "error", detail: this.lastError, ts: nowIso() });
+    });
+    this.everConnected = true;
+    this.lastError = null;
+    this.events.publish({ type: "network", kind: "connected", ts: nowIso() });
+    this.tracer.event("local UDP engine started");
+
+    // Best-effort realtime subscription. Subscribe/NotifyButtonEvent are documented as requiring
+    // Evolution firmware >= 37.90 / 39.50 respectively (p.314, p.316); on older firmware the
+    // gateway simply never emits these opcodes back — an honest, silent no-op this driver cannot
+    // distinguish from "not subscribed yet" without real hardware to verify against (see TODO.md).
+    const netId = local.config.netId ?? 0;
+    try {
+      await local.udp.send(encodeNotifyControlValuesSetDefaultMask(netId));
+      await local.udp.send(encodeNotifyControlValuesSubscribe(netId, 0, 250));
+      await local.udp.send(encodeNotifyButtonEvent(netId, true));
+    } catch (err) {
+      this.lastError = sanitizeError(err);
+      this.events.publish({ type: "diagnostic", kind: "error", detail: this.lastError, ts: nowIso() });
+    }
+  }
+
+  private async disconnectLocal(): Promise<void> {
+    const local = this.localTransport;
+    this.localUnsubscribePacket?.();
+    this.localUnsubscribePacket = null;
+    this.localUnsubscribeError?.();
+    this.localUnsubscribeError = null;
+    if (!local) return;
+    const netId = local.config.netId ?? 0;
+    try {
+      await local.udp.send(encodeNotifyButtonEvent(netId, false));
+      await local.udp.send(encodeNotifyControlValuesUnsubscribe(netId, 0, 250));
+    } catch {
+      // Best-effort teardown — the socket is closing regardless.
+    }
+    await local.udp.stop();
+  }
+
+  private onLocalPacket(pkt: CasambiUdpPacket): void {
+    this.lastEventAt = nowIso();
+    const { packet } = pkt;
+    switch (packet.opcode) {
+      case 0x4b: {
+        const notify = parseNotifyControlValues(packet);
+        if (notify.values.length === 0) return; // "no data available" empty response (p.315)
+        const prevUnit = this.units.get(notify.targetId);
+        const unit = updateUnitFromControlValues(notify.targetId, notify.values, prevUnit);
+        this.applyUnit(unit);
+        break;
+      }
+      case 0x51: {
+        const btn = parseButtonEvent(packet);
+        this.events.publish({
+          type: "button",
+          unitId: btn.unitId,
+          action: btn.eventLabel ?? `type_${btn.event}`,
+          ts: nowIso(),
+        });
+        break;
+      }
+      case 0x3a: {
+        const removed = parseNodeRemoved(packet);
+        this.units.delete(removed.unitId);
+        this.events.publish({
+          type: "network",
+          kind: "networkUpdated",
+          detail: `unit ${removed.unitId} removed`,
+          ts: nowIso(),
+        });
+        break;
+      }
+      case 0x0d: {
+        // Scene called — an 8-bit, installer-configured code (p.266) with no unitId/sceneId
+        // equivalent to Cloud's `SceneEvent`. Logged via the tracer only; not yet surfaced as a
+        // typed driver event — see TODO.md.
+        const scene = parseSceneCalled(packet);
+        this.tracer.event(`scene called (bits=${scene.bits.join(",")})`);
+        break;
+      }
+      default:
+        // Every other opcode (0x1A/0x1B parameter responses, 0x28 time, 0x39 node status, 0x45
+        // scene status, 0x46 target status, 0x49 target color) is real and decodable via
+        // `local-transport/udp-codec.ts`, but nothing in this driver queries them proactively
+        // yet — see TODO.md for wiring them into Diagnostics.
+        break;
+    }
   }
 }
 

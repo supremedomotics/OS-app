@@ -216,7 +216,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
               <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
             ))}
           {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "local" && (
-            <CasambiLocalGatewayPanel />
+            <CasambiLocalGatewayPanel values={values} />
           )}
           {!driver.protocols.includes("casambi") &&
             schema.map((f) => (
@@ -381,7 +381,7 @@ function ConfigField({ field, value, onChange }: { field: DriverConfigField; val
 
 // ── Casambi Driver Refactor — Foundation: Driver Setup Wizard + Local Gateway settings ──────
 const CASAMBI_CLOUD_ONLY_KEYS = new Set(["apiKey", "email", "password", "networkId"]);
-const CASAMBI_LOCAL_ONLY_KEYS = new Set(["gatewayIp", "restPort", "udpPort", "gatewayName", "autoDiscover"]);
+const CASAMBI_LOCAL_ONLY_KEYS = new Set(["gatewayIp", "restPort", "udpPort", "netId", "dataFormat", "gatewayName", "autoDiscover"]);
 
 /**
  * Step 1 of the Casambi Setup Wizard is the `connectionType` field itself (always visible, first
@@ -398,10 +398,14 @@ function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<
   });
 }
 
-/** Local Gateway wizard actions (Auto Discover / Test Connection). Both honestly report
- * "not implemented yet" — the Local REST/UDP protocol itself ships in a follow-up release; this
- * is architecture only, never a fabricated success. */
-function CasambiLocalGatewayPanel() {
+/**
+ * Local Gateway wizard actions. "Test Connection" is real (a REST reachability check + a safe
+ * UDP 0x39 "own node" probe against the gateway address/ports/Net ID/data format entered above —
+ * never a write, so it can never actuate a real device). "Auto Discover" honestly reports
+ * "not implemented" — no gateway enumeration/discovery endpoint is documented for the Lithernet
+ * Gateway, never a fabricated success.
+ */
+function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> }) {
   const [busy, setBusy] = useState<"discover" | "test" | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -419,11 +423,24 @@ function CasambiLocalGatewayPanel() {
   }
 
   async function test() {
+    const gatewayIp = String(values.gatewayIp ?? "").trim();
+    const restPort = Number(values.restPort);
+    const udpPort = Number(values.udpPort);
+    if (!gatewayIp || !Number.isFinite(restPort) || !Number.isFinite(udpPort)) {
+      setNote("Enter Gateway IP, REST port, and UDP port above before testing.");
+      return;
+    }
     setBusy("test");
     setNote(null);
     try {
-      const res = await testCasambiLocalConnection();
-      setNote(res.message);
+      const res = await testCasambiLocalConnection({
+        gatewayIp,
+        restPort,
+        udpPort,
+        netId: values.netId === undefined ? undefined : Number(values.netId),
+        dataFormat: values.dataFormat === "dec-hash" ? "dec-hash" : "hex-dot",
+      });
+      setNote(`${res.message} (REST: ${res.rest ? "reachable" : "unreachable"}, UDP: ${res.udp ? "reachable" : "unreachable"})`);
     } catch (e) {
       setNote(e instanceof Error ? e.message : "Test connection failed.");
     } finally {
@@ -448,10 +465,10 @@ function CasambiLocalGatewayPanel() {
 }
 
 /** Advanced Settings placeholders (§ Driver Settings): Developer Mode and Packet Capture have
- * no real backing yet (Packet Capture needs the Local UDP Engine, PR-3) — shown visible but
- * disabled with an honest label, never a functional-looking control that silently does nothing.
- * Logging IS real and ships as an ordinary schema field (wired to the driver's own trace/onLog
- * pipeline), so it is not repeated here. */
+ * no real backing yet — shown visible but disabled with an honest label, never a
+ * functional-looking control that silently does nothing. Logging IS real and ships as an
+ * ordinary schema field (wired to the driver's own trace/onLog pipeline), so it is not repeated
+ * here. */
 function CasambiAdvancedPlaceholders() {
   return (
     <div className="drv-field" style={{ marginBottom: 14 }}>
@@ -464,7 +481,7 @@ function CasambiAdvancedPlaceholders() {
       <label className="drv-field" style={{ opacity: 0.6 }}>
         <span className="lbl">Packet capture</span>
         <input type="checkbox" disabled />
-        <span className="help">Not implemented yet — needs the Local UDP Engine (see PR-3).</span>
+        <span className="help">Not implemented yet — the UDP engine now exists, but recording its traffic into the shared Packet Recorder framework hasn't been wired up.</span>
       </label>
     </div>
   );
@@ -514,7 +531,7 @@ function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
         <div><dt>Reconnect count</dt><dd>{snapshot.reconnectCount}</dd></div>
         <div><dt>Last event</dt><dd>{snapshot.lastEventAt ? new Date(snapshot.lastEventAt).toLocaleString() : "—"}</dd></div>
         <div><dt>REST status</dt><dd>{CASAMBI_STATUS_LABEL[snapshot.restStatus] ?? snapshot.restStatus}</dd></div>
-        <div><dt>UDP status</dt><dd>{CASAMBI_STATUS_LABEL[snapshot.udpStatus] ?? snapshot.udpStatus} <span className="muted">(placeholder)</span></dd></div>
+        <div><dt>UDP status</dt><dd>{CASAMBI_STATUS_LABEL[snapshot.udpStatus] ?? snapshot.udpStatus}</dd></div>
         <div><dt>Health</dt><dd><span className={`drv-badge ${snapshot.health === "healthy" ? "ok" : snapshot.health === "error" ? "err" : "off"}`}>{CASAMBI_HEALTH_LABEL[snapshot.health] ?? snapshot.health}</span></dd></div>
       </dl>
     </div>
