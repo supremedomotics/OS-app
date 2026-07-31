@@ -1,4 +1,4 @@
-import type { CasambiUnit } from "./casambi-codec.js";
+import type { CasambiUnit } from "./entity-mapper.js";
 
 /**
  * Casambi transport seam (§3, §7) — the ONLY place that speaks to Casambi Cloud over the wire.

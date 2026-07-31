@@ -28,6 +28,7 @@ import {
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
+import { CasambiProtocolDriver } from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -229,6 +230,54 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "update");
       reply.send(await i().disconnectDriver(req.params.id as DriverId));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Driver Refactor — Foundation: the dedicated Casambi Diagnostics page's snapshot
+  // (Connection Type, Gateway, Latency, Entities, Online/Offline, Reconnects, Last Event,
+  // REST/UDP Status, Health). Driver-level, not per-device — unlike `/v1/devices/:id/diagnostics`.
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/casambi/diagnostics", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+      reply.send(driver.getCasambiDiagnostics());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Local Gateway setup wizard actions (§ Driver Setup Wizard). Both are honest, structured
+  // "not implemented yet" responses (200, not a scary error) — the Local REST/UDP protocol
+  // itself ships in a follow-up release (PR-2/PR-3); this release only prepares the architecture.
+  app.post("/v1/commissioning/casambi/test-connection", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      reply.send({
+        implemented: false,
+        reachable: null,
+        message: "Local Gateway connection testing is not implemented yet — architecture-only in this release (see PR-2: Local REST implementation).",
+      });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/casambi/discover-gateway", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      reply.send({
+        implemented: false,
+        gateways: [],
+        message: "Local Gateway auto-discovery is not implemented yet — architecture-only in this release (see PR-2: Local REST implementation).",
+      });
     } catch (err) {
       sendError(reply, err);
     }

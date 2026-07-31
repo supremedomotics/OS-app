@@ -317,6 +317,46 @@ export async function discoverKnxGateways(): Promise<KnxGateway[]> {
   return ((await res.json()) as { interfaces: KnxGateway[] }).interfaces;
 }
 
+// ── Casambi Driver Refactor — Foundation (authenticated) ──────────────────────────
+/** The dedicated Casambi Diagnostics page's snapshot — driver-level, not per-device. */
+export interface CasambiDiagnostics {
+  connectionType: "cloud" | "local";
+  gateway: string | null;
+  latencyMs: number | null;
+  entities: number;
+  onlineDevices: number;
+  offlineDevices: number;
+  reconnectCount: number;
+  lastEventAt: string | null;
+  restStatus: "connected" | "disconnected" | "not_configured" | "not_implemented";
+  udpStatus: "not_implemented" | "not_configured";
+  health: "healthy" | "degraded" | "error" | "not_implemented";
+}
+export async function fetchCasambiDiagnostics(driverId: string): Promise<CasambiDiagnostics | null> {
+  try {
+    const res = await authed(`/v1/drivers/${driverId}/casambi/diagnostics`);
+    return res.ok ? ((await res.json()) as CasambiDiagnostics) : null;
+  } catch {
+    return null;
+  }
+}
+/** Local Gateway setup wizard actions — both honestly report `implemented: false` until
+ * PR-2/PR-3 land the real Local REST/UDP protocol; never a fabricated success. */
+export interface CasambiNotImplementedResult {
+  implemented: false;
+  message: string;
+}
+export async function testCasambiLocalConnection(): Promise<CasambiNotImplementedResult & { reachable: boolean | null }> {
+  const res = await authed("/v1/commissioning/casambi/test-connection", { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Test connection failed."));
+  return (await res.json()) as CasambiNotImplementedResult & { reachable: boolean | null };
+}
+export async function discoverCasambiLocalGateway(): Promise<CasambiNotImplementedResult & { gateways: unknown[] }> {
+  const res = await authed("/v1/commissioning/casambi/discover-gateway", { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Gateway discovery failed."));
+  return (await res.json()) as CasambiNotImplementedResult & { gateways: unknown[] };
+}
+
 // ── Supreme KNX Unified Device Intelligence — Discovery Queue (authenticated) ─────
 // Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
 // invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines

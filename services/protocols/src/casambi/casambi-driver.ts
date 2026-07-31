@@ -11,32 +11,41 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
+import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tracer.js";
 import {
-  capabilitiesFromUnit,
-  colorConfigFromUnit,
   commandToTargetControls,
   statesFromUnit,
   type CasambiUnit,
-} from "./casambi-codec.js";
+} from "./entity-mapper.js";
 import {
   CasambiSessionExpiredError,
-  HttpCasambiTransport,
   type CasambiCredentials,
   type CasambiEvent,
   type CasambiGroup,
   type CasambiSession,
   type CasambiTransport,
   type CasambiWire,
-} from "./casambi-transport.js";
-import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
+} from "./cloud-transport.js";
+import { createConnection, type CasambiConnectionMode } from "./connection-manager.js";
+import { CasambiLocalRestNotImplementedError, type CasambiLocalGatewayConfig, type CasambiLocalTransport } from "./local-transport/index.js";
+import { buildDiscoveredDevices } from "./discovery-engine.js";
+import { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";
+import { CasambiEventBus, type CasambiEventListener } from "./event-engine.js";
+import { buildDiagnosticsSnapshot, type CasambiDiagnosticsSnapshot } from "./diagnostics.js";
+import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
 
 /**
- * Real Casambi protocol driver (§3, §7) — Casambi is a Bluetooth-mesh luminaire ecosystem reached
- * through Casambi Cloud. The persistent network model (units, groups, capabilities) is read over
- * REST; live state and control flow over a single WebSocket wire. The driver confines all Casambi
- * framing and emits pure Supreme capabilities upward, exactly like the other native drivers.
+ * Real Casambi protocol driver (§3, §7; § Casambi Driver Refactor — Foundation) — Casambi is a
+ * Bluetooth-mesh luminaire ecosystem reachable two ways: Casambi Cloud (REST + WebSocket, the
+ * existing, fully-working implementation below) or a local Lithernet Gateway (REST + UDP,
+ * architecture-only in this release — see `local-transport/*`). The Connection Manager
+ * (`connection-manager.ts`) is the ONLY place that picks between them; everything below — Entity
+ * Mapper, Discovery Engine, Feedback Engine, Event Bus, Diagnostics, Health Monitor — is written
+ * against ONE unified entity model regardless of which mode is active, exactly this refactor's
+ * goal. Cloud behavior is byte-for-byte unchanged from before this refactor: same REST/WebSocket
+ * calls, same reconnect/heartbeat timing, same capability mapping.
  *
- * Reliability: the wire is heartbeated (PING within the 5-minute keep-alive window) and
+ * Reliability (Cloud): the wire is heartbeated (PING within the 5-minute keep-alive window) and
  * auto-reconnected with capped exponential backoff. A dropped socket or an expired session triggers
  * a full re-auth + re-fetch + re-open so no state is lost. Capabilities are derived dynamically from
  * each unit's advertised controls — never hard-coded per fixture model.
@@ -45,16 +54,34 @@ import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
  * this instance; they are never written to logs or embedded in thrown errors.
  */
 
-export interface CasambiDriverOptions {
-  credentials: CasambiCredentials;
-  /** Injectable transport (tests pass a fake; prod builds a real HTTP/WS transport from the key). */
-  transport?: CasambiTransport;
+export interface CasambiCommonDriverOptions {
   /** Keep-alive ping period (ms). Default 240_000 (4 min; server closes idle wires after 5). */
   pingIntervalMs?: number;
-  /** Reconnect backoff floor / ceiling (ms). Defaults 2_000 / 60_000. */
+  /** Reconnect backoff floor / ceiling (ms). Defaults 2_000 / 60_000. Cloud mode only — Local
+   * has no reconnect loop yet (nothing to reconnect to). */
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /** § Driver Settings → Advanced → Logging: lifecycle events surfaced into the Driver
+   * Manager's per-driver log, same pipeline every other native driver already uses. */
+  onLog?: (level: "info" | "warn" | "error", message: string) => void;
+  /** § Driver Settings → Advanced → Packet Capture (placeholder). Off by default; when on
+   * (and `onLog` is set) records a lightweight, log-line trace of wire traffic via the same
+   * shared tracer AVR/HEOS/Yamaha use — a real binary packet capture needs the Local UDP
+   * Engine (PR-3), so this is honestly a placeholder today. */
+  trace?: boolean;
 }
+
+export type CasambiDriverOptions =
+  | (CasambiCommonDriverOptions & {
+      connectionMode?: "cloud";
+      credentials: CasambiCredentials;
+      /** Injectable transport (tests pass a fake; prod builds a real HTTP/WS transport from the key). */
+      transport?: CasambiTransport;
+    })
+  | (CasambiCommonDriverOptions & {
+      connectionMode: "local";
+      local: CasambiLocalGatewayConfig;
+    });
 
 interface CasambiBinding {
   deviceId: DeviceId;
@@ -64,6 +91,7 @@ interface CasambiBinding {
 
 /** Live health snapshot for monitoring/telemetry (no secrets). */
 export interface CasambiHealth {
+  connectionType: CasambiConnectionMode;
   connected: boolean;
   sessionActive: boolean;
   reconnects: number;
@@ -72,12 +100,18 @@ export interface CasambiHealth {
   lastError: string | null;
 }
 
-const WIRE_ID = 1;
-
 export class CasambiProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "casambi";
-  private readonly opts: CasambiDriverOptions;
-  private readonly transport: CasambiTransport;
+  private readonly mode: CasambiConnectionMode;
+  private readonly credentials: CasambiCredentials | null;
+  private transport: CasambiTransport | null;
+  private readonly localTransport: CasambiLocalTransport | null;
+  private readonly feedback: CasambiFeedbackEngine;
+  private readonly events = new CasambiEventBus();
+  private readonly tracer: ProtocolTracer;
+  private readonly pingIntervalMs?: number;
+  private readonly reconnectBaseMs?: number;
+  private readonly reconnectMaxMs?: number;
   private readonly bindings: CasambiBinding[] = [];
   private readonly devices = new Set<DeviceId>();
   private readonly states = new Map<string, CapabilityState>();
@@ -93,16 +127,37 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closing = false;
   private reconnects = 0;
+  /** True once the wire has opened successfully at least once (§ Health Monitor — distinguishes
+   * "never connected yet" from "was connected, dropped" for an honest verdict). */
+  private everConnected = false;
+  private lastPingAt: number | null = null;
+  private latencyMs: number | null = null;
   private lastEventAt: string | null = null;
   private lastError: string | null = null;
 
   constructor(opts: CasambiDriverOptions) {
-    this.opts = opts;
-    this.transport = opts.transport ?? new HttpCasambiTransport({ apiKey: opts.credentials.apiKey });
+    this.mode = opts.connectionMode ?? "cloud";
+    const connection =
+      opts.connectionMode === "local"
+        ? createConnection({ connectionMode: "local", local: opts.local })
+        : createConnection({ connectionMode: "cloud", credentials: opts.credentials, transport: opts.transport });
+    this.transport = connection.cloudTransport;
+    this.localTransport = connection.localTransport;
+    this.credentials = opts.connectionMode === "local" ? null : opts.credentials;
+    this.feedback = new CasambiFeedbackEngine(() => this.wire);
+    this.tracer = createProtocolTracer("casambi", opts.trace === true, opts.onLog);
+    this.pingIntervalMs = opts.pingIntervalMs;
+    this.reconnectBaseMs = opts.reconnectBaseMs;
+    this.reconnectMaxMs = opts.reconnectMaxMs;
   }
 
   async connect(): Promise<void> {
     this.closing = false;
+    if (this.mode === "local") {
+      // § Casambi Driver Refactor — Foundation: architecture only. Fails fast and honestly
+      // rather than looping a reconnect against a transport that can't succeed yet.
+      throw new CasambiLocalRestNotImplementedError("connect");
+    }
     await this.establish();
   }
 
@@ -154,7 +209,8 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
     const targetControls = commandToTargetControls(command, prev);
     if (!targetControls) throw new Error(`casambi: unsupported command for ${command.capability}`);
-    this.wire.controlUnit(WIRE_ID, b.unitId, targetControls);
+    this.tracer.send(`controlUnit ${b.unitId}`);
+    this.feedback.send(b.unitId, targetControls);
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -166,31 +222,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       // Late discovery before the first fetch — pull the model on demand.
       await this.loadNetwork();
     }
-    const out: DiscoveredDevice[] = [];
-    for (const unit of this.units.values()) {
-      const capabilities = capabilitiesFromUnit(unit);
-      if (capabilities.length === 0) continue;
-      const group = unit.groupId ? this.groups.get(unit.groupId) : undefined;
-      const colorConfig = colorConfigFromUnit(unit);
-      out.push({
-        backendId: `casambi:${unit.id}`,
-        suggestedName: unit.name?.trim() || `Casambi ${unit.id}`,
-        capabilities,
-        // § ADR 0017 Capability Normalization — the real RGB/CCT distinction, known from this
-        // unit's advertised controls at discovery time, never guessed from live state.
-        ...(colorConfig ? { capabilityConfig: { color: colorConfig } } : {}),
-        // The Casambi group name auto-maps this luminaire to a Supreme room at commissioning.
-        raw: {
-          unitId: unit.id,
-          address: unit.address ?? null,
-          fixtureId: unit.fixtureId ?? null,
-          groupId: unit.groupId ?? 0,
-          room: group?.name ?? null,
-          type: unit.type ?? null,
-        },
-      });
-    }
-    return out;
+    return buildDiscoveredDevices(this.units, this.groups);
   }
 
   onState(listener: StateListener): () => void {
@@ -198,9 +230,16 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     return () => this.listeners.delete(listener);
   }
 
-  /** Health snapshot for monitoring — carries no credentials. */
+  /** § Event Bus — subscribe to the transport-independent event taxonomy (DeviceEvent/
+   * ButtonEvent/SceneEvent/SensorEvent/NetworkEvent/DiagnosticEvent), additive to {@link onState}. */
+  onDriverEvent(listener: CasambiEventListener): () => void {
+    return this.events.on(listener);
+  }
+
+  /** Health snapshot for monitoring — carries no secrets. */
   getHealth(): CasambiHealth {
     return {
+      connectionType: this.mode,
       connected: this.isConnected(),
       sessionActive: this.session !== null,
       reconnects: this.reconnects,
@@ -210,17 +249,44 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     };
   }
 
+  /** § Diagnostics — the dedicated Casambi diagnostics page's full snapshot (Connection Type,
+   * Gateway, Latency, Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP
+   * Status, Health). Driver-level (not per-device), unlike `INativeProtocolDriver.getDiagnostics`. */
+  getCasambiDiagnostics(): CasambiDiagnosticsSnapshot {
+    return buildDiagnosticsSnapshot({
+      mode: this.mode,
+      gateway: this.gatewayLabel(),
+      connected: this.isConnected(),
+      hasConnectedBefore: this.everConnected,
+      latencyMs: this.latencyMs,
+      units: this.units,
+      reconnects: this.reconnects,
+      lastEventAt: this.lastEventAt,
+      lastError: this.lastError,
+    });
+  }
+
+  private gatewayLabel(): string | null {
+    if (this.mode === "local") {
+      const cfg = this.localTransport?.config;
+      return cfg ? `${cfg.gatewayIp}:${cfg.restPort}` : null;
+    }
+    return this.session?.networkName ?? null;
+  }
+
   // --- connection lifecycle -------------------------------------------------
 
   private async establish(): Promise<void> {
-    this.session = await this.transport.createSession(this.opts.credentials);
+    if (!this.transport || !this.credentials) return; // unreachable in Cloud mode; guards Local's typed-but-inert path
+    this.session = await this.transport.createSession(this.credentials);
+    this.tracer.event("session created");
     await this.loadNetwork();
     await this.seedState();
     await this.openWire();
   }
 
   private async loadNetwork(): Promise<void> {
-    if (!this.session) return;
+    if (!this.session || !this.transport) return;
     const network = await this.transport.fetchNetwork(this.session);
     this.groups.clear();
     for (const g of network.groups) this.groups.set(g.id, g);
@@ -228,7 +294,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   }
 
   private async seedState(): Promise<void> {
-    if (!this.session) return;
+    if (!this.session || !this.transport) return;
     try {
       const units = await this.transport.fetchState(this.session);
       for (const unit of units) this.applyUnit(unit);
@@ -239,7 +305,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   }
 
   private async openWire(): Promise<void> {
-    if (!this.session) return;
+    if (!this.session || !this.transport) return;
     const wire = await this.transport.openWire({
       onEvent: (event) => this.onEvent(event),
       onClose: () => this.onDisconnected("socket closed"),
@@ -247,16 +313,21 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     });
     this.wire = wire;
     wire.open(this.session, WIRE_ID);
+    this.everConnected = true;
     this.reconnects = 0;
     this.lastError = null;
+    this.tracer.event("wire opened");
     this.startHeartbeat();
   }
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
-    const period = this.opts.pingIntervalMs ?? 240_000;
+    const period = this.pingIntervalMs ?? 240_000;
     this.pingTimer = setInterval(() => {
-      if (this.wire?.connected) this.wire.ping(WIRE_ID);
+      if (this.wire?.connected) {
+        this.lastPingAt = Date.now();
+        this.wire.ping(WIRE_ID);
+      }
     }, period);
     (this.pingTimer as { unref?: () => void }).unref?.();
   }
@@ -276,15 +347,17 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     this.lastError = reason;
     this.wire = null;
     this.stopHeartbeat();
+    this.events.publish({ type: "network", kind: "disconnected", detail: reason, ts: nowIso() });
     if (this.closing || this.reconnectTimer) return;
     this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
-    const base = this.opts.reconnectBaseMs ?? 2_000;
-    const max = this.opts.reconnectMaxMs ?? 60_000;
+    const base = this.reconnectBaseMs ?? 2_000;
+    const max = this.reconnectMaxMs ?? 60_000;
     const delay = Math.min(max, base * 2 ** Math.min(this.reconnects, 10));
     this.reconnects += 1;
+    this.events.publish({ type: "diagnostic", kind: "reconnect_scheduled", detail: `in ${delay}ms`, ts: nowIso() });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       void this.reconnect();
@@ -297,8 +370,10 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     try {
       // Full re-auth + re-fetch + re-open; a fresh session recovers from HTTP 410.
       await this.establish();
+      this.events.publish({ type: "diagnostic", kind: "reconnect_succeeded", ts: nowIso() });
     } catch (err) {
       this.lastError = sanitizeError(err);
+      this.events.publish({ type: "diagnostic", kind: "error", detail: this.lastError, ts: nowIso() });
       if (!this.closing) this.scheduleReconnect();
     }
   }
@@ -307,7 +382,13 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   private onEvent(event: CasambiEvent): void {
     this.lastEventAt = nowIso();
-    if (event.response === "pong") return;
+    if (event.response === "pong") {
+      if (this.lastPingAt !== null) {
+        this.latencyMs = Date.now() - this.lastPingAt;
+        this.lastPingAt = null;
+      }
+      return;
+    }
     if (typeof event.wireStatus === "string") {
       this.onWireStatus(event.wireStatus);
       return;
@@ -318,6 +399,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
         break;
       case "networkUpdated":
         // Configuration changed (groups/devices) — refresh the model and re-open the wire.
+        this.events.publish({ type: "network", kind: "networkUpdated", ts: nowIso() });
         void this.refreshNetwork();
         break;
       case "peerChanged":
@@ -334,6 +416,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     }
     // Any failure status (keyAuthenticateFailed, invalidSession, tooManyWires, …) → recover.
     this.lastError = `wire: ${status}`;
+    this.events.publish({ type: "network", kind: "wireStatus", detail: status, ts: nowIso() });
     if (status === "invalidSession") this.session = null;
     this.onDisconnected(`wire: ${status}`);
   }
@@ -349,12 +432,16 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   /** Merge a unit into the cache (keeping previously-known fields) and emit any state changes. */
   private applyUnit(unit: CasambiUnit): void {
+    const prevUnit = this.units.get(unit.id);
     const merged = this.mergeUnit(unit);
+    if (typeof merged.activeSceneId === "number" && merged.activeSceneId !== prevUnit?.activeSceneId) {
+      this.events.publish({ type: "scene", unitId: merged.id, sceneId: merged.activeSceneId, ts: nowIso() });
+    }
     const states = statesFromUnit(merged);
     const targets = this.bindings.filter((b) => b.unitId === merged.id);
     for (const b of targets) {
       const entry = states.find((s) => s.capability === b.capability);
-      if (entry) this.record(b.deviceId, b.capability, entry.state);
+      if (entry) this.record(b.deviceId, b.capability, entry.state, b.unitId);
     }
   }
 
@@ -368,12 +455,17 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     return merged;
   }
 
-  private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
+  private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState, unitId: number): void {
     const k = bindingKey(deviceId, capability);
     const prev = this.states.get(k);
     if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
     this.states.set(k, state);
-    for (const l of this.listeners) l({ deviceId, capability, state, ts: nowIso() });
+    const ts = nowIso();
+    for (const l of this.listeners) l({ deviceId, capability, state, ts });
+    this.events.publish({ type: "device", unitId, deviceId, capability, state, ts });
+    if (state.kind === "sensor") {
+      this.events.publish({ type: "sensor", unitId, deviceId, measure: state.measure, value: state.value, unit: state.unit, ts });
+    }
   }
 
   private unitIdFromBinding(binding: ProtocolBinding): number {

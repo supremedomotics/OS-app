@@ -34,6 +34,44 @@
 
 ## High
 
+### Casambi Local Gateway — PR-2: Local REST implementation
+- **Description:** the Casambi Driver Refactor (Foundation) session shipped the full
+  architecture (`services/protocols/src/casambi/connection-manager.ts`,
+  `local-transport/{rest-client,udp-engine,local-gateway-transport}.ts`, Driver Store
+  `connectionType`/Local fields, gateway routes, Driver Manager UI) but the Local Gateway
+  (Lithernet) REST protocol itself is entirely unimplemented — every `CasambiLocalRestClient`
+  method honestly throws `CasambiLocalRestNotImplementedError`, and picking "Local Gateway"
+  anywhere in the product produces a structured "not implemented yet" result, never a fake
+  connection.
+- **Reason:** explicit next step in the brief's own stated PR ordering (PR-1 architecture → PR-2
+  Local REST → PR-3 UDP → PR-4 hybrid failover → PR-5 advanced diagnostics).
+- **Dependencies:** none architecturally — the seam is built and typed; this is real Lithernet
+  WebAPI spec research + implementation, reusing the existing `entity-mapper.ts`/
+  `discovery-engine.ts`/`feedback-engine.ts` pure functions (transport-independent by design).
+- **Complexity:** Medium–Large (protocol research + real REST client + tests, same shape as
+  adding a new AVR brand).
+- **Status:** Not started; architecture ready (see `SESSION_HANDOFF.md`).
+
+### Casambi Local Gateway — PR-3: UDP Engine + realtime feedback
+- **Description:** `local-transport/udp-engine.ts` is an architecture-only stub — every method
+  throws `CasambiUdpNotImplementedError`. Real-time Local feedback needs a bound UDP socket,
+  packet decoding, and wiring into the Event Bus's `NetworkEvent`/`DeviceEvent` publish points
+  already built this session.
+- **Reason:** explicit next step in the brief's stated PR ordering, after PR-2.
+- **Dependencies:** PR-2 (Local REST) should land first per the brief's ordering, though the UDP
+  Engine's seam doesn't itself require it.
+- **Complexity:** Medium–Large.
+- **Status:** Not started; architecture ready.
+
+### Casambi Local Gateway — PR-4/PR-5: hybrid failover + advanced diagnostics/packet capture
+- **Description:** PR-4 is automatic REST+UDP failover once both exist; PR-5 is real packet
+  capture (the `packetCapture` placeholder in `CasambiAdvancedPlaceholders`/`driver-settings.ts`)
+  plus performance tuning.
+- **Reason:** explicit next steps in the brief's stated PR ordering.
+- **Dependencies:** PR-2 and PR-3.
+- **Complexity:** Large.
+- **Status:** Not started.
+
 ### Universal Keypad Editor / Intent-aware mapping UI
 - **Description:** Phase 1 (ADR 0016) and Phase 2 (ADR 0017) both shipped complete backend
   architecture — Universal Input/Feedback Engines, Subscription Manager, Mapping Engine, and the
@@ -199,6 +237,28 @@
 ---
 
 ## Low
+
+### Live Playwright verification of the Casambi Driver Manager UI
+- **Description:** the Casambi Driver Refactor session's new UI (`connectionType` Setup Wizard
+  step, `CasambiLocalGatewayPanel`, `CasambiAdvancedPlaceholders`, `CasambiDiagnosticsPanel` in
+  `apps/web-homeowner/src/drivers.tsx`) was typecheck/build/unit-test verified but never opened in
+  a real browser — no running `hub-compose` stack/backend in that sandbox.
+- **Reason:** this project's testing standard ("new UI behavior should be Playwright-verified
+  live... not just typechecked") wasn't met, flagged honestly rather than claimed.
+- **Dependencies:** `hub-compose` running (or the local dev server) with a Casambi driver
+  installed.
+- **Complexity:** Small — verification only, at all four required breakpoints.
+- **Status:** Not started.
+
+### `native-driver-factory.ts` test coverage for Casambi's `connectionType: "local"` branch
+- **Description:** the existing `native-driver-factory.test.ts` only exercises the pre-existing
+  Cloud-shape construction; the new Local-mode branch (`connectionType: "local"` → `gatewayIp`/
+  `restPort`/`udpPort` validation → `CasambiProtocolDriver({ connectionMode: "local", ... })`) has
+  no dedicated unit test yet.
+- **Reason:** found while wiring the factory this session; small, real coverage gap.
+- **Dependencies:** none.
+- **Complexity:** Small.
+- **Status:** Not started.
 
 ### Additional AVR brand drivers
 - **Description:** `docs/architecture/adding-avr-brands.md` explicitly lists brands with zero
@@ -458,6 +518,22 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Casambi Driver Refactor (Foundation)** — restructured the working Casambi Cloud driver
+  (unchanged behavior — same REST/WebSocket calls, same reconnect/heartbeat timing, same
+  capability mapping) into a 10-module architecture (`services/protocols/src/casambi/`):
+  Connection Manager, Cloud Transport, Local Transport (REST Client + UDP Engine — both
+  architecture-only, every method honestly throws "not implemented yet"), Entity Mapper,
+  Discovery Engine, Feedback Engine, an additive transport-independent Event Bus (`DeviceEvent`/
+  `ButtonEvent`/`SceneEvent`/`SensorEvent`/`NetworkEvent`/`DiagnosticEvent`), a dedicated
+  Diagnostics snapshot + Health Monitor framework, and Driver Settings. New Driver Store
+  `connectionType` field (Cloud default/Local Gateway) plus new Local fields, a Setup Wizard step
+  in the Driver Manager UI (Cloud shows the exact pre-existing fields unchanged; Local shows new
+  fields + Auto Discover/Test Connection, both honest not-implemented-yet stubs), and a new
+  Casambi Diagnostics panel. Zero Local REST/UDP protocol implementation, per the brief's explicit
+  scope (that's PR-2/PR-3/PR-4/PR-5). Full monorepo `turbo run build typecheck test` green (113
+  build/typecheck tasks, 97 test tasks), every pre-existing Casambi test passing unmodified. Not
+  Playwright-verified live this session (no backend running in the sandbox). Full detail:
+  `SESSION_HANDOFF.md`.
 - **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
   Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
   project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the

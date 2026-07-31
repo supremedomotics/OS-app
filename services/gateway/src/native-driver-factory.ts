@@ -47,7 +47,24 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
     const host = str(c.host);
     return host ? new ModbusProtocolDriver({ host, port: int(c.port, 502) }) : null;
   },
-  casambi: (c) => {
+  casambi: (c, ctx) => {
+    // § Casambi Driver Refactor — Foundation: `connectionType` is new. Absent (every
+    // deployment/config stored before this refactor) defaults to "cloud" — identical
+    // construction to before, zero behavior change for existing installs.
+    const connectionType = str(c.connectionType) ?? "cloud";
+    const onLog = c.logging === true ? ctx.onLog : undefined;
+    if (connectionType === "local") {
+      const gatewayIp = str(c.gatewayIp);
+      const restPort = int(c.restPort, NaN);
+      const udpPort = int(c.udpPort, NaN);
+      if (!gatewayIp || !Number.isFinite(restPort) || !Number.isFinite(udpPort)) return null;
+      return new CasambiProtocolDriver({
+        connectionMode: "local",
+        local: { gatewayIp, restPort, udpPort, gatewayName: str(c.gatewayName), autoDiscover: c.autoDiscover === true },
+        onLog,
+        trace: c.logging === true,
+      });
+    }
     const apiKey = str(c.apiKey);
     const email = str(c.email);
     const password = str(c.password);
@@ -55,6 +72,8 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
     const networkId = str(c.networkId);
     return new CasambiProtocolDriver({
       credentials: { apiKey, email, password, ...(networkId ? { networkId } : {}) },
+      onLog,
+      trace: c.logging === true,
     });
   },
   coolmaster: (c) => {

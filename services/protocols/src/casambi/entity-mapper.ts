@@ -1,9 +1,11 @@
 import type { CapabilityCommand, CapabilityKind, CapabilityState } from "@supreme/domain-model";
 
 /**
- * Casambi codec (§3) — the ONLY place that knows the Casambi Cloud wire shapes. Pure functions that
- * translate a Casambi unit/event into Supreme capabilities + normalized state, and a Supreme command
- * into a Casambi `targetControls` object. No I/O; the driver owns the transport. Capabilities are
+ * Casambi Entity Mapper (§3; § Casambi Driver Refactor — Foundation) — the ONLY place that knows
+ * the Casambi wire shapes (Cloud today; Local REST/UDP in PR-2/PR-3 reuse these same pure
+ * functions, since the unified entity model is transport-independent by design). Translates a
+ * Casambi unit/event into Supreme capabilities + normalized state, and a Supreme command into a
+ * Casambi `targetControls` object. No I/O; the driver owns the transport. Capabilities are
  * derived dynamically from each unit's advertised `controls` (never hard-coded per device model),
  * exactly as the Casambi WebSocket/REST API describes them.
  */
@@ -207,4 +209,38 @@ export function commandToTargetControls(
     default:
       return null;
   }
+}
+
+/** The unified Supreme entity model this driver's discovered units/groups/scenes map onto,
+ * regardless of connection type (§ Casambi Driver Refactor — Foundation "Entity Model": Lights,
+ * Switches, RGB, RGBW, Tunable White, Groups, Scenes, Buttons, Sensors, Presence, Lux, Relays,
+ * future device types). Diagnostics-only labeling — never changes discovery/state/command
+ * behavior, which is entirely driven by `capabilitiesFromUnit`/`statesFromUnit` above. */
+export type CasambiEntityKind =
+  | "light"
+  | "switch"
+  | "tunable_white"
+  | "position"
+  | "presence"
+  | "lux"
+  | "sensor"
+  | "relay";
+
+export function describeCasambiEntityKind(u: CasambiUnit): CasambiEntityKind {
+  const caps = capabilitiesFromUnit(u);
+  if (caps.includes("position")) return "position";
+  if (caps.includes("sensor")) {
+    const sensors = Object.keys(u.sensors ?? {});
+    if (sensors.includes("presence")) return "presence";
+    if (sensors.includes("lux")) return "lux";
+    return "sensor";
+  }
+  if (caps.includes("color")) {
+    const cct = colorConfigFromUnit(u)?.colorModes.cct ?? false;
+    const rgb = colorConfigFromUnit(u)?.colorModes.rgb ?? false;
+    return cct && !rgb ? "tunable_white" : "light";
+  }
+  if (caps.includes("brightness")) return "light";
+  if (caps.includes("onoff")) return (u.type ?? "").toLowerCase() === "relay" ? "relay" : "switch";
+  return "switch";
 }

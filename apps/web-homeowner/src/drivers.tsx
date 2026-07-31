@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import {
+  type CasambiDiagnostics,
   connectDriver,
+  discoverCasambiLocalGateway,
   discoverKnxGateways,
   type DriverConfigField,
   type DriverEntry,
   type DriverHealth,
+  fetchCasambiDiagnostics,
   fetchDriverHealth,
   fetchDriverLogs,
   fetchDriverRegistry,
@@ -13,6 +16,7 @@ import {
   type KnxGateway,
   setDriverConfig,
   setDriverEnabled,
+  testCasambiLocalConnection,
   uninstallDriver,
   updateDriverByKey,
 } from "./api.js";
@@ -207,9 +211,18 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
               }))}
             />
           )}
-          {schema.map((f) => (
-            <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
-          ))}
+          {driver.protocols.includes("casambi") &&
+            visibleCasambiConfigSchema(schema, values).map((f) => (
+              <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
+            ))}
+          {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "local" && (
+            <CasambiLocalGatewayPanel />
+          )}
+          {!driver.protocols.includes("casambi") &&
+            schema.map((f) => (
+              <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
+            ))}
+          {driver.protocols.includes("casambi") && <CasambiAdvancedPlaceholders />}
           <button className="primary" disabled={busy} onClick={() => run(() => setDriverConfig(id, values), "Configuration saved")} style={{ marginTop: 10 }}>Save configuration</button>
         </div>
       )}
@@ -219,6 +232,11 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           source into the same Discover devices -> Review -> Approve workflow every other
           KNX onboarding method uses, not a separate panel/pipeline. */}
       {driver.installed && driver.protocols.includes("knx") && <KnxDiscoveryWorkspace />}
+
+      {/* § Casambi Driver Refactor — Foundation: dedicated Diagnostics page (Connection Type,
+          Gateway, Latency, Entities, Online/Offline, Reconnects, Last Event, REST/UDP Status,
+          Health), driver-level rather than per-device. */}
+      {driver.installed && driver.protocols.includes("casambi") && <CasambiDiagnosticsPanel driverId={id} />}
 
       {/* Health */}
       {health && (
@@ -358,5 +376,147 @@ function ConfigField({ field, value, onChange }: { field: DriverConfigField; val
       )}
       {field.help && <span className="help">{field.help}</span>}
     </label>
+  );
+}
+
+// ── Casambi Driver Refactor — Foundation: Driver Setup Wizard + Local Gateway settings ──────
+const CASAMBI_CLOUD_ONLY_KEYS = new Set(["apiKey", "email", "password", "networkId"]);
+const CASAMBI_LOCAL_ONLY_KEYS = new Set(["gatewayIp", "restPort", "udpPort", "gatewayName", "autoDiscover"]);
+
+/**
+ * Step 1 of the Casambi Setup Wizard is the `connectionType` field itself (always visible, first
+ * in the manifest's config schema). Everything after it progressively discloses: picking Cloud
+ * shows EXACTLY the pre-refactor Casambi fields, unchanged; picking Local Gateway shows the new
+ * fields instead. Never both at once, never neither.
+ */
+function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<string, unknown>): DriverConfigField[] {
+  const connectionType = String(values.connectionType ?? "cloud");
+  return schema.filter((f) => {
+    if (CASAMBI_CLOUD_ONLY_KEYS.has(f.key)) return connectionType !== "local";
+    if (CASAMBI_LOCAL_ONLY_KEYS.has(f.key)) return connectionType === "local";
+    return true;
+  });
+}
+
+/** Local Gateway wizard actions (Auto Discover / Test Connection). Both honestly report
+ * "not implemented yet" — the Local REST/UDP protocol itself ships in a follow-up release; this
+ * is architecture only, never a fabricated success. */
+function CasambiLocalGatewayPanel() {
+  const [busy, setBusy] = useState<"discover" | "test" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function discover() {
+    setBusy("discover");
+    setNote(null);
+    try {
+      const res = await discoverCasambiLocalGateway();
+      setNote(res.message);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Gateway discovery failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function test() {
+    setBusy("test");
+    setNote(null);
+    try {
+      const res = await testCasambiLocalConnection();
+      setNote(res.message);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Test connection failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="drv-field" style={{ marginBottom: 14 }}>
+      <span className="lbl">Lithernet Gateway</span>
+      <div className="drv-actions" style={{ marginTop: 0 }}>
+        <button type="button" disabled={busy !== null} onClick={() => void discover()}>
+          {busy === "discover" ? "Scanning…" : "Auto Discover"}
+        </button>
+        <button type="button" disabled={busy !== null} onClick={() => void test()}>
+          {busy === "test" ? "Testing…" : "Test Connection"}
+        </button>
+      </div>
+      {note && <p className="muted">{note}</p>}
+    </div>
+  );
+}
+
+/** Advanced Settings placeholders (§ Driver Settings): Developer Mode and Packet Capture have
+ * no real backing yet (Packet Capture needs the Local UDP Engine, PR-3) — shown visible but
+ * disabled with an honest label, never a functional-looking control that silently does nothing.
+ * Logging IS real and ships as an ordinary schema field (wired to the driver's own trace/onLog
+ * pipeline), so it is not repeated here. */
+function CasambiAdvancedPlaceholders() {
+  return (
+    <div className="drv-field" style={{ marginBottom: 14 }}>
+      <span className="lbl">Advanced settings</span>
+      <label className="drv-field" style={{ opacity: 0.6 }}>
+        <span className="lbl">Developer mode</span>
+        <input type="checkbox" disabled />
+        <span className="help">Not implemented yet.</span>
+      </label>
+      <label className="drv-field" style={{ opacity: 0.6 }}>
+        <span className="lbl">Packet capture</span>
+        <input type="checkbox" disabled />
+        <span className="help">Not implemented yet — needs the Local UDP Engine (see PR-3).</span>
+      </label>
+    </div>
+  );
+}
+
+const CASAMBI_STATUS_LABEL: Record<string, string> = {
+  connected: "Connected",
+  disconnected: "Disconnected",
+  not_configured: "N/A",
+  not_implemented: "Not implemented yet",
+};
+const CASAMBI_HEALTH_LABEL: Record<string, string> = {
+  healthy: "Healthy",
+  degraded: "Degraded",
+  error: "Error",
+  not_implemented: "Not implemented yet",
+};
+
+/** The dedicated Casambi Diagnostics page (§ Diagnostics): Connection Type, Gateway, Latency,
+ * Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP Status, Health. A
+ * driver-level snapshot, not per-device — `null` (driver not currently running) renders nothing,
+ * never a fabricated all-zero shape. */
+function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
+  const [snapshot, setSnapshot] = useState<CasambiDiagnostics | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCasambiDiagnostics(driverId).then((s) => {
+      if (!cancelled) setSnapshot(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [driverId]);
+
+  if (!snapshot) return null;
+  return (
+    <div className="drv-config">
+      <h4>Diagnostics</h4>
+      <dl className="drv-about">
+        <div><dt>Connection type</dt><dd>{snapshot.connectionType === "local" ? "Local Gateway" : "Cloud"}</dd></div>
+        <div><dt>Gateway</dt><dd>{snapshot.gateway ?? "—"}</dd></div>
+        <div><dt>Latency</dt><dd>{snapshot.latencyMs === null ? "—" : `${snapshot.latencyMs} ms`}</dd></div>
+        <div><dt>Entities</dt><dd>{snapshot.entities}</dd></div>
+        <div><dt>Online devices</dt><dd>{snapshot.onlineDevices}</dd></div>
+        <div><dt>Offline devices</dt><dd>{snapshot.offlineDevices}</dd></div>
+        <div><dt>Reconnect count</dt><dd>{snapshot.reconnectCount}</dd></div>
+        <div><dt>Last event</dt><dd>{snapshot.lastEventAt ? new Date(snapshot.lastEventAt).toLocaleString() : "—"}</dd></div>
+        <div><dt>REST status</dt><dd>{CASAMBI_STATUS_LABEL[snapshot.restStatus] ?? snapshot.restStatus}</dd></div>
+        <div><dt>UDP status</dt><dd>{CASAMBI_STATUS_LABEL[snapshot.udpStatus] ?? snapshot.udpStatus} <span className="muted">(placeholder)</span></dd></div>
+        <div><dt>Health</dt><dd><span className={`drv-badge ${snapshot.health === "healthy" ? "ok" : snapshot.health === "error" ? "err" : "off"}`}>{CASAMBI_HEALTH_LABEL[snapshot.health] ?? snapshot.health}</span></dd></div>
+      </dl>
+    </div>
   );
 }

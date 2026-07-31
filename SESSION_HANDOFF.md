@@ -4,6 +4,128 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Driver Refactor (Foundation)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`, based on `main` at session start. Scope was
+explicitly an **architecture-only refactor** — the working Casambi Cloud driver's behavior must
+stay byte-for-byte unchanged, no Local REST/UDP protocol implementation in this PR (that's PR-2/
+PR-3/PR-4/PR-5, per the brief's stated roadmap).
+
+**What shipped:** the Casambi driver moved from three flat files
+(`casambi-driver.ts`/`casambi-transport.ts`/`casambi-codec.ts`) into
+`services/protocols/src/casambi/`, a 10-module architecture matching the brief's tree exactly:
+
+- `connection-manager.ts` — the ONE place that picks Cloud vs Local and builds the matching
+  connection. `CasambiDriverOptions` is now a discriminated union on `connectionMode` (`"cloud"`
+  default | `"local"`) — every existing caller (`bootstrap.ts`'s env wiring, tests, the new
+  `native-driver-factory.ts` path) that never set `connectionMode` still gets the exact same
+  cloud construction as before.
+- `cloud-transport.ts` (renamed from `casambi-transport.ts`) — the existing, working REST +
+  WebSocket transport, contents unchanged beyond the file move/import-path fix.
+- `local-transport/{rest-client,udp-engine,local-gateway-transport}.ts` — new, architecture-only.
+  Every method honestly throws `CasambiLocalRestNotImplementedError`/`CasambiUdpNotImplementedError`
+  rather than faking a connection — matches this codebase's "visibly incomplete, never silently
+  faked" capability-gating discipline exactly.
+- `entity-mapper.ts` (renamed from `casambi-codec.ts`) — unchanged capability/state/command logic,
+  plus one new additive pure function (`describeCasambiEntityKind`) mapping a unit onto the
+  brief's unified entity vocabulary (light/switch/tunable_white/position/presence/lux/sensor/relay)
+  for Diagnostics-only labeling — never used by discovery/state/command.
+- `discovery-engine.ts` — `buildDiscoveredDevices()`, the driver's old `discover()` loop extracted
+  verbatim (same output for the same input).
+- `feedback-engine.ts` — `CasambiFeedbackEngine`, the driver's old `command()` wire-write extracted
+  verbatim; also owns the shared `WIRE_ID` constant.
+- `event-engine.ts` — new, additive `CasambiEventBus` + the brief's exact taxonomy
+  (`DeviceEvent`/`ButtonEvent`/`SceneEvent`/`SensorEvent`/`NetworkEvent`/`DiagnosticEvent`).
+  `ButtonEvent` is honestly unused — no Casambi unit type decodes to a button yet. `SceneEvent`
+  is real (fires off the unit model's actual `activeSceneId` field). Alongside, never replacing,
+  the existing `onState`/`StateListener` contract `INativeProtocolDriver` requires.
+- `diagnostics.ts` + `health-monitor.ts` — the dedicated Casambi Diagnostics snapshot (Connection
+  Type, Gateway, Latency, Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP
+  Status, Health) and the Health Monitor framework it's built from (per-subsystem status +
+  one-verdict computation). Real heartbeat/reconnect timers stayed untouched inside
+  `casambi-driver.ts` itself — deliberately NOT routed through an extra layer, since
+  `casambi-driver.test.ts`'s fake-timer reconnect/heartbeat assertions are the regression net for
+  Cloud behavior and refactoring that code was unnecessary risk for this PR's goal.
+- `driver-settings.ts` — the settings shape (`CasambiDriverSettings`: connectionType/cloud/local/
+  advanced) driving the Driver Store manifest's config schema by convention (that package has no
+  dependency on `@supreme/protocols`, matching every other driver's manifest/factory pair already).
+- `casambi-driver.ts` — same public class name/shape, now the orchestrator wiring the above
+  together. New real (not fabricated) additions: measured heartbeat round-trip `latencyMs`, an
+  `everConnected` flag for an honest Health Monitor verdict, `onLog`/`trace` options reusing the
+  existing shared `createProtocolTracer` (AVR/HEOS/Yamaha's own opt-in tracer, not a new logging
+  subsystem) for "Logging"/"Packet Capture (placeholder)". In Local mode, `connect()` fails fast
+  and honestly (`CasambiLocalRestNotImplementedError`) instead of looping a reconnect against a
+  transport that can't succeed yet.
+
+**Driver Store** (`services/drivers/src/manifests.ts`): Casambi's manifest bumped 1.0.0 → 1.1.0,
+description updated to "Supports both Casambi Cloud and Lithernet Local Gateway.", config schema
+gained `connectionType` (select, default `"cloud"`, shown first — Setup Wizard Step 1) + the new
+Local fields (`gatewayIp`/`restPort`/`udpPort`/`gatewayName`/`autoDiscover`) + one real `logging`
+field wired to the driver's tracer. The four pre-existing Cloud fields (`apiKey`/`email`/
+`password`/`networkId`) are byte-for-byte unchanged.
+
+**Gateway** (`services/gateway/src/native-driver-factory.ts`, `routes/installer.ts`): the casambi
+factory now reads `connectionType` from stored config (absent → `"cloud"`, so every driver
+installed before this refactor keeps working identically) and builds either connection mode. New
+routes: `GET /v1/drivers/:id/casambi/diagnostics` (via `sil.getNativeDriver("casambi") instanceof
+CasambiProtocolDriver`), `POST /v1/commissioning/casambi/test-connection` and
+`.../discover-gateway` — both honest, structured `{ implemented: false, message }` 200 responses
+(the Local protocol doesn't exist yet, so there is nothing to test/discover), never a fabricated
+success. Confirmed via `SupremeNativeAdapter.registerDriver()`'s "push before wire" order that a
+Local-mode driver whose `connect()` always throws stays registered/reachable via
+`getNativeDriver()` — the Diagnostics route still resolves it and reports the honest
+not-implemented statuses, rather than 404ing.
+
+**UI** (`apps/web-homeowner/src/drivers.tsx`, `api.ts`): the Driver Manager's schema-driven config
+page now special-cases `casambi` (same pattern already established for `knx`'s
+`KnxGatewayDiscoveryPanel`): `connectionType` always renders first (Setup Wizard Step 1); picking
+Cloud shows exactly the four pre-existing fields and nothing else; picking Local Gateway swaps in
+the five new fields plus a `CasambiLocalGatewayPanel` (Auto Discover / Test Connection buttons,
+both surfacing the honest "not implemented yet" message from the new routes). A
+`CasambiAdvancedPlaceholders` block shows Developer Mode / Packet Capture as visibly **disabled**
+checkboxes with an explicit "not implemented yet" label — deliberately NOT wired to real config,
+since a checkbox that silently does nothing would itself be a fabricated capability. A new
+`CasambiDiagnosticsPanel` (installed Casambi drivers only) renders the full Diagnostics snapshot
+via the new `fetchCasambiDiagnostics()` client call, reusing the existing `drv-about`/`drv-badge`
+Aureon classes — no new CSS, no new design tokens.
+
+**Verification:** full monorepo `pnpm install` (fresh container) + `turbo run build typecheck test`
+across all 113 build/typecheck tasks and all 97 test-suite tasks — 100% green, including every
+pre-existing Casambi test (`casambi-driver.test.ts` 7, `entity-mapper.test.ts` 22, formerly
+`casambi-codec.test.ts`) passing **unmodified** except for their import paths. **Not** done this
+session: live Playwright verification of the new Driver Manager UI (no running `hub-compose`
+stack/backend in this sandbox) — flagged honestly per this project's testing standard rather than
+claimed. `typecheck`/`build` are clean for every touched package (`@supreme/protocols`,
+`@supreme/drivers`, `@supreme/gateway`, `@supreme/web-homeowner`) and the full monorepo.
+
+**Deliberately NOT done, per the brief's explicit scope:** no Local REST implementation, no UDP
+engine, no real Lithernet Gateway wire protocol of any kind. Selecting "Local Gateway" anywhere in
+the product today produces an honest "not implemented yet" result — never a fake connection, never
+fabricated diagnostics.
+
+## Immediate priorities for the next session
+
+1. **PR-2: Local REST implementation** — fill in `local-transport/rest-client.ts`'s real Lithernet
+   WebAPI calls (`fetchNetwork`/`fetchState`/`sendCommand`/`testConnection`), reusing the same
+   `entity-mapper.ts`/`discovery-engine.ts`/`feedback-engine.ts` pure functions the Cloud path
+   already uses — they're transport-independent by design, so this should be additive, not a
+   rewrite.
+2. **PR-3: UDP Engine + realtime feedback** — fill in `local-transport/udp-engine.ts`'s real socket
+   bind/packet-decode/reconnect, wire it into the Event Bus's `NetworkEvent`/`DeviceEvent` publish
+   points already built this session.
+3. **PR-4: Hybrid REST + UDP with automatic failover** — once PR-2/PR-3 both exist, per the brief's
+   stated ordering.
+4. **PR-5: Advanced diagnostics, packet capture, performance tuning** — the `packetCapture`
+   placeholder in `CasambiAdvancedPlaceholders`/`driver-settings.ts` is the seam; a real packet
+   capture needs the UDP Engine (PR-3) first.
+5. Live Playwright verification of the new Driver Manager wizard/diagnostics UI at all four
+   required breakpoints (phone/tablet/desktop/ultrawide) — genuinely not done this session (no
+   backend running in this sandbox).
+6. Consider a dedicated `native-driver-factory.test.ts` case for the new `connectionType: "local"`
+   branch (today only the pre-existing cloud-shape tests run against this factory).
+
+---
+
 ## Session: Universal AV SDK
 
 **Branch:** `claude/supremeos-universal-av-sdk-0rtaiw`, based on `main` at session start.

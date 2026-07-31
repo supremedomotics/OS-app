@@ -9,8 +9,8 @@ import type {
   CasambiTransport,
   CasambiWire,
   CasambiWireHandlers,
-} from "./casambi-transport.js";
-import type { CasambiUnit } from "./casambi-codec.js";
+} from "./cloud-transport.js";
+import type { CasambiUnit } from "./entity-mapper.js";
 
 /** A captured WebSocket wire — records every framed message the driver sends. */
 class FakeWire implements CasambiWire {
