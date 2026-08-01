@@ -139,6 +139,12 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     return this.ha.getTrace ? this.ha.getTrace(deviceId) : null;
   }
 
+  /** § AVR Diagnostic Mode — same routing as {@link getArtwork}: native-engine feature first. */
+  async exportDiagnosticsLog(deviceId: DeviceId): Promise<string | null> {
+    if (this.native.manages(deviceId)) return this.native.exportDiagnosticsLog(deviceId);
+    return this.ha.exportDiagnosticsLog ? this.ha.exportDiagnosticsLog(deviceId) : null;
+  }
+
   /** § RTI Capability Audit, Category C.4 — same routing as {@link getArtwork}. */
   async sendRaw(deviceId: DeviceId, token: string): Promise<void> {
     if (this.native.manages(deviceId)) return this.native.sendRaw(deviceId, token);

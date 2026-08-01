@@ -187,7 +187,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   }
   // AVR (Denon/Marantz) IP control — receivers added by IP address at bind time.
   if (config.avrEnabled) {
-    nativeDrivers.push(new AvrProtocolDriver());
+    nativeDrivers.push(new AvrProtocolDriver({ diagnostics: config.avrDiagnostics }));
   }
   // HEOS CLI (Denon/Marantz whole-home streaming) — one connection per network reaches
   // every player by pid; the network is added by any one player's IP at bind time.

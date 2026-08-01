@@ -1084,3 +1084,86 @@ describe("AvrProtocolDriver — artworkUrlFor advertisement (§ Universal AVR SD
     await new Promise<void>((r) => avr.server.close(() => r()));
   });
 });
+
+describe("AvrProtocolDriver — AVR Diagnostic Mode wiring", () => {
+  it("is a no-op when disabled: exportDiagnosticsLog() is null, recordDiagnosticStage is a harmless no-op", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({});
+    const dev = "device-avr-diag-off" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
+
+    expect(driver.exportDiagnosticsLog()).toBeNull();
+    expect(() => driver.recordDiagnosticStage("AVR-000001", "Gateway", { published: true })).not.toThrow();
+
+    await driver.command(dev, { capability: "onoff", action: "on" });
+    await vi.waitFor(() => expect(avr.received).toContain("ZMON"));
+    expect(driver.exportDiagnosticsLog()).toBeNull(); // still off — a real event didn't turn it on
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("when enabled, traces a real event end to end under one correlation ID, incl. gateway/websocket stages recorded by an external caller", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ diagnostics: true });
+    const dev = "device-avr-diag-on" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
+
+    const ev = nextEvent(driver, (e) => e.capability === "media" && (e.state as { volume?: number }).volume !== undefined);
+    await driver.command(dev, { capability: "media", action: "volume", volume: 80 });
+    const emitted = await ev;
+    // The driver stamped a correlation ID onto the event it dispatched — the exact hand-off
+    // gateway-layer code (context.ts/stream.ts) uses to append its own stages to this trace.
+    expect(emitted.traceId).toMatch(/^AVR-\d{6}$/);
+
+    // Simulate the gateway/WebSocket layers appending their own stages, exactly as
+    // context.ts's onBackendState() / stream.ts's unsubState handler do in production.
+    driver.recordDiagnosticStage(emitted.traceId!, "Gateway", { published: true });
+    driver.recordDiagnosticStage(emitted.traceId!, "WebSocket", { sent: true, subscribedRooms: 2 });
+
+    const log = driver.exportDiagnosticsLog();
+    expect(log).not.toBeNull();
+    expect(log).toContain(`[${emitted.traceId}][TCP]`);
+    expect(log).toContain(`[${emitted.traceId}][Parser]`);
+    expect(log).toContain(`[${emitted.traceId}][patchMedia]`);
+    expect(log).toContain(`[${emitted.traceId}][StateCache]`);
+    expect(log).toContain(`[${emitted.traceId}][Gateway]`);
+    expect(log).toContain("published=true");
+    expect(log).toContain(`[${emitted.traceId}][WebSocket]`);
+    expect(log).toContain("subscribedRooms=2");
+    expect(log).toContain("Session Report");
+    expect(log).toContain("commands received:");
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("captures an unrecognized line from the real receiver with hex/ascii/frequency, not a bare message", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ diagnostics: true });
+    const dev = "device-avr-diag-unknown" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
+
+    // The fake AVR only answers recognized tokens; write a bogus one straight to the wire
+    // via the existing raw-command escape hatch to trigger a genuinely unrecognized reply.
+    for (const sock of avr.sockets) sock.write("ZZBOGUS\r");
+    await vi.waitFor(() => {
+      const log = driver.exportDiagnosticsLog();
+      expect(log).toContain("ZZBOGUS");
+    });
+    const log = driver.exportDiagnosticsLog()!;
+    expect(log).not.toMatch(/unrecognized line/i);
+    expect(log).toContain("hex=");
+    expect(log).toContain("firstToken=ZZBOGUS");
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+});

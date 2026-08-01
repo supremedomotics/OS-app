@@ -92,6 +92,13 @@ verbose backend-log capture) — the ring buffer is cheap, in-memory, and always
 available for the Diagnostics UI's new "Protocol Trace" panel
 (`GET /v1/devices/:id/diagnostics/trace`).
 
+A third, still heavier and still opt-in-only facility — **AVR Diagnostic Mode**
+(`SUPREME_AVR_DIAGNOSTICS`) — was added later, on top of this pattern rather than
+folded into it: it traces one event's complete lifecycle end to end, under a
+correlation ID, across process boundaries (driver → gateway → WebSocket), which
+neither `trace` nor the diagnostics ring buffer can do (both are wire-level, one
+driver process only). See `docs/architecture/AVR-Diagnostic-Mode.md`.
+
 ### § Second pass — official PDFs + a real RTI driver export un-gate the Audyssey family
 
 The user directly supplied three primary sources this round: the official Denon AVR

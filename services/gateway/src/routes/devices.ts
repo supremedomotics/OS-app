@@ -250,6 +250,32 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
     }
   });
 
+  // § AVR Diagnostic Mode: GET /v1/devices/:id/diagnostics/export — the device's owning
+  // driver's complete diagnostic trace log (every captured event, under its correlation
+  // ID, ending with the session summary — see `AvrDiagnosticsRecorder.exportLog`). `null`
+  // when unsupported, or diagnostics isn't enabled for that driver instance (see
+  // `SUPREME_AVR_DIAGNOSTICS`, off by default). Served as a downloadable `diagnostic.log`
+  // file (not JSON) so this route IS "the single command that exports diagnostic.log" —
+  // e.g. `curl -H "Authorization: Bearer $TOKEN" .../diagnostics/export -o diagnostic.log`.
+  // Same permission posture as `/diagnostics`/`/diagnostics/trace` — devMode-gated on the
+  // client, but this is a read, so `view` (not `control`) is the correct permission.
+  app.get<{ Params: { id: string } }>("/v1/devices/:id/diagnostics/export", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "view");
+      const log = await ctx.sil.exportDiagnosticsLog(deviceId);
+      if (log === null) throw new SupremeError("not_found", "diagnostics not enabled for this device's driver");
+      reply.header("content-type", "text/plain; charset=utf-8");
+      reply.header("content-disposition", "attachment; filename=\"diagnostic.log\"");
+      reply.send(log);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // § RTI Capability Audit, Category C.4: POST /v1/devices/:id/raw-command — devMode-only
   // raw-token escape hatch. Writes `token` verbatim to the device's owning driver,
   // bypassing the typed CapabilityCommand dispatch entirely. `control` permission (same as

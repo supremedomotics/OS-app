@@ -15,6 +15,56 @@ Capability Audit, or this session's work). The detailed history of each of those
 its own architecture doc, cross-linked below — this file only needs to describe current state and
 what changed most recently.
 
+## Most recent session — AVR Diagnostic Mode
+
+Prior sessions in this branch did a static code audit (found one real bug: the renamed-input
+capability-config race — `refreshInputEnrichment()` fire-and-forget raced by a synchronous
+`getCapabilityConfig()` read, still unfixed, still in `TODO.md`), then a full runtime-instrumented
+trace of a real event through the entire pipeline against a fake AVR + real gateway + real
+browser (found no pipeline break). The user then explicitly asked for neither: since they have no
+way to give this session access to their real physical Denon/Marantz receiver, they asked for a
+**permanent, production-safe diagnostic facility they can enable on their own installation** to
+capture ground truth from their own hardware and hand the log back for analysis.
+
+**Shipped**: AVR Diagnostic Mode — `SUPREME_AVR_DIAGNOSTICS=true` (env var, off by default).
+When enabled, every real receiver event gets a correlation ID (`AVR-000023`); every stage it
+passes through (`TCP`/`Parser`/`patchMedia`/`emitFor`/`StateCache`/`Gateway`/`WebSocket`) logs a
+line tagged with that ID. Unrecognized lines are captured with hex/ascii/length/firstToken/
+sender/frequency, never a bare "unrecognized" message. Exact session counters (received/parsed/
+unknown/dispatched/dropped/bindingsMissing/cacheDeduplicated/gatewayPublishes/websocketSends) are
+tracked throughout and reported at shutdown and at export time. `GET /v1/devices/:id/diagnostics/
+export` streams the complete trace as a downloadable `diagnostic.log` file — the one file to
+upload back for analysis. Full detail, exact enable/export steps: `docs/architecture/
+AVR-Diagnostic-Mode.md`.
+
+**Architecture**: new `services/protocols/src/avr-diagnostics.ts` (`AvrDiagnosticsRecorder` —
+pure, no I/O, bounded ring buffer + bounded unknown-pattern map). Wired into `avr-driver.ts` via
+`this.diagnostics?.method(...)` at every stage — optional chaining short-circuits before argument
+evaluation when disabled, so the off cost is one property read + one null check, zero string
+building/allocation/I/O. Correlation ID crosses the driver→gateway→WebSocket process/package
+boundary via a new optional `traceId?: string` field on the already-shared `BackendStateEvent`
+type, and a new optional `INativeProtocolDriver.recordDiagnosticStage?()` method that gateway code
+calls back into (found via the pre-existing `SupremeIntegrationLayer.getNativeDriver("avr")`) —
+neither layer needs new knowledge of the other's internals. `exportDiagnosticsLog?()` is routed to
+the owning driver through the same `native-adapter.ts`/`routing-adapter.ts`/`sil.ts` pattern
+`getTrace`/`getDiagnostics` already use. No feature work: parser/protocol/control-path logic is
+completely unchanged, only observability was added.
+
+**Verification**: 6 new tests in `avr-diagnostics.test.ts` (correlation IDs, full-lifecycle
+capture, unknown-command capture, exact counters, session report, buffer eviction), 3 new tests
+in `avr-driver.test.ts`'s "AVR Diagnostic Mode wiring" `describe` block (disabled = no-op, enabled
+= real end-to-end trace incl. simulated Gateway/WebSocket stage append, real unrecognized-line
+capture over a real TCP fake AVR), 1 new test in `native-driver-factory.test.ts`, 3 new e2e tests
+in `avr-diagnostics-export.e2e.test.ts` (export succeeds/404s-when-off/404s-for-unknown-device).
+Full monorepo `pnpm typecheck`/`pnpm build`/`pnpm test` all green (93/93 turbo tasks); one
+transient CPU-contention flake in an untouched, pre-existing real-TCP timing test was confirmed
+non-reproducible in isolation and on rerun, not a regression from this work.
+
+**Known limitation, stated to the user**: this facility captures real traffic once enabled and
+operated against real hardware — it cannot be exercised against a physical Denon/Marantz receiver
+from this environment, since none is reachable here. The wiring itself is proven against a real
+in-process fake AVR over real TCP (same fidelity as prior sessions' runtime pipeline trace).
+
 ## Current state of the AV SDK
 
 - `services/protocols/src/av-sdk/` is the real, runtime shared module: `TcpLineTransport`

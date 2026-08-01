@@ -311,6 +311,13 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     return null;
   }
 
+  /** § AVR Diagnostic Mode — export the owning driver's complete diagnostic trace log. */
+  async exportDiagnosticsLog(deviceId: DeviceId): Promise<string | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.exportDiagnosticsLog) return owner.exportDiagnosticsLog();
+    return null;
+  }
+
   /** § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch. Throws
    * (rather than silently no-op-ing) when the owning driver doesn't support one, since this
    * is a write an installer explicitly asked for, not an optional read. */

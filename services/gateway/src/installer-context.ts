@@ -1093,6 +1093,8 @@ export class InstallerServices {
       ...(this.d.config.publicBaseUrl
         ? { artworkUrlFor: (id: string) => `${this.d.config.publicBaseUrl}/v1/devices/${id}/media/artwork` }
         : {}),
+      // § AVR Diagnostic Mode — off by default; see `GatewayConfig.avrDiagnostics`.
+      avrDiagnostics: this.d.config.avrDiagnostics,
     };
   }
 

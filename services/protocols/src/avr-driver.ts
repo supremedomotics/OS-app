@@ -33,6 +33,7 @@ import { TcpLineTransport, type TcpLink } from "./av-sdk/tcp-line-transport.js";
 import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
 import { AdaptivePoller, HttpPollClient } from "./av-sdk/http-poll-client.js";
 import { InitHandshake } from "./av-sdk/init-handshake.js";
+import { AvrDiagnosticsRecorder } from "./avr-diagnostics.js";
 
 /** Kept in sync with `supreme-avr`'s manifest `version` (services/drivers/src/manifests.ts)
  * — surfaced in Diagnostics so an installer can tell which driver build is running. */
@@ -75,6 +76,12 @@ export interface AvrDriverOptions {
    * (`/v1/devices/:id/media/artwork`), same pattern the Apple TV driver already uses.
    * Absent (no artwork advertised) when the gateway has no public base URL configured. */
   artworkUrlFor?: (deviceId: DeviceId) => string;
+  /** § AVR Diagnostic Mode — off by default. When true, every real receiver event is
+   * traced end-to-end under a correlation ID (see `avr-diagnostics.ts`) — a heavier,
+   * more structured facility than `trace` above, meant to be enabled only while
+   * actively capturing a session for export/analysis, not left on permanently. See
+   * `docs/architecture/AVR-Diagnostic-Mode.md`. */
+  diagnostics?: boolean;
 }
 
 interface AvrBinding {
@@ -190,10 +197,22 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     string,
     { resolve: (result: { ok: boolean; latencyMs: number | null }) => void; sentAt: number; timer: ReturnType<typeof setTimeout> }
   >();
+  /** § AVR Diagnostic Mode — `null` (the default) means fully disabled; every call site
+   * below reads this through `this.diagnostics?.method(...)`, which short-circuits
+   * before evaluating any argument when `null` (real JS/TS semantics, not an
+   * approximation) — so the disabled cost is one property read + one null check. */
+  private readonly diagnostics: AvrDiagnosticsRecorder | null;
+  /** § AVR Diagnostic Mode — the correlation ID for whichever event `onLine()` is
+   * currently processing, set at the top of `onLine()` and read by `patchMedia()`/
+   * `emitFor()`/`record()` within that same synchronous call chain (see `onLine()`'s
+   * doc comment for the non-reentrancy justification). `undefined` when diagnostics
+   * is disabled, or between events. */
+  private currentDiagId: string | undefined;
 
   constructor(opts: AvrDriverOptions = {}) {
     this.opts = opts;
     this.defaultPort = opts.port ?? 23;
+    this.diagnostics = opts.diagnostics ? new AvrDiagnosticsRecorder({ onLog: opts.onLog }) : null;
     this.explicitHttpPort = opts.httpPort;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.tracer = createProtocolTracer("avr", opts.trace === true, opts.onLog);
@@ -215,6 +234,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   }
 
   async disconnect(): Promise<void> {
+    // § AVR Diagnostic Mode — "at shutdown produce a summary": emitted through the same
+    // onLog sink every other diagnostics line goes through, and still available afterward
+    // via exportDiagnosticsLog() (the recorder itself isn't cleared here).
+    if (this.diagnostics) this.opts.onLog?.("info", `[avr-diagnostics]\n${this.diagnostics.sessionReport()}`);
     this.transport.disconnectAll();
     for (const poller of this.enrichmentPollers.values()) poller.stop();
     this.enrichmentPollers.clear();
@@ -779,6 +802,18 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
 
   private onLine(host: string, port: number, line: string): void {
     this.tracer.receive(line);
+    // § AVR Diagnostic Mode — one correlation ID per real event (one Telnet line = one
+    // event), stashed on the instance for the duration of this synchronous call chain
+    // (onLine → patchMedia/emitFor → record) rather than threaded as an extra parameter
+    // through ~20 call sites below. Safe because `onLine()` runs to completion
+    // synchronously for one line before the transport delivers the next (Node's single-
+    // threaded event loop; no `await` anywhere in this call chain) — the same
+    // non-reentrancy this codebase already relies on elsewhere (e.g.
+    // `TcpLineTransport.onData` feeding lines one at a time). `undefined` whenever
+    // diagnostics is disabled — every read of it is itself behind `this.diagnostics?.`,
+    // so an `undefined` ID is never dereferenced.
+    this.currentDiagId = this.diagnostics?.nextId();
+    if (this.currentDiagId) this.diagnostics?.recordReceived(this.currentDiagId, host, port, line);
     // § RTI Capability Audit, Category C — advances the paced init-sync handshake on ANY
     // received line, recognized or not (matching RTI's own observed behavior — Telnet has
     // no per-command request id to correlate a specific reply to a specific query with).
@@ -794,6 +829,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       pendingHb.resolve({ ok: true, latencyMs: Date.now() - pendingHb.sentAt });
     }
     const update = parseAvrLine(line);
+    if (this.currentDiagId) this.diagnostics?.recordParsed(this.currentDiagId, update);
     // § Production Bugfix Sprint ("no realtime feedback for any zone") — a line the
     // receiver genuinely sent but this codec doesn't recognize is exactly the kind of
     // thing that needs to be visible during debugging, not silently dropped. Traced
@@ -804,6 +840,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     // connected).
     if (!update) {
       this.tracer.event(`unrecognized line from ${host}:${port}: ${JSON.stringify(line)}`);
+      if (this.currentDiagId) this.diagnostics?.recordUnknown(this.currentDiagId, host, port, line);
       return;
     }
     switch (update.kind) {
@@ -878,8 +915,18 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
 
   private patchMedia(host: string, port: number, zone: AvrZone, patch: (cache: MediaCache) => void): void {
     const mediaBinding = this.bindings.find((b) => b.host === host && b.port === port && b.capability === "media" && b.zone === zone);
-    if (!mediaBinding) return;
-    const cache = this.media.get(mediaBinding.deviceId) ?? { volume: 0, muted: false, source: null };
+    const diagId = this.currentDiagId;
+    if (!mediaBinding) {
+      if (diagId) {
+        this.diagnostics?.recordPatch(diagId, "patchMedia", {
+          host, port, zone, capability: "media", deviceId: null, bindingFound: false,
+        });
+        this.diagnostics?.recordDropped(diagId, "no media binding for this host/port/zone");
+      }
+      return;
+    }
+    const oldCache = this.media.get(mediaBinding.deviceId) ?? { volume: 0, muted: false, source: null };
+    const cache = { ...oldCache };
     patch(cache);
     this.media.set(mediaBinding.deviceId, cache);
     // § Universal AVR SDK — album art is a whole-unit, front-panel-display concept
@@ -889,15 +936,49 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     // guaranteed to share a network with the receiver) — real bytes only flow through
     // `getArtwork()` on an actual client request, this never fetches eagerly.
     const artworkUrl = zone === "main" && this.opts.artworkUrlFor ? this.opts.artworkUrlFor(mediaBinding.deviceId) : null;
+    if (diagId) {
+      this.diagnostics?.recordPatch(diagId, "patchMedia", {
+        host, port, zone, capability: "media", deviceId: mediaBinding.deviceId, bindingFound: true,
+        oldState: oldCache, newState: cache,
+      });
+    }
     this.record(mediaBinding.deviceId, "media", buildMediaState(cache, artworkUrl));
   }
 
   private emitFor(host: string, port: number, capability: CapabilityKind, zone: AvrZone, state: CapabilityState): void {
     const b = this.bindings.find((x) => x.host === host && x.port === port && x.capability === capability && x.zone === zone);
+    const diagId = this.currentDiagId;
+    if (diagId) {
+      this.diagnostics?.recordPatch(diagId, "emitFor", {
+        host, port, zone, capability, deviceId: b?.deviceId ?? null, bindingFound: !!b,
+        ...(b ? { oldState: this.states.get(bindingKey(b.deviceId, capability)) ?? null, newState: state } : {}),
+      });
+      if (!b) this.diagnostics?.recordDropped(diagId, `no ${capability} binding for this host/port/zone`);
+    }
     if (b) this.record(b.deviceId, capability, state);
   }
 
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
-    recordCapabilityState(this.states, this.listeners, deviceId, capability, state);
+    const diagId = this.currentDiagId;
+    if (!diagId) {
+      recordCapabilityState(this.states, this.listeners, deviceId, capability, state);
+      return;
+    }
+    const oldState = this.states.get(bindingKey(deviceId, capability)) ?? null;
+    const changed = recordCapabilityState(this.states, this.listeners, deviceId, capability, state, diagId);
+    this.diagnostics?.recordStateCache(diagId, {
+      deviceId, capability, changed, listenerCount: [...this.listeners].length,
+      oldState, newState: state,
+    });
+  }
+
+  /** § AVR Diagnostic Mode — see `INativeProtocolDriver.recordDiagnosticStage`. */
+  recordDiagnosticStage(traceId: string, stage: string, fields: Record<string, unknown>): void {
+    this.diagnostics?.recordDiagnosticStage(traceId, stage, fields);
+  }
+
+  /** § AVR Diagnostic Mode — see `INativeProtocolDriver.exportDiagnosticsLog`. */
+  exportDiagnosticsLog(): string | null {
+    return this.diagnostics?.exportLog() ?? null;
   }
 }

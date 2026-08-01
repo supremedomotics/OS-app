@@ -25,6 +25,13 @@ export interface BackendStateEvent {
   state: CapabilityState;
   /** Backend event timestamp (ISO-8601). */
   ts: string;
+  /** § AVR Diagnostic Mode — optional correlation ID (e.g. "AVR-000023"), present only
+   * when the owning driver has diagnostics enabled and chose to tag this event. Lets
+   * the gateway/WebSocket layers append their own stage to the SAME per-event trace the
+   * driver started, without either layer knowing anything about the other's internals.
+   * `undefined` for every event from every driver that doesn't opt in — zero behavior
+   * change for anything but AVR-with-diagnostics-on. */
+  traceId?: string;
 }
 
 /** What the backend reports about a discovered device (pre-Supreme-mapping). */
@@ -162,6 +169,11 @@ export interface IBackendAdapter {
    * unsupported, or if trace logging isn't enabled for that driver instance — see
    * each protocol's `trace` config option, off by default). */
   getTrace?(deviceId: DeviceId): Promise<DriverTraceEntry[] | null>;
+
+  /** § AVR Diagnostic Mode — optional: export the owning driver's complete diagnostic
+   * trace log (null if unsupported, or diagnostics isn't enabled for that driver
+   * instance — see `AvrDriverOptions.diagnostics`, off by default). */
+  exportDiagnosticsLog?(deviceId: DeviceId): Promise<string | null>;
 
   /** Optional: § RTI Capability Audit, Category C.4 — devMode-only raw-token escape hatch,
    * see `INativeProtocolDriver.sendRaw` for the full rationale. Absent for any adapter/
