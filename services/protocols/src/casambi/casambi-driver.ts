@@ -12,54 +12,52 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tracer.js";
-import {
-  commandToTargetControls,
-  statesFromUnit,
-  type CasambiUnit,
-} from "./entity-mapper.js";
+import { statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import {
   CasambiSessionExpiredError,
   type CasambiCredentials,
-  type CasambiEvent,
   type CasambiGroup,
   type CasambiSession,
   type CasambiTransport,
   type CasambiWire,
 } from "./cloud-transport.js";
 import { createConnection, type CasambiConnectionMode } from "./connection-manager.js";
-import {
-  encodeNotifyButtonEvent,
-  encodeNotifyControlValuesSetDefaultMask,
-  encodeNotifyControlValuesSubscribe,
-  encodeNotifyControlValuesUnsubscribe,
-  parseButtonEvent,
-  parseNodeRemoved,
-  parseNotifyControlValues,
-  parseSceneCalled,
-  type CasambiLocalGatewayConfig,
-  type CasambiLocalTransport,
-  type CasambiUdpPacket,
-} from "./local-transport/index.js";
-import { updateUnitFromControlValues } from "./local-discovery.js";
-import { localCommandToUdpPacket } from "./local-command-mapper.js";
-import { buildDiscoveredDevices } from "./discovery-engine.js";
+import type { CasambiLocalGatewayConfig, CasambiLocalTransport } from "./local-transport/index.js";
+import { buildDiscoveredDevices, startLocalDiscovery, stopLocalDiscovery } from "./discovery-engine.js";
 import { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";
-import { CasambiEventBus, type CasambiEventListener } from "./event-engine.js";
+import { CloudCommandEngine, LocalCommandEngine, type CasambiCommandEngine } from "./command-engine.js";
+import {
+  CasambiEventBus,
+  disableLocalButtonEvents,
+  enableLocalButtonEvents,
+  normalizeCloudEvent,
+  normalizeLocalPacket,
+  type CasambiEventListener,
+  type CasambiSignal,
+} from "./event-engine.js";
 import { buildDiagnosticsSnapshot, type CasambiDiagnosticsSnapshot } from "./diagnostics.js";
 import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
 
 /**
  * Real Casambi protocol driver (§3, §7; § Casambi Driver Refactor — Foundation + PR-2 Local
- * Gateway Foundation) — Casambi is a Bluetooth-mesh luminaire ecosystem reachable two ways:
- * Casambi Cloud (REST + WebSocket, the existing, fully-working implementation below) or a local
- * Lithernet Gateway (real UDP Casambi Command protocol — `local-transport/udp-engine.ts` +
- * `udp-codec.ts` — plus the one documented REST write endpoint, `local-transport/rest-client.ts`).
- * The Connection Manager (`connection-manager.ts`) is the ONLY place that picks between them;
- * everything below — Entity Mapper, Discovery Engine, Feedback Engine, Event Bus, Diagnostics,
- * Health Monitor — is written against ONE unified entity model regardless of which mode is
- * active, exactly this refactor's goal. Cloud behavior is byte-for-byte unchanged from before
- * this refactor: same REST/WebSocket calls, same reconnect/heartbeat timing, same capability
- * mapping.
+ * Gateway Foundation + § Architecture Validation) — Casambi is a Bluetooth-mesh luminaire
+ * ecosystem reachable two ways: Casambi Cloud (REST + WebSocket, the existing, fully-working
+ * implementation below) or a local Lithernet Gateway (real UDP Casambi Command protocol —
+ * `local-transport/udp-engine.ts` + `udp-codec.ts` — plus the one documented REST write endpoint,
+ * `local-transport/rest-client.ts`). The Connection Manager (`connection-manager.ts`) is the ONLY
+ * place that picks between them; everything below is written against ONE unified entity model
+ * regardless of which mode is active.
+ *
+ * This orchestrator holds exactly one `CasambiCommandEngine` (`command-engine.ts`, picked once in
+ * the constructor) and exactly one event-normalization path (`event-engine.ts`'s
+ * `normalizeCloudEvent`/`normalizeLocalPacket` → this class's own `applySignal`) — `command()` and
+ * incoming-event handling never branch on connection mode themselves. This shape is the direct
+ * result of `docs/architecture/Casambi-Architecture-Audit.md`'s mandatory pre-implementation audit,
+ * which found the Command Engine and Event Engine layers did not exist as real, distinct entities
+ * before it — read that document before changing this file's command/event dispatch shape again.
+ * Cloud behavior is byte-for-byte unchanged from before that refactor: same REST/WebSocket calls,
+ * same reconnect/heartbeat timing, same capability mapping, verified by the full pre-existing
+ * `casambi-driver.test.ts` Cloud suite passing unmodified.
  *
  * Reliability (Cloud): the wire is heartbeated (PING within the 5-minute keep-alive window) and
  * auto-reconnected with capped exponential backoff. A dropped socket or an expired session triggers
@@ -130,6 +128,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private transport: CasambiTransport | null;
   private readonly localTransport: CasambiLocalTransport | null;
   private readonly feedback: CasambiFeedbackEngine;
+  private readonly commandEngine: CasambiCommandEngine;
   private readonly events = new CasambiEventBus();
   private readonly tracer: ProtocolTracer;
   private readonly pingIntervalMs?: number;
@@ -170,6 +169,10 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     this.localTransport = connection.localTransport;
     this.credentials = opts.connectionMode === "local" ? null : opts.credentials;
     this.feedback = new CasambiFeedbackEngine(() => this.wire);
+    this.commandEngine =
+      this.mode === "local" && this.localTransport
+        ? new LocalCommandEngine(this.localTransport.udp, this.localTransport.config.netId ?? 0)
+        : new CloudCommandEngine(this.feedback);
     this.tracer = createProtocolTracer("casambi", opts.trace === true, opts.onLog);
     this.pingIntervalMs = opts.pingIntervalMs;
     this.reconnectBaseMs = opts.reconnectBaseMs;
@@ -231,25 +234,16 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     removeDeviceStates(this.states, deviceId);
   }
 
+  /** § Command Engine — the ONE call site for every outgoing command, regardless of connection
+   * mode. `this.commandEngine` was picked once, in the constructor; this method never branches
+   * on `this.mode` itself (see `command-engine.ts` for why that matters). */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`casambi: ${deviceId} not bound for ${command.capability}`);
-    if (this.mode === "local") {
-      if (!this.localTransport?.udp.listening) throw new Error("casambi: not connected");
-      const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
-      const netId = this.localTransport.config.netId ?? 0;
-      const packet = localCommandToUdpPacket(netId, b.unitId, command, prev);
-      if (!packet) throw new Error(`casambi: unsupported command for ${command.capability}`);
-      this.tracer.send(`local controlUnit ${b.unitId}`);
-      await this.localTransport.udp.send(packet);
-      return;
-    }
-    if (!this.wire?.connected) throw new Error("casambi: not connected");
+    if (!this.isConnected()) throw new Error("casambi: not connected");
     const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
-    const targetControls = commandToTargetControls(command, prev);
-    if (!targetControls) throw new Error(`casambi: unsupported command for ${command.capability}`);
     this.tracer.send(`controlUnit ${b.unitId}`);
-    this.feedback.send(b.unitId, targetControls);
+    await this.commandEngine.send(b.unitId, command, prev);
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -346,7 +340,11 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private async openWire(): Promise<void> {
     if (!this.session || !this.transport) return;
     const wire = await this.transport.openWire({
-      onEvent: (event) => this.onEvent(event),
+      onEvent: (event) => {
+        this.lastEventAt = nowIso();
+        const signal = normalizeCloudEvent(event);
+        if (signal) this.applySignal(signal);
+      },
       onClose: () => this.onDisconnected("socket closed"),
       onError: (error) => this.onDisconnected(sanitizeError(error)),
     });
@@ -419,31 +417,45 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   // --- event handling -------------------------------------------------------
 
-  private onEvent(event: CasambiEvent): void {
-    this.lastEventAt = nowIso();
-    if (event.response === "pong") {
-      if (this.lastPingAt !== null) {
-        this.latencyMs = Date.now() - this.lastPingAt;
-        this.lastPingAt = null;
-      }
-      return;
-    }
-    if (typeof event.wireStatus === "string") {
-      this.onWireStatus(event.wireStatus);
-      return;
-    }
-    switch (event.method) {
-      case "unitChanged":
-        this.applyUnit(eventToUnit(event));
+  /** § Event Engine — the ONE reaction point for every normalized `CasambiSignal`, regardless of
+   * which transport produced it. `normalizeCloudEvent`/`normalizeLocalPacket` (in
+   * `event-engine.ts`) are the only two places that still know a Cloud `CasambiEvent` looks
+   * different from a Local `CasambiPacket`; everything past that point — merging a unit,
+   * publishing a driver event, triggering a reconnect — happens exactly once, here. */
+  private applySignal(signal: CasambiSignal): void {
+    switch (signal.kind) {
+      case "pong":
+        if (this.lastPingAt !== null) {
+          this.latencyMs = Date.now() - this.lastPingAt;
+          this.lastPingAt = null;
+        }
+        break;
+      case "wireStatus":
+        this.onWireStatus(signal.status);
+        break;
+      case "unit":
+        this.applyUnit(signal.unit);
         break;
       case "networkUpdated":
-        // Configuration changed (groups/devices) — refresh the model and re-open the wire.
+        // Cloud-only signal: configuration changed — refresh the model and re-open the wire.
         this.events.publish({ type: "network", kind: "networkUpdated", ts: nowIso() });
         void this.refreshNetwork();
         break;
-      case "peerChanged":
-      default:
-        // Peer/gateway presence — no device action required.
+      case "unitRemoved":
+        this.units.delete(signal.unitId);
+        this.events.publish({
+          type: "network",
+          kind: "networkUpdated",
+          detail: `unit ${signal.unitId} removed`,
+          ts: nowIso(),
+        });
+        break;
+      case "button":
+        this.events.publish({ type: "button", unitId: signal.unitId, action: signal.action, ts: nowIso() });
+        break;
+      case "sceneRaw":
+        // No unitId/sceneId to publish as a typed event yet — see event-engine.ts's doc comment.
+        this.tracer.event(`scene called (bits=${signal.bits.join(",")})`);
         break;
     }
   }
@@ -527,7 +539,11 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     const local = this.localTransport;
     if (!local) return; // unreachable — createConnection always builds one in local mode
     await local.udp.start();
-    this.localUnsubscribePacket = local.udp.onPacket((pkt) => this.onLocalPacket(pkt));
+    this.localUnsubscribePacket = local.udp.onPacket((pkt) => {
+      this.lastEventAt = nowIso();
+      const signal = normalizeLocalPacket(pkt.packet, (unitId) => this.units.get(unitId));
+      if (signal) this.applySignal(signal);
+    });
     this.localUnsubscribeError = local.udp.onError((err) => {
       this.lastError = sanitizeError(err);
       this.events.publish({ type: "diagnostic", kind: "error", detail: this.lastError, ts: nowIso() });
@@ -543,9 +559,8 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // distinguish from "not subscribed yet" without real hardware to verify against (see TODO.md).
     const netId = local.config.netId ?? 0;
     try {
-      await local.udp.send(encodeNotifyControlValuesSetDefaultMask(netId));
-      await local.udp.send(encodeNotifyControlValuesSubscribe(netId, 0, 250));
-      await local.udp.send(encodeNotifyButtonEvent(netId, true));
+      await startLocalDiscovery(local.udp, netId);
+      await enableLocalButtonEvents(local.udp, netId);
     } catch (err) {
       this.lastError = sanitizeError(err);
       this.events.publish({ type: "diagnostic", kind: "error", detail: this.lastError, ts: nowIso() });
@@ -561,84 +576,13 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     if (!local) return;
     const netId = local.config.netId ?? 0;
     try {
-      await local.udp.send(encodeNotifyButtonEvent(netId, false));
-      await local.udp.send(encodeNotifyControlValuesUnsubscribe(netId, 0, 250));
+      await disableLocalButtonEvents(local.udp, netId);
+      await stopLocalDiscovery(local.udp, netId);
     } catch {
       // Best-effort teardown — the socket is closing regardless.
     }
     await local.udp.stop();
   }
-
-  private onLocalPacket(pkt: CasambiUdpPacket): void {
-    this.lastEventAt = nowIso();
-    const { packet } = pkt;
-    switch (packet.opcode) {
-      case 0x4b: {
-        const notify = parseNotifyControlValues(packet);
-        if (notify.values.length === 0) return; // "no data available" empty response (p.315)
-        const prevUnit = this.units.get(notify.targetId);
-        const unit = updateUnitFromControlValues(notify.targetId, notify.values, prevUnit);
-        this.applyUnit(unit);
-        break;
-      }
-      case 0x51: {
-        const btn = parseButtonEvent(packet);
-        this.events.publish({
-          type: "button",
-          unitId: btn.unitId,
-          action: btn.eventLabel ?? `type_${btn.event}`,
-          ts: nowIso(),
-        });
-        break;
-      }
-      case 0x3a: {
-        const removed = parseNodeRemoved(packet);
-        this.units.delete(removed.unitId);
-        this.events.publish({
-          type: "network",
-          kind: "networkUpdated",
-          detail: `unit ${removed.unitId} removed`,
-          ts: nowIso(),
-        });
-        break;
-      }
-      case 0x0d: {
-        // Scene called — an 8-bit, installer-configured code (p.266) with no unitId/sceneId
-        // equivalent to Cloud's `SceneEvent`. Logged via the tracer only; not yet surfaced as a
-        // typed driver event — see TODO.md.
-        const scene = parseSceneCalled(packet);
-        this.tracer.event(`scene called (bits=${scene.bits.join(",")})`);
-        break;
-      }
-      default:
-        // Every other opcode (0x1A/0x1B parameter responses, 0x28 time, 0x39 node status, 0x45
-        // scene status, 0x46 target status, 0x49 target color) is real and decodable via
-        // `local-transport/udp-codec.ts`, but nothing in this driver queries them proactively
-        // yet — see TODO.md for wiring them into Diagnostics.
-        break;
-    }
-  }
-}
-
-/** A `unitChanged` event carries the same field set as a REST unit — read it as one. */
-function eventToUnit(event: CasambiEvent): CasambiUnit {
-  return {
-    id: Number(event.id),
-    name: typeof event.name === "string" ? event.name : undefined,
-    type: typeof event.type === "string" ? event.type : undefined,
-    fixtureId: typeof event.fixtureId === "number" ? event.fixtureId : undefined,
-    groupId: typeof event.groupId === "number" ? event.groupId : undefined,
-    address: typeof event.address === "string" ? event.address : undefined,
-    online: typeof event.online === "boolean" ? event.online : undefined,
-    on: typeof event.on === "boolean" ? event.on : undefined,
-    dimLevel: typeof event.dimLevel === "number" ? event.dimLevel : undefined,
-    status: typeof event.status === "string" ? event.status : undefined,
-    condition: typeof event.condition === "number" ? event.condition : undefined,
-    activeSceneId: typeof event.activeSceneId === "number" ? event.activeSceneId : undefined,
-    controls: Array.isArray(event.controls) ? (event.controls as CasambiUnit["controls"]) : undefined,
-    sensors: event.sensors && typeof event.sensors === "object" ? (event.sensors as Record<string, unknown>) : undefined,
-    image: typeof event.image === "string" ? event.image : undefined,
-  };
 }
 
 /** Reduce any thrown value to a short, credential-free message. */

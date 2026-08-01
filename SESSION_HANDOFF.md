@@ -4,6 +4,55 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Architecture Validation & Refactor (mandatory pre-implementation audit)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues PR-2 below, same branch). The user
+required a full, honest architecture audit against an explicit Connection Manager → Transport →
+Service → Command/Event/Discovery Engine hierarchy **before any further feature work**, with an
+explicit instruction not to self-grade "yes." Full findings, per-layer honest answers, refactor
+performed, and justification for every decision: **`docs/architecture/Casambi-Architecture-Audit.md`**
+— read that document, not this summary, before touching command/event dispatch in this driver again.
+
+**Headline finding:** Connection Manager, Local Transport (container), and both Local Services
+(REST/UDP) were already genuinely compliant. **Command Engine and Event Engine did not exist as
+real, distinct entities** — `casambi-driver.ts`'s `command()` had an inline `if (mode==="local")`
+branch building/sending commands two different ways, and two separate private methods
+(`onEvent`/`onLocalPacket`) each independently decided what a raw wire signal meant, duplicating
+that decision once per transport. Discovery Engine was half-real: `buildDiscoveredDevices()` (the
+output-shaping half) was already transport-independent and correct; the driving half (how a
+transport learns about units) was inline in the driver for both transports.
+
+**Refactor performed** (zero Cloud regression — the full pre-existing Cloud-mode
+`casambi-driver.test.ts` suite, including its fake-timer reconnect/heartbeat assertions, passed
+unmodified after every step, verified incrementally, not just once at the end):
+- **`command-engine.ts` (new)** — `CasambiCommandEngine` interface, `CloudCommandEngine`/
+  `LocalCommandEngine` implementations. `command()` collapsed to one call site, no mode branching.
+- **`event-engine.ts` (extended)** — `CasambiSignal` union + `normalizeCloudEvent`/
+  `normalizeLocalPacket` (pure functions) + `enableLocalButtonEvents`/`disableLocalButtonEvents`.
+  The driver's two duplicated dispatch methods removed, replaced by one `applySignal()` reaction
+  method fed by both normalizers.
+- **`discovery-engine.ts` (extended)** — `startLocalDiscovery`/`stopLocalDiscovery` extracted from
+  the driver's inline UDP bootstrap/teardown. Cloud's discovery-driving (`loadNetwork`/`seedState`)
+  was deliberately NOT extracted into a shared interface — two real callers with genuinely
+  different shapes (REST pull vs. UDP push) is judged premature abstraction, not a missing
+  abstraction; full reasoning in the audit doc.
+- **25 new tests** (`command-engine.test.ts` 6, `event-engine.test.ts` 14, `discovery-engine.test.ts`
+  5) exercising the extracted engines directly, independent of the driver.
+
+**Disclosed, NOT fixed in this pass** (see the audit doc's §7 template-readiness table and
+`TODO.md`): `casambi-driver.ts` still publishes through the old, Casambi-only `CasambiEventBus`,
+not the cross-driver `core/event-bus.ts`'s `CoreEventBus` built in the PR-2 session — migrating it
+is scoped, disclosed follow-up, not bundled into this audit's regression-sensitive refactor.
+Similarly, `entity-mapper.ts`'s `capabilitiesFromUnit` does not yet consume `core/
+capability-engine.ts` — that Capability Engine module exists and is tested but has no real
+consumer anywhere yet, Casambi included. **Casambi is not yet confirmed ready to be the standard
+template for future drivers** until those two gaps close — the audit doc says so explicitly rather
+than claiming a clean bill of health.
+
+**Verification:** full `turbo run build typecheck test` across `@supreme/protocols`,
+`@supreme/drivers`, `@supreme/gateway`, `@supreme/web-homeowner` — 46/46 tasks green.
+`@supreme/protocols` alone: 70 test files, 669 tests, all passing.
+
 ## Session: Casambi Driver Refactor — PR-2 Core Architecture + Local Gateway Foundation
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the Foundation session below — same

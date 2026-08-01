@@ -55,13 +55,38 @@
   cross-driver 13-category taxonomy) but `casambi-driver.ts` still publishes through the
   Foundation-session, Casambi-only `event-engine.ts`'s `CasambiEventBus` — deliberately not
   migrated in the same PR that added real Local UDP, to avoid re-touching tested Cloud
-  event-emission code paths alongside a large new Local implementation.
+  event-emission code paths alongside a large new Local implementation. The subsequent
+  Architecture Validation audit (`docs/architecture/Casambi-Architecture-Audit.md`) confirmed this
+  gap still stands and named it explicitly as one of two reasons Casambi cannot yet be declared
+  the standard template for future drivers.
 - **Reason:** the whole point of the Core Event Bus is "every driver publishes through the SAME
   bus" (§ PR-2 brief's Cross-Protocol Philosophy) — Casambi not being on it yet is the one
-  driver-side gap in that promise.
+  driver-side gap in that promise, and until ONE driver proves it end-to-end, `CoreEventBus` is
+  untested-by-real-use even though it has unit tests of its own.
 - **Dependencies:** none architecturally; needs its own regression pass against
-  `casambi-driver.test.ts`'s existing Cloud-mode event assertions.
+  `casambi-driver.test.ts`'s existing Cloud-mode event assertions. The new `CasambiSignal`
+  normalization layer (`event-engine.ts`'s `normalizeCloudEvent`/`normalizeLocalPacket`, added by
+  the Architecture Validation audit) is the natural seam to publish `CoreDriverEvent`s from,
+  alongside (or instead of) the existing `CasambiEventBus` publish calls in `applySignal`.
 - **Complexity:** Medium.
+- **Status:** Not started.
+
+### Casambi Local Gateway — wire `entity-mapper.ts` onto `core/capability-engine.ts`
+- **Description:** found during the Architecture Validation audit: `core/capability-engine.ts`'s
+  `computeEntityCapabilities()` exists, is tested, and is meant to be the ONE place every driver
+  turns a device's real capabilities into UI-facing boolean flags — but `entity-mapper.ts`'s
+  `capabilitiesFromUnit()` computes Casambi's capabilities its own way, independently, and nothing
+  in this driver calls `computeEntityCapabilities()` at all. The Capability Engine layer exists in
+  the codebase with zero real consumers, Casambi included.
+- **Reason:** named explicitly in the audit doc's §7 template-readiness table as the second of two
+  reasons Casambi is not yet confirmed ready to be the standard template for future drivers (KNX/
+  Matter/Lutron/RTI/Denon/DALI/Apple TV/Bluetooth/MQTT) — a driver copying Casambi today would
+  copy a working pattern that bypasses the shared engine meant to replace it.
+- **Dependencies:** none architecturally. `capabilitiesFromUnit`'s OUTPUT (a `CapabilityKind[]`)
+  is exactly `computeEntityCapabilities`'s INPUT shape (`CapabilitySnapshot.capabilities`) — this
+  should be closer to "wire the two together and expose the flags somewhere real consumes them"
+  than a rewrite of either.
+- **Complexity:** Small–Medium.
 - **Status:** Not started.
 
 ### Casambi Local Gateway — wire the real UDP engine into the Packet Recorder Framework
@@ -571,6 +596,25 @@
   session's work. Honest, disclosed gaps carried to `TODO.md`: Local RGBW/CCT capability inference,
   `CoreEventBus` migration for the driver, Packet Recorder wiring, a Local reconnect loop, and real
   hardware verification. Full detail: `SESSION_HANDOFF.md`.
+- **Casambi Architecture Validation & Refactor** — mandatory, honest pre-implementation audit of
+  the whole driver against a required Connection Manager → Transport → Service → Command/Event/
+  Discovery Engine hierarchy, per-layer, with no self-graded "yes" allowed. Found Command Engine
+  and Event Engine did not exist as real entities — `command()` had an inline per-mode branch
+  building/sending commands two ways, and two separate private methods (`onEvent`/`onLocalPacket`)
+  each independently decided what a raw signal meant, duplicated once per transport. Discovery
+  Engine was half-real (output-shaping genuinely shared; driving logic inline per transport).
+  Refactored: new `command-engine.ts` (`CasambiCommandEngine` interface, `Cloud`/`LocalCommandEngine`
+  implementations); `event-engine.ts` extended with a `CasambiSignal` union + `normalizeCloudEvent`/
+  `normalizeLocalPacket`, collapsing the driver's two dispatch methods into one `applySignal`
+  reaction; `discovery-engine.ts` extended with `startLocalDiscovery`/`stopLocalDiscovery`. Cloud's
+  discovery-driving deliberately NOT forced into a shared interface (disclosed judgment call: two
+  real callers with genuinely different pull-vs-push shapes, not evidence of a missing
+  abstraction). Zero Cloud regression — the full pre-existing Cloud-mode test suite passed
+  unmodified, verified after every incremental step. 25 new tests for the extracted engines. Full
+  monorepo `turbo run build typecheck test` green (46/46 tasks; `@supreme/protocols`: 70 files, 669
+  tests). Explicitly did NOT declare Casambi ready to be the standard template for future drivers —
+  two disclosed gaps remain (`CoreEventBus` migration, `core/capability-engine.ts` consumption).
+  Full detail: `docs/architecture/Casambi-Architecture-Audit.md`, `SESSION_HANDOFF.md`.
 - **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
   Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
   project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the
