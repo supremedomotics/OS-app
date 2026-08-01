@@ -60,11 +60,11 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
   defineManifest({
     key: "supreme-casambi",
     name: "Supreme Casambi",
-    description: "Casambi Bluetooth-mesh lighting control.",
+    description: "Supports both Casambi Cloud and Lithernet Local Gateway.",
     category: "lighting",
     channel: "official",
     publisher: PUBLISHER,
-    version: "1.0.0",
+    version: "1.2.0",
     capabilities: ["onoff", "brightness", "color", "position", "sensor"],
     protocols: ["casambi"],
     compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
@@ -72,15 +72,57 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     operations: [...PROTO_OPS],
     documentationUrl: "https://docs.supreme.local/extensions/casambi",
     releaseNotes:
-      "Native Casambi Cloud driver (REST + WebSocket): live state streaming with heartbeat and auto-reconnect, capabilities derived per fixture, and automatic room mapping from Casambi group names.",
+      "Native Casambi driver, two connection methods behind one unified entity model. Cloud (REST + WebSocket): live state streaming with heartbeat and auto-reconnect, capabilities derived per fixture, automatic room mapping from Casambi group names — unchanged since 1.0.0. Local Gateway (Lithernet): a real UDP Casambi Command engine (onoff/brightness/color control, NotifyControlValues-based progressive discovery of dimmer/on-off/battery/temperature/lux/presence, button-press notifications) plus the one documented REST write endpoint. Local discovery has no REST device-listing endpoint to enumerate from — units appear as their first UDP notification arrives, and RGBW/CCT capability inference from Local control values is not yet implemented (documented gap, see the driver's Diagnostics page and this project's TODO.md) — never a fabricated connection or capability.",
     changelog: [
+      { version: "1.2.0", date: "2026-07-31", notes: "Local Gateway: real UDP Casambi Command engine (byte-exact codec, dgram socket, NotifyControlValues-based progressive discovery, onoff/brightness/color commands, button events) and the one documented REST write endpoint. New Net ID / Data Format (Hex or Decimal) settings. Also ships the cross-driver SupremeOS Core (Event Bus, Capability Engine, Packet Recorder Framework, Driver Health/Metrics Engines) other native drivers build on next." },
+      { version: "1.1.0", date: "2026-07-31", notes: "Driver architecture refactor: Connection Manager, Local Gateway settings (REST/UDP ports, gateway name, auto-discover), dedicated Diagnostics page, Health Monitor framework. Cloud behavior unchanged. Local Gateway protocol implementation not yet included." },
       { version: "1.0.0", date: "2026-07-10", notes: "First stable release: native REST + WebSocket, onoff/brightness/color/position/sensor, auto room mapping." },
     ],
     configSchema: [
+      {
+        key: "connectionType",
+        label: "Connection type",
+        type: "select",
+        required: true,
+        default: "cloud",
+        help: "Casambi Cloud (REST + WebSocket) or a local Lithernet Gateway (real UDP Casambi Command protocol on your own network, no internet dependency).",
+        options: [
+          { value: "cloud", label: "Cloud" },
+          { value: "local", label: "Local Gateway" },
+        ],
+        secret: false,
+      },
+      // Cloud settings — unchanged from 1.0.0. Shown only when Connection type is Cloud.
       { key: "apiKey", label: "API key", type: "password", required: true, secret: true, help: "WebSocket-enabled key from Casambi Support." },
       { key: "email", label: "Network admin email", type: "text", required: true, secret: false },
       { key: "password", label: "Network admin password", type: "password", required: true, secret: true },
       { key: "networkId", label: "Network id (optional)", type: "text", help: "Pin a single network for a faster session handshake.", secret: false },
+      // Local Gateway settings. Shown only when Connection type is Local Gateway.
+      { key: "gatewayIp", label: "Gateway IP", type: "host", required: true, placeholder: "192.168.1.50", secret: false },
+      { key: "restPort", label: "REST port", type: "port", required: true, placeholder: "80", help: "Check your Lithernet Gateway's own configuration for its REST API port.", secret: false },
+      { key: "udpPort", label: "UDP port", type: "port", required: true, placeholder: "5100", help: "Check your Lithernet Gateway's own configuration for its UDP Casambi Command port — the gateway sends and receives on this same port.", secret: false },
+      { key: "netId", label: "Net ID", type: "number", default: 0, min: 0, max: 254, help: "Must match the Net ID configured on the gateway's own \"UDP Casambi Command\" page. 0-254; 255 is reserved for broadcast.", secret: false },
+      {
+        key: "dataFormat",
+        label: "Data format",
+        type: "select",
+        default: "hex-dot",
+        help: "Must match the gateway's own \"DEC or HEX\" setting exactly, or every command/notification will fail to parse.",
+        options: [
+          { value: "hex-dot", label: "Hex with dot" },
+          { value: "dec-hash", label: "Decimal with hash" },
+        ],
+        secret: false,
+      },
+      { key: "gatewayName", label: "Gateway name", type: "text", placeholder: "Living Room Gateway", secret: false },
+      { key: "autoDiscover", label: "Auto discover", type: "boolean", default: false, help: "Not yet implemented — no REST device-listing endpoint is documented for the Lithernet Gateway to scan. Enter the gateway's address manually.", secret: false },
+      // Advanced settings — Logging is real (wired to the driver's own trace/onLog pipeline,
+      // same as every other native driver's opt-in trace flag). Developer Mode is shown in the
+      // Driver Manager as an honest, disabled placeholder — no real backing yet. Packet Capture
+      // now has a real UDP engine to source from, but wiring its raw datagrams into the shared
+      // `PacketRecorder` framework (`core/packet-recorder.ts`) is a documented follow-up, not
+      // done in this release — see TODO.md.
+      { key: "logging", label: "Verbose connection logging", type: "boolean", default: false, help: "Record wire lifecycle events (session/wire open, commands, reconnects) into this driver's log.", secret: false },
     ],
   }),
   defineManifest({

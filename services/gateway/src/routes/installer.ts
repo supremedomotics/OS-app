@@ -28,6 +28,7 @@ import {
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
+import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine } from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -229,6 +230,93 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "update");
       reply.send(await i().disconnectDriver(req.params.id as DriverId));
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Driver Refactor — Foundation: the dedicated Casambi Diagnostics page's snapshot
+  // (Connection Type, Gateway, Latency, Entities, Online/Offline, Reconnects, Last Event,
+  // REST/UDP Status, Health). Driver-level, not per-device — unlike `/v1/devices/:id/diagnostics`.
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/casambi/diagnostics", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+      reply.send(driver.getCasambiDiagnostics());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Local Gateway setup wizard actions (§ Driver Setup Wizard; § Casambi Driver Refactor — PR-2
+  // Local Gateway Foundation). "Test Connection" is real: a REST reachability GET (never the
+  // `/set/target_value` write endpoint — that always actuates a real device) plus a safe UDP
+  // 0x39 "own node" probe (never a device/group/scene target, so it can never change real light
+  // state either). "Discover gateway" stays an honest, structured "not implemented" response — no
+  // enumeration/discovery endpoint (SSDP, mDNS, or otherwise) is documented anywhere in the
+  // supplied Lithernet reference set for this gateway.
+  app.post<{ Body: { gatewayIp?: string; restPort?: number; udpPort?: number; netId?: number; dataFormat?: string } }>(
+    "/v1/commissioning/casambi/test-connection",
+    async (req, reply) => {
+      try {
+        const user = await authenticate(ctx, req);
+        await enforce(ctx, user, "device", null, "create");
+        const { gatewayIp, restPort, udpPort, netId, dataFormat } = req.body ?? {};
+        if (!gatewayIp || !Number.isFinite(restPort) || !Number.isFinite(udpPort)) {
+          reply.send({
+            implemented: true,
+            reachable: false,
+            rest: false,
+            udp: false,
+            message: "Missing gatewayIp/restPort/udpPort — enter the Local Gateway's connection details first.",
+          });
+          return;
+        }
+        const format = dataFormat === "dec-hash" ? "dec-hash" : "hex-dot";
+        const rest = new CasambiLocalRestClient({ gatewayIp, restPort: restPort as number });
+        const restReachable = await rest.testConnection();
+
+        const udp = new CasambiUdpEngine({ gatewayIp, udpPort: udpPort as number, netId: netId ?? 0, format });
+        let udpReachable = false;
+        try {
+          await udp.start();
+          udpReachable = await udp.probe(2_000);
+        } catch {
+          udpReachable = false;
+        } finally {
+          await udp.stop();
+        }
+
+        reply.send({
+          implemented: true,
+          reachable: restReachable || udpReachable,
+          rest: restReachable,
+          udp: udpReachable,
+          message:
+            restReachable || udpReachable
+              ? "Gateway reachable."
+              : "Gateway did not respond over REST or UDP — check the IP address, ports, Net ID, and data format.",
+        });
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
+
+  app.post("/v1/commissioning/casambi/discover-gateway", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      reply.send({
+        implemented: false,
+        gateways: [],
+        message:
+          "Auto-discovery is not implemented — no gateway enumeration/discovery endpoint is documented for the Lithernet Gateway. Enter its IP address manually.",
+      });
     } catch (err) {
       sendError(reply, err);
     }

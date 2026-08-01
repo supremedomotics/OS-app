@@ -34,6 +34,101 @@
 
 ## High
 
+### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
+- **Description:** `local-discovery.ts` (real, PR-2) deliberately does NOT map NotifyControlValues
+  control types 2 (Color Temperature), 3 (Hue/Saturation), 4 (XY color), 5 (Color Source
+  Selector), or 11 (White channel) into Supreme's `color` capability. Type 2's documented byte
+  layout is one byte with no stated Kelvin range or normalization at the NotifyControlValues
+  layer — unlike the SET-side opcode 0x48, which explicitly documents either raw Kelvin
+  (0x400-0x4000) or a separate 0x00-0xFF normalized form. Guessing which encoding a real gateway
+  actually reports would be fabrication, not implementation.
+- **Reason:** without this, a dimmable-and-color-capable Casambi luminaire commissioned over
+  Local Gateway only ever exposes `onoff`/`brightness` — color control silently unavailable
+  (correctly gated, per `CapabilityGate`, but a real functionality gap).
+- **Dependencies:** real Lithernet hardware to observe what a gateway actually sends for type 2/3/4
+  in practice — this cannot be resolved from documentation alone.
+- **Complexity:** Medium, once the real byte semantics are confirmed against hardware.
+- **Status:** Not started; honestly gated (never fabricated) as of PR-2.
+
+### Casambi Local Gateway — migrate `casambi-driver.ts` onto the SupremeOS Core Event Bus
+- **Description:** PR-2 built `services/protocols/src/core/event-bus.ts` (`CoreEventBus`, the
+  cross-driver 13-category taxonomy) but `casambi-driver.ts` still publishes through the
+  Foundation-session, Casambi-only `event-engine.ts`'s `CasambiEventBus` — deliberately not
+  migrated in the same PR that added real Local UDP, to avoid re-touching tested Cloud
+  event-emission code paths alongside a large new Local implementation. The subsequent
+  Architecture Validation audit (`docs/architecture/Casambi-Architecture-Audit.md`) confirmed this
+  gap still stands and named it explicitly as one of two reasons Casambi cannot yet be declared
+  the standard template for future drivers.
+- **Reason:** the whole point of the Core Event Bus is "every driver publishes through the SAME
+  bus" (§ PR-2 brief's Cross-Protocol Philosophy) — Casambi not being on it yet is the one
+  driver-side gap in that promise, and until ONE driver proves it end-to-end, `CoreEventBus` is
+  untested-by-real-use even though it has unit tests of its own.
+- **Dependencies:** none architecturally; needs its own regression pass against
+  `casambi-driver.test.ts`'s existing Cloud-mode event assertions. The new `CasambiSignal`
+  normalization layer (`event-engine.ts`'s `normalizeCloudEvent`/`normalizeLocalPacket`, added by
+  the Architecture Validation audit) is the natural seam to publish `CoreDriverEvent`s from,
+  alongside (or instead of) the existing `CasambiEventBus` publish calls in `applySignal`.
+- **Complexity:** Medium.
+- **Status:** Not started.
+
+### Casambi Local Gateway — wire `entity-mapper.ts` onto `core/capability-engine.ts`
+- **Description:** found during the Architecture Validation audit: `core/capability-engine.ts`'s
+  `computeEntityCapabilities()` exists, is tested, and is meant to be the ONE place every driver
+  turns a device's real capabilities into UI-facing boolean flags — but `entity-mapper.ts`'s
+  `capabilitiesFromUnit()` computes Casambi's capabilities its own way, independently, and nothing
+  in this driver calls `computeEntityCapabilities()` at all. The Capability Engine layer exists in
+  the codebase with zero real consumers, Casambi included.
+- **Reason:** named explicitly in the audit doc's §7 template-readiness table as the second of two
+  reasons Casambi is not yet confirmed ready to be the standard template for future drivers (KNX/
+  Matter/Lutron/RTI/Denon/DALI/Apple TV/Bluetooth/MQTT) — a driver copying Casambi today would
+  copy a working pattern that bypasses the shared engine meant to replace it.
+- **Dependencies:** none architecturally. `capabilitiesFromUnit`'s OUTPUT (a `CapabilityKind[]`)
+  is exactly `computeEntityCapabilities`'s INPUT shape (`CapabilitySnapshot.capabilities`) — this
+  should be closer to "wire the two together and expose the flags somewhere real consumes them"
+  than a rewrite of either.
+- **Complexity:** Small–Medium.
+- **Status:** Not started.
+
+### Casambi Local Gateway — wire the real UDP engine into the Packet Recorder Framework
+- **Description:** `core/packet-recorder.ts` (`PacketRecorder`, PR-2) is a real, tested ring
+  buffer, but nothing feeds it yet — `local-transport/udp-engine.ts`'s real send/receive paths
+  don't record into it. The Driver Manager UI's "Packet Capture" toggle is still an honestly
+  disabled placeholder for this reason.
+- **Reason:** needed before Packet Capture can go from a disabled checkbox to a real feature.
+- **Dependencies:** none — the recorder and the engine both exist; this is pure wiring +
+  redaction review (packets never carry credentials for this protocol, but confirm before
+  shipping "Save Diagnostic Data" export).
+- **Complexity:** Small–Medium.
+- **Status:** Not started.
+
+### Casambi Local Gateway — reconnect/health-recovery loop for Local mode
+- **Description:** Cloud mode has a real capped-exponential-backoff reconnect loop
+  (`scheduleReconnect`/`reconnect` in `casambi-driver.ts`, unchanged since Foundation). Local mode
+  has none — UDP is connectionless, so a lost socket or an unresponsive gateway isn't detected or
+  recovered from automatically today.
+- **Reason:** a real Lithernet gateway rebooting or losing power should be detected and recovered
+  from without requiring the installer to manually reconnect the driver.
+- **Dependencies:** design decision on what "connection health" even means for a connectionless
+  protocol on a LAN (a periodic `probe()` heartbeat is the obvious candidate — `udp-engine.ts`'s
+  `probe()` already exists and is reused by Test Connection; the driver doesn't call it
+  periodically yet).
+- **Complexity:** Medium.
+- **Status:** Not started.
+
+### Casambi Local Gateway — verify against real Lithernet hardware
+- **Description:** PR-2's UDP codec/engine/REST client are byte-exact against the documentation
+  (39 codec tests, several matching the PDF's own worked examples byte-for-byte) but have never
+  touched a real Lithernet Gateway. Several features are firmware-gated per the doc (Evolution
+  ≥33.22 Scene status, ≥34.50 Target status, ≥36.70 Target Color/SetColorTemperature, ≥37.80 Resume
+  Automation, ≥37.90 NotifyControlValues, ≥39.50 NotifyButtonEvent) — whether a given gateway
+  silently ignores an unsupported opcode (as the doc claims for "unknown opcodes") is unverified.
+- **Reason:** the single most load-bearing unverified assumption in this implementation.
+- **Dependencies:** physical access to a Lithernet gateway + Casambi network.
+- **Complexity:** Medium (mostly verification, not new code, unless real behavior diverges from
+  the documentation — in which case see the flagged inconsistencies in `udp-codec.ts`'s doc
+  comments first).
+- **Status:** Not started.
+
 ### Universal Keypad Editor / Intent-aware mapping UI
 - **Description:** Phase 1 (ADR 0016) and Phase 2 (ADR 0017) both shipped complete backend
   architecture — Universal Input/Feedback Engines, Subscription Manager, Mapping Engine, and the
@@ -215,6 +310,18 @@
 ---
 
 ## Low
+
+### Live Playwright verification of the Casambi Driver Manager UI
+- **Description:** the Casambi Driver Refactor session's new UI (`connectionType` Setup Wizard
+  step, `CasambiLocalGatewayPanel`, `CasambiAdvancedPlaceholders`, `CasambiDiagnosticsPanel` in
+  `apps/web-homeowner/src/drivers.tsx`) was typecheck/build/unit-test verified but never opened in
+  a real browser — no running `hub-compose` stack/backend in that sandbox.
+- **Reason:** this project's testing standard ("new UI behavior should be Playwright-verified
+  live... not just typechecked") wasn't met, flagged honestly rather than claimed.
+- **Dependencies:** `hub-compose` running (or the local dev server) with a Casambi driver
+  installed.
+- **Complexity:** Small — verification only, at all four required breakpoints.
+- **Status:** Not started.
 
 ### Additional AVR brand drivers
 - **Description:** `docs/architecture/adding-avr-brands.md` explicitly lists brands with zero
@@ -491,6 +598,56 @@
   13 new tests (recorder unit tests, driver wiring incl. a real unrecognized-line capture over
   real TCP, factory wiring, export-route e2e). Full monorepo build/typecheck/test green.
   `docs/architecture/AVR-Diagnostic-Mode.md` has the full enable/export walkthrough.
+- **Casambi Driver Refactor (Foundation)** — restructured the working Casambi Cloud driver
+  (unchanged behavior — same REST/WebSocket calls, same reconnect/heartbeat timing, same
+  capability mapping) into a 10-module architecture (`services/protocols/src/casambi/`):
+  Connection Manager, Cloud Transport, Local Transport (REST Client + UDP Engine — both
+  architecture-only, every method honestly throws "not implemented yet"), Entity Mapper,
+  Discovery Engine, Feedback Engine, an additive transport-independent Event Bus (`DeviceEvent`/
+  `ButtonEvent`/`SceneEvent`/`SensorEvent`/`NetworkEvent`/`DiagnosticEvent`), a dedicated
+  Diagnostics snapshot + Health Monitor framework, and Driver Settings. New Driver Store
+  `connectionType` field (Cloud default/Local Gateway) plus new Local fields, a Setup Wizard step
+  in the Driver Manager UI (Cloud shows the exact pre-existing fields unchanged; Local shows new
+  fields + Auto Discover/Test Connection, both honest not-implemented-yet stubs), and a new
+  Casambi Diagnostics panel. Zero Local REST/UDP protocol implementation, per the brief's explicit
+  scope (that's PR-2/PR-3/PR-4/PR-5). Full monorepo `turbo run build typecheck test` green (113
+  build/typecheck tasks, 97 test tasks), every pre-existing Casambi test passing unmodified. Not
+  Playwright-verified live this session (no backend running in the sandbox). Full detail:
+  `SESSION_HANDOFF.md`.
+- **Casambi Driver Refactor — PR-2 Core Architecture + Local Gateway Foundation** — built the
+  cross-driver SupremeOS Core (`services/protocols/src/core/`: Event Bus, Capability Engine,
+  Packet Recorder Framework, Driver Health Engine, Driver Metrics Engine — none Casambi-specific)
+  and implemented the REAL Casambi Local Gateway protocol, grounded byte-exact in the Lithernet
+  UDP Developer Reference and WebAPI PDFs: a real `node:dgram` UDP Casambi Command engine
+  (`local-transport/udp-codec.ts` + `udp-engine.ts`), the one documented REST write endpoint
+  (`rest-client.ts`), NotifyControlValues-based progressive discovery (`local-discovery.ts`), a
+  command mapper (`local-command-mapper.ts`), and `casambi-driver.ts` wired to all of it — Local
+  mode now really connects, discovers, and controls onoff/brightness/color over UDP. Flagged (not
+  silently resolved) three real documentation inconsistencies found in the reference PDFs. Cloud
+  behavior untouched and re-verified. Full monorepo `turbo run build typecheck test` green (46/46
+  tasks); `@supreme/protocols` alone: 67 test files, 644 tests, including ~120 new tests for this
+  session's work. Honest, disclosed gaps carried to `TODO.md`: Local RGBW/CCT capability inference,
+  `CoreEventBus` migration for the driver, Packet Recorder wiring, a Local reconnect loop, and real
+  hardware verification. Full detail: `SESSION_HANDOFF.md`.
+- **Casambi Architecture Validation & Refactor** — mandatory, honest pre-implementation audit of
+  the whole driver against a required Connection Manager → Transport → Service → Command/Event/
+  Discovery Engine hierarchy, per-layer, with no self-graded "yes" allowed. Found Command Engine
+  and Event Engine did not exist as real entities — `command()` had an inline per-mode branch
+  building/sending commands two ways, and two separate private methods (`onEvent`/`onLocalPacket`)
+  each independently decided what a raw signal meant, duplicated once per transport. Discovery
+  Engine was half-real (output-shaping genuinely shared; driving logic inline per transport).
+  Refactored: new `command-engine.ts` (`CasambiCommandEngine` interface, `Cloud`/`LocalCommandEngine`
+  implementations); `event-engine.ts` extended with a `CasambiSignal` union + `normalizeCloudEvent`/
+  `normalizeLocalPacket`, collapsing the driver's two dispatch methods into one `applySignal`
+  reaction; `discovery-engine.ts` extended with `startLocalDiscovery`/`stopLocalDiscovery`. Cloud's
+  discovery-driving deliberately NOT forced into a shared interface (disclosed judgment call: two
+  real callers with genuinely different pull-vs-push shapes, not evidence of a missing
+  abstraction). Zero Cloud regression — the full pre-existing Cloud-mode test suite passed
+  unmodified, verified after every incremental step. 25 new tests for the extracted engines. Full
+  monorepo `turbo run build typecheck test` green (46/46 tasks; `@supreme/protocols`: 70 files, 669
+  tests). Explicitly did NOT declare Casambi ready to be the standard template for future drivers —
+  two disclosed gaps remain (`CoreEventBus` migration, `core/capability-engine.ts` consumption).
+  Full detail: `docs/architecture/Casambi-Architecture-Audit.md`, `SESSION_HANDOFF.md`.
 - **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
   Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
   project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
+import { CasambiProtocolDriver } from "@supreme/protocols";
 
 /**
  * The manifest↔runtime bridge for the Universal AVR Framework extensions (§ ADR 0015).
@@ -70,5 +71,52 @@ describe("native-driver-factory — CoolMaster", () => {
   it("builds a live driver instance once a gateway host is configured", () => {
     const driver = buildNativeDriver("coolmaster", { host: "192.168.0.21", protocol: "auto" });
     expect(driver?.protocol).toBe("coolmaster");
+  });
+});
+
+/**
+ * § Casambi Driver Refactor — PR-2: `connectionType` is absent from every config stored before
+ * the Foundation session, so the factory must keep defaulting to Cloud identically. This session
+ * added `netId`/`dataFormat` to the Local branch — this is that branch's first dedicated test
+ * (a real, disclosed coverage gap noted in TODO.md until now).
+ */
+describe("native-driver-factory — Casambi", () => {
+  it("defaults to Cloud when connectionType is absent (every pre-refactor config)", () => {
+    const driver = buildNativeDriver("casambi", { apiKey: "k", email: "a@b.com", password: "pw" });
+    expect(driver).toBeInstanceOf(CasambiProtocolDriver);
+    expect((driver as CasambiProtocolDriver).getHealth().connectionType).toBe("cloud");
+  });
+
+  it("returns null for Cloud config missing required credentials", () => {
+    expect(buildNativeDriver("casambi", { connectionType: "cloud" })).toBeNull();
+  });
+
+  it("returns null for Local config missing gatewayIp/restPort/udpPort", () => {
+    expect(buildNativeDriver("casambi", { connectionType: "local" })).toBeNull();
+  });
+
+  it("builds a Local driver and threads netId/dataFormat through to the transport config", () => {
+    const driver = buildNativeDriver("casambi", {
+      connectionType: "local",
+      gatewayIp: "192.168.1.90",
+      restPort: 80,
+      udpPort: 5100,
+      netId: 3,
+      dataFormat: "dec-hash",
+    }) as CasambiProtocolDriver;
+    expect(driver).toBeInstanceOf(CasambiProtocolDriver);
+    expect(driver.getHealth().connectionType).toBe("local");
+    expect(driver.getCasambiDiagnostics().gateway).toBe("192.168.1.90:80");
+  });
+
+  it("builds a Local driver with netId/dataFormat omitted (factory supplies the defaults)", () => {
+    const driver = buildNativeDriver("casambi", {
+      connectionType: "local",
+      gatewayIp: "192.168.1.90",
+      restPort: 80,
+      udpPort: 5100,
+    });
+    expect(driver).toBeInstanceOf(CasambiProtocolDriver);
+    expect((driver as CasambiProtocolDriver).getHealth().connectionType).toBe("local");
   });
 });

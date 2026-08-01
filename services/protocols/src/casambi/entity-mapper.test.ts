@@ -6,7 +6,7 @@ import {
   rgbToHueSat,
   statesFromUnit,
   type CasambiUnit,
-} from "./casambi-codec.js";
+} from "./entity-mapper.js";
 
 describe("Casambi codec — capability derivation", () => {
   it("derives brightness for a dimmable luminaire", () => {
