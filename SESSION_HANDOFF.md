@@ -4,6 +4,74 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Local Gateway — Auth & UDP Diagnostics
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the audit session below, same
+branch). Brief: refine Local REST authentication, fix the UDP "Unreachable" false-negative, and
+add production-quality staged connection diagnostics — grounded strictly in the Lithernet manuals,
+with every undocumented assumption disclosed rather than inferred. Full write-up, including the
+required six-question UDP audit answered against the real pre-existing code:
+**`docs/architecture/Casambi-Local-Auth-And-UDP-Diagnostics.md`** — read that document, not this
+summary, before touching Local REST auth or UDP diagnostics again.
+
+**Root causes found (both real, confirmed by reading the code, not assumed):**
+1. The generic `services/drivers/src/config.ts` `validateDriverConfig` iterated the Casambi
+   manifest's full `configSchema` unconditionally, checking `required` regardless of
+   `connectionType` — a Local Gateway config save could fail on a missing `email` (a Cloud-only
+   field), and vice versa. This existed independently of anything UDP-related.
+2. `CasambiUdpEngine.probe()`'s reachability check conflated one timed-out application-layer
+   round-trip (opcode 0x39 Node Status, 2s timeout) with the actual transport state — a
+   TCP-shaped assumption on a connectionless, push-based protocol. The gateway's own "UDP
+   Listening on IP:Port" self-report (confirmed via `Lithernet_General_Settings_Network.pdf` p.72
+   as its own Control System Wizard status field) was never contradictory with SupremeOS's
+   report; the probe-timeout logic was just answering the wrong question.
+
+**Changes made** (Connection Manager → Transport → Service → Engine hierarchy preserved,
+unmerged; zero Cloud regression — the full pre-existing Cloud-mode test suite passed unmodified):
+- **`packages/domain-model/src/drivers.ts`** — new `requiredIf: { key, equals }` on
+  `DriverConfigField`, a generic (not Casambi-specific) mechanism for mode-conditional required
+  fields.
+- **`services/drivers/src/config.ts`** — `validateDriverConfig`/`isConfigComplete` now resolve
+  `requiredIf` against the submitted/existing/default value of the named discriminator field.
+- **`local-transport/rest-client.ts`** — `gatewayUsername`/`gatewayPassword` → HTTP Basic Auth on
+  every request; `testConnection()` returns `{ reachable, httpStatus, authFailed }`;
+  `setTargetValue()` can return `"unauthorized"`.
+- **`local-transport/udp-engine.ts`** — real `socketState`, `localAddress`/`localPort` (from
+  `dgram.Socket.address()`), `packetsSent`/`packetsReceived`, `lastPacketAt`, `lastSendError`,
+  `lastDecodeError`, `averageLatencyMs` (probe round-trips only). No packet-loss field — the
+  documented packet structure has no sequence numbers, so it's permanently unmeasurable and never
+  fabricated.
+- **`health-monitor.ts`** — new `udpStage()`: `not_configured | socket_error | bound_waiting |
+  active`. Only a real socket error is a failure; "bound, nothing received yet" is a normal state.
+- **`diagnostics.ts`** — additive `udp` field on the snapshot (Local only, `null` for Cloud).
+- **`services/gateway/src/routes/installer.ts`** — Test Connection rewritten to the staged model
+  above instead of a single `reachable` boolean; never marks UDP failed on "no reply yet."
+- **`manifests.ts`** — new `gatewayUsername`/`gatewayPassword` fields, exact field order per the
+  brief's mockup, `requiredIf` on every mode-conditional field, version bumped to 1.3.0.
+- **`native-driver-factory.ts`**, **`drivers.tsx`**, **`api.ts`** — threaded the new fields/types
+  through; Driver Manager's Local Gateway panel now renders the staged Test Connection report
+  (REST / HTTP Authentication / Gateway / UDP / Port / Gateway Configuration / Status / Packets
+  Received / Last Packet / Latency), and the Diagnostics page gained a live "UDP transport"
+  section sourced from the running driver's real engine state.
+
+**Tests:** ~45 new/updated tests across `config.test.ts` (requiredIf, both directions),
+`rest-client.test.ts` (Basic Auth header, 401/403 handling), `udp-engine.test.ts` (socketState
+transitions including a real bind failure, address/port exposure, packet/send/decode counters,
+probe latency, no packet-loss getter), new `health-monitor.test.ts` (`udpStage`'s four-way rule),
+`casambi-driver.test.ts` (end-to-end diagnostics wiring, `bound_waiting`→`active` transition,
+`udp: null` in Cloud mode), `native-driver-factory.test.ts` (+2). Full monorepo
+`turbo run build typecheck test` across `@supreme/domain-model`, `@supreme/drivers`,
+`@supreme/protocols`, `@supreme/gateway`, `@supreme/web-homeowner`: **48/48 tasks green**
+(`@supreme/protocols` 71 files/690 tests, `@supreme/gateway` 71 files/289 tests, `@supreme/drivers`
+22 tests, `@supreme/web-homeowner` 55 tests + build). No hardware was available — every claim is
+either a code fact or cited to a specific Lithernet PDF page, never inferred as verified.
+
+**Disclosed, not fixed this session** (see `TODO.md`): the HTTP auth scheme is Basic by informed
+default, not confirmed against real hardware (Digest is possible); no SSL/HTTPS support for the
+Local REST client; no dedicated fastify-level HTTP test for the rewritten test-connection route
+(its underlying primitives are fully unit-tested); the MAC-address-as-credentials fallback login
+is not implemented.
+
 ## Session: Casambi Architecture Validation & Refactor (mandatory pre-implementation audit)
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues PR-2 below, same branch). The user

@@ -350,4 +350,41 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await driver.disconnect();
     expect(driver.getCasambiDiagnostics().udpStatus).toBe("disconnected");
   });
+
+  describe("staged UDP diagnostics (§ UDP Diagnostics audit)", () => {
+    it("reports stage 'bound_waiting' immediately after connect, before any notification arrives", async () => {
+      const { driver } = makeLocalDriver();
+      await driver.connect();
+      const udp = driver.getCasambiDiagnostics().udp;
+      expect(udp).not.toBeNull();
+      expect(udp?.socketState).toBe("bound");
+      expect(udp?.stage).toBe("bound_waiting");
+      expect(udp?.remoteAddress).toBe("192.168.1.90");
+      expect(udp?.remotePort).toBe(5100);
+      // connect() already sent the SetDefaultMask/Subscribe/NotifyButtonEvent bootstrap.
+      expect(udp?.packetsSent).toBe(3);
+      expect(udp?.packetsReceived).toBe(0);
+      expect(udp?.lastPacketAt).toBeNull();
+      await driver.disconnect();
+    });
+
+    it("moves to stage 'active' and increments packetsReceived once a notification arrives", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("0.70.4.4b.5.1.c8\r\n");
+      const udp = driver.getCasambiDiagnostics().udp;
+      expect(udp?.stage).toBe("active");
+      expect(udp?.packetsReceived).toBe(1);
+      expect(udp?.lastPacketAt).not.toBeNull();
+      await driver.disconnect();
+    });
+
+    it("udp diagnostics are null in Cloud mode — no fabricated UDP detail for a transport that doesn't exist", async () => {
+      const transport = new FakeCasambiTransport(NETWORK);
+      const driver = new CasambiProtocolDriver({ credentials: creds, transport });
+      await driver.connect();
+      expect(driver.getCasambiDiagnostics().udp).toBeNull();
+      await driver.disconnect();
+    });
+  });
 });

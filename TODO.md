@@ -50,6 +50,44 @@
 - **Complexity:** Medium, once the real byte semantics are confirmed against hardware.
 - **Status:** Not started; honestly gated (never fabricated) as of PR-2.
 
+### Casambi Local Gateway — confirm HTTP auth scheme (Basic vs Digest) against real hardware
+- **Description:** `Lithernet_General_Settings_Network.pdf` p.109 shows a native browser
+  credential prompt guarding a direct HTTP endpoint but never names the wire scheme. HTTP Basic
+  Authentication was implemented as the disclosed, informed default (it's the standard mechanism
+  that produces exactly that prompt), but this has not been verified against a real gateway. If a
+  real device expects Digest instead, `rest-client.ts`'s `authHeaders()` needs updating.
+- **Reason:** an unverified auth scheme could silently fail against real hardware even though it
+  looks correct in code and unit tests (which only exercise the client's own request-building
+  logic, not a real gateway's response to it).
+- **Dependencies:** a real Lithernet Gateway to test against.
+- **Complexity:** Small, once hardware is available.
+- **Status:** Not started; disclosed in `docs/architecture/Casambi-Local-Auth-And-UDP-Diagnostics.md`.
+
+### Casambi Local Gateway — SSL/HTTPS support for the Local REST client
+- **Description:** The gateway's embedded web server optionally supports HTTPS with either a
+  self-signed cert (valid to 2046) or an installer-uploaded custom cert (`Lithernet_General_
+  Settings_Network.pdf` p.64-65). `CasambiLocalRestClient` is HTTP-only; `restPort`'s help text
+  notes the 443/SSL possibility but SupremeOS cannot actually speak HTTPS to the gateway yet
+  (and would need a self-signed-cert trust decision if it did).
+- **Reason:** an installer who has enabled SSL on their gateway's web server cannot use Local REST
+  from SupremeOS at all today — a real, disclosed functionality gap, not a rare edge case (the
+  Lithernet UI makes enabling it one toggle).
+- **Dependencies:** none architecturally; needs a design decision on self-signed cert trust.
+- **Complexity:** Medium.
+- **Status:** Not started.
+
+### Casambi Local Gateway — HTTP-level test for the rewritten Test Connection route
+- **Description:** `/v1/commissioning/casambi/test-connection`'s staged rewrite (§ Auth & UDP
+  Diagnostics session) is thin orchestration over already-unit-tested primitives
+  (`CasambiLocalRestClient.testConnection()`, `CasambiUdpEngine.probe()`/counters), but the route
+  itself — request parsing, the missing-fields early return, the combined message string — has no
+  dedicated fastify-level integration test.
+- **Reason:** a route-shape regression (e.g. a renamed response field) wouldn't be caught by the
+  underlying unit tests alone.
+- **Dependencies:** none.
+- **Complexity:** Small.
+- **Status:** Not started; disclosed gap from the Auth & UDP Diagnostics session.
+
 ### Casambi Local Gateway — migrate `casambi-driver.ts` onto the SupremeOS Core Event Bus
 - **Description:** PR-2 built `services/protocols/src/core/event-bus.ts` (`CoreEventBus`, the
   cross-driver 13-category taxonomy) but `casambi-driver.ts` still publishes through the
@@ -615,6 +653,22 @@
   tests). Explicitly did NOT declare Casambi ready to be the standard template for future drivers —
   two disclosed gaps remain (`CoreEventBus` migration, `core/capability-engine.ts` consumption).
   Full detail: `docs/architecture/Casambi-Architecture-Audit.md`, `SESSION_HANDOFF.md`.
+- **Casambi Local Gateway — Auth & UDP Diagnostics** — grounded in `Lithernet_General_Settings_
+  Network.pdf`'s web-server-login section (p.64) and the UDP audit the brief required. Added
+  `gatewayUsername`/`gatewayPassword` (independent of Cloud credentials) with HTTP Basic Auth sent
+  on every Local REST request; `testConnection()`/`setTargetValue()` now distinguish
+  unreachable/auth-failed/ok. Fixed a real, confirmed bug: the generic `validateDriverConfig`
+  required Cloud AND Local fields unconditionally regardless of `connectionType` — fixed with a
+  new, driver-agnostic `requiredIf` schema concept (domain-model), not a Casambi special case.
+  Diagnosed and fixed the UDP "Unreachable" false-negative: the old Test Connection collapsed one
+  timed-out probe reply into a boolean, a TCP-shaped assumption on a connectionless, push-based
+  protocol; replaced with real, staged UDP instrumentation (`socketState`, local/remote
+  address:port, packet counters, probe-only latency, last send/decode error — no fabricated packet
+  loss, ever) surfaced both in a rewritten staged Test Connection response and in the ongoing
+  Diagnostics snapshot. Zero Cloud regression. Full monorepo `turbo run build typecheck test`
+  green (48/48 tasks); `@supreme/protocols` 71 files/690 tests, `@supreme/drivers` 22,
+  `@supreme/gateway` 289, `@supreme/web-homeowner` 55 (build + typecheck also verified). Full
+  detail: `docs/architecture/Casambi-Local-Auth-And-UDP-Diagnostics.md`, `SESSION_HANDOFF.md`.
 - **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
   Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
   project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the

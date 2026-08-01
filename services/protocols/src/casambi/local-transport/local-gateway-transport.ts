@@ -15,6 +15,12 @@ export interface CasambiLocalGatewayConfig {
   restPort: number;
   udpPort: number;
   gatewayName?: string;
+  /** § Casambi Local Gateway Auth — the Lithernet Gateway's own web-server login
+   * (`Lithernet_General_Settings_Network.pdf` p.64), required by every Local REST request. This
+   * is a distinct, independently-stored credential pair, never the Casambi Cloud
+   * `email`/`password`/`apiKey`. Optional because a gateway may have no login configured. */
+  gatewayUsername?: string;
+  gatewayPassword?: string;
   /** This bridge's own Net ID (0-254) for outgoing UDP commands. Default 0. */
   netId?: number;
   /** UDP wire text format — must match the gateway's own "DEC or HEX" setting. Default
@@ -40,6 +46,8 @@ export class CasambiLocalTransport {
       gatewayIp: config.gatewayIp,
       restPort: config.restPort,
       gatewayName: config.gatewayName,
+      gatewayUsername: config.gatewayUsername,
+      gatewayPassword: config.gatewayPassword,
     });
     this.udp = new CasambiUdpEngine({
       gatewayIp: config.gatewayIp,

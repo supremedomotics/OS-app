@@ -252,60 +252,112 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
-  // Local Gateway setup wizard actions (§ Driver Setup Wizard; § Casambi Driver Refactor — PR-2
-  // Local Gateway Foundation). "Test Connection" is real: a REST reachability GET (never the
-  // `/set/target_value` write endpoint — that always actuates a real device) plus a safe UDP
-  // 0x39 "own node" probe (never a device/group/scene target, so it can never change real light
-  // state either). "Discover gateway" stays an honest, structured "not implemented" response — no
-  // enumeration/discovery endpoint (SSDP, mDNS, or otherwise) is documented anywhere in the
-  // supplied Lithernet reference set for this gateway.
-  app.post<{ Body: { gatewayIp?: string; restPort?: number; udpPort?: number; netId?: number; dataFormat?: string } }>(
-    "/v1/commissioning/casambi/test-connection",
-    async (req, reply) => {
-      try {
-        const user = await authenticate(ctx, req);
-        await enforce(ctx, user, "device", null, "create");
-        const { gatewayIp, restPort, udpPort, netId, dataFormat } = req.body ?? {};
-        if (!gatewayIp || !Number.isFinite(restPort) || !Number.isFinite(udpPort)) {
-          reply.send({
-            implemented: true,
-            reachable: false,
-            rest: false,
-            udp: false,
-            message: "Missing gatewayIp/restPort/udpPort — enter the Local Gateway's connection details first.",
-          });
-          return;
-        }
-        const format = dataFormat === "dec-hash" ? "dec-hash" : "hex-dot";
-        const rest = new CasambiLocalRestClient({ gatewayIp, restPort: restPort as number });
-        const restReachable = await rest.testConnection();
-
-        const udp = new CasambiUdpEngine({ gatewayIp, udpPort: udpPort as number, netId: netId ?? 0, format });
-        let udpReachable = false;
-        try {
-          await udp.start();
-          udpReachable = await udp.probe(2_000);
-        } catch {
-          udpReachable = false;
-        } finally {
-          await udp.stop();
-        }
-
+  // Local Gateway setup wizard actions (§ Driver Setup Wizard; § Casambi Local Gateway Auth + UDP
+  // Diagnostics). "Test Connection" is real and staged, never a single reachable/unreachable
+  // boolean: it reports REST reachability + HTTP auth result (via the configured Gateway
+  // Username/Password, never Cloud credentials), and — because Casambi's UDP transport is
+  // connectionless — the real, verifiable stages of the UDP side (socket created, socket bound,
+  // probe packet transmitted, any notification received) instead of treating "no reply within
+  // the test window" as a failure. Never calls `/set/target_value` (always writes a real value to
+  // a real target) and the UDP probe uses opcode 0x39 with Request=0xFF ("own node") — neither
+  // path can ever actuate a real device. "Discover gateway" stays an honest, structured "not
+  // implemented" response — no enumeration/discovery endpoint (SSDP, mDNS, or otherwise) is
+  // documented anywhere in the supplied Lithernet reference set for this gateway.
+  app.post<{
+    Body: {
+      gatewayIp?: string;
+      restPort?: number;
+      udpPort?: number;
+      netId?: number;
+      dataFormat?: string;
+      gatewayUsername?: string;
+      gatewayPassword?: string;
+    };
+  }>("/v1/commissioning/casambi/test-connection", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { gatewayIp, restPort, udpPort, netId, dataFormat, gatewayUsername, gatewayPassword } = req.body ?? {};
+      if (!gatewayIp || !Number.isFinite(restPort) || !Number.isFinite(udpPort)) {
         reply.send({
           implemented: true,
-          reachable: restReachable || udpReachable,
-          rest: restReachable,
-          udp: udpReachable,
-          message:
-            restReachable || udpReachable
-              ? "Gateway reachable."
-              : "Gateway did not respond over REST or UDP — check the IP address, ports, Net ID, and data format.",
+          rest: { reachable: false, httpStatus: null, authFailed: null },
+          udp: {
+            socketCreated: false,
+            socketBound: false,
+            packetSent: false,
+            localAddress: null,
+            localPort: null,
+            remoteAddress: gatewayIp ?? null,
+            remotePort: udpPort ?? null,
+            notificationReceived: false,
+            packetsReceived: 0,
+            averageLatencyMs: null,
+            lastError: null,
+          },
+          message: "Missing gatewayIp/restPort/udpPort — enter the Local Gateway's connection details first.",
         });
-      } catch (err) {
-        sendError(reply, err);
+        return;
       }
-    },
-  );
+      const format = dataFormat === "dec-hash" ? "dec-hash" : "hex-dot";
+      const rest = new CasambiLocalRestClient({ gatewayIp, restPort: restPort as number, gatewayUsername, gatewayPassword });
+      const restResult = await rest.testConnection();
+
+      const udp = new CasambiUdpEngine({ gatewayIp, udpPort: udpPort as number, netId: netId ?? 0, format });
+      let socketCreated = false;
+      let socketBound = false;
+      try {
+        await udp.start();
+        socketCreated = true;
+        socketBound = true;
+      } catch {
+        // `dgram.createSocket()` itself has no documented failure path — only the subsequent
+        // bind can fail (EADDRINUSE, permission denied), so the socket was still "created."
+        socketCreated = true;
+        socketBound = false;
+      }
+      let notificationReceived = false;
+      if (socketBound) {
+        notificationReceived = await udp.probe(2_000);
+      }
+      const udpResult = {
+        socketCreated,
+        socketBound,
+        packetSent: udp.packetsSent > 0,
+        localAddress: udp.localAddress,
+        localPort: udp.localPort,
+        remoteAddress: gatewayIp,
+        remotePort: udpPort as number,
+        notificationReceived,
+        packetsReceived: udp.packetsReceived,
+        averageLatencyMs: udp.averageLatencyMs,
+        lastError: udp.lastError,
+      };
+      await udp.stop().catch(() => {});
+
+      const restMessage = !restResult.reachable
+        ? "REST unreachable — check the IP address and REST port."
+        : restResult.authFailed
+          ? "REST reachable, but the gateway rejected the configured Gateway Username/Password."
+          : "REST reachable.";
+      const udpMessage = !udpResult.socketBound
+        ? `UDP socket could not bind (${udpResult.lastError ?? "unknown error"}) — check the UDP port is not already in use.`
+        : !udpResult.packetSent
+          ? `UDP socket bound, but the test packet failed to send (${udpResult.lastError ?? "unknown error"}).`
+          : udpResult.notificationReceived || udpResult.packetsReceived > 0
+            ? "UDP active — the gateway is sending notifications."
+            : "UDP socket bound and listening — waiting for the gateway's first notification. This is normal for a connectionless protocol and does not by itself mean the gateway is unreachable.";
+
+      reply.send({
+        implemented: true,
+        rest: restResult,
+        udp: udpResult,
+        message: `${restMessage} ${udpMessage}`,
+      });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
 
   app.post("/v1/commissioning/casambi/discover-gateway", async (req, reply) => {
     try {

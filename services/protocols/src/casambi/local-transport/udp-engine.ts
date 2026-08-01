@@ -29,7 +29,16 @@ export interface CasambiUdpSocketLike {
   removeListener?(event: string, listener: (...args: unknown[]) => void): unknown;
   bind(port?: number): void;
   close(callback?: () => void): void;
+  /** Real `dgram.Socket.address()` once bound — the honest source for "local bind address/port"
+   * diagnostics (§ UDP Diagnostics). Optional so a minimal test fake need not implement it; when
+   * absent, `localAddress`/`localPort` simply report `null` rather than fabricating a value. */
+  address?(): { address: string; port: number; family: string };
 }
+
+/** One socket-level lifecycle state, reported honestly rather than collapsed into a single
+ * reachable/unreachable boolean (§ UDP Diagnostics audit — Casambi's UDP transport is
+ * connectionless; there is no "connected" state to claim, only these real, verifiable stages). */
+export type CasambiUdpSocketState = "closed" | "bound" | "error";
 
 export type CasambiUdpSocketFactory = () => CasambiUdpSocketLike;
 
@@ -63,6 +72,14 @@ export class CasambiUdpEngine {
   private readonly errorListeners = new Set<(err: Error) => void>();
   private readonly decodeErrorListeners = new Set<(raw: string, err: Error) => void>();
   private _listening = false;
+  private _lastError: string | null = null;
+  private _packetsSent = 0;
+  private _packetsReceived = 0;
+  private _lastPacketAt: string | null = null;
+  private _lastSendAt: string | null = null;
+  private _lastSendError: string | null = null;
+  private _lastDecodeError: { raw: string; message: string; at: string } | null = null;
+  private readonly probeLatenciesMs: number[] = [];
 
   constructor(opts: CasambiUdpEngineOptions) {
     this.opts = opts;
@@ -85,6 +102,95 @@ export class CasambiUdpEngine {
     return this._listening;
   }
 
+  /** Honest, staged socket lifecycle state (§ UDP Diagnostics audit). `"closed"` before `start()`
+   * or after `stop()`/a bind failure; `"bound"` once the OS has actually bound the local port;
+   * `"error"` after a real socket-level error (bind failure, EADDRINUSE, permission denied,
+   * ICMP-reported send failure) — never derived from "no reply yet", since Casambi's UDP
+   * protocol is connectionless and a lack of reply is not a documented failure condition. */
+  get socketState(): CasambiUdpSocketState {
+    if (this._lastError && !this._listening) return "error";
+    return this._listening ? "bound" : "closed";
+  }
+
+  /** The last real socket-level error (bind failure, send failure reported by the OS), or
+   * `null`. Distinct from `lastDecodeError`, which is a per-packet parse failure, not evidence
+   * the transport itself is broken. */
+  get lastError(): string | null {
+    return this._lastError;
+  }
+
+  /** Real local bind address, from `dgram.Socket.address()`, once bound. `null` before bind or
+   * if the injected socket doesn't implement `address()` (e.g. a minimal test fake) — never
+   * fabricated. */
+  get localAddress(): string | null {
+    if (!this._listening) return null;
+    return this.socket?.address?.().address ?? null;
+  }
+
+  /** Real local bound port, from `dgram.Socket.address()`. See {@link localAddress}. */
+  get localPort(): number | null {
+    if (!this._listening) return null;
+    return this.socket?.address?.().port ?? null;
+  }
+
+  /** Total datagrams successfully handed to the OS via `send()` since this engine was created. */
+  get packetsSent(): number {
+    return this._packetsSent;
+  }
+
+  /** Total datagrams successfully decoded from the gateway since this engine was created
+   * (decode failures are tracked separately via {@link lastDecodeError} and do not count here). */
+  get packetsReceived(): number {
+    return this._packetsReceived;
+  }
+
+  /** ISO timestamp of the most recently received (successfully decoded) packet, or `null` if
+   * none has arrived yet. */
+  get lastPacketAt(): string | null {
+    return this._lastPacketAt;
+  }
+
+  /** ISO timestamp of the most recent successful `send()`, or `null`. */
+  get lastSendAt(): string | null {
+    return this._lastSendAt;
+  }
+
+  /** Error message from the most recent failed `send()` (e.g. an ICMP-reported unreachable
+   * destination), or `null` if the last send succeeded or none has been attempted. */
+  get lastSendError(): string | null {
+    return this._lastSendError;
+  }
+
+  /** The most recent malformed/undecodable datagram, or `null`. A repeated decode error is real,
+   * protocol-grounded evidence of a Net ID or Data Format mismatch (the gateway's own config
+   * wizard requires both to match the remote station exactly) — unlike a plain absence of
+   * traffic, this IS a documented, actionable failure signal. */
+  get lastDecodeError(): { raw: string; message: string; at: string } | null {
+    return this._lastDecodeError;
+  }
+
+  /**
+   * Average round-trip latency across recent {@link probe} calls, in ms, or `null` if never
+   * measured. Deliberately scoped to probe round-trips only — the general Casambi UDP
+   * notification stream has no sequence numbers or request/response pairing in the documented
+   * packet structure (`{length, opcode, args}`), so there is no honest way to compute a general
+   * "notification latency"; labeling this as probe round-trip latency (not stream latency) is
+   * the disclosed, non-fabricated interpretation. */
+  get averageLatencyMs(): number | null {
+    if (this.probeLatenciesMs.length === 0) return null;
+    const sum = this.probeLatenciesMs.reduce((a, b) => a + b, 0);
+    return Math.round(sum / this.probeLatenciesMs.length);
+  }
+
+  /**
+   * Packet loss for the general notification stream is intentionally never reported (no `get`
+   * exists for it) rather than reported as `0` or estimated: the documented packet structure has
+   * no sequence numbers, so there is no way to distinguish "no packets sent yet" from "packets
+   * were dropped in transit." Fabricating a number here would violate the "never fabricate
+   * values" requirement. A future repeated-probe loss-rate measurement could compute this
+   * honestly, but that is not implemented.
+   */
+
   async start(): Promise<void> {
     if (this.socket) return; // idempotent, matching every other transport's start()
     const factory = this.opts.socketFactory ?? (() => dgram.createSocket("udp4") as unknown as CasambiUdpSocketLike);
@@ -93,23 +199,30 @@ export class CasambiUdpEngine {
     socket.on("error", (err) => this.emitError(err));
     this.socket = socket;
 
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const onError = (err: Error) => {
-        if (settled) return;
-        settled = true;
-        reject(err);
-      };
-      const onListening = () => {
-        if (settled) return;
-        settled = true;
-        this._listening = true;
-        resolve();
-      };
-      socket.on("error", onError);
-      socket.on("listening", onListening);
-      socket.bind(this.opts.localPort ?? this.opts.udpPort);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const onError = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          reject(err);
+        };
+        const onListening = () => {
+          if (settled) return;
+          settled = true;
+          this._listening = true;
+          resolve();
+        };
+        socket.on("error", onError);
+        socket.on("listening", onListening);
+        socket.bind(this.opts.localPort ?? this.opts.udpPort);
+      });
+      this._lastError = null;
+    } catch (err) {
+      this._lastError = err instanceof Error ? err.message : String(err);
+      this.socket = null;
+      throw err;
+    }
   }
 
   async stop(): Promise<void> {
@@ -144,9 +257,17 @@ export class CasambiUdpEngine {
     if (!this.socket) throw new Error("casambi: UDP engine send() called before start()");
     const text = encodeCasambiPacket(packet, this.format);
     const socket = this.socket;
-    await new Promise<void>((resolve, reject) => {
-      socket.send(text, this.opts.udpPort, this.opts.gatewayIp, (err) => (err ? reject(err) : resolve()));
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.send(text, this.opts.udpPort, this.opts.gatewayIp, (err) => (err ? reject(err) : resolve()));
+      });
+      this._packetsSent += 1;
+      this._lastSendAt = new Date().toISOString();
+      this._lastSendError = null;
+    } catch (err) {
+      this._lastSendError = err instanceof Error ? err.message : String(err);
+      throw err;
+    }
   }
 
   /**
@@ -159,6 +280,7 @@ export class CasambiUdpEngine {
    */
   async probe(timeoutMs = 3_000): Promise<boolean> {
     if (!this.socket) throw new Error("casambi: UDP engine probe() called before start()");
+    const startedAt = Date.now();
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const settle = (result: boolean) => {
@@ -166,6 +288,10 @@ export class CasambiUdpEngine {
         settled = true;
         clearTimeout(timer);
         unsubscribe();
+        if (result) {
+          this.probeLatenciesMs.push(Date.now() - startedAt);
+          if (this.probeLatenciesMs.length > 20) this.probeLatenciesMs.shift();
+        }
         resolve(result);
       };
       const unsubscribe = this.onPacket((pkt) => {
@@ -183,13 +309,17 @@ export class CasambiUdpEngine {
       packet = decodeCasambiPacket(raw, this.format);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      this._lastDecodeError = { raw, message: error.message, at: new Date().toISOString() };
       for (const listener of this.decodeErrorListeners) listener(raw, error);
       return;
     }
+    this._packetsReceived += 1;
+    this._lastPacketAt = new Date().toISOString();
     for (const listener of this.packetListeners) listener({ raw, packet, rinfo });
   }
 
   private emitError(err: Error): void {
+    this._lastError = err.message;
     for (const listener of this.errorListeners) listener(err);
   }
 }
