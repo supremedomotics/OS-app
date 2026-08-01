@@ -4,6 +4,71 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Production Architecture Refactor — `supreme-lan` LAN Transport Service (Phase 1)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the sessions below — this is now a
+cross-cutting infrastructure change, not Casambi-specific, per the user's own explicit framing).
+Full design record: **`docs/architecture/adr/0022-supreme-lan-transport-service.md`**; full
+technical detail (flow/deployment diagrams, migration risk table, testing honesty notes):
+**`docs/architecture/Supreme-LAN-Transport-Architecture.md`** — read both before touching Docker
+network topology or any raw-socket driver code again.
+
+**Problem:** Docker bridge networking silently drops LAN broadcast/multicast (proven with the real
+Casambi Wireshark capture from the prior session) — affects Casambi UDP, KNX Routing/Discovery,
+Matter/mDNS, SSDP, Sonos, Denon, Apple TV, Hue, Yamaha. Moving the whole Gateway to
+`network_mode: host` (tried previously) broke it (`getaddrinfo ENOTFOUND postgres`, proxy 502) —
+the Gateway is tightly coupled to Postgres/Redis/NATS/internal services only reachable via
+Docker's bridge DNS.
+
+**Solution built this session (Phase 1 only — service + generic transport + Docker topology +
+docs, NOT yet the default for any driver):**
+- **New package `@supreme/lan`** (`services/lan`) — zero dependency on `@supreme/protocols` or any
+  business/domain concept. Reuses `@supreme/messaging`'s existing `IEventBus`/NATS seam (already
+  deployed, already wired into the Gateway) as its only IPC — no new mechanism invented. A generic
+  `requestReply()` helper (`shared/rpc.ts`) adds real RPC semantics on top of the bus's existing
+  publish/subscribe, without modifying `@supreme/messaging` itself.
+- **Generic `UdpTransport` interface** (`transport.ts`): `bind`/`send`/`joinMulticast`/`close`/
+  `onMessage`/`onError`/`onListening`/`address` — ONE interface covering unicast, broadcast, and
+  every multicast use in this codebase (mDNS/SSDP/KNX are just `bind({multicastGroup})` presets).
+  `joinMulticast()` exists as a separate post-bind capability specifically because KNX
+  discovery's real code binds first, then joins multicast only once bind genuinely completes — a
+  real API gap found and fixed during implementation, not assumed away.
+- **Real server** (`server/`): `DgramUdpSession` (injectable `DgramSocketLike`, same fake-socket
+  convention as every existing raw-socket module) + `UdpTransportServer` (NATS command dispatch,
+  session multiplexing, event publishing) + `main.ts` (deployable entrypoint) + `health.ts`
+  (diagnostics snapshot — `networkMode` read from config, never inferred, per this codebase's
+  standing "never fabricate" rule).
+- **Four migration adapters** (`services/protocols/src/lan-adapters/`, NOT inside `@supreme/lan` —
+  keeps the dependency direction one-way: `@supreme/protocols → @supreme/lan`): each implements an
+  EXISTING driver-facing interface (`CasambiUdpSocketLike`, `KnxDiscoverySocket`, `MdnsSocket`,
+  `SsdpSocket`) exactly, as a drop-in alternative to that protocol's real-`dgram` default. **None
+  of the four existing driver files were modified** — the adapters are opt-in, not defaulted.
+- **Docker**: base `docker-compose.yml` gets a `lan` service (bridge, degraded-but-testable
+  default); new `docker-compose.lan-host.yml` (host networking, mirrors
+  `docker-compose.appletv-host.yml` exactly — simpler, since `lan` only ever talks NATS, no
+  `extra_hosts` needed); new `docker-compose.nats-loopback.yml` (exposes NATS on `127.0.0.1` only,
+  since `supreme-core` is `internal: true` and a host-networked container can't reach it by
+  container DNS). New `infra/hub-compose/lan.Dockerfile` mirrors `gateway.Dockerfile`'s
+  multi-stage pnpm-deploy pattern.
+
+**Tests (all passing, all in this session):** `@supreme/lan` — 24 tests (fake-socket unit,
+`InProcessEventBus` contract/RPC, real-loopback smoke test with genuine OS UDP sockets).
+`@supreme/protocols` lan-adapters — 19 tests, including the concrete cross-package proof: the
+REAL, unmodified, hardware-validated `CasambiUdpEngine` sending/receiving real wire packets
+entirely over the new remote transport. Full `@supreme/protocols` suite re-run: 77 files/727 tests,
+zero regression (no existing driver file touched).
+
+**Disclosed, not resolved this session (see TODO.md):** Phase 2 (defaulting Casambi onto the
+remote transport) deliberately held — the adapter is proven, but flipping the default needs its
+own real-hardware retest against a host-networked `supreme-lan`, not bundled into the session that
+introduces the RPC path for the first time. KNX Routing and Matter (Phases 3b/4) need their own
+protocol-level seam work first — both currently own sockets inside third-party libraries
+(`knxultimate`, future `@matter/main`) with no injectable hook, unlike Casambi/KNX-discovery/
+mDNS/SSDP. "Windows compatibility" testing is code-review-only + a documented native-process
+workaround, not executed on Windows this session (this sandbox is Linux-only). Real LAN broadcast
+reception has not been re-verified against actual hardware through `supreme-lan` yet — only the
+diagnostic/transport plumbing is proven, via loopback and in-process tests.
+
 ## Session: Casambi Local Gateway — UDP Receive Pipeline Audit (real hardware capture)
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the Auth & UDP Diagnostics session

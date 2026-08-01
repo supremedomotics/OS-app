@@ -304,6 +304,29 @@ services:
     networks:
       - supreme-core
 
+  # supreme-lan (§ Production Architecture Refactor — LAN Transport Service). Business-logic-free:
+  # no Postgres, no Redis, no auth — it only owns raw UDP sockets and talks to the Gateway over
+  # NATS (the same event bus the Gateway already connects to). On bridge networking (the default
+  # here) this is a DELIBERATELY DEGRADED mode: fully testable everywhere (Linux, Windows/Mac
+  # Docker Desktop, CI) but real LAN broadcast/multicast still won't reach it — Docker bridge
+  # drops broadcast the same way it always has (that's the whole reason this service exists).
+  # For real LAN access on a Linux hub, layer `docker-compose.lan-host.yml` (+
+  # `docker-compose.nats-loopback.yml`) on top — see
+  # `docs/architecture/Supreme-LAN-Transport-Architecture.md`.
+  lan:
+    build:
+      context: ../..
+      dockerfile: infra/hub-compose/lan.Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPREME_LAN_NATS_URL: ${SUPREME_NATS_URL:-nats://nats:4222}
+      SUPREME_LAN_NETWORK_MODE: bridge
+    networks:
+      - supreme-core
+    depends_on:
+      nats:
+        condition: service_started
+
 networks:
   supreme-edge:
     driver: bridge

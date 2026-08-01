@@ -1,0 +1,35 @@
+# supreme-lan — real LAN broadcast/multicast overlay (§ Production Architecture Refactor).
+#
+# Docker bridge networking silently drops broadcast/multicast destined for addresses like
+# 255.255.255.255 or a multicast group — proven with a real Casambi Lithernet gateway broadcasting
+# UDP notifications that a bridge-attached container's socket never receives even though Wireshark
+# on the host sees them (see docs/architecture/Casambi-UDP-Receive-Pipeline-Audit.md). Moving the
+# WHOLE Gateway to host networking previously broke it (`getaddrinfo ENOTFOUND postgres`, proxy
+# 502 Bad Gateway) — the Gateway is tightly coupled to Postgres/Redis/NATS/internal services only
+# reachable via Docker's bridge-network DNS. The fix: only `lan` (a business-logic-free sidecar
+# with nothing but raw sockets) goes on host networking; the Gateway stays exactly where it is.
+#
+# `lan` talks to the rest of the stack ONLY over NATS pub/sub, never HTTP — unlike the AppleTV
+# host-networking precedent this mirrors (docker-compose.appletv-host.yml), no
+# `extra_hosts`/`host.docker.internal` trick is needed on the Gateway side. `lan` DOES need NATS
+# reachable from the host network namespace, since `supreme-core` is `internal: true` (no host
+# in/out) — layer `docker-compose.nats-loopback.yml` too for that.
+#
+# Usage (Linux host only — see the note below):
+#   docker compose -f docker-compose.yml -f docker-compose.nats-loopback.yml -f docker-compose.lan-host.yml up -d
+#
+# Requires Compose v2.24+ for the `!reset` tag (clears the bridge-network attachment so it can be
+# combined with host networking). LINUX ONLY: host networking is a no-op on Docker Desktop for
+# macOS/Windows (the same limitation `services/appletv-py/README.md` already documents for the
+# identical pattern) — on those platforms `lan` still runs fine as an ordinary bridge-attached
+# container (the base compose file's default), it just stays in the honestly-disclosed degraded
+# mode with no real LAN broadcast reception. See the architecture doc's "Windows Docker Desktop"
+# section for the native-process workaround.
+services:
+  lan:
+    network_mode: host
+    # Can't combine host mode with explicit networks — drop the bridge attachment.
+    networks: !reset null
+    environment:
+      SUPREME_LAN_NATS_URL: nats://127.0.0.1:4222
+      SUPREME_LAN_NETWORK_MODE: host

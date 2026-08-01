@@ -1,0 +1,18 @@
+# Exposes NATS on the HOST'S LOOPBACK interface only (§ Production Architecture Refactor).
+#
+# `supreme-core` is `internal: true` in the base compose file (deliberately no host in/out at
+# all), so a host-networked container (see docker-compose.lan-host.yml) cannot reach
+# `nats://nats:4222` by container DNS — it isn't attached to that network anymore. This publishes
+# NATS's port to `127.0.0.1` ONLY — never a LAN-reachable interface, so it stays exactly as
+# internal-facing as before to every device on the network, just now also reachable from processes
+# running directly on the host (a host-networked container, or — on Windows/Mac Docker Desktop,
+# where host networking is a no-op — a plain native `node dist/server/main.js` process; see the
+# architecture doc's "Windows Docker Desktop" section).
+#
+# Always compose this together with docker-compose.lan-host.yml, never alone in production (there
+# is no reason to expose NATS at all unless something outside the `supreme-core` network needs to
+# reach it).
+services:
+  nats:
+    ports:
+      - "127.0.0.1:4222:4222"

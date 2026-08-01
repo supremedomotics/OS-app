@@ -1100,6 +1100,23 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.19)
 
+  services/lan:
+    dependencies:
+      '@supreme/messaging':
+        specifier: workspace:*
+        version: link:../messaging
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.19)
+    optionalDependencies:
+      nats:
+        specifier: ^2.29.0
+        version: 2.29.3
+
   services/license:
     dependencies:
       '@supreme/domain-model':
@@ -1221,6 +1238,12 @@ importers:
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+      '@supreme/lan':
+        specifier: workspace:*
+        version: link:../lan
+      '@supreme/messaging':
+        specifier: workspace:*
+        version: link:../messaging
       coap:
         specifier: ^1.5.0
         version: 1.5.0

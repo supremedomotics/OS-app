@@ -1,0 +1,91 @@
+# ADR 0022 — `supreme-lan`: a dedicated, business-logic-free LAN transport service
+
+- Status: **Accepted** (Phase 1 implemented; Phases 2-5 — driver cutovers — are deliberate,
+  separate follow-ups, not part of this decision's initial scope)
+- Date: 2026-08-01
+- Context: Production Architecture Refactor — Docker bridge networking silently drops LAN
+  broadcast/multicast traffic, proven with real hardware.
+
+## Context
+
+Real hardware testing proved Docker bridge networking drops LAN broadcast/multicast traffic
+before it reaches a container: a Lithernet Casambi gateway broadcasts UDP notifications to
+`255.255.255.255:10009`; Wireshark on the host sees them; the Gateway container's bound socket
+never does (see `docs/architecture/Casambi-UDP-Receive-Pipeline-Audit.md`). This is not
+Casambi-specific — the same failure mode blocks KNX Routing (multicast `224.0.23.12:3671`) and
+Discovery, Matter/mDNS (`224.0.0.251:5353`), SSDP (`239.255.255.250:1900`), and every future
+LAN-broadcast/multicast-dependent protocol (Sonos, Denon, Apple TV, Hue, Yamaha).
+
+A previous attempt moved the whole Gateway service to `network_mode: host` to fix this — it broke
+the Gateway instead (`getaddrinfo ENOTFOUND postgres`, the edge proxy returning 502) because the
+Gateway is tightly coupled to Postgres, Redis, NATS, and internal services (`commissioning`, `ai`,
+`appletv`, `homeassistant`) that are only reachable via Docker's bridge-network DNS. Moving the
+Gateway to host networking severs that DNS resolution entirely. **The Gateway cannot move to host
+networking.**
+
+This repo already has a smaller-scale precedent for the exact same class of problem:
+`infra/hub-compose/docker-compose.appletv-host.yml` puts only the Apple TV pyatv sidecar on host
+networking for reliable mDNS discovery, documented as Linux-only (a Docker Desktop for macOS/
+Windows limitation — the VM boundary between the host's real network adapter and the container
+runtime makes host networking a no-op there). This ADR generalizes that pattern into a permanent,
+protocol-agnostic architecture rather than repeating it once per protocol.
+
+## Decision
+
+Extract all raw LAN socket access into a new, standalone service — `supreme-lan` (npm package
+`@supreme/lan`, workspace `services/lan`) — with these hard constraints:
+
+- **No business logic.** It never parses a protocol frame, never knows what a `CapabilityKind` or
+  `DeviceId` is. It moves `Buffer`s between the LAN and the process that asked for them, nothing
+  else.
+- **No persistence, no Postgres, no Redis, no authentication.** Its only dependency is
+  `@supreme/messaging` (this repo's existing NATS event-bus seam) plus `node:dgram`.
+- **The Gateway stays exactly where it is** — bridge-attached, Postgres/Redis/NATS-connected,
+  unmodified in this phase. It talks to `supreme-lan` only over the SAME NATS instance it already
+  connects to (`SUPREME_NATS_URL`), never a new IPC mechanism.
+- **Protocol drivers stop opening raw sockets.** They consume a single generic `UdpTransport`
+  interface (bind/send/close/onMessage/onError/onListening/address, plus a `joinMulticast()`
+  capability for post-bind multicast joins) instead. mDNS and SSDP are not separate transports —
+  they are `bind({multicastGroup, localPort})` presets on the same interface. Wire-codec logic
+  (DNS-SD parsing, SSDP HTTP-framing, Casambi's `.`-hex codec, KNXnet/IP frame encode/decode) is
+  unchanged and stays exactly where it already lived, in `services/protocols`.
+- **Migration is non-breaking and incremental.** A thin adapter per existing driver-facing socket
+  interface (`services/protocols/src/lan-adapters/`) implements that EXACT interface by
+  delegating to a `UdpTransport` — a drop-in alternative to each protocol's existing real-`dgram`
+  default, selected only where a caller explicitly opts in. No existing driver file's default
+  behavior changes in this phase.
+- **Docker: `supreme-lan` may run with host networking; the Gateway never does.** The base compose
+  stack runs `lan` bridge-attached (a deliberately degraded default — testable everywhere, no real
+  LAN broadcast). A separate override, `docker-compose.lan-host.yml`, switches only `lan` to
+  `network_mode: host` on Linux, mirroring `docker-compose.appletv-host.yml` exactly. Because
+  `supreme-core` is `internal: true`, a second override (`docker-compose.nats-loopback.yml`)
+  exposes NATS on `127.0.0.1` only so a host-networked `lan` can still reach it.
+- **macvlan is documented as a future option, not implemented now.** It offers no advantage over
+  host networking on Linux (the only platform host networking works on today) and needs
+  per-site static IP/ARP planning; it's the natural fit for a *future* Kubernetes deployment via
+  Multus CNI, where `hostNetwork: true` is discouraged.
+
+Full technical detail — flow diagrams, deployment diagrams, the wire protocol, the per-protocol
+migration risk table, and the Windows Docker Desktop disclosure — lives in
+`docs/architecture/Supreme-LAN-Transport-Architecture.md`.
+
+## Consequences
+
+- Every current and future LAN-broadcast/multicast-dependent protocol gets a real fix through ONE
+  shared service, not a bespoke workaround repeated per protocol.
+- The Gateway's architecture, Docker service isolation, and Postgres/Redis/NATS coupling are
+  fully preserved — this is additive infrastructure, not a rewrite of anything that already works.
+- Real LAN access for `supreme-lan` is Linux-only for now (Docker host networking is a no-op on
+  Docker Desktop for macOS/Windows) — an honestly disclosed limitation, not a design flaw this ADR
+  hides. Local Windows development can still exercise every non-broadcast-dependent code path, and
+  can exercise the real socket/RPC pipeline via loopback (see the architecture doc's testing
+  tiers); genuine LAN broadcast verification needs a Linux host or a native (non-Docker) process.
+- KNX's tunneling/routing driver and Matter's future controller both own their sockets inside
+  third-party libraries (`knxultimate`, `@matter/main`) with no injectable seam today — Phase 1's
+  generic transport cannot absorb them for free. Migrating those is real, separate protocol-level
+  work (Phases 3-4), not solved by this decision.
+- `@supreme/lan`'s wire protocol (base64-encoded datagram bytes over NATS request/reply built on
+  `@supreme/messaging`'s existing pub/sub) adds one network hop's worth of latency to every LAN
+  send/receive when `supreme-lan` genuinely runs remotely — acceptable for the protocols this
+  serves (all sub-second, human-interaction-paced control/discovery traffic, none of them
+  latency-sensitive media/audio streams).

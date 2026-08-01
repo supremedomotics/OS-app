@@ -1,0 +1,37 @@
+{
+  "name": "@supreme/lan",
+  "version": "0.0.0",
+  "private": true,
+  "description": "supreme-lan: business-logic-free LAN transport service (raw UDP/TCP socket access over the existing NATS event bus). No persistence, no auth, no protocol codecs.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo",
+    "start": "node dist/server/main.js"
+  },
+  "dependencies": {
+    "@supreme/messaging": "workspace:*"
+  },
+  "optionalDependencies": {
+    "nats": "^2.29.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

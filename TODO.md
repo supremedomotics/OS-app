@@ -50,6 +50,69 @@
 - **Complexity:** Medium, once the real byte semantics are confirmed against hardware.
 - **Status:** Not started; honestly gated (never fabricated) as of PR-2.
 
+### supreme-lan Phase 2 — default Casambi UDP onto the remote transport
+- **Description:** `services/protocols/src/lan-adapters/casambi-remote-socket.ts` is built and
+  proven (the real `CasambiUdpEngine` sending/receiving real packets entirely over a
+  `supreme-lan`-backed `UdpTransport`, `casambi-remote-socket.test.ts`), but `CasambiUdpEngine`'s
+  default `socketFactory` is still real local `dgram`, unchanged. Flipping the default (or adding
+  a driver config toggle) so a deployed Casambi Local Gateway driver actually routes through a
+  running `supreme-lan` service is the real fix for the original `Packets Received = 0` /
+  Docker-bridge-drops-broadcast bug this whole refactor was triggered by.
+- **Reason:** deliberately held out of the Phase 1 session — Casambi's UDP engine was
+  hardware-validated across two recent sessions; stacking a brand-new, first-time cross-container
+  RPC path underneath it as the DEFAULT in the same session that introduces that RPC path for the
+  first time would combine two unproven changes.
+- **Dependencies:** a real Lithernet Gateway + a Linux host running the `docker-compose.
+  lan-host.yml` overlay, to confirm real LAN broadcast reception actually reaches the driver now
+  (not just the loopback/in-process tests already passing).
+- **Complexity:** Small once hardware is available — the adapter itself needs no further code.
+- **Status:** Not started; disclosed in `docs/architecture/Supreme-LAN-Transport-Architecture.md` §8.
+
+### supreme-lan Phase 3a — default KNX Discovery onto the remote transport
+- **Description:** `services/protocols/src/lan-adapters/knx-discovery-remote-socket.ts` is built
+  and unit-tested (including the two-phase bind-then-`setMulticast` sequence `knxSearch()` actually
+  uses), but not wired as `knxSearch`'s default `createSocket`.
+- **Reason:** same Docker-bridge-drops-broadcast problem affects KNX/IP Discovery's multicast
+  `SEARCH_REQUEST` to `224.0.23.12` exactly like it affected Casambi.
+- **Dependencies:** a real KNX/IP interface + a Linux host running the `lan-host` overlay.
+- **Complexity:** Small.
+- **Status:** Not started.
+
+### supreme-lan Phase 3b — KNX Routing needs its own protocol-level seam first
+- **Description:** Unlike KNX Discovery, KNX's main tunneling/routing driver (`knx-driver.ts`,
+  `knx/knx-ultimate-provider.ts`) delegates socket ownership entirely to the third-party
+  `knxultimate` npm package — there is no injectable raw-socket seam today for `supreme-lan`'s
+  generic transport to slot into.
+- **Reason:** KNX Routing also relies on multicast (`224.0.23.12:3671`) and hits the identical
+  Docker-bridge failure — but fixing it needs real investigation into whether `knxultimate`
+  exposes any custom-socket hook, or whether it needs forking/patching, BEFORE any transport swap
+  is possible. Not something Phase 1's generic transport layer can absorb for free.
+- **Dependencies:** research into `knxultimate`'s internals; possibly a request/PR upstream.
+- **Complexity:** Large.
+- **Status:** Not started; genuinely harder than a factory swap — disclosed as such, not
+  downplayed.
+
+### supreme-lan Phase 4 — Matter (mDNS-based commissioning) onto the remote transport
+- **Description:** No real Matter controller is wired in yet (`matter-driver.ts`'s
+  `defaultMatterController()` throws) — when `@matter/main` is integrated, it will own its own
+  sockets internally, the same class of problem as KNX Routing (no injectable seam without
+  investigating the library's internals first).
+- **Reason:** Matter commissioning is fundamentally mDNS-based and will hit the identical
+  Docker-bridge multicast failure the moment a real controller exists.
+- **Dependencies:** the real Matter controller integration itself (a separate, larger project —
+  see `docs/architecture/adr/0011-matter-commissioning-and-fabric-seams.md`) has to land first.
+- **Complexity:** Large.
+- **Status:** Not started.
+
+### supreme-lan Phase 5 — remaining mDNS/SSDP consumers onto the remote transport
+- **Description:** `mdns-remote-socket.ts`/`ssdp-remote-socket.ts` are built and tested, but not
+  wired as the default for any of their consumers (Sonos, Denon HEOS, Apple TV, Hue, Shelly,
+  AirPlay, WiiM — everything using `mdnsBrowse`/`ssdpSearch`).
+- **Reason:** same Docker-bridge multicast problem affects every mDNS/SSDP-based discovery flow.
+- **Dependencies:** none architecturally — small, low-risk, one consumer at a time.
+- **Complexity:** Small per consumer.
+- **Status:** Not started.
+
 ### Casambi Local Gateway — confirm the UDP receive fix against real hardware (firmware 6.25)
 - **Description:** A real Wireshark capture showed the Lithernet Gateway broadcasting to
   `255.255.255.255:10009` while SupremeOS reported `Packets Received = 0`. Code audit found no
@@ -635,6 +698,27 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Production Architecture Refactor — `supreme-lan` LAN Transport Service (Phase 1)** — real
+  hardware proved Docker bridge networking silently drops LAN broadcast/multicast (the Casambi
+  Wireshark capture); moving the whole Gateway to host networking (tried previously) broke it
+  instead (`getaddrinfo ENOTFOUND postgres`). Built a new, business-logic-free service
+  (`@supreme/lan`, `services/lan`) that owns raw LAN sockets and talks to the unmodified Gateway
+  only over the existing NATS event bus (`@supreme/messaging`, already deployed, zero new IPC
+  invented). Generic `UdpTransport` interface (bind/send/joinMulticast/close +
+  message/error/listening listeners) covers unicast, broadcast, and every multicast use in this
+  codebase as presets, not separate transports. Four migration adapters
+  (`services/protocols/src/lan-adapters/`) give Casambi/KNX-discovery/mDNS/SSDP a drop-in
+  alternative to their existing real-`dgram` defaults — proven end-to-end (the real, unmodified,
+  hardware-validated `CasambiUdpEngine` sending/receiving real packets entirely over the new
+  transport) but deliberately NOT defaulted onto any driver yet. Docker: base compose gets a `lan`
+  service (bridge, degraded-but-testable default); new `docker-compose.lan-host.yml` (host
+  networking on Linux, mirrors the existing `docker-compose.appletv-host.yml` precedent) +
+  `docker-compose.nats-loopback.yml` (NATS exposed on `127.0.0.1` only, since `supreme-core` is
+  `internal: true`). 43 new tests across `@supreme/lan` and `@supreme/protocols`'s lan-adapters
+  (fake-socket, `InProcessEventBus` contract/RPC, real-loopback UDP smoke test); zero regression
+  across the full `@supreme/protocols` suite. Full detail:
+  `docs/architecture/adr/0022-supreme-lan-transport-service.md`,
+  `docs/architecture/Supreme-LAN-Transport-Architecture.md`, `SESSION_HANDOFF.md`.
 - **AVR Diagnostic Mode** — after a static audit and a full runtime-instrumented pipeline trace
   (both against a fake AVR, since this environment has no access to real hardware) found no
   pipeline break, the user asked for a permanent, production-safe diagnostic facility installers

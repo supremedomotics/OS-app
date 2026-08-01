@@ -25,6 +25,8 @@
     "@supreme/commissioning": "workspace:*",
     "@supreme/domain-model": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
+    "@supreme/lan": "workspace:*",
+    "@supreme/messaging": "workspace:*",
     "coap": "^1.5.0",
     "coap-packet": "^1.1.1",
     "knxultimate": "^6.0.1",
