@@ -53,17 +53,35 @@ a REAL `NatsUdpTransportClient` + REAL `UdpTransportServer` sharing a REAL `IEve
 rejects, never silently "succeeds"); new `NatsUdpTransportClient`/`queryLanHealth` tests in
 `@supreme/lan`'s `contract.test.ts`; new `native-driver-factory.test.ts` tests proving the factory
 actually uses a supplied `udpTransportFactory` and correctly falls back to
-`LocalDirectUdpTransport`. Full monorepo `turbo run build typecheck test`: **173/173 tasks green**
-(`@supreme/protocols` 76 files/740 tests, `@supreme/gateway` 72 files/295 tests, `@supreme/lan` 4
-files/34 tests — all up from Phase 1's counts, zero regression anywhere).
+`LocalDirectUdpTransport`; new `casambi-lan-latency.test.ts` — an automated, repeatable, code-only
+latency benchmark (n=50 samples/run). Full monorepo `turbo run build typecheck test`: **173/173
+tasks green** (`@supreme/protocols` 77 files/742 tests, `@supreme/gateway` 72 files/295 tests,
+`@supreme/lan` 4 files/34 tests — all up from Phase 1's counts, zero regression anywhere).
 
-**Disclosed, not resolved this session (see TODO.md and architecture doc §10.3):** this sandbox
-cannot reach real Lithernet hardware, real Windows Docker Desktop, or a real multi-container Linux
-deployment. Everything above is proven at the loopback/in-process/fake-socket tier — real
-production LAN broadcast reception through a real host-networked `supreme-lan` has **not** been
-re-verified. The Transport Monitor has a working backend + route but no dedicated UI page yet.
-KNX/mDNS/SSDP migration remains explicitly on hold pending that hardware retest, per the governing
-brief.
+**Real Docker validation (new this continuation — a real Docker Engine became available in this
+sandbox mid-session):** built the real `lan.Dockerfile` image, booted real `nats`+`lan` containers,
+and reproduced the ACTUAL bug this project exists to fix, for real: a genuine UDP broadcast sent
+from the Docker host was **not received** by the bridge-networked `lan` container, then **was
+received** by the identical container rebuilt on `docker-compose.lan-host.yml` (real
+`network_mode: host`) + `docker-compose.nats-loopback.yml`. This is real Docker/Linux evidence, not
+a simulation — see architecture doc §10.3 for full detail. In the process, found and fixed two
+real, previously-undiscovered bugs (not caught by config-parsing or code review): (1)
+`lan.Dockerfile` never copied `cloud`/`drivers`/`tools`, so `pnpm install --frozen-lockfile` failed
+outright (`services/license` depends on `cloud/licensing`) — fixed to match
+`gateway.Dockerfile`'s COPY list; (2) `docker-compose.nats-loopback.yml`'s port publish was
+silently a no-op because Docker refuses to publish a port for a container whose ONLY network is
+`internal: true` (confirmed with an isolated minimal repro) — fixed by giving `nats` a second,
+non-internal, loopback-only network in that one override file. Also measured a real end-to-end
+latency of **~8ms** (host UDP send → real container receive → real NATS publish → host-side
+subscriber) during this validation, alongside the new automated benchmark's code-only numbers
+(sub-millisecond — see architecture doc §10.4 for both, kept clearly separate).
+
+**Disclosed, still not resolved (see TODO.md and architecture doc §10.3):** this sandbox still
+cannot reach a real Lithernet gateway or real Windows Docker Desktop — no amount of additional
+sandbox work substitutes for that. A synthetic UDP broadcast from a script is real evidence the
+Docker/networking MECHANISM works, but it is not a real device on a real physical LAN. The
+Transport Monitor has a working backend + route but no dedicated UI page yet. KNX/mDNS/SSDP
+migration remains explicitly on hold pending the real-hardware retest, per the governing brief.
 
 ## Session: Production Architecture Refactor — `supreme-lan` LAN Transport Service (Phase 1)
 

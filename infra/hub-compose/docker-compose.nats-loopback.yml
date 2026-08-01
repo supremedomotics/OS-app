@@ -12,7 +12,23 @@
 # Always compose this together with docker-compose.lan-host.yml, never alone in production (there
 # is no reason to expose NATS at all unless something outside the `supreme-core` network needs to
 # reach it).
+#
+# § Real-hardware validation session (Phase 2) — found by actually running this overlay, not by
+# inspection: Docker refuses to publish a port for a container whose ONLY network is `internal:
+# true` (confirmed with a minimal reproduction outside this repo — no DNAT/userland-proxy rule is
+# ever created, `docker port` shows nothing, and the port is simply unreachable). A `ports:` entry
+# alone on a service still attached only to `supreme-core` is therefore silently a no-op. The fix
+# is a second, dedicated, NON-internal network that only `nats` joins in this override — every
+# other service on `supreme-core` (Postgres, Redis, MQTT, …) keeps its exact existing isolation,
+# only `nats` gains the second interface Docker needs to actually wire up the publish.
 services:
   nats:
+    networks:
+      - supreme-core
+      - lan-loopback
     ports:
       - "127.0.0.1:4222:4222"
+
+networks:
+  lan-loopback:
+    driver: bridge

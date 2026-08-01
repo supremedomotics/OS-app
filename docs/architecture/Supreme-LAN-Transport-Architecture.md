@@ -230,7 +230,7 @@ it (outside this document's control).
 | Phase | Protocol | Effort | Risk |
 |---|---|---|---|
 | 1 | `supreme-lan` itself: generic transport, wire protocol, Docker topology | Done | Purely additive — zero existing behavior changed |
-| 2 | Casambi UDP | **Done** (see §10) — `CasambiUdpEngine` rewritten onto `UdpTransport` directly, `CasambiUdpSocketLike` deleted, Casambi now DEFAULTS through `@supreme/lan` (`NatsUdpTransportClient` when NATS is configured, `LocalDirectUdpTransport` otherwise) | Migration itself fully tested (loopback + cross-package proof, §9/§10); **real-hardware LAN broadcast reception on the new path is NOT yet re-verified** — this sandbox cannot originate that test (§10) |
+| 2 | Casambi UDP | **Done** (see §10) — `CasambiUdpEngine` rewritten onto `UdpTransport` directly, `CasambiUdpSocketLike` deleted, Casambi now DEFAULTS through `@supreme/lan` (`NatsUdpTransportClient` when NATS is configured, `LocalDirectUdpTransport` otherwise) | Migration fully tested (loopback + cross-package proof + real-Docker bridge-vs-host broadcast reproduction, §9/§10); **only real physical Lithernet hardware remains unverified** — this sandbox has no such device (§10.3) |
 | 3a | KNX Discovery | Small — adapter already built (`knx-discovery-remote-socket.ts`) | Low — discovery is a one-shot, timeout-bounded operation; a regression is easy to detect (empty results) |
 | 3b | KNX Routing | **Large** — `knxultimate` (the third-party library `knx-driver.ts`/`knx-ultimate-provider.ts` wrap) owns its own sockets internally with no injectable seam today. Needs its own protocol-level investigation (does the library expose a custom-socket hook? does it need forking/patching?) before any transport swap is possible | Not started; genuinely harder than a factory swap |
 | 4 | Matter (mDNS-based commissioning) | **Large** — no real `@matter/main` controller is wired in yet (`matter-driver.ts`'s `defaultMatterController()` throws); when it is, it will own its own sockets internally, the same class of problem as KNX Routing | Not started |
@@ -258,12 +258,16 @@ Three tiers, all passing in this Linux sandbox as of this session:
 
 **What this does NOT prove, stated plainly:** "Windows compatibility" and "Linux compatibility" as
 literally requested cannot both be *executed* in one sandboxed session. Linux is verified by
-actually running the above tests here. Windows is verified only by code review (no OS-specific
-APIs are used anywhere in `@supreme/lan` — `node:dgram`, `node:crypto`'s `randomUUID`, and
-`node:os` are all cross-platform) plus the documented native-process workaround in §7. Genuine LAN
-broadcast reception — the actual bug this service exists to fix — has not been re-verified against
-real hardware in this session either; that requires a Linux host running the `lan-host` overlay
-against a real Casambi/KNX device, which this sandboxed environment cannot originate.
+actually running the above tests here, and — as of Phase 2 (§10.3) — by actually booting the real
+`lan`/`nats` containers on a real Docker Engine and reproducing the bridge-vs-host broadcast
+behavior for real, not just parsing the Compose files. Windows is still verified only by code
+review (no OS-specific APIs are used anywhere in `@supreme/lan` — `node:dgram`, `node:crypto`'s
+`randomUUID`, and `node:os` are all cross-platform) plus the documented native-process workaround
+in §7 — this sandbox is Linux-only and cannot originate a real Windows Docker Desktop run. Genuine
+LAN broadcast reception from a REAL Casambi/KNX device — the actual bug this service exists to
+fix — still has not been re-verified against real hardware; that requires a Linux host running the
+`lan-host` overlay against the real device itself, which no synthetic broadcast from a script can
+substitute for (see §10.3 for exactly what was and wasn't reproduced).
 
 ## 10. Phase 2 — Casambi migration (completed) and the Transport Monitor
 
@@ -274,7 +278,7 @@ the Casambi driver is fully operational on the new `@supreme/lan` transport ... 
 reference implementation that validates the architecture before migrating the remaining
 LAN-based drivers").
 
-### 11.1 What changed
+### 10.1 What changed
 
 - `CasambiUdpSocketLike` / `CasambiUdpSocketFactory` — **deleted**. `CasambiUdpEngine`
   (`services/protocols/src/casambi/local-transport/udp-engine.ts`) no longer owns a raw socket or
@@ -302,7 +306,7 @@ LAN-based drivers").
   Manager UI, and the existing Cloud REST implementation are byte-for-byte unchanged** — confirmed
   by zero edits to any of those files and the full pre-existing test suite passing unmodified.
 
-### 11.2 The Transport Monitor
+### 10.2 The Transport Monitor
 
 A new, additive, developer-grade diagnostics view — separate from the long-standing
 `/v1/drivers/:id/casambi/diagnostics` (installer-facing, unchanged) — at
@@ -333,65 +337,99 @@ so a future UI page (not the existing Driver Manager, per the "do not modify" co
 consume it; see `TODO.md` for this as an explicit follow-up rather than a silently dropped
 requirement.
 
-### 11.3 Real hardware validation — stated honestly
+### 10.3 Real hardware validation — stated honestly
 
-**This sandboxed environment cannot connect to real Lithernet hardware, a real Windows Docker
-Desktop host, or a real Linux Docker host.** Everything claimed as "tested" in this phase is one
-of: a fake-transport unit test, a fake-`dgram`-socket integration test, or a REAL loopback
-`node:dgram` test on `127.0.0.1` inside this sandbox — never a real LAN, never real broadcast
-traffic from real Casambi hardware. Specifically NOT verified this phase, and not claimed to be:
+**This sandboxed environment still cannot connect to a real Lithernet gateway or a real Windows
+Docker Desktop host — that has not changed.** What DID change this session: a real Docker Engine
+became available in this sandbox, so the Docker/Linux/Compose side of validation moved from
+"config parses" (Phase 1) to **real containers actually booted, and the exact bridge-vs-host
+broadcast behavior this whole project exists to fix was reproduced for real** — not simulated,
+not code-reviewed, actually observed. Both directions:
 
-- Whether the migrated Casambi driver actually receives the real broadcast NotifyControlValues
-  traffic from the real Lithernet gateway (192.168.0.45) captured in the earlier Wireshark
-  session, when running through a real `supreme-lan` service on real Linux host networking.
-- Any behavior on real Windows Docker Desktop.
-- Any behavior on a real multi-container Linux Docker Compose deployment (`docker compose up`
-  with the `lan-host`/`nats-loopback` overlays) — the overlay files were validated with `docker
-  compose config` (parses correctly) in Phase 1, not with real running containers.
+- **Bug reproduced (bridge mode):** built the real `lan.Dockerfile` image, booted real `nats` +
+  `lan` containers with `lan` on its default bridge network, bound a real UDP socket inside the
+  container via the real wire protocol (`supreme.lan.udp.bind` over real NATS), then sent a real
+  UDP broadcast (`255.255.255.255` and the subnet broadcast) from a process on the Docker host —
+  **not received**. This is the exact `Packets Received = 0` failure mode the whole `supreme-lan`
+  service exists to fix, reproduced against this session's own build, not assumed from the
+  original Casambi-specific incident.
+- **Fix confirmed (host mode):** rebuilt the same containers with `lan` on `docker-compose.
+  lan-host.yml` (real `network_mode: host`) and NATS reachable via `docker-compose.
+  nats-loopback.yml`'s loopback-only publish — the identical broadcast, from the identical host
+  process, to the identical bound port, **was received**, correctly reported through the real
+  wire protocol (`supreme.lan.session.<id>.rx`) and the real health snapshot
+  (`packetsReceived: 1`).
+- **A real, previously-undiscovered bug was found and fixed in the process** (not by inspection —
+  by actually running it): `lan.Dockerfile` only `COPY`'d `packages`/`services`, but
+  `pnpm-workspace.yaml` also declares `cloud/*`/`drivers/*`/`tools/*` as workspace members, so
+  `pnpm install --frozen-lockfile` failed outright (`services/license` depends on
+  `@supreme/licensing`, which lives in `cloud/licensing`, never copied into the build context).
+  Fixed by copying `cloud`/`drivers`/`tools` too, matching `gateway.Dockerfile`'s existing pattern.
+  A second, separate bug: `docker-compose.nats-loopback.yml`'s `ports:` publish was silently a
+  no-op, because Docker does not create the port-forwarding rule for a container whose ONLY
+  network is `internal: true` (confirmed with an isolated minimal reproduction outside this repo,
+  not just this service) — `supreme-core` is `internal: true` by design. Fixed by giving `nats` a
+  second, non-internal, loopback-only network (`lan-loopback`) in that one override file — every
+  other service on `supreme-core` keeps its exact existing isolation.
 
-What WAS actually run and passed in this sandbox, and is meaningful evidence the migration is
-architecturally sound: `services/protocols/src/casambi/casambi-over-supreme-lan.test.ts` proves
-the REAL, unmodified `CasambiProtocolDriver` connects, discovers a unit, updates capability state,
-fires a button event, and issues a command — all the way through a REAL `NatsUdpTransportClient`
-+ REAL `UdpTransportServer` sharing a REAL `IEventBus`, with only the innermost `node:dgram`
-socket faked (the same disclosed testing tier this codebase uses everywhere it cannot originate
-real network hardware). It also proves the failure path: if no `supreme-lan` service answers on
-the bus, `connect()` rejects honestly within the configured timeout rather than silently
-"succeeding" — the exact case the Phase 2 brief's Failure Handling clause was written for.
-
-**The next real-world step, not done here:** run this exact build against the real Lithernet
-gateway on a real Linux Docker host with the `lan-host` overlay active, and confirm
+**What this still does NOT prove, stated plainly:** a synthetic UDP broadcast sent from a script
+on the same Docker host is not a real Casambi Lithernet gateway on a real physical LAN segment —
+it doesn't exercise a real NIC, real switch, real ARP, or a real ~six-message Lithernet UDP
+Command protocol payload. Real Windows Docker Desktop was not (and cannot be) touched from this
+Linux sandbox. The recommended next real-world step is unchanged: run this exact build against
+the real Lithernet gateway on a real Linux host with the `lan-host` overlay, and confirm
 `GET /v1/drivers/:id/casambi/transport-monitor` shows a nonzero `adapter.packetsReceived` from
-real broadcast traffic. Until that's done, the honest status is "migration is architecturally
-complete and internally proven; hardware re-validation is outstanding," not "hardware-verified."
+that real device. What DID change is that the Docker/networking MECHANISM this depends on is no
+longer merely asserted by design — it was independently reproduced and fixed in this session, on
+a real Docker Engine, which is meaningfully stronger evidence than Phase 1 had.
 
-### 11.4 Performance — measured, in-sandbox loopback numbers only
+A step-by-step runbook for that real-hardware retest — prerequisites, exact commands, what
+success/failure at each stage means, and how to isolate exactly where a real failure occurs
+without guessing — is written out in full at `docs/architecture/
+Casambi-Real-Hardware-Validation-Runbook.md`.
 
-No dedicated latency-measurement test was added, so this phase reports only what the existing
-test suite's own timings show, clearly labeled as sandbox/loopback figures rather than production
-network measurements: the `casambi-over-supreme-lan.test.ts` suite (7 tests, exercising
-connect/discover/feedback/button/command/error paths through the real client+server+bus chain)
-completes in well under 100ms total, with no individual step requiring an explicit wait beyond a
-single 10ms tick for one asynchronous bus hop. This says the in-process NATS-shaped RPC overhead
-is negligible relative to real network latency, but it is **not** a measurement of real UDP
-broadcast latency, real NATS latency, or real cross-container latency — those all require the
-real-hardware/real-deployment step in §10.3.
+### 10.4 Performance — real Docker measurement plus a repeatable automated benchmark
 
-### 11.5 Production readiness — honest assessment
+Two distinct numbers, deliberately kept separate because they measure different things:
 
-**Architecturally complete and internally consistent:** the migration removes Casambi's direct
-socket ownership entirely, centralizes transport selection in one place, preserves every
-byte-for-byte-unchanged constraint the brief required, and is covered by unit tests (engine-level),
-integration tests (driver-over-real-client-and-server), and a wiring-level test (gateway factory
-resolution) — 76 test files / 740 tests in `@supreme/protocols` and 72 files / 295 tests in
-`@supreme/gateway`, all passing, with the new Casambi-specific additions covering the transport
-diagnostics, decoded/decode-failure counters, driver-level counters, NATS client counters, and
-the full over-the-wire proof.
+- **Real, one-off, real-Docker measurement (not automated — needs a live Docker daemon):** in the
+  §10.3 host-mode validation, a real UDP packet sent from the Docker host process to the real
+  host-networked `lan` container's real bound socket was observed on its NATS-published
+  `session.rx` event **~8ms** after the `dgram.send()` call returned. This includes real OS UDP
+  delivery, the real `DgramUdpSession`/`UdpTransportServer` code path, and a real NATS publish/
+  subscribe round trip over the loopback-published connection — the closest this session could get
+  to a genuine cross-process, cross-container latency number without physical LAN hardware.
+- **Automated, repeatable, code-only benchmark** (`services/protocols/src/casambi/
+  casambi-lan-latency.test.ts`, runs in CI on every `vitest run`, n=50 samples each): the SAME real
+  classes (`CasambiProtocolDriver`, `NatsUdpTransportClient`, `UdpTransportServer`) wired over an
+  `InProcessEventBus` (no real NATS, no real network — isolates the CODE's own overhead from
+  Docker/OS/network scheduling variance). Measured this session: UDP-receive → decode → driver
+  `applySignal` → `onState` fired — median **0.022ms**, p95 **0.354ms**; `command()` dispatch →
+  adapter → transport → fake gateway socket — median **0.035ms**, p95 **0.127ms**. These numbers
+  say the code path itself adds negligible overhead; the real ~8ms figure above is dominated by
+  real inter-process NATS/OS latency, not this migration's own code.
 
-**Not yet production-validated:** real Lithernet hardware, real Windows Docker Desktop, and real
-multi-container Linux deployment, per §10.3. Recommendation: do not consider Casambi's `@supreme
-/lan` migration "done" for a real installation until that hardware retest passes — this matches
-the Phase 2 brief's own Critical Requirement to prove Casambi before touching KNX/Matter.
+Neither number is a measurement of real Casambi UDP broadcast latency over a real physical LAN —
+that still requires the real-hardware step in §10.3.
+
+### 10.5 Production readiness — honest assessment
+
+**Architecturally complete, internally consistent, AND now independently validated on real Docker
+infrastructure (new this session):** the migration removes Casambi's direct socket ownership
+entirely, centralizes transport selection in one place, preserves every byte-for-byte-unchanged
+constraint the brief required, and is covered by unit tests (engine-level), integration tests
+(driver-over-real-client-and-server), a wiring-level test (gateway factory resolution), an
+automated latency benchmark, AND a real Docker Engine run that reproduced the original bug in
+bridge mode and confirmed the fix in host mode — 77 test files / 742 tests in `@supreme/protocols`
+and 72 files / 295 tests in `@supreme/gateway`, all passing.
+
+**Still not production-validated:** a real Lithernet gateway on a real physical LAN, and real
+Windows Docker Desktop. Recommendation unchanged: do not consider Casambi's `@supreme/lan`
+migration "done" for a real installation until the real-hardware retest in §10.3 passes — this
+matches the Phase 2 brief's own Critical Requirement to prove Casambi before touching KNX/Matter.
+The gap between "done" and "not yet" narrowed significantly this session (from "never actually ran
+a container" to "reproduced and fixed the exact bug on a real Docker Engine"), but real Lithernet
+hardware is the one thing no amount of additional sandbox work can substitute for.
 
 ## 11. Future extensibility
 

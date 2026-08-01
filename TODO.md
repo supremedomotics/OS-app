@@ -50,22 +50,26 @@
 - **Complexity:** Medium, once the real byte semantics are confirmed against hardware.
 - **Status:** Not started; honestly gated (never fabricated) as of PR-2.
 
-### supreme-lan Phase 2 — real hardware retest of the (now-default) Casambi transport
+### supreme-lan Phase 2 — real Lithernet hardware retest of the (now-default) Casambi transport
 - **Description:** Phase 2 is CODE-COMPLETE — `CasambiUdpEngine` no longer owns a raw socket;
   `CasambiUdpSocketLike` is deleted; the Casambi Local Gateway driver now DEFAULTS through
   `@supreme/lan` (`NatsUdpTransportClient` when NATS is configured, `LocalDirectUdpTransport`
-  otherwise), resolved centrally in `installer-context.ts`. What's NOT done: re-verifying this
-  against the real Lithernet gateway on a real Linux host running the `docker-compose.
-  lan-host.yml` overlay. This sandbox cannot originate that test — everything shipped this phase
-  was proven at the loopback/in-process/fake-socket tier only (see
-  `casambi-over-supreme-lan.test.ts`, 7 tests, and architecture doc §10.3).
+  otherwise), resolved centrally in `installer-context.ts`. A follow-up session with real Docker
+  access reproduced the ACTUAL bridge-vs-host broadcast bug for real (a genuine UDP broadcast was
+  dropped in bridge mode, received in host mode — see architecture doc §10.3) and fixed two real
+  bugs found in the process (`lan.Dockerfile` missing `cloud`/`drivers`/`tools`; the
+  `nats-loopback.yml` port publish being a no-op on an `internal: true`-only network). What's
+  STILL not done: the identical test against a REAL Lithernet gateway on a real physical LAN —
+  a synthetic broadcast from a script proves the Docker/networking mechanism, not a real device.
 - **Reason:** the whole point of this refactor was fixing real LAN broadcast reception that a real
-  Wireshark capture proved was being silently dropped by Docker bridge networking. That fix is not
-  "done" for a real installation until it's confirmed against real hardware — the migration being
-  internally correct is necessary but not sufficient.
+  Wireshark capture proved was being silently dropped by Docker bridge networking. Reproducing the
+  mechanism on synthetic traffic is strong evidence but not the same as confirming against the
+  actual device — the migration being internally correct AND mechanism-proven is still not the
+  same as hardware-confirmed.
 - **Dependencies:** a real Lithernet Gateway + a Linux host running the `docker-compose.
-  lan-host.yml`/`docker-compose.nats-loopback.yml` overlays; confirm `GET /v1/drivers/:id/
-  casambi/transport-monitor` shows nonzero `adapter.packetsReceived` from real broadcast traffic.
+  lan-host.yml`/`docker-compose.nats-loopback.yml` overlays (both now confirmed to actually boot
+  and connect for real); confirm `GET /v1/drivers/:id/casambi/transport-monitor` shows nonzero
+  `adapter.packetsReceived` from real broadcast traffic from the real device.
 - **Complexity:** Small (no further code expected) — pure verification.
 - **Status:** Blocked on hardware access. Per the governing brief's Critical Requirement, KNX/
   Matter/other LAN protocol migrations (Phases 3-5) stay on hold until this passes.
@@ -737,10 +741,18 @@
   through its full connect/discover/feedback/command lifecycle over a REAL `NatsUdpTransportClient`
   + REAL `UdpTransportServer` sharing a REAL `IEventBus` (only the innermost `node:dgram` socket
   faked), including the honest failure path (unreachable `supreme-lan` → `connect()` rejects,
-  never silently "succeeds"). Full monorepo `turbo run build typecheck test`: 173/173 tasks green,
-  zero regression. **Honestly NOT done:** real Lithernet hardware, real Windows Docker Desktop, and
-  real multi-container Linux deployment were not (and could not be) re-verified from this sandbox
-  — see the two High-priority TODO items above and
+  never silently "succeeds"); new `casambi-lan-latency.test.ts` automated benchmark. Full monorepo
+  `turbo run build typecheck test`: 173/173 tasks green, zero regression. **Real Docker validation
+  (a real Docker Engine became available mid-session):** built the real `lan.Dockerfile` image,
+  booted real `nats`+`lan` containers, and reproduced the actual bridge-vs-host broadcast bug for
+  real — a genuine UDP broadcast was dropped by the bridge-networked container and received by the
+  identical container on `docker-compose.lan-host.yml` + `docker-compose.nats-loopback.yml`.
+  Found and fixed two real bugs in the process: `lan.Dockerfile` never copied `cloud`/`drivers`/
+  `tools` (pnpm install failed outright); the `nats-loopback.yml` port publish was silently a
+  no-op on an `internal: true`-only network (fixed with a second, non-internal, loopback-only
+  network for `nats`). Measured a real ~8ms host-to-container round trip alongside the automated
+  benchmark's sub-millisecond code-only numbers. **Still NOT done:** a real Lithernet gateway on a
+  real physical LAN, and real Windows Docker Desktop — see the High-priority TODO item above and
   `docs/architecture/Supreme-LAN-Transport-Architecture.md` §10.3 for the exact scope of what
   remains outstanding before this is production-verified.
 - **Production Architecture Refactor — `supreme-lan` LAN Transport Service (Phase 1)** — real

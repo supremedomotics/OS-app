@@ -18,6 +18,9 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json turbo.json tsconfig.base.js
 # (pnpm's own `--filter ...^...` dependency resolution ignores everything it doesn't need).
 COPY packages ./packages
 COPY services ./services
+COPY cloud ./cloud
+COPY drivers ./drivers
+COPY tools ./tools
 RUN [ -s /usr/local/share/proxy-ca.pem ] && export NODE_EXTRA_CA_CERTS=/usr/local/share/proxy-ca.pem; \
     corepack enable && \
     pnpm install --frozen-lockfile && \
