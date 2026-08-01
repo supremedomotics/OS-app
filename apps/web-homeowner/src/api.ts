@@ -318,6 +318,20 @@ export async function discoverKnxGateways(): Promise<KnxGateway[]> {
 }
 
 // ── Casambi Driver Refactor — Foundation (authenticated) ──────────────────────────
+/** One entry in the bounded UDP protocol trace (§ UDP Receive Pipeline Audit) — recorded for
+ * every datagram received, parsed or not, so a real capture (e.g. Wireshark) can be cross-checked
+ * against what SupremeOS actually saw at the socket layer. */
+export interface CasambiUdpPacketTrace {
+  at: string;
+  sourceAddress: string;
+  sourcePort: number;
+  destinationPort: number | null;
+  payloadLength: number;
+  rawAscii: string;
+  rawHex: string;
+  decoded: { netId: number; direction: string; opcode: number; args: number[] } | null;
+  parseError: string | null;
+}
 /** Real, non-fabricated UDP transport detail — Local mode only (§ UDP Diagnostics). `null`
  * fields mean "not yet measured." No `packetLoss` field exists: the documented Casambi UDP
  * packet structure carries no sequence numbers, so ongoing loss cannot be computed honestly. */
@@ -334,6 +348,7 @@ export interface CasambiUdpDetail {
   averageLatencyMs: number | null;
   lastSendError: string | null;
   lastDecodeError: { raw: string; message: string; at: string } | null;
+  recentTraces: CasambiUdpPacketTrace[];
 }
 /** The dedicated Casambi Diagnostics page's snapshot — driver-level, not per-device. */
 export interface CasambiDiagnostics {
@@ -391,6 +406,7 @@ export interface CasambiTestConnectionResult {
     packetsReceived: number;
     averageLatencyMs: number | null;
     lastError: string | null;
+    recentTraces: CasambiUdpPacketTrace[];
   };
   message: string;
 }

@@ -64,6 +64,28 @@ export interface CasambiUdpPacket {
   readonly rinfo: { address: string; port: number };
 }
 
+/**
+ * One entry in the bounded protocol trace (§ UDP Receive Pipeline Audit). Recorded for EVERY
+ * datagram the socket delivers — successfully parsed or not — so a real capture (e.g. a Wireshark
+ * session showing the gateway broadcasting to `255.255.255.255`) can always be cross-checked
+ * against what SupremeOS actually received, independent of whether parsing later succeeded.
+ */
+export interface CasambiUdpPacketTrace {
+  at: string;
+  sourceAddress: string;
+  sourcePort: number;
+  /** This engine's own bound local port — every datagram arrives here regardless of whether the
+   * gateway unicast or broadcast it. */
+  destinationPort: number | null;
+  payloadLength: number;
+  rawAscii: string;
+  rawHex: string;
+  decoded: CasambiPacket | null;
+  parseError: string | null;
+}
+
+const MAX_TRACE_ENTRIES = 20;
+
 export class CasambiUdpEngine {
   private readonly opts: Required<Pick<CasambiUdpEngineOptions, "gatewayIp" | "udpPort" | "netId">> &
     CasambiUdpEngineOptions;
@@ -71,6 +93,12 @@ export class CasambiUdpEngine {
   private readonly packetListeners = new Set<(packet: CasambiUdpPacket) => void>();
   private readonly errorListeners = new Set<(err: Error) => void>();
   private readonly decodeErrorListeners = new Set<(raw: string, err: Error) => void>();
+  /** § UDP Receive Pipeline Audit — fired the instant `socket.on("message")` delivers a datagram,
+   * before any parsing/validation/filtering. Exists so reception can be proven independently of
+   * whether the payload later decodes, per real hardware evidence that the OS receives broadcast
+   * packets the old parse-gated instrumentation gave no visibility into. */
+  private readonly rawDatagramListeners = new Set<(raw: string, rinfo: { address: string; port: number }) => void>();
+  private readonly traceLog: CasambiUdpPacketTrace[] = [];
   private _listening = false;
   private _lastError: string | null = null;
   private _packetsSent = 0;
@@ -238,6 +266,25 @@ export class CasambiUdpEngine {
     return () => this.packetListeners.delete(listener);
   }
 
+  /**
+   * Fires for EVERY datagram the socket delivers, immediately upon `socket.on("message")` and
+   * before any parsing, validation, or filtering (§ UDP Receive Pipeline Audit, Step 1). Use this
+   * to prove socket-level reception is working independent of decode outcome — e.g. wiring it to
+   * the driver's trace log gives an immediate "UDP datagram received" line for every packet, sent
+   * or broadcast, that Wireshark also sees.
+   */
+  onRawDatagram(listener: (raw: string, rinfo: { address: string; port: number }) => void): () => void {
+    this.rawDatagramListeners.add(listener);
+    return () => this.rawDatagramListeners.delete(listener);
+  }
+
+  /** Bounded (last 20) protocol trace of every datagram received, parsed or not — the real,
+   * non-fabricated record backing the Diagnostics page's packet trace (§ UDP Receive Pipeline
+   * Audit, Step 6). */
+  get recentTraces(): readonly CasambiUdpPacketTrace[] {
+    return this.traceLog;
+  }
+
   /** Socket-level errors (bind failures, ICMP unreachable, etc). */
   onError(listener: (err: Error) => void): () => void {
     this.errorListeners.add(listener);
@@ -303,19 +350,54 @@ export class CasambiUdpEngine {
   }
 
   private handleMessage(msg: Buffer, rinfo: { address: string; port: number }): void {
+    // § UDP Receive Pipeline Audit — counted and traced the instant the OS delivers a datagram,
+    // strictly before parsing/validation/opcode decoding/filtering. Real hardware evidence
+    // (Wireshark) showed the Lithernet gateway broadcasting NotifyControlValues to
+    // 255.255.255.255:10009 rather than unicasting to this client — this engine never filters by
+    // source or destination address (no `rinfo.address !== gatewayIp` check exists, and the
+    // socket is never `connect()`-ed, which would otherwise restrict delivery to one peer), so a
+    // broadcast datagram is received exactly like a unicast one. Counting/tracing here, ahead of
+    // decode, means a real reception failure and a real parse failure are never indistinguishable
+    // again.
+    const at = new Date().toISOString();
+    this._packetsReceived += 1;
+    this._lastPacketAt = at;
     const raw = msg.toString("ascii");
-    let packet: CasambiPacket;
+    for (const listener of this.rawDatagramListeners) listener(raw, rinfo);
+
+    const rawHex = msg.toString("hex");
+    let packet: CasambiPacket | null = null;
+    let parseError: string | null = null;
     try {
       packet = decodeCasambiPacket(raw, this.format);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      this._lastDecodeError = { raw, message: error.message, at: new Date().toISOString() };
-      for (const listener of this.decodeErrorListeners) listener(raw, error);
+      parseError = error.message;
+      this._lastDecodeError = { raw, message: error.message, at };
+    }
+
+    this.recordTrace({
+      at,
+      sourceAddress: rinfo.address,
+      sourcePort: rinfo.port,
+      destinationPort: this.localPort,
+      payloadLength: msg.length,
+      rawAscii: raw,
+      rawHex,
+      decoded: packet,
+      parseError,
+    });
+
+    if (packet === null) {
+      for (const listener of this.decodeErrorListeners) listener(raw, new Error(parseError ?? "unknown decode error"));
       return;
     }
-    this._packetsReceived += 1;
-    this._lastPacketAt = new Date().toISOString();
     for (const listener of this.packetListeners) listener({ raw, packet, rinfo });
+  }
+
+  private recordTrace(entry: CasambiUdpPacketTrace): void {
+    this.traceLog.push(entry);
+    if (this.traceLog.length > MAX_TRACE_ENTRIES) this.traceLog.shift();
   }
 
   private emitError(err: Error): void {

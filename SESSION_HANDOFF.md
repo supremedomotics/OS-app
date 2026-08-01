@@ -4,6 +4,52 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Local Gateway — UDP Receive Pipeline Audit (real hardware capture)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the Auth & UDP Diagnostics session
+below). Triggered by a real Wireshark capture (Lithernet Gateway, firmware 6.25) proving the
+gateway broadcasts `NotifyControlValues` to `255.255.255.255:10009` while SupremeOS reported
+`Packets Received = 0`. Full audit, root cause, before/after flow diagrams, and firmware-scheme
+disclosure: **`docs/architecture/Casambi-UDP-Receive-Pipeline-Audit.md`** — read that document
+before touching `udp-engine.ts`'s `handleMessage` again.
+
+**Root cause (confirmed by code reading, not hardware):** no reception-blocking bug existed —
+the socket binds to `0.0.0.0` (no address filter, no `connect()`, no `rinfo.address` check
+anywhere), so broadcast and unicast datagrams are received identically. The REAL, confirmed bug:
+`packetsReceived` only incremented inside `decodeCasambiPacket()`'s success branch, so a datagram
+that failed to parse was invisible to the counter and had no bulk trace — "never arrived" and
+"arrived but failed to parse" were indistinguishable everywhere in the driver. Manually decoding
+the report's exact byte sequence (reconstructed to its stated 99-byte length) against the
+unmodified codec succeeds, so the specific example isn't itself undecodable — the fix targets the
+counter/tracing gap the report's required steps describe, not a codec rewrite.
+
+**Changes:**
+- `udp-engine.ts`: `packetsReceived`/`lastPacketAt` now increment BEFORE parsing, unconditionally.
+  New `onRawDatagram()` (fires pre-parse, proves socket-level reception independent of decode) and
+  a bounded (20-entry) `recentTraces` log — every datagram, decoded or not, with raw ASCII/hex,
+  byte length, source, and parse result. A failed parse is traced and logged, never a silent drop.
+- `casambi-driver.ts`: wires `onRawDatagram`/`onDecodeError` into the existing `ProtocolTracer`
+  pipeline (immediate "UDP datagram received"/"UDP parse failed" log lines); threads
+  `recentTraces` into `getCasambiDiagnostics()`.
+- `diagnostics.ts`, `routes/installer.ts`, `api.ts`, `drivers.tsx`: `recentTraces` surfaced end to
+  end — Diagnostics page now renders a real packet-trace table, and Test Connection's UDP result
+  includes the trace from its own test window.
+
+**Tests:** `udp-engine.test.ts` — 1 updated (decode failure now correctly counts as received) + a
+new "real hardware capture" suite (8 tests) using the report's exact byte sequence, reconstructed
+and verified to be exactly 99 bytes: broadcast reception, pre-parse counting, real ASCII hex-dot
+decode, full trace recording, parser-failure trace+log, bounded trace log. `casambi-driver.test.ts`
++2 (end-to-end trace reaching Driver Diagnostics for both a decodable and an undecodable packet).
+Full monorepo verification green (`@supreme/protocols` 72 files/708 tests, `@supreme/gateway` 72
+files/293 tests after rebuilding `@supreme/protocols`'s dist — a workspace-resolution step, not a
+code defect — `@supreme/drivers` 22, `@supreme/web-homeowner` 55 + build). Zero Cloud regression.
+
+**Disclosed, not resolved:** no hardware was available to confirm the original symptom is now
+actually fixed end-to-end on the real gateway — only that the diagnostic blind spot the report
+describes is closed and the reconstructed real payload decodes correctly. The gateway's own
+firmware number (6.25) and the protocol doc's "Evolution firmware" version gates (e.g. ≥37.90) are
+different numbering schemes and were NOT compared numerically — see the audit doc §6.
+
 ## Session: Casambi Local Gateway — Auth & UDP Diagnostics
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the audit session below, same

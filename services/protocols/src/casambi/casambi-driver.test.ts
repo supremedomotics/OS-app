@@ -379,6 +379,34 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       await driver.disconnect();
     });
 
+    it("surfaces a full protocol trace in Driver Diagnostics for a received broadcast packet, even a firmware-6.25-shaped payload the codec can't fully decode", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      // A broadcast NotifyControlValues packet from the gateway (sender = gateway, not addressed
+      // only to this client) — proves reception + tracing works for exactly the real Wireshark
+      // scenario, not just the fake unicast shape other tests use.
+      socket.receive("c.70.27.4b.1e.15.0.14.0.0\r\n");
+      const udp = driver.getCasambiDiagnostics().udp;
+      expect(udp?.recentTraces).toHaveLength(1);
+      expect(udp?.recentTraces[0]).toMatchObject({
+        rawAscii: "c.70.27.4b.1e.15.0.14.0.0\r\n",
+        decoded: expect.objectContaining({ opcode: 0x4b }),
+        parseError: null,
+      });
+      await driver.disconnect();
+    });
+
+    it("traces AND counts a datagram that fails to parse — reception is never gated on successful decode", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("garbage\r\n");
+      const udp = driver.getCasambiDiagnostics().udp;
+      expect(udp?.packetsReceived).toBe(1);
+      expect(udp?.recentTraces[0]).toMatchObject({ rawAscii: "garbage\r\n", decoded: null });
+      expect(udp?.recentTraces[0]?.parseError).toMatch(/Malformed/);
+      await driver.disconnect();
+    });
+
     it("udp diagnostics are null in Cloud mode — no fabricated UDP detail for a transport that doesn't exist", async () => {
       const transport = new FakeCasambiTransport(NETWORK);
       const driver = new CasambiProtocolDriver({ credentials: creds, transport });
