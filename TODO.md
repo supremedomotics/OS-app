@@ -50,6 +50,22 @@
 - **Complexity:** Medium, once the real byte semantics are confirmed against hardware.
 - **Status:** Not started; honestly gated (never fabricated) as of PR-2.
 
+### Casambi Local Gateway — confirm the UDP receive fix against real hardware (firmware 6.25)
+- **Description:** A real Wireshark capture showed the Lithernet Gateway broadcasting to
+  `255.255.255.255:10009` while SupremeOS reported `Packets Received = 0`. Code audit found no
+  reception-blocking bug (no filter, no `connect()`) and the fix targets a real, confirmed gap:
+  `packetsReceived` only counted successfully-decoded packets, hiding the difference between "no
+  datagram arrived" and "a datagram arrived but failed to parse." The exact reported payload
+  decodes successfully against the current, unmodified codec once manually reconstructed to its
+  stated length.
+- **Reason:** without a real gateway, this session cannot confirm the original symptom is now
+  actually resolved end-to-end — only that the diagnostic blind spot is closed and the
+  reconstructed real payload decodes correctly in isolation.
+- **Dependencies:** the same Lithernet Gateway (firmware 6.25) used for the original capture.
+- **Complexity:** Small — re-run SupremeOS against it and check the new Diagnostics packet-trace
+  table / `onRawDatagram` trace log directly.
+- **Status:** Not started; disclosed in `docs/architecture/Casambi-UDP-Receive-Pipeline-Audit.md`.
+
 ### Casambi Local Gateway — confirm HTTP auth scheme (Basic vs Digest) against real hardware
 - **Description:** `Lithernet_General_Settings_Network.pdf` p.109 shows a native browser
   credential prompt guarding a direct HTTP endpoint but never names the wire scheme. HTTP Basic
@@ -702,6 +718,17 @@
   green (48/48 tasks); `@supreme/protocols` 71 files/690 tests, `@supreme/drivers` 22,
   `@supreme/gateway` 289, `@supreme/web-homeowner` 55 (build + typecheck also verified). Full
   detail: `docs/architecture/Casambi-Local-Auth-And-UDP-Diagnostics.md`, `SESSION_HANDOFF.md`.
+- **Casambi Local Gateway — UDP Receive Pipeline Audit (real hardware capture)** — a real
+  Wireshark capture (firmware 6.25) proved the gateway broadcasts to `255.255.255.255:10009`
+  while SupremeOS reported `Packets Received = 0`. Confirmed via code audit: no reception-blocking
+  filter/`connect()`/unicast-only logic existed; the real bug was `packetsReceived` only
+  incrementing on successful decode, making "never arrived" and "arrived but failed to parse"
+  indistinguishable. Fixed: the counter now increments before parsing, unconditionally; added
+  `onRawDatagram()` (pre-parse proof of reception) and a bounded 20-entry real packet trace
+  (raw ASCII/hex, source, decode result) surfaced in Driver Diagnostics and Test Connection. The
+  report's exact byte sequence, reconstructed to its stated 99-byte length, is now a permanent
+  regression fixture. Zero Cloud regression; full monorepo green. Full detail:
+  `docs/architecture/Casambi-UDP-Receive-Pipeline-Audit.md`, `SESSION_HANDOFF.md`.
 - **Denon Cheat Sheet Audit** — audited an installer/engineer cheat sheet ("Dan's Denon Cheat
   Sheets") against the official Denon Telnet protocol, the official HEOS CLI spec, and this
   project's own Universal AVR SDK, per the strict "reference only, never a source" hierarchy the

@@ -147,6 +147,8 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private wire: CasambiWire | null = null;
   private localUnsubscribePacket: (() => void) | null = null;
   private localUnsubscribeError: (() => void) | null = null;
+  private localUnsubscribeRaw: (() => void) | null = null;
+  private localUnsubscribeDecodeError: (() => void) | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closing = false;
@@ -310,6 +312,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
             averageLatencyMs: local.udp.averageLatencyMs,
             lastSendError: local.udp.lastSendError,
             lastDecodeError: local.udp.lastDecodeError,
+            recentTraces: local.udp.recentTraces,
           }
         : null,
     });
@@ -555,6 +558,18 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     const local = this.localTransport;
     if (!local) return; // unreachable — createConnection always builds one in local mode
     await local.udp.start();
+    // § UDP Receive Pipeline Audit, Step 1: log the instant a datagram is received, strictly
+    // before any parsing — proves `socket.on("message")` is really firing, independent of
+    // whether the payload later decodes. Real hardware evidence showed the OS receiving
+    // broadcast packets the driver had no way to confirm without this.
+    this.localUnsubscribeRaw = local.udp.onRawDatagram((raw, rinfo) => {
+      this.tracer.event(`UDP datagram received from ${rinfo.address}:${rinfo.port} (${raw.length} bytes)`);
+    });
+    this.localUnsubscribeDecodeError = local.udp.onDecodeError((raw, err) => {
+      // § UDP Receive Pipeline Audit, Step 7: never a silent drop — the raw payload is always
+      // available here and in `getCasambiDiagnostics().udp.recentTraces`.
+      this.tracer.event(`UDP parse failed: ${err.message} — raw: ${raw.trim()}`);
+    });
     this.localUnsubscribePacket = local.udp.onPacket((pkt) => {
       this.lastEventAt = nowIso();
       const signal = normalizeLocalPacket(pkt.packet, (unitId) => this.units.get(unitId));
@@ -589,6 +604,10 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     this.localUnsubscribePacket = null;
     this.localUnsubscribeError?.();
     this.localUnsubscribeError = null;
+    this.localUnsubscribeRaw?.();
+    this.localUnsubscribeRaw = null;
+    this.localUnsubscribeDecodeError?.();
+    this.localUnsubscribeDecodeError = null;
     if (!local) return;
     const netId = local.config.netId ?? 0;
     try {

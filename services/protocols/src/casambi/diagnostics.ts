@@ -1,5 +1,6 @@
 import { capabilitiesFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import type { CasambiConnectionMode } from "./connection-manager.js";
+import type { CasambiUdpPacketTrace } from "./local-transport/index.js";
 import {
   computeHealthVerdict,
   restSubsystemStatus,
@@ -32,6 +33,11 @@ export interface CasambiUdpDetail {
   averageLatencyMs: number | null;
   lastSendError: string | null;
   lastDecodeError: { raw: string; message: string; at: string } | null;
+  /** § UDP Receive Pipeline Audit, Step 6 — the bounded (last 20) real protocol trace, recorded
+   * for every datagram received regardless of parse outcome. Surfaced in Driver Diagnostics so a
+   * real capture (e.g. a Wireshark session) can always be cross-checked against what SupremeOS
+   * actually saw at the socket layer, never just "reachable/unreachable." */
+  recentTraces: readonly CasambiUdpPacketTrace[];
 }
 
 /**
@@ -85,6 +91,7 @@ export interface CasambiDiagnosticsInputs {
     averageLatencyMs: number | null;
     lastSendError: string | null;
     lastDecodeError: { raw: string; message: string; at: string } | null;
+    recentTraces: readonly CasambiUdpPacketTrace[];
   } | null;
 }
 
@@ -123,6 +130,7 @@ export function buildDiagnosticsSnapshot(inputs: CasambiDiagnosticsInputs): Casa
           averageLatencyMs: inputs.udp.averageLatencyMs,
           lastSendError: inputs.udp.lastSendError,
           lastDecodeError: inputs.udp.lastDecodeError,
+          recentTraces: inputs.udp.recentTraces,
         }
       : null,
     health: computeHealthVerdict({

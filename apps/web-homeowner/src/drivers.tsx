@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   type CasambiDiagnostics,
   type CasambiTestConnectionResult,
+  type CasambiUdpPacketTrace,
   connectDriver,
   discoverCasambiLocalGateway,
   discoverKnxGateways,
@@ -625,8 +626,49 @@ function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
             <div><dt>Packet loss</dt><dd>Not measurable — no sequence numbers in the documented protocol</dd></div>
             <div><dt>Last protocol error</dt><dd>{udp.lastDecodeError ? udp.lastDecodeError.message : udp.lastSendError ?? "None"}</dd></div>
           </dl>
+          <CasambiPacketTraceTable traces={udp.recentTraces} />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Real protocol trace table (§ UDP Receive Pipeline Audit, Step 6) — every datagram the socket
+ * actually received, parsed or not, so an installer/engineer can cross-check this against a
+ * Wireshark capture directly. A packet that failed to parse still appears here with its raw
+ * payload and the exact parser error, never silently dropped.
+ */
+function CasambiPacketTraceTable({ traces }: { traces: CasambiUdpPacketTrace[] }) {
+  if (traces.length === 0) {
+    return <p className="muted">No UDP packets received yet.</p>;
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table className="drv-trace-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Source</th>
+            <th>Bytes</th>
+            <th>Raw ASCII</th>
+            <th>Decoded</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...traces].reverse().map((t, i) => (
+            <tr key={`${t.at}-${i}`}>
+              <td>{new Date(t.at).toLocaleTimeString()}</td>
+              <td>{`${t.sourceAddress}:${t.sourcePort}`}</td>
+              <td>{t.payloadLength}</td>
+              <td title={t.rawHex}>{t.rawAscii.trim()}</td>
+              <td>{t.decoded ? `opcode 0x${t.decoded.opcode.toString(16)}` : "—"}</td>
+              <td>{t.parseError ? <span className="drv-badge err">{t.parseError}</span> : <span className="drv-badge ok">OK</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

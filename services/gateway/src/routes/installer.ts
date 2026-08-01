@@ -294,6 +294,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
             packetsReceived: 0,
             averageLatencyMs: null,
             lastError: null,
+            recentTraces: [],
           },
           message: "Missing gatewayIp/restPort/udpPort — enter the Local Gateway's connection details first.",
         });
@@ -332,6 +333,9 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         packetsReceived: udp.packetsReceived,
         averageLatencyMs: udp.averageLatencyMs,
         lastError: udp.lastError,
+        // § UDP Receive Pipeline Audit, Step 6 — every datagram this test window actually saw,
+        // parsed or not, so a real capture can be cross-checked against what SupremeOS received.
+        recentTraces: udp.recentTraces,
       };
       await udp.stop().catch(() => {});
 

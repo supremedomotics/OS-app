@@ -225,11 +225,15 @@ describe("CasambiUdpEngine (fake socket)", () => {
       expect(engine.lastPacketAt).not.toBeNull();
     });
 
-    it("does not count a decode failure as a received packet, but does record lastDecodeError", async () => {
+    it("counts a decode failure as received (reception is proven before parsing), and records lastDecodeError", async () => {
       const { engine, socket } = makeEngine();
       await engine.start();
       socket.receive("garbage\r\n");
-      expect(engine.packetsReceived).toBe(0);
+      // § UDP Receive Pipeline Audit: real hardware evidence showed the OS/dgram layer receiving
+      // real broadcast datagrams while the driver reported Packets Received = 0, because the old
+      // counter only incremented on successful decode. Reception and parsing are now counted
+      // separately — a malformed/undecodable payload was still RECEIVED.
+      expect(engine.packetsReceived).toBe(1);
       expect(engine.lastDecodeError).toMatchObject({ raw: "garbage\r\n" });
     });
 
@@ -257,6 +261,104 @@ describe("CasambiUdpEngine (fake socket)", () => {
     it("never reports a packet-loss figure (no sequence numbers exist to measure it honestly)", () => {
       const { engine } = makeEngine();
       expect((engine as unknown as { packetLoss?: unknown }).packetLoss).toBeUndefined();
+    });
+  });
+
+  /**
+   * § UDP Receive Pipeline Audit — regression tests grounded in a real Wireshark capture against
+   * firmware 6.25: the gateway broadcasts NotifyControlValues to `255.255.255.255:10009` (not
+   * unicast to the client), 99-byte ASCII "Hex with dot" payload, CRLF-terminated. Real bug: the
+   * driver reported `Packets Received = 0` despite the OS receiving these datagrams, because the
+   * counter only incremented on successful decode.
+   */
+  describe("real hardware capture — broadcast NotifyControlValues, firmware 6.25", () => {
+    // Byte-exact reconstruction of the captured packet (99 bytes incl. CRLF, confirmed by
+    // counting): Net_ID=0xc, Direction=0x70 (fromCasambi), Length=0x27(39), Opcode=0x4b
+    // (NotifyControlValues), Target_ID=0x1e, then presenceSensor/lightSensorLux/8x indexed
+    // onOffToggle value pairs — a real, not fabricated, wire capture.
+    const REAL_CAPTURE =
+      "c.70.27.4b.1e.15.0.14.0.0.90.0.1.1.90.1.1.1.90.2.1.1.90.3.1.1.90.4.1.1.90.5.1.1.90.6.1.1.90.7.1.1\r\n";
+
+    it("payload is exactly 99 bytes, matching the Wireshark capture", () => {
+      expect(Buffer.byteLength(REAL_CAPTURE, "ascii")).toBe(99);
+    });
+
+    it("receives a BROADCAST datagram (sender = gateway, but not addressed only to this client) — no destination/unicast filtering exists", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      // The gateway broadcasts to 255.255.255.255; from this socket's perspective the OS just
+      // delivers a datagram whose sender is the gateway. Nothing in the engine inspects or
+      // requires a specific destination address — proven by the engine having no `connect()` call
+      // and no `rinfo`-based filtering anywhere in `handleMessage`.
+      socket.receive(REAL_CAPTURE, { address: "192.168.0.45", port: 10009 });
+      expect(engine.packetsReceived).toBe(1);
+    });
+
+    it("Packets Received increments immediately on socket reception, strictly before parsing succeeds or fails", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      const rawSeen: string[] = [];
+      engine.onRawDatagram((raw) => rawSeen.push(raw));
+      socket.receive(REAL_CAPTURE);
+      // onRawDatagram fired (proves reception is observable independent of decode) and the
+      // counter reflects it.
+      expect(rawSeen).toEqual([REAL_CAPTURE]);
+      expect(engine.packetsReceived).toBe(1);
+    });
+
+    it("parses the real captured ASCII 'Hex with dot' payload correctly, never expecting a binary buffer", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      const packets: unknown[] = [];
+      engine.onPacket((p) => packets.push(p));
+      socket.receive(REAL_CAPTURE);
+      expect(engine.lastDecodeError).toBeNull();
+      expect(packets).toEqual([
+        expect.objectContaining({
+          packet: expect.objectContaining({ netId: 12, direction: "fromCasambi", opcode: 0x4b }),
+        }),
+      ]);
+    });
+
+    it("records a full protocol trace (timestamp, source, length, raw ascii/hex, decoded, parse result) for the real capture", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      socket.receive(REAL_CAPTURE, { address: "192.168.0.45", port: 10009 });
+      const [trace] = engine.recentTraces;
+      expect(trace).toMatchObject({
+        sourceAddress: "192.168.0.45",
+        sourcePort: 10009,
+        payloadLength: 99,
+        rawAscii: REAL_CAPTURE,
+        parseError: null,
+      });
+      expect(trace.rawHex).toBe(Buffer.from(REAL_CAPTURE, "ascii").toString("hex"));
+      expect(trace.decoded).toMatchObject({ opcode: 0x4b });
+      expect(new Date(trace.at).toString()).not.toBe("Invalid Date");
+    });
+
+    it("traces AND fully logs a parser failure with the raw payload — never a silent drop", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      const failures: { raw: string; err: Error }[] = [];
+      engine.onDecodeError((raw, err) => failures.push({ raw, err }));
+      // A firmware-6.25-shaped payload this codec doesn't understand (too few fields).
+      socket.receive("c.70\r\n");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.raw).toBe("c.70\r\n");
+      const [trace] = engine.recentTraces;
+      expect(trace).toMatchObject({ rawAscii: "c.70\r\n", decoded: null });
+      expect(trace?.parseError).toMatch(/Malformed/);
+      // Even a failed parse counts as a real, received datagram — this is the core bug fix.
+      expect(engine.packetsReceived).toBe(1);
+    });
+
+    it("keeps the trace log bounded (does not grow unbounded across many real packets)", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      for (let i = 0; i < 30; i++) socket.receive(REAL_CAPTURE);
+      expect(engine.recentTraces.length).toBeLessThanOrEqual(20);
+      expect(engine.packetsReceived).toBe(30);
     });
   });
 });

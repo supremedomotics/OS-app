@@ -1261,6 +1261,11 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .drv-about dt { color: var(--aureon-color-text-secondary); min-width: 96px; }
 .drv-about dd { margin: 0; color: var(--aureon-color-text-primary); }
 
+/* § UDP Receive Pipeline Audit — real protocol trace table (Casambi Local Gateway Diagnostics). */
+.drv-trace-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.drv-trace-table th { text-align: left; padding: 6px 10px; color: var(--aureon-color-text-secondary); font-weight: 500; border-bottom: 1px solid var(--aureon-color-base-hairline); white-space: nowrap; }
+.drv-trace-table td { padding: 6px 10px; border-bottom: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); font-family: monospace; white-space: nowrap; }
+
 /* Dashboard hub-resource meters (§ Installer Dashboard, real host telemetry). */
 .stat.meter { align-items: stretch; }
 .meter-bar { height: 5px; border-radius: 999px; background: var(--aureon-color-base-hairline); overflow: hidden; margin: 6px 0 2px; }
