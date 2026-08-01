@@ -1,11 +1,13 @@
 # Casambi Real Hardware Validation Runbook
 
-> Companion to `docs/architecture/Supreme-LAN-Transport-Architecture.md` §10.3 and ADR 0022.
-> This is the ONE remaining step before the Casambi Local Gateway driver's `@supreme/lan`
-> migration can be called production-verified rather than "internally proven." Nothing in this
-> document has been run by the AI session that wrote it — this sandbox has no real Lithernet
-> gateway, no real physical LAN, and no real Windows machine. It is written FOR the person who has
-> those things.
+> Companion to `docs/architecture/Supreme-LAN-Transport-Architecture.md` §10.3, ADR 0022, and
+> `docs/architecture/Casambi-Final-Hardware-Validation-Report.md` (the Production Gate's official
+> "NOT EVALUATED — hardware unavailable" verdict, and the Packet Replay Framework / Failure
+> Analysis / Transport Monitor guides this runbook now uses). This is the ONE remaining step
+> before the Casambi Local Gateway driver's `@supreme/lan` migration can be called
+> production-verified rather than "internally proven." Nothing in this document has been run by
+> the AI session that wrote it — this sandbox has no real Lithernet gateway, no real physical LAN,
+> and no real Windows machine. It is written FOR the person who has those things.
 
 ## What has already been proven, and what hasn't
 
@@ -83,19 +85,32 @@ to the `lan` container at all; fix the Gateway's env before continuing.
 
 Do something on the real Casambi network that causes a `NotifyControlValues` broadcast (toggle a
 light physically, or via the Casambi app) — the gateway broadcasts on state change and periodic
-heartbeats. Re-poll the Transport Monitor:
+heartbeats. Re-poll the Transport Monitor, and read its new `failureAnalysis` field FIRST — it
+already runs this exact staged diagnosis for you (`services/protocols/src/casambi/
+failure-analysis.ts`): a ✓/✗ checklist across Transport → NATS → Casambi Adapter →
+Discovery/Driver, with a concrete, data-backed reason on the first stage that fails. Use it before
+manually cross-referencing counters:
 
-- `transport.packetsReceived` and `adapter.packetsReceived` should both increment together. If
-  `transport.packetsReceived` increments but `adapter.packetsReceived` does not, the failure is
-  between the transport and the Casambi engine — check `adapter.decodeFailures` and the
-  `casambi/diagnostics` route's `recentTraces` for the raw payload.
-- If NEITHER increments, the failure is upstream of this codebase entirely — confirm with
-  `tcpdump -i <iface> udp port <udp-port>` on the Linux host itself that the broadcast is arriving
-  at the host's real NIC in the first place. If `tcpdump` sees it and the Transport Monitor
-  doesn't, that is the single most useful piece of evidence to bring back to a follow-up session —
-  it means the receive path inside `@supreme/lan` itself is the problem, not the network.
-- If `tcpdump` does NOT see it, the problem is external to this codebase (firewall, switch
-  IGMP/broadcast filtering, wrong interface, VLAN mismatch) — not something a code change can fix.
+- If `failureAnalysis.firstFailingStage` is `"Transport (UDP)"` and the reason mentions zero
+  packets received: confirm with `tcpdump -i <iface> udp port <udp-port>` on the Linux host itself
+  that the broadcast is arriving at the host's real NIC in the first place. If `tcpdump` sees it
+  and the Transport Monitor doesn't, that's the single most useful evidence to bring back to a
+  follow-up session — the receive path inside `@supreme/lan` itself is the problem, not the
+  network. If `tcpdump` does NOT see it either, the problem is external to this codebase (firewall,
+  switch IGMP/broadcast filtering, wrong interface, VLAN mismatch) — not something a code change
+  can fix.
+- If it's `"Casambi Adapter"`: the reason includes the exact decode error and raw payload — check
+  `driver.recentJourney` (the per-packet "Packet Trace") for the full sequence of what arrived and
+  when.
+- If it's `"Discovery / Driver"` with an "opcode 0xXX not mapped" reason: this is a REAL,
+  documented Casambi opcode `event-engine.ts`'s `normalizeLocalPacket` doesn't yet map to a
+  driver signal — that's a concrete, fixable gap, not a network problem.
+
+**Capture it for next time:** whatever raw payload the `recentTraces`/`recentJourney` show,
+save it as a new Packet Replay capture (`docs/architecture/
+Casambi-Final-Hardware-Validation-Report.md` §3) under `tests/regression/casambi/` — from then on,
+this exact real-world scenario is a permanent, hardware-free regression test, and a follow-up
+session can reproduce and fix it without needing your hardware again.
 
 This is the exact staged approach the governing brief's Failure Handling clause asked for: prove
 exactly which stage stops, never guess.

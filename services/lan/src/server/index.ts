@@ -10,3 +10,14 @@
 export { UdpTransportServer } from "./udp-transport-server.js";
 export { DgramUdpSession, defaultDgramSocket, type DgramSocketLike, type DgramSocketFactory } from "./dgram-udp-session.js";
 export { buildDiagnosticsSnapshot, type LanHealthInputs } from "./health.js";
+export {
+  replayableDgramSocket,
+  fakeDgramSocket,
+  makeCapture,
+  capturedDatagramAscii,
+  capturedDatagramBuffer,
+  type CapturedDatagram,
+  type PacketCapture,
+  type ReplayHandle,
+} from "./replay-dgram-socket.js";
+export { saveCaptureJson, loadCaptureJson, exportPcap } from "./capture-io.js";

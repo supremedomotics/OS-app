@@ -39,6 +39,31 @@ export interface CasambiAdapterSectionSnapshot {
   recentTraces: readonly CasambiUdpPacketTrace[];
 }
 
+/**
+ * § Final Hardware Validation — Packet Trace. One entry per datagram the DRIVER processed
+ * (bounded, last 20, same convention as `CasambiUdpPacketTrace`), recording what happened to it
+ * AFTER decode — the piece `CasambiUdpPacketTrace` can't see, since the engine has no visibility
+ * into driver-level dispatch by design (one-way layering: driver knows about the engine, never
+ * the reverse). `processingDurationMs` is measured wall-clock time from raw reception
+ * (`onRawDatagram`) to the driver finishing its handling of that same datagram — everything in
+ * this codebase's receive path is synchronous JS, so this is a real, not simulated, measurement.
+ */
+export interface CasambiPacketJourneyEntry {
+  at: string;
+  sourceAddress: string;
+  sourcePort: number;
+  rawAscii: string;
+  decoded: boolean;
+  decodeError: string | null;
+  /** Hex opcode once decoded, `null` if decode failed. */
+  opcode: number | null;
+  /** Which `CasambiSignal.kind` `normalizeLocalPacket` produced and this driver acted on, or
+   * `null` if decode failed or the opcode wasn't mapped (see `outcome`). */
+  handlerInvoked: string | null;
+  outcome: "mapped" | "unmapped_opcode" | "decode_failed";
+  processingDurationMs: number;
+}
+
 export interface CasambiDriverSectionSnapshot {
   entities: number;
   /** Count of units that were NEW the first time this driver ever saw them (Local: first
@@ -51,6 +76,17 @@ export interface CasambiDriverSectionSnapshot {
    * feedback (Cloud `unitChanged` events or Local `NotifyControlValues` packets) — deduplicated
    * the same way `getState()`'s cache is (identical repeated state is not counted again). */
   feedbackEvents: number;
+  /** § Final Hardware Validation — Local mode only. Count of datagrams that decoded successfully
+   * (the Adapter section's `decoded` counter includes these) but whose opcode
+   * `normalizeLocalPacket` doesn't map to any driver signal, so nothing downstream (discovery,
+   * entities, UI) ever saw them. The exact, nameable failure this codebase's Failure Analysis
+   * report looks for: "Adapter decoded, Discovery ignored packet — opcode 0xXX not mapped." */
+  unmappedOpcodeEvents: number;
+  /** The most recent such opcode, or `null` if none has occurred. */
+  lastUnmappedOpcode: number | null;
+  /** § Final Hardware Validation — Packet Trace. Empty array in Cloud mode (no per-datagram
+   * journey concept there). */
+  recentJourney: readonly CasambiPacketJourneyEntry[];
 }
 
 export interface CasambiTransportMonitorSnapshot {
@@ -66,6 +102,9 @@ export interface CasambiTransportMonitorInputs {
   discoveryEvents: number;
   commandsIssued: number;
   feedbackEvents: number;
+  unmappedOpcodeEvents: number;
+  lastUnmappedOpcode: number | null;
+  recentJourney: readonly CasambiPacketJourneyEntry[];
   local: {
     listening: boolean;
     localAddress: string | null;
@@ -110,6 +149,9 @@ export function buildTransportMonitorSnapshot(inputs: CasambiTransportMonitorInp
       discoveryEvents: inputs.discoveryEvents,
       commandsIssued: inputs.commandsIssued,
       feedbackEvents: inputs.feedbackEvents,
+      unmappedOpcodeEvents: inputs.unmappedOpcodeEvents,
+      lastUnmappedOpcode: inputs.lastUnmappedOpcode,
+      recentJourney: inputs.recentJourney,
     },
   };
 }

@@ -85,7 +85,15 @@ export {
   type CasambiTransportSectionSnapshot,
   type CasambiAdapterSectionSnapshot,
   type CasambiDriverSectionSnapshot,
+  type CasambiPacketJourneyEntry,
 } from "./transport-monitor.js";
+export {
+  buildFailureAnalysisReport,
+  formatFailureAnalysisReport,
+  type CasambiFailureAnalysisReport,
+  type CasambiFailureStageResult,
+  type CasambiFailureStageStatus,
+} from "./failure-analysis.js";
 export {
   computeHealthVerdict,
   restSubsystemStatus,

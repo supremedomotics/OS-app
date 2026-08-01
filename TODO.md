@@ -74,19 +74,38 @@
 - **Status:** Blocked on hardware access. Per the governing brief's Critical Requirement, KNX/
   Matter/other LAN protocol migrations (Phases 3-5) stay on hold until this passes.
 
-### Transport Monitor — dedicated UI page
-- **Description:** The Transport Monitor backend (`CasambiProtocolDriver.
-  getCasambiTransportMonitor()`, `GET /v1/drivers/:id/casambi/transport-monitor`) is implemented
-  and tested, but has no dedicated UI page yet — Phase 2's "do not modify the Driver Manager UI"
-  constraint means it needs its own new page, not an addition to `drivers.tsx`'s existing
-  diagnostics panel.
+### Transport Monitor / Packet Replay / Packet Trace — dedicated UI pages
+- **Description:** The backends are implemented and tested (`GET /v1/drivers/:id/casambi/
+  transport-monitor` including the new `failureAnalysis` and `driver.recentJourney` "Packet
+  Trace" fields; the Packet Replay Framework's capture/replay engine in `@supreme/lan`), but NO
+  UI exists for any of it yet — the "Saved Captures / Living Room / Kitchen / Office / Replay /
+  Loop / Step / Export / Import / Delete" panel and the Transport Monitor's four-section layout
+  are both still just data shapes, not pages. Phase 2's "do not modify the Driver Manager UI"
+  constraint means these need their own new page(s), not an addition to `drivers.tsx`.
 - **Reason:** the user asked for this to become "the primary debugging tool for every LAN
   protocol" — a backend-only endpoint doesn't deliver that on its own.
 - **Dependencies:** none technically, but per CLAUDE.md's UI standards a new page needs real
   Aureon-token styling and Playwright-verified responsive testing at all four density tiers before
-  being considered done — deliberately not rushed into this session alongside the backend work.
-- **Complexity:** Small — the data shape already matches the four-section layout requested; this
-  is presentation work, not new backend logic.
+  being considered done — deliberately not rushed into a session that was already backend/pipeline
+  validation work.
+- **Complexity:** Small-Medium — the data shapes already match the layouts requested; this is
+  presentation work, not new backend logic.
+- **Status:** Not started.
+
+### Casambi capture library — expand beyond the current 3 reference captures
+- **Description:** `tests/regression/casambi/` currently has `living-room.json` (real hardware
+  capture, maps to `sensor`), `kitchen.json` (synthetic button press), `office.json` (synthetic
+  unmapped opcode). The Driver Verification checklist in the governing brief (on/off, brightness,
+  color, scenes, sensors, battery, temperature, presence, button events, feedback) is only
+  partially covered — no capture exists yet for a dimmable/color luminaire, a scene call, or a
+  battery/temperature sensor reading.
+- **Reason:** without these, the "no hardware required" regression suite doesn't actually exercise
+  every capability type a real installation will encounter.
+- **Dependencies:** either real captures from actual hardware (preferred — see the validation
+  runbook's "capture it for next time" note) or carefully hand-constructed synthetic ones
+  following the exact byte layouts in `udp-codec.ts`'s `CASAMBI_CONTROL_TYPE` table, same as
+  `kitchen.json`/`office.json` were built this session.
+- **Complexity:** Small per capture.
 - **Status:** Not started.
 
 ### supreme-lan Phase 3a — default KNX Discovery onto the remote transport
@@ -719,6 +738,35 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Casambi Local Gateway — Final Hardware Validation & Production Gate** — attempted the final
+  real-hardware validation the governing brief demanded; delivered everything hardware-independent
+  it asked for, and rendered the honest verdict for the one thing it couldn't: **Production Gate =
+  NOT EVALUATED — hardware unavailable** (neither PASS nor FAIL — no real Lithernet gateway was
+  ever reachable from this sandbox, so there's no real-hardware evidence to render either verdict
+  on). Built the Packet Replay Framework (`@supreme/lan`, protocol-agnostic): a `PacketCapture`
+  JSON format, `replayableDgramSocket()` that injects a captured datagram through the IDENTICAL
+  `DgramUdpSession → UdpTransportServer → NATS → NatsUdpTransportClient → adapter → driver` chain
+  real hardware traffic uses (no code path differs, structurally, not by convention), a
+  `fakeDgramSocket()` formalizing the fake-socket pattern every test file was hand-rolling
+  separately, and one-way PCAP export (real Ethernet/IPv4/UDP framing, correct IPv4 checksum, for
+  opening a capture in Wireshark). New capture library at `tests/regression/casambi/`
+  (`living-room.json` = the REAL 99-byte Wireshark-captured packet from the earlier hardware audit
+  session, reused rather than re-transcribed; `kitchen.json`/`office.json` = synthetic but
+  wire-valid) with an auto-loading regression suite (7 tests) replaying every capture through the
+  real pipeline — verified, not assumed, that the real capture's controls map to Supreme's
+  `sensor` capability (an earlier draft guess of `onoff` was wrong and caught by the test itself
+  failing honestly). New driver-level observability: `unmappedOpcodeEvents`/`lastUnmappedOpcode`
+  (a decoded-but-unmapped-opcode packet is now a real, observable event, never a silent drop) and
+  a bounded `recentJourney` "Packet Trace" (arrival time, decode outcome, resolved signal kind,
+  real measured `processingDurationMs`). New Failure Analysis report generator
+  (`failure-analysis.ts`) — a pure function producing the EXACT ✓/✗ + "Reason:" checklist format
+  the brief specified (Transport → NATS → Casambi Adapter → Discovery/Driver), wired into the
+  Transport Monitor route as a new `failureAnalysis` field. Extended the performance benchmark to
+  p50/p95/p99/max. Full write-up: `docs/architecture/Casambi-Final-Hardware-Validation-Report.md`.
+  4 new test files (23 tests) plus new cases in `casambi-driver.test.ts`; `@supreme/lan` 6
+  files/42 tests, `@supreme/protocols` 79 files/760 tests, `@supreme/gateway` 72 files/295 tests —
+  all passing, zero regression. **No UI built** (Transport Monitor panel, Packet Replay "Saved
+  Captures" panel, Packet Trace viewer) — backend/data only, tracked above in TODO.md.
 - **`supreme-lan` LAN Transport Service — Phase 2 (Casambi Migration & Transport Monitor)** —
   migrated the Casambi Local Gateway driver completely onto `@supreme/lan`, using it as the
   reference implementation per the governing brief. `CasambiUdpSocketLike`/`CasambiUdpSocketFactory`

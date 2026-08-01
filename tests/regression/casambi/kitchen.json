@@ -1,0 +1,13 @@
+{
+  "name": "kitchen",
+  "savedAt": "2026-08-01T00:00:00.000Z",
+  "description": "Synthetic but wire-valid button-press capture (opcode 0x51, Notify Button Event) — Net_ID=0xc matching the living-room capture's real gateway, Unit_ID=9, Source=1, Button=0, Event=2 (short press). Exercises the button-event path of the pipeline distinctly from living-room's NotifyControlValues capture.",
+  "packets": [
+    {
+      "rawHex": "632e37302e352e35312e392e312e302e320d0a",
+      "sourceAddress": "192.168.0.45",
+      "sourcePort": 10009,
+      "relativeTimeMs": 0
+    }
+  ]
+}

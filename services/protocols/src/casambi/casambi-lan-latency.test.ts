@@ -54,10 +54,23 @@ function percentile(sorted: number[], p: number): number {
   const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
   return sorted[idx]!;
 }
-function stats(samplesMs: number[]): { medianMs: number; p95Ms: number; meanMs: number } {
+export interface LatencyStats {
+  medianMs: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  meanMs: number;
+}
+export function stats(samplesMs: number[]): LatencyStats {
   const sorted = [...samplesMs].sort((a, b) => a - b);
   const mean = samplesMs.reduce((a, b) => a + b, 0) / samplesMs.length;
-  return { medianMs: percentile(sorted, 50), p95Ms: percentile(sorted, 95), meanMs: Math.round(mean * 1000) / 1000 };
+  return {
+    medianMs: percentile(sorted, 50),
+    p95Ms: percentile(sorted, 95),
+    p99Ms: percentile(sorted, 99),
+    maxMs: sorted[sorted.length - 1]!,
+    meanMs: Math.round(mean * 1000) / 1000,
+  };
 }
 
 describe("Casambi over @supreme/lan — latency (code-only, InProcessEventBus; see architecture doc for the real-Docker measurement)", () => {
@@ -105,7 +118,7 @@ describe("Casambi over @supreme/lan — latency (code-only, InProcessEventBus; s
     console.log(
       `[Casambi/@supreme/lan latency, code-only InProcessEventBus, n=${N}] ` +
         `UDP-receive -> decode -> driver applySignal -> onState fired: ` +
-        `median=${s.medianMs.toFixed(3)}ms p95=${s.p95Ms.toFixed(3)}ms mean=${s.meanMs}ms`,
+        `median=${s.medianMs.toFixed(3)}ms p95=${s.p95Ms.toFixed(3)}ms p99=${s.p99Ms.toFixed(3)}ms max=${s.maxMs.toFixed(3)}ms mean=${s.meanMs}ms`,
     );
     // Generous bound — this guards against a real regression (e.g. an accidental await/timeout
     // added to a hot path), not a tight performance SLA. The manual real-Docker run (~8ms,
@@ -149,7 +162,7 @@ describe("Casambi over @supreme/lan — latency (code-only, InProcessEventBus; s
     console.log(
       `[Casambi/@supreme/lan latency, code-only InProcessEventBus, n=${N}] ` +
         `command() -> commandEngine -> NatsUdpTransportClient.send() (request/reply round trip) -> UdpTransportServer -> fake gateway socket: ` +
-        `median=${s.medianMs.toFixed(3)}ms p95=${s.p95Ms.toFixed(3)}ms mean=${s.meanMs}ms`,
+        `median=${s.medianMs.toFixed(3)}ms p95=${s.p95Ms.toFixed(3)}ms p99=${s.p99Ms.toFixed(3)}ms max=${s.maxMs.toFixed(3)}ms mean=${s.meanMs}ms`,
     );
     expect(s.p95Ms).toBeLessThan(200);
 

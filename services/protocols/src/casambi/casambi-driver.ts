@@ -36,7 +36,9 @@ import {
   type CasambiSignal,
 } from "./event-engine.js";
 import { buildDiagnosticsSnapshot, type CasambiDiagnosticsSnapshot } from "./diagnostics.js";
-import { buildTransportMonitorSnapshot, type CasambiTransportMonitorSnapshot } from "./transport-monitor.js";
+import { buildTransportMonitorSnapshot, type CasambiPacketJourneyEntry, type CasambiTransportMonitorSnapshot } from "./transport-monitor.js";
+
+const MAX_JOURNEY_ENTRIES = 20;
 import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
 
 /**
@@ -166,6 +168,18 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private discoveryEventsCount = 0;
   private commandsIssuedCount = 0;
   private feedbackEventsCount = 0;
+  /** § Final Hardware Validation — Local mode only. A datagram that decoded successfully but
+   * whose opcode `normalizeLocalPacket` doesn't map to any `CasambiSignal` (e.g. a real but
+   * undocumented/unhandled opcode) reaches here as a REAL, observable event, not a silent drop —
+   * exactly the "Discovery ignored packet — Opcode 0xXX not mapped" failure mode the Failure
+   * Analysis report needs to be able to name. */
+  private unmappedOpcodeCount = 0;
+  private lastUnmappedOpcode: number | null = null;
+  /** § Final Hardware Validation — Packet Trace (driver-level; see `CasambiPacketJourneyEntry`'s
+   * doc comment for why this is separate from the engine's `recentTraces`). Bounded, same
+   * convention as the engine's trace log. */
+  private readonly packetJourney: CasambiPacketJourneyEntry[] = [];
+  private pendingJourneyStart: { at: bigint; rinfo: { address: string; port: number }; raw: string } | null = null;
 
   constructor(opts: CasambiDriverOptions) {
     this.mode = opts.connectionMode ?? "cloud";
@@ -339,6 +353,9 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       discoveryEvents: this.discoveryEventsCount,
       commandsIssued: this.commandsIssuedCount,
       feedbackEvents: this.feedbackEventsCount,
+      unmappedOpcodeEvents: this.unmappedOpcodeCount,
+      lastUnmappedOpcode: this.lastUnmappedOpcode,
+      recentJourney: this.packetJourney,
       local: local
         ? {
             listening: local.udp.listening,
@@ -604,16 +621,30 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // broadcast packets the driver had no way to confirm without this.
     this.localUnsubscribeRaw = local.udp.onRawDatagram((raw, rinfo) => {
       this.tracer.event(`UDP datagram received from ${rinfo.address}:${rinfo.port} (${raw.length} bytes)`);
+      // § Final Hardware Validation — Packet Trace: `onRawDatagram`/`onDecodeError`/`onPacket`
+      // fire synchronously in sequence for the SAME datagram (the engine's `handleMessage` is
+      // entirely synchronous), so stashing the start time + rinfo here and consuming it in
+      // whichever of the other two fires next gives a real, measured `processingDurationMs`.
+      this.pendingJourneyStart = { at: process.hrtime.bigint(), rinfo, raw };
     });
     this.localUnsubscribeDecodeError = local.udp.onDecodeError((raw, err) => {
       // § UDP Receive Pipeline Audit, Step 7: never a silent drop — the raw payload is always
       // available here and in `getCasambiDiagnostics().udp.recentTraces`.
       this.tracer.event(`UDP parse failed: ${err.message} — raw: ${raw.trim()}`);
+      this.recordJourneyEntry(raw, { decoded: false, decodeError: err.message, opcode: null, handlerInvoked: null, outcome: "decode_failed" });
     });
     this.localUnsubscribePacket = local.udp.onPacket((pkt) => {
       this.lastEventAt = nowIso();
       const signal = normalizeLocalPacket(pkt.packet, (unitId) => this.units.get(unitId));
-      if (signal) this.applySignal(signal);
+      if (signal) {
+        this.applySignal(signal);
+        this.recordJourneyEntry(pkt.raw, { decoded: true, decodeError: null, opcode: pkt.packet.opcode, handlerInvoked: signal.kind, outcome: "mapped" });
+      } else {
+        this.unmappedOpcodeCount += 1;
+        this.lastUnmappedOpcode = pkt.packet.opcode;
+        this.tracer.event(`opcode 0x${pkt.packet.opcode.toString(16)} decoded but not mapped to a driver signal — ignored`);
+        this.recordJourneyEntry(pkt.raw, { decoded: true, decodeError: null, opcode: pkt.packet.opcode, handlerInvoked: null, outcome: "unmapped_opcode" });
+      }
     });
     this.localUnsubscribeError = local.udp.onError((err) => {
       this.lastError = sanitizeError(err);
@@ -636,6 +667,29 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       this.lastError = sanitizeError(err);
       this.events.publish({ type: "diagnostic", kind: "error", detail: this.lastError, ts: nowIso() });
     }
+  }
+
+  /** § Final Hardware Validation — Packet Trace. Finalizes the journey entry started by the most
+   * recent `onRawDatagram` call for THIS datagram (see the doc comment on `pendingJourneyStart`).
+   * A no-op (never throws/fabricates) if called with no pending start — defensive only, since the
+   * engine always fires raw-datagram before decode-error/packet for the same datagram. */
+  private recordJourneyEntry(
+    raw: string,
+    outcome: Pick<CasambiPacketJourneyEntry, "decoded" | "decodeError" | "opcode" | "handlerInvoked" | "outcome">,
+  ): void {
+    const pending = this.pendingJourneyStart;
+    this.pendingJourneyStart = null;
+    if (!pending) return;
+    const processingDurationMs = Number(process.hrtime.bigint() - pending.at) / 1_000_000;
+    this.packetJourney.push({
+      at: nowIso(),
+      sourceAddress: pending.rinfo.address,
+      sourcePort: pending.rinfo.port,
+      rawAscii: raw,
+      processingDurationMs,
+      ...outcome,
+    });
+    if (this.packetJourney.length > MAX_JOURNEY_ENTRIES) this.packetJourney.shift();
   }
 
   private async disconnectLocal(): Promise<void> {

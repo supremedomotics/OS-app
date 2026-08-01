@@ -433,7 +433,15 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       await driver.connect();
       const monitor = driver.getCasambiTransportMonitor();
       expect(monitor.connectionType).toBe("local");
-      expect(monitor.driver).toEqual({ entities: 0, discoveryEvents: 0, commandsIssued: 0, feedbackEvents: 0 });
+      expect(monitor.driver).toEqual({
+        entities: 0,
+        discoveryEvents: 0,
+        commandsIssued: 0,
+        feedbackEvents: 0,
+        unmappedOpcodeEvents: 0,
+        lastUnmappedOpcode: null,
+        recentJourney: [],
+      });
       expect(monitor.adapter?.packetsReceived).toBe(0);
       expect(monitor.adapter?.decoded).toBe(0);
       expect(monitor.adapter?.decodeFailures).toBe(0);
@@ -473,6 +481,54 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       expect(driver.getCasambiTransportMonitor().driver.commandsIssued).toBe(0);
       await driver.command(dev, { capability: "onoff", action: "on" });
       expect(driver.getCasambiTransportMonitor().driver.commandsIssued).toBe(1);
+      await driver.disconnect();
+    });
+
+    it("a well-formed but unmapped opcode is decoded but ignored — observable, never a silent drop", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      // 0x39 Node Status — a real, documented opcode this driver's event normalizer doesn't map
+      // to any CasambiSignal (it's only ever used as a probe() response check, not a discovery/
+      // feedback signal). Well-formed per the codec (length=2, one arg=0xff), so it decodes
+      // successfully — this is the exact "Adapter decoded, Discovery ignored packet" case.
+      socket.receive("0.70.2.39.ff\r\n");
+      const monitor = driver.getCasambiTransportMonitor();
+      expect(monitor.adapter?.decoded).toBe(1);
+      expect(monitor.adapter?.decodeFailures).toBe(0);
+      expect(monitor.driver.unmappedOpcodeEvents).toBe(1);
+      expect(monitor.driver.lastUnmappedOpcode).toBe(0x39);
+      expect(monitor.driver.discoveryEvents).toBe(0);
+      expect(monitor.driver.feedbackEvents).toBe(0);
+      expect(monitor.driver.recentJourney).toHaveLength(1);
+      expect(monitor.driver.recentJourney[0]).toMatchObject({
+        decoded: true,
+        decodeError: null,
+        opcode: 0x39,
+        handlerInvoked: null,
+        outcome: "unmapped_opcode",
+      });
+      expect(monitor.driver.recentJourney[0]?.processingDurationMs).toBeGreaterThanOrEqual(0);
+      await driver.disconnect();
+    });
+
+    it("packet journey records 'mapped' with the resolved signal kind for a NotifyControlValues packet", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("0.70.4.4b.5.1.c8\r\n");
+      const journey = driver.getCasambiTransportMonitor().driver.recentJourney;
+      expect(journey).toHaveLength(1);
+      expect(journey[0]).toMatchObject({ decoded: true, opcode: 0x4b, handlerInvoked: "unit", outcome: "mapped" });
+      await driver.disconnect();
+    });
+
+    it("packet journey records a decode failure distinctly from an unmapped opcode", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("garbage\r\n");
+      const journey = driver.getCasambiTransportMonitor().driver.recentJourney;
+      expect(journey).toHaveLength(1);
+      expect(journey[0]).toMatchObject({ decoded: false, opcode: null, handlerInvoked: null, outcome: "decode_failed" });
+      expect(journey[0]?.decodeError).toMatch(/Malformed/);
       await driver.disconnect();
     });
 

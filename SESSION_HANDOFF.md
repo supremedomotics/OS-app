@@ -4,6 +4,65 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Local Gateway — Final Hardware Validation & Production Gate
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues Phase 2 below). Full report:
+**`docs/architecture/Casambi-Final-Hardware-Validation-Report.md`** — Hardware Validation Report,
+Performance Report, Packet Replay Framework Guide, Transport Monitor Guide, and Production
+Readiness Checklist, all in one document. **Production Gate verdict: NOT EVALUATED — hardware
+unavailable** (neither PASS nor FAIL — this sandbox never had access to a real Lithernet gateway,
+so there is no real-hardware evidence to render either verdict on). Per the governing brief's
+Critical Requirement, KNX/Matter/other protocol migrations remain on hold until that real-hardware
+retest actually happens.
+
+**What changed this session:**
+- **Packet Replay Framework** (new, `@supreme/lan`, protocol-agnostic — reusable by every future
+  LAN protocol): `PacketCapture` JSON format (`services/lan/src/server/replay-dgram-socket.ts`),
+  `replayableDgramSocket()` (wraps a real or fake `DgramSocketLike`, injects a captured datagram
+  through the IDENTICAL `DgramUdpSession` → `UdpTransportServer` → NATS → `NatsUdpTransportClient`
+  → adapter → driver chain real hardware traffic uses — "no code path may differ" is satisfied
+  structurally, not by convention), `fakeDgramSocket()` (formalizes the fake-socket pattern every
+  test file was hand-rolling separately). File I/O + PCAP export (one-way, for opening a capture in
+  Wireshark — PCAP import deliberately not implemented, see the report §3 for why) in
+  `services/lan/src/server/capture-io.ts`.
+- **Capture library**: `tests/regression/casambi/{living-room,kitchen,office}.json` —
+  `living-room` is the REAL 99-byte Wireshark-captured NotifyControlValues packet from the earlier
+  hardware audit session, reused rather than re-transcribed; `kitchen`/`office` are synthetic but
+  wire-valid (a button press; a well-formed but UNMAPPED opcode 0x39, deliberately exercising the
+  "Discovery ignored packet" failure mode). New
+  `casambi-packet-replay-regression.test.ts` (7 tests) auto-loads and replays every capture
+  through the real pipeline — "no hardware required" per the brief, verified: e.g. the real
+  living-room capture's controls map to Supreme's `sensor` capability (VERIFIED by actually
+  running the code and reading the result, not assumed — an earlier draft assumption that it
+  would map to `onoff` was wrong and caught by the test failing honestly).
+- **New driver-level observability**: `CasambiProtocolDriver` now tracks `unmappedOpcodeEvents`/
+  `lastUnmappedOpcode` (a datagram that decodes successfully but whose opcode
+  `normalizeLocalPacket` doesn't map to any signal — previously a true silent drop, now a real,
+  observable event) and a bounded `recentJourney` "Packet Trace" (per-datagram: arrival time,
+  decode outcome, resolved handler/signal kind, and a REAL measured `processingDurationMs`).
+- **Failure Analysis report generator** (`services/protocols/src/casambi/failure-analysis.ts`,
+  new): a pure function over the Transport Monitor snapshot producing the EXACT ✓/✗ + "Reason:"
+  checklist format the governing brief specified (Transport → NATS → Casambi Adapter →
+  Discovery/Driver), never guessing — `not_applicable` for anything it can't honestly evaluate.
+  Wired into `GET /v1/drivers/:id/casambi/transport-monitor` as a new `failureAnalysis` field.
+- **Performance**: extended the existing latency benchmark to report p50/p95/p99/max (not just
+  median/p95/mean).
+- **No UI built this session** (Transport Monitor panel, Packet Replay "Saved Captures" panel,
+  Packet Trace viewer) — same disclosed scope cut as Phase 2's Transport Monitor; backend/data
+  only, tracked in TODO.md.
+
+**Tests:** 4 new test files (`replay-dgram-socket.test.ts` 5 tests, `capture-io.test.ts` 3 tests,
+`casambi-packet-replay-regression.test.ts` 7 tests, `failure-analysis.test.ts` 8 tests) plus new
+cases in `casambi-driver.test.ts`. `@supreme/lan`: 6 files/42 tests. `@supreme/protocols`: 79
+files/760 tests. `@supreme/gateway`: 72 files/295 tests. All passing, zero regression.
+
+**Disclosed, still not resolved:** real Lithernet hardware and real Windows Docker Desktop remain
+outside this sandbox's reach — no engineering inside this environment changes that. The Packet
+Replay Framework and Failure Analysis tooling exist specifically so that when real hardware IS
+available, the runbook (`docs/architecture/Casambi-Real-Hardware-Validation-Runbook.md`, updated
+this session to reference these new tools) can be followed and the Production Gate re-evaluated
+with real evidence.
+
 ## Session: `supreme-lan` LAN Transport Service — Phase 2 (Casambi Migration & Transport Monitor)
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues Phase 1 below). Full account,

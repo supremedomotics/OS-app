@@ -28,7 +28,7 @@ import {
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
-import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine } from "@supreme/protocols";
+import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport } from "@supreme/protocols";
 import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, type LanDiagnosticsSnapshot } from "@supreme/lan";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
@@ -279,7 +279,11 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
           lanQueryError = err instanceof Error ? err.message : String(err);
         }
       }
-      reply.send({ ...monitor, lan, lanQueryError });
+      // § Final Hardware Validation — Failure Analysis, computed from the SAME snapshot just
+      // returned above (never a fresh/separate measurement) — "prove exactly where the pipeline
+      // stopped," mechanized as a real, reusable field on this same response.
+      const failureAnalysis = buildFailureAnalysisReport(monitor);
+      reply.send({ ...monitor, lan, lanQueryError, failureAnalysis });
     } catch (err) {
       sendError(reply, err);
     }
