@@ -2,6 +2,14 @@
   "name": "kitchen",
   "savedAt": "2026-08-01T00:00:00.000Z",
   "description": "Synthetic but wire-valid button-press capture (opcode 0x51, Notify Button Event) — Net_ID=0xc matching the living-room capture's real gateway, Unit_ID=9, Source=1, Button=0, Event=2 (short press). Exercises the button-event path of the pipeline distinctly from living-room's NotifyControlValues capture.",
+  "metadata": {
+    "firmwareVersion": null,
+    "gatewayVersion": null,
+    "dataFormat": "hex-dot",
+    "netId": 12,
+    "date": null,
+    "notes": "SYNTHETIC, hand-constructed per the documented opcode 0x51 byte layout — not from real hardware. Replace with a real captured button press when available (see the Live Capture workflow in the validation runbook)."
+  },
   "packets": [
     {
       "rawHex": "632e37302e352e35312e392e312e302e320d0a",

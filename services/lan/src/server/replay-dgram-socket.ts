@@ -32,6 +32,13 @@ export interface PacketCapture {
   name: string;
   savedAt: string;
   description?: string;
+  /** § Real Hardware Certification — a free-form, protocol-agnostic bag (firmware version,
+   * gateway/device version, wire format, network id, capture date, free-text notes, …). Kept as
+   * an untyped `Record` here since `@supreme/lan` has no business knowing what "Net ID" or "Data
+   * Format" mean — protocol-specific consumers (e.g. `@supreme/protocols`'s Casambi captures)
+   * define and read their own well-typed metadata shape on top of this bag; see
+   * `CasambiCaptureMetadata` in `services/protocols/src/casambi/`. */
+  metadata?: Record<string, unknown>;
   packets: CapturedDatagram[];
 }
 
@@ -49,12 +56,14 @@ export function makeCapture(
   name: string,
   packets: { raw: Buffer; rinfo: { address: string; port: number }; atMs?: number }[],
   description?: string,
+  metadata?: Record<string, unknown>,
 ): PacketCapture {
   const first = packets[0]?.atMs ?? 0;
   return {
     name,
     savedAt: new Date().toISOString(),
     description,
+    metadata,
     packets: packets.map((p) => ({
       rawHex: p.raw.toString("hex"),
       sourceAddress: p.rinfo.address,
@@ -83,12 +92,41 @@ export interface ReplayHandle {
  * sockets/ports involved; the default real `base` is for live developer-mode replay against a
  * genuinely running `supreme-lan` process (see `docs/architecture/Casambi-Packet-Replay-Guide.md`).
  */
+/** § Real Hardware Certification — "Live Capture." Returned by `startRecording()`; `count`
+ * updates in real time as real datagrams arrive, `finish()` stops recording and returns
+ * everything captured as a ready-to-save `PacketCapture`. This is how a real, physical Lithernet
+ * gateway's actual traffic becomes a permanent capture file — no code path differs from normal
+ * reception; recording is a pure side-observation, never a change to what `DgramUdpSession`
+ * (and everything above it) sees or does with the same datagram. */
+export interface LiveCaptureHandle {
+  readonly count: number;
+  finish(name: string, description?: string, metadata?: Record<string, unknown>): PacketCapture;
+}
+
 export function replayableDgramSocket(base: DgramSocketFactory = defaultDgramSocket): DgramSocketLike & {
   injectDatagram(datagram: CapturedDatagram): void;
   replay(capture: PacketCapture, opts?: { loop?: boolean; speedMultiplier?: number }): ReplayHandle;
+  startRecording(): LiveCaptureHandle;
 } {
   const real = base();
   const messageListeners = new Set<(msg: Buffer, rinfo: { address: string; port: number }) => void>();
+  let activeRecording: { packets: CapturedDatagram[]; startedAt: number } | null = null;
+
+  // Registered ONCE, directly on the real socket, regardless of how many `DgramUdpSession`s ever
+  // call `wrapped.on("message", ...)` — real reception and recording are independent concerns,
+  // neither one gated on the other being active.
+  real.on("message", (msg, rinfo) => {
+    for (const l of messageListeners) l(msg, rinfo);
+    if (activeRecording) {
+      const rec = activeRecording;
+      rec.packets.push({
+        rawHex: msg.toString("hex"),
+        sourceAddress: rinfo.address,
+        sourcePort: rinfo.port,
+        relativeTimeMs: Date.now() - rec.startedAt,
+      });
+    }
+  });
 
   const wrapped: DgramSocketLike = {
     bind: (port, address) => real.bind(port, address),
@@ -99,10 +137,27 @@ export function replayableDgramSocket(base: DgramSocketFactory = defaultDgramSoc
     addMembership: (group, iface) => real.addMembership(group, iface),
     setMulticastInterface: (iface) => real.setMulticastInterface?.(iface),
     on: ((event: "message" | "error" | "listening", listener: (...args: unknown[]) => void) => {
-      if (event === "message") messageListeners.add(listener as (msg: Buffer, rinfo: { address: string; port: number }) => void);
-      return real.on(event as "message", listener as (msg: Buffer, rinfo: { address: string; port: number }) => void);
+      if (event === "message") {
+        messageListeners.add(listener as (msg: Buffer, rinfo: { address: string; port: number }) => void);
+        return undefined;
+      }
+      return real.on(event as "error", listener as (err: Error) => void);
     }) as DgramSocketLike["on"],
   };
+
+  function startRecording(): LiveCaptureHandle {
+    const rec = { packets: [] as CapturedDatagram[], startedAt: Date.now() };
+    activeRecording = rec;
+    return {
+      get count() {
+        return rec.packets.length;
+      },
+      finish: (name, description, metadata) => {
+        if (activeRecording === rec) activeRecording = null;
+        return { name, savedAt: new Date().toISOString(), description, metadata, packets: rec.packets };
+      },
+    };
+  }
 
   function injectDatagram(datagram: CapturedDatagram): void {
     const msg = capturedDatagramBuffer(datagram);
@@ -150,13 +205,20 @@ export function replayableDgramSocket(base: DgramSocketFactory = defaultDgramSoc
     };
   }
 
-  return Object.assign(wrapped, { injectDatagram, replay });
+  return Object.assign(wrapped, { injectDatagram, replay, startRecording });
 }
 
 /** A pure in-memory `DgramSocketLike` base (no real socket) — the hermetic replay base for CI
  * regression tests. `bind`/`send`/`close` all resolve immediately with no real I/O; formalizes the
- * fake-socket pattern this codebase's test files were each hand-rolling separately. */
-export function fakeDgramSocket(): DgramSocketLike {
+ * fake-socket pattern this codebase's test files were each hand-rolling separately. Also exposes
+ * `emitMessage`/`emitError` (beyond the `DgramSocketLike` interface, purely test-support) so a
+ * test can simulate a REAL datagram arriving at the base layer — distinct from
+ * `replayableDgramSocket`'s own `injectDatagram`, which fires listeners directly and is never
+ * observed by `startRecording()` (recording only sees traffic through this real base). */
+export function fakeDgramSocket(): DgramSocketLike & {
+  emitMessage(msg: Buffer, rinfo: { address: string; port: number }): void;
+  emitError(err: Error): void;
+} {
   let bound = { address: "0.0.0.0", port: 0, family: "IPv4" };
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   return {
@@ -177,5 +239,11 @@ export function fakeDgramSocket(): DgramSocketLike {
       listeners.get(event)!.add(listener);
       return undefined;
     }) as DgramSocketLike["on"],
+    emitMessage: (msg, rinfo) => {
+      for (const l of listeners.get("message") ?? []) l(msg, rinfo);
+    },
+    emitError: (err) => {
+      for (const l of listeners.get("error") ?? []) l(err);
+    },
   };
 }

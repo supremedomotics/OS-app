@@ -738,6 +738,25 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Casambi Local Gateway — Phase 3, Real Hardware Certification Tooling** — confirmed workflow
+  (stated explicitly by the user): this AI session has no network path to real hardware and never
+  will; the user runs the validation runbook on their own installation and shares evidence back.
+  Built all tooling assuming that workflow: Live Capture (`replayableDgramSocket().
+  startRecording()`/`finish()` records real datagrams as they arrive, pure side-observation, zero
+  effect on normal delivery — this is how real gateway traffic becomes a permanent capture);
+  `PacketCapture.metadata` (generic bag in `@supreme/lan`) + `CasambiCaptureMetadata`
+  (firmware/gateway version, data format, Net ID, date, notes — all nullable, never guessed);
+  capture library reorganized into `tests/regression/casambi/{living-room,kitchen,office,
+  button-events,sensor-events,dimming,scenes}/` per the certification brief's exact tree — the
+  four new category folders are correctly EMPTY (no synthetic data fabricated to fill them), each
+  with a README explaining what real evidence would populate it; Failure Analysis extended with
+  per-stage `evidence`/`suggestedFix` (matches the brief's Reason/Evidence/Suggested Fix format
+  exactly); a local certification evidence collector
+  (`infra/hub-compose/collect-certification-evidence.sh`) the user runs on their OWN machine to
+  bundle Transport Monitor snapshots, container logs, and an optional real tcpdump capture into
+  one shareable package. `@supreme/lan` 6 files/46 tests, `@supreme/protocols` 79 files/760 tests,
+  all passing. **No UI built** — same disclosed scope cut, tracked below. Production Gate
+  unchanged: NOT EVALUATED (no evidence bundle exists yet to render a verdict from).
 - **Casambi Local Gateway — Final Hardware Validation & Production Gate** — attempted the final
   real-hardware validation the governing brief demanded; delivered everything hardware-independent
   it asked for, and rendered the honest verdict for the one thing it couldn't: **Production Gate =

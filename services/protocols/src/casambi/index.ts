@@ -94,6 +94,7 @@ export {
   type CasambiFailureStageResult,
   type CasambiFailureStageStatus,
 } from "./failure-analysis.js";
+export { type CasambiCaptureMetadata } from "./capture-metadata.js";
 export {
   computeHealthVerdict,
   restSubsystemStatus,

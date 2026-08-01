@@ -38,7 +38,9 @@ describe("buildFailureAnalysisReport", () => {
     expect(report.healthy).toBe(false);
     expect(report.firstFailingStage).toBe("Transport (UDP)");
     const transportStage = report.stages.find((s) => s.stage === "Transport (UDP)")!;
-    expect(transportStage.reason).toMatch(/real Lithernet gateway's broadcast is not reaching supreme-lan/);
+    expect(transportStage.reason).toMatch(/zero packets have been received/);
+    expect(transportStage.evidence).toContain("transport.packetsReceived = 0");
+    expect(transportStage.suggestedFix).toMatch(/real Lithernet gateway's broadcast is not reaching supreme-lan/);
     // Downstream stages are not_applicable, not falsely "pass" — the whole point of stopping at
     // the first real failure rather than reporting misleading downstream state.
     expect(report.stages.find((s) => s.stage === "NATS")?.status).toBe("not_applicable");
@@ -78,9 +80,10 @@ describe("buildFailureAnalysisReport", () => {
     });
     const report = buildFailureAnalysisReport(snapshot);
     expect(report.firstFailingStage).toBe("Discovery / Driver");
-    expect(report.stages.find((s) => s.stage === "Discovery / Driver")?.reason).toBe(
-      "Discovery ignored packet — opcode 0x39 not mapped to a driver signal (see event-engine.ts's normalizeLocalPacket).",
-    );
+    const stage = report.stages.find((s) => s.stage === "Discovery / Driver")!;
+    expect(stage.reason).toBe("Discovery ignored packet — opcode 0x39 not mapped to a driver signal.");
+    expect(stage.evidence).toContain("driver.lastUnmappedOpcode = 0x39");
+    expect(stage.suggestedFix).toMatch(/normalizeLocalPacket/);
   });
 
   it("Cloud mode: UDP-specific stages are not_applicable, never a fabricated pass/fail", () => {
@@ -100,22 +103,17 @@ describe("buildFailureAnalysisReport", () => {
 });
 
 describe("formatFailureAnalysisReport", () => {
-  it("renders the exact ✓/✗ + Reason shape from the governing brief", () => {
+  it("renders the exact ✓/✗ + Reason/Evidence/Suggested Fix shape from the certification brief", () => {
     const snapshot = baseSnapshot({
       driver: { entities: 0, discoveryEvents: 0, commandsIssued: 0, feedbackEvents: 0, unmappedOpcodeEvents: 1, lastUnmappedOpcode: 0x39, recentJourney: [] },
     });
     const text = formatFailureAnalysisReport(buildFailureAnalysisReport(snapshot));
-    expect(text).toBe(
-      [
-        "✓ Transport (UDP)",
-        "✓ NATS",
-        "✓ Casambi Adapter",
-        "✗ Discovery / Driver",
-        "",
-        "Reason:",
-        "Discovery ignored packet — opcode 0x39 not mapped to a driver signal (see event-engine.ts's normalizeLocalPacket).",
-      ].join("\n"),
-    );
+    expect(text.startsWith(["✓ Transport (UDP)", "✓ NATS", "✓ Casambi Adapter", "✗ Discovery / Driver", "", "Reason:"].join("\n"))).toBe(true);
+    expect(text).toContain("Discovery ignored packet — opcode 0x39 not mapped to a driver signal.");
+    expect(text).toContain("Evidence:");
+    expect(text).toContain("- driver.lastUnmappedOpcode = 0x39");
+    expect(text).toContain("Suggested Fix:");
+    expect(text).toContain("normalizeLocalPacket()");
   });
 
   it("renders a fully healthy report with no Reason section", () => {

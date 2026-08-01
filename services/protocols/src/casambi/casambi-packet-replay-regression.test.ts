@@ -14,18 +14,24 @@ import type { DeviceId } from "@supreme/domain-model";
  * § Final Hardware Validation — Packet Replay Framework, automatic regression testing.
  * "Every replay session should automatically become a regression test... Running CI should
  * replay every capture. No hardware required." This file does exactly that: every `.json`
- * capture under `tests/regression/casambi/` is loaded and replayed through the REAL pipeline
- * (`CasambiProtocolDriver` -> real `NatsUdpTransportClient` -> real `UdpTransportServer` -> a
- * `replayableDgramSocket`) — the identical code path a real Lithernet gateway's traffic would
- * take, per the Packet Replay Framework's design (see `@supreme/lan/server`'s
- * `replay-dgram-socket.ts`). Adding a new `.json` file to that directory is enough to add it to
- * this suite — no test code changes required for a new capture.
+ * capture under `tests/regression/casambi/` (RECURSIVELY — captures are organized into
+ * per-category subdirectories: `living-room/`, `kitchen/`, `office/`, `button-events/`,
+ * `sensor-events/`, `dimming/`, `scenes/`, see that directory's own `README.md`) is loaded and
+ * replayed through the REAL pipeline (`CasambiProtocolDriver` -> real `NatsUdpTransportClient` ->
+ * real `UdpTransportServer` -> a `replayableDgramSocket`) — the identical code path a real
+ * Lithernet gateway's traffic would take, per the Packet Replay Framework's design (see
+ * `@supreme/lan/server`'s `replay-dgram-socket.ts`). Adding a new `.json` file anywhere under that
+ * directory is enough to add it to this suite — no test code changes required for a new capture.
  */
 const CAPTURES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../tests/regression/casambi");
 
 async function loadAllCaptures(): Promise<{ file: string; capture: PacketCapture }[]> {
-  const files = (await readdir(CAPTURES_DIR)).filter((f) => f.endsWith(".json")).sort();
-  return Promise.all(files.map(async (file) => ({ file, capture: await loadCaptureJson(path.join(CAPTURES_DIR, file)) })));
+  const entries = await readdir(CAPTURES_DIR, { withFileTypes: true, recursive: true });
+  const files = entries
+    .filter((e) => e.isFile() && e.name.endsWith(".json"))
+    .map((e) => path.join(e.parentPath ?? e.path, e.name))
+    .sort();
+  return Promise.all(files.map(async (file) => ({ file: path.relative(CAPTURES_DIR, file), capture: await loadCaptureJson(file) })));
 }
 
 async function setupDriverOverRealLan() {

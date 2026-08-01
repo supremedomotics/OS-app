@@ -2,6 +2,14 @@
   "name": "living-room",
   "savedAt": "2026-08-01T00:00:00.000Z",
   "description": "Real hardware capture from the § UDP Receive Pipeline Audit session — Lithernet Gateway (192.168.0.45, firmware 6.25) broadcasting a NotifyControlValues packet (opcode 0x4b) to 255.255.255.255:10009. Net_ID=0xc, Target_ID=0x1e, presenceSensor + lightSensorLux + 8x indexed onOffToggle value pairs. 99 bytes including CRLF, confirmed byte-exact against the real Wireshark capture. This is the SAME fixture used throughout the automated test suite (udp-engine.test.ts's REAL_CAPTURE_FIXTURE) — one real payload, reused everywhere it's needed rather than re-transcribed.",
+  "metadata": {
+    "firmwareVersion": "6.25",
+    "gatewayVersion": null,
+    "dataFormat": "hex-dot",
+    "netId": 12,
+    "date": null,
+    "notes": "Captured during the original real-hardware Wireshark session that motivated the UDP Receive Pipeline Audit (a prior session, exact calendar date not recorded at the time). Gateway model/hardware version was also not recorded — both left null rather than guessed."
+  },
   "packets": [
     {
       "rawHex": "632e37302e32372e34622e31652e31352e302e31342e302e302e39302e302e312e312e39302e312e312e312e39302e322e312e312e39302e332e312e312e39302e342e312e312e39302e352e312e312e39302e362e312e312e39302e372e312e310d0a",

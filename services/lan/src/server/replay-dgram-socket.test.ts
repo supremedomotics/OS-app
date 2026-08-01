@@ -70,4 +70,73 @@ describe("Packet Replay Framework — replayableDgramSocket", () => {
     await session.bind({ localPort: 5100 });
     expect(session.localPort).toBe(5100);
   });
+
+  // § Real Hardware Certification — Live Capture.
+  describe("startRecording() (Live Capture)", () => {
+    it("records real base-socket message events into a PacketCapture, without affecting normal delivery", async () => {
+      let base!: ReturnType<typeof fakeDgramSocket>;
+      const socket = replayableDgramSocket(() => (base = fakeDgramSocket()));
+      const session = new DgramUdpSession("s1", () => socket);
+      await session.bind({});
+
+      const delivered: Buffer[] = [];
+      session.onMessage((msg) => delivered.push(msg));
+
+      const rec = socket.startRecording();
+      base.emitMessage(Buffer.from("hello real gateway", "ascii"), { address: "192.168.0.45", port: 10009 });
+      expect(rec.count).toBe(1);
+      // Recording is a side-observation — the real listener still received the datagram exactly
+      // as it would have with no recording active at all.
+      expect(delivered).toEqual([Buffer.from("hello real gateway", "ascii")]);
+      expect(session.packetsReceived).toBe(1);
+
+      const capture = rec.finish("living-room", "test capture", { netId: 12 });
+      expect(capture.name).toBe("living-room");
+      expect(capture.description).toBe("test capture");
+      expect(capture.metadata).toEqual({ netId: 12 });
+      expect(capture.packets).toHaveLength(1);
+      expect(capture.packets[0]).toMatchObject({ sourceAddress: "192.168.0.45", sourcePort: 10009 });
+      expect(capturedDatagramAscii(capture.packets[0]!)).toBe("hello real gateway");
+    });
+
+    it("stops recording once finish() is called — later messages aren't included", async () => {
+      let base!: ReturnType<typeof fakeDgramSocket>;
+      const socket = replayableDgramSocket(() => (base = fakeDgramSocket()));
+      const session = new DgramUdpSession("s1", () => socket);
+      await session.bind({});
+
+      const rec = socket.startRecording();
+      base.emitMessage(Buffer.from("one", "ascii"), { address: "1.2.3.4", port: 1 });
+      const capture = rec.finish("cap");
+      base.emitMessage(Buffer.from("two", "ascii"), { address: "1.2.3.4", port: 1 });
+
+      expect(capture.packets).toHaveLength(1);
+    });
+
+    it("relativeTimeMs is 0 or greater and monotonically non-decreasing across a real recording", async () => {
+      let base!: ReturnType<typeof fakeDgramSocket>;
+      const socket = replayableDgramSocket(() => (base = fakeDgramSocket()));
+      const session = new DgramUdpSession("s1", () => socket);
+      await session.bind({});
+
+      const rec = socket.startRecording();
+      base.emitMessage(Buffer.from("a", "ascii"), { address: "1.2.3.4", port: 1 });
+      await new Promise((r) => setTimeout(r, 5));
+      base.emitMessage(Buffer.from("b", "ascii"), { address: "1.2.3.4", port: 1 });
+      const capture = rec.finish("timed");
+
+      expect(capture.packets[0]!.relativeTimeMs).toBeGreaterThanOrEqual(0);
+      expect(capture.packets[1]!.relativeTimeMs).toBeGreaterThanOrEqual(capture.packets[0]!.relativeTimeMs);
+    });
+
+    it("injectDatagram (replay) is NOT recorded — recording observes real traffic only, never replayed traffic", async () => {
+      const socket = replayableDgramSocket(fakeDgramSocket);
+      const session = new DgramUdpSession("s1", () => socket);
+      await session.bind({});
+      const rec = socket.startRecording();
+      socket.injectDatagram({ rawHex: Buffer.from("x", "ascii").toString("hex"), sourceAddress: "1.2.3.4", sourcePort: 1, relativeTimeMs: 0 });
+      expect(rec.count).toBe(0);
+      rec.finish("unused");
+    });
+  });
 });

@@ -4,6 +4,60 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Local Gateway — Phase 3, Real Hardware Certification Tooling
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the Final Hardware Validation
+session below). **Confirmed workflow, explicitly stated by the user this session:** this AI
+session has no network path to the user's real Lithernet Gateway or LAN, and never will from this
+sandbox — the user runs the validation runbook themselves, on their own SupremeOS installation,
+against their real hardware, and shares back the resulting JSON/logs/pcap evidence for analysis.
+**Production Gate verdict unchanged: NOT EVALUATED — hardware unavailable** (no evidence bundle
+has been shared yet; nothing here renders a verdict from data that doesn't exist).
+
+**What changed this session** (all hardware-independent tooling to support that confirmed
+handoff, per the user's explicit instruction "Build all tooling assuming this workflow"):
+- **Live Capture**: `replayableDgramSocket().startRecording()`/`handle.finish()`
+  (`services/lan/src/server/replay-dgram-socket.ts`) — records real datagrams as they arrive at
+  the base socket (pure side-observation, zero effect on normal delivery) into a ready-to-save
+  `PacketCapture`. This is how a real gateway's real traffic becomes a permanent regression
+  capture. New `fakeDgramSocket().emitMessage()`/`emitError()` test-support methods so this could
+  be verified hermetically. 4 new tests.
+- **`PacketCapture.metadata`**: a generic `Record<string, unknown>` bag added to `@supreme/lan`'s
+  capture format; `CasambiCaptureMetadata` (firmware/gateway version, data format, Net ID, date,
+  notes — all nullable, never guessed) documents the Casambi-specific shape in
+  `services/protocols/src/casambi/capture-metadata.ts`.
+- **Capture library reorganized** into the certification brief's exact category tree:
+  `tests/regression/casambi/{living-room,kitchen,office,button-events,sensor-events,dimming,
+  scenes}/`. The three existing captures moved into their category folders with real metadata
+  populated (`null` for anything not actually known, e.g. the real capture's exact date/gateway
+  hardware version were never recorded). The four new category folders are correctly EMPTY — no
+  synthetic data fabricated to fill them — each with a `README.md` explaining exactly what real
+  evidence would populate it. The regression test loader (`casambi-packet-replay-regression.
+  test.ts`) now recurses `tests/regression/casambi/` instead of scanning one flat directory.
+- **Failure Analysis extended**: `CasambiFailureStageResult` gained `evidence: string[]` (the
+  literal snapshot facts behind each verdict, independently checkable) and `suggestedFix: string
+  | null` (always a concrete next action) — matches the certification brief's exact
+  Reason/Evidence/Suggested Fix format. `formatFailureAnalysisReport()` renders all three.
+- **Local certification evidence collector**
+  (`infra/hub-compose/collect-certification-evidence.sh`, new): a shell script the user runs on
+  THEIR OWN machine — never remotely, never assuming this session can reach their LAN — that
+  automates the runbook's `curl`/`docker logs`/`tcpdump` steps into one timestamped bundle
+  (before/after Transport Monitor snapshots, container logs, an optional real tcpdump capture
+  during a prompted trigger step). Every uncollectable piece is recorded as an explicit
+  "SKIPPED: &lt;reason&gt;", never silently omitted.
+- Runbook and the Final Hardware Validation Report doc both updated to reference all of the above
+  and make the confirmed handoff workflow explicit throughout.
+
+**Tests:** 4 new (`startRecording`/Live Capture) in `replay-dgram-socket.test.ts`; existing
+`failure-analysis.test.ts`/`casambi-packet-replay-regression.test.ts` updated for the extended
+shape and reorganized directory, all still passing. `@supreme/lan`: 6 files/46 tests (up from 42).
+`@supreme/protocols`: 79 files/760 tests (no new test files this session — only new cases within
+existing files, some replacing prior assertions for the extended shape — net count unchanged).
+
+**No UI built** (same disclosed scope cut carried forward unchanged): Transport Monitor panel,
+Packet Replay "Saved Captures" panel, Packet Trace Viewer, performance charts — all backend/data
+only, tracked in TODO.md.
+
 ## Session: Casambi Local Gateway — Final Hardware Validation & Production Gate
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues Phase 2 below). Full report:

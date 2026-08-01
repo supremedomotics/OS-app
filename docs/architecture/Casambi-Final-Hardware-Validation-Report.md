@@ -3,13 +3,17 @@
 > Companion documents: `docs/architecture/Supreme-LAN-Transport-Architecture.md` (the full
 > `@supreme/lan` architecture, Phases 1-2), `docs/architecture/adr/0022-supreme-lan-transport-service.md`
 > (the decision record), `docs/architecture/Casambi-Real-Hardware-Validation-Runbook.md` (the
-> step-by-step procedure for running the ONE thing this document cannot do: validate against a
-> real Lithernet gateway on a real physical LAN).
+> step-by-step procedure — and, as of Phase 3, the `collect-certification-evidence.sh` script that
+> automates it — for running the ONE thing this document cannot do: validate against a real
+> Lithernet gateway on a real physical LAN), `tests/regression/casambi/README.md` (the Packet
+> Replay capture library).
 >
 > This single document covers, as clearly labeled sections: the Hardware Validation Report, the
-> Performance Report, the Packet Replay Framework Guide, the Transport Monitor Guide, and the
-> Production Readiness Checklist — kept together because they describe one connected system, not
-> five independent ones.
+> Performance Report, the Packet Replay Framework Guide (including Live Capture and the
+> reorganized capture library, added in Phase 3), the Transport Monitor Guide (including the
+> Failure Analysis Guide — its Reason/Evidence/Suggested Fix format, also extended in Phase 3),
+> and the Production Readiness Checklist — kept together because they describe one connected
+> system, not five independent ones.
 
 ## 1. Hardware Validation Report
 
@@ -138,20 +142,47 @@ const handle = socket.replay(capture, { loop: false, speedMultiplier: 1 });
 ### Saved Captures library — status
 
 The "Saved Captures / Living Room / Kitchen / Office" UI mockup in the governing brief describes a
-developer-mode panel; **the UI panel itself was not built this session** (same disclosed scope cut
-as the Transport Monitor's own UI — see TODO.md). What DOES exist and is real: the capture
-LIBRARY, at `tests/regression/casambi/` — `living-room.json` (the real, Wireshark-captured
-99-byte NotifyControlValues packet reused from the earlier hardware audit session), `kitchen.json`
-(a synthetic but wire-valid button press), `office.json` (a synthetic but wire-valid, well-formed,
-UNMAPPED opcode — exercises the "Discovery ignored packet" failure mode on purpose).
+developer-mode panel; **the UI panel itself was not built** (same disclosed scope cut as the
+Transport Monitor's own UI — see TODO.md). What DOES exist and is real: the capture LIBRARY, at
+`tests/regression/casambi/` (see that directory's own `README.md`), organized into the exact
+category structure the certification brief specified: `living-room/` (the real, Wireshark-captured
+99-byte NotifyControlValues packet reused from the earlier hardware audit session),
+`kitchen/`/`office/` (synthetic but wire-valid — a button press; a well-formed but UNMAPPED opcode
+exercising the "Discovery ignored packet" failure mode on purpose), and `button-events/`/
+`sensor-events/`/`dimming/`/`scenes/` (reserved, currently EMPTY — no synthetic capture was
+fabricated to fill them; each has its own `README.md` explaining exactly what real-hardware
+evidence would populate it). Every capture carries a `metadata` field (firmware version, gateway
+version, data format, Net ID, date, notes) — `null` for anything not actually known, never guessed.
+
+### Live Capture
+
+New: `replayableDgramSocket().startRecording()` records REAL datagrams as they arrive at the base
+socket (a pure side-observation — normal delivery to `DgramUdpSession` and everything above it is
+completely unaffected) and `handle.finish(name, description, metadata)` turns them into a
+ready-to-save `PacketCapture`. This is how a real Lithernet gateway's actual traffic becomes a
+permanent capture file: run it against a real running `supreme-lan`/driver, trigger real activity,
+call `finish()`, `saveCaptureJson()` the result into `tests/regression/casambi/<category>/`. Fully
+tested (4 new tests) with a hermetic fake base — no real hardware needed to verify the RECORDING
+mechanism itself works; only to feed it real traffic.
 
 ### Regression testing
 
 `services/protocols/src/casambi/casambi-packet-replay-regression.test.ts` loads every `.json` file
-in that directory automatically (no test-code change needed to add a new capture) and replays each
-through the real `CasambiProtocolDriver` + real `NatsUdpTransportClient` + real
-`UdpTransportServer` chain, asserting real, verified outcomes for each — "no hardware required,"
-exactly as the brief asked. 7 tests, all passing.
+under `tests/regression/casambi/` **recursively** (subdirectories included — no test-code change
+needed to add a new capture anywhere in the tree) and replays each through the real
+`CasambiProtocolDriver` + real `NatsUdpTransportClient` + real `UdpTransportServer` chain,
+asserting real, verified outcomes for each — "no hardware required," exactly as the brief asked.
+7 tests, all passing.
+
+### Local certification evidence collector
+
+New: `infra/hub-compose/collect-certification-evidence.sh` — run on YOUR OWN machine, next to your
+real installation and gateway (never remotely, never from this AI session). Automates the
+runbook's manual `curl`/`docker logs`/`tcpdump` steps into one bundle: `docker compose ps` output,
+per-container logs, a Transport Monitor snapshot before and after you're prompted to trigger real
+activity, and an optional real `tcpdump` capture running during that window. Every step that can't
+be completed is recorded as an explicit "SKIPPED: &lt;reason&gt;" in the bundle's `notes.txt`,
+never silently omitted. See `docs/architecture/Casambi-Real-Hardware-Validation-Runbook.md` §6.
 
 ## 4. Transport Monitor Guide
 
@@ -186,11 +217,16 @@ measurement, not a simulation). This is the "one click reveals the entire proces
 the brief asked for — no UI built for it this session (same disclosed scope cut as above), but the
 data is real and complete.
 
-**`failureAnalysis`** (new — see §5 of the architecture doc's Phase 2 section and the dedicated
-`failure-analysis.ts` module): a stage-by-stage checklist (Transport → NATS → Casambi Adapter →
-Discovery/Driver), each stage `pass`/`fail`/`not_applicable`, with a concrete, data-backed
-`reason` on the first failure — never a guess, never fabricated. Call
-`formatFailureAnalysisReport()` for the literal ✓/✗ text rendering.
+**`failureAnalysis`** (see the dedicated `failure-analysis.ts` module — this is also the Failure
+Analysis Guide the certification brief asked for as its own deliverable): a stage-by-stage
+checklist (Transport → NATS → Casambi Adapter → Discovery/Driver), each stage
+`pass`/`fail`/`not_applicable`, and for a `"fail"` stage: a concrete, data-backed `reason`, an
+`evidence` array (the literal snapshot facts that led to the verdict, e.g. `"transport.
+packetsReceived = 0"` — independently checkable against the raw response, never asserted without
+citation), and a `suggestedFix` (always a concrete next action — "run tcpdump on interface X," "add
+opcode 0x39 to normalizeLocalPacket()" — never "check the logs"). Call
+`formatFailureAnalysisReport()` for the literal ✓/✗ + Reason/Evidence/Suggested Fix text rendering,
+matching the certification brief's exact requested format.
 
 **UI:** not built this session (backend + route only), consistent with the "do not modify the
 Driver Manager UI" constraint carried over from Phase 2 and the same honest scope-cut already
@@ -206,16 +242,30 @@ disclosed for the base Transport Monitor.
 - [x] Failure Analysis report generator: stage-by-stage, data-backed, matches the brief's exact format — this session.
 - [x] Automated regression suite replays real + synthetic captures with zero hardware — this session.
 - [x] Automated, repeatable performance benchmark (code-only) — this session.
+- [x] Live Capture recording (`startRecording()`/`finish()`) so real gateway traffic becomes a
+      permanent capture with zero code-path difference from normal reception — Phase 3.
+- [x] Capture library reorganized into the certification brief's exact category structure
+      (`living-room/`, `kitchen/`, `office/`, `button-events/`, `sensor-events/`, `dimming/`,
+      `scenes/`) with per-capture metadata (firmware/gateway version, data format, Net ID, date,
+      notes) — Phase 3.
+- [x] Failure Analysis extended with per-stage `evidence`/`suggestedFix`, matching the
+      certification brief's exact Reason/Evidence/Suggested Fix format — Phase 3.
+- [x] Local certification evidence collection script
+      (`infra/hub-compose/collect-certification-evidence.sh`) — runs entirely on the user's own
+      machine, never remotely — Phase 3.
 - [x] Full monorepo `turbo run build typecheck test` green throughout every change.
-- [ ] **Real Lithernet gateway validated on a real physical LAN.** NOT DONE. See
-      `Casambi-Real-Hardware-Validation-Runbook.md`.
-- [ ] Real Windows Docker Desktop validated. NOT DONE — this sandbox is Linux-only.
-- [ ] Transport Monitor / Packet Replay UI pages. NOT DONE — backend/data only, tracked in TODO.md.
+- [ ] **Real Lithernet gateway validated on a real physical LAN.** NOT DONE. Confirmed workflow:
+      the user runs `Casambi-Real-Hardware-Validation-Runbook.md` (Step 6's collection script) on
+      their own installation and shares the resulting evidence bundle back for analysis.
+- [ ] Real Windows Docker Desktop validated. NOT DONE — no environment in this project has ever
+      had access to one.
+- [ ] Transport Monitor / Packet Replay UI pages, Packet Trace Viewer, performance charts. NOT
+      DONE — backend/data only, tracked in TODO.md.
 - [ ] Driver Verification checklist (on/off, brightness, color, scenes, sensors, battery,
       temperature, presence, button events, feedback) run against a REAL device. NOT DONE — the
-      capture library only covers what this session could construct/replay
-      (NotifyControlValues + button press + an unmapped opcode); it does not exercise every
-      capability type a real installation will encounter (e.g. dimmable/color luminaires, scenes).
+      capture library's `button-events/`/`sensor-events/`/`dimming/`/`scenes/` categories exist and
+      are ready to receive real captures via Live Capture, but are currently empty; no synthetic
+      data was fabricated to fill them.
 
 ## Production Gate
 
@@ -235,16 +285,26 @@ pipeline that can be exercised without physical Lithernet hardware — a real Do
 NATS server, the real `CasambiProtocolDriver`, and a real captured hardware payload replayed
 through the real code — works correctly, including the specific bridge-vs-host broadcast bug this
 whole project was built to fix, reproduced and confirmed fixed for real. The Packet Replay
-Framework and Failure Analysis tooling built this session exist specifically so that when real
-hardware IS available, the runbook in `Casambi-Real-Hardware-Validation-Runbook.md` can be
-followed and this Production Gate can be re-evaluated with actual evidence — PASS or FAIL, decided
-by what the Transport Monitor and Failure Analysis report actually show, not by anyone's
-assumption in either direction.
+Framework, Live Capture, and Failure Analysis tooling exist specifically so that when real
+hardware evidence IS available, this Production Gate can be re-evaluated with actual evidence —
+PASS or FAIL, decided by what the Transport Monitor and Failure Analysis report actually show, not
+by anyone's assumption in either direction.
+
+**Confirmed handoff workflow (Phase 3):** the certification owner runs
+`Casambi-Real-Hardware-Validation-Runbook.md` (specifically its Step 6 collection script,
+`infra/hub-compose/collect-certification-evidence.sh`) on their own SupremeOS installation against
+their real Lithernet Gateway, entirely on their own machine — no remote access, no assumption of
+connectivity from any AI session into their LAN. They share the resulting evidence bundle
+(Transport Monitor JSON before/after, container logs, an optional real `tcpdump` capture) back;
+a follow-up session reads that bundle, runs the same Failure Analysis logic against the numbers in
+it, and writes the actual PASS/FAIL verdict from real data. This report cannot skip ahead of that
+handoff — there is no bundle yet, so there is nothing here to render a verdict from.
 
 **Recommendation:** do not merge this branch's Casambi migration into `main` as "the reference
-architecture for migrating KNX, Matter, Sonos, Denon, Apple TV, Hue" on the strength of this report
-alone. Run the runbook against real hardware first. If it passes, this becomes exactly the
-reference implementation the brief describes. If it doesn't, the Failure Analysis report and
-Packet Replay Framework built this session are the tools that will pinpoint exactly why, without
-guessing — capture the failing traffic, save it as a new regression capture, and it becomes a
-permanent, hardware-free test the moment it's fixed.
+architecture for migrating KNX, Matter, Sonos, Denon, Apple TV, Hue, Yamaha, RTI" on the strength
+of this report alone. Run the runbook against real hardware first and share the evidence bundle.
+If it passes, this becomes exactly the reference implementation the brief describes. If it doesn't,
+the Failure Analysis report and Packet Replay Framework are the tools that will pinpoint exactly
+why, without guessing — capture the failing traffic (via Live Capture), save it as a new regression
+capture in the appropriate `tests/regression/casambi/` category, and it becomes a permanent,
+hardware-free test the moment it's fixed.

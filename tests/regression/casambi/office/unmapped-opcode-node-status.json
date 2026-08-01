@@ -2,6 +2,14 @@
   "name": "office",
   "savedAt": "2026-08-01T00:00:00.000Z",
   "description": "Synthetic but wire-valid Node Status packet (opcode 0x39, Request=0xFF/'own node') — a real, documented Casambi opcode the driver's event normalizer does NOT map to any discovery/feedback signal (it's only used as a probe() response check). Decodes successfully but is deliberately ignored downstream — exercises the exact 'Adapter decoded, Discovery ignored packet — opcode not mapped' failure mode the Failure Analysis report names.",
+  "metadata": {
+    "firmwareVersion": null,
+    "gatewayVersion": null,
+    "dataFormat": "hex-dot",
+    "netId": 12,
+    "date": null,
+    "notes": "SYNTHETIC, hand-constructed per the documented opcode 0x39 byte layout — not from real hardware. Deliberately exercises the 'unmapped opcode' failure path, not a real-world scenario to fix."
+  },
   "packets": [
     {
       "rawHex": "632e37302e322e33392e66660d0a",

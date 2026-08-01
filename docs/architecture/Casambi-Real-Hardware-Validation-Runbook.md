@@ -7,7 +7,14 @@
 > before the Casambi Local Gateway driver's `@supreme/lan` migration can be called
 > production-verified rather than "internally proven." Nothing in this document has been run by
 > the AI session that wrote it — this sandbox has no real Lithernet gateway, no real physical LAN,
-> and no real Windows machine. It is written FOR the person who has those things.
+> and no real Windows machine, and no network path to reach any of those things even if they
+> existed. It is written FOR the person who has those things.
+>
+> **Confirmed workflow:** you run this runbook (and/or the collection script in Step 6) on your
+> own SupremeOS installation, against your real Lithernet Gateway. Nothing here attempts to reach
+> your LAN remotely, and nothing should — the collection script explicitly never talks to anything
+> outside your own network. You then share the resulting JSON/logs/pcap bundle back for analysis
+> and certification write-up.
 
 ## What has already been proven, and what hasn't
 
@@ -126,9 +133,38 @@ exactly which stage stops, never guess.
 - **Commands:** issue an on/off/brightness command from the SupremeOS UI; confirm the real light
   responds, and `driver.commandsIssued` increments.
 
-## Step 6 — Report back
+## Step 6 — Collect evidence and report back
 
-Whatever the outcome — full success, partial (e.g. discovery works but commands don't), or
-complete failure — the Transport Monitor's full JSON output at each stage, plus a `tcpdump`
-capture if reception fails, is exactly what a follow-up session needs to diagnose further without
-guessing. Please capture and share that rather than a summary like "it didn't work."
+Rather than doing Steps 3-5's `curl`/`tcpdump` manually, run the collection script from the repo
+root — it automates exactly those steps into one timestamped bundle:
+
+```bash
+cd infra/hub-compose
+./collect-certification-evidence.sh \
+  --gateway-url https://<your-gateway-host> \
+  --driver-id <installed-casambi-driver-id> \
+  --auth-token "$SUPREME_AUTH_TOKEN" \
+  --interface <real-LAN-NIC-name>   # optional — omit to skip the tcpdump capture
+```
+
+It collects, into `./casambi-certification-<timestamp>/` (and a matching `.tar.gz`): `docker
+compose ps` output, `lan`/`gateway`/`nats` container logs, a Transport Monitor snapshot taken
+immediately, a real `tcpdump` capture running while you're prompted to trigger activity on the
+gateway (if `--interface` was given), and a second Transport Monitor snapshot taken after.
+Anything it couldn't collect is recorded honestly in `notes.txt` inside the bundle — never
+silently skipped.
+
+**Whatever the outcome** — full success, partial (e.g. discovery works but commands don't), or
+complete failure — share the whole bundle back, not a summary like "it didn't work." The
+`failureAnalysis` field in the "after" snapshot already names the exact failing stage with
+Reason/Evidence/Suggested Fix if something's wrong (see `docs/architecture/
+Casambi-Final-Hardware-Validation-Report.md` §5 for the guide), so a follow-up session can act on
+it directly rather than re-deriving it from raw logs.
+
+**Turn it into a permanent regression test:** whatever raw payload the bundle's Transport Monitor
+snapshot or a `driver.recentJourney`/`recentTraces` entry shows, save it as a new capture under
+`tests/regression/casambi/` (see that directory's own `README.md` for the exact categories —
+`living-room/`, `kitchen/`, `office/`, `button-events/`, `sensor-events/`, `dimming/`, `scenes/`
+— and the Live Capture API for recording it directly from a real session instead of hand-typing
+hex). From then on, this exact real-world scenario is a permanent, hardware-free regression test
+in CI, and a fix for it stays fixed.

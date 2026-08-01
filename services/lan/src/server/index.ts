@@ -19,5 +19,6 @@ export {
   type CapturedDatagram,
   type PacketCapture,
   type ReplayHandle,
+  type LiveCaptureHandle,
 } from "./replay-dgram-socket.js";
 export { saveCaptureJson, loadCaptureJson, exportPcap } from "./capture-io.js";
