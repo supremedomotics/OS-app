@@ -71,6 +71,8 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
           netId: int(c.netId, 0),
           dataFormat,
           gatewayName: str(c.gatewayName),
+          gatewayUsername: str(c.gatewayUsername),
+          gatewayPassword: str(c.gatewayPassword),
           autoDiscover: c.autoDiscover === true,
         },
         onLog,

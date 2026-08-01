@@ -286,6 +286,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
    * Gateway, Latency, Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP
    * Status, Health). Driver-level (not per-device), unlike `INativeProtocolDriver.getDiagnostics`. */
   getCasambiDiagnostics(): CasambiDiagnosticsSnapshot {
+    const local = this.mode === "local" ? this.localTransport : null;
     return buildDiagnosticsSnapshot({
       mode: this.mode,
       gateway: this.gatewayLabel(),
@@ -296,6 +297,21 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       reconnects: this.reconnects,
       lastEventAt: this.lastEventAt,
       lastError: this.lastError,
+      udp: local
+        ? {
+            socketState: local.udp.socketState,
+            localAddress: local.udp.localAddress,
+            localPort: local.udp.localPort,
+            remoteAddress: local.config.gatewayIp,
+            remotePort: local.config.udpPort,
+            packetsSent: local.udp.packetsSent,
+            packetsReceived: local.udp.packetsReceived,
+            lastPacketAt: local.udp.lastPacketAt,
+            averageLatencyMs: local.udp.averageLatencyMs,
+            lastSendError: local.udp.lastSendError,
+            lastDecodeError: local.udp.lastDecodeError,
+          }
+        : null,
     });
   }
 

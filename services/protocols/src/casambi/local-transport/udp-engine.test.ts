@@ -41,6 +41,24 @@ class FakeUdpSocket implements CasambiUdpSocketLike {
   receive(raw: string, rinfo = { address: "192.168.1.90", port: 5100 }): void {
     this.emit("message", Buffer.from(raw, "ascii"), rinfo);
   }
+
+  address(): { address: string; port: number; family: string } {
+    return { address: "0.0.0.0", port: 5100, family: "IPv4" };
+  }
+}
+
+/** A socket whose `bind()` immediately fails — exercises the honest "error" socketState path. */
+class FailingBindSocket extends FakeUdpSocket {
+  bind(_port?: number): void {
+    queueMicrotask(() => this.emit("error", new Error("EADDRINUSE")));
+  }
+}
+
+/** A socket whose `send()` always fails — exercises `lastSendError` without a bind failure. */
+class SendFailingSocket extends FakeUdpSocket {
+  send(msg: string, port: number, address: string, callback?: (error: Error | null) => void): void {
+    callback?.(new Error("ENETUNREACH"));
+  }
 }
 
 function makeEngine(overrides: Partial<{ netId: number }> = {}) {
@@ -164,6 +182,81 @@ describe("CasambiUdpEngine (fake socket)", () => {
       void engine.probe(10);
       await Promise.resolve();
       expect(socket.sent).toEqual([{ msg: "3.72.2.39.ff\r\n", port: 5100, address: "192.168.1.90" }]);
+    });
+  });
+
+  describe("staged diagnostics (§ UDP Diagnostics audit — real, non-fabricated transport state)", () => {
+    it("reports socketState 'closed' before start(), 'bound' after, 'closed' again after stop()", async () => {
+      const { engine } = makeEngine();
+      expect(engine.socketState).toBe("closed");
+      await engine.start();
+      expect(engine.socketState).toBe("bound");
+      await engine.stop();
+      expect(engine.socketState).toBe("closed");
+    });
+
+    it("reports socketState 'error' on a real bind failure, never on a mere lack of reply", async () => {
+      const socket = new FailingBindSocket();
+      const engine = new CasambiUdpEngine({ gatewayIp: "192.168.1.90", udpPort: 5100, netId: 0, socketFactory: () => socket });
+      await expect(engine.start()).rejects.toThrow("EADDRINUSE");
+      expect(engine.socketState).toBe("error");
+      expect(engine.lastError).toBe("EADDRINUSE");
+    });
+
+    it("exposes real local bind address/port from the socket's own address(), once bound", async () => {
+      const { engine } = makeEngine();
+      expect(engine.localAddress).toBeNull();
+      expect(engine.localPort).toBeNull();
+      await engine.start();
+      expect(engine.localAddress).toBe("0.0.0.0");
+      expect(engine.localPort).toBe(5100);
+    });
+
+    it("counts packets sent and received, and timestamps the last packet", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      expect(engine.packetsSent).toBe(0);
+      expect(engine.packetsReceived).toBe(0);
+      expect(engine.lastPacketAt).toBeNull();
+      await engine.send(encodeSetTargetLevel(0, CASAMBI_TARGET_TYPE.device, 5, 200));
+      expect(engine.packetsSent).toBe(1);
+      socket.receive("2.70.2.3a.1\r\n");
+      expect(engine.packetsReceived).toBe(1);
+      expect(engine.lastPacketAt).not.toBeNull();
+    });
+
+    it("does not count a decode failure as a received packet, but does record lastDecodeError", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      socket.receive("garbage\r\n");
+      expect(engine.packetsReceived).toBe(0);
+      expect(engine.lastDecodeError).toMatchObject({ raw: "garbage\r\n" });
+    });
+
+    it("records lastSendError on a real send failure without touching packetsSent", async () => {
+      const socket = new SendFailingSocket();
+      const engine = new CasambiUdpEngine({ gatewayIp: "192.168.1.90", udpPort: 5100, netId: 0, socketFactory: () => socket });
+      await engine.start();
+      await expect(engine.send(encodeSetTargetLevel(0, CASAMBI_TARGET_TYPE.device, 5, 200))).rejects.toThrow("ENETUNREACH");
+      expect(engine.packetsSent).toBe(0);
+      expect(engine.lastSendError).toBe("ENETUNREACH");
+    });
+
+    it("averageLatencyMs is null until a probe succeeds, then reflects real measured round-trips", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      expect(engine.averageLatencyMs).toBeNull();
+      const result = engine.probe(1_000);
+      await Promise.resolve();
+      socket.receive("0.70.6.39.1.1.0.0.1\r\n");
+      await result;
+      expect(engine.averageLatencyMs).not.toBeNull();
+      expect(engine.averageLatencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it("never reports a packet-loss figure (no sequence numbers exist to measure it honestly)", () => {
+      const { engine } = makeEngine();
+      expect((engine as unknown as { packetLoss?: unknown }).packetLoss).toBeUndefined();
     });
   });
 });

@@ -3,10 +3,36 @@ import type { CasambiConnectionMode } from "./connection-manager.js";
 import {
   computeHealthVerdict,
   restSubsystemStatus,
+  udpStage,
   udpSubsystemStatus,
   type CasambiHealthVerdict,
   type CasambiSubsystemStatus,
+  type CasambiUdpStage,
 } from "./health-monitor.js";
+
+/**
+ * Real, non-fabricated UDP transport detail (§ UDP Diagnostics audit — "expose additional
+ * information... never fabricate values"). `null` fields mean "not yet measured," never a guess.
+ * `packetLoss` has no getter at all on the source engine and is intentionally absent here too —
+ * the documented Casambi UDP packet structure (`{length, opcode, args}`) carries no sequence
+ * numbers, so ongoing packet loss cannot be computed honestly for the general notification
+ * stream. `averageLatencyMs` reflects only measured `probe()` round-trips, never the (unmeasurable)
+ * latency of unsolicited notifications.
+ */
+export interface CasambiUdpDetail {
+  stage: CasambiUdpStage;
+  socketState: "closed" | "bound" | "error";
+  localAddress: string | null;
+  localPort: number | null;
+  remoteAddress: string;
+  remotePort: number;
+  packetsSent: number;
+  packetsReceived: number;
+  lastPacketAt: string | null;
+  averageLatencyMs: number | null;
+  lastSendError: string | null;
+  lastDecodeError: { raw: string; message: string; at: string } | null;
+}
 
 /**
  * Casambi Diagnostics (§ Casambi Driver Refactor — Foundation "Diagnostics: dedicated diagnostics
@@ -29,6 +55,9 @@ export interface CasambiDiagnosticsSnapshot {
   restStatus: CasambiSubsystemStatus;
   udpStatus: CasambiSubsystemStatus;
   health: CasambiHealthVerdict;
+  /** Real UDP transport detail, Local mode only. `null` for Cloud (no UDP concept) or before the
+   * Local transport has been constructed. See {@link CasambiUdpDetail}. */
+  udp: CasambiUdpDetail | null;
 }
 
 export interface CasambiDiagnosticsInputs {
@@ -41,6 +70,22 @@ export interface CasambiDiagnosticsInputs {
   reconnects: number;
   lastEventAt: string | null;
   lastError: string | null;
+  /** Raw UDP engine getters, Local mode only — `buildDiagnosticsSnapshot` derives the honest
+   * `stage` from these rather than accepting a pre-computed one, so every caller gets the same
+   * never-fabricated staging logic. */
+  udp?: {
+    socketState: "closed" | "bound" | "error";
+    localAddress: string | null;
+    localPort: number | null;
+    remoteAddress: string;
+    remotePort: number;
+    packetsSent: number;
+    packetsReceived: number;
+    lastPacketAt: string | null;
+    averageLatencyMs: number | null;
+    lastSendError: string | null;
+    lastDecodeError: { raw: string; message: string; at: string } | null;
+  } | null;
 }
 
 export function buildDiagnosticsSnapshot(inputs: CasambiDiagnosticsInputs): CasambiDiagnosticsSnapshot {
@@ -64,6 +109,22 @@ export function buildDiagnosticsSnapshot(inputs: CasambiDiagnosticsInputs): Casa
     lastEventAt: inputs.lastEventAt,
     restStatus: restSubsystemStatus(inputs.mode, inputs.connected),
     udpStatus: udpSubsystemStatus(inputs.mode, inputs.connected),
+    udp: inputs.udp
+      ? {
+          stage: udpStage(inputs.mode, inputs.udp.socketState, inputs.udp.packetsReceived),
+          socketState: inputs.udp.socketState,
+          localAddress: inputs.udp.localAddress,
+          localPort: inputs.udp.localPort,
+          remoteAddress: inputs.udp.remoteAddress,
+          remotePort: inputs.udp.remotePort,
+          packetsSent: inputs.udp.packetsSent,
+          packetsReceived: inputs.udp.packetsReceived,
+          lastPacketAt: inputs.udp.lastPacketAt,
+          averageLatencyMs: inputs.udp.averageLatencyMs,
+          lastSendError: inputs.udp.lastSendError,
+          lastDecodeError: inputs.udp.lastDecodeError,
+        }
+      : null,
     health: computeHealthVerdict({
       mode: inputs.mode,
       connected: inputs.connected,

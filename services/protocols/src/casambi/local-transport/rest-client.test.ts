@@ -38,26 +38,78 @@ describe("CasambiLocalRestClient", () => {
     expect(capturedUrl).not.toContain("duration");
   });
 
-  it("testConnection resolves true on any HTTP response, without ever calling the write endpoint", async () => {
+  it("testConnection resolves reachable:true on any HTTP response, without ever calling the write endpoint", async () => {
     const calledPaths: string[] = [];
     const fetchImpl = fakeFetch((url) => {
       calledPaths.push(url);
       return new Response("not found", { status: 404 });
     });
     const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 8080, fetchImpl });
-    expect(await client.testConnection()).toBe(true);
+    expect(await client.testConnection()).toEqual({ reachable: true, httpStatus: 404, authFailed: false });
     expect(calledPaths).toEqual(["http://192.168.1.50:8080"]);
   });
 
-  it("testConnection resolves false on a network failure", async () => {
+  it("testConnection resolves reachable:false, authFailed:null on a network failure", async () => {
     const fetchImpl = vi.fn(() => Promise.reject(new Error("ECONNREFUSED"))) as unknown as typeof fetch;
     const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 80, fetchImpl });
-    expect(await client.testConnection()).toBe(false);
+    expect(await client.testConnection()).toEqual({ reachable: false, httpStatus: null, authFailed: null });
   });
 
   it("fetchNetwork and fetchState honestly reject — no such endpoint is documented", async () => {
     const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 80 });
     await expect(client.fetchNetwork()).rejects.toThrow(CasambiLocalRestNotImplementedError);
     await expect(client.fetchState()).rejects.toThrow(CasambiLocalRestNotImplementedError);
+  });
+
+  describe("Gateway authentication (§ Casambi Local Gateway Auth)", () => {
+    it("sends no Authorization header when no gateway credentials are configured", async () => {
+      let capturedHeaders: Record<string, string> | undefined;
+      const fetchImpl = fakeFetch((_url, init) => {
+        capturedHeaders = init?.headers as Record<string, string>;
+        return new Response("ok");
+      });
+      const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 80, fetchImpl });
+      await client.testConnection();
+      expect(capturedHeaders?.Authorization).toBeUndefined();
+    });
+
+    it("sends HTTP Basic Auth built from Gateway Username/Password on every request", async () => {
+      let capturedHeaders: Record<string, string> | undefined;
+      const fetchImpl = fakeFetch((_url, init) => {
+        capturedHeaders = init?.headers as Record<string, string>;
+        return new Response("ok");
+      });
+      const client = new CasambiLocalRestClient({
+        gatewayIp: "192.168.1.50",
+        restPort: 80,
+        gatewayUsername: "admin",
+        gatewayPassword: "secret",
+        fetchImpl,
+      });
+      await client.testConnection();
+      expect(capturedHeaders?.Authorization).toBe(`Basic ${Buffer.from("admin:secret").toString("base64")}`);
+
+      await client.setTargetValue({ targetType: CASAMBI_TARGET_TYPE.device, targetId: 1, value: 100 });
+      expect(capturedHeaders?.Authorization).toBe(`Basic ${Buffer.from("admin:secret").toString("base64")}`);
+    });
+
+    it("testConnection reports authFailed:true on a 401, without treating it as unreachable", async () => {
+      const fetchImpl = fakeFetch(() => new Response("Unauthorized", { status: 401 }));
+      const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 80, gatewayUsername: "admin", gatewayPassword: "wrong", fetchImpl });
+      expect(await client.testConnection()).toEqual({ reachable: true, httpStatus: 401, authFailed: true });
+    });
+
+    it("testConnection reports authFailed:false when the gateway accepts the credentials", async () => {
+      const fetchImpl = fakeFetch(() => new Response("ok", { status: 200 }));
+      const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 80, gatewayUsername: "admin", gatewayPassword: "right", fetchImpl });
+      expect(await client.testConnection()).toEqual({ reachable: true, httpStatus: 200, authFailed: false });
+    });
+
+    it("setTargetValue returns 'unauthorized' on a 401/403 instead of misreporting it as 'error'", async () => {
+      const fetchImpl = fakeFetch(() => new Response("Forbidden", { status: 403 }));
+      const client = new CasambiLocalRestClient({ gatewayIp: "192.168.1.50", restPort: 80, gatewayUsername: "admin", gatewayPassword: "wrong", fetchImpl });
+      const result = await client.setTargetValue({ targetType: CASAMBI_TARGET_TYPE.device, targetId: 1, value: 100 });
+      expect(result).toBe("unauthorized");
+    });
   });
 });

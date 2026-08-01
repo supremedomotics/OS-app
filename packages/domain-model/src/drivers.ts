@@ -56,6 +56,12 @@ export const DriverConfigField = z.object({
   label: z.string().min(1),
   type: z.enum(["text", "password", "number", "boolean", "select", "host", "port"]),
   required: z.boolean().default(false),
+  /** Conditional required-ness: this field is only required when another field in the same
+   * schema currently equals the given value (e.g. Casambi's `connectionType` discriminator).
+   * Lets one manifest express mutually-exclusive config modes without the generic validator
+   * needing to know anything about a specific driver. A field with neither `required` nor
+   * `requiredIf` is always optional. */
+  requiredIf: z.object({ key: z.string(), equals: z.string() }).optional(),
   /** Default applied when the driver is first configured. */
   default: z.unknown().optional(),
   placeholder: z.string().optional(),

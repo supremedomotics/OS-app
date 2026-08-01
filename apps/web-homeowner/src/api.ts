@@ -318,6 +318,23 @@ export async function discoverKnxGateways(): Promise<KnxGateway[]> {
 }
 
 // ── Casambi Driver Refactor — Foundation (authenticated) ──────────────────────────
+/** Real, non-fabricated UDP transport detail — Local mode only (§ UDP Diagnostics). `null`
+ * fields mean "not yet measured." No `packetLoss` field exists: the documented Casambi UDP
+ * packet structure carries no sequence numbers, so ongoing loss cannot be computed honestly. */
+export interface CasambiUdpDetail {
+  stage: "not_configured" | "socket_error" | "bound_waiting" | "active";
+  socketState: "closed" | "bound" | "error";
+  localAddress: string | null;
+  localPort: number | null;
+  remoteAddress: string;
+  remotePort: number;
+  packetsSent: number;
+  packetsReceived: number;
+  lastPacketAt: string | null;
+  averageLatencyMs: number | null;
+  lastSendError: string | null;
+  lastDecodeError: { raw: string; message: string; at: string } | null;
+}
 /** The dedicated Casambi Diagnostics page's snapshot — driver-level, not per-device. */
 export interface CasambiDiagnostics {
   connectionType: "cloud" | "local";
@@ -331,6 +348,7 @@ export interface CasambiDiagnostics {
   restStatus: "connected" | "disconnected" | "not_configured" | "not_implemented";
   udpStatus: "connected" | "disconnected" | "not_configured" | "not_implemented";
   health: "healthy" | "degraded" | "error" | "not_implemented";
+  udp: CasambiUdpDetail | null;
 }
 export async function fetchCasambiDiagnostics(driverId: string): Promise<CasambiDiagnostics | null> {
   try {
@@ -341,19 +359,39 @@ export async function fetchCasambiDiagnostics(driverId: string): Promise<Casambi
   }
 }
 /** Local Gateway setup wizard — "Test Connection" params, matching the Local Gateway config
- * fields on the manifest (`gatewayIp`/`restPort`/`udpPort`/`netId`/`dataFormat`). */
+ * fields on the manifest (`gatewayIp`/`restPort`/`udpPort`/`netId`/`dataFormat`/gateway login). */
 export interface CasambiTestConnectionParams {
   gatewayIp: string;
   restPort: number;
   udpPort: number;
   netId?: number;
   dataFormat?: "hex-dot" | "dec-hash";
+  gatewayUsername?: string;
+  gatewayPassword?: string;
 }
+/** Staged, honest Test Connection result (§ UDP Diagnostics — "do not assume UDP behaves like
+ * TCP"). REST and UDP are reported as independent, structured facts rather than a single
+ * reachable/unreachable boolean. */
 export interface CasambiTestConnectionResult {
   implemented: true;
-  reachable: boolean;
-  rest: boolean;
-  udp: boolean;
+  rest: {
+    reachable: boolean;
+    httpStatus: number | null;
+    authFailed: boolean | null;
+  };
+  udp: {
+    socketCreated: boolean;
+    socketBound: boolean;
+    packetSent: boolean;
+    localAddress: string | null;
+    localPort: number | null;
+    remoteAddress: string | null;
+    remotePort: number | null;
+    notificationReceived: boolean;
+    packetsReceived: number;
+    averageLatencyMs: number | null;
+    lastError: string | null;
+  };
   message: string;
 }
 export async function testCasambiLocalConnection(params: CasambiTestConnectionParams): Promise<CasambiTestConnectionResult> {

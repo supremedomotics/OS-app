@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   type CasambiDiagnostics,
+  type CasambiTestConnectionResult,
   connectDriver,
   discoverCasambiLocalGateway,
   discoverKnxGateways,
@@ -381,7 +382,17 @@ function ConfigField({ field, value, onChange }: { field: DriverConfigField; val
 
 // ── Casambi Driver Refactor — Foundation: Driver Setup Wizard + Local Gateway settings ──────
 const CASAMBI_CLOUD_ONLY_KEYS = new Set(["apiKey", "email", "password", "networkId"]);
-const CASAMBI_LOCAL_ONLY_KEYS = new Set(["gatewayIp", "restPort", "udpPort", "netId", "dataFormat", "gatewayName", "autoDiscover"]);
+const CASAMBI_LOCAL_ONLY_KEYS = new Set([
+  "gatewayIp",
+  "restPort",
+  "gatewayUsername",
+  "gatewayPassword",
+  "udpPort",
+  "netId",
+  "dataFormat",
+  "gatewayName",
+  "autoDiscover",
+]);
 
 /**
  * Step 1 of the Casambi Setup Wizard is the `connectionType` field itself (always visible, first
@@ -399,19 +410,72 @@ function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<
 }
 
 /**
- * Local Gateway wizard actions. "Test Connection" is real (a REST reachability check + a safe
- * UDP 0x39 "own node" probe against the gateway address/ports/Net ID/data format entered above —
- * never a write, so it can never actuate a real device). "Auto Discover" honestly reports
- * "not implemented" — no gateway enumeration/discovery endpoint is documented for the Lithernet
- * Gateway, never a fabricated success.
+ * Renders the staged Test Connection result (§ UDP Diagnostics — "do not assume UDP behaves
+ * like TCP"). REST reachability, HTTP authentication, and the UDP socket lifecycle are shown as
+ * independent, honest facts rather than collapsed into one reachable/unreachable boolean — a
+ * bound socket with zero packets received yet is shown as "Waiting for first event," never as a
+ * failure, since Casambi's UDP protocol is connectionless and push-based.
+ */
+function CasambiTestConnectionReport({ res }: { res: CasambiTestConnectionResult }) {
+  const restLabel = res.rest.reachable ? "✓ Connected" : "✗ Unreachable";
+  const authLabel = res.rest.authFailed === null ? "—" : res.rest.authFailed ? "✗ Failed" : "✓ Success";
+  const gatewayOnline = res.rest.reachable || res.udp.socketBound;
+  const udpLabel = !res.udp.socketBound
+    ? "✗ Bind failed"
+    : !res.udp.packetSent
+      ? "✗ Send failed"
+      : res.udp.packetsReceived > 0
+        ? "✓ Active"
+        : "✓ Socket bound";
+  const configLabel = res.udp.socketBound && res.udp.packetSent ? "✓ Verified" : "—";
+  const status = !res.udp.socketBound
+    ? "Socket error"
+    : res.udp.packetsReceived > 0
+      ? "Active"
+      : "Waiting for first event";
+
+  return (
+    <div className="drv-config" style={{ marginTop: 8 }}>
+      <dl className="drv-about">
+        <div><dt>REST</dt><dd>{restLabel}</dd></div>
+        <div><dt>HTTP Authentication</dt><dd>{authLabel}</dd></div>
+        <div><dt>Gateway</dt><dd>{gatewayOnline ? "✓ Online" : "✗ Offline"}</dd></div>
+        <div><dt>UDP</dt><dd>{udpLabel}</dd></div>
+        <div><dt>Port</dt><dd>{res.udp.remotePort ?? "—"}</dd></div>
+        <div><dt>Gateway configuration</dt><dd>{configLabel}</dd></div>
+        <div><dt>Status</dt><dd>{status}</dd></div>
+        <div><dt>Packets received</dt><dd>{res.udp.packetsReceived}</dd></div>
+        <div><dt>Last packet</dt><dd>{res.udp.packetsReceived > 0 ? "Just now" : "Never"}</dd></div>
+        <div><dt>Latency</dt><dd>{res.udp.averageLatencyMs === null ? "—" : `${res.udp.averageLatencyMs} ms`}</dd></div>
+      </dl>
+      <p className="help">
+        "Gateway configuration ✓ Verified" means the entered IP/ports/Net ID/data format are well-formed and the
+        test packet was accepted by the network stack — the Lithernet documentation does not describe a
+        gateway-confirmed acknowledgement of these settings, so this is a local check, not a remote one.
+      </p>
+      <p className="muted">{res.message}</p>
+    </div>
+  );
+}
+
+/**
+ * Local Gateway wizard actions. "Test Connection" is real and staged: a REST reachability + HTTP
+ * auth check (using the Gateway Username/Password entered above, never Cloud credentials) and
+ * the honest UDP socket lifecycle (created/bound/packet sent/notification received) against the
+ * gateway address/ports/Net ID/data format entered above — never a write, so it can never
+ * actuate a real device. "Auto Discover" honestly reports "not implemented" — no gateway
+ * enumeration/discovery endpoint is documented for the Lithernet Gateway, never a fabricated
+ * success.
  */
 function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> }) {
   const [busy, setBusy] = useState<"discover" | "test" | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [result, setResult] = useState<CasambiTestConnectionResult | null>(null);
 
   async function discover() {
     setBusy("discover");
     setNote(null);
+    setResult(null);
     try {
       const res = await discoverCasambiLocalGateway();
       setNote(res.message);
@@ -432,6 +496,7 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
     }
     setBusy("test");
     setNote(null);
+    setResult(null);
     try {
       const res = await testCasambiLocalConnection({
         gatewayIp,
@@ -439,8 +504,10 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
         udpPort,
         netId: values.netId === undefined ? undefined : Number(values.netId),
         dataFormat: values.dataFormat === "dec-hash" ? "dec-hash" : "hex-dot",
+        gatewayUsername: values.gatewayUsername === undefined ? undefined : String(values.gatewayUsername),
+        gatewayPassword: values.gatewayPassword === undefined ? undefined : String(values.gatewayPassword),
       });
-      setNote(`${res.message} (REST: ${res.rest ? "reachable" : "unreachable"}, UDP: ${res.udp ? "reachable" : "unreachable"})`);
+      setResult(res);
     } catch (e) {
       setNote(e instanceof Error ? e.message : "Test connection failed.");
     } finally {
@@ -460,6 +527,7 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
         </button>
       </div>
       {note && <p className="muted">{note}</p>}
+      {result && <CasambiTestConnectionReport res={result} />}
     </div>
   );
 }
@@ -499,11 +567,19 @@ const CASAMBI_HEALTH_LABEL: Record<string, string> = {
   error: "Error",
   not_implemented: "Not implemented yet",
 };
+const CASAMBI_UDP_STAGE_LABEL: Record<string, string> = {
+  not_configured: "N/A",
+  socket_error: "Socket error",
+  bound_waiting: "Waiting for first event",
+  active: "Active",
+};
 
-/** The dedicated Casambi Diagnostics page (§ Diagnostics): Connection Type, Gateway, Latency,
- * Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP Status, Health. A
- * driver-level snapshot, not per-device — `null` (driver not currently running) renders nothing,
- * never a fabricated all-zero shape. */
+/** The dedicated Casambi Diagnostics page (§ Diagnostics; § UDP Diagnostics). Connection Type,
+ * Gateway, Latency, Entities, Online/Offline Devices, Reconnect Count, Last Event, REST/UDP
+ * Status, Health, plus — Local mode only — the real, staged UDP transport detail (socket state,
+ * local/remote address:port, packet counters, probe latency, last error). A driver-level
+ * snapshot, not per-device — `null` (driver not currently running) renders nothing, never a
+ * fabricated all-zero shape. */
 function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
   const [snapshot, setSnapshot] = useState<CasambiDiagnostics | null>(null);
 
@@ -518,6 +594,7 @@ function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
   }, [driverId]);
 
   if (!snapshot) return null;
+  const udp = snapshot.udp;
   return (
     <div className="drv-config">
       <h4>Diagnostics</h4>
@@ -534,6 +611,22 @@ function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
         <div><dt>UDP status</dt><dd>{CASAMBI_STATUS_LABEL[snapshot.udpStatus] ?? snapshot.udpStatus}</dd></div>
         <div><dt>Health</dt><dd><span className={`drv-badge ${snapshot.health === "healthy" ? "ok" : snapshot.health === "error" ? "err" : "off"}`}>{CASAMBI_HEALTH_LABEL[snapshot.health] ?? snapshot.health}</span></dd></div>
       </dl>
+      {udp && (
+        <>
+          <h4>UDP transport</h4>
+          <dl className="drv-about">
+            <div><dt>Status</dt><dd>{CASAMBI_UDP_STAGE_LABEL[udp.stage] ?? udp.stage}</dd></div>
+            <div><dt>Local address</dt><dd>{udp.localAddress ? `${udp.localAddress}:${udp.localPort}` : "—"}</dd></div>
+            <div><dt>Remote gateway</dt><dd>{`${udp.remoteAddress}:${udp.remotePort}`}</dd></div>
+            <div><dt>Packets sent</dt><dd>{udp.packetsSent}</dd></div>
+            <div><dt>Packets received</dt><dd>{udp.packetsReceived}</dd></div>
+            <div><dt>Last packet</dt><dd>{udp.lastPacketAt ? new Date(udp.lastPacketAt).toLocaleTimeString() : "Never"}</dd></div>
+            <div><dt>Average latency</dt><dd>{udp.averageLatencyMs === null ? "—" : `${udp.averageLatencyMs} ms (probe round-trip)`}</dd></div>
+            <div><dt>Packet loss</dt><dd>Not measurable — no sequence numbers in the documented protocol</dd></div>
+            <div><dt>Last protocol error</dt><dd>{udp.lastDecodeError ? udp.lastDecodeError.message : udp.lastSendError ?? "None"}</dd></div>
+          </dl>
+        </>
+      )}
     </div>
   );
 }

@@ -109,6 +109,19 @@ describe("native-driver-factory — Casambi", () => {
     expect(driver.getCasambiDiagnostics().gateway).toBe("192.168.1.90:80");
   });
 
+  it("threads gatewayUsername/gatewayPassword through to the Local transport without requiring them", () => {
+    const driver = buildNativeDriver("casambi", {
+      connectionType: "local",
+      gatewayIp: "192.168.1.90",
+      restPort: 80,
+      udpPort: 5100,
+      gatewayUsername: "admin",
+      gatewayPassword: "s3cret",
+    }) as CasambiProtocolDriver;
+    expect(driver).toBeInstanceOf(CasambiProtocolDriver);
+    expect(driver.getHealth().connectionType).toBe("local");
+  });
+
   it("builds a Local driver with netId/dataFormat omitted (factory supplies the defaults)", () => {
     const driver = buildNativeDriver("casambi", {
       connectionType: "local",

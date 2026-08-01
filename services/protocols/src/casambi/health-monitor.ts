@@ -52,3 +52,24 @@ export function udpSubsystemStatus(mode: CasambiConnectionMode, connected: boole
   if (mode !== "local") return "not_configured";
   return connected ? "connected" : "disconnected";
 }
+
+/**
+ * UDP staged status (§ UDP Diagnostics audit). Casambi's UDP transport is connectionless — there
+ * is no application-level handshake to call "connected," only real, verifiable transport states.
+ * `"bound_waiting"` and `"active"` are BOTH healthy, working states; the only unhealthy state is
+ * `"socket_error"`, which requires an actual OS-level socket error (bind failure, EADDRINUSE,
+ * permission denied) — never merely "no packet has arrived yet," since that is the expected,
+ * normal state of a push-based protocol before the gateway's next notification.
+ */
+export type CasambiUdpStage = "not_configured" | "socket_error" | "bound_waiting" | "active";
+
+export function udpStage(
+  mode: CasambiConnectionMode,
+  socketState: "closed" | "bound" | "error",
+  packetsReceived: number,
+): CasambiUdpStage {
+  if (mode !== "local") return "not_configured";
+  if (socketState === "error") return "socket_error";
+  if (socketState !== "bound") return "not_configured";
+  return packetsReceived > 0 ? "active" : "bound_waiting";
+}

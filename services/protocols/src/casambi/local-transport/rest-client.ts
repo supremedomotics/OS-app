@@ -21,11 +21,41 @@ export interface CasambiLocalRestClientOptions {
   gatewayIp: string;
   restPort: number;
   gatewayName?: string;
+  /** § Casambi Local Gateway Auth — `Lithernet_General_Settings_Network.pdf` p.64: "Username and
+   * password... Only one user account can be set up. This account has full access to all system
+   * functions." The same login the gateway's embedded web server prompts for natively (p.109
+   * screenshot shows a browser-native credential dialog, not a custom HTML form) is required for
+   * direct HTTP/REST endpoints too, per that same page. Sent as HTTP Basic Authentication — the
+   * standard mechanism that produces exactly that native-prompt behavior; the manuals show the
+   * prompt but never name the scheme explicitly, so Basic Auth here is a disclosed, informed
+   * choice, not a literally-documented protocol fact. Entirely independent of Casambi Cloud's
+   * `apiKey`/`email`/`password` — never reused across the two. */
+  gatewayUsername?: string;
+  gatewayPassword?: string;
   /** Injectable fetch (tests pass a fake), matching `cloud-transport.ts`'s `fetchImpl` pattern.
    * Defaults to `globalThis.fetch`. */
   fetchImpl?: typeof fetch;
   /** Request timeout in ms for `testConnection`/`setTargetValue`. Default 3000. */
   timeoutMs?: number;
+}
+
+/**
+ * Result of the reachability + auth probe used by the Setup Wizard's "Test Connection" action.
+ * Kept as a structured shape (rather than a single boolean) so the UI can show REST reachability
+ * and HTTP authentication as the two distinct, honest facts they are — a gateway can be fully
+ * reachable over HTTP and still reject the configured credentials, which is not the same failure
+ * as being unreachable at all.
+ */
+export interface CasambiLocalRestTestResult {
+  /** True if the gateway responded to the HTTP request at all (any status code) — false only on
+   * a network-level failure (refused/timeout/DNS/abort). */
+  reachable: boolean;
+  /** The HTTP status of the reachability GET, or `null` if the request never got a response. */
+  httpStatus: number | null;
+  /** `true` if the gateway responded 401/403 (credentials required and missing/rejected),
+   * `false` if it responded without an auth challenge, `null` if unreachable so auth could not
+   * be evaluated at all. Never fabricated. */
+  authFailed: boolean | null;
 }
 
 export class CasambiLocalRestNotImplementedError extends Error {
@@ -47,7 +77,7 @@ export interface CasambiSetTargetValueParams {
   value: number;
 }
 
-export type CasambiSetTargetValueResult = "ok" | "error";
+export type CasambiSetTargetValueResult = "ok" | "error" | "unauthorized";
 
 /** Real REST client for the Lithernet Gateway's documented WebAPI. */
 export class CasambiLocalRestClient {
@@ -71,22 +101,34 @@ export class CasambiLocalRestClient {
     return `http://${this.opts.gatewayIp}:${this.opts.restPort}`;
   }
 
+  /** Basic Auth header for every Local REST request, built from the Gateway Username/Password —
+   * never from Casambi Cloud credentials. Omitted entirely when no gateway credentials are
+   * configured, so an unauthenticated gateway (or one not yet configured with credentials in
+   * SupremeOS) still gets a plain request rather than a malformed header. */
+  private authHeaders(): Record<string, string> {
+    if (!this.opts.gatewayUsername || !this.opts.gatewayPassword) return {};
+    const token = Buffer.from(`${this.opts.gatewayUsername}:${this.opts.gatewayPassword}`, "utf8").toString("base64");
+    return { Authorization: `Basic ${token}` };
+  }
+
   /**
-   * Reachability probe for the Setup Wizard's "Test Connection" action. Deliberately does NOT
-   * call `/set/target_value` — that endpoint always writes a real value to a real target, and
-   * the PR-2 brief requires connectivity checks to never actuate a device. Instead this issues a
-   * plain GET to the gateway's HTTP root: any response (including a 404, since the gateway's
-   * embedded web server has no documented root page) proves the host is up and speaking HTTP;
-   * only a network-level failure (refused/timeout/DNS) means unreachable.
+   * Reachability + HTTP-auth probe for the Setup Wizard's "Test Connection" action. Deliberately
+   * does NOT call `/set/target_value` — that endpoint always writes a real value to a real
+   * target, and connectivity checks must never actuate a device. Instead this issues a plain GET
+   * to the gateway's HTTP root, carrying the configured Gateway Username/Password as Basic Auth:
+   * any response (including a 404, since the gateway's embedded web server has no documented
+   * root page) proves the host is up and speaking HTTP; a 401/403 proves it's up AND rejecting
+   * the given credentials; only a network-level failure (refused/timeout/DNS/abort) means
+   * unreachable, and only then is `authFailed` left `null` rather than guessed.
    */
-  async testConnection(): Promise<boolean> {
+  async testConnection(): Promise<CasambiLocalRestTestResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      await this.fetchImpl(this.baseUrl(), { method: "GET", signal: controller.signal });
-      return true;
+      const res = await this.fetchImpl(this.baseUrl(), { method: "GET", signal: controller.signal, headers: this.authHeaders() });
+      return { reachable: true, httpStatus: res.status, authFailed: res.status === 401 || res.status === 403 };
     } catch {
-      return false;
+      return { reachable: false, httpStatus: null, authFailed: null };
     } finally {
       clearTimeout(timer);
     }
@@ -118,7 +160,8 @@ export class CasambiLocalRestClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const res = await this.fetchImpl(url, { method: "GET", signal: controller.signal });
+      const res = await this.fetchImpl(url, { method: "GET", signal: controller.signal, headers: this.authHeaders() });
+      if (res.status === 401 || res.status === 403) return "unauthorized";
       const text = (await res.text()).trim().toLowerCase();
       return text === "ok" ? "ok" : "error";
     } finally {

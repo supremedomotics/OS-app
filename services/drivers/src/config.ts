@@ -13,6 +13,27 @@ export interface ConfigValidation {
   errors: string[];
 }
 
+/**
+ * Resolves whether a field is currently required, honoring `requiredIf` (§ Casambi Local
+ * Gateway Auth — "Validation must branch immediately based on connection type"). The
+ * discriminator field's live value is read from `input` first (what's being saved right now),
+ * falling back to `existing` (what's already stored) and finally its own schema default — so a
+ * partial save that omits the discriminator still resolves against the driver's actual mode.
+ */
+function isFieldRequired(
+  f: DriverConfigField,
+  schema: DriverConfigField[],
+  input: Record<string, unknown>,
+  existing: Record<string, unknown>,
+): boolean {
+  if (f.required) return true;
+  if (!f.requiredIf) return false;
+  const { key, equals } = f.requiredIf;
+  const raw = input[key] !== undefined && input[key] !== "" ? input[key] : existing[key];
+  const value = raw !== undefined && raw !== "" ? raw : schema.find((c) => c.key === key)?.default;
+  return String(value ?? "") === equals;
+}
+
 export function validateDriverConfig(
   schema: DriverConfigField[],
   input: Record<string, unknown>,
@@ -23,18 +44,19 @@ export function validateDriverConfig(
 
   for (const f of schema) {
     let v = input[f.key];
+    const required = isFieldRequired(f, schema, input, existing);
 
     // Secret preservation: a field left as the mask (or omitted) keeps the previously stored value.
     if (f.secret && (v === undefined || v === "" || v === SECRET_MASK)) {
       if (existing[f.key] !== undefined) out[f.key] = existing[f.key];
-      else if (f.required) errors.push(`${f.label} is required`);
+      else if (required) errors.push(`${f.label} is required`);
       continue;
     }
 
     if (v === undefined || v === "") {
       if (f.default !== undefined) v = f.default;
       else {
-        if (f.required) errors.push(`${f.label} is required`);
+        if (required) errors.push(`${f.label} is required`);
         continue;
       }
     }
@@ -78,8 +100,13 @@ export function defaultDriverConfig(schema: DriverConfigField[]): Record<string,
   return out;
 }
 
-/** Whether every required field is present in a config — drives the "configured" health signal. */
+/** Whether every required field is present in a config — drives the "configured" health signal.
+ * Honors `requiredIf` the same way {@link validateDriverConfig} does, so a mode-conditional
+ * field (e.g. Casambi's Local-only `gatewayIp`) is never flagged missing while a different mode
+ * is selected. */
 export function isConfigComplete(schema: DriverConfigField[], config: Record<string, unknown>): { complete: boolean; missing: string[] } {
-  const missing = schema.filter((f) => f.required && (config[f.key] === undefined || config[f.key] === "")).map((f) => f.key);
+  const missing = schema
+    .filter((f) => isFieldRequired(f, schema, config, {}) && (config[f.key] === undefined || config[f.key] === ""))
+    .map((f) => f.key);
   return { complete: missing.length === 0, missing };
 }

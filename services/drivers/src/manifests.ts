@@ -64,7 +64,7 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     category: "lighting",
     channel: "official",
     publisher: PUBLISHER,
-    version: "1.2.0",
+    version: "1.3.0",
     capabilities: ["onoff", "brightness", "color", "position", "sensor"],
     protocols: ["casambi"],
     compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
@@ -72,8 +72,9 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     operations: [...PROTO_OPS],
     documentationUrl: "https://docs.supreme.local/extensions/casambi",
     releaseNotes:
-      "Native Casambi driver, two connection methods behind one unified entity model. Cloud (REST + WebSocket): live state streaming with heartbeat and auto-reconnect, capabilities derived per fixture, automatic room mapping from Casambi group names — unchanged since 1.0.0. Local Gateway (Lithernet): a real UDP Casambi Command engine (onoff/brightness/color control, NotifyControlValues-based progressive discovery of dimmer/on-off/battery/temperature/lux/presence, button-press notifications) plus the one documented REST write endpoint. Local discovery has no REST device-listing endpoint to enumerate from — units appear as their first UDP notification arrives, and RGBW/CCT capability inference from Local control values is not yet implemented (documented gap, see the driver's Diagnostics page and this project's TODO.md) — never a fabricated connection or capability.",
+      "Native Casambi driver, two connection methods behind one unified entity model. Cloud (REST + WebSocket): live state streaming with heartbeat and auto-reconnect, capabilities derived per fixture, automatic room mapping from Casambi group names — unchanged since 1.0.0. Local Gateway (Lithernet): a real UDP Casambi Command engine (onoff/brightness/color control, NotifyControlValues-based progressive discovery of dimmer/on-off/battery/temperature/lux/presence, button-press notifications), HTTP Basic Authentication using the gateway's own web-server login (independent of any Casambi Cloud credential), and the one documented REST write endpoint. Local discovery has no REST device-listing endpoint to enumerate from — units appear as their first UDP notification arrives, and RGBW/CCT capability inference from Local control values is not yet implemented (documented gap, see the driver's Diagnostics page and this project's TODO.md) — never a fabricated connection or capability.",
     changelog: [
+      { version: "1.3.0", date: "2026-08-01", notes: "Local Gateway: Gateway Username/Password fields (HTTP Basic Auth on every Local REST request, stored independently of Casambi Cloud credentials — Lithernet_General_Settings_Network.pdf p.64). Configuration validation now branches strictly by Connection Type (Cloud's API Key/Email/Password are never required in Local mode and vice versa, fixing a prior bug where the generic validator required fields from both modes at once). Test Connection now reports staged, honest UDP/REST diagnostics (socket created/bound/packet sent, HTTP reachability + auth result) instead of a single misleading REST/UDP \"reachable\" boolean — UDP is connectionless, so \"no reply yet\" is no longer treated as a failure. Local Gateway config fields reordered to match the field-by-field commissioning flow." },
       { version: "1.2.0", date: "2026-07-31", notes: "Local Gateway: real UDP Casambi Command engine (byte-exact codec, dgram socket, NotifyControlValues-based progressive discovery, onoff/brightness/color commands, button events) and the one documented REST write endpoint. New Net ID / Data Format (Hex or Decimal) settings. Also ships the cross-driver SupremeOS Core (Event Bus, Capability Engine, Packet Recorder Framework, Driver Health/Metrics Engines) other native drivers build on next." },
       { version: "1.1.0", date: "2026-07-31", notes: "Driver architecture refactor: Connection Manager, Local Gateway settings (REST/UDP ports, gateway name, auto-discover), dedicated Diagnostics page, Health Monitor framework. Cloud behavior unchanged. Local Gateway protocol implementation not yet included." },
       { version: "1.0.0", date: "2026-07-10", notes: "First stable release: native REST + WebSocket, onoff/brightness/color/position/sensor, auto room mapping." },
@@ -92,15 +93,43 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
         ],
         secret: false,
       },
-      // Cloud settings — unchanged from 1.0.0. Shown only when Connection type is Cloud.
-      { key: "apiKey", label: "API key", type: "password", required: true, secret: true, help: "WebSocket-enabled key from Casambi Support." },
-      { key: "email", label: "Network admin email", type: "text", required: true, secret: false },
-      { key: "password", label: "Network admin password", type: "password", required: true, secret: true },
+      // Cloud settings — unchanged from 1.0.0. Shown only when Connection type is Cloud; validated
+      // ONLY in Cloud mode (requiredIf), never in Local mode.
+      { key: "apiKey", label: "API key", type: "password", requiredIf: { key: "connectionType", equals: "cloud" }, secret: true, help: "WebSocket-enabled key from Casambi Support." },
+      { key: "email", label: "Network admin email", type: "text", requiredIf: { key: "connectionType", equals: "cloud" }, secret: false },
+      { key: "password", label: "Network admin password", type: "password", requiredIf: { key: "connectionType", equals: "cloud" }, secret: true },
       { key: "networkId", label: "Network id (optional)", type: "text", help: "Pin a single network for a faster session handshake.", secret: false },
-      // Local Gateway settings. Shown only when Connection type is Local Gateway.
-      { key: "gatewayIp", label: "Gateway IP", type: "host", required: true, placeholder: "192.168.1.50", secret: false },
-      { key: "restPort", label: "REST port", type: "port", required: true, placeholder: "80", help: "Check your Lithernet Gateway's own configuration for its REST API port.", secret: false },
-      { key: "udpPort", label: "UDP port", type: "port", required: true, placeholder: "5100", help: "Check your Lithernet Gateway's own configuration for its UDP Casambi Command port — the gateway sends and receives on this same port.", secret: false },
+      // Local Gateway settings — shown only when Connection type is Local Gateway; validated ONLY
+      // in Local mode (requiredIf). Field order matches the installer's commissioning flow
+      // (Gateway IP → REST port → gateway login → UDP port → Net ID → Data format → name).
+      { key: "gatewayIp", label: "Gateway IP", type: "host", requiredIf: { key: "connectionType", equals: "local" }, placeholder: "192.168.1.50", secret: false },
+      {
+        key: "restPort",
+        label: "REST port",
+        type: "port",
+        requiredIf: { key: "connectionType", equals: "local" },
+        default: 80,
+        placeholder: "80",
+        help: "Default 80, or 443 if the gateway's own web server has SSL/HTTPS enabled (Lithernet_General_Settings_Network.pdf p.64-65).",
+        secret: false,
+      },
+      {
+        key: "gatewayUsername",
+        label: "Gateway username",
+        type: "text",
+        requiredIf: { key: "connectionType", equals: "local" },
+        help: "The Lithernet Gateway's own web-server login (its Settings → Network → Web server page) — not your Casambi Cloud account. Required for every Local REST request (HTTP Basic Authentication).",
+        secret: false,
+      },
+      {
+        key: "gatewayPassword",
+        label: "Gateway password",
+        type: "password",
+        requiredIf: { key: "connectionType", equals: "local" },
+        help: "The Lithernet Gateway's own web-server password. Stored independently of any Casambi Cloud credential — never shared or reused.",
+        secret: true,
+      },
+      { key: "udpPort", label: "UDP port", type: "port", requiredIf: { key: "connectionType", equals: "local" }, placeholder: "5100", help: "Check your Lithernet Gateway's own configuration for its UDP Casambi Command port — the gateway sends and receives on this same port.", secret: false },
       { key: "netId", label: "Net ID", type: "number", default: 0, min: 0, max: 254, help: "Must match the Net ID configured on the gateway's own \"UDP Casambi Command\" page. 0-254; 255 is reserved for broadcast.", secret: false },
       {
         key: "dataFormat",
