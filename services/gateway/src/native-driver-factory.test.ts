@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
 import { CasambiProtocolDriver } from "@supreme/protocols";
+import type { UdpBindOptions, UdpTransport } from "@supreme/lan";
 
 /**
  * The manifest↔runtime bridge for the Universal AVR Framework extensions (§ ADR 0015).
@@ -131,5 +132,56 @@ describe("native-driver-factory — Casambi", () => {
     });
     expect(driver).toBeInstanceOf(CasambiProtocolDriver);
     expect((driver as CasambiProtocolDriver).getHealth().connectionType).toBe("local");
+  });
+
+  // § LAN Transport Phase 2 — the factory no longer defaults to a real `dgram` socket internally;
+  // it must actually USE whichever `ctx.udpTransportFactory` the caller supplies (in production,
+  // `installer-context.ts`'s NATS-vs-local-direct resolution), never silently substitute its own.
+  it("uses ctx.udpTransportFactory when the caller supplies one, rather than the LocalDirectUdpTransport fallback", async () => {
+    class FakeTransport implements UdpTransport {
+      static instancesCreated = 0;
+      async bind(_opts?: UdpBindOptions): Promise<void> {
+        FakeTransport.instancesCreated += 1;
+      }
+      async send(): Promise<void> {}
+      async joinMulticast(): Promise<void> {}
+      async close(): Promise<void> {}
+      onMessage(): () => void {
+        return () => {};
+      }
+      onError(): () => void {
+        return () => {};
+      }
+      onListening(): () => void {
+        return () => {};
+      }
+      address() {
+        return { address: "0.0.0.0", port: 5100 };
+      }
+    }
+    const driver = buildNativeDriver(
+      "casambi",
+      { connectionType: "local", gatewayIp: "192.168.1.90", restPort: 80, udpPort: 5100 },
+      { udpTransportFactory: () => new FakeTransport() },
+    ) as CasambiProtocolDriver;
+    await driver.connect();
+    expect(FakeTransport.instancesCreated).toBe(1);
+    await driver.disconnect();
+  });
+
+  it("falls back to LocalDirectUdpTransport (real node:dgram) when no ctx.udpTransportFactory is supplied", async () => {
+    // A distinctive fixed port (matching this codebase's existing real-dgram test convention,
+    // e.g. udp-engine.test.ts's loopback test) — sending to itself on 127.0.0.1 real-binds and
+    // real-sends over an actual OS socket, proving the fallback truly is LocalDirectUdpTransport
+    // and not just "didn't throw."
+    const driver = buildNativeDriver("casambi", {
+      connectionType: "local",
+      gatewayIp: "127.0.0.1",
+      restPort: 80,
+      udpPort: 58471,
+    }) as CasambiProtocolDriver;
+    await driver.connect();
+    expect(driver.isConnected()).toBe(true);
+    await driver.disconnect();
   });
 });

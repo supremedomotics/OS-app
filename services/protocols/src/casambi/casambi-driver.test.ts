@@ -11,7 +11,7 @@ import type {
   CasambiWireHandlers,
 } from "./cloud-transport.js";
 import type { CasambiUnit } from "./entity-mapper.js";
-import type { CasambiUdpSocketLike } from "./local-transport/index.js";
+import type { UdpTransport } from "@supreme/lan";
 import type { CasambiDriverEvent } from "./event-engine.js";
 
 /** A captured WebSocket wire — records every framed message the driver sends. */
@@ -190,47 +190,55 @@ describe("CasambiProtocolDriver (fake transport)", () => {
   });
 });
 
-/** A real event-emitting fake UDP socket for Local-mode driver tests — see `local-transport/
- * udp-engine.test.ts` for the same pattern used directly against `CasambiUdpEngine`. */
-class FakeUdpSocket implements CasambiUdpSocketLike {
+/** A real event-emitting fake `UdpTransport` for Local-mode driver tests (§ LAN Transport Phase 2
+ * — Casambi no longer owns a raw socket or a Casambi-specific socket interface) — see
+ * `local-transport/udp-engine.test.ts` for the same pattern used directly against
+ * `CasambiUdpEngine`. */
+class FakeUdpTransport implements UdpTransport {
   sent: string[] = [];
-  private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   closed = false;
+  private messageListeners = new Set<(msg: Buffer, rinfo: { address: string; port: number }) => void>();
+  private errorListeners = new Set<(err: Error) => void>();
+  private listeningListeners = new Set<() => void>();
+  private bound: { address: string; port: number } | null = null;
 
-  on(event: string, listener: (...args: unknown[]) => void): this {
-    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-    this.listeners.get(event)!.add(listener);
-    return this;
+  async bind(opts: { localPort?: number; localAddress?: string } = {}): Promise<void> {
+    this.bound = { address: opts.localAddress ?? "0.0.0.0", port: opts.localPort ?? 5100 };
+    for (const l of this.listeningListeners) l();
   }
-  removeListener(event: string, listener: (...args: unknown[]) => void): this {
-    this.listeners.get(event)?.delete(listener);
-    return this;
+  async send(data: Buffer): Promise<void> {
+    this.sent.push(data.toString("ascii"));
   }
-  bind(): void {
-    queueMicrotask(() => this.emit("listening"));
-  }
-  send(msg: string, _port: number, _address: string, callback?: (error: Error | null) => void): void {
-    this.sent.push(msg);
-    callback?.(null);
-  }
-  close(callback?: () => void): void {
+  async joinMulticast(): Promise<void> {}
+  async close(): Promise<void> {
     this.closed = true;
-    callback?.();
   }
-  emit(event: string, ...args: unknown[]): void {
-    for (const l of this.listeners.get(event) ?? []) l(...args);
+  onMessage(cb: (msg: Buffer, rinfo: { address: string; port: number }) => void): () => void {
+    this.messageListeners.add(cb);
+    return () => this.messageListeners.delete(cb);
+  }
+  onError(cb: (err: Error) => void): () => void {
+    this.errorListeners.add(cb);
+    return () => this.errorListeners.delete(cb);
+  }
+  onListening(cb: () => void): () => void {
+    this.listeningListeners.add(cb);
+    return () => this.listeningListeners.delete(cb);
+  }
+  address(): { address: string; port: number } | null {
+    return this.bound;
   }
   receive(raw: string): void {
-    this.emit("message", Buffer.from(raw, "ascii"), { address: "192.168.1.90", port: 5100 });
+    for (const l of this.messageListeners) l(Buffer.from(raw, "ascii"), { address: "192.168.1.90", port: 5100 });
   }
 }
 
 describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
   function makeLocalDriver() {
-    const socket = new FakeUdpSocket();
+    const socket = new FakeUdpTransport();
     const driver = new CasambiProtocolDriver({
       connectionMode: "local",
-      local: { gatewayIp: "192.168.1.90", restPort: 80, udpPort: 5100, netId: 0, udpSocketFactory: () => socket },
+      local: { gatewayIp: "192.168.1.90", restPort: 80, udpPort: 5100, netId: 0, udpTransportFactory: () => socket },
     });
     return { socket, driver };
   }
@@ -412,6 +420,82 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       const driver = new CasambiProtocolDriver({ credentials: creds, transport });
       await driver.connect();
       expect(driver.getCasambiDiagnostics().udp).toBeNull();
+      await driver.disconnect();
+    });
+  });
+
+  // § LAN Transport Phase 2 — Transport Monitor: the layered Transport/Casambi Adapter/Driver
+  // debugging view built on top of the same real engine/driver state, additive to
+  // getCasambiDiagnostics() (this method changes nothing about that existing shape).
+  describe("getCasambiTransportMonitor() (§ LAN Transport Phase 2)", () => {
+    it("driver counters start at zero and entities/adapter reflect no traffic yet", async () => {
+      const { driver } = makeLocalDriver();
+      await driver.connect();
+      const monitor = driver.getCasambiTransportMonitor();
+      expect(monitor.connectionType).toBe("local");
+      expect(monitor.driver).toEqual({ entities: 0, discoveryEvents: 0, commandsIssued: 0, feedbackEvents: 0 });
+      expect(monitor.adapter?.packetsReceived).toBe(0);
+      expect(monitor.adapter?.decoded).toBe(0);
+      expect(monitor.adapter?.decodeFailures).toBe(0);
+      // FakeUdpTransport is neither NatsUdpTransportClient nor LocalDirectUdpTransport — the
+      // honest "unknown" backend, never guessed as one of the two real ones.
+      expect(monitor.transport).toMatchObject({ backend: "unknown", listening: true });
+      await driver.disconnect();
+    });
+
+    it("discoveryEvents/entities/feedbackEvents increment when a real packet discovers and updates a bound unit", async () => {
+      const { socket, driver } = makeLocalDriver();
+      const dev = "local-dev-5" as DeviceId;
+      await driver.bind({ deviceId: dev, capability: "brightness", address: "casambi:5" });
+      await driver.connect();
+      socket.receive("0.70.4.4b.5.1.c8\r\n"); // first-ever packet for unit 5
+      const monitor = driver.getCasambiTransportMonitor();
+      expect(monitor.driver.discoveryEvents).toBe(1);
+      expect(monitor.driver.entities).toBe(1);
+      expect(monitor.driver.feedbackEvents).toBe(1);
+      expect(monitor.adapter?.packetsReceived).toBe(1);
+      expect(monitor.adapter?.decoded).toBe(1);
+      expect(monitor.adapter?.decodeFailures).toBe(0);
+
+      // A repeat of the identical state is deduplicated — not double-counted as a new feedback event.
+      socket.receive("0.70.4.4b.5.1.c8\r\n");
+      expect(driver.getCasambiTransportMonitor().driver.feedbackEvents).toBe(1);
+      // But it IS still a real received/decoded datagram at the adapter layer.
+      expect(driver.getCasambiTransportMonitor().adapter?.packetsReceived).toBe(2);
+      await driver.disconnect();
+    });
+
+    it("commandsIssued increments only after command() actually dispatches", async () => {
+      const { driver } = makeLocalDriver();
+      const dev = "local-dev-5" as DeviceId;
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "casambi:5" });
+      await driver.connect();
+      expect(driver.getCasambiTransportMonitor().driver.commandsIssued).toBe(0);
+      await driver.command(dev, { capability: "onoff", action: "on" });
+      expect(driver.getCasambiTransportMonitor().driver.commandsIssued).toBe(1);
+      await driver.disconnect();
+    });
+
+    it("a malformed datagram counts toward adapter.decodeFailures, not decoded", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("garbage\r\n");
+      const monitor = driver.getCasambiTransportMonitor();
+      expect(monitor.adapter?.packetsReceived).toBe(1);
+      expect(monitor.adapter?.decoded).toBe(0);
+      expect(monitor.adapter?.decodeFailures).toBe(1);
+      await driver.disconnect();
+    });
+
+    it("transport/adapter are null in Cloud mode; driver counters still populate from real Cloud activity", async () => {
+      const transport = new FakeCasambiTransport(NETWORK);
+      const driver = new CasambiProtocolDriver({ credentials: creds, transport });
+      await driver.connect();
+      const monitor = driver.getCasambiTransportMonitor();
+      expect(monitor.connectionType).toBe("cloud");
+      expect(monitor.transport).toBeNull();
+      expect(monitor.adapter).toBeNull();
+      expect(monitor.driver.entities).toBeGreaterThan(0); // NETWORK's fixture units, fetched on connect
       await driver.disconnect();
     });
   });

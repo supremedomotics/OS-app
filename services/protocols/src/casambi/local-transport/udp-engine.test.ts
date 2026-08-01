@@ -1,84 +1,95 @@
 import { describe, expect, it, vi } from "vitest";
-import { CasambiUdpEngine, type CasambiUdpSocketLike } from "./udp-engine.js";
+import { LocalDirectUdpTransport, type UdpBindOptions, type UdpTransport } from "@supreme/lan";
+import { CasambiUdpEngine } from "./udp-engine.js";
 import { encodeSetTargetLevel, CASAMBI_TARGET_TYPE } from "./udp-codec.js";
 
-/** A real event-emitting fake socket — exercises the engine's actual listener wiring rather than
- * mocking it away, matching `cloud-transport.test.ts`'s injectable-socket pattern. */
-class FakeUdpSocket implements CasambiUdpSocketLike {
-  sent: { msg: string; port: number; address: string }[] = [];
-  private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+/** Same real captured 99-byte NotifyControlValues wire fixture used by the "real hardware
+ * capture" describe block below, hoisted to module scope so the Transport Monitor tests can
+ * reuse it too without duplicating the fixture. */
+const REAL_CAPTURE_FIXTURE =
+  "c.70.27.4b.1e.15.0.14.0.0.90.0.1.1.90.1.1.1.90.2.1.1.90.3.1.1.90.4.1.1.90.5.1.1.90.6.1.1.90.7.1.1\r\n";
+
+/** A real event-emitting fake `UdpTransport` (§ LAN Transport Phase 2 — Casambi no longer owns a
+ * raw socket or a Casambi-specific socket interface; it consumes the generic `UdpTransport` from
+ * `@supreme/lan` like every other current/future LAN driver will). Exercises the engine's actual
+ * listener wiring rather than mocking it away, matching `cloud-transport.test.ts`'s
+ * injectable-transport pattern. */
+class FakeUdpTransport implements UdpTransport {
+  sent: { data: Buffer; port: number; address: string }[] = [];
   closed = false;
+  private messageListeners = new Set<(msg: Buffer, rinfo: { address: string; port: number }) => void>();
+  private errorListeners = new Set<(err: Error) => void>();
+  private listeningListeners = new Set<() => void>();
+  private bound: { address: string; port: number } | null = null;
 
-  on(event: string, listener: (...args: unknown[]) => void): this {
-    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
-    this.listeners.get(event)!.add(listener);
-    return this;
+  async bind(opts: UdpBindOptions = {}): Promise<void> {
+    this.bound = { address: opts.localAddress ?? "0.0.0.0", port: opts.localPort ?? 5100 };
+    for (const l of this.listeningListeners) l();
   }
-
-  removeListener(event: string, listener: (...args: unknown[]) => void): this {
-    this.listeners.get(event)?.delete(listener);
-    return this;
+  async send(data: Buffer, port: number, address: string): Promise<void> {
+    this.sent.push({ data, port, address });
   }
-
-  bind(_port?: number): void {
-    queueMicrotask(() => this.emit("listening"));
-  }
-
-  send(msg: string, port: number, address: string, callback?: (error: Error | null) => void): void {
-    this.sent.push({ msg, port, address });
-    callback?.(null);
-  }
-
-  close(callback?: () => void): void {
+  async joinMulticast(): Promise<void> {}
+  async close(): Promise<void> {
     this.closed = true;
-    callback?.();
+  }
+  onMessage(cb: (msg: Buffer, rinfo: { address: string; port: number }) => void): () => void {
+    this.messageListeners.add(cb);
+    return () => this.messageListeners.delete(cb);
+  }
+  onError(cb: (err: Error) => void): () => void {
+    this.errorListeners.add(cb);
+    return () => this.errorListeners.delete(cb);
+  }
+  onListening(cb: () => void): () => void {
+    this.listeningListeners.add(cb);
+    return () => this.listeningListeners.delete(cb);
+  }
+  address(): { address: string; port: number } | null {
+    return this.bound;
   }
 
-  emit(event: string, ...args: unknown[]): void {
-    for (const l of this.listeners.get(event) ?? []) l(...args);
-  }
-
+  // Test-only helpers, not part of UdpTransport.
   receive(raw: string, rinfo = { address: "192.168.1.90", port: 5100 }): void {
-    this.emit("message", Buffer.from(raw, "ascii"), rinfo);
+    for (const l of this.messageListeners) l(Buffer.from(raw, "ascii"), rinfo);
   }
-
-  address(): { address: string; port: number; family: string } {
-    return { address: "0.0.0.0", port: 5100, family: "IPv4" };
-  }
-}
-
-/** A socket whose `bind()` immediately fails — exercises the honest "error" socketState path. */
-class FailingBindSocket extends FakeUdpSocket {
-  bind(_port?: number): void {
-    queueMicrotask(() => this.emit("error", new Error("EADDRINUSE")));
+  emitError(err: Error): void {
+    for (const l of this.errorListeners) l(err);
   }
 }
 
-/** A socket whose `send()` always fails — exercises `lastSendError` without a bind failure. */
-class SendFailingSocket extends FakeUdpSocket {
-  send(msg: string, port: number, address: string, callback?: (error: Error | null) => void): void {
-    callback?.(new Error("ENETUNREACH"));
+/** A transport whose `bind()` always rejects — exercises the honest "error" socketState path. */
+class FailingBindTransport extends FakeUdpTransport {
+  override async bind(): Promise<void> {
+    throw new Error("EADDRINUSE");
+  }
+}
+
+/** A transport whose `send()` always rejects — exercises `lastSendError` without a bind failure. */
+class SendFailingTransport extends FakeUdpTransport {
+  override async send(): Promise<void> {
+    throw new Error("ENETUNREACH");
   }
 }
 
 function makeEngine(overrides: Partial<{ netId: number }> = {}) {
-  const socket = new FakeUdpSocket();
+  const transport = new FakeUdpTransport();
   const engine = new CasambiUdpEngine({
     gatewayIp: "192.168.1.90",
     udpPort: 5100,
     netId: overrides.netId ?? 0,
-    socketFactory: () => socket,
+    udpTransportFactory: () => transport,
   });
-  return { socket, engine };
+  return { socket: transport, engine };
 }
 
-describe("CasambiUdpEngine (fake socket)", () => {
+describe("CasambiUdpEngine (fake UdpTransport)", () => {
   it("is not listening before start()", () => {
     const { engine } = makeEngine();
     expect(engine.listening).toBe(false);
   });
 
-  it("becomes listening once the socket emits 'listening'", async () => {
+  it("becomes listening once the transport binds", async () => {
     const { engine } = makeEngine();
     await engine.start();
     expect(engine.listening).toBe(true);
@@ -92,11 +103,11 @@ describe("CasambiUdpEngine (fake socket)", () => {
     expect(factorySpy).not.toHaveBeenCalled();
   });
 
-  it("send() writes the encoded wire text to gatewayIp:udpPort", async () => {
+  it("send() writes the encoded wire text (as bytes) to gatewayIp:udpPort", async () => {
     const { engine, socket } = makeEngine();
     await engine.start();
     await engine.send(encodeSetTargetLevel(0, CASAMBI_TARGET_TYPE.device, 5, 200));
-    expect(socket.sent).toEqual([{ msg: "0.72.4.20.c8.1.5\r\n", port: 5100, address: "192.168.1.90" }]);
+    expect(socket.sent).toEqual([{ data: Buffer.from("0.72.4.20.c8.1.5\r\n", "ascii"), port: 5100, address: "192.168.1.90" }]);
   });
 
   it("send() before start() throws rather than silently dropping the command", async () => {
@@ -142,7 +153,7 @@ describe("CasambiUdpEngine (fake socket)", () => {
     expect(received).toHaveLength(1);
   });
 
-  it("stop() closes the socket and resets listening", async () => {
+  it("stop() closes the transport and resets listening", async () => {
     const { engine, socket } = makeEngine();
     await engine.start();
     await engine.stop();
@@ -181,7 +192,7 @@ describe("CasambiUdpEngine (fake socket)", () => {
       await engine.start();
       void engine.probe(10);
       await Promise.resolve();
-      expect(socket.sent).toEqual([{ msg: "3.72.2.39.ff\r\n", port: 5100, address: "192.168.1.90" }]);
+      expect(socket.sent).toEqual([{ data: Buffer.from("3.72.2.39.ff\r\n", "ascii"), port: 5100, address: "192.168.1.90" }]);
     });
   });
 
@@ -196,14 +207,14 @@ describe("CasambiUdpEngine (fake socket)", () => {
     });
 
     it("reports socketState 'error' on a real bind failure, never on a mere lack of reply", async () => {
-      const socket = new FailingBindSocket();
-      const engine = new CasambiUdpEngine({ gatewayIp: "192.168.1.90", udpPort: 5100, netId: 0, socketFactory: () => socket });
+      const transport = new FailingBindTransport();
+      const engine = new CasambiUdpEngine({ gatewayIp: "192.168.1.90", udpPort: 5100, netId: 0, udpTransportFactory: () => transport });
       await expect(engine.start()).rejects.toThrow("EADDRINUSE");
       expect(engine.socketState).toBe("error");
       expect(engine.lastError).toBe("EADDRINUSE");
     });
 
-    it("exposes real local bind address/port from the socket's own address(), once bound", async () => {
+    it("exposes real local bind address/port from the transport's own address(), once bound", async () => {
       const { engine } = makeEngine();
       expect(engine.localAddress).toBeNull();
       expect(engine.localPort).toBeNull();
@@ -238,8 +249,8 @@ describe("CasambiUdpEngine (fake socket)", () => {
     });
 
     it("records lastSendError on a real send failure without touching packetsSent", async () => {
-      const socket = new SendFailingSocket();
-      const engine = new CasambiUdpEngine({ gatewayIp: "192.168.1.90", udpPort: 5100, netId: 0, socketFactory: () => socket });
+      const transport = new SendFailingTransport();
+      const engine = new CasambiUdpEngine({ gatewayIp: "192.168.1.90", udpPort: 5100, netId: 0, udpTransportFactory: () => transport });
       await engine.start();
       await expect(engine.send(encodeSetTargetLevel(0, CASAMBI_TARGET_TYPE.device, 5, 200))).rejects.toThrow("ENETUNREACH");
       expect(engine.packetsSent).toBe(0);
@@ -286,15 +297,14 @@ describe("CasambiUdpEngine (fake socket)", () => {
     it("receives a BROADCAST datagram (sender = gateway, but not addressed only to this client) — no destination/unicast filtering exists", async () => {
       const { engine, socket } = makeEngine();
       await engine.start();
-      // The gateway broadcasts to 255.255.255.255; from this socket's perspective the OS just
-      // delivers a datagram whose sender is the gateway. Nothing in the engine inspects or
-      // requires a specific destination address — proven by the engine having no `connect()` call
-      // and no `rinfo`-based filtering anywhere in `handleMessage`.
+      // The gateway broadcasts to 255.255.255.255; from this transport's perspective the OS just
+      // delivers a datagram whose sender is the gateway. Nothing in the engine — or `@supreme/lan`'s
+      // transport underneath it — inspects or requires a specific destination address.
       socket.receive(REAL_CAPTURE, { address: "192.168.0.45", port: 10009 });
       expect(engine.packetsReceived).toBe(1);
     });
 
-    it("Packets Received increments immediately on socket reception, strictly before parsing succeeds or fails", async () => {
+    it("Packets Received increments immediately on reception, strictly before parsing succeeds or fails", async () => {
       const { engine, socket } = makeEngine();
       await engine.start();
       const rawSeen: string[] = [];
@@ -359,6 +369,95 @@ describe("CasambiUdpEngine (fake socket)", () => {
       for (let i = 0; i < 30; i++) socket.receive(REAL_CAPTURE);
       expect(engine.recentTraces.length).toBeLessThanOrEqual(20);
       expect(engine.packetsReceived).toBe(30);
+    });
+  });
+
+  // § LAN Transport Phase 2 — Transport Monitor's Casambi Adapter section counters.
+  describe("decoded / decode-failure counters (Transport Monitor)", () => {
+    it("counts a successfully decoded packet in decodedCount, not decodeFailureCount", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      socket.receive(REAL_CAPTURE_FIXTURE);
+      expect(engine.decodedCount).toBe(1);
+      expect(engine.decodeFailureCount).toBe(0);
+    });
+
+    it("counts a malformed packet in decodeFailureCount, not decodedCount", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      socket.receive("c.70\r\n");
+      expect(engine.decodedCount).toBe(0);
+      expect(engine.decodeFailureCount).toBe(1);
+    });
+
+    it("keeps independent running totals across a mix of good and bad packets", async () => {
+      const { engine, socket } = makeEngine();
+      await engine.start();
+      socket.receive(REAL_CAPTURE_FIXTURE);
+      socket.receive("garbage");
+      socket.receive(REAL_CAPTURE_FIXTURE);
+      expect(engine.packetsReceived).toBe(3);
+      expect(engine.decodedCount).toBe(2);
+      expect(engine.decodeFailureCount).toBe(1);
+    });
+  });
+
+  // § LAN Transport Phase 2 — Transport Monitor's Transport section: real diagnostics read off
+  // whichever concrete `UdpTransport` the engine is actually bound to.
+  describe("transportDiagnostics (Transport Monitor)", () => {
+    it("is null before start()", () => {
+      const { engine } = makeEngine();
+      expect(engine.transportDiagnostics).toBeNull();
+    });
+
+    it("reports backend 'unknown' for a transport that is neither NatsUdpTransportClient nor LocalDirectUdpTransport", async () => {
+      const { engine } = makeEngine();
+      await engine.start();
+      expect(engine.transportDiagnostics).toEqual({ backend: "unknown", packetsSent: null, packetsReceived: null, lastError: null });
+    });
+
+    it("is null again after stop()", async () => {
+      const { engine } = makeEngine();
+      await engine.start();
+      await engine.stop();
+      expect(engine.transportDiagnostics).toBeNull();
+    });
+
+    it("reports backend 'local-direct' and real transport-level counts over a REAL loopback socket", async () => {
+      // Two real engines, each on its own `LocalDirectUdpTransport` (real node:dgram), proving
+      // both that the backend is correctly identified AND that the transport's own packet count
+      // agrees with this adapter's — the cross-layer check the Transport Monitor exists for.
+      const receiver = new CasambiUdpEngine({
+        gatewayIp: "127.0.0.1",
+        udpPort: 0,
+        localPort: 0,
+        netId: 0,
+        udpTransportFactory: () => new LocalDirectUdpTransport(),
+      });
+      await receiver.start();
+      const receiverPort = receiver.localPort;
+      expect(receiverPort).toBeGreaterThan(0);
+
+      const sender = new CasambiUdpEngine({
+        gatewayIp: "127.0.0.1",
+        udpPort: receiverPort as number,
+        localPort: 0, // distinct ephemeral port — do not collide with the receiver's bound port
+        netId: 0,
+        udpTransportFactory: () => new LocalDirectUdpTransport(),
+      });
+      await sender.start();
+
+      const received = new Promise<void>((resolve) => receiver.onPacket(() => resolve()));
+      await sender.send(encodeSetTargetLevel(0, CASAMBI_TARGET_TYPE.device, 5, 128));
+      await received;
+
+      expect(receiver.transportDiagnostics).toMatchObject({ backend: "local-direct", packetsReceived: 1 });
+      expect(sender.transportDiagnostics).toMatchObject({ backend: "local-direct", packetsSent: 1 });
+      // The adapter's own counters agree with the transport's — no gap between layers.
+      expect(receiver.packetsReceived).toBe(receiver.transportDiagnostics?.packetsReceived);
+
+      await sender.stop();
+      await receiver.stop();
     });
   });
 });

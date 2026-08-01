@@ -1,5 +1,6 @@
+import type { UdpTransportFactory } from "@supreme/lan";
 import { CasambiLocalRestClient } from "./rest-client.js";
-import { CasambiUdpEngine, type CasambiUdpSocketFactory } from "./udp-engine.js";
+import { CasambiUdpEngine } from "./udp-engine.js";
 import type { CasambiWireFormat } from "./udp-codec.js";
 
 /**
@@ -30,9 +31,13 @@ export interface CasambiLocalGatewayConfig {
    * listing endpoint is documented, so "auto discovery" beyond UDP NotifyControlValues
    * subscription has no protocol to drive it). */
   autoDiscover?: boolean;
-  /** Injectable UDP socket (tests pass a fake), matching `cloud-transport.ts`'s injectable
-   * `socketFactory`/`fetchImpl` testing pattern. Never set in production. */
-  udpSocketFactory?: CasambiUdpSocketFactory;
+  /** § LAN Transport Phase 2 — factory for the generic `UdpTransport` (`@supreme/lan`) the UDP
+   * engine sends/receives through. REQUIRED: this driver no longer owns a raw socket or has any
+   * protocol-specific socket factory of its own — real `NatsUdpTransportClient` (a real
+   * `supreme-lan` service) or `LocalDirectUdpTransport` (same-process real `dgram`, no NATS) in
+   * production, a fake `UdpTransport` in tests. See
+   * `docs/architecture/adr/0022-supreme-lan-transport-service.md`. */
+  udpTransportFactory: UdpTransportFactory;
 }
 
 export class CasambiLocalTransport {
@@ -54,7 +59,7 @@ export class CasambiLocalTransport {
       udpPort: config.udpPort,
       netId: config.netId ?? 0,
       format: config.dataFormat ?? "hex-dot",
-      socketFactory: config.udpSocketFactory,
+      udpTransportFactory: config.udpTransportFactory,
     });
   }
 }

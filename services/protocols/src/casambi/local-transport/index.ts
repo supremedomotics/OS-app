@@ -10,9 +10,8 @@ export {
   type CasambiUdpEngineOptions,
   type CasambiUdpPacket,
   type CasambiUdpPacketTrace,
-  type CasambiUdpSocketLike,
-  type CasambiUdpSocketFactory,
   type CasambiUdpSocketState,
+  type CasambiUdpTransportDiagnostics,
 } from "./udp-engine.js";
 export { CasambiLocalTransport, type CasambiLocalGatewayConfig } from "./local-gateway-transport.js";
 export * from "./udp-codec.js";

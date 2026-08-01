@@ -1,7 +1,11 @@
 # ADR 0022 — `supreme-lan`: a dedicated, business-logic-free LAN transport service
 
-- Status: **Accepted** (Phase 1 implemented; Phases 2-5 — driver cutovers — are deliberate,
-  separate follow-ups, not part of this decision's initial scope)
+- Status: **Accepted** (Phase 1 implemented. Phase 2 — Casambi, the reference migration — also
+  implemented and is now the DEFAULT transport for the Casambi Local Gateway driver; see
+  `docs/architecture/Supreme-LAN-Transport-Architecture.md` §10 for the full account, including
+  what remains hardware-unverified. Phases 3-5 — KNX/Matter/remaining LAN drivers — are deliberate,
+  separate follow-ups, explicitly gated on a real-hardware retest of Phase 2, not part of this
+  decision's scope yet)
 - Date: 2026-08-01
 - Context: Production Architecture Refactor — Docker bridge networking silently drops LAN
   broadcast/multicast traffic, proven with real hardware.
@@ -49,11 +53,13 @@ Extract all raw LAN socket access into a new, standalone service — `supreme-la
   they are `bind({multicastGroup, localPort})` presets on the same interface. Wire-codec logic
   (DNS-SD parsing, SSDP HTTP-framing, Casambi's `.`-hex codec, KNXnet/IP frame encode/decode) is
   unchanged and stays exactly where it already lived, in `services/protocols`.
-- **Migration is non-breaking and incremental.** A thin adapter per existing driver-facing socket
-  interface (`services/protocols/src/lan-adapters/`) implements that EXACT interface by
-  delegating to a `UdpTransport` — a drop-in alternative to each protocol's existing real-`dgram`
-  default, selected only where a caller explicitly opts in. No existing driver file's default
-  behavior changes in this phase.
+- **Migration is non-breaking and incremental.** Two shapes, chosen per protocol: (1) a thin
+  adapter per existing driver-facing socket interface (`services/protocols/src/lan-adapters/`,
+  used for KNX Discovery/mDNS/SSDP, still unmigrated as of Phase 2) implementing that EXACT
+  interface by delegating to a `UdpTransport`; (2) Casambi (Phase 2, migrated) skips the adapter
+  entirely — `CasambiUdpEngine` was rewritten to consume `UdpTransport` directly, since its
+  socket interface had no other real consumer to stay backward-compatible with. Either way, the
+  driver's OWN wire codec and every non-transport method/getter keep their exact prior shape.
 - **Docker: `supreme-lan` may run with host networking; the Gateway never does.** The base compose
   stack runs `lan` bridge-attached (a deliberately degraded default — testable everywhere, no real
   LAN broadcast). A separate override, `docker-compose.lan-host.yml`, switches only `lan` to
@@ -89,3 +95,10 @@ migration risk table, and the Windows Docker Desktop disclosure — lives in
   send/receive when `supreme-lan` genuinely runs remotely — acceptable for the protocols this
   serves (all sub-second, human-interaction-paced control/discovery traffic, none of them
   latency-sensitive media/audio streams).
+- **Phase 2 (Casambi) is architecturally complete and covered by real loopback/in-process tests
+  (unit, integration, and a full driver-over-real-client-and-server cross-package proof), but has
+  NOT been re-verified against real Lithernet hardware, real Windows Docker Desktop, or a real
+  multi-container Linux deployment** — this sandboxed environment cannot originate any of those.
+  Treat Casambi's `@supreme/lan` migration as "internally proven, hardware-pending" until that
+  retest happens; see the architecture doc §10.3 for the exact, disclosed scope of what was and
+  wasn't verified.

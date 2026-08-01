@@ -32,6 +32,17 @@ export class NatsUdpTransportClient implements UdpTransport {
   private readonly errorListeners = new Set<(err: Error) => void>();
   private readonly listeningListeners = new Set<() => void>();
   private subs: Subscription[] = [];
+  /** § LAN Transport Phase 2 — Transport Monitor's "NATS" section: real counts of the bus
+   * operations THIS client instance performed, not an estimate. `requestsSent` is every
+   * request/reply command (bind/send/close/joinMulticast); `eventsReceived` is every session-
+   * scoped event (rx/error/listening) actually delivered back over the bus. There is no "dropped"
+   * counter — neither `IEventBus` implementation has a queue that can silently drop a message
+   * today, so reporting one would be a fabricated metric, not a measured one. */
+  private _requestsSent = 0;
+  private _eventsReceived = 0;
+  private _packetsSent = 0;
+  private _packetsReceived = 0;
+  private _lastError: string | null = null;
 
   constructor(
     private readonly bus: IEventBus,
@@ -40,6 +51,7 @@ export class NatsUdpTransportClient implements UdpTransport {
 
   async bind(opts: UdpBindOptions = {}): Promise<void> {
     if (this.sessionId) throw new Error("supreme-lan: transport already bound — call close() first");
+    this._requestsSent += 1;
     const res = await requestReply<LanBindRequest, LanBindResponse>(
       this.bus,
       lanSubjects.bind,
@@ -52,17 +64,22 @@ export class NatsUdpTransportClient implements UdpTransport {
 
     this.subs.push(
       await this.bus.subscribe<LanRxEvent>(lanSubjects.sessionRx(res.sessionId), (evt) => {
+        this._eventsReceived += 1;
+        this._packetsReceived += 1;
         const buf = Buffer.from(evt.dataBase64, "base64");
         for (const l of this.messageListeners) l(buf, evt.rinfo);
       }),
     );
     this.subs.push(
       await this.bus.subscribe<LanErrorEvent>(lanSubjects.sessionError(res.sessionId), (evt) => {
+        this._eventsReceived += 1;
+        this._lastError = evt.message;
         for (const l of this.errorListeners) l(new Error(evt.message));
       }),
     );
     this.subs.push(
       await this.bus.subscribe<LanListeningEvent>(lanSubjects.sessionListening(res.sessionId), () => {
+        this._eventsReceived += 1;
         for (const l of this.listeningListeners) l();
       }),
     );
@@ -71,17 +88,23 @@ export class NatsUdpTransportClient implements UdpTransport {
 
   async send(data: Buffer, port: number, address: string): Promise<void> {
     if (!this.sessionId) throw new Error("supreme-lan: send() called before bind()");
+    this._requestsSent += 1;
     const res = await requestReply<LanSendRequest, LanSendResponse>(
       this.bus,
       lanSubjects.send,
       { sessionId: this.sessionId, host: address, port, dataBase64: data.toString("base64") },
       this.opts,
     );
-    if (!res.ok) throw new Error(`supreme-lan: send failed — ${res.error}`);
+    if (!res.ok) {
+      this._lastError = res.error;
+      throw new Error(`supreme-lan: send failed — ${res.error}`);
+    }
+    this._packetsSent += 1;
   }
 
   async joinMulticast(group: string, iface?: string): Promise<void> {
     if (!this.sessionId) throw new Error("supreme-lan: joinMulticast() called before bind()");
+    this._requestsSent += 1;
     const res = await requestReply<LanJoinMulticastRequest, LanJoinMulticastResponse>(
       this.bus,
       lanSubjects.joinMulticast,
@@ -98,6 +121,7 @@ export class NatsUdpTransportClient implements UdpTransport {
     for (const sub of this.subs) sub.unsubscribe();
     this.subs = [];
     if (!sessionId) return;
+    this._requestsSent += 1;
     await requestReply<LanCloseRequest, LanCloseResponse>(this.bus, lanSubjects.close, { sessionId }, this.opts);
   }
 
@@ -115,5 +139,24 @@ export class NatsUdpTransportClient implements UdpTransport {
   }
   address(): { address: string; port: number } | null {
     return this.localAddr;
+  }
+
+  /** § LAN Transport Phase 2 — Transport Monitor's "NATS" section. Real counts scoped to this
+   * one client instance/session, not the whole `supreme-lan` service (see `queryLanHealth` for
+   * the service-wide view). */
+  get packetsSent(): number {
+    return this._packetsSent;
+  }
+  get packetsReceived(): number {
+    return this._packetsReceived;
+  }
+  get lastError(): string | null {
+    return this._lastError;
+  }
+  get requestsSent(): number {
+    return this._requestsSent;
+  }
+  get eventsReceived(): number {
+    return this._eventsReceived;
   }
 }

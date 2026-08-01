@@ -28,6 +28,8 @@ import {
   type IInstalledDriverStore,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
+import type { IEventBus } from "@supreme/messaging";
+import { NatsUdpTransportClient, LocalDirectUdpTransport } from "@supreme/lan";
 import { buildNativeDriver, hasNativeFactory, type NativeDriverFactoryContext } from "./native-driver-factory.js";
 import {
   knxSearch,
@@ -267,6 +269,11 @@ export interface InstallerDeps {
    * Lifecycle: no duplicate registration logic). Not yet connected; the pipeline's
    * Register Driver stage connects them. */
   envDrivers?: Map<string, INativeProtocolDriver>;
+  /** § LAN Transport Phase 2 — the SAME event bus `AppContext`/`bootstrap.ts` already created
+   * (real NATS when `config.natsUrl` is set, `InProcessEventBus` otherwise). Used only to decide
+   * which `UdpTransport` a LAN-dependent native driver (Casambi today) gets — see
+   * `nativeDriverContext()`. Never used for anything protocol-specific here. */
+  bus?: IEventBus;
 }
 
 /**
@@ -1095,6 +1102,16 @@ export class InstallerServices {
         : {}),
       // § AVR Diagnostic Mode — off by default; see `GatewayConfig.avrDiagnostics`.
       avrDiagnostics: this.d.config.avrDiagnostics,
+      // § LAN Transport Phase 2 — the ONE place this decision is made, for every current and
+      // future LAN-broadcast/multicast-dependent driver, not per-protocol: real NATS configured
+      // means a separate `supreme-lan` service is expected to be running and reachable on the
+      // same bus, so use the real remote transport; no NATS configured (single-process dev,
+      // `pnpm --filter @supreme/gateway dev` without the full Docker Compose stack) means there's
+      // no separate process to reach, so fall back to a same-process real socket instead.
+      udpTransportFactory:
+        this.d.config.natsUrl && this.d.bus
+          ? () => new NatsUdpTransportClient(this.d.bus!)
+          : () => new LocalDirectUdpTransport(),
     };
   }
 

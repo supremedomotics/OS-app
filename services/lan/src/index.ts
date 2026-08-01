@@ -9,6 +9,8 @@
  */
 export type { UdpBindOptions, UdpTransport, UdpTransportFactory } from "./transport.js";
 export { NatsUdpTransportClient } from "./client/nats-udp-transport-client.js";
+export { LocalDirectUdpTransport } from "./client/local-direct-udp-transport.js";
+export { queryLanHealth } from "./client/query-lan-health.js";
 export {
   lanSubjects,
   type LanSessionId,

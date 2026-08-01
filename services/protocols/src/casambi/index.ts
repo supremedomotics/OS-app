@@ -54,6 +54,8 @@ export {
   type CasambiSetTargetValueResult,
   type CasambiUdpEngineOptions,
   type CasambiUdpPacket,
+  type CasambiUdpPacketTrace,
+  type CasambiUdpTransportDiagnostics,
   type CasambiLocalGatewayConfig,
   type CasambiWireFormat,
   type CasambiPacket,
@@ -76,6 +78,14 @@ export {
   type CasambiDiagnosticsSnapshot,
   type CasambiDiagnosticsInputs,
 } from "./diagnostics.js";
+export {
+  buildTransportMonitorSnapshot,
+  type CasambiTransportMonitorSnapshot,
+  type CasambiTransportMonitorInputs,
+  type CasambiTransportSectionSnapshot,
+  type CasambiAdapterSectionSnapshot,
+  type CasambiDriverSectionSnapshot,
+} from "./transport-monitor.js";
 export {
   computeHealthVerdict,
   restSubsystemStatus,

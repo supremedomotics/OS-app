@@ -9,6 +9,7 @@ import {
   MqttProtocolDriver,
   YamahaProtocolDriver,
 } from "@supreme/protocols";
+import { LocalDirectUdpTransport, type UdpTransport } from "@supreme/lan";
 
 /**
  * Native driver factories — the manifest↔runtime bridge. Given a driver's PROTOCOL and its stored
@@ -28,6 +29,15 @@ export interface NativeDriverFactoryContext {
   /** § AVR Diagnostic Mode — off by default; forwarded only to the `avr` factory below (the
    * only driver that currently implements diagnostics). See `GatewayConfig.avrDiagnostics`. */
   avrDiagnostics?: boolean;
+  /** § LAN Transport Phase 2 — factory for the generic, protocol-agnostic `UdpTransport`
+   * (`@supreme/lan`) every LAN-broadcast/multicast-dependent driver should use instead of opening
+   * a raw socket itself (Casambi today; KNX/Matter/mDNS/SSDP later). Decided ONCE, centrally, by
+   * `services/gateway/src/installer-context.ts`'s `nativeDriverContext()` — real NATS configured
+   * -> `NatsUdpTransportClient` reaching a separate `supreme-lan` service; no NATS configured
+   * (single-process dev) -> `LocalDirectUdpTransport` (real `node:dgram`, same process). Absent
+   * only in tests that construct a factory directly — falls back to `LocalDirectUdpTransport` so
+   * a missing context never silently breaks a LAN-dependent driver. */
+  udpTransportFactory?: () => UdpTransport;
 }
 export type NativeDriverFactory = (config: Record<string, unknown>, ctx: NativeDriverFactoryContext) => INativeProtocolDriver | null;
 
@@ -74,6 +84,9 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
           gatewayUsername: str(c.gatewayUsername),
           gatewayPassword: str(c.gatewayPassword),
           autoDiscover: c.autoDiscover === true,
+          // § LAN Transport Phase 2 — Casambi no longer owns a raw socket; every Local UDP send/
+          // receive goes through this generic transport factory.
+          udpTransportFactory: ctx.udpTransportFactory ?? (() => new LocalDirectUdpTransport()),
         },
         onLog,
         trace: c.logging === true,

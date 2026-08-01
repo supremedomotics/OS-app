@@ -906,6 +906,9 @@ importers:
       '@supreme/keypad-framework':
         specifier: workspace:*
         version: link:../keypad-framework
+      '@supreme/lan':
+        specifier: workspace:*
+        version: link:../lan
       '@supreme/license-service':
         specifier: workspace:*
         version: link:../license

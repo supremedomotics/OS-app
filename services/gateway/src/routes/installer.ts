@@ -29,6 +29,7 @@ import {
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine } from "@supreme/protocols";
+import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, type LanDiagnosticsSnapshot } from "@supreme/lan";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -252,6 +253,38 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // § LAN Transport Phase 2 — Transport Monitor: the developer-grade, layered view (Transport /
+  // Casambi Adapter / Driver from the driver itself; a service-wide "NATS"/`supreme-lan` layer
+  // attached here, since only the Gateway route holds the event bus `queryLanHealth` needs). This
+  // is deliberately a SEPARATE endpoint from `casambi/diagnostics` above — that one is the stable,
+  // long-standing installer-facing snapshot; this one is a debugging tool and its shape may grow
+  // as more LAN protocols migrate onto `@supreme/lan`. `lan`/`lanQueryError` are honestly `null`
+  // (never a fabricated empty snapshot) whenever the resolved transport isn't NATS-backed, or a
+  // real `supreme-lan` service didn't answer in time.
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/casambi/transport-monitor", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+      const monitor = driver.getCasambiTransportMonitor();
+      let lan: LanDiagnosticsSnapshot | null = null;
+      let lanQueryError: string | null = null;
+      if (monitor.transport?.backend === "nats" && ctx.config.natsUrl) {
+        try {
+          lan = await queryLanHealth(ctx.bus, 2_000);
+        } catch (err) {
+          lanQueryError = err instanceof Error ? err.message : String(err);
+        }
+      }
+      reply.send({ ...monitor, lan, lanQueryError });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Local Gateway setup wizard actions (§ Driver Setup Wizard; § Casambi Local Gateway Auth + UDP
   // Diagnostics). "Test Connection" is real and staged, never a single reachable/unreachable
   // boolean: it reports REST reachability + HTTP auth result (via the configured Gateway
@@ -304,7 +337,14 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const rest = new CasambiLocalRestClient({ gatewayIp, restPort: restPort as number, gatewayUsername, gatewayPassword });
       const restResult = await rest.testConnection();
 
-      const udp = new CasambiUdpEngine({ gatewayIp, udpPort: udpPort as number, netId: netId ?? 0, format });
+      // § LAN Transport Phase 2 — resolve the SAME transport a real persistent driver would use
+      // (see installer-context.ts's nativeDriverContext()), so a Test Connection result reflects
+      // the actual network vantage point in production rather than always testing from the
+      // Gateway's own bridge-network process.
+      const udpTransportFactory = ctx.config.natsUrl
+        ? () => new NatsUdpTransportClient(ctx.bus)
+        : () => new LocalDirectUdpTransport();
+      const udp = new CasambiUdpEngine({ gatewayIp, udpPort: udpPort as number, netId: netId ?? 0, format, udpTransportFactory });
       let socketCreated = false;
       let socketBound = false;
       try {

@@ -89,8 +89,10 @@ IEventBus
 NatsUdpTransportClient (Gateway process)
         │  decodes base64 back to bytes, notifies onMessage listeners
         ▼
-Migration adapter → the exact existing driver-facing interface
-  (CasambiUdpSocketLike / KnxDiscoverySocket / MdnsSocket / SsdpSocket)
+Casambi (Phase 2, migrated): CasambiUdpEngine consumes UdpTransport DIRECTLY — no adapter layer.
+KNX Discovery / mDNS / SSDP (unmigrated as of §10): a migration adapter implements each
+protocol's existing driver-facing interface (KnxDiscoverySocket / MdnsSocket / SsdpSocket) on
+top of the same UdpTransport.
         │
         ▼
 Protocol driver's own wire codec (unchanged — e.g. Casambi's udp-codec.ts)
@@ -99,10 +101,10 @@ Protocol driver's own wire codec (unchanged — e.g. Casambi's udp-codec.ts)
 Entity/capability state update → Supreme Integration Layer → UI
 ```
 
-The receive path never changes above the migration adapter boundary — a driver's own
-decode/dispatch logic (Casambi's `decodeCasambiPacket`, KNX's `parseSearchResponse`, mDNS's
-`decodeMessage`, SSDP's `parseSsdpResponse`) runs exactly as it always has, on bytes that arrived
-via a different transport underneath it.
+The receive path never changes above the transport boundary — a driver's own decode/dispatch
+logic (Casambi's `decodeCasambiPacket`, KNX's `parseSearchResponse`, mDNS's `decodeMessage`,
+SSDP's `parseSsdpResponse`) runs exactly as it always has, on bytes that arrived via a different
+transport underneath it.
 
 ## 5. The generic transport interface
 
@@ -142,20 +144,27 @@ One interface for every UDP-shaped need in this codebase:
 
 ## 6. Migration adapters
 
+**Casambi (Phase 2, completed — see §10) no longer uses a migration adapter at all.** Phase 1's
+`casambi-remote-socket.ts` implemented a Casambi-specific `CasambiUdpSocketLike` interface as a
+bridge; Phase 2 deleted `CasambiUdpSocketLike` entirely and rewrote `CasambiUdpEngine` to consume
+the generic `UdpTransport` directly — one less layer, and proof that a driver CAN be written
+against `UdpTransport` from the start rather than needing an adapter shim. KNX Discovery/mDNS/SSDP
+are still Phase 1's migration-adapter shape (below), unmigrated as of this document — see §8.
+
 Each adapter in `services/protocols/src/lan-adapters/` implements an **existing** interface
 exactly, so it's a drop-in alternative to that protocol's existing real-`dgram` default:
 
 | Adapter | Implements | Existing default (unchanged) |
 |---|---|---|
-| `casambi-remote-socket.ts` | `CasambiUdpSocketLike` | `CasambiUdpEngine`'s `dgram.createSocket()` |
 | `knx-discovery-remote-socket.ts` | `KnxDiscoverySocket` | `knx-discovery.ts`'s `defaultSocket()` |
 | `mdns-remote-socket.ts` | `MdnsSocket` | `mdns.ts`'s `defaultSocket()` |
 | `ssdp-remote-socket.ts` | `SsdpSocket` | `ssdp.ts`'s `defaultSocket()` |
 
 None of these change any existing driver's default behavior — they're passed only where a caller
 explicitly supplies the new factory via each protocol's existing `socketFactory`/`createSocket`
-option. `casambi-driver.ts`, `local-gateway-transport.ts`, `knx-discovery.ts`, `mdns.ts`, `ssdp.ts`
-are unmodified in this phase.
+option. `knx-discovery.ts`, `mdns.ts`, `ssdp.ts` remain unmodified and unmigrated — per the
+Critical Requirement governing Phase 2 (§10), nothing here is touched until Casambi is proven
+fully operational on real hardware.
 
 ## 7. Deployment topology
 
@@ -220,8 +229,8 @@ it (outside this document's control).
 
 | Phase | Protocol | Effort | Risk |
 |---|---|---|---|
-| 1 (this session) | `supreme-lan` itself: generic transport, wire protocol, Docker topology | Done | Purely additive — zero existing behavior changed |
-| 2 | Casambi UDP | Small — adapter already built (`casambi-remote-socket.ts`), proven against the real `CasambiUdpEngine` in `casambi-remote-socket.test.ts` | Low, but deliberately **not defaulted yet** — Casambi's engine was hardware-validated across two recent sessions; flipping its default transport needs its own real-hardware retest, not bundled into the session that introduces the RPC path for the first time |
+| 1 | `supreme-lan` itself: generic transport, wire protocol, Docker topology | Done | Purely additive — zero existing behavior changed |
+| 2 | Casambi UDP | **Done** (see §10) — `CasambiUdpEngine` rewritten onto `UdpTransport` directly, `CasambiUdpSocketLike` deleted, Casambi now DEFAULTS through `@supreme/lan` (`NatsUdpTransportClient` when NATS is configured, `LocalDirectUdpTransport` otherwise) | Migration itself fully tested (loopback + cross-package proof, §9/§10); **real-hardware LAN broadcast reception on the new path is NOT yet re-verified** — this sandbox cannot originate that test (§10) |
 | 3a | KNX Discovery | Small — adapter already built (`knx-discovery-remote-socket.ts`) | Low — discovery is a one-shot, timeout-bounded operation; a regression is easy to detect (empty results) |
 | 3b | KNX Routing | **Large** — `knxultimate` (the third-party library `knx-driver.ts`/`knx-ultimate-provider.ts` wrap) owns its own sockets internally with no injectable seam today. Needs its own protocol-level investigation (does the library expose a custom-socket hook? does it need forking/patching?) before any transport swap is possible | Not started; genuinely harder than a factory swap |
 | 4 | Matter (mDNS-based commissioning) | **Large** — no real `@matter/main` controller is wired in yet (`matter-driver.ts`'s `defaultMatterController()` throws); when it is, it will own its own sockets internally, the same class of problem as KNX Routing | Not started |
@@ -236,10 +245,13 @@ Three tiers, all passing in this Linux sandbox as of this session:
    fake-socket convention already established in this codebase).
 2. **Contract/integration tests** — `services/lan/src/contract.test.ts` wires the real
    `UdpTransportServer` and `NatsUdpTransportClient` to one shared `InProcessEventBus`, proving the
-   real request/reply + event wire protocol end-to-end with zero network. Plus
-   `services/protocols/src/lan-adapters/casambi-remote-socket.test.ts` — the concrete
-   cross-package proof: the REAL, unmodified `CasambiUdpEngine` running entirely over this
-   transport, sending and receiving real Casambi wire packets.
+   real request/reply + event wire protocol end-to-end with zero network. Plus (Phase 2)
+   `services/protocols/src/casambi/casambi-over-supreme-lan.test.ts` — the concrete cross-package
+   proof: the REAL, unmodified `CasambiProtocolDriver` (not a lower-level engine test) running its
+   full connect/discover/feedback/command lifecycle entirely over `NatsUdpTransportClient` +
+   `UdpTransportServer` + a fake `node:dgram` socket standing in for the physical Lithernet
+   gateway. This superseded and replaced Phase 1's `lan-adapters/casambi-remote-socket.test.ts`,
+   which tested an adapter interface Phase 2 deleted.
 3. **Real-loopback smoke test** — `services/lan/src/loopback.smoke.test.ts` uses the REAL
    `node:dgram`-backed server (not a fake) on `127.0.0.1`, proving actual OS sockets move bytes
    through the full pipeline.
@@ -253,7 +265,135 @@ broadcast reception — the actual bug this service exists to fix — has not be
 real hardware in this session either; that requires a Linux host running the `lan-host` overlay
 against a real Casambi/KNX device, which this sandboxed environment cannot originate.
 
-## 10. Future extensibility
+## 10. Phase 2 — Casambi migration (completed) and the Transport Monitor
+
+Phase 2 completed the ONE thing Phase 1 deliberately deferred: making `@supreme/lan` the real,
+default transport for a real driver, using Casambi as the reference implementation per the
+Phase 2 brief's Critical Requirement ("do not proceed to KNX, Matter, or any other protocol until
+the Casambi driver is fully operational on the new `@supreme/lan` transport ... Use Casambi as the
+reference implementation that validates the architecture before migrating the remaining
+LAN-based drivers").
+
+### 11.1 What changed
+
+- `CasambiUdpSocketLike` / `CasambiUdpSocketFactory` — **deleted**. `CasambiUdpEngine`
+  (`services/protocols/src/casambi/local-transport/udp-engine.ts`) no longer owns a raw socket or
+  defines any protocol-specific socket interface; it takes a required `udpTransportFactory:
+  UdpTransportFactory` and calls `UdpTransport.bind()/send()/close()` directly. Every other public
+  method/getter kept its exact prior name and shape, so `command-engine.ts`, `discovery-engine.ts`,
+  and `casambi-driver.ts` needed **zero changes** to their command/event dispatch logic — only the
+  UDP engine's internals changed, satisfying the "do not modify Discovery/Event/Command engine"
+  constraint by construction rather than by care.
+- `LocalDirectUdpTransport` (`services/lan/src/client/local-direct-udp-transport.ts`, new) — a
+  same-process `UdpTransport` wrapping the existing tested `DgramUdpSession`, for single-process
+  dev/test stacks where no separate `supreme-lan` deployment exists (no NATS hop).
+- **Transport resolution is centralized, once**, in
+  `services/gateway/src/installer-context.ts`'s `nativeDriverContext()`: real NATS configured
+  (`config.natsUrl` set) → `NatsUdpTransportClient` reaching a real `supreme-lan` service;
+  otherwise → `LocalDirectUdpTransport`. `services/gateway/src/native-driver-factory.ts`'s casambi
+  factory consumes this via `ctx.udpTransportFactory`, falling back to `LocalDirectUdpTransport`
+  only when no context is supplied at all (e.g. a test constructing the factory directly). This is
+  the ONE decision point for every future LAN-dependent driver, not a per-protocol choice.
+- The Test Connection route (`services/gateway/src/routes/installer.ts`,
+  `/v1/commissioning/casambi/test-connection`) resolves its diagnostic `CasambiUdpEngine` through
+  the identical resolution logic, so a "Test Connection" result reflects the same network vantage
+  point the real persistent driver would actually use in production.
+- **Cloud implementation, entity model, discovery engine, event engine, command engine, Driver
+  Manager UI, and the existing Cloud REST implementation are byte-for-byte unchanged** — confirmed
+  by zero edits to any of those files and the full pre-existing test suite passing unmodified.
+
+### 11.2 The Transport Monitor
+
+A new, additive, developer-grade diagnostics view — separate from the long-standing
+`/v1/drivers/:id/casambi/diagnostics` (installer-facing, unchanged) — at
+`/v1/drivers/:id/casambi/transport-monitor` (`services/gateway/src/routes/installer.ts`), backed by
+`CasambiProtocolDriver.getCasambiTransportMonitor()`
+(`services/protocols/src/casambi/transport-monitor.ts`). Four layers, matching the brief's example
+shape, each sourced from a real counter — nothing estimated or backfilled:
+
+| Section | Fields | Source |
+|---|---|---|
+| **Transport** | backend (`local-direct`/`nats`/`unknown`), listening, local address/port, packets sent/received, last error | `CasambiUdpEngine.transportDiagnostics` — read off whichever concrete `UdpTransport` is actually bound, via `instanceof`, never assumed from config |
+| **NATS** (Gateway route only, when backend is `nats`) | the running `supreme-lan` service's own interfaces, configured network mode, session diagnostics | `queryLanHealth()` (new client helper, `services/lan/src/client/query-lan-health.ts`) — calls the `supreme.lan.health` subject Phase 1 already built a server handler for but nothing had called from the Gateway side yet |
+| **Casambi Adapter** | packets received, decoded, decode failures, last packet, last decode error, recent trace | `CasambiUdpEngine.decodedCount`/`decodeFailureCount` (new counters) + the pre-existing `recentTraces` |
+| **Driver** | entities, discovery events, commands issued, feedback events | New lifetime counters on `CasambiProtocolDriver` (`discoveryEventsCount`/`commandsIssuedCount`/`feedbackEventsCount`), incremented at the same points that already drive `getState()`/`onDriverEvent()` |
+
+**What is deliberately absent, and why:** Broadcast-vs-unicast receive counts (nothing in this
+codebase filters or distinguishes by destination address — that was the actual root cause fixed
+in the prior UDP Receive Pipeline Audit session, so tracking it separately would imply a
+distinction that doesn't exist). A NATS "dropped" counter (neither `IEventBus` implementation has
+a queue that can silently drop a message today — reporting `0` would look like a measurement,
+not an honest "not applicable"). Cross-layer counts (transport vs. adapter vs. driver) are
+reported independently and are expected to agree — a real production issue would show up as a
+**disagreement** between layers, which is the entire diagnostic point of separating them.
+
+The Transport Monitor endpoint is implemented, typechecked, and unit/integration-tested (below).
+**A dedicated UI page for it was not built this phase** — the endpoint is deliberately new/separate
+so a future UI page (not the existing Driver Manager, per the "do not modify" constraint) can
+consume it; see `TODO.md` for this as an explicit follow-up rather than a silently dropped
+requirement.
+
+### 11.3 Real hardware validation — stated honestly
+
+**This sandboxed environment cannot connect to real Lithernet hardware, a real Windows Docker
+Desktop host, or a real Linux Docker host.** Everything claimed as "tested" in this phase is one
+of: a fake-transport unit test, a fake-`dgram`-socket integration test, or a REAL loopback
+`node:dgram` test on `127.0.0.1` inside this sandbox — never a real LAN, never real broadcast
+traffic from real Casambi hardware. Specifically NOT verified this phase, and not claimed to be:
+
+- Whether the migrated Casambi driver actually receives the real broadcast NotifyControlValues
+  traffic from the real Lithernet gateway (192.168.0.45) captured in the earlier Wireshark
+  session, when running through a real `supreme-lan` service on real Linux host networking.
+- Any behavior on real Windows Docker Desktop.
+- Any behavior on a real multi-container Linux Docker Compose deployment (`docker compose up`
+  with the `lan-host`/`nats-loopback` overlays) — the overlay files were validated with `docker
+  compose config` (parses correctly) in Phase 1, not with real running containers.
+
+What WAS actually run and passed in this sandbox, and is meaningful evidence the migration is
+architecturally sound: `services/protocols/src/casambi/casambi-over-supreme-lan.test.ts` proves
+the REAL, unmodified `CasambiProtocolDriver` connects, discovers a unit, updates capability state,
+fires a button event, and issues a command — all the way through a REAL `NatsUdpTransportClient`
++ REAL `UdpTransportServer` sharing a REAL `IEventBus`, with only the innermost `node:dgram`
+socket faked (the same disclosed testing tier this codebase uses everywhere it cannot originate
+real network hardware). It also proves the failure path: if no `supreme-lan` service answers on
+the bus, `connect()` rejects honestly within the configured timeout rather than silently
+"succeeding" — the exact case the Phase 2 brief's Failure Handling clause was written for.
+
+**The next real-world step, not done here:** run this exact build against the real Lithernet
+gateway on a real Linux Docker host with the `lan-host` overlay active, and confirm
+`GET /v1/drivers/:id/casambi/transport-monitor` shows a nonzero `adapter.packetsReceived` from
+real broadcast traffic. Until that's done, the honest status is "migration is architecturally
+complete and internally proven; hardware re-validation is outstanding," not "hardware-verified."
+
+### 11.4 Performance — measured, in-sandbox loopback numbers only
+
+No dedicated latency-measurement test was added, so this phase reports only what the existing
+test suite's own timings show, clearly labeled as sandbox/loopback figures rather than production
+network measurements: the `casambi-over-supreme-lan.test.ts` suite (7 tests, exercising
+connect/discover/feedback/button/command/error paths through the real client+server+bus chain)
+completes in well under 100ms total, with no individual step requiring an explicit wait beyond a
+single 10ms tick for one asynchronous bus hop. This says the in-process NATS-shaped RPC overhead
+is negligible relative to real network latency, but it is **not** a measurement of real UDP
+broadcast latency, real NATS latency, or real cross-container latency — those all require the
+real-hardware/real-deployment step in §10.3.
+
+### 11.5 Production readiness — honest assessment
+
+**Architecturally complete and internally consistent:** the migration removes Casambi's direct
+socket ownership entirely, centralizes transport selection in one place, preserves every
+byte-for-byte-unchanged constraint the brief required, and is covered by unit tests (engine-level),
+integration tests (driver-over-real-client-and-server), and a wiring-level test (gateway factory
+resolution) — 76 test files / 740 tests in `@supreme/protocols` and 72 files / 295 tests in
+`@supreme/gateway`, all passing, with the new Casambi-specific additions covering the transport
+diagnostics, decoded/decode-failure counters, driver-level counters, NATS client counters, and
+the full over-the-wire proof.
+
+**Not yet production-validated:** real Lithernet hardware, real Windows Docker Desktop, and real
+multi-container Linux deployment, per §10.3. Recommendation: do not consider Casambi's `@supreme
+/lan` migration "done" for a real installation until that hardware retest passes — this matches
+the Phase 2 brief's own Critical Requirement to prove Casambi before touching KNX/Matter.
+
+## 11. Future extensibility
 
 - **macvlan**: not implemented in Phase 1 (see ADR §Decision for why), but the natural evolution
   for a future Kubernetes deployment — `supreme-lan` as a DaemonSet using a macvlan/Multus CNI

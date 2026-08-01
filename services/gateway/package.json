@@ -26,6 +26,7 @@
     "@supreme/contracts": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
     "@supreme/protocols": "workspace:*",
+    "@supreme/lan": "workspace:*",
     "@supreme/identity": "workspace:*",
     "@supreme/permissions": "workspace:*",
     "@supreme/home": "workspace:*",

@@ -12,7 +12,7 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tracer.js";
-import { statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
+import { capabilitiesFromUnit, statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import {
   CasambiSessionExpiredError,
   type CasambiCredentials,
@@ -36,6 +36,7 @@ import {
   type CasambiSignal,
 } from "./event-engine.js";
 import { buildDiagnosticsSnapshot, type CasambiDiagnosticsSnapshot } from "./diagnostics.js";
+import { buildTransportMonitorSnapshot, type CasambiTransportMonitorSnapshot } from "./transport-monitor.js";
 import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
 
 /**
@@ -160,6 +161,11 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private latencyMs: number | null = null;
   private lastEventAt: string | null = null;
   private lastError: string | null = null;
+  /** § LAN Transport Phase 2 — Transport Monitor's Driver-layer counters. Lifetime, additive
+   * only — never reset except by constructing a new driver instance. */
+  private discoveryEventsCount = 0;
+  private commandsIssuedCount = 0;
+  private feedbackEventsCount = 0;
 
   constructor(opts: CasambiDriverOptions) {
     this.mode = opts.connectionMode ?? "cloud";
@@ -246,6 +252,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
     this.tracer.send(`controlUnit ${b.unitId}`);
     await this.commandEngine.send(b.unitId, command, prev);
+    this.commandsIssuedCount += 1;
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -311,6 +318,37 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
             lastPacketAt: local.udp.lastPacketAt,
             averageLatencyMs: local.udp.averageLatencyMs,
             lastSendError: local.udp.lastSendError,
+            lastDecodeError: local.udp.lastDecodeError,
+            recentTraces: local.udp.recentTraces,
+          }
+        : null,
+    });
+  }
+
+  /** § LAN Transport Phase 2 — Transport Monitor. Layered, developer-grade diagnostics
+   * (Transport/Casambi Adapter/Driver — the Gateway route separately attaches the service-wide
+   * "NATS"/`supreme-lan` layer via `queryLanHealth`, since only the Gateway holds the event bus).
+   * Additive to {@link getCasambiDiagnostics} — does not change its existing shape. */
+  getCasambiTransportMonitor(): CasambiTransportMonitorSnapshot {
+    const local = this.mode === "local" ? this.localTransport : null;
+    let entities = 0;
+    for (const unit of this.units.values()) if (capabilitiesFromUnit(unit).length > 0) entities += 1;
+    return buildTransportMonitorSnapshot({
+      mode: this.mode,
+      entities,
+      discoveryEvents: this.discoveryEventsCount,
+      commandsIssued: this.commandsIssuedCount,
+      feedbackEvents: this.feedbackEventsCount,
+      local: local
+        ? {
+            listening: local.udp.listening,
+            localAddress: local.udp.localAddress,
+            localPort: local.udp.localPort,
+            transportDiagnostics: local.udp.transportDiagnostics,
+            packetsReceived: local.udp.packetsReceived,
+            decoded: local.udp.decodedCount,
+            decodeFailures: local.udp.decodeFailureCount,
+            lastPacketAt: local.udp.lastPacketAt,
             lastDecodeError: local.udp.lastDecodeError,
             recentTraces: local.udp.recentTraces,
           }
@@ -517,6 +555,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   private mergeUnit(unit: CasambiUnit): CasambiUnit {
     const prev = this.units.get(unit.id);
+    if (!prev) this.discoveryEventsCount += 1;
     // Events are complete for the state they carry; merge so static fields (name/type/fixture/group)
     // survive partial event payloads.
     const merged: CasambiUnit = { ...prev, ...unit };
@@ -529,6 +568,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     const k = bindingKey(deviceId, capability);
     const prev = this.states.get(k);
     if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
+    this.feedbackEventsCount += 1;
     this.states.set(k, state);
     const ts = nowIso();
     for (const l of this.listeners) l({ deviceId, capability, state, ts });

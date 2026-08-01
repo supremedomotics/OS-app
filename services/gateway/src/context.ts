@@ -536,6 +536,7 @@ export class AppContext {
       pendingDeviceStore: deps.pendingDeviceStore,
       configStore: this.homeConfig,
       envDrivers: deps.envDrivers,
+      bus: this.bus,
     });
     await this.installer.init();
 

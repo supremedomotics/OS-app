@@ -50,23 +50,40 @@
 - **Complexity:** Medium, once the real byte semantics are confirmed against hardware.
 - **Status:** Not started; honestly gated (never fabricated) as of PR-2.
 
-### supreme-lan Phase 2 — default Casambi UDP onto the remote transport
-- **Description:** `services/protocols/src/lan-adapters/casambi-remote-socket.ts` is built and
-  proven (the real `CasambiUdpEngine` sending/receiving real packets entirely over a
-  `supreme-lan`-backed `UdpTransport`, `casambi-remote-socket.test.ts`), but `CasambiUdpEngine`'s
-  default `socketFactory` is still real local `dgram`, unchanged. Flipping the default (or adding
-  a driver config toggle) so a deployed Casambi Local Gateway driver actually routes through a
-  running `supreme-lan` service is the real fix for the original `Packets Received = 0` /
-  Docker-bridge-drops-broadcast bug this whole refactor was triggered by.
-- **Reason:** deliberately held out of the Phase 1 session — Casambi's UDP engine was
-  hardware-validated across two recent sessions; stacking a brand-new, first-time cross-container
-  RPC path underneath it as the DEFAULT in the same session that introduces that RPC path for the
-  first time would combine two unproven changes.
+### supreme-lan Phase 2 — real hardware retest of the (now-default) Casambi transport
+- **Description:** Phase 2 is CODE-COMPLETE — `CasambiUdpEngine` no longer owns a raw socket;
+  `CasambiUdpSocketLike` is deleted; the Casambi Local Gateway driver now DEFAULTS through
+  `@supreme/lan` (`NatsUdpTransportClient` when NATS is configured, `LocalDirectUdpTransport`
+  otherwise), resolved centrally in `installer-context.ts`. What's NOT done: re-verifying this
+  against the real Lithernet gateway on a real Linux host running the `docker-compose.
+  lan-host.yml` overlay. This sandbox cannot originate that test — everything shipped this phase
+  was proven at the loopback/in-process/fake-socket tier only (see
+  `casambi-over-supreme-lan.test.ts`, 7 tests, and architecture doc §10.3).
+- **Reason:** the whole point of this refactor was fixing real LAN broadcast reception that a real
+  Wireshark capture proved was being silently dropped by Docker bridge networking. That fix is not
+  "done" for a real installation until it's confirmed against real hardware — the migration being
+  internally correct is necessary but not sufficient.
 - **Dependencies:** a real Lithernet Gateway + a Linux host running the `docker-compose.
-  lan-host.yml` overlay, to confirm real LAN broadcast reception actually reaches the driver now
-  (not just the loopback/in-process tests already passing).
-- **Complexity:** Small once hardware is available — the adapter itself needs no further code.
-- **Status:** Not started; disclosed in `docs/architecture/Supreme-LAN-Transport-Architecture.md` §8.
+  lan-host.yml`/`docker-compose.nats-loopback.yml` overlays; confirm `GET /v1/drivers/:id/
+  casambi/transport-monitor` shows nonzero `adapter.packetsReceived` from real broadcast traffic.
+- **Complexity:** Small (no further code expected) — pure verification.
+- **Status:** Blocked on hardware access. Per the governing brief's Critical Requirement, KNX/
+  Matter/other LAN protocol migrations (Phases 3-5) stay on hold until this passes.
+
+### Transport Monitor — dedicated UI page
+- **Description:** The Transport Monitor backend (`CasambiProtocolDriver.
+  getCasambiTransportMonitor()`, `GET /v1/drivers/:id/casambi/transport-monitor`) is implemented
+  and tested, but has no dedicated UI page yet — Phase 2's "do not modify the Driver Manager UI"
+  constraint means it needs its own new page, not an addition to `drivers.tsx`'s existing
+  diagnostics panel.
+- **Reason:** the user asked for this to become "the primary debugging tool for every LAN
+  protocol" — a backend-only endpoint doesn't deliver that on its own.
+- **Dependencies:** none technically, but per CLAUDE.md's UI standards a new page needs real
+  Aureon-token styling and Playwright-verified responsive testing at all four density tiers before
+  being considered done — deliberately not rushed into this session alongside the backend work.
+- **Complexity:** Small — the data shape already matches the four-section layout requested; this
+  is presentation work, not new backend logic.
+- **Status:** Not started.
 
 ### supreme-lan Phase 3a — default KNX Discovery onto the remote transport
 - **Description:** `services/protocols/src/lan-adapters/knx-discovery-remote-socket.ts` is built
@@ -698,6 +715,34 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **`supreme-lan` LAN Transport Service — Phase 2 (Casambi Migration & Transport Monitor)** —
+  migrated the Casambi Local Gateway driver completely onto `@supreme/lan`, using it as the
+  reference implementation per the governing brief. `CasambiUdpSocketLike`/`CasambiUdpSocketFactory`
+  deleted; `CasambiUdpEngine` now consumes the generic `UdpTransport` directly (no adapter layer,
+  unlike KNX/mDNS/SSDP's Phase 1 shape) via a required `udpTransportFactory`. New
+  `LocalDirectUdpTransport` (`@supreme/lan`) covers same-process dev/test (no NATS hop). Transport
+  selection centralized once in `installer-context.ts`'s `nativeDriverContext()`
+  (NATS-configured → `NatsUdpTransportClient`; otherwise → `LocalDirectUdpTransport`) — the Casambi
+  Local Gateway driver now DEFAULTS through `@supreme/lan` in every environment, not just when
+  explicitly opted in. New layered Transport Monitor (`getCasambiTransportMonitor()`,
+  `GET /v1/drivers/:id/casambi/transport-monitor`) — Transport/NATS/Casambi Adapter/Driver
+  sections, each backed by a real counter (new `decodedCount`/`decodeFailureCount`/
+  `transportDiagnostics` on the UDP engine; new `packetsSent`/`packetsReceived`/`requestsSent`/
+  `eventsReceived`/`lastError` on `NatsUdpTransportClient`; new `discoveryEventsCount`/
+  `commandsIssuedCount`/`feedbackEventsCount` on the driver); new `queryLanHealth()` client helper
+  calls the `supreme.lan.health` subject Phase 1 built server-side but nothing had called yet.
+  Cloud implementation, entity model, discovery/event/command engines, and the Driver Manager UI
+  are byte-for-byte unchanged (zero edits). New cross-package proof test
+  (`casambi-over-supreme-lan.test.ts`, 7 tests) runs the REAL, unmodified `CasambiProtocolDriver`
+  through its full connect/discover/feedback/command lifecycle over a REAL `NatsUdpTransportClient`
+  + REAL `UdpTransportServer` sharing a REAL `IEventBus` (only the innermost `node:dgram` socket
+  faked), including the honest failure path (unreachable `supreme-lan` → `connect()` rejects,
+  never silently "succeeds"). Full monorepo `turbo run build typecheck test`: 173/173 tasks green,
+  zero regression. **Honestly NOT done:** real Lithernet hardware, real Windows Docker Desktop, and
+  real multi-container Linux deployment were not (and could not be) re-verified from this sandbox
+  — see the two High-priority TODO items above and
+  `docs/architecture/Supreme-LAN-Transport-Architecture.md` §10.3 for the exact scope of what
+  remains outstanding before this is production-verified.
 - **Production Architecture Refactor — `supreme-lan` LAN Transport Service (Phase 1)** — real
   hardware proved Docker bridge networking silently drops LAN broadcast/multicast (the Casambi
   Wireshark capture); moving the whole Gateway to host networking (tried previously) broke it

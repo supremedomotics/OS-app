@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InProcessEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient } from "./client/nats-udp-transport-client.js";
+import { queryLanHealth } from "./client/query-lan-health.js";
 import { UdpTransportServer } from "./server/udp-transport-server.js";
 import type { DgramSocketLike } from "./server/dgram-udp-session.js";
 
@@ -176,6 +177,80 @@ describe("supreme-lan client <-> server contract (InProcessEventBus)", () => {
       networkMode: "bridge",
       natsConnected: false,
       sessions: [expect.objectContaining({ localPort: 5100, packetsSent: 0, packetsReceived: 0 })],
+    });
+  });
+
+  // § LAN Transport Phase 2 — Transport Monitor's "NATS" section: real per-client-instance
+  // counts of bus operations, not an estimate.
+  describe("NatsUdpTransportClient diagnostic counters (Transport Monitor)", () => {
+    it("starts at zero before any call", async () => {
+      const { client } = await setup();
+      expect(client.requestsSent).toBe(0);
+      expect(client.eventsReceived).toBe(0);
+      expect(client.packetsSent).toBe(0);
+      expect(client.packetsReceived).toBe(0);
+      expect(client.lastError).toBeNull();
+    });
+
+    it("counts one requestsSent per command (bind/send/close), and packetsSent only on a successful send", async () => {
+      const { client } = await setup();
+      await client.bind({});
+      expect(client.requestsSent).toBe(1);
+      await client.send(Buffer.from("hello"), 10009, "192.168.0.45");
+      expect(client.requestsSent).toBe(2);
+      expect(client.packetsSent).toBe(1);
+      await client.close();
+      expect(client.requestsSent).toBe(3);
+    });
+
+    it("counts a real received datagram in both eventsReceived and packetsReceived", async () => {
+      const { client, socket } = await setup();
+      await client.bind({});
+      socket.receive(Buffer.from("real hardware payload"));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(client.eventsReceived).toBe(1);
+      expect(client.packetsReceived).toBe(1);
+    });
+
+    it("send() failure is reflected in lastError without incrementing packetsSent", async () => {
+      const bus = new InProcessEventBus();
+      const socket = new FakeDgramSocket();
+      socket.send = (_msg, _port, _address, callback) => callback?.(new Error("ENETUNREACH"));
+      const server = new UdpTransportServer(bus, () => socket);
+      await server.start();
+      const client = new NatsUdpTransportClient(bus, { timeoutMs: 500 });
+      await client.bind({});
+      await expect(client.send(Buffer.from("x"), 1, "1.2.3.4")).rejects.toThrow(/ENETUNREACH/);
+      expect(client.packetsSent).toBe(0);
+      expect(client.lastError).toMatch(/ENETUNREACH/);
+    });
+  });
+
+  // § LAN Transport Phase 2 — the Gateway-side caller for `supreme-lan`'s existing
+  // `supreme.lan.health` subject (Phase 1 built the server handler; nothing called it from the
+  // client side until now).
+  describe("queryLanHealth()", () => {
+    it("returns the real, live snapshot from a running supreme-lan health handler", async () => {
+      const bus = new InProcessEventBus();
+      const { handleRequests } = await import("./shared/rpc.js");
+      const { lanSubjects } = await import("./shared/wire-types.js");
+      const { buildDiagnosticsSnapshot } = await import("./server/health.js");
+      const socket = new FakeDgramSocket();
+      const server = new UdpTransportServer(bus, () => socket);
+      await server.start();
+      await handleRequests(
+        bus,
+        lanSubjects.health,
+        async () => buildDiagnosticsSnapshot({ networkMode: "host", natsConnected: true, startedAt: Date.now(), sessions: server.sessionDiagnostics() }),
+        () => buildDiagnosticsSnapshot({ networkMode: "host", natsConnected: true, startedAt: Date.now(), sessions: [] }),
+      );
+      const health = await queryLanHealth(bus, 500);
+      expect(health).toMatchObject({ networkMode: "host", natsConnected: true, sessions: [] });
+    });
+
+    it("throws honestly (never a fabricated empty snapshot) when no supreme-lan service answers", async () => {
+      const bus = new InProcessEventBus(); // nobody subscribed to supreme.lan.health
+      await expect(queryLanHealth(bus, 100)).rejects.toThrow(/timed out/);
     });
   });
 });

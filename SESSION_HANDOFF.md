@@ -4,6 +4,67 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: `supreme-lan` LAN Transport Service — Phase 2 (Casambi Migration & Transport Monitor)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e` (continues Phase 1 below). Full account,
+including the honest hardware/Windows/Linux assessment: **`docs/architecture/
+Supreme-LAN-Transport-Architecture.md` §10**. ADR 0022's status line updated to reflect Phase 2 as
+implemented. Per the governing brief's Critical Requirement, **do not start KNX/Matter/any other
+protocol migration until Casambi is confirmed operational on real hardware** — that hasn't
+happened yet (see below); the existing `lan-adapters/` (KNX Discovery/mDNS/SSDP) remain exactly as
+Phase 1 left them, untouched.
+
+**What changed this session:**
+- **`CasambiUdpSocketLike`/`CasambiUdpSocketFactory` deleted entirely.** `CasambiUdpEngine`
+  (`services/protocols/src/casambi/local-transport/udp-engine.ts`) now takes a required
+  `udpTransportFactory: UdpTransportFactory` and calls the generic `UdpTransport` (`@supreme/lan`)
+  directly — no adapter layer, no raw `node:dgram` inside this package anymore. Every other public
+  method/getter kept its exact prior shape, so `command-engine.ts`, `discovery-engine.ts`, and
+  `casambi-driver.ts`'s command/event dispatch needed **zero edits**.
+- **`LocalDirectUdpTransport`** (new, `services/lan/src/client/local-direct-udp-transport.ts`) — a
+  same-process `UdpTransport` (real `node:dgram`, no NATS hop) for single-process dev/test, wrapping
+  the already-tested `DgramUdpSession`.
+- **Transport selection is centralized once**, in `services/gateway/src/installer-context.ts`'s
+  `nativeDriverContext()`: real NATS configured → `NatsUdpTransportClient`; otherwise →
+  `LocalDirectUdpTransport`. `native-driver-factory.ts`'s casambi factory and the Test Connection
+  route (`routes/installer.ts`) both consume this same resolution — Casambi's Local Gateway driver
+  now **defaults through `@supreme/lan`** in every environment, not just when explicitly configured.
+- **Transport Monitor** (new): `CasambiProtocolDriver.getCasambiTransportMonitor()`
+  (`services/protocols/src/casambi/transport-monitor.ts`) — four real, non-fabricated layers
+  (Transport/NATS/Casambi Adapter/Driver), exposed at the new
+  `GET /v1/drivers/:id/casambi/transport-monitor` route, separate from the existing
+  `casambi/diagnostics` route (unchanged). New counters added purely additively:
+  `CasambiUdpEngine.decodedCount`/`decodeFailureCount`/`transportDiagnostics`,
+  `NatsUdpTransportClient.packetsSent`/`packetsReceived`/`requestsSent`/`eventsReceived`/
+  `lastError`, `CasambiProtocolDriver`'s `discoveryEventsCount`/`commandsIssuedCount`/
+  `feedbackEventsCount`. New `queryLanHealth()` client helper (`@supreme/lan`) calls the
+  `supreme.lan.health` subject Phase 1 built a server handler for but nothing had called yet.
+  **No dedicated UI page built this session** — see TODO.md.
+- **Cloud implementation, entity model, discovery/event/command engines, Driver Manager UI, and
+  the existing Cloud REST implementation are byte-for-byte unchanged** — zero edits to any of those
+  files; confirmed by the full pre-existing test suite passing unmodified.
+
+**Tests (all passing, all in this session):** rewrote `udp-engine.test.ts` (35 tests, all UdpTransport-
+based) and `casambi-driver.test.ts` (34 tests) onto the new architecture; new
+`casambi-over-supreme-lan.test.ts` (7 tests) — the cross-package proof that the REAL, unmodified
+`CasambiProtocolDriver` connects/discovers/updates state/fires events/issues commands entirely over
+a REAL `NatsUdpTransportClient` + REAL `UdpTransportServer` sharing a REAL `IEventBus` (fake
+`node:dgram` only), plus the honest failure-path proof (no `supreme-lan` reachable → `connect()`
+rejects, never silently "succeeds"); new `NatsUdpTransportClient`/`queryLanHealth` tests in
+`@supreme/lan`'s `contract.test.ts`; new `native-driver-factory.test.ts` tests proving the factory
+actually uses a supplied `udpTransportFactory` and correctly falls back to
+`LocalDirectUdpTransport`. Full monorepo `turbo run build typecheck test`: **173/173 tasks green**
+(`@supreme/protocols` 76 files/740 tests, `@supreme/gateway` 72 files/295 tests, `@supreme/lan` 4
+files/34 tests — all up from Phase 1's counts, zero regression anywhere).
+
+**Disclosed, not resolved this session (see TODO.md and architecture doc §10.3):** this sandbox
+cannot reach real Lithernet hardware, real Windows Docker Desktop, or a real multi-container Linux
+deployment. Everything above is proven at the loopback/in-process/fake-socket tier — real
+production LAN broadcast reception through a real host-networked `supreme-lan` has **not** been
+re-verified. The Transport Monitor has a working backend + route but no dedicated UI page yet.
+KNX/mDNS/SSDP migration remains explicitly on hold pending that hardware retest, per the governing
+brief.
+
 ## Session: Production Architecture Refactor — `supreme-lan` LAN Transport Service (Phase 1)
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the sessions below — this is now a
