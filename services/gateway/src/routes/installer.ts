@@ -411,11 +411,17 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
+      // § Discovery UX correction — this endpoint is about GATEWAY discovery only (finding the
+      // Lithernet Gateway's own IP), which genuinely has no documented API. It says nothing about
+      // DEVICE discovery, which IS implemented and automatic once the gateway is reachable
+      // (`local-discovery.ts` builds units from incoming NotifyControlValues UDP notifications).
+      // The previous wording ("Auto-discovery is not implemented") conflated the two and wrongly
+      // read as "Casambi devices must be added by hand."
       reply.send({
         implemented: false,
         gateways: [],
         message:
-          "Auto-discovery is not implemented — no gateway enumeration/discovery endpoint is documented for the Lithernet Gateway. Enter its IP address manually.",
+          "Automatic GATEWAY discovery is not available — the Lithernet Gateway documentation defines no network discovery API (no REST enumeration endpoint, no SSDP/mDNS profile), so its IP must be entered manually. This does not affect DEVICE discovery: once the gateway is connected, Casambi devices are discovered automatically from incoming UDP notifications, with no manual device creation.",
       });
     } catch (err) {
       sendError(reply, err);

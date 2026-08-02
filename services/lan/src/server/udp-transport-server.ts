@@ -14,6 +14,7 @@ import {
   type LanSessionDiagnostics,
 } from "../shared/wire-types.js";
 import { DgramUdpSession, defaultDgramSocket, type DgramSocketFactory } from "./dgram-udp-session.js";
+import { diagnoseRouting } from "./routing-diagnosis.js";
 
 /**
  * The `supreme-lan` server core (§ Production Architecture Refactor). Owns every real UDP socket
@@ -31,6 +32,11 @@ export class UdpTransportServer {
   constructor(
     private readonly bus: IEventBus,
     private readonly socketFactory: DgramSocketFactory = defaultDgramSocket,
+    /** § ENETUNREACH investigation — the deployment mode as EXPLICITLY configured
+     * (`SUPREME_LAN_NETWORK_MODE`), never self-detected, so a send-failure diagnosis can name the
+     * deployment shape honestly. Defaults to `"bridge"` because that is what the base
+     * `docker-compose.yml` actually deploys. */
+    private readonly networkMode: "bridge" | "host" | "macvlan" = "bridge",
   ) {}
 
   async start(): Promise<void> {
@@ -128,7 +134,16 @@ export class UdpTransportServer {
       await session.send(Buffer.from(req.dataBase64, "base64"), req.port, req.host);
       return { ok: true };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      // § ENETUNREACH investigation — attach a real routing diagnosis computed HERE, inside the
+      // process that actually owns the socket and can see the real interfaces. The Gateway side
+      // has no visibility into supreme-lan's network namespace, so this is the only place the
+      // question "is there even a route to that address?" can be answered honestly.
+      const code = (err as NodeJS.ErrnoException | undefined)?.code ?? null;
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        diagnosis: diagnoseRouting({ destination: req.host, errorCode: code, configuredNetworkMode: this.networkMode }),
+      };
     }
   }
 

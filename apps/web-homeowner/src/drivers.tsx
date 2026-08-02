@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { StatusDot } from "@supreme/aureon-web";
 import {
   type CasambiDiagnostics,
   type CasambiTestConnectionResult,
@@ -464,9 +465,21 @@ function CasambiTestConnectionReport({ res }: { res: CasambiTestConnectionResult
  * auth check (using the Gateway Username/Password entered above, never Cloud credentials) and
  * the honest UDP socket lifecycle (created/bound/packet sent/notification received) against the
  * gateway address/ports/Net ID/data format entered above — never a write, so it can never
- * actuate a real device. "Auto Discover" honestly reports "not implemented" — no gateway
- * enumeration/discovery endpoint is documented for the Lithernet Gateway, never a fabricated
- * success.
+ * actuate a real device.
+ *
+ * § Discovery UX correction: this panel deliberately separates the TWO different discovery
+ * mechanisms, which an earlier single "Auto Discover / not implemented" control wrongly conflated
+ * into "discovery doesn't work":
+ *
+ *  - GATEWAY discovery (finding the Lithernet Gateway's IP) genuinely is NOT available — no
+ *    discovery API, SSDP/mDNS profile, or enumeration endpoint is documented anywhere in the
+ *    supplied Lithernet reference set. The IP must be entered manually. Implementing a speculative
+ *    scan would be fabricating a protocol the vendor never defined.
+ *  - DEVICE discovery (finding the Casambi units behind that gateway) IS implemented and fully
+ *    automatic — `local-discovery.ts`'s `updateUnitFromControlValues` builds real units from
+ *    incoming NotifyControlValues (opcode 0x4B) UDP notifications. It's progressive rather than
+ *    instant (a unit appears as its first notification arrives, since no REST device-listing
+ *    endpoint exists to enumerate from), but it requires no manual device creation at all.
  */
 function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> }) {
   const [busy, setBusy] = useState<"discover" | "test" | null>(null);
@@ -521,7 +534,7 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
       <span className="lbl">Lithernet Gateway</span>
       <div className="drv-actions" style={{ marginTop: 0 }}>
         <button type="button" disabled={busy !== null} onClick={() => void discover()}>
-          {busy === "discover" ? "Scanning…" : "Auto Discover"}
+          {busy === "discover" ? "Checking…" : "Check for Gateway Discovery"}
         </button>
         <button type="button" disabled={busy !== null} onClick={() => void test()}>
           {busy === "test" ? "Testing…" : "Test Connection"}
@@ -529,6 +542,40 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
       </div>
       {note && <p className="muted">{note}</p>}
       {result && <CasambiTestConnectionReport res={result} />}
+      <CasambiDiscoveryExplainer />
+    </div>
+  );
+}
+
+/**
+ * § Discovery UX correction — the two discovery mechanisms, stated separately and accurately.
+ * Static explanatory copy (no fetch): both facts below are properties of the Lithernet protocol
+ * and this driver's own implementation, not runtime state — the live "has discovery actually
+ * started yet" view belongs in the Diagnostics panel (see `CasambiDiscoveryStatus`), not here.
+ */
+function CasambiDiscoveryExplainer() {
+  return (
+    <div className="drv-discovery-explainer">
+      <div className="drv-discovery-item">
+        <span className="drv-discovery-title">
+          <StatusDot tone="warning" label="Not available" /> Automatic Gateway Discovery
+        </span>
+        <p className="help">
+          Not available. The Lithernet Gateway documentation does not define any network discovery
+          API — no REST enumeration endpoint and no SSDP/mDNS profile. Enter the Gateway IP
+          manually above.
+        </p>
+      </div>
+      <div className="drv-discovery-item">
+        <span className="drv-discovery-title">
+          <StatusDot tone="good" label="Enabled" /> Automatic Device Discovery
+        </span>
+        <p className="help">
+          Enabled. Once the Gateway is connected, SupremeOS automatically discovers Casambi devices
+          from incoming UDP notifications. No manual device creation is required. Units appear
+          progressively, as each one's first notification arrives.
+        </p>
+      </div>
     </div>
   );
 }
@@ -629,7 +676,61 @@ function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
           <CasambiPacketTraceTable traces={udp.recentTraces} />
         </>
       )}
+      {snapshot.connectionType === "local" && <CasambiDiscoveryStatus snapshot={snapshot} />}
     </div>
+  );
+}
+
+/**
+ * § Discovery UX correction — live DEVICE discovery status, Local mode only.
+ *
+ * Device discovery is implemented and automatic; it is simply *driven by incoming UDP traffic*,
+ * so before the first notification arrives there is genuinely nothing discovered yet. This panel
+ * has to say that precisely: "waiting for the first notification" is a normal, expected state on
+ * a freshly-connected gateway, NOT evidence that discovery is unsupported (which is exactly the
+ * wrong conclusion the old wording invited). Every number below is real snapshot state — nothing
+ * is estimated, and no "expected device count" is invented, because the Local protocol provides
+ * no device-listing endpoint to compare against.
+ */
+function CasambiDiscoveryStatus({ snapshot }: { snapshot: CasambiDiagnostics }) {
+  const udp = snapshot.udp;
+  const received = udp?.packetsReceived ?? 0;
+  const running = received > 0;
+  return (
+    <>
+      <h4>Device discovery</h4>
+      <dl className="drv-about">
+        <div>
+          <dt>Status</dt>
+          <dd>
+            {/* "neutral", not "warning": waiting for the first notification on a freshly-connected
+                gateway is a normal expected state, not a fault. */}
+            <StatusDot tone={running ? "good" : "neutral"} label={running ? "Running" : "Waiting"} />{" "}
+            {running ? "Running" : "Waiting for first UDP notification"}
+          </dd>
+        </div>
+        <div><dt>Notifications received</dt><dd>{received}</dd></div>
+        <div><dt>Devices discovered</dt><dd>{snapshot.entities}</dd></div>
+        <div><dt>Entities created</dt><dd>{snapshot.entities}</dd></div>
+        <div><dt>Last discovery event</dt><dd>{snapshot.lastEventAt ? new Date(snapshot.lastEventAt).toLocaleTimeString() : "—"}</dd></div>
+      </dl>
+      {!running && (
+        <p className="help">
+          Waiting for first UDP notification. Device discovery will begin automatically after the
+          first Casambi event is received — no manual device creation is required. If this stays at
+          zero, the problem is the UDP path (see UDP transport above), not device discovery itself.
+        </p>
+      )}
+      {/* Rooms are assigned by the shared Room Assignment Engine at commissioning time, from the
+          discovery queue's room hint — not by this driver, and the Local UDP protocol carries no
+          room/group name of its own to derive one from. Stating a "rooms assigned" count here
+          would imply this driver does something it doesn't. */}
+      <p className="help">
+        Room assignment happens at commissioning, via the shared Room Assignment Engine — the
+        Casambi Local UDP protocol carries no room or group names, so rooms cannot be derived from
+        gateway traffic alone.
+      </p>
+    </>
   );
 }
 

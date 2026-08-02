@@ -738,6 +738,28 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Casambi — Discovery UX fix + ENETUNREACH root cause (deployment defect, fixed)** — two
+  independent issues, both resolved without touching any Casambi protocol code. (1) The Driver
+  Manager said "Auto-discovery is not implemented," conflating GATEWAY discovery (genuinely
+  unavailable — no discovery API exists in the Lithernet docs) with DEVICE discovery (implemented
+  and automatic from incoming UDP notifications); now stated as two separate facts in the wizard
+  plus a live discovery-status block in Diagnostics that frames "waiting for first UDP
+  notification" as a normal pre-traffic state, never as an unsupported feature. The misleading
+  string originated in the gateway route's own response message, which was corrected too.
+  (2) `ENETUNREACH` root-caused to a DEPLOYMENT defect and **reproduced on a real Docker Engine**:
+  `docker-compose.yml` attached `lan` to `supreme-core` only, which is `internal: true` and by
+  design has no default route — one variable changed (identical image/code/target) gave
+  `internal: true` → the byte-identical `send ENETUNREACH 192.168.0.45:10009`, normal bridge →
+  `SEND OK`. Fixed with a dedicated non-internal `supreme-lan-egress` network joined only by
+  `lan`; **verified by booting the real stack** — the container now has a default route
+  (previously none) and the identical real `supreme.lan.udp.send` returns `{"ok": true}`. Also
+  corrected the base compose's own comment, which had understated the degradation as "no broadcast
+  reception" when it was actually "no egress at all." New `routing-diagnosis.ts` computes a real
+  routing verdict inside supreme-lan's own namespace (real interfaces + CIDR arithmetic, real
+  platform, explicitly-configured mode — never self-detected), and `failure-analysis.ts` now
+  classifies send errors BEFORE the reception branch so a rejected send is never misreported as a
+  broadcast problem. Full write-up:
+  `docs/architecture/Casambi-ENETUNREACH-Investigation.md`. 13 new tests; 47/47 turbo tasks green.
 - **Casambi Local Gateway — Phase 3, Real Hardware Certification Tooling** — confirmed workflow
   (stated explicitly by the user): this AI session has no network path to real hardware and never
   will; the user runs the validation runbook on their own installation and shares evidence back.

@@ -53,7 +53,12 @@ export interface LanSendRequest {
   port: number;
   dataBase64: string;
 }
-export type LanSendResponse = { ok: true } | { ok: false; error: string };
+/** § ENETUNREACH investigation — a failed send carries a real routing diagnosis (see
+ * `server/routing-diagnosis.ts`), so the Gateway side can tell an installer WHICH layer failed
+ * (deployment / routing / gateway) instead of surfacing a bare errno. Typed loosely here (the
+ * wire layer stays free of the diagnosis module's internals); `RoutingDiagnosis` is the real
+ * shape. Absent on older servers and on non-routing failures — never fabricated. */
+export type LanSendResponse = { ok: true } | { ok: false; error: string; diagnosis?: unknown };
 
 export interface LanCloseRequest {
   replySubject: string;

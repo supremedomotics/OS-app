@@ -1266,6 +1266,14 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .drv-trace-table th { text-align: left; padding: 6px 10px; color: var(--aureon-color-text-secondary); font-weight: 500; border-bottom: 1px solid var(--aureon-color-base-hairline); white-space: nowrap; }
 .drv-trace-table td { padding: 6px 10px; border-bottom: 1px solid var(--aureon-color-base-hairline); color: var(--aureon-color-text-primary); font-family: monospace; white-space: nowrap; }
 
+/* § Discovery UX correction — Gateway vs Device discovery, stated as two separate facts so
+   "no gateway discovery API" never reads as "device discovery unavailable". */
+.drv-discovery-explainer { display: grid; gap: 10px; margin-top: 10px; padding: 12px; border: 1px solid var(--aureon-color-base-hairline); border-radius: 12px; background: var(--aureon-color-base-surface); }
+.drv-discovery-item { display: flex; flex-direction: column; gap: 3px; }
+.drv-discovery-title { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--aureon-color-text-primary); }
+.drv-discovery-explainer .help { margin: 0; font-size: 12px; color: var(--aureon-color-text-secondary); line-height: 1.5; }
+[data-density="expanded"] .drv-discovery-explainer { grid-template-columns: 1fr 1fr; gap: 16px; }
+
 /* Dashboard hub-resource meters (§ Installer Dashboard, real host telemetry). */
 .stat.meter { align-items: stretch; }
 .meter-bar { height: 5px; border-radius: 999px; background: var(--aureon-color-base-hairline); overflow: hidden; margin: 6px 0 2px; }

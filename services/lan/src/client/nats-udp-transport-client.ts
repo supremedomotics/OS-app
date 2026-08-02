@@ -43,6 +43,7 @@ export class NatsUdpTransportClient implements UdpTransport {
   private _packetsSent = 0;
   private _packetsReceived = 0;
   private _lastError: string | null = null;
+  private _lastSendDiagnosis: unknown = null;
 
   constructor(
     private readonly bus: IEventBus,
@@ -97,9 +98,15 @@ export class NatsUdpTransportClient implements UdpTransport {
     );
     if (!res.ok) {
       this._lastError = res.error;
+      // § ENETUNREACH investigation — the server attaches a real routing diagnosis computed inside
+      // its OWN network namespace (the only place that can answer "is there even a route?").
+      // Keep it verbatim; never synthesize one Gateway-side, where the interfaces belong to a
+      // different container entirely.
+      this._lastSendDiagnosis = res.diagnosis ?? null;
       throw new Error(`supreme-lan: send failed — ${res.error}`);
     }
     this._packetsSent += 1;
+    this._lastSendDiagnosis = null;
   }
 
   async joinMulticast(group: string, iface?: string): Promise<void> {
@@ -152,6 +159,14 @@ export class NatsUdpTransportClient implements UdpTransport {
   }
   get lastError(): string | null {
     return this._lastError;
+  }
+  /** § ENETUNREACH investigation — the `RoutingDiagnosis` the supreme-lan server attached to the
+   * most recent failed send (interfaces, outbound interface, platform, deployment mode, verdict,
+   * explanation, suggested fix), or `null` if the last send succeeded / no diagnosis was
+   * supplied. Read by the Casambi Transport Monitor so an installer sees "deployment" rather than
+   * a bare errno. */
+  get lastSendDiagnosis(): unknown {
+    return this._lastSendDiagnosis;
   }
   get requestsSent(): number {
     return this._requestsSent;

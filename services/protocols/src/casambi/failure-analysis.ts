@@ -50,6 +50,38 @@ export interface CasambiFailureAnalysisReport {
   firstFailingStage: string | null;
 }
 
+/**
+ * § ENETUNREACH investigation — recognizes an OS-level SEND rejection in a transport error string
+ * and names the layer that actually failed. `@supreme/lan`'s `RoutingDiagnosis` (computed inside
+ * supreme-lan's own network namespace) is the richer source when available; this is the
+ * string-level fallback so the Transport Monitor still classifies correctly from a snapshot
+ * alone. Returns `null` for anything not recognized — never a guessed classification.
+ */
+function classifySendError(lastError: string | null): { reason: string; suggestedFix: string } | null {
+  if (!lastError) return null;
+  if (lastError.includes("ENETUNREACH")) {
+    return {
+      reason:
+        "The operating system rejected the UDP send before any packet left the process (ENETUNREACH — no route to the gateway's network). This is a DEPLOYMENT/ROUTING failure, not a Casambi protocol failure: nothing was transmitted, so no reply could arrive.",
+      suggestedFix:
+        "supreme-lan has no route to the LAN. Most common cause: its container is attached only to a Docker network declared `internal: true` (which has no default route by design). Confirm `lan` is on a non-internal network — the base docker-compose.yml now attaches it to `supreme-lan-egress` for exactly this reason. For real broadcast RECEPTION (not just sending) on a Linux hub, additionally layer `docker-compose.lan-host.yml` + `docker-compose.nats-loopback.yml`. On Windows/macOS Docker Desktop, host networking is a no-op for Linux containers — run supreme-lan as a native process instead. See docs/architecture/Casambi-ENETUNREACH-Investigation.md.",
+    };
+  }
+  if (lastError.includes("EHOSTUNREACH")) {
+    return {
+      reason: "A route to the gateway's network exists, but the gateway itself did not respond (EHOSTUNREACH). This is a GATEWAY/addressing issue, not a routing or protocol one.",
+      suggestedFix: "Confirm the Lithernet Gateway is powered on and really at the configured IP (its own web UI, or `ping <gatewayIp>` from the same host).",
+    };
+  }
+  if (lastError.includes("EACCES") || lastError.includes("EPERM")) {
+    return {
+      reason: "The OS refused the send with a permission error. For a broadcast destination this normally means SO_BROADCAST was not set on the socket.",
+      suggestedFix: "If the destination is a broadcast address, ensure the bind requested `broadcast: true`. Otherwise check container capabilities / host security policy (AppArmor, SELinux).",
+    };
+  }
+  return null;
+}
+
 interface StageInput {
   stage: string;
   status: CasambiFailureStageStatus;
@@ -92,6 +124,19 @@ export function buildFailureAnalysisReport(snapshot: CasambiTransportMonitorSnap
         suggestedFix: transport.lastError
           ? `Resolve the reported bind error ("${transport.lastError}") — common causes: another process already bound the UDP port (EADDRINUSE), or insufficient permission to bind it.`
           : "Confirm the Gateway's supreme-lan connectivity: is NatsUdpTransportClient's bind() request actually reaching a running supreme-lan process? Check supreme-lan's own container logs for a bind attempt.",
+      });
+    } else if (classifySendError(transport.lastError) !== null) {
+      // § ENETUNREACH investigation — checked BEFORE the "zero packets received" branch below.
+      // A send that the OS rejected outright is a routing/deployment failure, and diagnosing it
+      // as "the gateway's broadcast isn't reaching us" would point the installer at the wrong
+      // layer entirely: nothing was ever transmitted, so there is nothing to receive a reply to.
+      const cls = classifySendError(transport.lastError)!;
+      push({
+        stage: "Transport (UDP)",
+        status: "fail",
+        reason: cls.reason,
+        evidence: [`transport.listening = true`, `transport.lastError = ${JSON.stringify(transport.lastError)}`, `transport.packetsSent = ${transport.packetsSent}`, `transport.backend = "${transport.backend}"`],
+        suggestedFix: cls.suggestedFix,
       });
     } else if (transport.backend === "nats" && (transport.packetsReceived ?? 0) === 0) {
       push({

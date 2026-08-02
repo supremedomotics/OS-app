@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
 
   const bus = await createEventBus({ natsUrl });
-  const server = new UdpTransportServer(bus);
+  const server = new UdpTransportServer(bus, undefined, networkMode);
   await server.start();
 
   const healthSub = await handleRequests<LanHealthRequest, LanHealthResponse>(

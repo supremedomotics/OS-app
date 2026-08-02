@@ -4,6 +4,52 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi — Discovery UX fix + ENETUNREACH root cause (DEPLOYMENT defect, fixed)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. Full investigation:
+**`docs/architecture/Casambi-ENETUNREACH-Investigation.md`**. Two independent issues, both fixed.
+No Casambi protocol code (UDP codec / Discovery Engine / Entity Mapper / Event Engine) was
+touched, per the governing brief.
+
+**PART 1 — Discovery UX.** The UI said "Auto-discovery is not implemented," conflating two
+different mechanisms and wrongly implying devices must be added by hand. Now stated separately:
+*Automatic Gateway Discovery — Not available* (no discovery API exists in the Lithernet docs; IP
+entered manually) and *Automatic Device Discovery — Enabled* (devices appear automatically from
+incoming UDP notifications, no manual creation). New `CasambiDiscoveryExplainer` in `drivers.tsx`
++ matching Aureon-token CSS; the gateway route's own response message was the source of the
+misleading string and was corrected too. Added a live `CasambiDiscoveryStatus` block to
+Diagnostics that shows real discovery state and, before any traffic, says "Waiting for first UDP
+notification — device discovery will begin automatically," framed as a normal pre-traffic state.
+
+**PART 2 — ENETUNREACH root cause: a DEPLOYMENT defect, reproduced and fixed.**
+`docker-compose.yml` attached `lan` to `supreme-core` ONLY, and that network is `internal: true`
+— which by design has no default route, so the kernel rejected every send to a LAN address before
+a packet left the process. **Reproduced on a real Docker Engine** with one variable changed
+(identical image/code/target): `internal: true` → `SEND FAILED: send ENETUNREACH
+192.168.0.45:10009` (byte-identical to the report); normal bridge → `SEND OK`. Fixed by giving
+`lan` a second, non-internal `supreme-lan-egress` network — every other service keeps its exact
+prior isolation. **Fix verified by booting the real stack**: the container now has a default route
+(previously none) and the identical real `supreme.lan.udp.send` to `192.168.0.45:10009` returns
+`{"ok": true}`.
+
+Note the base compose's own comment had claimed the degraded bridge mode only lost *broadcast
+reception*; reality was worse (no egress at all, not even unicast). Comment corrected. Broadcast
+RECEPTION still requires the host-networking overlay — unchanged and still the documented
+production topology.
+
+**Diagnostics (Part 2 cont.):** new `services/lan/src/server/routing-diagnosis.ts` computes a real
+routing verdict inside supreme-lan's own namespace (real interfaces + CIDR mask arithmetic, real
+`os.platform()`, explicitly-configured network mode — never self-detected), attached to failed-send
+wire responses and exposed via `NatsUdpTransportClient.lastSendDiagnosis`. `failure-analysis.ts`
+gained a snapshot-level send-error classifier that runs BEFORE the "zero packets received" branch,
+so `ENETUNREACH` is named a deployment/routing failure rather than misreported as a
+broadcast-reception problem; `EHOSTUNREACH` → gateway issue; `EACCES` → permission/SO_BROADCAST;
+anything else stays honestly `unknown_error`.
+
+**Tests:** `@supreme/lan` 7 files/56 tests (10 new routing-diagnosis tests); `@supreme/protocols`
+79 files/763 tests (3 new send-classification tests). Full monorepo turbo run across
+lan/protocols/gateway/web-homeowner: 47/47 tasks green. Both compose configurations re-validated.
+
 ## Session: Casambi Local Gateway — Phase 3, Real Hardware Certification Tooling
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e` (continues the Final Hardware Validation

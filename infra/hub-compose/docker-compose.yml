@@ -306,12 +306,25 @@ services:
 
   # supreme-lan (§ Production Architecture Refactor — LAN Transport Service). Business-logic-free:
   # no Postgres, no Redis, no auth — it only owns raw UDP sockets and talks to the Gateway over
-  # NATS (the same event bus the Gateway already connects to). On bridge networking (the default
-  # here) this is a DELIBERATELY DEGRADED mode: fully testable everywhere (Linux, Windows/Mac
-  # Docker Desktop, CI) but real LAN broadcast/multicast still won't reach it — Docker bridge
-  # drops broadcast the same way it always has (that's the whole reason this service exists).
-  # For real LAN access on a Linux hub, layer `docker-compose.lan-host.yml` (+
-  # `docker-compose.nats-loopback.yml`) on top — see
+  # NATS (the same event bus the Gateway already connects to).
+  #
+  # § ENETUNREACH investigation — networks: this service MUST have a non-internal network. It was
+  # previously attached to `supreme-core` ALONE, which is `internal: true`; a container whose only
+  # network is internal has no default route off the host at all, so the kernel rejects every send
+  # to a LAN address with `ENETUNREACH` before a packet leaves the process. That made the default
+  # deployment unable to reach a Lithernet Gateway even by plain unicast — strictly worse than the
+  # "no broadcast reception" this comment used to claim was the only degradation. Verified
+  # experimentally (identical image + code, only the network's `internal` flag changed: internal =>
+  # ENETUNREACH, normal bridge => send succeeds); see
+  # `docs/architecture/Casambi-ENETUNREACH-Investigation.md`.
+  #
+  # `supreme-lan-egress` below is a normal (non-internal) bridge network that ONLY this service
+  # joins — every other service keeps its exact existing `supreme-core` isolation, unchanged.
+  #
+  # Still degraded vs. the documented production topology, and honestly so: bridge networking can
+  # send unicast to the LAN and receive replies, but does NOT receive LAN BROADCAST/multicast (the
+  # original reason this service exists). For that, layer `docker-compose.lan-host.yml` (+
+  # `docker-compose.nats-loopback.yml`) on a Linux hub — see
   # `docs/architecture/Supreme-LAN-Transport-Architecture.md`.
   lan:
     build:
@@ -323,6 +336,7 @@ services:
       SUPREME_LAN_NETWORK_MODE: bridge
     networks:
       - supreme-core
+      - supreme-lan-egress
     depends_on:
       nats:
         condition: service_started
@@ -333,6 +347,10 @@ networks:
   supreme-core:
     driver: bridge
     internal: true # no outbound/inbound to host — pure internal plane
+  # Joined ONLY by `lan` (see its comment above): gives that one service the default route it needs
+  # to reach LAN devices at all. Deliberately NOT internal — that is the entire point.
+  supreme-lan-egress:
+    driver: bridge
 
 volumes:
   ha-data:

@@ -57,6 +57,51 @@ describe("buildFailureAnalysisReport", () => {
     expect(report.stages[0]?.reason).toContain("EADDRINUSE");
   });
 
+  // § ENETUNREACH investigation — a rejected SEND must be diagnosed as deployment/routing, and
+  // must take priority over the "zero packets received" branch (nothing was transmitted, so
+  // blaming reception would point the installer at entirely the wrong layer).
+  it("classifies ENETUNREACH as a DEPLOYMENT/ROUTING failure, not a protocol or reception failure", () => {
+    const snapshot = baseSnapshot({
+      transport: {
+        backend: "nats",
+        listening: true,
+        localAddress: "0.0.0.0",
+        localPort: 10009,
+        packetsSent: 0,
+        packetsReceived: 0,
+        lastError: "supreme-lan: send failed — send ENETUNREACH 192.168.0.45:10009",
+      },
+      adapter: { packetsReceived: 0, decoded: 0, decodeFailures: 0, lastPacketAt: null, lastDecodeError: null, recentTraces: [] },
+      driver: { entities: 0, discoveryEvents: 0, commandsIssued: 0, feedbackEvents: 0, unmappedOpcodeEvents: 0, lastUnmappedOpcode: null, recentJourney: [] },
+    });
+    const report = buildFailureAnalysisReport(snapshot);
+    expect(report.firstFailingStage).toBe("Transport (UDP)");
+    const stage = report.stages.find((s) => s.stage === "Transport (UDP)")!;
+    expect(stage.reason).toMatch(/DEPLOYMENT\/ROUTING failure, not a Casambi protocol failure/);
+    expect(stage.reason).toMatch(/before any packet left the process/);
+    expect(stage.suggestedFix).toMatch(/internal: true/);
+    expect(stage.suggestedFix).toMatch(/supreme-lan-egress/);
+    // Must NOT be misdiagnosed as the broadcast-reception case.
+    expect(stage.suggestedFix).not.toMatch(/broadcast is not reaching supreme-lan/);
+  });
+
+  it("classifies EHOSTUNREACH as a GATEWAY issue, distinct from ENETUNREACH's routing issue", () => {
+    const snapshot = baseSnapshot({
+      transport: { backend: "nats", listening: true, localAddress: "0.0.0.0", localPort: 10009, packetsSent: 0, packetsReceived: 0, lastError: "send EHOSTUNREACH 192.168.0.45:10009" },
+    });
+    const stage = buildFailureAnalysisReport(snapshot).stages.find((s) => s.stage === "Transport (UDP)")!;
+    expect(stage.reason).toMatch(/GATEWAY\/addressing issue/);
+    expect(stage.suggestedFix).toMatch(/powered on and really at the configured IP/);
+  });
+
+  it("leaves an unrecognized transport error to the existing branches rather than inventing a classification", () => {
+    const snapshot = baseSnapshot({
+      transport: { backend: "nats", listening: true, localAddress: "0.0.0.0", localPort: 10009, packetsSent: 5, packetsReceived: 3, lastError: "something entirely unfamiliar" },
+    });
+    const stage = buildFailureAnalysisReport(snapshot).stages.find((s) => s.stage === "Transport (UDP)")!;
+    expect(stage.status).toBe("pass"); // packets flowed; no recognized send failure to report
+  });
+
   it("fails at Casambi Adapter when packets arrive but nothing decodes", () => {
     const snapshot = baseSnapshot({
       adapter: {
