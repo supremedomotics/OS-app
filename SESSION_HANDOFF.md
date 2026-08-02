@@ -4,6 +4,60 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Runtime Data Path Verification — Casambi UDP receive-path evidence tooling
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:
+**`docs/architecture/Casambi-Runtime-Data-Path-Verification.md`**. **No protocol logic modified**
+(UDP codec, Discovery Engine, Entity Mapper, Event Engine untouched).
+
+**The ask:** determine exactly where a UDP packet disappears when `Packets Received` stays at
+zero despite the gateway confirmed broadcasting (Wireshark on the host sees it), with runtime
+evidence rather than another round of assumption.
+
+**Built, in order from the bottom of the stack up:**
+- **Independent UDP probe** (`services/lan/src/server/udp-probe.ts`, opt-in via
+  `SUPREME_LAN_PROBE_PORT`) — a second listener with no decoder, no NATS, no Casambi, bound to the
+  same port. Splits "why does SupremeOS see zero packets?" into two answerable halves: probe deaf
+  too → loss is below SupremeOS; probe hears them → loss is inside SupremeOS, above the socket.
+- **Network + socket forensics** (`services/lan/src/server/network-forensics.ts`) — real
+  `/proc/net/route` (routing table, default gateway), `/proc/net/udp` (kernel's own per-socket
+  **drop counter** — proof packets arrived and were THEN lost, a different diagnosis from "never
+  arrived"), `/proc/self/ns/net` (namespace identity), real socket buffer sizes. Parsers validated
+  against real captured content from this session's own Linux sandbox, cross-checked against
+  Node's own `address()`/`getRecvBufferSize()` for a genuinely bound socket. `null` + stated reason
+  on any non-Linux platform, never a fabricated empty table.
+- **Eleven-stage receive pipeline** (`services/protocols/src/casambi/receive-pipeline.ts`) — OS
+  Network Stack → supreme-lan UDP Socket → Datagram Received → Raw Packet Recorder → NATS Publish →
+  Gateway Subscriber → Casambi UDP Engine → Protocol Decoder → Discovery Engine → Entity Mapper →
+  Room Assignment. `StageMetrics` (entered/exited/failures/timestamps/latency) added to
+  `core/pipeline-stages.ts` with every `null` REQUIRED to carry a reason (enforced by
+  `stageMetrics()`'s own default) — e.g. OS Network Stack's `entered` is `null` because the kernel
+  cannot count datagrams that never reached it, and Room Assignment carries no counter at all
+  because that step genuinely isn't performed by this driver (confirmed by reading
+  `approvePendingDevice` before writing the stage, not assumed).
+- **Root cause classifier + certification** (`services/protocols/src/casambi/receive-certification.ts`)
+  — exactly the nine specified categories, checked bottom-up (kernel drops before any app counter).
+  `unknown` is a real, tested outcome: the exact reported state (driver socket at zero, no host
+  capture) resolves to `unknown` naming both candidate causes and the one piece of evidence
+  (a `tcpdump`/Wireshark count over the same window) that would resolve it — never invented.
+  Certification requires all seven sections evaluated AND passing; an un-run section is
+  `NOT EVALUATED`, never a silent pass.
+- **Gateway route** `GET /v1/drivers/:id/casambi/receive-pipeline?wiresharkPackets=N` and a
+  **Runtime Pipeline Dashboard** in the Casambi Diagnostics panel — all eleven stages rendered
+  independently (no aggregate), a `null` metric shown as "not measured" with its reason, never `0`.
+  Diagnostics-only; not rendered in Cloud mode.
+- `infra/hub-compose/collect-certification-evidence.sh` now also fetches this report, feeding it
+  the REAL packet count read back from its own `tcpdump` capture.
+
+**Verification:** `@supreme/lan` 93/93 tests (22 new, including real-OS-socket reception proof for
+the probe); `@supreme/protocols` 279/279 (32 new, covering every classifier branch including both
+`unknown` cases). Full monorepo: 115/115 build+typecheck, 99/99 test tasks. Deployment-isolation
+guard still passes against the new modules.
+
+**Standing limitation, stated plainly:** this cannot run against the real Lithernet Gateway from
+this sandbox — no LAN path exists here. Built entirely for the user's own local execution; the
+resulting evidence bundle (or dashboard output) is what a follow-up session would analyze.
+
 ## Session: Production Architecture Direction — deployment/transport separation in `@supreme/lan`
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. ADR: **`docs/architecture/adr/0022-supreme-lan-transport-service.md`**

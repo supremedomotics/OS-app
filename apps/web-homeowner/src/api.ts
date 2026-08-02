@@ -373,6 +373,51 @@ export async function fetchCasambiDiagnostics(driverId: string): Promise<Casambi
     return null;
   }
 }
+/**
+ * § Runtime Data Path Verification — the full receive-path evidence bundle: eleven instrumented
+ * pipeline stages, the automatic root-cause verdict, the Wireshark comparison, and the
+ * seven-section certification report.
+ *
+ * `wiresharkPackets` is the one number SupremeOS genuinely cannot observe about itself — how many
+ * packets a host-side capture saw over the same window. Passing it resolves the one case where two
+ * mutually exclusive causes ("the gateway is silent" vs "the packets never reach this network
+ * namespace") produce byte-identical counters; omitting it leaves the verdict honestly `unknown`.
+ */
+export interface ReceiveStageMetrics {
+  entered: number | null;
+  exited: number | null;
+  failures: number | null;
+  firstAt: string | null;
+  lastAt: string | null;
+  latencyMs: number | null;
+  unmeasured: string | null;
+}
+export interface ReceivePipelineStage {
+  name: string;
+  status: "pass" | "fail" | "waiting";
+  detail?: string;
+  metrics?: ReceiveStageMetrics;
+}
+export interface ReceiveCertification {
+  generatedAt: string;
+  sections: { name: string; status: "pass" | "fail" | "not_evaluated"; detail: string }[];
+  rootCause: { cause: string; summary: string; evidence: string[]; needed: string | null };
+  wireshark: { wiresharkPackets: number | null; socketPackets: number | null; difference: number | null; stageWherePacketsDisappear: string; captureFilter: string | null };
+  stages: ReceivePipelineStage[];
+  certified: boolean;
+  lanQueryError: string | null;
+}
+
+export async function fetchCasambiReceivePipeline(driverId: string, wiresharkPackets?: number): Promise<ReceiveCertification | null> {
+  try {
+    const q = typeof wiresharkPackets === "number" && Number.isInteger(wiresharkPackets) && wiresharkPackets >= 0 ? `?wiresharkPackets=${wiresharkPackets}` : "";
+    const res = await authed(`/v1/drivers/${driverId}/casambi/receive-pipeline${q}`);
+    return res.ok ? ((await res.json()) as ReceiveCertification) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Local Gateway setup wizard — "Test Connection" params, matching the Local Gateway config
  * fields on the manifest (`gatewayIp`/`restPort`/`udpPort`/`netId`/`dataFormat`/gateway login). */
 export interface CasambiTestConnectionParams {

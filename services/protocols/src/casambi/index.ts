@@ -94,6 +94,25 @@ export {
   type CasambiFailureStageResult,
   type CasambiFailureStageStatus,
 } from "./failure-analysis.js";
+export {
+  casambiReceivePipeline,
+  pipelineMetricsByStage,
+  type ReceivePipelineInputs,
+  type LanForensicsInput,
+  type WiresharkObservation,
+} from "./receive-pipeline.js";
+export {
+  buildReceiveCertificationReport,
+  classifyReceiveRootCause,
+  compareWithWireshark,
+  formatReceiveCertificationReport,
+  type ReceiveCertificationReport,
+  type ReceiveRootCause,
+  type RootCauseVerdict,
+  type WiresharkComparison,
+  type CertificationSection,
+  type CertificationStatus,
+} from "./receive-certification.js";
 export { type CasambiCaptureMetadata } from "./capture-metadata.js";
 export {
   computeHealthVerdict,

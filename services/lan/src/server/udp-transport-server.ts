@@ -14,6 +14,7 @@ import {
   type LanSessionDiagnostics,
 } from "../shared/wire-types.js";
 import { DgramUdpSession, defaultDgramSocket, type DgramSocketFactory } from "./dgram-udp-session.js";
+import { findKernelSocket, type ForensicUdpSocket, type SocketForensics } from "./network-forensics.js";
 import { diagnoseRouting } from "./routing-diagnosis.js";
 import { DEPLOYMENTS, type LanDeployment } from "./deployment.js";
 
@@ -95,6 +96,20 @@ export class UdpTransportServer {
       joinedMulticastAt: s.joinedMulticastAt,
       joinedMulticastButNeverReceived: s.joinedMulticastButNeverReceived,
     }));
+  }
+
+  /**
+   * § Runtime Data Path Verification — per-session socket forensics, joined to the kernel's own
+   * view of the same socket. The session reports what it knows (bound address, real buffer sizes,
+   * what was requested at bind); `/proc/net/udp` independently corroborates that the socket really
+   * is bound where it claims and reports the kernel's own drop counter for it. A session with no
+   * matching kernel row gets `kernelSocket: null` — a real finding, not a gap to paper over.
+   */
+  sessionForensics(kernelSockets: ForensicUdpSocket[] | null): { sessionId: string; forensics: SocketForensics }[] {
+    return [...this.sessions.values()].map((s) => {
+      const base = s.socketForensics();
+      return { sessionId: s.sessionId, forensics: { ...base, kernelSocket: findKernelSocket(kernelSockets, base.boundAddress, base.boundPort) } };
+    });
   }
 
   private async handleBind(req: LanBindRequest): Promise<LanBindResponse> {

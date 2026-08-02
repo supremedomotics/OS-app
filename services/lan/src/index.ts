@@ -10,7 +10,7 @@
 export type { UdpBindOptions, UdpTransport, UdpTransportFactory } from "./transport.js";
 export { NatsUdpTransportClient } from "./client/nats-udp-transport-client.js";
 export { LocalDirectUdpTransport } from "./client/local-direct-udp-transport.js";
-export { queryLanHealth } from "./client/query-lan-health.js";
+export { queryLanHealth, queryLanForensics } from "./client/query-lan-health.js";
 export {
   lanSubjects,
   type LanSessionId,
@@ -31,5 +31,7 @@ export {
   type LanDiagnosticsSnapshot,
   type LanHealthRequest,
   type LanHealthResponse,
+  type LanForensicsRequest,
+  type LanForensicsResponse,
 } from "./shared/wire-types.js";
 export { requestReply, handleRequests, type RequestPayload } from "./shared/rpc.js";

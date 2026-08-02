@@ -28,8 +28,8 @@ import {
 } from "@supreme/contracts";
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
-import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport } from "@supreme/protocols";
-import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, type LanDiagnosticsSnapshot } from "@supreme/lan";
+import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport, buildReceiveCertificationReport, type LanForensicsInput } from "@supreme/protocols";
+import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, queryLanForensics, type LanDiagnosticsSnapshot, type LanForensicsResponse } from "@supreme/lan";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -288,6 +288,61 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       sendError(reply, err);
     }
   });
+
+  /**
+   * § Runtime Data Path Verification — the full receive-path evidence bundle: the eleven
+   * instrumented pipeline stages, the automatic root-cause verdict, the Wireshark comparison, and
+   * the seven-section certification report.
+   *
+   * Deliberately separate from `/transport-monitor` above: this one asks `supreme-lan` for deep
+   * forensics (it reads `/proc` and walks every session on the service side), so it is requested
+   * when someone is actively diagnosing rather than on every poll.
+   *
+   * `?wiresharkPackets=N` supplies the one number SupremeOS genuinely cannot observe about itself
+   * — how many packets a host-side capture saw over the same window. Without it the comparison
+   * reports "not supplied" and the root cause stays honestly `unknown` in the one case where two
+   * mutually exclusive causes produce identical counters.
+   */
+  app.get<{ Params: { id: string }; Querystring: { wiresharkPackets?: string; captureFilter?: string } }>(
+    "/v1/drivers/:id/casambi/receive-pipeline",
+    async (req, reply) => {
+      try {
+        const user = await authenticate(ctx, req);
+        await enforce(ctx, user, "integration", null, "view");
+        const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+        if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+        const driver = ctx.sil.getNativeDriver("casambi");
+        if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+        const snapshot = driver.getCasambiTransportMonitor();
+        let lan: LanForensicsResponse | null = null;
+        let lanQueryError: string | null = null;
+        if (ctx.config.natsUrl) {
+          try {
+            lan = await queryLanForensics(ctx.bus, 5_000);
+          } catch (err) {
+            // Reported, never substituted with an empty snapshot: "supreme-lan did not answer" and
+            // "supreme-lan answered that it saw nothing" must never look alike.
+            lanQueryError = err instanceof Error ? err.message : String(err);
+          }
+        }
+
+        const parsed = Number(req.query.wiresharkPackets);
+        const wireshark =
+          Number.isInteger(parsed) && parsed >= 0 ? { packets: parsed, captureFilter: req.query.captureFilter ?? undefined, capturedAt: new Date().toISOString() } : null;
+
+        // `LanForensicsResponse` types its payloads as `unknown` on purpose — the transport's wire
+        // protocol must not restate the forensics module's internals (the same rule that keeps
+        // deployment vocabulary out of it). The Gateway is the one boundary that knows both sides,
+        // so the narrowing happens here. It cannot throw: every field of `LanForensicsInput` is
+        // optional, so an unexpected shape degrades to the same `null`s as "not collected".
+        const report = buildReceiveCertificationReport({ snapshot, lan: lan as LanForensicsInput | null, wireshark });
+        reply.send({ ...report, lanQueryError });
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
 
   // Local Gateway setup wizard actions (§ Driver Setup Wizard; § Casambi Local Gateway Auth + UDP
   // Diagnostics). "Test Connection" is real and staged, never a single reachable/unreachable

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { StatusDot } from "@supreme/aureon-web";
+import { useCallback, useEffect, useState } from "react";
+import { Button, StatusDot } from "@supreme/aureon-web";
 import {
   type CasambiDiagnostics,
   type CasambiTestConnectionResult,
@@ -11,12 +11,14 @@ import {
   type DriverEntry,
   type DriverHealth,
   fetchCasambiDiagnostics,
+  fetchCasambiReceivePipeline,
   fetchDriverHealth,
   fetchDriverLogs,
   fetchDriverRegistry,
   getDriverConfig,
   installDriverByKey,
   type KnxGateway,
+  type ReceiveCertification,
   setDriverConfig,
   setDriverEnabled,
   testCasambiLocalConnection,
@@ -677,8 +679,188 @@ function CasambiDiagnosticsPanel({ driverId }: { driverId: string }) {
         </>
       )}
       {snapshot.connectionType === "local" && <CasambiDiscoveryStatus snapshot={snapshot} />}
+      {snapshot.connectionType === "local" && <CasambiReceivePipelineDashboard driverId={driverId} />}
     </div>
   );
+}
+
+/**
+ * § Runtime Data Path Verification — the Runtime Pipeline Dashboard.
+ *
+ * Every stage is rendered INDEPENDENTLY, with its own entered/exited/failures counters, first/last
+ * timestamps and latency. Deliberately no aggregate "pipeline health" number: an aggregate is
+ * exactly what hid this failure for so long — a single green tick over a pipeline whose third
+ * stage has been at zero the whole time.
+ *
+ * Two display rules carry the honesty requirement into the UI itself:
+ *  - A `null` metric renders as "not measured" with its reason on hover, NEVER as `0`. "Zero
+ *    packets entered" and "nothing counts what enters here" lead to opposite conclusions.
+ *  - A `waiting` stage is neutral, not a warning. On a freshly-connected gateway, waiting is the
+ *    correct state, and colouring it red teaches installers to ignore red.
+ *
+ * This is a diagnostics-only surface: it adds no control, changes no protocol behavior, and is not
+ * rendered at all in Cloud mode (which has no UDP receive pipeline).
+ */
+function CasambiReceivePipelineDashboard({ driverId }: { driverId: string }) {
+  const [report, setReport] = useState<ReceiveCertification | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [wiresharkPackets, setWiresharkPackets] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const parsed = Number(wiresharkPackets);
+    const withCapture = wiresharkPackets.trim() !== "" && Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+    setReport(await fetchCasambiReceivePipeline(driverId, withCapture));
+    setLoading(false);
+  }, [driverId, wiresharkPackets]);
+
+  return (
+    <>
+      <h4>Receive pipeline</h4>
+      <p className="help">
+        Every stage from the OS network stack to room assignment, measured independently. Run this
+        when packets are being sent but nothing arrives — it localizes exactly where they stop.
+      </p>
+      <div className="drv-pipeline-controls">
+        <label htmlFor="ws-packets">
+          Host capture packet count (optional)
+          <input
+            id="ws-packets"
+            type="number"
+            min={0}
+            inputMode="numeric"
+            placeholder="e.g. 145"
+            value={wiresharkPackets}
+            onChange={(e) => setWiresharkPackets(e.target.value)}
+          />
+        </label>
+        <Button onClick={() => void load()} aria-busy={loading}>
+          {report ? "Refresh" : "Run verification"}
+        </Button>
+      </div>
+      <p className="help">
+        From <code>tcpdump -i &lt;iface&gt; udp port 10009</code> or Wireshark on the hub host, over
+        the same window. SupremeOS cannot observe this itself — supplying it is what separates
+        &ldquo;the gateway is not transmitting&rdquo; from &ldquo;the packets never reach this
+        process&rdquo;, which otherwise produce identical counters.
+      </p>
+
+      {report && (
+        <>
+          {report.lanQueryError && (
+            <p className="help">
+              <StatusDot tone="warning" label="Transport forensics unavailable" /> supreme-lan did not
+              answer the forensics request ({report.lanQueryError}). Network-layer stages below are
+              reported as un-inspected rather than assumed healthy.
+            </p>
+          )}
+          <div style={{ overflowX: "auto" }}>
+            <table className="drv-trace-table">
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th>Status</th>
+                  <th>Entered</th>
+                  <th>Exited</th>
+                  <th>Failures</th>
+                  <th>Latency</th>
+                  <th>Last</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.stages.map((stage) => (
+                  <tr key={stage.name}>
+                    <td style={{ whiteSpace: "normal" }}>
+                      {stage.name}
+                      {stage.detail && <div className="drv-stage-detail">{stage.detail}</div>}
+                    </td>
+                    <td>
+                      <StatusDot
+                        tone={stage.status === "pass" ? "good" : stage.status === "fail" ? "critical" : "neutral"}
+                        label={stage.status === "pass" ? "Pass" : stage.status === "fail" ? "Fail" : "Waiting"}
+                      />
+                    </td>
+                    <td><StageMetricCell value={stage.metrics?.entered ?? null} reason={stage.metrics?.unmeasured ?? null} /></td>
+                    <td><StageMetricCell value={stage.metrics?.exited ?? null} reason={stage.metrics?.unmeasured ?? null} /></td>
+                    <td><StageMetricCell value={stage.metrics?.failures ?? null} reason={stage.metrics?.unmeasured ?? null} /></td>
+                    <td><StageMetricCell value={stage.metrics?.latencyMs ?? null} reason={stage.metrics?.unmeasured ?? null} suffix=" ms" /></td>
+                    <td>{stage.metrics?.lastAt ? new Date(stage.metrics.lastAt).toLocaleTimeString() : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <h4>Root cause</h4>
+          <dl className="drv-about">
+            <div>
+              <dt>Verdict</dt>
+              <dd>
+                <StatusDot
+                  tone={report.rootCause.cause === "packets_received_by_socket" ? "good" : report.rootCause.cause === "unknown" ? "neutral" : "critical"}
+                  label={report.rootCause.cause}
+                />{" "}
+                {report.rootCause.cause.replace(/_/g, " ")}
+              </dd>
+            </div>
+            <div><dt>Summary</dt><dd style={{ whiteSpace: "normal" }}>{report.rootCause.summary}</dd></div>
+            {report.rootCause.needed && (
+              <div><dt>Needed to resolve</dt><dd style={{ whiteSpace: "normal" }}>{report.rootCause.needed}</dd></div>
+            )}
+            <div>
+              <dt>Evidence</dt>
+              <dd style={{ whiteSpace: "normal" }}>
+                {report.rootCause.evidence.length === 0 ? "—" : <ul className="drv-evidence">{report.rootCause.evidence.map((e) => <li key={e}><code>{e}</code></li>)}</ul>}
+              </dd>
+            </div>
+          </dl>
+
+          <h4>Host capture comparison</h4>
+          <dl className="drv-about">
+            <div><dt>Host capture packets</dt><dd>{report.wireshark.wiresharkPackets ?? "Not supplied"}</dd></div>
+            <div><dt>supreme-lan socket packets</dt><dd>{report.wireshark.socketPackets ?? "Unknown"}</dd></div>
+            <div><dt>Difference</dt><dd>{report.wireshark.difference ?? "Not determinable"}</dd></div>
+            <div><dt>Stage where packets disappear</dt><dd style={{ whiteSpace: "normal" }}>{report.wireshark.stageWherePacketsDisappear}</dd></div>
+          </dl>
+
+          <h4>Certification</h4>
+          <dl className="drv-about">
+            {report.sections.map((s) => (
+              <div key={s.name}>
+                <dt>{s.name}</dt>
+                <dd style={{ whiteSpace: "normal" }}>
+                  <StatusDot
+                    tone={s.status === "pass" ? "good" : s.status === "fail" ? "critical" : "neutral"}
+                    label={s.status === "pass" ? "PASS" : s.status === "fail" ? "FAIL" : "NOT EVALUATED"}
+                  />{" "}
+                  {s.status === "pass" ? "PASS" : s.status === "fail" ? "FAIL" : "NOT EVALUATED"} — {s.detail}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {!report.certified && (
+            <p className="help">
+              Not certified. A section that was never exercised counts as un-run, not as passing —
+              certification requires every one of the seven sections to be evaluated and passing.
+            </p>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/** Renders a stage metric, keeping "not measured" visually distinct from a real `0`. The reason a
+ * value is absent is carried in the title so it is available without cluttering the table. */
+function StageMetricCell({ value, reason, suffix = "" }: { value: number | null; reason: string | null; suffix?: string }) {
+  if (value === null) {
+    return (
+      <span className="muted" title={reason ?? "Not measured at this stage."}>
+        n/m
+      </span>
+    );
+  }
+  return <>{value}{suffix}</>;
 }
 
 /**

@@ -95,12 +95,34 @@ export {
 export { knxDiscoveryStages } from "./knx/knx-discovery-pipeline.js";
 export { casambiPipelineStages } from "./casambi/pipeline-status.js";
 export {
+  casambiReceivePipeline,
+  pipelineMetricsByStage,
+  type ReceivePipelineInputs,
+  type LanForensicsInput,
+  type WiresharkObservation,
+} from "./casambi/receive-pipeline.js";
+export {
+  buildReceiveCertificationReport,
+  classifyReceiveRootCause,
+  compareWithWireshark,
+  formatReceiveCertificationReport,
+  type ReceiveCertificationReport,
+  type ReceiveRootCause,
+  type RootCauseVerdict,
+  type WiresharkComparison,
+  type CertificationSection,
+  type CertificationStatus,
+} from "./casambi/receive-certification.js";
+
+export {
   firstNonPassingStage,
   formatPipelineStages,
   countedStage,
+  stageMetrics,
   booleanStage,
   type PipelineStage,
   type PipelineStageStatus,
+  type StageMetrics,
 } from "./core/pipeline-stages.js";
 export {
   MatterProtocolDriver,

@@ -26,6 +26,32 @@
  */
 export type PipelineStageStatus = "pass" | "fail" | "waiting";
 
+/**
+ * § Runtime Data Path Verification — per-stage instrumentation: "Every stage must expose packets
+ * entered, packets exited, failures, timestamps, latency."
+ *
+ * Every field is `number | null` / `string | null` because for several real stages some of these
+ * are genuinely not observable, and a `0` would be a lie in exactly the place this investigation
+ * cannot afford one — "zero packets entered" and "we cannot count what enters this stage" lead to
+ * opposite conclusions. Any `null` MUST be explained in {@link unmeasured}; a null with no reason
+ * is a bug in the reporter, not an acceptable gap.
+ */
+export interface StageMetrics {
+  /** Datagrams that reached this stage's input. */
+  entered: number | null;
+  /** Datagrams this stage successfully passed on to the next one. `entered - exited` is the loss
+   * attributable to THIS stage, which is the whole point of measuring both. */
+  exited: number | null;
+  failures: number | null;
+  firstAt: string | null;
+  lastAt: string | null;
+  /** Real measured time attributable to this stage, when something measures it. Never estimated
+   * by dividing an end-to-end figure across stages. */
+  latencyMs: number | null;
+  /** Why any field above is `null`. Required whenever one is. */
+  unmeasured: string | null;
+}
+
 export interface PipelineStage {
   /** Short display name, e.g. "Joined Multicast", "Received Search Response". */
   name: string;
@@ -33,6 +59,39 @@ export interface PipelineStage {
   /** Why this stage is in this state — required for `fail` and `waiting` (an installer staring at
    * a non-green row must always be told what it means), optional for `pass`. */
   detail?: string;
+  /** § Runtime Data Path Verification. Optional so the existing Casambi/KNX stage builders are
+   * unchanged; stages that carry it render the full instrumented row. */
+  metrics?: StageMetrics;
+}
+
+/** Builds a {@link StageMetrics} with every field defaulting to "not measured", so a caller can
+ * only ever report a number it actually has. Enforces the null-needs-a-reason rule structurally:
+ * omitting a field leaves it `null`, and `unmeasured` is a required argument. */
+export function stageMetrics(unmeasured: string | null, known: Partial<Omit<StageMetrics, "unmeasured">> = {}): StageMetrics {
+  const metrics: StageMetrics = {
+    entered: known.entered ?? null,
+    exited: known.exited ?? null,
+    failures: known.failures ?? null,
+    firstAt: known.firstAt ?? null,
+    lastAt: known.lastAt ?? null,
+    latencyMs: known.latencyMs ?? null,
+    unmeasured,
+  };
+  // Enforce the null-needs-a-reason rule for the one case a caller forgets most easily. Most
+  // stages in a receive path genuinely have no latency of their own to measure — the handoff is a
+  // synchronous function call — and silently leaving that null would look like a missing
+  // measurement rather than an absent concept.
+  if (metrics.latencyMs === null) {
+    metrics.unmeasured = joinReasons(metrics.unmeasured, NO_STAGE_LATENCY);
+  }
+  return metrics;
+}
+
+const NO_STAGE_LATENCY =
+  "No latency is attributed to this stage: the handoff to the next stage is a synchronous in-process call, so there is no queue or transport in between whose delay could be measured. Splitting an end-to-end figure across stages would be an estimate, not a measurement.";
+
+function joinReasons(a: string | null, b: string): string {
+  return a && a.length > 0 ? `${a} ${b}` : b;
 }
 
 /** Helper: a stage backed by a real counter. `waiting` (not `fail`) while the count is zero and

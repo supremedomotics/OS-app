@@ -1,5 +1,6 @@
 import dgram from "node:dgram";
 import type { LanUdpBindOptions } from "../shared/wire-types.js";
+import type { SocketForensics } from "./network-forensics.js";
 
 /**
  * Minimal surface of `node:dgram`'s `Socket` this module depends on — the same injectable-socket
@@ -18,6 +19,11 @@ export interface DgramSocketLike {
   setBroadcast(flag: boolean): void;
   addMembership(multicastAddress: string, multicastInterface?: string): void;
   setMulticastInterface?(multicastInterface: string): void;
+  /** § Runtime Data Path Verification — real kernel buffer sizes, read back after bind. Optional
+   * so the existing fake sockets in tests need no change; a fake that omits them reports `null`
+   * rather than a made-up size. */
+  getRecvBufferSize?(): number;
+  getSendBufferSize?(): number;
   on(event: "message", listener: (msg: Buffer, rinfo: { address: string; port: number }) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
   on(event: "listening", listener: () => void): unknown;
@@ -35,6 +41,8 @@ export function defaultDgramSocket(): DgramSocketLike {
     setBroadcast: (flag) => sock.setBroadcast(flag),
     addMembership: (group, iface) => sock.addMembership(group, iface),
     setMulticastInterface: (iface) => sock.setMulticastInterface(iface),
+    getRecvBufferSize: () => sock.getRecvBufferSize(),
+    getSendBufferSize: () => sock.getSendBufferSize(),
     on: (event, listener) => sock.on(event, listener),
   };
 }
@@ -81,10 +89,36 @@ export class DgramUdpSession {
    */
   private _joinedMulticastAt: string | null = null;
 
+  /** § Runtime Data Path Verification — the bind options as ACTUALLY requested, retained so
+   * forensics can report "what was asked for" separately from "what the kernel confirms". Node's
+   * `dgram` exposes no getter for SO_BROADCAST/SO_REUSEADDR, so conflating the two would present a
+   * request as a verified fact. */
+  private _bindOptions: LanUdpBindOptions | null = null;
+
   constructor(
     readonly sessionId: string,
     private readonly socketFactory: DgramSocketFactory,
   ) {}
+
+  /** § Runtime Data Path Verification — real, per-socket state read back from the live socket at
+   * call time. `recvBufferSize`/`sendBufferSize` are genuine kernel values; the `requested*`
+   * fields are the caller's bind options, deliberately named so they are never misread as kernel
+   * confirmation. `kernelSocket` is attached by the caller, which owns the `/proc` read. */
+  socketForensics(): Omit<SocketForensics, "kernelSocket"> {
+    const socket = this.socket;
+    const opts = this._bindOptions;
+    return {
+      boundAddress: this._localAddress,
+      boundPort: this._localPort,
+      recvBufferSize: socket?.getRecvBufferSize?.() ?? null,
+      sendBufferSize: socket?.getSendBufferSize?.() ?? null,
+      requestedBroadcast: opts?.broadcast === true,
+      requestedReuseAddr: opts?.reuseAddr !== false,
+      requestedMulticastGroup: opts?.multicastGroup ?? this.multicastGroup,
+      requestedMulticastInterface: opts?.multicastInterface ?? null,
+      joinedMulticastAt: this._joinedMulticastAt,
+    };
+  }
 
   get packetsSent(): number {
     return this._packetsSent;
@@ -114,6 +148,7 @@ export class DgramUdpSession {
   }
 
   async bind(opts: LanUdpBindOptions): Promise<{ address: string; port: number }> {
+    this._bindOptions = opts;
     const socket = this.socketFactory();
     socket.on("message", (msg, rinfo) => {
       this._packetsReceived += 1;

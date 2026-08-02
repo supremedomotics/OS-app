@@ -30,3 +30,16 @@ export {
   type LanDeploymentId,
   type LanAccess,
 } from "./deployment.js";
+export {
+  collectNetworkForensics,
+  findKernelSocket,
+  parseKernelHexAddress,
+  parseProcNetRoute,
+  parseProcNetUdp,
+  type NetworkForensics,
+  type SocketForensics,
+  type ForensicInterface,
+  type ForensicRoute,
+  type ForensicUdpSocket,
+} from "./network-forensics.js";
+export { UdpProbe, defaultProbeSocket, type UdpProbeOptions, type UdpProbeSnapshot, type ProbeDatagram } from "./udp-probe.js";

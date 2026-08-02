@@ -133,6 +133,43 @@ exactly which stage stops, never guess.
 - **Commands:** issue an on/off/brightness command from the SupremeOS UI; confirm the real light
   responds, and `driver.commandsIssued` increments.
 
+## Step 5a — If Step 4 shows zero packets received: Runtime Data Path Verification
+
+If `transport.packetsReceived` stays at zero while a host-side capture confirms the gateway is
+broadcasting, the fault is below the Casambi driver, and the driver's own counters cannot localize
+it further. This is exactly what the Runtime Pipeline Dashboard (in the driver's Diagnostics panel)
+and the independent UDP probe exist to resolve.
+
+1. **Enable the independent probe.** Before bringing the stack up, set on the `lan` service (e.g.
+   in `infra/hub-compose/docker-compose.yml` or an env file):
+   ```
+   SUPREME_LAN_PROBE_PORT=10009
+   ```
+   This starts a second, completely independent listener inside `supreme-lan` — no decoder, no
+   NATS republish, no Casambi — bound to the same port. Its only job is to prove whether the OS
+   delivers datagrams to this process at all, independent of anything the driver does with them.
+2. **Open the Runtime Pipeline Dashboard** in the Casambi driver's Diagnostics panel and click "Run
+   verification." It shows all eleven stages (OS Network Stack → supreme-lan UDP Socket → Datagram
+   Received → Raw Packet Recorder → NATS Publish → Gateway Subscriber → Casambi UDP Engine →
+   Protocol Decoder → Discovery Engine → Entity Mapper → Room Assignment) independently, each with
+   its own entered/exited/failures/timestamps — never one aggregated number.
+3. **If you also ran `tcpdump`/Wireshark**, enter the packet count it captured into the "Host
+   capture packet count" field before running verification. This is the one number SupremeOS
+   cannot observe about itself, and it is what resolves the one case where two opposite causes
+   ("the gateway isn't transmitting" vs. "the packets never reach this network namespace") would
+   otherwise look identical from inside the process.
+4. **Read the Root Cause verdict.** It is one of exactly nine categories (never a guess — an
+   inconclusive case reports `unknown` with exactly what additional evidence would resolve it,
+   most commonly "take a host-side capture over the same window").
+5. **Check the Certification section.** A stage that was never exercised (e.g. the Decoder, when
+   nothing reached it) is reported `NOT EVALUATED`, never as a silent pass — certification requires
+   every one of the seven sections to be both evaluated and passing.
+
+The evidence-collection script in Step 6 below automatically calls this same endpoint
+(`GET /v1/drivers/:id/casambi/receive-pipeline`) and feeds it the real packet count from its own
+`tcpdump` capture, so running the script already captures everything above — this section explains
+what you're looking at in the resulting `receive-pipeline.json` and the live dashboard.
+
 ## Step 6 — Collect evidence and report back
 
 Rather than doing Steps 3-5's `curl`/`tcpdump` manually, run the collection script from the repo

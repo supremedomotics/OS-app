@@ -770,6 +770,21 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Runtime Data Path Verification — Casambi UDP receive-path evidence tooling** — built an
+  independent UDP probe (`SUPREME_LAN_PROBE_PORT`, no decoder/NATS/Casambi) to split "why zero
+  packets?" into below-SupremeOS vs. inside-SupremeOS; real `/proc/net/route`/`/proc/net/udp`
+  forensics (kernel drop counters, namespace identity, routing table) validated against real
+  captured content; an eleven-stage receive pipeline (OS Network Stack through Room Assignment)
+  with per-stage entered/exited/failures/latency where every `null` metric carries a required
+  reason rather than defaulting to a misleading `0`; a nine-category root-cause classifier
+  (`gateway_not_transmitting` through `unknown`) that resolves the one genuinely ambiguous case
+  only when a host capture count is supplied, and otherwise honestly reports `unknown` with what
+  evidence would resolve it; a seven-section certification report where an un-run check is
+  `NOT EVALUATED`, never a silent pass; and a diagnostics-only Runtime Pipeline Dashboard. No
+  protocol logic touched. `@supreme/lan` 93/93, `@supreme/protocols` 279/279, full monorepo
+  115/115 build+typecheck + 99/99 test tasks green. Cannot be run against the real Lithernet
+  Gateway from this sandbox — built for the user's own local execution.
+
 - **Production Architecture Direction — deployment/transport separation in `@supreme/lan`** —
   SupremeOS ships as a dedicated OS image with `supreme-lan` as a native systemd service; Docker is
   dev/CI only. Docker's vocabulary had leaked into load-bearing places (`networkMode: "bridge" |

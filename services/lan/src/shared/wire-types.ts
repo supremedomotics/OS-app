@@ -116,10 +116,10 @@ export interface LanSessionDiagnostics {
   joinedMulticastButNeverReceived?: boolean;
 }
 
-/** Service-wide diagnostics. `networkMode` is read from this service's OWN configuration
- * (`SUPREME_LAN_NETWORK_MODE`), never inferred from OS network interfaces — auto-detecting "am I
- * really on host networking?" from inside the container would be a guess, and this codebase's
- * standing rule is to never fabricate a fact it cannot verify. */
+/** Service-wide diagnostics. `deployment` is read from this service's OWN configuration (see
+ * `server/deployment.ts`), never inferred from OS network interfaces — a process cannot reliably
+ * determine from inside its own network namespace whether it shares the host's, and this
+ * codebase's standing rule is to never fabricate a fact it cannot verify. */
 export interface LanDiagnosticsSnapshot {
   /** § Production Architecture Direction — the configured deployment id. Deliberately an open
    * string on the wire rather than a Docker-shaped union: the shipping target is a native
@@ -140,6 +140,33 @@ export interface LanHealthRequest {
 }
 export type LanHealthResponse = LanDiagnosticsSnapshot;
 
+/**
+ * § Runtime Data Path Verification — the deep forensics request. Separate from
+ * {@link LanHealthRequest} on purpose: health is a cheap, frequently-polled liveness view, while
+ * this reads `/proc` and walks every session, so it is requested deliberately when someone is
+ * actually diagnosing a receive-path failure.
+ *
+ * Both payloads are typed loosely on the wire (`unknown`) so the transport's wire protocol does
+ * not have to restate the forensics module's internals; `NetworkForensics`, `SocketForensics`, and
+ * `UdpProbeSnapshot` in `server/network-forensics.ts` / `server/udp-probe.ts` are the real shapes.
+ * Keeping them out of this file is the same rule that keeps deployment vocabulary out of it.
+ */
+export interface LanForensicsRequest {
+  replySubject: string;
+}
+export interface LanForensicsResponse {
+  /** Live network namespace facts read from the running kernel. */
+  network: unknown;
+  /** Per-session socket forensics, one entry per open transport session. */
+  sockets: { sessionId: LanSessionId; forensics: unknown }[];
+  /** The independent UDP probe's snapshot, or `null` when no probe is configured — never a
+   * fabricated zeroed snapshot, which would be indistinguishable from "a probe ran and saw
+   * nothing", the single most important distinction in this whole diagnosis. */
+  probe: unknown | null;
+  /** Why the probe is absent, when it is. `null` when a probe IS running. */
+  probeDisabledReason: string | null;
+}
+
 /** NATS-style subject names (`.`-delimited, matching `@supreme/messaging`'s `subjectMatches`
  * token semantics). Commands are request/reply (see `../shared/rpc.ts`); session events are
  * fire-and-forget publishes scoped per session so a subscriber only ever needs to listen to the
@@ -150,6 +177,7 @@ export const lanSubjects = {
   close: "supreme.lan.udp.close",
   joinMulticast: "supreme.lan.udp.joinMulticast",
   health: "supreme.lan.health",
+  forensics: "supreme.lan.forensics",
   sessionRx: (sessionId: LanSessionId): string => `supreme.lan.session.${sessionId}.rx`,
   sessionError: (sessionId: LanSessionId): string => `supreme.lan.session.${sessionId}.error`,
   sessionListening: (sessionId: LanSessionId): string => `supreme.lan.session.${sessionId}.listening`,
