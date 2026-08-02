@@ -3,6 +3,7 @@ import { InProcessEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient } from "./client/nats-udp-transport-client.js";
 import { queryLanHealth } from "./client/query-lan-health.js";
 import { UdpTransportServer } from "./server/udp-transport-server.js";
+import { DEPLOYMENTS } from "./server/deployment.js";
 import type { DgramSocketLike } from "./server/dgram-udp-session.js";
 
 /**
@@ -167,14 +168,14 @@ describe("supreme-lan client <-> server contract (InProcessEventBus)", () => {
       bus,
       lanSubjects.health,
       async () =>
-        buildDiagnosticsSnapshot({ networkMode: "bridge", natsConnected: false, startedAt: Date.now(), sessions: server.sessionDiagnostics() }),
-      () => buildDiagnosticsSnapshot({ networkMode: "bridge", natsConnected: false, startedAt: Date.now(), sessions: [] }),
+        buildDiagnosticsSnapshot({ deployment: DEPLOYMENTS["docker-bridge"], natsConnected: false, startedAt: Date.now(), sessions: server.sessionDiagnostics() }),
+      () => buildDiagnosticsSnapshot({ deployment: DEPLOYMENTS["docker-bridge"], natsConnected: false, startedAt: Date.now(), sessions: [] }),
     );
     const client = new NatsUdpTransportClient(bus, { timeoutMs: 500 });
     await client.bind({ localPort: 5100 });
     const health = await requestReply(bus, lanSubjects.health, {});
     expect(health).toMatchObject({
-      networkMode: "bridge",
+      deployment: "docker-bridge",
       natsConnected: false,
       sessions: [expect.objectContaining({ localPort: 5100, packetsSent: 0, packetsReceived: 0 })],
     });
@@ -241,11 +242,11 @@ describe("supreme-lan client <-> server contract (InProcessEventBus)", () => {
       await handleRequests(
         bus,
         lanSubjects.health,
-        async () => buildDiagnosticsSnapshot({ networkMode: "host", natsConnected: true, startedAt: Date.now(), sessions: server.sessionDiagnostics() }),
-        () => buildDiagnosticsSnapshot({ networkMode: "host", natsConnected: true, startedAt: Date.now(), sessions: [] }),
+        async () => buildDiagnosticsSnapshot({ deployment: DEPLOYMENTS["docker-host"], natsConnected: true, startedAt: Date.now(), sessions: server.sessionDiagnostics() }),
+        () => buildDiagnosticsSnapshot({ deployment: DEPLOYMENTS["docker-host"], natsConnected: true, startedAt: Date.now(), sessions: [] }),
       );
       const health = await queryLanHealth(bus, 500);
-      expect(health).toMatchObject({ networkMode: "host", natsConnected: true, sessions: [] });
+      expect(health).toMatchObject({ deployment: "docker-host", lanAccess: "direct", natsConnected: true, sessions: [] });
     });
 
     it("throws honestly (never a fabricated empty snapshot) when no supreme-lan service answers", async () => {

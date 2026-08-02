@@ -1,0 +1,63 @@
+# supreme-lan — SupremeOS LAN Transport Service (PRODUCTION deployment unit)
+#
+# § Production Architecture Direction. This is the shipping deployment: a native systemd service
+# on the SupremeOS image, with direct access to the physical network interfaces. Docker is a
+# development and CI environment only, and NOTHING in `@supreme/lan` branches on it — the same
+# `dist/server/main.js` runs identically here and in a container. Switching between them is a
+# deployment change (this file vs. a Compose override), never a protocol or transport change.
+#
+# Why this unit needs almost nothing special: because it runs in the host's own network namespace,
+# broadcast reception, multicast reception, IGMP membership, mDNS, SSDP, KNX Routing/Discovery and
+# Casambi UDP all work with no bridges, no NAT, no overlay files, and no per-protocol workarounds.
+# The entire class of Docker networking problems documented in
+# docs/architecture/Casambi-LAN-Receive-Path-Investigation.md simply does not exist here.
+#
+# Install:
+#   install -m 0644 infra/systemd/supreme-lan.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now supreme-lan
+
+[Unit]
+Description=SupremeOS LAN Transport Service (supreme-lan)
+Documentation=file:///opt/supreme/docs/architecture/Supreme-LAN-Transport-Architecture.md
+# Ordering only — supreme-lan does not require NATS to be healthy to start; it reconnects.
+After=network-online.target nats-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/supreme/services/lan/dist/server/main.js
+WorkingDirectory=/opt/supreme/services/lan
+Restart=always
+RestartSec=2
+
+# The deployment identity this service reports in diagnostics. Read by `resolveDeployment()`;
+# deliberately explicit rather than auto-detected — a process cannot reliably tell from inside its
+# own network namespace whether it shares the host's, so guessing would produce confidently wrong
+# diagnostics (see services/lan/src/server/deployment.ts).
+Environment=SUPREME_LAN_DEPLOYMENT=native-linux
+Environment=SUPREME_LAN_NATS_URL=nats://127.0.0.1:4222
+Environment=NODE_ENV=production
+
+# Hardening. Note what is deliberately NOT restricted: the network. This service's entire purpose
+# is raw LAN socket access, so PrivateNetwork/NetworkNamespacePath must never be set here — that
+# would recreate, on the production image, exactly the isolation that breaks broadcast/multicast
+# in Docker bridge mode.
+User=supreme
+Group=supreme
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Binding a privileged port (<1024) is not required by any protocol currently carried (Casambi
+# 10009, KNX 3671, mDNS 5353, SSDP 1900 are all unprivileged). If a future protocol needs one, add
+# AmbientCapabilities=CAP_NET_BIND_SERVICE here rather than running the service as root.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -333,7 +333,10 @@ services:
     restart: unless-stopped
     environment:
       SUPREME_LAN_NATS_URL: ${SUPREME_NATS_URL:-nats://nats:4222}
-      SUPREME_LAN_NETWORK_MODE: bridge
+      # § Production Architecture Direction — deployment-neutral identity. Docker is a
+      # DEVELOPMENT environment only; production is a native systemd service on the SupremeOS
+      # image (SUPREME_LAN_DEPLOYMENT=native-linux, see infra/systemd/supreme-lan.service).
+      SUPREME_LAN_DEPLOYMENT: docker-bridge
     networks:
       - supreme-core
       - supreme-lan-egress

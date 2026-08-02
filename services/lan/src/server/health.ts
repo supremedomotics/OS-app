@@ -1,18 +1,23 @@
 import os from "node:os";
 import type { LanDiagnosticsSnapshot, LanSessionDiagnostics } from "../shared/wire-types.js";
+import type { LanDeployment } from "./deployment.js";
 
 /**
  * Builds the service-wide diagnostics snapshot (§ Production Architecture Refactor — "Move
- * transport diagnostics into supreme-lan"). `networkMode` is read from this service's OWN
- * configuration, never inferred from OS network interfaces: whether a container is genuinely on
- * `network_mode: host` cannot be reliably self-detected from inside it (interface lists look
- * similar in both cases), so guessing would violate this codebase's "never fabricate a fact it
- * cannot verify" rule. The deploying Compose file sets `SUPREME_LAN_NETWORK_MODE` explicitly (see
- * `infra/hub-compose/docker-compose.lan-host.yml`), and this snapshot honestly reports exactly
- * that configured value.
+ * transport diagnostics into supreme-lan").
+ *
+ * The deployment is read from this service's OWN configuration (`SUPREME_LAN_DEPLOYMENT`, see
+ * `deployment.ts`), never inferred from OS network interfaces: a process cannot reliably determine
+ * from inside its own network namespace whether it shares the host's — the interface lists look
+ * alike either way — so guessing would violate this codebase's "never fabricate a fact it cannot
+ * verify" rule. This snapshot reports exactly the configured value, plus the deployment-neutral
+ * `lanAccess` derived from it (the property that actually matters and that holds identically for a
+ * native SupremeOS service, a VM, or a container).
  */
 export interface LanHealthInputs {
-  networkMode: "bridge" | "host" | "macvlan";
+  /** § Production Architecture Direction — the configured deployment (see `deployment.ts`).
+   * Deployment vocabulary lives in that one module; this snapshot just reports it. */
+  deployment: LanDeployment;
   natsConnected: boolean;
   startedAt: number;
   sessions: LanSessionDiagnostics[];
@@ -26,7 +31,9 @@ export function buildDiagnosticsSnapshot(inputs: LanHealthInputs): LanDiagnostic
     }
   }
   return {
-    networkMode: inputs.networkMode,
+    deployment: inputs.deployment.id,
+    deploymentLabel: inputs.deployment.label,
+    lanAccess: inputs.deployment.lanAccess,
     natsConnected: inputs.natsConnected,
     uptimeSec: Math.round((Date.now() - inputs.startedAt) / 1000),
     interfaces,

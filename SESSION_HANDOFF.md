@@ -4,6 +4,57 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Production Architecture Direction — deployment/transport separation in `@supreme/lan`
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. ADR: **`docs/architecture/adr/0022-supreme-lan-transport-service.md`**
+(new Amendment section, 2026-08-02). **No protocol driver was modified.**
+
+**The direction:** SupremeOS ships as a dedicated OS image (Home Assistant OS-style) on x86/ARM,
+where `supreme-lan` runs as a native systemd service with direct NIC access. Docker is a
+development and CI environment only, and no long-term architectural decision may be made from its
+limitations.
+
+**The problem this exposed:** Docker's vocabulary had leaked into load-bearing places in the
+transport — `networkMode: "bridge" | "host" | "macvlan"` sat in the **NATS wire protocol**, the
+health snapshot, the `UdpTransportServer` constructor, and the failure-diagnosis branch condition;
+compose filenames were hardcoded into remediation strings. Removing Docker would have meant editing
+the transport and its wire protocol — a protocol change forced by a deployment change.
+
+**The fix — one deployment module, one neutral concept.** New `services/lan/src/server/deployment.ts`
+is the ONLY module in `@supreme/lan` allowed to name a container runtime, compose file, or systemd
+unit; it holds a `LanDeployment` table (`native-linux`, `docker-host`, `docker-bridge`, `macvlan`,
+`vm-bridged`, `unknown`) carrying all deployment-specific text as data. Everything else reasons only
+about `LanAccess` = `"direct" | "isolated" | "unknown"` — a property of the network namespace that
+is equally meaningful for a native service, a VM, and a container. Deployment is **configured**
+(`SUPREME_LAN_DEPLOYMENT`), never auto-detected: a process cannot tell from inside its own namespace
+whether it shares the host's, so `unknown` is reported honestly instead of guessed. Legacy
+`SUPREME_LAN_NETWORK_MODE` still works — existing compose files and deployed units are unaffected.
+
+**Production deployment unit:** `infra/systemd/supreme-lan.service` runs the SAME
+`dist/server/main.js` as the container with `SUPREME_LAN_DEPLOYMENT=native-linux`. It deliberately
+does not set `PrivateNetwork`/`NetworkNamespacePath` — that would recreate on the production image
+exactly the isolation that breaks broadcast/multicast under Docker bridge.
+
+**The rule is now enforced, not just written down.** `services/lan/src/deployment-isolation.test.ts`
+scans every shipped `@supreme/lan` module for container-runtime vocabulary in executable code (doc
+comments exempt — explaining *why* a limitation exists carries no runtime coupling; `*.test.ts`
+exempt — a test must construct a `DEPLOYMENTS["docker-bridge"]` fixture and assert its remediation
+text, which is consuming the isolated module, not leaking). The guard was verified by injecting a
+real leak into `health.ts` and confirming it fails — it does not pass vacuously.
+
+**One genuine leak it caught in shipped code:** the "Docker Desktop does not implement host
+networking" caveat was a hardcoded string inside `routing-diagnosis.ts`. It is now
+`LanDeployment.unreliableLanAccessOn`, keyed by `process.platform`; the diagnosis appends the note
+verbatim without knowing which runtimes are affected. Correcting the earlier code, it now covers
+`darwin` as well as `win32` — Docker Desktop runs Linux containers in a VM on both.
+
+**Net effect:** removing Docker is now a deployment change, not a protocol rewrite. The transport
+can switch between Docker / native Linux / a future hardware-specific deployment without touching
+any protocol driver.
+
+**Verification:** `@supreme/lan` 9 files / 74 tests green; full monorepo 115/115 build+typecheck
+tasks and 99/99 test tasks green.
+
 ## Session: LAN receive path — Casambi UDP RX + KNX/IP discovery (one shared root cause)
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. Full investigation:

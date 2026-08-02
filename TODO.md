@@ -169,6 +169,22 @@
 - **Complexity:** Small per consumer.
 - **Status:** Not started.
 
+### Enforce "supreme-lan owns every physical LAN socket" with a structural guard in `@supreme/protocols`
+- **Description:** The Production Architecture Direction states `@supreme/lan` must be the single
+  owner of every physical LAN socket, with no protocol owning raw sockets directly. That is now
+  enforced for the *deployment* half (`services/lan/src/deployment-isolation.test.ts`) but not for
+  the *ownership* half: `knx-discovery.ts`, `mdns.ts`, and `ssdp.ts` still default to their own
+  `node:dgram` sockets, and nothing fails the build if a new driver adds another one.
+- **Reason:** Phases 3a/4/5 below migrate the known consumers one at a time, but without a guard
+  the rule erodes again the moment someone adds a protocol — exactly how Docker vocabulary got into
+  the wire protocol in the first place. A test is what makes an architectural rule hold.
+- **Dependencies:** should land *after* Phases 3a/5 migrate the current consumers, otherwise the
+  guard fails on known, already-scheduled work. `knxultimate`/`@matter/main` own sockets inside
+  third-party code (Phase 3b/4) and would need an explicit, documented exemption.
+- **Complexity:** Small (the guard itself mirrors `deployment-isolation.test.ts`); the ordering
+  dependency is what makes it not-yet-actionable.
+- **Status:** Not started — newly identified while implementing the deployment/transport split.
+
 ### Casambi Local Gateway — confirm the UDP receive fix against real hardware (firmware 6.25)
 - **Description:** A real Wireshark capture showed the Lithernet Gateway broadcasting to
   `255.255.255.255:10009` while SupremeOS reported `Packets Received = 0`. Code audit found no
@@ -753,6 +769,24 @@
 
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
+
+- **Production Architecture Direction — deployment/transport separation in `@supreme/lan`** —
+  SupremeOS ships as a dedicated OS image with `supreme-lan` as a native systemd service; Docker is
+  dev/CI only. Docker's vocabulary had leaked into load-bearing places (`networkMode: "bridge" |
+  "host" | "macvlan"` in the **NATS wire protocol**, the health snapshot, the server constructor,
+  and the failure-diagnosis branch; compose filenames hardcoded in remediation strings), so removing
+  Docker would have forced a protocol change. Fixed with one isolated `server/deployment.ts` (the
+  only module allowed to name a container runtime, compose file, or systemd unit) plus a neutral
+  `LanAccess = "direct" | "isolated" | "unknown"` that the rest of the transport reasons about.
+  Deployment is configured (`SUPREME_LAN_DEPLOYMENT`), never auto-detected — a process cannot tell
+  from inside its own namespace whether it shares the host's. Legacy `SUPREME_LAN_NETWORK_MODE`
+  still honored, so no existing compose file or deployed unit changed behavior. Added
+  `infra/systemd/supreme-lan.service` (production unit, same `main.js` as the container) and
+  `deployment-isolation.test.ts`, a structural guard that fails the build on any new leak —
+  verified by injecting a real one rather than trusted to pass. Also moved the "Docker Desktop
+  doesn't implement host networking" caveat out of `routing-diagnosis.ts` into deployment data
+  (`unreliableLanAccessOn`), now correctly covering `darwin` as well as `win32`. No protocol driver
+  modified. ADR 0022 amended. Full monorepo green (115/115 build+typecheck, 99/99 test).
 
 - **LAN receive path — Casambi UDP RX + KNX/IP discovery (one shared root cause)** — proved
   experimentally on a real Docker Engine that bridge networking delivers neither LAN broadcast nor

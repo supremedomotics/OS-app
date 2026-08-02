@@ -121,7 +121,15 @@ export interface LanSessionDiagnostics {
  * really on host networking?" from inside the container would be a guess, and this codebase's
  * standing rule is to never fabricate a fact it cannot verify. */
 export interface LanDiagnosticsSnapshot {
-  networkMode: "bridge" | "host" | "macvlan";
+  /** § Production Architecture Direction — the configured deployment id. Deliberately an open
+   * string on the wire rather than a Docker-shaped union: the shipping target is a native
+   * SupremeOS system service, and adding a future deployment must not require a wire-protocol
+   * change. Authoritative values live in `server/deployment.ts`. */
+  deployment: string;
+  deploymentLabel: string;
+  /** The deployment-NEUTRAL fact consumers should branch on: can this process reach the physical
+   * LAN directly? True/false regardless of Docker, systemd, VM, or bare metal. */
+  lanAccess: "direct" | "isolated" | "unknown";
   natsConnected: boolean;
   uptimeSec: number;
   interfaces: { name: string; address: string; internal: boolean }[];

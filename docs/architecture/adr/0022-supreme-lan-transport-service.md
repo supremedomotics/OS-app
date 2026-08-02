@@ -6,7 +6,7 @@
   what remains hardware-unverified. Phases 3-5 — KNX/Matter/remaining LAN drivers — are deliberate,
   separate follow-ups, explicitly gated on a real-hardware retest of Phase 2, not part of this
   decision's scope yet)
-- Date: 2026-08-01
+- Date: 2026-08-01 (amended 2026-08-02 — see the Amendment section at the end)
 - Context: Production Architecture Refactor — Docker bridge networking silently drops LAN
   broadcast/multicast traffic, proven with real hardware.
 
@@ -102,3 +102,70 @@ migration risk table, and the Windows Docker Desktop disclosure — lives in
   Treat Casambi's `@supreme/lan` migration as "internally proven, hardware-pending" until that
   retest happens; see the architecture doc §10.3 for the exact, disclosed scope of what was and
   wasn't verified.
+
+## Amendment (2026-08-02) — Production Architecture Direction: deployment/transport separation
+
+### Context
+
+The original decision above was written while Docker was the only deployment SupremeOS had. That
+framing leaked: the transport layer had come to carry Docker's own vocabulary in load-bearing
+places — `networkMode: "bridge" | "host" | "macvlan"` in the NATS **wire protocol**, in the health
+snapshot, in the `UdpTransportServer` constructor, and as the branch condition in the failure
+diagnosis. Compose filenames were hardcoded into remediation strings.
+
+The confirmed product direction is that SupremeOS ships as a **dedicated OS image** (Home Assistant
+OS-style) on x86/ARM hardware, where `supreme-lan` runs as a native systemd service with direct
+access to the physical NICs. **Docker is a development and CI environment only.** Under the old
+shape, removing Docker would have meant editing the transport and its wire protocol — a protocol
+change forced by a deployment change, which is exactly backwards. None of the Docker networking
+limitations documented in this ADR exist on the production target at all.
+
+### Decision
+
+**`@supreme/lan` owns every physical LAN socket in SupremeOS, and knows nothing about how it is
+deployed.** Two concrete rules, both now structurally enforced rather than aspirational:
+
+- **One deployment module.** `services/lan/src/server/deployment.ts` is the ONLY module in
+  `@supreme/lan` permitted to name a container runtime, a compose file, or a systemd unit. It
+  exposes a `LanDeployment` table (`native-linux`, `docker-host`, `docker-bridge`, `macvlan`,
+  `vm-bridged`, `unknown`) carrying `label`, `developmentOnly`, `noLanAccessRemedy`, and
+  `unreliableLanAccessOn` — all deployment-specific text as *data*.
+- **The transport reasons only about `LanAccess`** (`"direct" | "isolated" | "unknown"`) — a
+  property of the network namespace, meaningful for a native service, a VM, and a container
+  alike. This replaced `"bridge" | "host" | "macvlan"` in the wire protocol, the health snapshot,
+  the server constructor, and `routing-diagnosis.ts`. Adding a future deployment (hardware
+  appliance, VM template, k8s DaemonSet) is one entry in that table — no transport change, and no
+  protocol-driver change.
+
+Deployment is **configured, never auto-detected** (`SUPREME_LAN_DEPLOYMENT`, with the legacy
+`SUPREME_LAN_NETWORK_MODE` still honored for backward compatibility). A process cannot reliably
+determine from inside its own network namespace whether it shares the host's, so detection would
+produce confidently wrong diagnostics — `unknown` is reported honestly instead.
+
+`infra/systemd/supreme-lan.service` is the production deployment unit. It runs the **same**
+`dist/server/main.js` as the container, with `SUPREME_LAN_DEPLOYMENT=native-linux`. Note what it
+deliberately does not harden: `PrivateNetwork`/`NetworkNamespacePath` must never be set there, as
+that would recreate on the production image precisely the isolation that breaks
+broadcast/multicast under Docker bridge.
+
+### Consequences
+
+- **Removing Docker is now a deployment change, not a protocol rewrite** — the stated goal. The
+  same transport code ships unchanged to the SupremeOS image.
+- **The rule is enforced by a test, not by convention.** `services/lan/src/deployment-isolation.
+  test.ts` scans every shipped `@supreme/lan` module for container-runtime vocabulary in
+  executable code (doc comments exempt — explaining *why* a limitation exists carries no runtime
+  coupling; `*.test.ts` exempt — a test must be able to construct a `DEPLOYMENTS["docker-bridge"]`
+  fixture and assert its remediation text, which is consuming the isolated module, not leaking).
+  The guard was verified to actually fail on an injected leak, not merely to pass.
+- **Docker's platform caveats became data.** "Docker Desktop does not implement host networking
+  for Linux containers" now lives in `deployment.ts` as `unreliableLanAccessOn` keyed by
+  `process.platform`; `routing-diagnosis.ts` appends the note verbatim without knowing which
+  runtimes are affected. Correcting the earlier code, this now covers `darwin` as well as
+  `win32` — Docker Desktop runs Linux containers in a VM on both.
+- **Backward compatibility is preserved in full.** Existing compose files and any already-deployed
+  unit setting `SUPREME_LAN_NETWORK_MODE` keep behaving identically; no protocol driver was
+  touched by this amendment.
+- The transport can now switch between Docker, native Linux, and a future hardware-specific
+  deployment without modifying any protocol driver — which is what makes Phases 3-5 (KNX, Matter,
+  remaining LAN drivers) independent of the deployment question entirely.

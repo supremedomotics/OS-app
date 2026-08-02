@@ -15,6 +15,7 @@ import {
 } from "../shared/wire-types.js";
 import { DgramUdpSession, defaultDgramSocket, type DgramSocketFactory } from "./dgram-udp-session.js";
 import { diagnoseRouting } from "./routing-diagnosis.js";
+import { DEPLOYMENTS, type LanDeployment } from "./deployment.js";
 
 /**
  * The `supreme-lan` server core (§ Production Architecture Refactor). Owns every real UDP socket
@@ -32,11 +33,11 @@ export class UdpTransportServer {
   constructor(
     private readonly bus: IEventBus,
     private readonly socketFactory: DgramSocketFactory = defaultDgramSocket,
-    /** § ENETUNREACH investigation — the deployment mode as EXPLICITLY configured
-     * (`SUPREME_LAN_NETWORK_MODE`), never self-detected, so a send-failure diagnosis can name the
-     * deployment shape honestly. Defaults to `"bridge"` because that is what the base
-     * `docker-compose.yml` actually deploys. */
-    private readonly networkMode: "bridge" | "host" | "macvlan" = "bridge",
+    /** § Production Architecture Direction — the EXPLICITLY configured deployment (never
+     * self-detected; see `deployment.ts`), so a send-failure diagnosis can name the deployment
+     * honestly. Defaults to `unknown` rather than assuming any particular runtime: this service's
+     * primary target is a native SupremeOS system service, not a container. */
+    private readonly deployment: LanDeployment = DEPLOYMENTS.unknown,
   ) {}
 
   async start(): Promise<void> {
@@ -144,7 +145,7 @@ export class UdpTransportServer {
       return {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
-        diagnosis: diagnoseRouting({ destination: req.host, errorCode: code, configuredNetworkMode: this.networkMode }),
+        diagnosis: diagnoseRouting({ destination: req.host, errorCode: code, deployment: this.deployment }),
       };
     }
   }

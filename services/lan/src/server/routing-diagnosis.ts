@@ -1,4 +1,5 @@
 import os from "node:os";
+import { type LanDeployment } from "./deployment.js";
 
 /**
  * § ENETUNREACH investigation — routing diagnosis. Turns a raw OS send error into an
@@ -35,8 +36,11 @@ export interface RoutingDiagnosis {
    * which is itself the key finding for an `ENETUNREACH`. */
   outboundInterface: { name: string; address: string } | null;
   platform: NodeJS.Platform;
-  /** As explicitly configured via `SUPREME_LAN_NETWORK_MODE` — never self-detected. */
-  configuredNetworkMode: "bridge" | "host" | "macvlan";
+  /** § Production Architecture Direction — the deployment this service was CONFIGURED as (never
+   * self-detected; see `deployment.ts`). Deployment-specific vocabulary lives entirely in that
+   * module — this diagnosis branches only on `deployment.lanAccess`, which is meaningful for a
+   * native SupremeOS service, a VM, and a container alike. */
+  deployment: LanDeployment;
   /** Plain-language statement of what the evidence shows. */
   explanation: string;
   /** Concrete, actionable next step. Never "check the logs". */
@@ -81,7 +85,7 @@ function verdictFor(errorCode: string | null): RoutingVerdict {
 export function diagnoseRouting(opts: {
   destination: string;
   errorCode: string | null;
-  configuredNetworkMode: "bridge" | "host" | "macvlan";
+  deployment: LanDeployment;
 }): RoutingDiagnosis {
   const interfaces: RoutingDiagnosis["interfaces"] = [];
   for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
@@ -101,18 +105,17 @@ export function diagnoseRouting(opts: {
   if (verdict === "ok") {
     explanation = `No send error reported. ${outboundInterface ? `Destination ${opts.destination} is on the same subnet as interface ${outboundInterface.name} (${outboundInterface.address}).` : `Destination ${opts.destination} is not on any local subnet — traffic would be routed via a default gateway.`}`;
   } else if (verdict === "no_route") {
-    // The decisive, reproducible case. Verified experimentally: a container on a Docker
-    // `internal: true` network gets exactly this error, and the identical code on a normal bridge
-    // network does not.
+    // Branches on the deployment-NEUTRAL `lanAccess` property, never on a container-runtime term.
+    // Deployment-specific remediation text comes from `deployment.ts`, the one module allowed to
+    // know what Docker/systemd are — so a future SupremeOS-image deployment needs no change here.
     explanation =
       `The operating system rejected the send before any packet left the process: there is no route from this process's network namespace to ${opts.destination}. ` +
       (outboundInterface
-        ? `An interface (${outboundInterface.name}, ${outboundInterface.address}) IS on that subnet, so this is unlikely to be a Docker-internal-network problem — check host firewall/routing rules.`
+        ? `An interface (${outboundInterface.name}, ${outboundInterface.address}) IS on that subnet, so the network namespace is not the constraint — check host firewall/routing rules.`
         : `No local interface is on ${opts.destination}'s subnet, and no usable default route exists. Visible interfaces: ${interfaces.filter((i) => !i.internal).map((i) => `${i.name}=${i.cidr ?? i.address}`).join(", ") || "(none besides loopback)"}.`);
     suggestedFix =
-      opts.configuredNetworkMode === "bridge"
-        ? "supreme-lan is deployed in BRIDGE mode. If it is attached only to a Docker network declared `internal: true` (the base docker-compose.yml attaches `lan` to `supreme-core`, which IS internal), it has no route off the host by design and can never reach a LAN device — this is a deployment issue, not a protocol one. Fix: deploy with `-f docker-compose.yml -f docker-compose.nats-loopback.yml -f docker-compose.lan-host.yml` (Linux host networking, the documented production topology in ADR 0022), or on Windows/macOS Docker Desktop — where host networking is a no-op — run supreme-lan as a native process (`node dist/server/main.js`) against the loopback-exposed NATS."
-        : `supreme-lan is deployed in ${opts.configuredNetworkMode.toUpperCase()} mode but still has no route to ${opts.destination}. Verify the host itself can reach it (\`ping ${opts.destination}\`, \`ip route get ${opts.destination}\`) — if the host cannot either, the problem is the physical network (VLAN, subnet, firewall), not SupremeOS.`;
+      opts.deployment.noLanAccessRemedy ??
+      `This deployment (${opts.deployment.label}) is expected to have direct LAN access, yet there is no route to ${opts.destination}. Verify the host itself can reach it (\`ping ${opts.destination}\`, \`ip route get ${opts.destination}\`) — if the host cannot either, the problem is the physical network (VLAN, subnet, firewall), not SupremeOS.`;
   } else if (verdict === "host_unreachable") {
     explanation = `A route to ${opts.destination}'s network exists, but the host itself did not respond (no ARP reply / ICMP host unreachable). The network path is correct; the specific device is not answering.`;
     suggestedFix = `Confirm the gateway is powered on and at ${opts.destination} (its own web UI, or \`ping ${opts.destination}\` from the same host). This is a gateway/addressing issue, not a SupremeOS or routing issue.`;
@@ -124,8 +127,13 @@ export function diagnoseRouting(opts: {
     suggestedFix = null;
   }
 
-  if (verdict !== "ok" && platform === "win32" && opts.configuredNetworkMode === "host") {
-    explanation += " NOTE: the configured mode is `host`, but this process reports platform win32 — Docker Desktop for Windows does not implement host networking for Linux containers, so a `network_mode: host` container there is NOT actually on the host network.";
+  // A deployment can declare direct LAN access that the real platform silently does not honor.
+  // Which deployments, on which platforms, and why is deployment knowledge — it lives in
+  // `deployment.ts`; this only matches the observed `process.platform` against that table and
+  // appends the note verbatim.
+  const platformCaveat = opts.deployment.unreliableLanAccessOn?.[platform];
+  if (verdict !== "ok" && platformCaveat) {
+    explanation += ` NOTE: ${opts.deployment.label} on platform ${platform} — ${platformCaveat}`;
   }
 
   return {
@@ -135,7 +143,7 @@ export function diagnoseRouting(opts: {
     interfaces,
     outboundInterface,
     platform,
-    configuredNetworkMode: opts.configuredNetworkMode,
+    deployment: opts.deployment,
     explanation,
     suggestedFix,
   };

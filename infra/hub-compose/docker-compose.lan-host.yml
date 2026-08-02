@@ -32,4 +32,4 @@ services:
     networks: !reset null
     environment:
       SUPREME_LAN_NATS_URL: nats://127.0.0.1:4222
-      SUPREME_LAN_NETWORK_MODE: host
+      SUPREME_LAN_DEPLOYMENT: docker-host

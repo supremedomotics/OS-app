@@ -23,3 +23,10 @@ export {
 } from "./replay-dgram-socket.js";
 export { saveCaptureJson, loadCaptureJson, exportPcap } from "./capture-io.js";
 export { diagnoseRouting, ipInCidr, type RoutingDiagnosis, type RoutingVerdict } from "./routing-diagnosis.js";
+export {
+  resolveDeployment,
+  DEPLOYMENTS,
+  type LanDeployment,
+  type LanDeploymentId,
+  type LanAccess,
+} from "./deployment.js";
