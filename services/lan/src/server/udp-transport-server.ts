@@ -91,6 +91,8 @@ export class UdpTransportServer {
       packetsSent: s.packetsSent,
       packetsReceived: s.packetsReceived,
       lastError: s.lastError,
+      joinedMulticastAt: s.joinedMulticastAt,
+      joinedMulticastButNeverReceived: s.joinedMulticastButNeverReceived,
     }));
   }
 

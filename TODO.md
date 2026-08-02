@@ -108,6 +108,22 @@
 - **Complexity:** Small per capture.
 - **Status:** Not started.
 
+### KNX/IP discovery cannot work in Docker until it routes through supreme-lan
+- **Description:** Proven this session: KNX discovery runs raw `node:dgram` inside the **Gateway**
+  container (`installer-context.ts:817` calls `knxSearch()` with no options), which is
+  bridge-attached by design per ADR 0022 — the Gateway cannot move to host networking without
+  losing Postgres/Redis/NATS DNS. Bridge accepts the `224.0.23.12` multicast join and then never
+  delivers multicast, so discovery returns zero gateways with no error. The `lan-host.yml` overlay
+  fixes Casambi but **not** this, because KNX discovery isn't in `supreme-lan`.
+- **Reason:** this is the one remaining path where a correct deployment still cannot work. Wiring
+  the already-built `knx-discovery-remote-socket.ts` adapter makes KNX inherit the same
+  host-networking fix instead of needing its own.
+- **Dependencies:** the standing rule that KNX migration waits until Casambi is confirmed on real
+  hardware — so this is queued behind the Casambi hardware retest, not blocked on new design.
+- **Complexity:** Small — the adapter and `joinMulticast()` both already exist and are tested.
+- **Status:** Not started; diagnosed and documented in
+  `docs/architecture/Casambi-LAN-Receive-Path-Investigation.md`.
+
 ### supreme-lan Phase 3a — default KNX Discovery onto the remote transport
 - **Description:** `services/protocols/src/lan-adapters/knx-discovery-remote-socket.ts` is built
   and unit-tested (including the two-phase bind-then-`setMulticast` sequence `knxSearch()` actually
@@ -738,6 +754,21 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **LAN receive path — Casambi UDP RX + KNX/IP discovery (one shared root cause)** — proved
+  experimentally on a real Docker Engine that bridge networking delivers neither LAN broadcast nor
+  multicast into containers (identical code; bridge = not received, host = received, both cases).
+  Casambi's `Sent=6 / Received=0 / Last Error=None` is exactly that signature. **KNX/IP discovery
+  is NOT a regression from `@supreme/lan`** — `createKnxDiscoveryRemoteSocketFactory` is defined
+  and never called, `knxSearch()` still uses raw `node:dgram`, and the Gateway's networks were
+  never touched by that work; it fails for the same Docker reason, independently. Biggest finding:
+  `addMembership()` SUCCEEDS on bridge and then nothing arrives, so every "did we join?" check was
+  a **false PASS** on a permanently deaf socket — the reason KNX discovery returned an empty list
+  with no error, forever. Added `joinedMulticastAt` / `joinedMulticastButNeverReceived` to
+  `DgramUdpSession`, a protocol-agnostic PASS/FAIL/**WAITING** stage model (`core/pipeline-stages.ts`),
+  and Casambi + KNX stage builders; `knx-discovery.ts` gained an optional `onDiagnostics` observer
+  (omitting it is byte-for-byte the prior path). Deliberately did NOT add a broadcast/multicast RX
+  split — `rinfo` reports the sender, not the destination, so it would be a guess. Full write-up:
+  `docs/architecture/Casambi-LAN-Receive-Path-Investigation.md`. 13 new tests; 47/47 turbo green.
 - **Casambi — Discovery UX fix + ENETUNREACH root cause (deployment defect, fixed)** — two
   independent issues, both resolved without touching any Casambi protocol code. (1) The Driver
   Manager said "Auto-discovery is not implemented," conflating GATEWAY discovery (genuinely

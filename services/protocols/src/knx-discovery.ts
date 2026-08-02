@@ -175,6 +175,34 @@ export interface KnxSearchOptions {
    * segment (§ production defect: "No KNX/IP gateways found on this network" with a real
    * gateway present, on a host with Docker/other virtual adapters also installed). */
   interfaceAddress?: string;
+  /** § LAN receive-path investigation — optional, purely observational. Invoked once when the
+   * search finishes with the real stage outcomes, so the KNX setup page can show WHY zero
+   * gateways were found instead of an empty list with no explanation. Adding this changes no
+   * discovery behavior whatsoever; omitting it is exactly the prior code path. */
+  onDiagnostics?: (d: KnxDiscoveryDiagnostics) => void;
+}
+
+/**
+ * Real, observed outcomes of one `knxSearch()` run (§ LAN receive-path investigation).
+ *
+ * `joinedMulticast` deliberately means only "the `addMembership()` call did not throw" — it is
+ * NOT evidence that multicast will be delivered. Verified experimentally on real Docker: a
+ * bridge-networked container joins `224.0.23.12` successfully and then receives nothing, because
+ * the bridge does not forward multicast in from the physical LAN. `datagramsReceived` is the
+ * counter that actually distinguishes a working socket from a silently deaf one, which is why
+ * both are reported separately rather than collapsed into one "multicast OK" boolean.
+ */
+export interface KnxDiscoveryDiagnostics {
+  socketBound: boolean;
+  joinedMulticast: boolean;
+  /** Non-null when the multicast join itself threw — a genuinely different failure from
+   * "joined fine but nothing arrived". */
+  joinError: string | null;
+  /** Every datagram delivered to the socket, parseable or not. */
+  datagramsReceived: number;
+  /** Datagrams that parsed as a valid KNXnet/IP SEARCH_RESPONSE. */
+  searchResponsesParsed: number;
+  gatewaysFound: number;
 }
 
 /** Multicast a SEARCH_REQUEST and collect KNXnet/IP interfaces until the timeout. Deduped by IA. */
@@ -183,6 +211,16 @@ export function knxSearch(opts: KnxSearchOptions = {}): Promise<KnxGateway[]> {
   const socket = (opts.createSocket ?? defaultSocket)();
   const found = new Map<string, KnxGateway>();
   const request = encodeSearchRequest(opts.localIp ?? opts.interfaceAddress, opts.localPort);
+
+  // § LAN receive-path investigation — observation only; none of these affect discovery.
+  const diag: KnxDiscoveryDiagnostics = {
+    socketBound: false,
+    joinedMulticast: false,
+    joinError: null,
+    datagramsReceived: 0,
+    searchResponsesParsed: 0,
+    gatewaysFound: 0,
+  };
 
   return new Promise<KnxGateway[]>((resolve) => {
     let done = false;
@@ -194,14 +232,28 @@ export function knxSearch(opts: KnxSearchOptions = {}): Promise<KnxGateway[]> {
       } catch {
         /* ignore */
       }
+      diag.gatewaysFound = found.size;
+      opts.onDiagnostics?.(diag);
       resolve([...found.values()]);
     };
     socket.on("message", (msg, rinfo) => {
+      diag.datagramsReceived += 1;
       const gw = parseSearchResponse(msg, rinfo.address);
-      if (gw) found.set(`${gw.individualAddress}|${gw.address}`, gw);
+      if (gw) {
+        diag.searchResponsesParsed += 1;
+        found.set(`${gw.individualAddress}|${gw.address}`, gw);
+      }
     });
     socket.bind(() => {
-      socket.setMulticast?.(opts.interfaceAddress);
+      diag.socketBound = true;
+      try {
+        socket.setMulticast?.(opts.interfaceAddress);
+        // Records only that the call returned — see KnxDiscoveryDiagnostics' doc comment for why
+        // this is NOT treated as evidence that multicast will actually be delivered.
+        diag.joinedMulticast = true;
+      } catch (err) {
+        diag.joinError = err instanceof Error ? err.message : String(err);
+      }
       socket.send(request, KNX_PORT, KNX_MULTICAST);
     }, opts.interfaceAddress);
     const t = setTimeout(finish, timeoutMs);

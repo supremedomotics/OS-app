@@ -4,6 +4,54 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: LAN receive path — Casambi UDP RX + KNX/IP discovery (one shared root cause)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. Full investigation:
+**`docs/architecture/Casambi-LAN-Receive-Path-Investigation.md`**. No protocol logic modified.
+
+**Both symptoms share ONE root cause, proven experimentally on a real Docker Engine: bridge
+networking does not deliver LAN broadcast OR multicast into containers.** Identical code, only the
+network mode differing — bridge: broadcast NOT RECEIVED, multicast join OK but NOT RECEIVED; host:
+both RECEIVED. Casambi's `Sent = 6 / Received = 0 / Last Error = None` is exactly that signature:
+nothing errored, the kernel just never delivered. Wireshark sees the packets; `@supreme/lan` never
+does — the loss is below the application, so no protocol-level change could fix it.
+
+**KNX/IP discovery is NOT a regression from `@supreme/lan`** — code evidence:
+`createKnxDiscoveryRemoteSocketFactory` is defined and **never called**; `knxSearch()` still uses
+its built-in raw `node:dgram`, and `installer-context.ts:817` calls it with no options at all. KNX
+discovery has never routed through `@supreme/lan`, and the Gateway's own networks were never
+modified by any of that work (`git log -- infra/hub-compose/docker-compose.yml`). It fails for the
+same Docker-bridge reason, independently.
+
+**The most damaging finding — a false PASS:** `addMembership()` SUCCEEDS on bridge networking and
+then nothing ever arrives. Every diagnostic checking "did we join the group?" was reporting a green
+tick on a permanently deaf socket, which is exactly why KNX discovery returned an empty list with
+no error, forever. Fixed: `DgramUdpSession` now tracks `joinedMulticastAt` separately from
+reception and exposes `joinedMulticastButNeverReceived`; a live run of the real `knxSearch()` now
+reproduces the 0-gateway symptom but *explains itself*.
+
+**New diagnostics (no behavior change):** protocol-agnostic `core/pipeline-stages.ts` with a
+PASS/FAIL/**WAITING** vocabulary — WAITING is the state the old diagnostics couldn't express. A
+reception stage is never PASS because a setup call didn't throw; it must be backed by a
+received-packet counter. Built on it: `casambi/pipeline-status.ts` (Socket → Listening → Receiving
+→ Publishing → Decoding → Discovery → Entities) and `knx/knx-discovery-pipeline.ts` (Socket →
+Joined Multicast → Received Search Response → Gateway Parsed → Gateway Created).
+`knx-discovery.ts` gained an **optional** `onDiagnostics` observer — omitting it is byte-for-byte
+the prior code path.
+
+**Deliberately NOT tracked:** a per-datagram broadcast/multicast/unicast split. `rinfo` reports the
+SENDER, not the destination, and Node doesn't surface `IP_PKTINFO` — such a counter would be a
+guess presented as a measurement.
+
+**Required fix (deployment, not code):** reception needs host networking —
+`-f docker-compose.lan-host.yml -f docker-compose.nats-loopback.yml` on Linux. Note this fixes
+Casambi but **not** KNX discovery, which runs in the Gateway (bridge by design per ADR 0022). The
+recommended next step, explicitly NOT done here per the standing "Casambi first" rule: wire the
+already-built `knx-discovery-remote-socket.ts` adapter so KNX inherits the same fix.
+
+**Tests:** `@supreme/lan` 7 files/60 tests (4 new joined-vs-receiving); `@supreme/protocols` 80
+files/772 tests (9 new pipeline-stage). 47/47 turbo tasks green.
+
 ## Session: Casambi — Discovery UX fix + ENETUNREACH root cause (DEPLOYMENT defect, fixed)
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. Full investigation:

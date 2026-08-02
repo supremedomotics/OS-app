@@ -58,6 +58,29 @@ export class DgramUdpSession {
    * session itself since the multicast group is a caller-supplied bind option, not socket state. */
   multicastGroup: string | null = null;
 
+  /**
+   * § LAN receive-path investigation — the counters that distinguish "joined a multicast group"
+   * from "actually receives multicast", which are NOT the same thing and were previously
+   * conflated into a false PASS.
+   *
+   * Proven experimentally on a real Docker Engine (identical code, only the container's network
+   * mode differing): on a bridge network `addMembership()` SUCCEEDS — the IGMP membership is
+   * accepted inside the container's own netns, no error is raised — yet zero multicast datagrams
+   * are ever delivered, because the bridge does not forward multicast in from the physical LAN.
+   * On host networking the identical code receives them. A diagnostic that only checks "did the
+   * join succeed?" therefore reports PASS for a socket that can never receive anything, which is
+   * precisely why KNX/IP discovery fails silently with no error to show an installer.
+   *
+   * NOTE on what is deliberately NOT tracked: a per-datagram broadcast/multicast/unicast
+   * classification. `dgram`'s `rinfo` reports the SENDER's address, not the datagram's
+   * DESTINATION, and Node does not surface `IP_PKTINFO`/`IPV6_RECVPKTINFO`, so the destination a
+   * packet was actually addressed to is not observable here. Reporting a "Broadcast RX" vs
+   * "Multicast RX" split would therefore be a guess dressed as a measurement. What IS observable
+   * and genuinely diagnostic is recorded instead: whether a group was joined, and whether
+   * anything at all has since arrived.
+   */
+  private _joinedMulticastAt: string | null = null;
+
   constructor(
     readonly sessionId: string,
     private readonly socketFactory: DgramSocketFactory,
@@ -77,6 +100,17 @@ export class DgramUdpSession {
   }
   get localPort(): number | null {
     return this._localPort;
+  }
+  /** ISO timestamp of a successful multicast join, or `null` if none was attempted/succeeded. */
+  get joinedMulticastAt(): string | null {
+    return this._joinedMulticastAt;
+  }
+  /** § LAN receive-path investigation — the honest signal a bare "joined OK" cannot give: a
+   * multicast group was joined, yet nothing has EVER been received on this socket. On Docker
+   * bridge networking that is the expected, silent failure mode (join succeeds, delivery never
+   * happens). Callers surface this as WAITING/FAIL, never PASS. */
+  get joinedMulticastButNeverReceived(): boolean {
+    return this._joinedMulticastAt !== null && this._packetsReceived === 0;
   }
 
   async bind(opts: LanUdpBindOptions): Promise<{ address: string; port: number }> {
@@ -113,6 +147,8 @@ export class DgramUdpSession {
       // picks which NIC actually carries the membership independently of the bind address.
       if (opts.multicastInterface) socket.setMulticastInterface?.(opts.multicastInterface);
       socket.addMembership(opts.multicastGroup, opts.multicastInterface);
+      // Records that the join SUCCEEDED — deliberately not treated as evidence of reception.
+      this._joinedMulticastAt = new Date().toISOString();
     }
 
     const addr = socket.address();
@@ -126,6 +162,7 @@ export class DgramUdpSession {
     if (iface) this.socket.setMulticastInterface?.(iface);
     this.socket.addMembership(group, iface);
     this.multicastGroup = group;
+    this._joinedMulticastAt = new Date().toISOString();
   }
 
   async send(data: Buffer, port: number, address: string): Promise<void> {

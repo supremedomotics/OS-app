@@ -107,6 +107,13 @@ export interface LanSessionDiagnostics {
   packetsSent: number;
   packetsReceived: number;
   lastError: string | null;
+  /** § LAN receive-path investigation — ISO timestamp of a SUCCESSFUL multicast join, or `null`.
+   * Deliberately separate from {@link joinedMulticastButNeverReceived}: a join succeeding proves
+   * nothing about delivery (on Docker bridge it succeeds and nothing ever arrives). */
+  joinedMulticastAt?: string | null;
+  /** True when a group was joined but this socket has NEVER received anything — the exact,
+   * otherwise-silent Docker-bridge multicast failure. Callers report this as WAITING/FAIL. */
+  joinedMulticastButNeverReceived?: boolean;
 }
 
 /** Service-wide diagnostics. `networkMode` is read from this service's OWN configuration

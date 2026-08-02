@@ -90,7 +90,18 @@ export {
   type KnxSearchOptions,
   type KnxDiscoverySocket,
   type KnxDiscoverySocketFactory,
+  type KnxDiscoveryDiagnostics,
 } from "./knx-discovery.js";
+export { knxDiscoveryStages } from "./knx/knx-discovery-pipeline.js";
+export { casambiPipelineStages } from "./casambi/pipeline-status.js";
+export {
+  firstNonPassingStage,
+  formatPipelineStages,
+  countedStage,
+  booleanStage,
+  type PipelineStage,
+  type PipelineStageStatus,
+} from "./core/pipeline-stages.js";
 export {
   MatterProtocolDriver,
   type MatterDriverOptions,

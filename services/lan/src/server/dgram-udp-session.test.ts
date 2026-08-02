@@ -130,6 +130,48 @@ describe("DgramUdpSession", () => {
     expect(socket.memberships).toEqual([{ group: "224.0.23.12", iface: "192.168.1.10" }]);
   });
 
+  // § LAN receive-path investigation — a successful multicast JOIN is not evidence of RECEPTION.
+  // Proven on real Docker: bridge networking accepts addMembership() and then delivers nothing.
+  // These guard the diagnostic that makes that silent failure visible.
+  describe("joined-vs-receiving (the Docker bridge multicast false-PASS)", () => {
+    it("reports joinedMulticastButNeverReceived after a successful join with no traffic", async () => {
+      const socket = new FakeDgramSocket();
+      const session = new DgramUdpSession("s1", () => socket);
+      await session.bind({ multicastGroup: "224.0.23.12" });
+      // The join itself succeeded — exactly what a bridge container reports.
+      expect(socket.memberships).toHaveLength(1);
+      expect(session.joinedMulticastAt).not.toBeNull();
+      // ...and yet nothing has arrived, which is the real, reportable state.
+      expect(session.packetsReceived).toBe(0);
+      expect(session.joinedMulticastButNeverReceived).toBe(true);
+    });
+
+    it("clears joinedMulticastButNeverReceived once a datagram genuinely arrives", async () => {
+      const socket = new FakeDgramSocket();
+      const session = new DgramUdpSession("s1", () => socket);
+      await session.bind({ multicastGroup: "224.0.23.12" });
+      socket.emit("message", Buffer.from("real"), { address: "192.168.0.9", port: 3671 });
+      expect(session.packetsReceived).toBe(1);
+      expect(session.joinedMulticastButNeverReceived).toBe(false);
+    });
+
+    it("is false when no multicast group was ever joined — a plain unicast socket is not 'failing'", async () => {
+      const session = new DgramUdpSession("s1", () => new FakeDgramSocket());
+      await session.bind({});
+      expect(session.joinedMulticastAt).toBeNull();
+      expect(session.joinedMulticastButNeverReceived).toBe(false);
+    });
+
+    it("records the join timestamp for the post-bind joinMulticast() path too", async () => {
+      const session = new DgramUdpSession("s1", () => new FakeDgramSocket());
+      await session.bind({});
+      expect(session.joinedMulticastAt).toBeNull();
+      await session.joinMulticast("224.0.23.12");
+      expect(session.joinedMulticastAt).not.toBeNull();
+      expect(session.joinedMulticastButNeverReceived).toBe(true);
+    });
+  });
+
   it("joinMulticast() before bind() throws rather than silently doing nothing", async () => {
     const session = new DgramUdpSession("s1", () => new FakeDgramSocket());
     await expect(session.joinMulticast("224.0.23.12")).rejects.toThrow(/before bind/);
