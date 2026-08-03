@@ -7,6 +7,22 @@
 
 ## Critical
 
+### No native-only backend mode — HA-owned devices silently fall through to a simulator
+- **Description:** found by the Home Assistant Dependency Audit
+  (`docs/architecture/Home-Assistant-Dependency-Audit.md`). `RoutingBackendAdapter` is always
+  constructed with an `ha` side (`services/gateway/src/bootstrap.ts:288-294`), which is either the
+  real `HaAdapter` or **`MockAdapter` — an in-memory simulator**. A device whose ownership is
+  `"ha"` on a hub running `SUPREME_BACKEND=mock` is therefore served by fabricated state rather
+  than real hardware or an honest error.
+- **Reason:** directly violates this codebase's own "never fabricate data" rule (`CLAUDE.md`) and
+  `routing-adapter.ts:29-33`'s own stated no-silent-fallback principle (which is already enforced
+  in the native→HA direction but not the reverse). This is the single blocker gating "Home
+  Assistant becomes optional."
+- **Dependencies:** none — additive third mode (`SUPREME_BACKEND=native`), no breaking change.
+- **Complexity:** Small.
+- **Status:** Diagnosed, not fixed (audit was analysis-only per its brief). See the audit's Phase 9
+  item **C-1** for the exact design.
+
 ### Real-world deployment readiness gap
 - **Description:** `docs/production-readiness.md`'s own assessment: feature-complete
   development is ~80%, but real-world deployment readiness is ~25–30%. Nothing has run against
@@ -33,6 +49,29 @@
 ---
 
 ## High
+
+### Make Home Assistant opt-in in the production compose topology
+- **Description:** `infra/hub-compose/docker-compose.yml:25` defaults `SUPREME_BACKEND=ha` and
+  `:125-127` hard-declares `depends_on: homeassistant`. The shipped production topology therefore
+  cannot start without the HA container even though the *code* boots fine without it (proven by the
+  full 240-test gateway suite running at `SUPREME_BACKEND=mock`).
+- **Reason:** HA cannot be "optional" while compose requires it to start.
+- **Dependencies:** the Critical native-mode item above (ship together).
+- **Complexity:** Small — move HA behind a compose profile, flip the default.
+- **Status:** Not started. Audit Phase 9 item **H-1**; breaking for existing HA deployments, needs
+  a documented upgrade note.
+
+### `engine: "ha"` automations are accepted, persisted, and never executed by anyone
+- **Description:** `compileToHa()` (`services/automations/src/compiler.ts:17`) has **no runtime
+  caller anywhere** — only tests. Meanwhile the API accepts and stores `engine: "ha"` automations
+  (`routes/phase3.ts:41-52`) and the native engine filters them out
+  (`services/automations/src/engine.ts:116`). Net effect: such an automation runs nowhere.
+- **Reason:** a live correctness bug today, independent of the HA migration — the API promises a
+  capability the platform does not deliver.
+- **Dependencies:** none.
+- **Complexity:** Small — either wire `compileToHa` to a real push path, or reject `engine:"ha"` at
+  the API with a clear error.
+- **Status:** Diagnosed, not fixed. Audit Phase 9 item **H-2**.
 
 ### Universal Keypad Editor / Intent-aware mapping UI
 - **Description:** Phase 1 (ADR 0016) and Phase 2 (ADR 0017) both shipped complete backend
@@ -145,6 +184,28 @@
 ---
 
 ## Medium
+
+### Device availability (`Device.status`) is owned by nobody
+- **Description:** found by the HA Dependency Audit. `Device.status` is set to `"online"` at
+  creation (`services/home/src/home-service.ts:523`, `camera-service.ts:45`) and **never updated by
+  any code path afterwards** — verified by exhaustive search. Neither HA nor any native driver ever
+  writes it, so `"offline"`/`"unavailable"` are unreachable states in practice.
+- **Reason:** pre-existing gap, unrelated to HA, but must be assigned an owner before HA (a
+  plausible future source of availability) is removed.
+- **Dependencies:** none.
+- **Complexity:** Medium — needs a driver-side liveness signal threaded through the SIL.
+- **Status:** Diagnosed, not fixed. Audit Phase 9 item **M-3**.
+
+### Generic commissioning defaults new devices to `ownership="ha"`
+- **Description:** `CommissioningService.commission()` always writes `backendIds`
+  (`services/commissioning/src/index.ts:162-163`), which makes `HomeService.bind()` record
+  ownership as `"ha"` (`home-service.ts:272`) unless a protocol bind immediately overwrites it.
+  A device commissioned without a protocol therefore lands in the exact bucket the HA migration is
+  trying to empty.
+- **Reason:** keeps growing the `"ha"`-owned population while the migration tries to shrink it.
+- **Dependencies:** the Critical native-mode item (land that first).
+- **Complexity:** Small — default to `unassigned` rather than `ha`.
+- **Status:** Diagnosed, not fixed. Audit Phase 9 item **M-2**.
 
 ### Wire real Redis/NATS backends behind the messaging seam
 - **Description:** `services/messaging` uses in-process fakes for the event bus (NATS) and
