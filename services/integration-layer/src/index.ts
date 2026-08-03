@@ -18,12 +18,28 @@ export type {
 } from "./adapter.js";
 export { EntityRegistryMirror, type BackendEntityRef } from "./registry.js";
 export {
-  OwnershipRegistry,
-  InMemoryDeviceOwnershipStore,
-  type OwnerKind,
-  type DeviceOwnership,
-  type IDeviceOwnershipStore,
-} from "./ownership.js";
+  type DeviceLifecycleState,
+  DEVICE_LIFECYCLE_TRANSITIONS,
+  canTransition,
+} from "./device-lifecycle.js";
+export {
+  ProviderRegistry,
+  InMemoryDeviceProviderStore,
+  type DeviceProviderRecord,
+  type IDeviceProviderStore,
+} from "./provider-registry.js";
+export {
+  type ProviderAdapter,
+  type ProviderMetadata,
+  type ProviderHealth,
+  type ProviderDiagnostics,
+  type ProviderEvent,
+} from "./provider-adapter.js";
+export {
+  DriverBindingEngine,
+  type DriverHost,
+  type BindingHealth,
+} from "./driver-binding-engine.js";
 export { SupremeIntegrationLayer, type SilOptions } from "./sil.js";
 export { MockAdapter } from "./mock-adapter.js";
 export {
@@ -45,7 +61,8 @@ export {
   type CleanupFn,
   type DriverLifecycleState,
 } from "./protocols/lifecycle.js";
-export { RoutingBackendAdapter, type RoutingAdapterOptions } from "./routing-adapter.js";
+export { ProviderRouter, type ProviderRouterOptions } from "./provider-router.js";
+export { HomeAssistantProviderDriver } from "./ha/ha-provider-driver.js";
 export { MigrationPolicy, type EngineKind, type IMigrationPolicyStore } from "./migration.js";
 export { applyCommand } from "./apply.js";
 export { HaAdapter, type HaTransport, type HaAdapterOptions } from "./ha/ha-adapter.js";

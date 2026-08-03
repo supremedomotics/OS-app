@@ -2,12 +2,15 @@ import type { CapabilityCommand, CapabilityKind, CapabilityState, DeviceId } fro
 import {
   EntityRegistryMirror,
   InMemoryProtocolBindingStore,
-  MigrationPolicy,
-  MockAdapter,
-  RoutingBackendAdapter,
+  HaAdapter,
+  HomeAssistantProviderDriver,
+  DriverBindingEngine,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
+  type HaTransport,
   type INativeProtocolDriver,
   type ProtocolBinding,
   type StateListener,
@@ -34,6 +37,21 @@ class FlakyDriver implements INativeProtocolDriver {
   onState(_l: StateListener): () => void { return () => {}; }
 }
 
+/** No-socket HA transport (mirrors integration-layer's own ha-adapter.test.ts pattern) —
+ * registered so demo-seeded devices (which map onto "homeassistant" per ADR-0023 §
+ * Commissioning) are genuinely bound, exactly like a real hub with HA configured. */
+class FakeHaTransport implements HaTransport {
+  opened = false;
+  async open(): Promise<void> { this.opened = true; }
+  async close(): Promise<void> { this.opened = false; }
+  isOpen(): boolean { return this.opened; }
+  onEvent(): void {}
+  async send(message: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (message.type === "get_states") return { result: [] };
+    return {};
+  }
+}
+
 describe("Settings → Logs (§ Diagnostics): unified system log", () => {
   let app: FastifyInstance;
   let ctx: AppContext;
@@ -41,12 +59,10 @@ describe("Settings → Logs (§ Diagnostics): unified system log", () => {
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({ drivers: [new FlakyDriver()] }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+    const haDriver = new HomeAssistantProviderDriver(new HaAdapter({ transport: new FakeHaTransport(), registry }), registry);
+    const routerEngine0 = new SupremeNativeAdapter({ drivers: [new FlakyDriver(), haDriver] });
+    const routerProviders0 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine0, registry: routerProviders0, bindingEngine: new DriverBindingEngine(routerEngine0, routerProviders0) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,

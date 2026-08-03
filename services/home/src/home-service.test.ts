@@ -1,7 +1,31 @@
-import { newId, type HomeId, type UserId } from "@supreme/domain-model";
-import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
+import { newId, type DeviceId, type HomeId, type UserId } from "@supreme/domain-model";
+import {
+  DriverBindingEngine,
+  EntityRegistryMirror,
+  HaAdapter,
+  HomeAssistantProviderDriver,
+  MockAdapter,
+  ProviderRegistry,
+  ProviderRouter,
+  SupremeIntegrationLayer,
+  SupremeNativeAdapter,
+  type HaTransport,
+} from "@supreme/integration-layer";
 import { describe, expect, it } from "vitest";
 import { HomeService, seedDemoHome } from "./home-service.js";
+
+/** Minimal no-socket HA transport (mirrors integration-layer's own ha-adapter.test.ts pattern). */
+class FakeHaTransport implements HaTransport {
+  opened = false;
+  async open(): Promise<void> { this.opened = true; }
+  async close(): Promise<void> { this.opened = false; }
+  isOpen(): boolean { return this.opened; }
+  onEvent(): void {}
+  async send(message: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (message.type === "get_states") return { result: [] };
+    return {};
+  }
+}
 
 async function setup() {
   const adapter = new MockAdapter();
@@ -132,5 +156,41 @@ describe("HomeService", () => {
     expect(await home.listFavorites(userId)).toHaveLength(1);
     await home.setFavorite(userId, ref, false);
     expect(await home.listFavorites(userId)).toHaveLength(0);
+  });
+
+  describe("ADR-0023 § Commissioning — explicit provider assignment", () => {
+    async function setupRouter() {
+      const registry = new EntityRegistryMirror();
+      const haDriver = new HomeAssistantProviderDriver(new HaAdapter({ transport: new FakeHaTransport(), registry }), registry);
+      const engine = new SupremeNativeAdapter({ drivers: [haDriver] });
+      const providers = new ProviderRegistry();
+      const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
+      const sil = new SupremeIntegrationLayer({ adapter: router, registry, providers });
+      await sil.start();
+      return { sil, providers, home: new HomeService(sil) };
+    }
+
+    it("addDevice() with backendIds binds through DriverBindingEngine — no implicit ownership side effect", async () => {
+      const { sil, providers, home } = await setupRouter();
+      const deviceId = newId("device") as DeviceId;
+      await home.addDevice(
+        { id: deviceId, roomId: null, name: "Lamp", supremeType: "dimmer", capabilities: [{ kind: "onoff" }], state: {}, metadata: {} },
+        { onoff: "light.lamp" },
+      );
+      // Real lifecycle state, not a fabricated default.
+      expect(providers.get(deviceId)).toMatchObject({ provider: "homeassistant", state: "ONLINE" });
+      // And it's genuinely commandable through the router (not just recorded as owned).
+      await expect(sil.command(deviceId, { capability: "onoff", action: "on" })).resolves.toBeUndefined();
+    });
+
+    it("a device with no backendIds stays unassigned — never defaulted to homeassistant", async () => {
+      const { providers, home } = await setupRouter();
+      const deviceId = newId("device") as DeviceId;
+      await home.addDevice(
+        { id: deviceId, roomId: null, name: "Unbound thing", supremeType: "dimmer", capabilities: [{ kind: "onoff" }], state: {}, metadata: {} },
+        {},
+      );
+      expect(providers.get(deviceId)).toBeUndefined();
+    });
   });
 });

@@ -7,9 +7,10 @@ import {
   type MatterOnboardingPayload,
 } from "@supreme/protocols";
 import {
+  DriverBindingEngine,
   EntityRegistryMirror,
-  MockAdapter,
-  RoutingBackendAdapter,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
 } from "@supreme/integration-layer";
@@ -53,9 +54,12 @@ describe("Matter commissioning routes", () => {
     // Mirror production wiring: the Matter driver lives in the SIL's native adapter AND is exposed
     // as the matter handle (same instance), so commissioning binds the protocol for real.
     const registry = new EntityRegistryMirror();
+    const native = new SupremeNativeAdapter({ drivers: [driver] });
+    const providers = new ProviderRegistry();
     const sil = new SupremeIntegrationLayer({
-      adapter: new RoutingBackendAdapter({ ha: new MockAdapter(), native: new SupremeNativeAdapter({ drivers: [driver] }), registry }),
+      adapter: new ProviderRouter({ engine: native, registry: providers, bindingEngine: new DriverBindingEngine(native, providers) }),
       registry,
+      providers,
     });
     ctx = await AppContext.create(loadConfig({ SUPREME_PORT: "0", SUPREME_LOG_LEVEL: "silent" }), {
       sil,

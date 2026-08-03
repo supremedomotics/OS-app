@@ -3,7 +3,9 @@ import {
   EntityRegistryMirror,
   MigrationPolicy,
   MockAdapter,
-  RoutingBackendAdapter,
+  DriverBindingEngine,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
@@ -96,12 +98,9 @@ describe("Ordinary devices auto-commission through Universal Room Intelligence; 
 
   function sil() {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({ drivers: [new FakeCasambi()] }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+    const routerEngine0 = new SupremeNativeAdapter({ drivers: [new FakeCasambi()] });
+    const routerProviders0 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine0, registry: routerProviders0, bindingEngine: new DriverBindingEngine(routerEngine0, routerProviders0) })
     return new SupremeIntegrationLayer({ adapter: router, registry });
   }
 

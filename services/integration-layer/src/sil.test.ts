@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { MockAdapter } from "./mock-adapter.js";
 import { SupremeIntegrationLayer } from "./sil.js";
 import { SupremeNativeAdapter } from "./native-adapter.js";
-import { RoutingBackendAdapter } from "./routing-adapter.js";
+import { ProviderRouter } from "./provider-router.js";
+import { ProviderRegistry } from "./provider-registry.js";
+import { DriverBindingEngine } from "./driver-binding-engine.js";
 import { EntityRegistryMirror } from "./registry.js";
 import { commandToHaService } from "./ha/capability-mapper.js";
 import type { DiscoveredDevice } from "./adapter.js";
@@ -75,7 +77,8 @@ describe("SupremeIntegrationLayer.unmapDevice — § Driver Lifecycle Completion
   it("releases the owning native driver's per-device resources before clearing SIL bookkeeping", async () => {
     const driver = new FakeCleanupDriver();
     const native = new SupremeNativeAdapter({ drivers: [driver] });
-    const router = new RoutingBackendAdapter({ ha: new MockAdapter(), native, registry: new EntityRegistryMirror() });
+    const providers = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: native, registry: providers, bindingEngine: new DriverBindingEngine(native, providers) });
     const sil = new SupremeIntegrationLayer({ adapter: router });
     await sil.start();
 

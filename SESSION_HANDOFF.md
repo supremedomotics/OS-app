@@ -58,6 +58,51 @@ guard still passes against the new modules.
 this sandbox — no LAN path exists here. Built entirely for the user's own local execution; the
 resulting evidence bundle (or dashboard output) is what a follow-up session would analyze.
 
+## Session: Native Device Lifecycle Architecture (ADR-0023, Phase 1 complete)
+
+Replaced the ownership model (`OwnershipRegistry`/`RoutingBackendAdapter`,
+`ownership = ha | native | unassigned`) with a provider-driven architecture:
+`ProviderRegistry` + `DeviceLifecycleState` machine + `DriverBindingEngine` +
+`ProviderRouter`. Home Assistant is now just another provider driver
+(`HomeAssistantProviderDriver` wraps `HaAdapter` into `INativeProtocolDriver` and
+registers into the same driver array as every native protocol) — no special casing
+anywhere in routing. `SUPREME_BACKEND=native` is the new production default;
+`mock` is explicitly test/CI-only. See `docs/architecture/adr/0023-native-device-
+lifecycle-architecture.md` for the full decision record, phased implementation, and
+completion summary (includes one disclosed, deliberate behavior change: the
+`/v1/migration` wizard no longer fabricates live control for a domain migrated to
+"native" without a real driver bound).
+
+No protocol driver was modified (Casambi, KNX, Matter, MQTT, Apple TV, DALI, Modbus
+untouched). `pnpm -r build` clean workspace-wide; full test suite clean except two
+confirmed pre-existing flakes in files this refactor never touched (real-TCP-socket
+`avr-driver`/`heos-driver` contention in `@supreme/protocols`, a timing-based loop
+assertion in `@supreme/lan`) — both re-run clean in isolation. `gateway` + `homeowner`
+containers rebuilt/redeployed; `/healthz` confirms `backend: "provider-router"`.
+
+**Known gap, not silently skipped:** per-device provider/lifecycle fields aren't yet
+wired into `GET /v1/devices/:id/diagnostics` (needs a `supreme-contracts` schema
+change) — the broader `/v1/drivers/diagnostics` surface and its UI panel already
+expose lifecycle-state counts. Native (non-Docker) Linux deployment wasn't
+re-exercised this pass (the change is deployment-independent by design, but only the
+Docker path was actually run).
+
+## Session: Native Linux Installer — backend/HA prompt fix
+
+**Branch:** `native-linux`. Fixed a real first-install bug: answering "No" to Home
+Assistant still asked for HA username/password and a standalone "Backend [mock]"
+question. `infra/native-linux/install.sh`'s `SUPREME_BACKEND` is now always derived
+from the HA yes/no answer (`native` when no HA, `ha` when yes) and validated against
+`native|ha|mock` — HA-specific prompts are skipped entirely on the "No" path. Added
+pre-install validation (domain format, timezone, HA credential length) that fails
+loudly rather than silently continuing. Updated `docs/architecture/
+Native-Linux-Deployment.md` with the new wizard flow. Verified via an isolated
+functional harness (8 scenarios) since no automated test suite exists for these
+shell scripts; all 9 native-linux scripts pass `bash -n`. Only `infra/native-linux/`
++ one doc touched — no application code, Gateway, LAN service, Commissioning, or
+provider architecture modified. Committed and pushed to `origin/native-linux`
+(`d96ee90`).
+
 ## Session: Production Architecture Direction — deployment/transport separation in `@supreme/lan`
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. ADR: **`docs/architecture/adr/0022-supreme-lan-transport-service.md`**

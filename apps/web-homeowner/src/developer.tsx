@@ -52,16 +52,16 @@ interface DriverDiagnosticsEntryView {
  * troubleshooting "why isn't this device responding" never requires reading logs. */
 function DriverLifecyclePanel() {
   const [drivers, setDrivers] = useState<DriverDiagnosticsEntryView[]>([]);
-  const [ownership, setOwnership] = useState<Record<string, number> | null>(null);
+  const [providers, setProviders] = useState<Record<string, number> | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function load() {
     setBusy(true);
     const res = await apiRequest("GET", "/v1/drivers/diagnostics");
     if (res.status === 200) {
-      const body = res.body as { drivers: DriverDiagnosticsEntryView[]; ownership: Record<string, number> };
+      const body = res.body as { drivers: DriverDiagnosticsEntryView[]; providers: Record<string, number> };
       setDrivers(body.drivers);
-      setOwnership(body.ownership);
+      setProviders(body.providers);
     }
     setBusy(false);
   }
@@ -71,9 +71,9 @@ function DriverLifecyclePanel() {
     <div className="dev-drivers">
       <div className="dev-row2" style={{ marginBottom: 8 }}>
         <button disabled={busy} onClick={load}>{busy ? "Loading…" : "Refresh"}</button>
-        {ownership && (
+        {providers && (
           <span className="muted">
-            Ownership — native {ownership.native} · ha {ownership.ha} · matter {ownership.matter} · cloud {ownership.cloud} · unassigned {ownership.unassigned}
+            Lifecycle — unbound {providers.UNBOUND} · binding {providers.BINDING} · bound {providers.BOUND} · online {providers.ONLINE} · offline {providers.OFFLINE} · error {providers.ERROR}
           </span>
         )}
       </div>

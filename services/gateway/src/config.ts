@@ -19,7 +19,7 @@ export interface GatewayConfig {
   port: number;
   tokenSecret: string;
   /** "mock" runs the offline vertical slice; "ha" uses the real HA backend. */
-  backend: "mock" | "ha";
+  backend: "mock" | "ha" | "native";
   haUrl: string;
   /** HA long-lived token. Optional: when empty and backend=ha, the hub provisions HA
    * headlessly on first boot and stores the generated token in the secrets manager. */
@@ -196,7 +196,11 @@ export interface GatewayConfig {
 export const DEV_TOKEN_SECRET = "dev-only-insecure-secret-change-me-change-me";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
-  const backend = env.SUPREME_BACKEND === "ha" ? "ha" : "mock";
+  // ADR-0023 § Native Backend: "native" (no Home Assistant leg at all) is the
+  // production default. "ha" additionally registers Home Assistant as one more
+  // provider driver. "mock" exists ONLY for tests/CI — never select it via a real
+  // deployment's env, since it's the one path that doesn't talk to a real backend.
+  const backend = env.SUPREME_BACKEND === "ha" ? "ha" : env.SUPREME_BACKEND === "mock" ? "mock" : "native";
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),

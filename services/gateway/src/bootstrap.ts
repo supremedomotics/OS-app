@@ -2,15 +2,15 @@ import {
   EntityRegistryMirror,
   HaAdapter,
   HaWsTransport,
+  HomeAssistantProviderDriver,
   MigrationPolicy,
-  MockAdapter,
-  RoutingBackendAdapter,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
-  OwnershipRegistry,
+  ProviderRegistry,
+  DriverBindingEngine,
   provisionHaToken,
   haHttpFromWsUrl,
-  type IBackendAdapter,
   type INativeProtocolDriver,
   type IMigrationPolicyStore,
 } from "@supreme/integration-layer";
@@ -41,7 +41,7 @@ import {
   createSonosConnect,
   createAppleTvConnect,
 } from "@supreme/protocols";
-import { createPersistence } from "@supreme/persistence";
+import { createPersistence, migrateOwnershipToProvider } from "@supreme/persistence";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
 import { HttpProtocolScanner } from "@supreme/commissioning";
 import type { ProtocolKind } from "@supreme/domain-model";
@@ -119,9 +119,21 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.pushTokenStore = stores.pushTokens;
     deps.backupStore = stores.backups;
     deps.pendingDeviceStore = stores.pendingDevices;
-    deps.ownershipStore = stores.deviceOwnership;
+    deps.providerStore = stores.deviceProvider;
     migrationStore = stores.migrationPolicy;
     deps.db = stores.db;
+
+    // ADR-0023 § Migration: one-time, idempotent device_ownership -> device_provider
+    // upgrade. Cheap to run every boot (a no-op once every device is migrated) —
+    // never fabricates a bound state, only records provenance; see migrate-ownership.ts.
+    const ownershipMigration = await migrateOwnershipToProvider(stores.deviceOwnership, stores.deviceProvider);
+    if (ownershipMigration.migrated.length || ownershipMigration.unresolvable.length) {
+      console.info("[ADR-0023 migration] device_ownership -> device_provider", {
+        migrated: ownershipMigration.migrated.length,
+        skippedAlreadyMigrated: ownershipMigration.skippedAlreadyMigrated.length,
+        unresolvable: ownershipMigration.unresolvable,
+      });
+    }
   }
 
   // Cross-process messaging: NATS event bus + Redis presence when configured,
@@ -137,23 +149,22 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     );
   }
 
-  // The SIL is always backed by a routing adapter so per-domain native migration
-  // (§16 Phase 4) is available: the "ha" side is the real HaAdapter or the mock
-  // backend, and the native side is the Supreme-native engine. The shared registry
-  // is what the router consults to route each domain.
+  // ADR-0023 § Native Backend: the SIL is always backed by a ProviderRouter — there
+  // is no separate HA leg. Home Assistant, when configured, registers as ONE MORE
+  // driver (`HomeAssistantProviderDriver`) into the exact same drivers array as
+  // Casambi/KNX/Matter/MQTT/etc — no special casing anywhere above this point.
   const registry = new EntityRegistryMirror();
-  let haSide: IBackendAdapter;
+  const nativeDrivers: INativeProtocolDriver[] = [];
   if (config.backend === "ha") {
     const token = await resolveHaToken(config);
     const transport = new HaWsTransport({ url: config.haUrl, token });
-    haSide = new HaAdapter({ transport, registry });
-  } else {
-    haSide = new MockAdapter();
+    nativeDrivers.push(new HomeAssistantProviderDriver(new HaAdapter({ transport, registry }), registry));
   }
+  // config.backend === "mock" registers nothing here — MockAdapter exists only for
+  // standalone/dev slices (see buildSil in context.ts), never wired into a real hub.
   // Real native protocol stacks the Supreme-native engine fronts (§3, §7). Loaded
-  // only when configured; the in-process model serves everything else, so the hub
-  // boots identically with or without field-bus hardware present.
-  const nativeDrivers: INativeProtocolDriver[] = [];
+  // only when configured; the hub boots identically with or without field-bus
+  // hardware present — an unconfigured protocol simply never appears in this array.
   if (config.mqttUrl) nativeDrivers.push(new MqttProtocolDriver({ url: config.mqttUrl }));
   if (config.modbusHost) {
     nativeDrivers.push(new ModbusProtocolDriver({ host: config.modbusHost, port: config.modbusPort }));
@@ -274,25 +285,22 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     );
   }
 
-  // Restore persisted native-migration routing so migrated domains stay native on reboot.
-  const policy = new MigrationPolicy([], migrationStore);
-  await policy.hydrate();
-  // The native adapter starts with NO drivers registered — every env-configured driver
-  // built above is instead handed to InstallerServices as `envDrivers` (below) and
-  // registered through the same Driver Lifecycle pipeline manifest-configured drivers
-  // use (§ Driver Lifecycle: no duplicate registration logic). This is the structural
-  // fix for the boot-order race the Architecture Investigation Report identified: a
-  // persisted protocol binding can no longer be replayed before the driver it needs
-  // exists, because there is only one place drivers get registered + bindings restored.
-  const ownership = new OwnershipRegistry(deps.ownershipStore);
-  const router = new RoutingBackendAdapter({
-    ha: haSide,
-    native: new SupremeNativeAdapter(),
-    registry,
-    ownership,
-    policy,
-  });
-  deps.sil = new SupremeIntegrationLayer({ adapter: router, registry, ownership });
+  // Restore persisted migration-wizard routing so a migrated domain's tracked engine
+  // survives a reboot — purely the `/v1/migration` reporting surface, not routing.
+  const migrationPolicy = new MigrationPolicy([], migrationStore);
+  await migrationPolicy.hydrate();
+  // The engine starts with NO drivers registered — every env-configured driver built
+  // above (native protocols AND Home Assistant alike) is instead handed to
+  // InstallerServices as `envDrivers` (below) and registered through the same Driver
+  // Lifecycle pipeline manifest-configured drivers use (§ Driver Lifecycle: no
+  // duplicate registration logic). This is the structural fix for the boot-order race
+  // the Architecture Investigation Report identified: a persisted protocol binding can
+  // no longer be replayed before the driver it needs exists, because there is only one
+  // place drivers get registered + bindings restored.
+  const providers = new ProviderRegistry(deps.providerStore);
+  const engine = new SupremeNativeAdapter();
+  const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
+  deps.sil = new SupremeIntegrationLayer({ adapter: router, registry, providers, migrationPolicy });
   deps.envDrivers = new Map(nativeDrivers.map((d) => [d.protocol, d] as const));
 
   // Proactive voice reporting (ADR 0010): when configured, publish local state changes to the
@@ -302,24 +310,6 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   }
 
   const ctx = await AppContext.create(config, deps);
-
-  // The mock backend computes each command's result from ITS OWN in-memory cache of the
-  // device's previous state (see MockAdapter.apply → applyCommand), which starts empty on
-  // every process boot. Any device whose current state lives only in HomeService (seeded
-  // demo devices, or any mock-backed device on a persisted home) would otherwise have that
-  // richer state silently discarded — reset to applyCommand's bare defaults — the moment
-  // its FIRST command after boot arrives, because the mock adapter didn't know it existed.
-  // Priming the cache from HomeService's already-persisted truth keeps the two in sync from
-  // boot, so a demo device's seeded title/artwork/etc. survives the first play/pause/volume
-  // command instead of vanishing. No-op for real HA/native-bound devices, which never route
-  // through this cache in the first place.
-  if (haSide instanceof MockAdapter) {
-    for (const device of await ctx.home.listDevices()) {
-      for (const state of Object.values(device.state ?? {})) {
-        haSide.seedState(device.id, state);
-      }
-    }
-  }
 
   return ctx;
 }

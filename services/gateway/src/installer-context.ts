@@ -212,7 +212,7 @@ export type DriverLifecycleTrigger = "boot" | "install" | "reconnect" | "config_
 
 export type DriverLifecycleStage =
   | "registering" | "validating" | "restoring_bindings" | "rebinding_devices"
-  | "recalculating_ownership" | "publishing" | "ready" | "failed"
+  | "recalculating_providers" | "publishing" | "ready" | "failed"
   // § Driver Lifecycle Completion — the teardown half (disable/uninstall/no-longer-
   // desired) previously had no visible transitional stage at all: `runDriverLifecycle`
   // went straight from whatever stage the driver was last in to being deleted from
@@ -1179,9 +1179,9 @@ export class InstallerServices {
       // already stopped, see `SupremeNativeAdapter.unregisterProtocol`), so repeated
       // teardown calls for the same protocol are always safe.
       this.setStage(protocol, { stage: "stopping" });
-      const owned = this.d.sil.ownership.devicesOwnedByProtocol(protocol);
+      const owned = this.d.sil.providers.devicesByProvider(protocol);
       await this.d.sil.unregisterNativeProtocol(protocol); // Stop + Unbind (every owned device's driver-level state released) + Destroy (driver instance dereferenced)
-      for (const deviceId of owned) await this.d.sil.ownership.clear(deviceId);
+      for (const deviceId of owned) await this.d.sil.providers.remove(deviceId);
       this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
       this.lifecycleStatus.delete(protocol);
       return;
@@ -1227,8 +1227,8 @@ export class InstallerServices {
       this.appendLog(key, "error", `${failures.length}/${bindings.length} device binding(s) failed to restore for ${protocol}: ${failures.join("; ")}`);
     }
 
-    this.setStage(protocol, { stage: "recalculating_ownership", boundCount: bound });
-    const ownedCount = this.d.sil.ownership.devicesOwnedByProtocol(protocol).length;
+    this.setStage(protocol, { stage: "recalculating_providers", boundCount: bound });
+    const ownedCount = this.d.sil.providers.devicesByProvider(protocol).length;
 
     this.setStage(protocol, { stage: "publishing", ownedCount });
     this.appendLog(key, failures.length ? "warn" : "info", `${bound}/${bindings.length} device binding(s) restored for ${protocol} (${trigger})`);

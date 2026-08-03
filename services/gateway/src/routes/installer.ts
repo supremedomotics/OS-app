@@ -95,7 +95,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "view");
-      reply.send({ drivers: await i().driverDiagnostics(), ownership: ctx.sil.ownership.countsByKind() });
+      reply.send({ drivers: await i().driverDiagnostics(), providers: ctx.sil.providers.countsByState() });
     } catch (err) {
       sendError(reply, err);
     }

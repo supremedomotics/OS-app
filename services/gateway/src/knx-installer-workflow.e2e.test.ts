@@ -9,7 +9,9 @@ import {
   InMemoryProtocolBindingStore,
   MigrationPolicy,
   MockAdapter,
-  RoutingBackendAdapter,
+  DriverBindingEngine,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
@@ -57,12 +59,9 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({ drivers: [new FakeKnx()] }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+    const routerEngine0 = new SupremeNativeAdapter({ drivers: [new FakeKnx()] });
+    const routerProviders0 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine0, registry: routerProviders0, bindingEngine: new DriverBindingEngine(routerEngine0, routerProviders0) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,
@@ -223,12 +222,9 @@ describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import &
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({ drivers: [new FakeKnx()] }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+    const routerEngine1 = new SupremeNativeAdapter({ drivers: [new FakeKnx()] });
+    const routerProviders1 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine1, registry: routerProviders1, bindingEngine: new DriverBindingEngine(routerEngine1, routerProviders1) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), { sil, protocolBindingStore: new InMemoryProtocolBindingStore() });
     app = await buildServer(ctx);
@@ -334,12 +330,9 @@ describe("KNX Automatic Room Creation (§ Generic Room Assignment Engine)", () =
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({ drivers: [new FakeKnx()] }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+    const routerEngine2 = new SupremeNativeAdapter({ drivers: [new FakeKnx()] });
+    const routerProviders2 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine2, registry: routerProviders2, bindingEngine: new DriverBindingEngine(routerEngine2, routerProviders2) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,

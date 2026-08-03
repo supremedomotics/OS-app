@@ -4,7 +4,9 @@ import {
   InMemoryProtocolBindingStore,
   MigrationPolicy,
   MockAdapter,
-  RoutingBackendAdapter,
+  DriverBindingEngine,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
@@ -59,12 +61,9 @@ describe("Casambi Automatic Room Assignment via the actual Discover Devices UI p
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({ drivers: [new FakeCasambi()] }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+    const routerEngine0 = new SupremeNativeAdapter({ drivers: [new FakeCasambi()] });
+    const routerProviders0 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine0, registry: routerProviders0, bindingEngine: new DriverBindingEngine(routerEngine0, routerProviders0) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,

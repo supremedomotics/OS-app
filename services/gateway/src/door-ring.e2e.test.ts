@@ -5,10 +5,10 @@ import type {
   DeviceId,
 } from "@supreme/domain-model";
 import {
+  DriverBindingEngine,
   EntityRegistryMirror,
-  MigrationPolicy,
-  MockAdapter,
-  RoutingBackendAdapter,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
@@ -91,14 +91,11 @@ describe("Door ring → notification → push", () => {
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
     const native = new SupremeNativeAdapter({ drivers: [driver] });
+    const providers = new ProviderRegistry();
     const sil = new SupremeIntegrationLayer({
-      adapter: new RoutingBackendAdapter({
-        ha: new MockAdapter(),
-        native,
-        registry,
-        policy: new MigrationPolicy(),
-      }),
+      adapter: new ProviderRouter({ engine: native, registry: providers, bindingEngine: new DriverBindingEngine(native, providers) }),
       registry,
+      providers,
     });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,

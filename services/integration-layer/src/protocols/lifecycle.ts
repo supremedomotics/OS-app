@@ -7,7 +7,7 @@
  *      Create → Initialize → Register → Bind → Start → Stop → Unbind → Destroy.
  *      Already real and working — `services/gateway/src/installer-context.ts`'s
  *      `runDriverLifecycle()`/`DriverLifecycleStage` (registering → validating →
- *      restoring_bindings → rebinding_devices → recalculating_ownership → publishing
+ *      restoring_bindings → rebinding_devices → recalculating_providers → publishing
  *      → ready, plus the teardown branch). This file does not replace that; it adds
  *      the missing per-DEVICE half described below, which that pipeline was never
  *      built to cover (it manages one driver INSTANCE, not individual device

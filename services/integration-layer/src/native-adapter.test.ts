@@ -87,8 +87,8 @@ describe("SupremeNativeAdapter with protocol drivers", () => {
     expect(await adapter.getState(dev, "onoff")).toEqual({ kind: "onoff", on: true });
   });
 
-  it("still serves unbound devices from the in-process model", async () => {
-    const adapter = new SupremeNativeAdapter({ drivers: [new FakeDriver()] });
+  it("test-only simulate mode serves unbound devices from an in-process model", async () => {
+    const adapter = new SupremeNativeAdapter({ drivers: [new FakeDriver()], simulate: true });
     const events: BackendStateEvent[] = [];
     adapter.onState((e) => events.push(e));
     await adapter.connect();
@@ -98,6 +98,14 @@ describe("SupremeNativeAdapter with protocol drivers", () => {
     // In-process model echoes immediately.
     expect(events).toHaveLength(1);
     expect(await adapter.getState(dev, "onoff")).toEqual({ kind: "onoff", on: true });
+  });
+
+  it("ADR-0023: production default (no simulate) never fabricates state for an unbound device", async () => {
+    const adapter = new SupremeNativeAdapter({ drivers: [new FakeDriver()] });
+    await adapter.connect();
+    const dev = "device-virtual-1" as DeviceId;
+    await expect(adapter.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/no bound driver/);
+    expect(await adapter.getState(dev, "onoff")).toBeNull();
   });
 
   it("aggregates discovery across drivers", async () => {

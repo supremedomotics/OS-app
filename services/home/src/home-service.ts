@@ -50,13 +50,31 @@ export class HomeService {
     for (const l of this.changeListeners) l(event);
   }
 
-  /** Rebind every stored device's capabilities into the SIL registry (on boot). Runs
-   * BEFORE the native driver lifecycle (§ Driver Lifecycle) so a device that's
-   * actually native-bound gets its ownership correctly overwritten from "ha" to
-   * "native" moments later, rather than racing it. */
+  /** Restore every stored device's HA binding on boot (ADR-0023 § Driver Binding: a
+   * driver instance is per-process, so a persisted `provider="homeassistant"`
+   * lifecycle record from before this restart does NOT mean `HomeAssistantProviderDriver`
+   * actually has this device in its in-memory `manages()` set this boot — the exact
+   * same "protocol bindings must be replayed onto the driver on every boot" principle
+   * `InstallerServices`'s driver lifecycle already applies to native protocol
+   * bindings, extended here to Home Assistant). Re-binds through the real
+   * `bindNative()` path (never fabricates ONLINE) when a "homeassistant" driver is
+   * registered this boot; otherwise only restores the entity mapping, exactly like
+   * `addDevice()`'s own no-HA-configured fallback — never a special ownership side
+   * effect either way. */
   async rebindRegistry(): Promise<void> {
     for (const { device, backendIds } of await this.store.listDevices()) {
-      await this.bind(device, backendIds);
+      if (Object.keys(backendIds).length === 0) continue;
+      if (this.sil.migrationEnabled && this.sil.getNativeDriver("homeassistant")) {
+        const existing = this.sil.providers.get(device.id);
+        if (!existing || existing.provider === "homeassistant") {
+          for (const cap of device.capabilities) {
+            const backendId = backendIds[cap.kind];
+            if (backendId) await this.sil.bindNative({ deviceId: device.id, capability: cap.kind, address: backendId }, "homeassistant");
+          }
+          continue;
+        }
+      }
+      this.mapEntities(device, backendIds);
     }
   }
 
@@ -104,9 +122,33 @@ export class HomeService {
       .filter((d) => d.roomId === roomId);
   }
 
+  /**
+   * Commission a device (ADR-0023 § Commissioning: Create Device → Assign Provider →
+   * Bind Driver). `backendIds` non-empty is the explicit installer decision to map
+   * this device onto Home Assistant. When this hub actually has a "homeassistant"
+   * provider driver registered, this binds each mapped capability through
+   * `bindNative(..., "homeassistant")` — the EXACT same Driver Binding Engine path
+   * every other provider uses, never a special ownership side effect. A device
+   * already bound to a real native driver is left untouched — `DriverBindingEngine`/
+   * `ProviderRegistry` already refuse to silently downgrade a bound device. When no
+   * "homeassistant" driver is registered on this hub at all (HA not configured — an
+   * explicitly supported topology per ADR-0023 § Native Backend), this only maps
+   * entities, exactly as it does on a bare (non-router) adapter — there is no
+   * provider to honestly bind against, so nothing pretends there is.
+   */
   async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
     await this.store.putDevice(device, backendIds);
-    await this.bind(device, backendIds);
+    if (this.sil.migrationEnabled && this.sil.getNativeDriver("homeassistant")) {
+      for (const cap of device.capabilities) {
+        const backendId = backendIds[cap.kind];
+        if (!backendId) continue;
+        const existing = this.sil.providers.get(device.id);
+        if (existing && existing.provider !== "homeassistant") continue; // already bound elsewhere — never downgrade
+        await this.sil.bindNative({ deviceId: device.id, capability: cap.kind, address: backendId }, "homeassistant");
+      }
+    } else {
+      this.mapEntities(device, backendIds);
+    }
     this.emitChanged({ type: "upsert", device });
   }
 
@@ -250,13 +292,11 @@ export class HomeService {
     return room;
   }
 
-  /** Map every backend-id'd capability into the SIL's HA-side registry, and — if this
-   * device was actually mapped to anything — record ownership as "ha" (§ Device
-   * Ownership: explicit, never inferred). A subsequent native `bindNative()` call
-   * (the driver lifecycle's Rebind Devices stage) correctly overwrites this to
-   * "native" for devices that are actually native-bound; this is always a safe
-   * starting default because it never runs after that stage in the boot sequence. */
-  private async bind(device: Device, backendIds: Record<string, string>): Promise<void> {
+  /** Map every backend-id'd capability into the SIL's entity registry — mapping
+   * only, never a provider decision (ADR-0023 § Commissioning). Used by the boot-time
+   * `rebindRegistry()` restore path and by `addDevice()`'s bare-adapter (no provider
+   * concept) fallback. Returns whether anything was actually mapped. */
+  private mapEntities(device: Device, backendIds: Record<string, string>): boolean {
     let mapped = false;
     for (const cap of device.capabilities) {
       const backendId = backendIds[cap.kind];
@@ -268,9 +308,7 @@ export class HomeService {
         mapped = true;
       }
     }
-    if (mapped && this.sil.ownership.get(device.id)?.kind !== "native") {
-      await this.sil.ownership.set(device.id, "ha");
-    }
+    return mapped;
   }
 }
 

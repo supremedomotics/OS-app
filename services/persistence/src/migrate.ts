@@ -32,6 +32,7 @@ const MIGRATIONS = [
   "0022_pending_devices_capability_config.sql",
   "0023_automation_tags.sql",
   "0024_scene_import.sql",
+  "0025_device_provider.sql",
 ] as const;
 
 /**

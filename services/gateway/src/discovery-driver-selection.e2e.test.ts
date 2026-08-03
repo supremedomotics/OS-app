@@ -3,7 +3,9 @@ import {
   EntityRegistryMirror,
   MigrationPolicy,
   MockAdapter,
-  RoutingBackendAdapter,
+  DriverBindingEngine,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
@@ -77,9 +79,7 @@ describe("Discovery Driver Selector actually gates which drivers execute", () =>
   /** A fresh AppContext with KNX + Casambi installed and a CoolMaster driver that always fails. */
   async function ctxWithInstalledDrivers(coolmasterFails: boolean) {
     const registry = new EntityRegistryMirror();
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native: new SupremeNativeAdapter({
+    const routerEngine0 = new SupremeNativeAdapter({
         drivers: [
           new FakeDriver("knx", knxDevices),
           new FakeDriver("casambi", casambiDevices),
@@ -88,10 +88,9 @@ describe("Discovery Driver Selector actually gates which drivers execute", () =>
             return [{ backendId: "coolmaster:1", suggestedName: "Conference AC", capabilities: ["onoff"], raw: {} }];
           }),
         ],
-      }),
-      registry,
-      policy: new MigrationPolicy(),
-    });
+      });
+    const routerProviders0 = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngine0, registry: routerProviders0, bindingEngine: new DriverBindingEngine(routerEngine0, routerProviders0) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
     const config = loadConfig({ SUPREME_LOG_LEVEL: "silent", SUPREME_DEV_MODE: "1" });
     const ctx = await AppContext.create(config, { ...deps(), sil });

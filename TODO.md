@@ -785,6 +785,40 @@
   115/115 build+typecheck + 99/99 test tasks green. Cannot be run against the real Lithernet
   Gateway from this sandbox — built for the user's own local execution.
 
+- **Native Device Lifecycle Architecture (ADR-0023, Phase 1)** — replaced the
+  ownership model (`OwnershipRegistry`/`RoutingBackendAdapter`) with a
+  provider-driven architecture: `ProviderRegistry` + `DeviceLifecycleState` machine
+  (`DISCOVERED→REGISTERED→UNBOUND→BINDING→BOUND→ONLINE/OFFLINE/ERROR→REMOVED`) +
+  `DriverBindingEngine` (sole bind/unbind/rebind/validate/health/recover authority) +
+  `ProviderRouter`. Home Assistant is now just another provider
+  (`HomeAssistantProviderDriver` registers into the same driver array as every native
+  protocol — zero special-cased routing). Production simulation removed:
+  `SupremeNativeAdapter`'s in-process model is test-only (`simulate` flag, default
+  false); an unbound device now honestly fails rather than fabricating state.
+  `SUPREME_BACKEND=native` is the new default. Commissioning no longer implicitly
+  defaults a device to HA ownership on incidental `backendId` mapping — provider
+  assignment is explicit, at `HomeService.addDevice()` time, through the same
+  `bindNative()` path every provider uses. Automatic, idempotent
+  `device_ownership → device_provider` migration runs on every boot. No protocol
+  driver touched. See `docs/architecture/adr/0023-native-device-lifecycle-
+  architecture.md` for the full record, including one disclosed behavior change (the
+  migration wizard no longer fabricates live control for an unbound "migrated"
+  device). Zero regressions: full workspace build clean, full test suite clean
+  (two pre-existing, unrelated flakes confirmed via isolated rerun). Follow-up not
+  done this pass: per-device provider/lifecycle fields on the device diagnostics
+  route (needs a contracts schema change), architecture diagrams/migration guide,
+  native-Linux (non-Docker) re-verification.
+
+- **Native Linux Installer — backend/HA prompt fix** — `infra/native-linux/install.sh`
+  no longer asks a standalone "Backend [mock]" question or Home Assistant credentials
+  when the installer declines to install Home Assistant. `SUPREME_BACKEND` is now
+  always derived from the HA yes/no answer (`native`/`ha`) and validated against
+  `native|ha|mock`; pre-install validation added for domain/timezone/HA credential
+  length, failing loudly instead of silently continuing. Verified via an isolated
+  functional harness (8 scenarios); all 9 native-linux scripts pass `bash -n`. Only
+  `infra/native-linux/` + one doc touched — no application code, Gateway, LAN
+  service, Commissioning, or provider architecture modified. `origin/native-linux`.
+
 - **Production Architecture Direction — deployment/transport separation in `@supreme/lan`** —
   SupremeOS ships as a dedicated OS image with `supreme-lan` as a native systemd service; Docker is
   dev/CI only. Docker's vocabulary had leaked into load-bearing places (`networkMode: "bridge" |

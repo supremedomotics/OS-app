@@ -32,7 +32,7 @@ import {
   type IEventBus,
   type IPresenceStore,
 } from "@supreme/messaging";
-import type { IProtocolBindingStore, IDeviceOwnershipStore, INativeProtocolDriver } from "@supreme/integration-layer";
+import type { IProtocolBindingStore, IDeviceProviderStore, INativeProtocolDriver } from "@supreme/integration-layer";
 import type { IBackupStore, IPendingDeviceStore } from "@supreme/persistence";
 import {
   AutomationEngine,
@@ -131,8 +131,8 @@ export interface AppDeps {
   backupStore?: IBackupStore;
   /** Pending-device queue (§ Device Approval). */
   pendingDeviceStore?: IPendingDeviceStore;
-  /** Explicit device ownership persistence (§ Device Ownership). */
-  ownershipStore?: IDeviceOwnershipStore;
+  /** Device provider + lifecycle persistence (ADR-0023). */
+  providerStore?: IDeviceProviderStore;
   /** Override push providers (tests); otherwise selected from config. */
   pushProviders?: IPushProvider[];
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */

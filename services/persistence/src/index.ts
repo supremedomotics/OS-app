@@ -13,7 +13,7 @@ import type { INotificationStore } from "@supreme/notifications";
 import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IAutomationStore } from "@supreme/automations";
 import type { ISecurityStore } from "@supreme/security";
-import type { IProtocolBindingStore, IDeviceOwnershipStore } from "@supreme/integration-layer";
+import type { IProtocolBindingStore, IDeviceProviderStore } from "@supreme/integration-layer";
 import type { IPushTokenStore } from "@supreme/notifications";
 import type { IMigrationPolicyStore } from "@supreme/integration-layer";
 import type { IBackupStore } from "./repositories/backup-repo.js";
@@ -37,6 +37,7 @@ import { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 import { BackupRepo } from "./repositories/backup-repo.js";
 import { PendingDeviceRepo, type IPendingDeviceStore } from "./repositories/pending-device-repo.js";
 import { DeviceOwnershipRepo } from "./repositories/device-ownership-repo.js";
+import { DeviceProviderRepo } from "./repositories/device-provider-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -66,9 +67,11 @@ export {
 } from "./repositories/pending-device-repo.js";
 export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { DeviceOwnershipRepo } from "./repositories/device-ownership-repo.js";
+export { DeviceProviderRepo } from "./repositories/device-provider-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 export { IntelligenceRepo, type SieHistoryRecord, type SieSavingsAggregate } from "./repositories/intelligence-repo.js";
+export { migrateOwnershipToProvider, type OwnershipMigrationReport } from "./migrate-ownership.js";
 
 /** The full set of persisted stores, ready to inject into the domain services. */
 export interface PersistenceStores {
@@ -90,7 +93,9 @@ export interface PersistenceStores {
   pendingDevices: IPendingDeviceStore;
   apiTokens: IApiTokenStore;
   webAuthn: IWebAuthnStore;
-  deviceOwnership: IDeviceOwnershipStore;
+  /** Legacy read-only accessor for the one-time ownership→provider migration only. */
+  deviceOwnership: DeviceOwnershipRepo;
+  deviceProvider: IDeviceProviderStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -114,6 +119,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     apiTokens: new ApiTokenRepo(db),
     webAuthn: new WebAuthnRepo(db),
     deviceOwnership: new DeviceOwnershipRepo(db),
+    deviceProvider: new DeviceProviderRepo(db),
   };
 }
 

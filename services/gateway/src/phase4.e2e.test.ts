@@ -1,23 +1,42 @@
-import type { HomeView, MigrationStatus, ServerFrame } from "@supreme/contracts";
+import type { HomeView, MigrationStatus } from "@supreme/contracts";
 import {
+  DriverBindingEngine,
   EntityRegistryMirror,
-  MockAdapter,
-  RoutingBackendAdapter,
+  HaAdapter,
+  HomeAssistantProviderDriver,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
+  type HaTransport,
 } from "@supreme/integration-layer";
 import type { FastifyInstance } from "fastify";
-import { WebSocket } from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
 
 /**
- * Phase-4 native migration: a device controlled via the HA-side backend is migrated
- * to the Supreme-native engine at runtime, and control continues over the IDENTICAL
- * client API — proving the migration guarantee (zero change above the SIL).
+ * Phase-4 native migration: the `/v1/migration` installer wizard still reports and
+ * flips per-domain routing intent. ADR-0023 § Remove Runtime Simulation changed what
+ * "migrated" means, though: it no longer fabricates live native state for a domain's
+ * devices (the old behavior — instant, driver-less "control continues unchanged" —
+ * was exactly the kind of simulated state the new architecture forbids). A migrated
+ * device is honestly UNBOUND until a real driver binds it via `bindNative()`.
  */
+/** No-socket HA transport (mirrors integration-layer's own ha-adapter.test.ts pattern). */
+class FakeHaTransport implements HaTransport {
+  opened = false;
+  async open(): Promise<void> { this.opened = true; }
+  async close(): Promise<void> { this.opened = false; }
+  isOpen(): boolean { return this.opened; }
+  onEvent(): void {}
+  async send(message: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (message.type === "get_states") return { result: [] };
+    return {};
+  }
+}
+
 describe("Phase-4 native migration", () => {
   let app: FastifyInstance;
   let ctx: AppContext;
@@ -28,9 +47,11 @@ describe("Phase-4 native migration", () => {
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    native = new SupremeNativeAdapter();
-    const router = new RoutingBackendAdapter({ ha: new MockAdapter(), native, registry });
-    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    const haDriver = new HomeAssistantProviderDriver(new HaAdapter({ transport: new FakeHaTransport(), registry }), registry);
+    native = new SupremeNativeAdapter({ drivers: [haDriver] });
+    const providers = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: native, registry: providers, bindingEngine: new DriverBindingEngine(native, providers) });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry, providers });
 
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), { sil });
     app = await buildServer(ctx);
@@ -73,18 +94,19 @@ describe("Phase-4 native migration", () => {
     expect(status.fullyMigrated).toBe(false);
   });
 
-  it("migrates the 'light' domain to native; control continues unchanged", async () => {
+  it("migrates the 'light' domain's tracked engine to native honestly — never fabricates live control", async () => {
     const deviceId = await dimmer();
 
-    // Control via the HA side first.
-    await fetch(`${baseUrl}/v1/devices/${deviceId}/command`, {
+    // Control via the HA side first — genuinely bound via HomeAssistantProviderDriver.
+    const before = await fetch(`${baseUrl}/v1/devices/${deviceId}/command`, {
       method: "POST",
       headers: auth(),
       body: JSON.stringify({ command: { capability: "brightness", action: "set", level: 30 } }),
     });
-    expect(native.manages(deviceId as never)).toBe(false);
+    expect(before.status).toBeLessThan(300);
+    expect(native.manages(deviceId as never)).toBe(true); // HA registers into the SAME driver registry (ADR-0023)
 
-    // Migrate the light domain to the native engine.
+    // Migrate the light domain's tracked engine to native.
     const res = await fetch(`${baseUrl}/v1/migration/light`, {
       method: "POST",
       headers: auth(),
@@ -92,32 +114,17 @@ describe("Phase-4 native migration", () => {
     });
     const migrated = (await res.json()) as { engine: string; moved: number };
     expect(migrated.engine).toBe("native");
-    expect(migrated.moved).toBeGreaterThan(0);
 
-    // The SAME command endpoint now drives the native engine — observed over WSS.
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${token}`);
-    await new Promise((r) => ws.once("open", r));
-    const delta = new Promise<ServerFrame>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("no native state delta")), 4000);
-      ws.on("message", (raw: Buffer) => {
-        const f = JSON.parse(raw.toString()) as ServerFrame;
-        if (f.type === "state" && f.deviceId === deviceId) {
-          clearTimeout(t);
-          resolve(f);
-        }
-      });
-    });
-    ws.send(JSON.stringify({ type: "subscribe", rooms: ["*"] }));
-    await fetch(`${baseUrl}/v1/devices/${deviceId}/command`, {
+    // ADR-0023 § Remove Runtime Simulation: migrating the domain's tracked engine is
+    // NOT the same as binding a real driver — the device has no real native protocol
+    // bound, so it must stay honestly unbound/uncommandable, never instantly "just
+    // work" via fabricated state.
+    const afterMigrate = await fetch(`${baseUrl}/v1/devices/${deviceId}/command`, {
       method: "POST",
       headers: auth(),
       body: JSON.stringify({ command: { capability: "brightness", action: "set", level: 80 } }),
     });
-    const frame = await delta;
-    if (frame.type !== "state") throw new Error("unreachable");
-    expect(frame.state).toEqual({ kind: "brightness", on: true, level: 80 });
-    expect(native.manages(deviceId as never)).toBe(true); // now under native control
-    ws.close();
+    expect(afterMigrate.status).toBeGreaterThanOrEqual(400);
 
     // Status reflects the migration; other domains remain on HA.
     const status = (await (await fetch(`${baseUrl}/v1/migration`, { headers: auth() })).json()) as MigrationStatus;

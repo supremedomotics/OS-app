@@ -6,11 +6,11 @@ import type {
   DeviceId,
 } from "@supreme/domain-model";
 import {
+  DriverBindingEngine,
   EntityRegistryMirror,
   InMemoryProtocolBindingStore,
-  MigrationPolicy,
-  MockAdapter,
-  RoutingBackendAdapter,
+  ProviderRegistry,
+  ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   bindingKey,
@@ -84,13 +84,9 @@ describe("Native protocol binding e2e", () => {
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
     const native = new SupremeNativeAdapter({ drivers: [driver] });
-    const router = new RoutingBackendAdapter({
-      ha: new MockAdapter(),
-      native,
-      registry,
-      policy: new MigrationPolicy(),
-    });
-    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    const providers = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: native, registry: providers, bindingEngine: new DriverBindingEngine(native, providers) });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry, providers });
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,
       protocolBindingStore: bindingStore,

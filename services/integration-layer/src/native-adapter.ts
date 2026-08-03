@@ -23,11 +23,20 @@ import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.
 
 export interface SupremeNativeAdapterOptions {
   /**
-   * Real protocol drivers (KNX/DALI/Modbus/MQTT/…) this engine fronts. Bound devices
-   * route to their driver; everything else uses the built-in in-process model, so the
-   * migration path stays fully testable with or without hardware.
+   * Real protocol drivers (KNX/DALI/Modbus/MQTT/Home Assistant/…) this engine
+   * fronts — every provider, including HA (via `HomeAssistantProviderDriver`),
+   * registers here identically. Bound devices route to their driver.
    */
   drivers?: INativeProtocolDriver[];
+  /**
+   * ADR-0023 § Remove Runtime Simulation: when true, an unbound device's command
+   * is served by an in-process deterministic model instead of failing loudly. This
+   * exists ONLY for unit/integration tests that need a device to "just respond"
+   * without a real driver — it must never be enabled in production. Default false:
+   * `command()`/`getState()` for a device with no bound driver throw/return null,
+   * exactly like ProviderRouter's own UNBOUND handling above it.
+   */
+  simulate?: boolean;
 }
 
 /**
@@ -56,8 +65,11 @@ export class SupremeNativeAdapter implements IBackendAdapter {
    * across every registered driver, mirroring `listeners`/`onState` exactly. */
   private readonly inputListeners = new Set<(event: KeypadInputEvent) => void>();
 
+  private readonly simulate: boolean;
+
   constructor(opts: SupremeNativeAdapterOptions = {}) {
     this.drivers = opts.drivers ?? [];
+    this.simulate = opts.simulate ?? false;
   }
 
   /** Connect a single driver and wire its state upward; a connect failure is recorded, not fatal. */
@@ -216,7 +228,11 @@ export class SupremeNativeAdapter implements IBackendAdapter {
       await owner.command(deviceId, command);
       return;
     }
-    // Otherwise the in-process model responds deterministically.
+    if (!this.simulate) {
+      // ADR-0023 § Remove Runtime Simulation: no bound driver, no fabricated state.
+      throw new SupremeError("backend_unavailable", `device ${deviceId} has no bound driver`);
+    }
+    // Test-only in-process model responds deterministically.
     this.managed.add(deviceId);
     const prev = this.states.get(key(deviceId, command.capability));
     const next = applyCommand(prev, command);
