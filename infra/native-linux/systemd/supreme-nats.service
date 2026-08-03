@@ -1,0 +1,38 @@
+# supreme-nats — NATS JetStream event bus, native-linux production deployment.
+#
+# Ubuntu 24.04's default apt repos carry no `nats-server` package, so install.sh fetches
+# the official static binary from NATS' GitHub releases (checksum-verified) to
+# /usr/local/bin/nats-server, exactly as `nats:2.10-alpine`'s own image does internally —
+# same binary, same version, just not inside a container. Config is byte-equivalent to
+# infra/hub-compose/nats/nats.conf (see config/nats.conf.template's own comment for the
+# one real difference: `store_dir`).
+
+[Unit]
+Description=SupremeOS NATS JetStream Event Bus
+Documentation=https://docs.nats.io/ file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nats-server -js -c ___SUPREME_CONFIG_DIR___/nats.conf
+Restart=always
+RestartSec=2
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+ReadWritePaths=___SUPREME_DATA_DIR___/nats
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

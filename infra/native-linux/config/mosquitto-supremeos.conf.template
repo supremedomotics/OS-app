@@ -1,0 +1,24 @@
+# SupremeOS native-linux — Mosquitto broker config, dropped into
+# /etc/mosquitto/conf.d/supremeos.conf rather than replacing Ubuntu's own
+# /etc/mosquitto/mosquitto.conf, so the package's own defaults/upgrade path stay intact.
+#
+# Only the two directives Ubuntu's OWN /etc/mosquitto/mosquitto.conf does not already set
+# are declared here. Confirmed by actually starting Mosquitto against a conf.d file that
+# DID redeclare persistence/persistence_location/log_dest (matching the shape of
+# infra/hub-compose/mosquitto/mosquitto.conf, the Docker deployment's own config): Mosquitto
+# hard-errors with "Duplicate persistence_location value in configuration" and refuses to
+# start at all, since Ubuntu's package-provided mosquitto.conf already sets `persistence
+# true` / `persistence_location /var/lib/mosquitto/` / `log_dest file ...` before its own
+# `include_dir /etc/mosquitto/conf.d` line — conf.d entries can ADD new listeners, they
+# cannot override a directive the base file already set.
+#
+# Consequence, disclosed rather than silently different from Docker: Mosquitto's persisted
+# retained-messages/subscriptions data lives at Ubuntu's own default
+# /var/lib/mosquitto/ on this deployment, NOT under this deployment's own
+# ___SUPREME_DATA_DIR___ convention — see docs/architecture/Native-Linux-Deployment.md's
+# "Known deviations from Docker" section. This data is a broker cache the same MQTT
+# clients would simply rebuild on reconnect (no client in this codebase authenticates or
+# depends on retained MQTT state surviving a broker restart), so backup.sh does not
+# capture it — a decision, not an oversight.
+listener 1883 127.0.0.1
+allow_anonymous true

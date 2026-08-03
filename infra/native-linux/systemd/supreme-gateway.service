@@ -1,0 +1,53 @@
+# supreme-gateway — SupremeOS API Gateway (native-linux production deployment).
+#
+# § Production Architecture Direction. Runs the SAME pruned, self-contained bundle the
+# Docker deployment runs (`pnpm --filter @supreme/gateway deploy --prod --legacy`, see
+# infra/hub-compose/gateway.Dockerfile and install.sh's `build_and_deploy_node_service()`)
+# — just via systemd instead of a container. Every environment variable it needs lives in
+# gateway.env (rendered from gateway.env.template), matching docker-compose.yml's `gateway`
+# service block field-for-field so the two deployments stay comparable.
+#
+# Applies its own database migrations idempotently on every start (services/persistence/
+# src/migrate.ts, invoked from bootstrap.ts) — no separate migration step in install.sh.
+#
+# Install: install.sh copies this file to /etc/systemd/system/ and substitutes the
+# ___SUPREME_APP_DIR___/___SUPREME_USER___ placeholders from lib/common.sh's constants.
+
+[Unit]
+Description=SupremeOS API Gateway
+Documentation=file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network-online.target postgresql.service supreme-nats.service mosquitto.service redis-server.service supreme-commissioning.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node ___SUPREME_APP_DIR___/current/services/gateway/dist/main.js
+WorkingDirectory=___SUPREME_APP_DIR___/current/services/gateway
+EnvironmentFile=___SUPREME_CONFIG_DIR___/gateway.env
+Restart=always
+RestartSec=2
+# The gateway's own migration-on-start (see header) can take longer than systemd's
+# default 90s start timeout against a cold Postgres on modest hardware (a Pi-class or
+# small-VM SupremeOS box) — generous rather than tight, since a false "failed to start"
+# on slow hardware is worse than a slightly longer wait during first boot.
+TimeoutStartSec=180
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+# Runtime secrets provisioned into the secrets dir (HA token, etc.) — read/write.
+ReadWritePaths=___SUPREME_SECRETS_DIR___ ___SUPREME_DATA_DIR___
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

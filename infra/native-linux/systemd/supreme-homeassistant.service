@@ -1,0 +1,56 @@
+# supreme-homeassistant — headless Home Assistant Core, native-linux production deployment.
+#
+# OPTIONAL — only installed when install.sh's Home Assistant step is enabled
+# (SUPREME_BACKEND=ha). The production default is SUPREME_BACKEND=native, which needs
+# no Home Assistant at all; "mock" is test/CI-only and never used by this installer.
+#
+# Runs "Home Assistant Core" (not HAOS, no Supervisor) inside a dedicated Python venv —
+# the exact same component the Docker deployment's `homeassistant:` service runs from the
+# official `homeassistant/home-assistant:stable` image, just via systemd + a venv instead
+# of a container. Bound to loopback only via `http: server_host: 127.0.0.1` in its
+# configuration.yaml (install.sh seeds this before first start) — HA must NEVER be exposed
+# to the host/LAN, identical to the Docker deployment's explicit "no ports:" + comment.
+#
+# NOTE (disclosed, not silently assumed): this unit follows Home Assistant's own documented
+# "Home Assistant Core" systemd pattern (https://www.home-assistant.io/installation/linux),
+# adapted to this repo's directory/user conventions. HA Core's own dependency tree is large
+# and version-sensitive; install.sh installs it via pip into the dedicated venv exactly as
+# HA's own docs specify, but a full HA Core bring-up was not executed end-to-end against
+# real hardware in the environment that produced this deployment — see
+# docs/architecture/Native-Linux-Deployment.md's verification-scope section for exactly
+# what was and wasn't run.
+
+[Unit]
+Description=Home Assistant Core (headless, SupremeOS-internal only)
+Documentation=https://www.home-assistant.io/ file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=___SUPREME_APP_DIR___/venvs/homeassistant/bin/hass -c ___SUPREME_DATA_DIR___/homeassistant
+Restart=always
+RestartSec=10
+# HA's own startup (component discovery, first-run DB setup) can be slow on modest
+# hardware — generous rather than tight, same reasoning as supreme-gateway.service.
+TimeoutStartSec=300
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+ReadWritePaths=___SUPREME_DATA_DIR___/homeassistant
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Deliberately NOT as locked down as supreme-gateway/supreme-lan: Home Assistant's own
+# integration surface (even used headlessly, SIL-only, per this deployment's design) can
+# need more of the kernel/device surface than a purpose-built Node service. Tightened only
+# as far as could be verified against this repo's actual (headless, no-hardware-integration)
+# usage — loosen further only with a real, reproduced reason, never preemptively.
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
