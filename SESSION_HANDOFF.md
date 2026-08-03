@@ -996,6 +996,44 @@ Diagnostics/Media/Audio/Video/Developer-Tools layer, or Denon-adapter-only).
 
 ## Session: Universal Keypad Framework / Intent Engine
 
+---
+
+## Latest pass — Home Assistant Dependency Audit (analysis only, ZERO code changes)
+
+A repository-wide audit of every remaining runtime dependency on Home Assistant, producing
+`docs/architecture/Home-Assistant-Dependency-Audit.md` (10 phases: dependency discovery, runtime
+graph, registry/automation/state/UI/driver audits, compatibility-layer design, migration roadmap,
+readiness assessment). **No application code was modified, no HA code removed, no driver touched** —
+the only file added is the audit document; `pnpm build`/`typecheck`/`test` remained fully cached
+(56/56, 97/97, 97/97), proving nothing was disturbed.
+
+**Headline findings (all evidence-cited in the doc):**
+- HA-specific code is confined to **4 files** in `services/integration-layer/src/ha/`, with exactly
+  **2 consumers** elsewhere — `bootstrap.ts` (conditional on `SUPREME_BACKEND=ha`) and
+  `compiler.ts`'s `compileToHa`, which has **no runtime caller at all**.
+- **Every protocol driver is 100% native** (zero HA references in `services/protocols/src/`), the
+  **entire UI has zero HA calls**, and **every registry** (device/entity identity/room/floor/area/
+  state/capabilities/history/statistics) is Supreme-owned.
+- Only **6 of the brief's 20 HA subsystems** are genuinely used, all via one WebSocket connection
+  plus a one-time onboarding HTTP flow.
+- **SupremeOS already boots and fully functions with no HA process** — the entire 240-test gateway
+  suite runs at `SUPREME_BACKEND=mock`.
+- **The one real blocker:** there is no native-only backend mode. The router always has an `ha`
+  side, which is either real HA or `MockAdapter` — **an in-memory simulator**. Turning HA off today
+  doesn't remove the dependency, it silently replaces it with a fake. Now tracked as the top
+  **Critical** item in `TODO.md`.
+- Assessment: **architecturally ~90% HA-independent, operationally ~40%** — 1 Critical, 2 High,
+  3 Medium, 2 Low blockers, all small and well-scoped (a third adapter mode, a compose profile, a
+  dead-code decision), not a platform rewrite.
+
+**Newly tracked in `TODO.md`:** the Critical native-mode blocker; 2 High (compose opt-in; the
+`engine:"ha"` dead path); 2 Medium (unowned `Device.status` availability; commissioning defaulting
+to `ownership="ha"`).
+
+---
+
+## Prior pass — Universal Intent & Capability Engine (Phase 2)
+
 **Branch:** `claude/universal-keypad-framework-7khr2o`, based on `main` at session start (the
 same branch Phase 1 shipped on — this session's branch instruction named
 `feature/universal-keypad`, but the harness's assigned branch for this session takes precedence,

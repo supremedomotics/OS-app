@@ -7,6 +7,34 @@
 
 ## Critical
 
+### ~~`SupremeNativeAdapter` simulates unbound devices — and `migrateDomainToNative` creates them~~ — RESOLVED by ADR-0023
+- **Description:** found by the HA Dependency Audit addendum
+  (`docs/architecture/Home-Assistant-Dependency-Audit.md`, item **A-1**).
+  `SupremeNativeAdapter.command()` fell through to `applyCommand()` — the *same* pure in-memory
+  model `MockAdapter` used — for any native-owned device with no bound driver, fabricating state
+  and emitting it as a genuine `BackendStateEvent`. `migrateDomainToNative()` walked straight into
+  it: it called `provision()` (which only marked `managed` + seeded a state cache) and **never
+  called `bind()`**, so the shipped HA→native migration API produced simulator-backed devices.
+- **Resolution:** `SupremeNativeAdapter`'s in-process model is now test-only, gated behind an
+  explicit `simulate` constructor flag (default `false`, never set in production wiring) — an
+  unbound device's `command()` now throws `backend_unavailable` instead of fabricating state.
+  `SupremeIntegrationLayer.migrateDomain()` no longer auto-provisions fake state either: it
+  releases the device from its current provider and leaves it honestly `UNBOUND` until a real
+  driver binds it via `DriverBindingEngine`. See
+  `docs/architecture/adr/0023-native-device-lifecycle-architecture.md`.
+
+### ~~No native-only backend mode — HA-owned devices silently fall through to a simulator~~ — RESOLVED by ADR-0023
+- **Description:** found by the Home Assistant Dependency Audit. `RoutingBackendAdapter` was
+  always constructed with an `ha` side, which was either the real `HaAdapter` or **`MockAdapter`
+  — an in-memory simulator**. A device whose ownership was `"ha"` on a hub running
+  `SUPREME_BACKEND=mock` was therefore served by fabricated state rather than real hardware or an
+  honest error. Audit Phase 9 item **C-1**.
+- **Resolution:** `RoutingBackendAdapter` is deleted. `ProviderRouter` never requires an HA leg —
+  Home Assistant registers as one more `INativeProtocolDriver` (`HomeAssistantProviderDriver`)
+  only when actually configured. `SUPREME_BACKEND=native` is the new production default (was
+  `mock`); `mock` is now explicitly test/CI-only and never wired into a real hub. See
+  `docs/architecture/adr/0023-native-device-lifecycle-architecture.md`.
+
 ### Real-world deployment readiness gap
 - **Description:** `docs/production-readiness.md`'s own assessment: feature-complete
   development is ~80%, but real-world deployment readiness is ~25–30%. Nothing has run against
@@ -318,6 +346,29 @@
   comments first).
 - **Status:** Not started.
 
+### Make Home Assistant opt-in in the production compose topology
+- **Description:** `infra/hub-compose/docker-compose.yml:25` defaults `SUPREME_BACKEND=ha` and
+  `:125-127` hard-declares `depends_on: homeassistant`. The shipped production topology therefore
+  cannot start without the HA container even though the *code* boots fine without it (proven by the
+  full 240-test gateway suite running at `SUPREME_BACKEND=mock`).
+- **Reason:** HA cannot be "optional" while compose requires it to start.
+- **Dependencies:** the Critical native-mode item above (ship together).
+- **Complexity:** Small — move HA behind a compose profile, flip the default.
+- **Status:** Not started. Audit Phase 9 item **H-1**; breaking for existing HA deployments, needs
+  a documented upgrade note.
+
+### `engine: "ha"` automations are accepted, persisted, and never executed by anyone
+- **Description:** `compileToHa()` (`services/automations/src/compiler.ts:17`) has **no runtime
+  caller anywhere** — only tests. Meanwhile the API accepts and stores `engine: "ha"` automations
+  (`routes/phase3.ts:41-52`) and the native engine filters them out
+  (`services/automations/src/engine.ts:116`). Net effect: such an automation runs nowhere.
+- **Reason:** a live correctness bug today, independent of the HA migration — the API promises a
+  capability the platform does not deliver.
+- **Dependencies:** none.
+- **Complexity:** Small — either wire `compileToHa` to a real push path, or reject `engine:"ha"` at
+  the API with a clear error.
+- **Status:** Diagnosed, not fixed. Audit Phase 9 item **H-2**.
+
 ### Universal Keypad Editor / Intent-aware mapping UI
 - **Description:** Phase 1 (ADR 0016) and Phase 2 (ADR 0017) both shipped complete backend
   architecture — Universal Input/Feedback Engines, Subscription Manager, Mapping Engine, and the
@@ -445,6 +496,30 @@
 - **Complexity:** Small — likely fixable by awaiting `refreshInputEnrichment()` before the
   read, or by having the read wait on the in-flight promise if one exists.
 - **Status:** Diagnosed, not fixed.
+
+### Device availability (`Device.status`) is owned by nobody
+- **Description:** found by the HA Dependency Audit. `Device.status` is set to `"online"` at
+  creation (`services/home/src/home-service.ts:523`, `camera-service.ts:45`) and **never updated by
+  any code path afterwards** — verified by exhaustive search. Neither HA nor any native driver ever
+  writes it, so `"offline"`/`"unavailable"` are unreachable states in practice.
+- **Reason:** pre-existing gap, unrelated to HA, but must be assigned an owner before HA (a
+  plausible future source of availability) is removed.
+- **Dependencies:** none.
+- **Complexity:** Medium — needs a driver-side liveness signal threaded through the SIL.
+- **Status:** Diagnosed, not fixed. Audit Phase 9 item **M-3**.
+
+### ~~Generic commissioning defaults new devices to `ownership="ha"`~~ — RESOLVED by ADR-0023
+- **Description:** `CommissioningService.commission()` always wrote `backendIds`
+  (`services/commissioning/src/index.ts:162-163`), which made `HomeService.bind()` record
+  ownership as `"ha"` (`home-service.ts:272`) unless a protocol bind immediately overwrote it.
+  A device commissioned without a protocol landed in the exact bucket the HA migration was
+  trying to empty. Audit Phase 9 item **M-2**.
+- **Resolution:** the Native Device Lifecycle Architecture (ADR-0023) removed the ownership
+  model entirely. `HomeService.addDevice()` no longer has any implicit default — a device with
+  `backendIds` only binds to `provider="homeassistant"` when a `"homeassistant"` driver is
+  actually registered on the hub, through the same `bindNative()`/`DriverBindingEngine` path
+  every provider uses; otherwise it stays honestly unassigned. See
+  `docs/architecture/adr/0023-native-device-lifecycle-architecture.md`.
 
 ### Wire real Redis/NATS backends behind the messaging seam
 - **Description:** `services/messaging` uses in-process fakes for the event bus (NATS) and
