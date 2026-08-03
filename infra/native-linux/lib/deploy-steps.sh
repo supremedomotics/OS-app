@@ -39,12 +39,20 @@ sync_repo() {
       "${src}/" "${SUPREME_REPO_DIR}/"
     log_info "Synced from ${src} to ${SUPREME_REPO_DIR}."
   fi
-  ln -sfn "$SUPREME_REPO_DIR" "$SUPREME_RELEASE_DIR"
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_REPO_DIR"
+  # § Transactional updates: staged into SUPREME_REPO_DIR only — NOT switched live yet.
+  # The caller (install.sh/update.sh) snapshots + switches only after verification passes.
+  SUPREME_RELEASE_VERSION="dev-$(date -u +%Y%m%dT%H%M%SZ)"
 }
 
+# ── Source-mode build/verify (§ Development deployment) ─────────────────────────────────
+# Unchanged from before the CI/production split: a git checkout is a developer workflow,
+# so it keeps the FULL build + typecheck + test suite — the same one CI/`pnpm turbo run
+# build typecheck test` runs. This is the only path allowed to run it; release mode below
+# never recompiles or re-tests (that already happened once, in CI, before the artifact was
+# signed — see .github/workflows/release.yml and package-release.sh).
 build_workspace() {
-  log_step "Building the complete SupremeOS workspace"
+  log_step "Building the complete SupremeOS workspace (source mode)"
   cd "$SUPREME_REPO_DIR"
   run_as_supreme pnpm install --frozen-lockfile
   run_as_supreme pnpm turbo run build
@@ -61,6 +69,209 @@ verify_workspace() {
   run_as_supreme pnpm turbo run typecheck test \
     || die "Workspace verification failed — see the failing task's own output above. Refusing to deploy an unverified build. Re-run with SUPREME_SKIP_TESTS=1 only if you have already verified this build elsewhere."
   log_info "typecheck + test: all green."
+}
+
+# § Package format — extracts a supremeos-<version>-<arch>.tar.zst (or .tar.gz, for
+# environments without zstd) into a working directory and returns its path via echo. Pure
+# local extraction — no network access, so this is offline-safe by construction; the
+# caller is responsible for how the tarball GOT onto this machine (download vs. USB copy).
+extract_release_tarball() {
+  local tarball="$1"
+  local work
+  work="$(mktemp -d)"
+  case "$tarball" in
+    *.tar.zst)
+      command_exists zstd || die "zstd is required to extract ${tarball} (should have been installed by install_apt_dependencies, or pre-provisioned offline)."
+      zstd -dc "$tarball" | tar -x -C "$work" || die "Failed to extract ${tarball}."
+      ;;
+    *.tar.gz|*.tgz)
+      tar -xzf "$tarball" -C "$work" || die "Failed to extract ${tarball}."
+      ;;
+    *) die "Unrecognized release package format: ${tarball} (expected .tar.zst or .tar.gz)." ;;
+  esac
+  echo "$work"
+}
+
+# ── Release-mode install (§ Production deployment) ──────────────────────────────────────
+# A release artifact (produced by package-release.sh, verified by .github/workflows/
+# release.yml BEFORE it was ever signed) ships pre-built dist/ output and a production
+# node_modules tree — this machine never runs pnpm install, turbo build, or the developer
+# test suite. What it verifies instead is the ARTIFACT itself (checksum + version +
+# every compatibility field in the manifest), not the source code (already verified once,
+# in CI) — see run_runtime_verification() in common.sh for the runtime half (services/DB/
+# health) that runs after service startup.
+install_release_artifact() {
+  log_step "Verifying and staging release artifact into ${SUPREME_REPO_DIR}"
+  local src="$1"
+  local manifest="${src}/release-manifest.json"
+  [ -r "$manifest" ] || die "No release-manifest.json at ${manifest} — this does not look like a release artifact."
+
+  command_exists jq || die "jq is required to read release-manifest.json (should have been installed by install_apt_dependencies)."
+  SUPREME_RELEASE_VERSION="$(jq -r '.version' "$manifest")"
+  SUPREME_RELEASE_GIT_SHA="$(jq -r '.git_sha' "$manifest")"
+  SUPREME_RELEASE_CHECKSUM_ALGO="$(jq -r '.checksum_algo' "$manifest")"
+  SUPREME_RELEASE_MIGRATION_COUNT="$(jq -r '.migration_count' "$manifest")"
+  SUPREME_RELEASE_SCHEMA_VERSION="$(jq -r '.schema_version' "$manifest")"
+  SUPREME_RELEASE_SUPPORTED_OS="$(jq -r '.supported_os' "$manifest")"
+  SUPREME_RELEASE_ARCH="$(jq -r '.architecture' "$manifest")"
+  SUPREME_RELEASE_NODE_VERSION="$(jq -r '.node_version' "$manifest")"
+  SUPREME_RELEASE_PACKAGE_FORMAT_VERSION="$(jq -r '.package_format_version' "$manifest")"
+  SUPREME_RELEASE_REQUIRED_DISK_MB="$(jq -r '.required_disk_mb // 0' "$manifest")"
+  SUPREME_RELEASE_REQUIRED_RAM_MB="$(jq -r '.required_ram_mb // 0' "$manifest")"
+  SUPREME_RELEASE_REQUIRED_CPU_ARCH="$(jq -r '.required_cpu_arch // empty' "$manifest")"
+  SUPREME_RELEASE_MIN_UPGRADE_SCHEMA="$(jq -r '.compatibility_matrix.min_upgrade_from_schema_version // 0' "$manifest")"
+  [ -n "$SUPREME_RELEASE_VERSION" ] && [ "$SUPREME_RELEASE_VERSION" != "null" ] \
+    || die "release-manifest.json is missing 'version' — refusing to install an unversioned artifact."
+
+  log_info "Release ${SUPREME_RELEASE_VERSION} (git ${SUPREME_RELEASE_GIT_SHA:0:12}), schema ${SUPREME_RELEASE_SCHEMA_VERSION}, ${SUPREME_RELEASE_MIGRATION_COUNT} migration(s) expected."
+
+  validate_release_manifest
+
+  # Checksum verification against the standalone .sha256 sidecar package-release.sh writes
+  # next to the tarball (the manifest INSIDE the tarball cannot contain the tarball's own
+  # checksum — that byte doesn't exist yet when the manifest is written). Only meaningful
+  # when the original tarball is available (SUPREME_RELEASE_TARBALL) — an already-extracted
+  # directory with no tarball alongside it honestly skips this, never fakes "verified".
+  if [ -n "${SUPREME_RELEASE_TARBALL:-}" ] && [ -r "$SUPREME_RELEASE_TARBALL" ]; then
+    local sidecar="${SUPREME_RELEASE_TARBALL}.sha256"
+    [ -r "$sidecar" ] || die "No checksum sidecar at ${sidecar} — refusing to install a release artifact with no verifiable checksum."
+    local expected actual
+    case "$SUPREME_RELEASE_CHECKSUM_ALGO" in
+      sha256)
+        expected="$(awk '{print $1}' "$sidecar")"
+        actual="$(sha256sum "$SUPREME_RELEASE_TARBALL" | awk '{print $1}')"
+        ;;
+      *) die "Unsupported checksum algo '${SUPREME_RELEASE_CHECKSUM_ALGO}' in release manifest." ;;
+    esac
+    [ "$actual" = "$expected" ] \
+      || die "Release tarball checksum mismatch: ${sidecar} says ${expected}, actual is ${actual}. Refusing to install a corrupted/tampered artifact."
+    log_info "Tarball checksum verified (${SUPREME_RELEASE_CHECKSUM_ALGO})."
+  else
+    log_warn "No tarball path available to checksum — verifying manifest fields only, not tarball integrity. Pass SUPREME_RELEASE_TARBALL to verify the download itself."
+  fi
+
+  # § Mandatory release signing (requirement 4): SHA256 alone proves the bytes weren't
+  # corrupted/truncated in transit — it proves NOTHING about who produced them (anyone
+  # who intercepts the download can recompute a matching checksum for a tampered file).
+  # A signature proves provenance. Ed25519 (`.ed25519.sig`, verified via `openssl
+  # pkeyutl`) is preferred — small, fast, no GPG keyring/trust-model complexity; OpenPGP
+  # (`.sig`, verified via `gpg --verify`) is supported as the alternative. Production
+  # (release mode) REFUSES an unsigned release outright; only an explicit
+  # SUPREME_ALLOW_UNSIGNED_RELEASE=1 override (documented, loud, never the default) can
+  # install one — for local testing of the release pipeline itself, never for a real
+  # customer deployment. See docs/architecture/Native-Linux-Deployment.md's "Release
+  # signing & key management" section for how the keys themselves are managed.
+  local signed=0
+  if [ -n "${SUPREME_RELEASE_TARBALL:-}" ] && [ -r "${SUPREME_RELEASE_TARBALL}.ed25519.sig" ]; then
+    local pubkey="${SUPREME_RELEASE_ED25519_PUBKEY:-${SCRIPT_DIR}/release-signing-ed25519.pub}"
+    [ -r "$pubkey" ] || die "An Ed25519 signature (${SUPREME_RELEASE_TARBALL}.ed25519.sig) is present but no public key found at ${pubkey}. Set SUPREME_RELEASE_ED25519_PUBKEY or provision the key."
+    command_exists openssl || die "openssl is required to verify the Ed25519 signature."
+    openssl pkeyutl -verify -rawin -pubin -inkey "$pubkey" -sigfile "${SUPREME_RELEASE_TARBALL}.ed25519.sig" -in "$SUPREME_RELEASE_TARBALL" >/dev/null 2>&1 \
+      || die "Ed25519 signature verification FAILED for ${SUPREME_RELEASE_TARBALL} — refusing to install an unsigned/tampered release."
+    log_info "Ed25519 signature verified."
+    signed=1
+  elif [ -n "${SUPREME_RELEASE_TARBALL:-}" ] && [ -r "${SUPREME_RELEASE_TARBALL}.sig" ]; then
+    command_exists gpg || die "A .sig file is present but gpg is not installed — cannot verify the release signature."
+    gpg --verify "${SUPREME_RELEASE_TARBALL}.sig" "$SUPREME_RELEASE_TARBALL" \
+      || die "GPG signature verification FAILED for ${SUPREME_RELEASE_TARBALL} — refusing to install an unsigned/tampered release."
+    log_info "OpenPGP signature verified."
+    signed=1
+  fi
+
+  if [ "$signed" != "1" ]; then
+    if [ "${SUPREME_ALLOW_UNSIGNED_RELEASE:-0}" = "1" ]; then
+      log_warn "SUPREME_ALLOW_UNSIGNED_RELEASE=1 — installing an UNSIGNED release. Never use this for a real customer deployment."
+    else
+      die "No valid Ed25519 or OpenPGP signature found for this release — production installs require a signed release (§ Mandatory Release Signing). Set SUPREME_ALLOW_UNSIGNED_RELEASE=1 only for local release-pipeline testing."
+    fi
+  fi
+
+  rsync -a --delete --exclude '.git' "${src}/" "${SUPREME_REPO_DIR}/"
+  chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_REPO_DIR"
+  log_info "Release ${SUPREME_RELEASE_VERSION} staged into ${SUPREME_REPO_DIR} (not yet active — switch_active_release runs after verification)."
+}
+
+# § requirement 2/11: validate EVERY manifest field before installation, and reject
+# unsupported upgrade paths outright — never a guess, never a soft warning for something
+# that would actually break the running controller.
+validate_release_manifest() {
+  # OS: same check require_ubuntu_24_04 already applies to the HOST; this confirms the
+  # ARTIFACT was actually built for it too — a release built for a different OS target
+  # could ship binaries (native node_modules addons) that simply won't load here.
+  if [ -r /etc/os-release ]; then
+    local host_os
+    # shellcheck source=/dev/null
+    host_os="$(. /etc/os-release && echo "${ID}-${VERSION_ID}")"
+    if [ -n "$SUPREME_RELEASE_SUPPORTED_OS" ] && [ "$SUPREME_RELEASE_SUPPORTED_OS" != "null" ] \
+      && [ "$SUPREME_RELEASE_SUPPORTED_OS" != "$host_os" ]; then
+      die "Release ${SUPREME_RELEASE_VERSION} was built for '${SUPREME_RELEASE_SUPPORTED_OS}', this host is '${host_os}' — refusing to install a mismatched OS target."
+    fi
+  fi
+
+  # Architecture.
+  local host_arch
+  host_arch="$(uname -m)"
+  [ "$host_arch" = "x86_64" ] && host_arch="amd64"
+  if [ -n "$SUPREME_RELEASE_ARCH" ] && [ "$SUPREME_RELEASE_ARCH" != "null" ] && [ "$SUPREME_RELEASE_ARCH" != "$host_arch" ]; then
+    die "Release ${SUPREME_RELEASE_VERSION} was built for '${SUPREME_RELEASE_ARCH}', this host is '${host_arch}' — refusing to install a mismatched architecture."
+  fi
+
+  # Package format version — this installer only understands format "1". A future,
+  # incompatible package layout must be rejected with a clear message, not misread.
+  if [ -n "$SUPREME_RELEASE_PACKAGE_FORMAT_VERSION" ] && [ "$SUPREME_RELEASE_PACKAGE_FORMAT_VERSION" != "null" ] \
+    && [ "$SUPREME_RELEASE_PACKAGE_FORMAT_VERSION" != "1" ]; then
+    die "Release ${SUPREME_RELEASE_VERSION} uses package format version '${SUPREME_RELEASE_PACKAGE_FORMAT_VERSION}', this installer only supports format '1'. Upgrade infra/native-linux/install.sh first."
+  fi
+
+  # Schema/migration compatibility (§ requirement 11): reject an older schema than what's
+  # already running (a downgrade), and reject an upgrade the release itself doesn't claim
+  # to support (compatibility_matrix.min_upgrade_from_schema_version).
+  local current_schema
+  current_schema="$(current_release_schema_version)"
+  if [ -n "$current_schema" ]; then
+    if [ "$SUPREME_RELEASE_SCHEMA_VERSION" -lt "$current_schema" ] 2>/dev/null; then
+      die "Release ${SUPREME_RELEASE_VERSION} has schema ${SUPREME_RELEASE_SCHEMA_VERSION}, older than the currently-installed schema ${current_schema}. Downgrades are not supported — restore a backup from before the current version instead (see restore.sh)."
+    fi
+    if [ "$SUPREME_RELEASE_MIN_UPGRADE_SCHEMA" -gt "$current_schema" ] 2>/dev/null; then
+      die "Release ${SUPREME_RELEASE_VERSION} requires upgrading from schema >= ${SUPREME_RELEASE_MIN_UPGRADE_SCHEMA}, this machine is on schema ${current_schema}. Install an intermediate release first — see the release notes for the supported upgrade path."
+    fi
+  fi
+
+  # Resource requirements — real numbers, checked now (before touching anything) rather
+  # than discovered mid-install. Full detail (disk/RAM/CPU) is re-verified as part of
+  # run_runtime_verification() after the switch; this is the fail-fast pass.
+  if [ "${SUPREME_RELEASE_REQUIRED_RAM_MB:-0}" -gt 0 ] 2>/dev/null && [ -r /proc/meminfo ]; then
+    local total_mb
+    total_mb=$(( $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 1024 ))
+    [ "$total_mb" -ge "$SUPREME_RELEASE_REQUIRED_RAM_MB" ] \
+      || die "Release ${SUPREME_RELEASE_VERSION} requires ${SUPREME_RELEASE_REQUIRED_RAM_MB}MB RAM, this host has ${total_mb}MB."
+  fi
+  log_info "Release manifest validated: OS/arch/package-format/schema-compatibility/resources all OK."
+}
+
+# The schema version of whatever release is CURRENTLY active on this machine, read from
+# its own release-manifest.json (source-mode installs have none — first install, or a dev
+# machine, has no prior schema to compare against, so this returns empty, not zero, which
+# would incorrectly look like "schema 0").
+current_release_schema_version() {
+  local current="${SUPREME_RELEASE_DIR}/release-manifest.json"
+  if [ -r "$current" ] && command_exists jq; then
+    jq -r '.schema_version // empty' "$current" 2>/dev/null
+  else
+    echo ""
+  fi
+}
+
+# Snapshots whatever is staged in SUPREME_REPO_DIR into its own immutable versioned
+# directory and atomically switches SUPREME_RELEASE_DIR to point there (§ Transactional
+# updates: this is the ONE moment code actually goes live — everything before it only
+# touched the staging area, never a path a running service reads).
+stage_and_switch_release() {
+  local version="${SUPREME_RELEASE_VERSION:?stage_and_switch_release requires SUPREME_RELEASE_VERSION to be set (sync_repo/install_release_artifact set it)}"
+  release_state_set pending_release "$version"
+  stage_release_version "$version" >/dev/null
+  switch_active_release "$version"
+  release_state_record_switch "$version"
 }
 
 render_template() {

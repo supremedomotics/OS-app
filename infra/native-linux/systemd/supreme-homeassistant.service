@@ -51,6 +51,18 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictRealtime=yes
+# Empty = drop every capability — HA Core is bound to loopback only (see configuration.yaml
+# seeded by install.sh) and needs no privileged syscalls in this headless, SIL-internal
+# deployment. Same "tightened only as far as verified" caveat as the rest of this file.
+CapabilityBoundingSet=
+# CPython has no JIT — no known W+X memory requirement. Same disclosed caveat as the rest
+# of this file: HA Core's real dependency tree (including C extensions) was not exercised
+# end-to-end against live hardware in the environment that produced this deployment: if a
+# real HA bring-up ever fails startup with this set, that is the first thing to try
+# removing, and it should be logged in docs/architecture/Native-Linux-Deployment.md's
+# verification-scope section when it happens, not silently reverted.
+MemoryDenyWriteExecute=yes
 
 [Install]
 WantedBy=multi-user.target

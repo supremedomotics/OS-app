@@ -33,6 +33,13 @@ RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+# Empty = drop every capability. NATS binds only the non-privileged ports
+# config/nats.conf.template declares — no raw sockets, no privileged bind.
+CapabilityBoundingSet=
+# The Go runtime has no JIT (ahead-of-time compiled binary) — no known W+X memory
+# requirement, safe to deny.
+MemoryDenyWriteExecute=yes
 
 [Install]
 WantedBy=multi-user.target

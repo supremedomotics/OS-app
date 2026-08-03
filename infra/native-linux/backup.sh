@@ -28,6 +28,7 @@ main() {
   local ts work archive
   ts="$(date -u +"%Y%m%dT%H%M%SZ")"
   work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
   archive="${SUPREME_BACKUP_DIR}/supremeos-backup-${ts}.tar.gz"
   mkdir -p "$SUPREME_BACKUP_DIR"
 

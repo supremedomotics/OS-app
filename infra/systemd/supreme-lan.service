@@ -58,6 +58,11 @@ LockPersonality=yes
 # 10009, KNX 3671, mDNS 5353, SSDP 1900 are all unprivileged). If a future protocol needs one, add
 # AmbientCapabilities=CAP_NET_BIND_SERVICE here rather than running the service as root.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# No capability is needed for UDP broadcast/multicast recv (IP_ADD_MEMBERSHIP is a plain
+# socket option, not a privileged operation) — safe to drop every capability, matching every
+# sibling unit (supreme-gateway/commissioning/nats.service).
+CapabilityBoundingSet=
+RestrictRealtime=yes
 
 [Install]
 WantedBy=multi-user.target

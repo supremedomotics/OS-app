@@ -8,7 +8,14 @@
 # development and CI, and this script never touches it.
 #
 # Usage:
-#   sudo ./install.sh
+#   sudo ./install.sh                                   install from this script's own tree
+#   sudo ./install.sh --offline /path/to/release.tar.zst install fully offline from a local
+#                                                         release package (USB drive, copied
+#                                                         file — no network access required
+#                                                         for the package itself; apt/Node/
+#                                                         NATS/Caddy installation is skipped
+#                                                         entirely on an official appliance
+#                                                         image, see is_official_appliance_image)
 #
 # Every install-time answer can be supplied non-interactively via environment variables
 # (see the "Answers" section below); anything left unset is prompted for on a real TTY, or
@@ -18,7 +25,8 @@
 # Idempotent: safe to re-run. Re-running reuses secrets/config already written to
 # /etc/supremeos and only starts/restarts what changed — it does not regenerate secrets or
 # recreate the database on a second run (see update.sh for the "pull latest code, rebuild,
-# restart" workflow this script's initial run sets up).
+# restart" workflow this script's initial run sets up). Interrupted mid-run? Just re-run —
+# every completed phase is checkpointed and skipped (see lib/common.sh's run_phase).
 
 set -euo pipefail
 
@@ -27,6 +35,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/deploy-steps.sh
 source "${SCRIPT_DIR}/lib/deploy-steps.sh"
+
+# § Offline installation: `--offline <package>` points directly at a local release tarball
+# (USB drive, scp'd file) — no download, no network dependency for the package itself. The
+# tarball is extracted once, here, before mode detection runs against the extracted tree.
+SUPREME_OFFLINE=0
+OFFLINE_PACKAGE=""
+if [ "${1:-}" = "--offline" ]; then
+  SUPREME_OFFLINE=1
+  OFFLINE_PACKAGE="${2:?Usage: install.sh --offline <path-to-release-package.tar.zst>}"
+  [ -r "$OFFLINE_PACKAGE" ] || { echo "ERROR: cannot read ${OFFLINE_PACKAGE}" >&2; exit 1; }
+fi
 
 # Pinned, checksum-verified releases (§ supply-chain integrity — never an unauthenticated
 # `curl | bash`, every third-party binary here is fetched from its vendor's own GitHub
@@ -231,7 +250,15 @@ persist_secrets() {
 install_apt_dependencies() {
   log_step "Installing OS package dependencies"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
+  # § Offline installation: `apt-get update` needs a reachable archive — offline installs
+  # rely on the operator having pre-seeded a local apt cache/mirror (a standard offline-apt
+  # prerequisite this script cannot fabricate); skipping the refresh uses whatever package
+  # index is already on disk.
+  if [ "$SUPREME_OFFLINE" != "1" ]; then
+    apt-get update -qq
+  else
+    log_warn "SUPREME_OFFLINE=1 — skipping 'apt-get update'. Requires a pre-seeded local apt cache/mirror with every package below already available."
+  fi
   apt-get install -y -qq \
     curl ca-certificates gnupg lsb-release git rsync jq build-essential pkg-config \
     postgresql postgresql-contrib \
@@ -246,6 +273,8 @@ install_node() {
   log_step "Installing Node.js ${SUPREME_NODE_MAJOR}.x"
   if command_exists node && [ "$(node -p 'process.versions.node.split(".")[0]')" = "$SUPREME_NODE_MAJOR" ]; then
     log_info "Node.js $(node -v) already installed — skipping."
+  elif [ "$SUPREME_OFFLINE" = "1" ]; then
+    die "SUPREME_OFFLINE=1 but Node.js ${SUPREME_NODE_MAJOR}.x is not already installed — the NodeSource setup script requires network access. Pre-install Node.js ${SUPREME_NODE_MAJOR}.x (or use an official SupremeOS appliance image, which ships it already) before an offline install."
   else
     curl -fsSL "https://deb.nodesource.com/setup_${SUPREME_NODE_MAJOR}.x" | bash -
     apt-get install -y -qq nodejs
@@ -268,10 +297,15 @@ install_nats() {
     log_info "nats-server ${NATS_VERSION} already installed — skipping."
     return
   fi
-  local tmp deb_url
+  local tmp deb_path
   tmp="$(mktemp -d)"
-  deb_url="https://github.com/nats-io/nats-server/releases/download/v${NATS_VERSION}/nats-server-v${NATS_VERSION}-amd64.deb"
-  curl -fsSL "$deb_url" -o "${tmp}/nats-server.deb"
+  if [ "$SUPREME_OFFLINE" = "1" ]; then
+    deb_path="${SUPREME_NATS_DEB_PATH:?SUPREME_OFFLINE=1 requires SUPREME_NATS_DEB_PATH pointing at a local nats-server-v${NATS_VERSION}-amd64.deb (no network download in offline mode)}"
+    [ -r "$deb_path" ] || die "SUPREME_NATS_DEB_PATH=${deb_path} is not readable."
+    cp "$deb_path" "${tmp}/nats-server.deb"
+  else
+    curl -fsSL "https://github.com/nats-io/nats-server/releases/download/v${NATS_VERSION}/nats-server-v${NATS_VERSION}-amd64.deb" -o "${tmp}/nats-server.deb"
+  fi
   echo "${NATS_DEB_SHA256}  ${tmp}/nats-server.deb" | sha256sum -c - \
     || die "nats-server .deb checksum mismatch — refusing to install a package that doesn't match the pinned, verified hash."
   dpkg -i "${tmp}/nats-server.deb"
@@ -285,10 +319,15 @@ install_caddy() {
     log_info "caddy ${CADDY_VERSION} already installed — skipping."
     return
   fi
-  local tmp deb_url
+  local tmp deb_path
   tmp="$(mktemp -d)"
-  deb_url="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.deb"
-  curl -fsSL "$deb_url" -o "${tmp}/caddy.deb"
+  if [ "$SUPREME_OFFLINE" = "1" ]; then
+    deb_path="${SUPREME_CADDY_DEB_PATH:?SUPREME_OFFLINE=1 requires SUPREME_CADDY_DEB_PATH pointing at a local caddy_${CADDY_VERSION}_linux_amd64.deb (no network download in offline mode)}"
+    [ -r "$deb_path" ] || die "SUPREME_CADDY_DEB_PATH=${deb_path} is not readable."
+    cp "$deb_path" "${tmp}/caddy.deb"
+  else
+    curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.deb" -o "${tmp}/caddy.deb"
+  fi
   echo "${CADDY_DEB_SHA512}  ${tmp}/caddy.deb" | sha512sum -c - \
     || die "caddy .deb checksum mismatch — refusing to install a package that doesn't match the pinned, verified hash."
   dpkg -i "${tmp}/caddy.deb"
@@ -429,6 +468,17 @@ install_systemd_units() {
   if systemd_is_live; then systemctl daemon-reload; fi
 }
 
+# § requirement 8: `supremeos-support` becomes a real, system-wide command — a thin
+# wrapper so `sudo supremeos-support` works from anywhere, not just `sudo ./supremeos-
+# support.sh` from this directory. Symlinked (not copied) so it always runs the version
+# shipped with whatever release is currently active.
+install_cli_commands() {
+  log_step "Installing CLI commands (supremeos-support)"
+  ln -sfn "${SUPREME_RELEASE_DIR}/infra/native-linux/supremeos-support.sh" /usr/local/bin/supremeos-support
+  chmod +x "${SUPREME_RELEASE_DIR}/infra/native-linux/supremeos-support.sh" 2>/dev/null || true
+  log_info "Installed: supremeos-support (run 'sudo supremeos-support' any time)."
+}
+
 start_services() {
   log_step "Enabling and starting SupremeOS services"
   systemctl_enable_now supreme-commissioning
@@ -467,11 +517,14 @@ print_summary() {
   local backend_display="Native"
   [ "$SUPREME_BACKEND" = "ha" ] && backend_display="Native + Home Assistant"
   [ "$SUPREME_BACKEND" = "mock" ] && backend_display="Mock (test/CI only — never use in production)"
+  local mode_display="Development (source checkout, full test suite verified)"
+  [ "$SUPREME_INSTALL_MODE" = "release" ] && mode_display="Production (release ${SUPREME_RELEASE_VERSION:-unknown}, runtime-verified)"
   cat <<EOF
 
   SupremeOS Native Installation
 
   Target OS:          ${os_pretty}
+  Install mode:        ${mode_display}
   Backend:             ${backend_display}
   Deployment:          Systemd
   Container Runtime:   Not Used
@@ -491,31 +544,114 @@ print_summary() {
 EOF
 }
 
+run_verify_runtime() {
+  log_step "Verifying runtime (production mode) — staged, ordered startup verification"
+  if run_staged_verification "${SUPREME_RELEASE_MIGRATION_COUNT:-}" "${SUPREME_RELEASE_REQUIRED_DISK_MB:-0}" "${SUPREME_RELEASE_REQUIRED_RAM_MB:-0}" "${SUPREME_RELEASE_REQUIRED_CPU_ARCH:-}"; then
+    log_info "Runtime verification: all stages passed."
+    release_state_record_health "healthy"
+  else
+    release_state_record_health "unhealthy"
+    die "Runtime verification FAILED at the stage shown above (${RUNTIME_CHECK_FAILED} check(s)) — later stages did not run. Run ./health-check.sh for a full re-check once fixed; this install phase will be re-run (not skipped) next time."
+  fi
+}
+
 main() {
   require_root
-  require_ubuntu_24_04
-  collect_answers
-  create_system_user
-  create_directories
-  persist_secrets
-  install_apt_dependencies
-  install_node
-  install_nats
-  install_caddy
-  sync_repo
-  build_workspace
-  verify_workspace
-  install_commissioning_venv
-  install_homeassistant_venv
-  configure_postgres
-  configure_redis
-  configure_mosquitto
-  configure_nats
-  configure_gateway_env
-  configure_caddy
-  install_systemd_units
-  start_services
-  wait_for_health
+
+  # § Offline installation: extract the supplied package BEFORE any other detection, then
+  # treat its contents exactly like a normal release tree from here on — no code path
+  # downstream needs to know whether the bytes came from the network or a USB drive.
+  local src_root
+  if [ "$SUPREME_OFFLINE" = "1" ]; then
+    log_step "Offline install from ${OFFLINE_PACKAGE}"
+    src_root="$(extract_release_tarball "$OFFLINE_PACKAGE")"
+    SUPREME_RELEASE_TARBALL="$OFFLINE_PACKAGE"
+    SUPREME_INSTALL_MODE="release"
+  else
+    src_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  fi
+
+  # § Future SupremeOS image: an official appliance image has Node/pnpm/NATS/Caddy already
+  # provisioned at image-build time (SUPREME_IMAGE_MARKER present) — skip OS/toolchain
+  # installation entirely and jump straight to configure+migrate+start+verify, per
+  # requirement 9. A dev/CI-installed Ubuntu box (no marker) gets the full install.
+  local on_appliance_image=0
+  is_official_appliance_image && on_appliance_image=1
+
+  if [ "$on_appliance_image" = "1" ]; then
+    log_info "Official SupremeOS appliance image detected ($(appliance_image_info | tr '\n' ' ')) — skipping package/dependency/toolchain installation."
+  else
+    require_ubuntu_24_04
+  fi
+
+  # § CI/Production verification split: everything downstream branches on this. A git
+  # checkout (SUPREME_INSTALL_MODE=source) keeps the full developer build+typecheck+test
+  # suite; a signed release artifact (=release) never recompiles or re-tests — see
+  # docs/architecture/Native-Linux-Deployment.md's "Deployment modes" section.
+  detect_install_mode "$src_root"
+  if [ "$on_appliance_image" = "1" ] && [ "$SUPREME_INSTALL_MODE" != "release" ]; then
+    die "Running on an official SupremeOS appliance image but ${src_root} is not a release artifact — an appliance image must always install from a signed release, never a source checkout."
+  fi
+
+  # Structured logs (§ requirement): every run appends to its own timestamped log AND to
+  # stdout, so an interrupted install leaves a complete record of what actually happened up
+  # to the point it stopped — not just whatever scrolled past in a lost SSH session.
+  mkdir -p "$SUPREME_LOG_DIR"
+  local logfile="${SUPREME_LOG_DIR}/install-$(date -u +%Y%m%dT%H%M%SZ).log"
+  exec > >(tee -a "$logfile") 2>&1
+  log_info "Logging to ${logfile}. Re-run this script any time — completed phases are skipped (see ${SUPREME_STATE_FILE})."
+
+  run_phase "collect_answers" collect_answers
+  run_phase "create_system_user" create_system_user
+  run_phase "create_directories" create_directories
+  run_phase "persist_secrets" persist_secrets
+
+  if [ "$on_appliance_image" != "1" ]; then
+    run_phase "install_apt_dependencies" install_apt_dependencies
+    run_phase "install_node" install_node
+    run_phase "install_nats" install_nats
+    run_phase "install_caddy" install_caddy
+  fi
+
+  if [ "$SUPREME_INSTALL_MODE" = "release" ]; then
+    run_phase "install_release_artifact" install_release_artifact "$src_root"
+  else
+    run_phase "sync_repo" sync_repo
+    run_phase "build_workspace" build_workspace
+    run_phase "verify_workspace" verify_workspace
+  fi
+
+  # § Transactional updates: the moment code actually goes live — a snapshot into its own
+  # immutable versioned directory, then one atomic symlink switch. Nothing before this
+  # point touched a path a running service could be reading.
+  run_phase "stage_and_switch_release" stage_and_switch_release
+
+  if [ "$on_appliance_image" != "1" ]; then
+    run_phase "install_commissioning_venv" install_commissioning_venv
+    run_phase "install_homeassistant_venv" install_homeassistant_venv
+  fi
+  run_phase "configure_postgres" configure_postgres
+  run_phase "configure_redis" configure_redis
+  run_phase "configure_mosquitto" configure_mosquitto
+  run_phase "configure_nats" configure_nats
+  run_phase "configure_gateway_env" configure_gateway_env
+  run_phase "configure_caddy" configure_caddy
+  run_phase "install_systemd_units" install_systemd_units
+  run_phase "install_cli_commands" install_cli_commands
+  run_phase "start_services" start_services
+  run_phase "wait_for_health" wait_for_health
+
+  # Runtime verification is the production-mode replacement for the developer test suite
+  # (§ requirement: "verify release integrity, migration success, ... If all runtime checks
+  # pass, deployment succeeds") — always runs, in BOTH modes, since "the Gateway answers
+  # /healthz" is never a substitute for "every dependency it needs is actually reachable".
+  # A first install has no previous version to roll back to — a failure here means fix and
+  # re-run (checkpointing skips everything already done); update.sh's transactional
+  # rollback is what handles "this WAS working, an upgrade broke it."
+  run_phase "verify_runtime" run_verify_runtime
+
+  run_phase "prune_old_releases" prune_old_releases
+
   print_summary
 }
 

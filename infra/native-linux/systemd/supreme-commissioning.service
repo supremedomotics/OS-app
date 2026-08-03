@@ -39,6 +39,12 @@ RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+# Empty = drop every capability. Binds only 127.0.0.1:9100 (see ExecStart above) — no
+# privileged port, no raw sockets.
+CapabilityBoundingSet=
+# CPython has no JIT (unlike Node's V8) — no known W+X memory requirement, safe to deny.
+MemoryDenyWriteExecute=yes
 
 [Install]
 WantedBy=multi-user.target

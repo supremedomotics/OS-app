@@ -22,6 +22,13 @@ SUPREME_DATA_DIR="${SUPREME_DATA_DIR:-/var/lib/supremeos}"
 SUPREME_BACKUP_DIR="${SUPREME_BACKUP_DIR:-/var/backups/supremeos}"
 SUPREME_RELEASE_DIR="${SUPREME_APP_DIR}/current"
 SUPREME_REPO_DIR="${SUPREME_APP_DIR}/repo"
+# § Transactional updates: every install/update stages into SUPREME_REPO_DIR (unchanged —
+# sync_repo()/install_release_artifact() are not rewritten), then a KNOWN-GOOD build is
+# snapshotted into its own immutable, versioned directory here. SUPREME_RELEASE_DIR
+# ("current") is a symlink into ONE of these — switching versions is one atomic `ln -sfn`,
+# never an in-place overwrite of code a running service might be mid-read of.
+SUPREME_RELEASES_DIR="${SUPREME_APP_DIR}/releases"
+SUPREME_RELEASE_RETAIN="${SUPREME_RELEASE_RETAIN:-3}"
 SUPREME_USER="${SUPREME_USER:-supreme}"
 SUPREME_GROUP="${SUPREME_GROUP:-supreme}"
 
@@ -155,3 +162,555 @@ generate_secret() {
 # constant here so native and Docker deployments track the same runtime without this file
 # and the Dockerfiles silently drifting apart.
 SUPREME_NODE_MAJOR="22"
+
+# ── Install mode detection (§ CI/Production verification split) ────────────────────────
+# The installer verifies what it's actually installing, not a fixed assumption:
+#   "source"  — a git checkout (has .git). A developer workflow: full build + typecheck +
+#               test, exactly as before. This is the ONLY mode allowed to run the ~800-test
+#               developer suite, per its own requirement ("keep full verification").
+#   "release" — a signed, pre-built release artifact (has release-manifest.json, produced
+#               by package-release.sh in CI). Never recompiled, never re-tested — its own
+#               CI pipeline (.github/workflows/release.yml) already ran build+typecheck+
+#               test+integration+performance before signing it. The installer instead
+#               verifies release integrity (checksum/signature), applies migrations, starts
+#               services, and checks REAL runtime health — see run_runtime_verification().
+# Detection is a plain fact check (file presence), never a guess, and always overridable
+# via SUPREME_INSTALL_MODE for an operator who knows better (e.g. testing the release path
+# from a git checkout that also happens to carry a stray manifest).
+detect_install_mode() {
+  local src="$1" # the source tree root install.sh is being run from
+  if [ -n "${SUPREME_INSTALL_MODE:-}" ]; then
+    case "$SUPREME_INSTALL_MODE" in
+      source|release) log_info "Install mode: ${SUPREME_INSTALL_MODE} (explicit SUPREME_INSTALL_MODE override)."; return ;;
+      *) die "Invalid SUPREME_INSTALL_MODE '${SUPREME_INSTALL_MODE}' — must be 'source' or 'release'." ;;
+    esac
+  fi
+  if [ -r "${src}/release-manifest.json" ]; then
+    SUPREME_INSTALL_MODE="release"
+  elif [ -d "${src}/.git" ]; then
+    SUPREME_INSTALL_MODE="source"
+  else
+    die "Cannot determine install mode: ${src} has neither a release-manifest.json (release artifact) nor a .git directory (source checkout). Set SUPREME_INSTALL_MODE=source|release explicitly to override."
+  fi
+  log_info "Install mode: ${SUPREME_INSTALL_MODE} (detected from ${src})."
+}
+
+# ── Phase checkpoints (§ resume-after-interruption) ─────────────────────────────────────
+# One completed-phase name per line in SUPREME_STATE_FILE. Deliberately NOT a single
+# "last completed step" pointer — an explicit set means a re-run after adding a new phase
+# (e.g. an installer upgrade) correctly re-runs only the NEW phase, not every phase after
+# whatever line number the old pointer happened to stop at.
+SUPREME_STATE_FILE="${SUPREME_CONFIG_DIR}/install.state"
+SUPREME_LOG_DIR="${SUPREME_CONFIG_DIR}/logs"
+
+phase_done() {
+  [ -r "$SUPREME_STATE_FILE" ] && grep -qxF "$1" "$SUPREME_STATE_FILE"
+}
+
+mark_phase_done() {
+  mkdir -p "$(dirname "$SUPREME_STATE_FILE")"
+  echo "$1" >> "$SUPREME_STATE_FILE"
+}
+
+# Runs one named phase with a checkpoint: skipped entirely (not even invoked) if already
+# recorded complete in SUPREME_STATE_FILE, so re-running the installer after an interruption
+# — a dropped SSH session mid-`apt-get`, a reboot mid-way — resumes from the first
+# NOT-yet-completed phase instead of redoing everything already known-good. Structured,
+# greppable log line per phase (name, elapsed seconds, exit status) regardless of outcome.
+# SUPREME_FORCE_REDO=1 re-runs every phase even if checkpointed (e.g. after hand-editing
+# config) — opt-in, never the default, so "resume" stays the normal behavior.
+run_phase() {
+  local name="$1"; shift
+  if [ "${SUPREME_FORCE_REDO:-0}" != "1" ] && phase_done "$name"; then
+    log_info "[phase] ${name}: already completed — skipping (SUPREME_FORCE_REDO=1 to re-run)."
+    return 0
+  fi
+  local start end elapsed
+  start="$(date +%s)"
+  log_step "[phase] ${name}"
+  if "$@"; then
+    end="$(date +%s)"; elapsed=$((end - start))
+    log_info "[phase] ${name}: OK (${elapsed}s)."
+    mark_phase_done "$name"
+  else
+    end="$(date +%s)"; elapsed=$((end - start))
+    log_error "[phase] ${name}: FAILED after ${elapsed}s. Fix the reported error and re-run — already-completed phases will be skipped."
+    exit 1
+  fi
+}
+
+# ── Runtime verification (§ Production verification strategy) ──────────────────────────
+# The single source of truth for "is this deployment actually working" — used by BOTH
+# health-check.sh (read-only, operator/cron-facing) and install.sh's production-mode
+# post-install verification (§ requirement: verify runtime dependencies, DB connectivity,
+# NATS, Mosquitto, PostgreSQL, Gateway, LAN Service, Commissioning, Web UI). One
+# implementation, two callers — never let the installer's idea of "healthy" drift from
+# health-check.sh's.
+RUNTIME_CHECK_FAILED=0
+RUNTIME_CHECK_NOT_EVALUATED=0
+
+RUNTIME_CHECK_WARNING=0
+
+rc_pass() { echo "  PASS       $*"; }
+rc_fail() { echo "  FAIL       $*"; RUNTIME_CHECK_FAILED=$((RUNTIME_CHECK_FAILED + 1)); }
+rc_warn() { echo "  WARNING    $*"; RUNTIME_CHECK_WARNING=$((RUNTIME_CHECK_WARNING + 1)); }
+rc_not_applicable() { echo "  N/A        $*"; }
+rc_not_evaluated() { echo "  NOT EVAL   $*"; RUNTIME_CHECK_NOT_EVALUATED=$((RUNTIME_CHECK_NOT_EVALUATED + 1)); }
+
+rc_check_service() {
+  local unit="$1"
+  if ! systemd_is_live; then
+    rc_not_evaluated "${unit} — systemd is not live in this environment"
+    return
+  fi
+  if systemctl is-active --quiet "$unit"; then
+    rc_pass "${unit} is active"
+  else
+    rc_fail "${unit} is NOT active ($(systemctl is-active "$unit" 2>&1 || true)) — see: journalctl -u ${unit} -n 50"
+  fi
+}
+
+rc_check_tcp() {
+  local label="$1" host="$2" port="$3"
+  if command_exists nc; then
+    if nc -z -w2 "$host" "$port" 2>/dev/null; then rc_pass "${label} reachable at ${host}:${port}"; else rc_fail "${label} NOT reachable at ${host}:${port}"; fi
+  elif command_exists bash; then
+    if timeout 2 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then rc_pass "${label} reachable at ${host}:${port}"; else rc_fail "${label} NOT reachable at ${host}:${port}"; fi
+  else
+    rc_not_evaluated "${label} at ${host}:${port} — neither nc nor /dev/tcp available"
+  fi
+}
+
+rc_check_http() {
+  local label="$1" url="$2"
+  local body
+  if body="$(curl -fsS -k --max-time 5 "$url" 2>&1)"; then
+    rc_pass "${label} responded: ${url} — ${body:0:120}"
+  else
+    rc_fail "${label} did NOT respond at ${url}"
+  fi
+}
+
+# Real Postgres schema-migration state — not "did the process start" but "did the DB
+# actually reach the version this release expects." Reads the same schema_migrations
+# table services/persistence/src/migrate.ts writes to; never assumed from a log line.
+rc_check_migrations() {
+  local expected_count="${1:-}"
+  if ! command_exists psql; then
+    rc_not_evaluated "Migration state — psql not available to query it"
+    return
+  fi
+  local applied
+  if ! applied="$(PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h 127.0.0.1 -U supreme -d supreme -tAc \
+    "SELECT count(*) FROM schema_migrations" 2>&1)"; then
+    rc_fail "Migration state — could not query schema_migrations: ${applied}"
+    return
+  fi
+  applied="$(echo "$applied" | tr -d '[:space:]')"
+  if [ -n "$expected_count" ] && [ "$applied" != "$expected_count" ]; then
+    rc_fail "Migration state — expected ${expected_count} applied migrations, found ${applied}"
+  else
+    rc_pass "Migration state — ${applied} migration(s) applied"
+  fi
+}
+
+# ── Resource checks (§ requirement 10: disk, memory, CPU) ───────────────────────────────
+# Real numbers, read from the kernel/filesystem — never assumed. Thresholds are WARNINGs,
+# not FAILs: a controller that's merely tight on headroom should be flagged, not treated as
+# broken (it may run fine indefinitely; it just has less margin than recommended).
+rc_check_disk() {
+  local path="$1" required_mb="${2:-0}"
+  if ! command_exists df; then rc_not_evaluated "Disk space at ${path} — df not available"; return; fi
+  local avail_kb avail_mb
+  avail_kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2 {print $4}')"
+  [ -n "$avail_kb" ] || { rc_not_evaluated "Disk space at ${path} — could not read"; return; }
+  avail_mb=$((avail_kb / 1024))
+  if [ "$required_mb" -gt 0 ] && [ "$avail_mb" -lt "$required_mb" ]; then
+    rc_fail "Disk space at ${path} — ${avail_mb}MB free, release requires ${required_mb}MB"
+  elif [ "$required_mb" -gt 0 ] && [ "$avail_mb" -lt $((required_mb * 2)) ]; then
+    rc_warn "Disk space at ${path} — ${avail_mb}MB free, within 2x of the ${required_mb}MB requirement"
+  else
+    rc_pass "Disk space at ${path} — ${avail_mb}MB free"
+  fi
+}
+
+rc_check_memory() {
+  local required_mb="${1:-0}"
+  if [ ! -r /proc/meminfo ]; then rc_not_evaluated "Memory — /proc/meminfo not readable"; return; fi
+  local total_kb total_mb
+  total_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+  total_mb=$((total_kb / 1024))
+  if [ "$required_mb" -gt 0 ] && [ "$total_mb" -lt "$required_mb" ]; then
+    rc_fail "Memory — ${total_mb}MB total, release requires ${required_mb}MB"
+  else
+    rc_pass "Memory — ${total_mb}MB total"
+  fi
+}
+
+rc_check_cpu() {
+  local required_arch="${1:-}"
+  local arch cores
+  arch="$(uname -m)"
+  cores="$(nproc 2>/dev/null || echo unknown)"
+  if [ -n "$required_arch" ] && [ "$arch" != "$required_arch" ] \
+    && ! { [ "$required_arch" = "amd64" ] && [ "$arch" = "x86_64" ]; }; then
+    rc_fail "CPU architecture — this machine is ${arch}, release requires ${required_arch}"
+  else
+    rc_pass "CPU — ${arch}, ${cores} core(s)"
+  fi
+}
+
+# Every TCP port this deployment binds, checked for "nothing ELSE already listening on it"
+# — meaningful only BEFORE services start (install.sh runs this ahead of start_services);
+# once SupremeOS itself owns the port, rc_check_tcp above (reachability) is the right check.
+rc_check_port_available() {
+  local label="$1" port="$2"
+  if ! command_exists ss; then rc_not_evaluated "${label} port ${port} — ss not available"; return; fi
+  local owner
+  owner="$(ss -ltnp 2>/dev/null | awk -v p=":${port}$" '$4 ~ p {print}')"
+  if [ -z "$owner" ]; then
+    rc_pass "Port ${port} (${label}) is free"
+  else
+    rc_fail "Port ${port} (${label}) is already in use: ${owner}"
+  fi
+}
+
+# Runs the full checklist (§ requirement 1, Production bullet list) and returns non-zero if
+# anything genuinely failed. `expected_migration_count`/`release_version` are optional —
+# supplied by install.sh in release mode (known from release-manifest.json), omitted by
+# health-check.sh (which just reports current state, nothing to compare against).
+run_runtime_verification() {
+  local expected_migration_count="${1:-}" required_disk_mb="${2:-0}" required_ram_mb="${3:-0}" required_cpu_arch="${4:-}"
+  RUNTIME_CHECK_FAILED=0
+  RUNTIME_CHECK_NOT_EVALUATED=0
+  RUNTIME_CHECK_WARNING=0
+
+  echo "--- Host resources ---"
+  rc_check_disk "$SUPREME_APP_DIR" "$required_disk_mb"
+  rc_check_memory "$required_ram_mb"
+  rc_check_cpu "$required_cpu_arch"
+
+  echo ""
+  echo "--- Third-party services ---"
+  for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}"; do rc_check_service "$svc"; done
+
+  echo ""
+  echo "--- SupremeOS services ---"
+  for svc in "${SUPREME_NODE_SERVICES[@]}"; do rc_check_service "$svc"; done
+  for svc in "${SUPREME_PY_SERVICES[@]}"; do rc_check_service "$svc"; done
+  rc_check_service "supreme-nats"
+  if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then
+    rc_check_service "$SUPREME_HA_SERVICE"
+  else
+    echo "  SKIPPED    ${SUPREME_HA_SERVICE} — Home Assistant was not installed"
+  fi
+
+  echo ""
+  echo "--- Runtime dependencies (loopback — matches this deployment's binding policy) ---"
+  rc_check_tcp "PostgreSQL" 127.0.0.1 5432
+  rc_check_tcp "Redis" 127.0.0.1 6379
+  rc_check_tcp "NATS" 127.0.0.1 4222
+  rc_check_tcp "Mosquitto" 127.0.0.1 1883
+  rc_check_tcp "Gateway" 127.0.0.1 8080
+  rc_check_tcp "Caddy (HTTPS)" 127.0.0.1 443
+  if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then
+    rc_check_tcp "Home Assistant (must be loopback-only)" 127.0.0.1 8123
+  fi
+
+  echo ""
+  echo "--- Database migration state ---"
+  rc_check_migrations "$expected_migration_count"
+
+  echo ""
+  echo "--- Application endpoints (Gateway / Commissioning / Web UI) ---"
+  rc_check_http "Gateway /healthz (direct)" "http://127.0.0.1:8080/healthz"
+  rc_check_http "Edge /healthz (via Caddy — proves Gateway + LAN + Commissioning wiring)" "https://127.0.0.1/healthz"
+  rc_check_http "Web UI (via Caddy)" "https://127.0.0.1/"
+
+  echo ""
+  echo "=== Runtime verification summary ==="
+  echo "Failed: ${RUNTIME_CHECK_FAILED}   Warnings: ${RUNTIME_CHECK_WARNING}   Not evaluated: ${RUNTIME_CHECK_NOT_EVALUATED}"
+  [ "$RUNTIME_CHECK_FAILED" -eq 0 ]
+}
+
+# ── Staged health verification (§ requirement 2) ─────────────────────────────────────────
+# The same checks run_runtime_verification already performs, reorganized into ORDERED
+# startup stages — each with its own start/finish/duration and PASS/FAIL/WARNING/N-A
+# outcome, and a failure stops every LATER stage from running (a broken database means
+# checking messaging/network/services/protocols/web afterward would only produce a wall of
+# secondary failures that bury the actual, single root cause). Built entirely on the
+# existing rc_* primitives above — no new check logic, only new sequencing/reporting.
+STAGE_RESULTS=()
+
+# $1=stage name  $2=function name to call (a real function in THIS shell, sharing
+# rc_*/RUNTIME_CHECK_* state directly — never a `bash -c` subshell, which would run
+# without lib/common.sh sourced and lose every counter this whole scheme depends on).
+_stage_run() {
+  local name="$1" fn="$2"
+  local before="$RUNTIME_CHECK_FAILED"
+  local start end duration
+  start="$(date -u +%s)"
+  echo ""
+  echo "=== Stage: ${name} (started $(date -u +%H:%M:%S)) ==="
+  "$fn"
+  end="$(date -u +%s)"
+  duration=$((end - start))
+  local outcome="PASS"
+  [ "$RUNTIME_CHECK_FAILED" -gt "$before" ] && outcome="FAIL"
+  STAGE_RESULTS+=("${name}|${outcome}|${duration}s")
+  echo "--- Stage ${name}: ${outcome} (${duration}s) ---"
+  [ "$outcome" = "PASS" ]
+}
+
+_stage_boot() {
+  if systemd_is_live; then rc_pass "systemd is live (PID 1)"; else rc_warn "systemd is not live in this environment"; fi
+}
+_stage_core_os() {
+  rc_check_cpu "$_STAGE_REQUIRED_CPU_ARCH"
+  rc_check_memory "$_STAGE_REQUIRED_RAM_MB"
+}
+_stage_filesystem() {
+  rc_check_disk "$SUPREME_APP_DIR" "$_STAGE_REQUIRED_DISK_MB"
+  if [ -w "$SUPREME_DATA_DIR" ]; then rc_pass "Data directory writable"; else rc_fail "Data directory not writable: ${SUPREME_DATA_DIR}"; fi
+  if [ -e "$SUPREME_RELEASE_DIR" ]; then rc_pass "Active release symlink resolves"; else rc_fail "Active release symlink missing/broken: ${SUPREME_RELEASE_DIR}"; fi
+}
+_stage_database() {
+  rc_check_service postgresql
+  rc_check_tcp "PostgreSQL" 127.0.0.1 5432
+  rc_check_migrations "$_STAGE_EXPECTED_MIGRATION_COUNT"
+}
+_stage_messaging() {
+  rc_check_service supreme-nats
+  rc_check_tcp "NATS" 127.0.0.1 4222
+  rc_check_service mosquitto
+  rc_check_tcp "Mosquitto" 127.0.0.1 1883
+  rc_check_service redis-server
+  rc_check_tcp "Redis" 127.0.0.1 6379
+}
+_stage_network() {
+  rc_check_service caddy
+  rc_check_tcp "Caddy (HTTPS)" 127.0.0.1 443
+}
+_stage_supreme_services() {
+  rc_check_service supreme-gateway
+  rc_check_service supreme-lan
+  rc_check_service supreme-commissioning
+  if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then rc_check_service supreme-homeassistant; else rc_not_applicable "Home Assistant (not installed)"; fi
+}
+_stage_protocols() {
+  rc_check_http "Driver diagnostics reachable (proves protocol drivers loaded)" "http://127.0.0.1:8080/v1/drivers/diagnostics"
+}
+_stage_web_ui() {
+  rc_check_http "Web UI (via Caddy)" "https://127.0.0.1/"
+}
+_stage_ready() {
+  rc_check_http "Gateway /healthz (direct)" "http://127.0.0.1:8080/healthz"
+  rc_check_http "Edge /healthz (via Caddy)" "https://127.0.0.1/healthz"
+}
+
+run_staged_verification() {
+  _STAGE_EXPECTED_MIGRATION_COUNT="${1:-}"
+  _STAGE_REQUIRED_DISK_MB="${2:-0}"
+  _STAGE_REQUIRED_RAM_MB="${3:-0}"
+  _STAGE_REQUIRED_CPU_ARCH="${4:-}"
+  RUNTIME_CHECK_FAILED=0
+  RUNTIME_CHECK_NOT_EVALUATED=0
+  RUNTIME_CHECK_WARNING=0
+  STAGE_RESULTS=()
+
+  for stage in "BOOT:_stage_boot" "CORE OS:_stage_core_os" "FILESYSTEM:_stage_filesystem" \
+    "DATABASE:_stage_database" "MESSAGING:_stage_messaging" "NETWORK:_stage_network" \
+    "SUPREME SERVICES:_stage_supreme_services" "PROTOCOLS:_stage_protocols" "WEB UI:_stage_web_ui"; do
+    _stage_run "${stage%%:*}" "${stage#*:}" || { _print_stage_summary; return 1; }
+  done
+  # READY always runs (even if it fails) so its own PASS/FAIL is visible — nothing comes
+  # after it to protect from a wall of secondary failures.
+  _stage_run "READY" _stage_ready
+
+  _print_stage_summary
+  [ "$RUNTIME_CHECK_FAILED" -eq 0 ]
+}
+
+_print_stage_summary() {
+  echo ""
+  echo "=== Staged verification summary ==="
+  local s
+  for s in "${STAGE_RESULTS[@]}"; do
+    IFS='|' read -r name outcome duration <<< "$s"
+    printf "  %-20s %-6s %s\n" "$name" "$outcome" "$duration"
+  done
+  echo "Failed: ${RUNTIME_CHECK_FAILED}   Warnings: ${RUNTIME_CHECK_WARNING}   Not evaluated: ${RUNTIME_CHECK_NOT_EVALUATED}"
+}
+
+# ── Versioned releases + atomic switch (§ Transactional updates) ────────────────────────
+# The active release is ALWAYS reached through the SUPREME_RELEASE_DIR symlink — code is
+# never modified in place under a version a running service might be reading. Switching
+# versions is one atomic `ln -sfn` (POSIX guarantees a symlink replacement is atomic —
+# readers see either the old or the new target, never a half-written one).
+
+current_release_version() {
+  if [ -L "$SUPREME_RELEASE_DIR" ]; then
+    basename "$(readlink -f "$SUPREME_RELEASE_DIR")"
+  else
+    echo ""
+  fi
+}
+
+# Snapshots the staged, already-verified build at SUPREME_REPO_DIR into its own immutable
+# versioned directory — never the reverse (SUPREME_REPO_DIR stays the reusable staging
+# area every sync_repo()/install_release_artifact() call writes into next time).
+stage_release_version() {
+  local version="$1"
+  local target="${SUPREME_RELEASES_DIR}/${version}"
+  local building="${target}.building"
+  mkdir -p "$SUPREME_RELEASES_DIR"
+  rm -rf "$building"
+  cp -a "$SUPREME_REPO_DIR" "$building"
+  chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$building"
+  # Build into a sibling ".building" directory, then swap it into place with NO window
+  # where $target is missing: rename the old one aside first (if present), rename the
+  # new one in, THEN delete the old one. `mv` onto an existing directory nests inside it
+  # rather than replacing it, so the old one must move out of the way first — but "moved
+  # aside" is not "gone," unlike a naive rm-then-copy. Matters when $version happens to
+  # already exist and be the current live symlink target (re-staging the same version,
+  # e.g. SUPREME_FORCE_REDO=1) — a running service's files are never absent, even
+  # momentarily.
+  local old_aside="${target}.previous"
+  rm -rf "$old_aside"
+  [ -e "$target" ] && mv "$target" "$old_aside"
+  mv "$building" "$target"
+  rm -rf "$old_aside"
+  echo "$target"
+}
+
+switch_active_release() {
+  local version="$1"
+  local target="${SUPREME_RELEASES_DIR}/${version}"
+  [ -d "$target" ] || die "Cannot switch to release '${version}' — ${target} does not exist."
+  ln -sfn "$target" "$SUPREME_RELEASE_DIR"
+  log_info "Active release switched to ${version} (${SUPREME_RELEASE_DIR} -> ${target})."
+}
+
+prune_old_releases() {
+  local keep_current
+  keep_current="$(current_release_version)"
+  [ -d "$SUPREME_RELEASES_DIR" ] || return 0
+  local -a old
+  mapfile -t old < <(find "$SUPREME_RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' 2>/dev/null \
+    | sort -rn | cut -d' ' -f2- | grep -vxF "$keep_current" | tail -n "+${SUPREME_RELEASE_RETAIN}")
+  for v in "${old[@]:-}"; do
+    [ -n "$v" ] || continue
+    log_info "Pruning old release: ${v}"
+    rm -rf "${SUPREME_RELEASES_DIR:?}/${v:?}"
+  done
+}
+
+# ── Official appliance image detection (§ requirement 9) ────────────────────────────────
+# A marker file baked into the future SupremeOS Linux image at build time (never created by
+# this installer itself — creating your own marker would defeat the point of a signal that
+# means "this is a factory-provisioned appliance, not a machine install.sh set up"). Its
+# presence means Node/pnpm/NATS/Caddy/apt dependencies are ALREADY provisioned in the image
+# — install.sh skips reinstalling them and jumps straight to configure+migrate+start+verify.
+SUPREME_IMAGE_MARKER="/etc/supremeos/image-release"
+
+is_official_appliance_image() {
+  [ -r "$SUPREME_IMAGE_MARKER" ]
+}
+
+appliance_image_info() {
+  if is_official_appliance_image; then
+    cat "$SUPREME_IMAGE_MARKER"
+  else
+    echo ""
+  fi
+}
+
+# ── Release State Manager (§ requirement 1) ──────────────────────────────────────────────
+# ONE authoritative JSON file — never inferred solely from which way a symlink happens to
+# point (a symlink says "what's live," nothing about what's PENDING, what FAILED, or what
+# the rollback target should be if this release itself later turns out bad). Every writer
+# goes through release_state_set; every reader through release_state_get — no script reads
+# or edits this file directly, so the schema only needs to be right in one place.
+SUPREME_RELEASE_STATE_FILE="${SUPREME_CONFIG_DIR}/release-state.json"
+
+release_state_init() {
+  if [ ! -r "$SUPREME_RELEASE_STATE_FILE" ]; then
+    mkdir -p "$(dirname "$SUPREME_RELEASE_STATE_FILE")"
+    cat > "$SUPREME_RELEASE_STATE_FILE" <<'EOF'
+{
+  "active_release": null,
+  "previous_release": null,
+  "pending_release": null,
+  "failed_release": null,
+  "rollback_target": null,
+  "installed_at": null,
+  "updated_at": null,
+  "health_status": "unknown"
+}
+EOF
+  fi
+}
+
+# $1=field $2=value. `null` (bare, unquoted) clears a field; anything else is written as a
+# JSON string. Atomic write (temp file + rename) so a crash mid-write can never leave a
+# truncated/corrupt state file for the next read to choke on.
+release_state_set() {
+  local field="$1" value="$2"
+  command_exists jq || { log_warn "jq not available — cannot update release state (${field}=${value})."; return 0; }
+  release_state_init
+  local tmp
+  tmp="$(mktemp)"
+  if [ "$value" = "null" ]; then
+    jq --arg f "$field" '.[$f] = null' "$SUPREME_RELEASE_STATE_FILE" > "$tmp"
+  else
+    jq --arg f "$field" --arg v "$value" '.[$f] = $v' "$SUPREME_RELEASE_STATE_FILE" > "$tmp"
+  fi
+  jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t' "$tmp" > "${tmp}.2"
+  mv "${tmp}.2" "$SUPREME_RELEASE_STATE_FILE"
+  rm -f "$tmp"
+}
+
+release_state_get() {
+  local field="$1"
+  command_exists jq || { echo ""; return 0; }
+  release_state_init
+  jq -r --arg f "$field" '.[$f] // empty' "$SUPREME_RELEASE_STATE_FILE" 2>/dev/null
+}
+
+release_state_print() {
+  command_exists jq || { echo "(jq not available)"; return 0; }
+  release_state_init
+  jq . "$SUPREME_RELEASE_STATE_FILE"
+}
+
+# Records a successful switch: the version that was active becomes "previous", the new one
+# becomes "active", pending/failed are cleared (a successful switch resolves both).
+release_state_record_switch() {
+  local new_version="$1"
+  local prev
+  prev="$(release_state_get active_release)"
+  release_state_set previous_release "${prev:-null}"
+  release_state_set active_release "$new_version"
+  release_state_set pending_release null
+  release_state_set failed_release null
+  release_state_set rollback_target "${prev:-null}"
+  [ -z "$(release_state_get installed_at)" ] && release_state_set installed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  release_state_set upgrade_timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  release_state_set health_status "verifying"
+}
+
+# Records a failed update: the version that failed is recorded distinctly from
+# "active" (which — after rollback — goes back to the previous version), so an operator
+# (or supremeos-support) can see exactly what was attempted and rejected, not just what's
+# currently running.
+release_state_record_failure() {
+  local failed_version="$1" rollback_target="$2"
+  release_state_set failed_release "$failed_version"
+  release_state_set pending_release null
+  release_state_set active_release "${rollback_target:-null}"
+  release_state_set health_status "rolled_back"
+}
+
+release_state_record_health() {
+  release_state_set health_status "$1"
+}
