@@ -1,4 +1,4 @@
-# ADR 0023 — Native systemd deployment as a parallel layer to Docker Compose
+# ADR 0024 — Native systemd deployment as a parallel layer to Docker Compose
 
 - Status: **Accepted**
 - Date: 2026-08-03

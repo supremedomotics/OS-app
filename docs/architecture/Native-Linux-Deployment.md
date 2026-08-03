@@ -2,7 +2,7 @@
 
 - Status: **Accepted** (Phase 1 — see "Known scope gaps" below for what is intentionally not yet
   covered)
-- Companion: `docs/architecture/adr/0023-native-linux-deployment.md`
+- Companion: `docs/architecture/adr/0024-native-linux-deployment.md`
 
 ## Purpose
 
