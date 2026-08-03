@@ -484,6 +484,78 @@ platform rewrite.
 
 ---
 
+## Addendum — "If `SUPREME_BACKEND=native` existed today, what would still be missing?"
+
+Follow-up question answered against the same repo state. **Answer: zero `IBackendAdapter`
+methods.** `SupremeNativeAdapter` already implements a **strict superset** of `HaAdapter`:
+
+| Adapter | Required members (8) | Optional members (8) |
+|---|---|---|
+| `HaAdapter` | 8/8 (`ha-adapter.ts:53,71,77,82,86,104,114,122`) | **0/8** |
+| `SupremeNativeAdapter` | 8/8 (`native-adapter.ts:44,86,102,108,209,234,240,252`) | **8/8** (`:258,265,272,279,288,295,304,320`) |
+
+HA implements none of `getArtwork`/`getQueue`/`getCapabilityConfig`/`getDiagnostics`/
+`unbindDevice`/`getKeypadCapabilities`/`onInputEvent`/`sendKeypadFeedback`. Nothing is lost
+at the interface level by unplugging it. The real gaps are these five, none of which are
+`IBackendAdapter` methods:
+
+### A-1 🔴 `SupremeNativeAdapter` carries the SAME simulator fallback as `MockAdapter`
+
+`native-adapter.ts:218-231` — when a native-owned device has no bound driver, `command()`
+falls through to `applyCommand()`, the *same* pure in-memory model `MockAdapter` uses
+(`apply.ts:5-7` states this explicitly). It fabricates state and emits it as a genuine
+`BackendStateEvent`.
+
+`migrateDomainToNative()` (`routing-adapter.ts:178-190`) walks directly into it: it calls
+`native.provision()` — which only adds to `managed` and seeds a state cache
+(`native-adapter.ts:196-199`) — sets ownership to `"native"` with the literal protocol
+string `"supreme-native"`, and **never calls `bind()`**. **The shipped HA→native migration
+API therefore produces simulator-backed devices today.** `pick()`'s guard
+(`routing-adapter.ts:208-213`) cannot catch it, because it tests `native.manages(deviceId)`
+— which `provision()` just made true.
+
+**Missing:** a `SupremeNativeAdapter.isBound(deviceId)`-style distinction between "real
+driver" and "in-process model", with `pick()` testing *that* rather than `manages()`.
+**This is more severe than the HA dependency itself** — it is the identical defect the
+Executive Summary flags for `MockAdapter`, in the adapter that survives HA's removal.
+
+### A-2 🟠 `RoutingBackendAdapter.ha` is structurally required — 14 unguarded call sites
+
+`routing-adapter.ts:38` (options) and `:50` (field) both declare `ha: IBackendAdapter`
+non-optional. Every `this.ha.*` site needs a guard: lines **69, 75, 80, 83, 86, 98, 111,
+117, 126, 132, 140, 154, 167, 182**. Line `:182` is inside `migrateDomainToNative`, which
+becomes meaningless without an HA side to read prior state from.
+
+### A-3 🟠 No per-device rebind from `ownership="ha"` to a real driver
+
+`migrateDomainToNative` is domain-level and binds nothing (A-1). No
+`migrateDeviceToDriver(deviceId, capability, protocol, address, config)` equivalent exists,
+so there is no supported route off HA ownership onto real hardware.
+
+### A-4 🟡 No native-first commissioning path
+
+`CommissioningService.commission()` always writes `backendIds`
+(`services/commissioning/src/index.ts:162-163`), making `HomeService.bind()` record
+ownership `"ha"` (`home-service.ts:272`). Every new device transits the `"ha"` state even
+when a protocol bind immediately overwrites it (`installer-context.ts:428-435`).
+**Missing:** a flag/overload that commissions with no backend mapping.
+
+### A-5 🟡 Discovery is a *different* set, not a smaller one
+
+Six drivers return `[]` from `discover()` — ajax, knx, lutron, modbus, sip, tuya.
+KNX/DALI/Modbus are instead covered by the Python `HttpProtocolScanner`
+(`bootstrap.ts:132-138`), leaving **Ajax, Lutron, Tuya and SIP with no discovery path at
+all**. HA does not cover them either: the shipped config is `default_config:` with **no
+integrations configured** (`infra/hub-compose/homeassistant/configuration.yaml`), and
+`toDiscovered()` (`ha-adapter.ts:169-188`) filters to seven entity domains — so HA
+contributes approximately nothing to discovery in the default topology.
+
+**Net:** unplugging HA costs **no adapter methods and no discovery coverage** in the shipped
+configuration. A-1 is the true blocker, and it is a pre-existing defect that `SUPREME_BACKEND=native`
+would expose rather than cause.
+
+---
+
 ## Explicitly NOT VERIFIED
 
 Stated honestly rather than guessed:
@@ -501,7 +573,12 @@ Stated honestly rather than guessed:
 5. **Runtime performance of the HA WS path under load.** `tools/loadtest` exercises the
    gateway, not the HA adapter specifically (`harness.ts:176` references HA only in a
    comment about operator-induced faults).
-6. **Whether HA's Config Entries are meaningfully used.** `ha-provisioner.ts:132` posts
+6. **Whether any real deployment has installer-added HA integrations that genuinely
+   contribute entities.** Addendum A-5's "HA contributes ~nothing to discovery" is verified
+   against the **shipped** `configuration.yaml` only. A hub where someone configured HA
+   integrations would change that conclusion materially, and that is not observable from
+   this repository.
+7. **Whether HA's Config Entries are meaningfully used.** `ha-provisioner.ts:132` posts
    `/api/onboarding/integration` once during onboarding; whether that creates a config
    entry HA later depends on was not traced into HA's own source (out of repo scope).
 

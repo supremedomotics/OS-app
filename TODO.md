@@ -7,6 +7,27 @@
 
 ## Critical
 
+### `SupremeNativeAdapter` simulates unbound devices — and `migrateDomainToNative` creates them
+- **Description:** found by the HA Dependency Audit addendum
+  (`docs/architecture/Home-Assistant-Dependency-Audit.md`, item **A-1**).
+  `SupremeNativeAdapter.command()` (`services/integration-layer/src/native-adapter.ts:218-231`)
+  falls through to `applyCommand()` — the *same* pure in-memory model `MockAdapter` uses
+  (`apply.ts:5-7`) — for any native-owned device with no bound driver, fabricating state and
+  emitting it as a genuine `BackendStateEvent`. `migrateDomainToNative()`
+  (`routing-adapter.ts:178-190`) walks straight into it: it calls `provision()` (which only marks
+  `managed` + seeds a state cache) and **never calls `bind()`**, so **the shipped HA→native
+  migration API produces simulator-backed devices today**. `pick()`'s guard
+  (`routing-adapter.ts:208-213`) cannot catch it because it tests `manages()`, which `provision()`
+  just made true.
+- **Reason:** same "never fabricate data" violation as the `MockAdapter` item below, but in the
+  adapter that *survives* HA removal — so it is strictly more severe. This is a pre-existing
+  defect that `SUPREME_BACKEND=native` would expose, not cause.
+- **Dependencies:** none. Needs an `isBound(deviceId)`-style real-driver check, with `pick()`
+  testing that instead of `manages()`.
+- **Complexity:** Small–Medium (behaviour change: previously-"working" simulated devices start
+  failing honestly — which is the point, but needs a release note).
+- **Status:** Diagnosed, not fixed (audit was analysis-only). Audit addendum **A-1**.
+
 ### No native-only backend mode — HA-owned devices silently fall through to a simulator
 - **Description:** found by the Home Assistant Dependency Audit
   (`docs/architecture/Home-Assistant-Dependency-Audit.md`). `RoutingBackendAdapter` is always
