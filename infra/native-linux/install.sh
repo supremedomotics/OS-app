@@ -70,6 +70,43 @@ prompt_yesno() {
   printf -v "$varname" '%s' "$current"
 }
 
+# § ADR-0023 Provider architecture: the only backends this installer may ever produce.
+# "mock" is valid input (unattended/CI installs may set it explicitly) but is never a
+# prompted default and never the production default — see collect_answers below.
+SUPREME_VALID_BACKENDS=(native ha mock)
+
+is_valid_backend() {
+  local candidate="$1" valid
+  for valid in "${SUPREME_VALID_BACKENDS[@]}"; do
+    [ "$candidate" = "$valid" ] && return 0
+  done
+  return 1
+}
+
+# § requirement: validate hostname/domain/timezone/passwords/backend BEFORE installation
+# begins — fail early with a clear error rather than discovering a bad value mid-install
+# (e.g. apt/npm already partially run). Backend itself is validated inline in
+# collect_answers (it's derived, not free text); this covers the remaining free-text answers.
+validate_answers() {
+  [ -n "${SUPREME_SYSTEM_NAME// }" ] || die "System name must not be empty."
+
+  if [ "$SUPREME_DOMAIN" != "localhost" ] \
+    && ! [[ "$SUPREME_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]; then
+    die "Invalid domain '${SUPREME_DOMAIN}' — use 'localhost' or a real DNS domain (e.g. home.example.com)."
+  fi
+
+  if [ -d /usr/share/zoneinfo ] && [ ! -e "/usr/share/zoneinfo/${SUPREME_TZ}" ]; then
+    die "Invalid timezone '${SUPREME_TZ}' — must match a /usr/share/zoneinfo entry (e.g. America/New_York, UTC). See: timedatectl list-timezones"
+  fi
+
+  if [ "$SUPREME_INSTALL_HA" = "1" ]; then
+    [ -n "${SUPREME_HA_ADMIN_USER// }" ] || die "Home Assistant admin username must not be empty."
+    [ "${#SUPREME_HA_ADMIN_PASSWORD}" -ge 8 ] || die "Home Assistant admin password must be at least 8 characters."
+  fi
+
+  log_info "Answers validated: backend=${SUPREME_BACKEND}, domain=${SUPREME_DOMAIN}, tz=${SUPREME_TZ}, install_ha=${SUPREME_INSTALL_HA}."
+}
+
 collect_answers() {
   log_step "Collecting installation answers"
   if [ -r "$ANSWERS_FILE" ]; then
@@ -81,14 +118,41 @@ collect_answers() {
   prompt_default SUPREME_SYSTEM_NAME "System name" "Supreme Residence"
   prompt_default SUPREME_DOMAIN "Domain (leave 'localhost' for LAN-only, self-signed access)" "localhost"
   prompt_default SUPREME_TZ "Timezone" "$(cat /etc/timezone 2>/dev/null || echo UTC)"
-  prompt_yesno SUPREME_INSTALL_HA "Install headless Home Assistant Core (needed for SUPREME_BACKEND=ha)?" 1
-  if [ "$SUPREME_INSTALL_HA" = "1" ]; then
-    SUPREME_BACKEND="ha"
-  else
-    prompt_default SUPREME_BACKEND "Backend (ha requires Home Assistant; mock needs neither)" "mock"
+
+  # § ADR-0023 Provider architecture: Home Assistant is an OPTIONAL provider, never a
+  # required backend — this is the ONLY Home Assistant question on the "No" path.
+  # Answering "No" here must skip every HA-specific prompt entirely (username, password,
+  # a separate backend question) and silently configure the native-first production
+  # default. There is no standalone "Backend [mock]" prompt in the normal flow anymore.
+  prompt_yesno SUPREME_INSTALL_HA "Install headless Home Assistant Core?" 1
+
+  # Auto-derive the backend from the HA answer — never a standalone question. An
+  # already-set SUPREME_BACKEND (explicit environment override, e.g. an unattended/CI
+  # install that wants "mock") is respected rather than silently overwritten, but is
+  # validated below exactly like the derived value is.
+  if [ -z "${SUPREME_BACKEND:-}" ]; then
+    if [ "$SUPREME_INSTALL_HA" = "1" ]; then
+      SUPREME_BACKEND="ha"
+    else
+      SUPREME_BACKEND="native"
+    fi
   fi
-  prompt_default SUPREME_HA_ADMIN_USER "Home Assistant hidden admin username" "admin"
-  prompt_default SUPREME_HA_ADMIN_PASSWORD "Home Assistant hidden admin password" "admin@supremeos"
+
+  if [ "$SUPREME_INSTALL_HA" = "1" ]; then
+    prompt_default SUPREME_HA_ADMIN_USER "Home Assistant admin username" "admin"
+    prompt_default SUPREME_HA_ADMIN_PASSWORD "Home Assistant admin password" "$(generate_secret)"
+  else
+    SUPREME_HA_ADMIN_USER=""
+    SUPREME_HA_ADMIN_PASSWORD=""
+  fi
+
+  # Never silently continue with an invalid backend, whether it came from the
+  # derivation above, an environment override, or a hand-edited ANSWERS_FILE
+  # (§ requirement: reject invalid input, fail early with a clear error).
+  if ! is_valid_backend "$SUPREME_BACKEND"; then
+    die "Invalid SUPREME_BACKEND '${SUPREME_BACKEND}' — must be one of: ${SUPREME_VALID_BACKENDS[*]}. Fix the environment variable or ${ANSWERS_FILE} and re-run."
+  fi
+
   prompt_default SUPREME_SETUP_WIZARD "Show the Setup Wizard on first boot (1) or seed a demo owner (0)" "1"
   prompt_default SUPREME_LOG_LEVEL "Log level" "info"
   prompt_default SUPREME_HUB_VERSION "Hub version string" "0.4.0"
@@ -104,6 +168,8 @@ collect_answers() {
     SUPREME_TOKEN_SECRET="$(generate_secret)"
     POSTGRES_PASSWORD="$(generate_secret)"
   fi
+
+  validate_answers
 
   mkdir -p "$SUPREME_CONFIG_DIR"
   cat > "$ANSWERS_FILE" <<EOF
@@ -393,10 +459,24 @@ wait_for_health() {
 
 print_summary() {
   log_step "SupremeOS native-linux installation complete"
+  local os_pretty="Ubuntu 24.04 LTS"
+  if [ -r /etc/os-release ]; then
+    # shellcheck source=/dev/null
+    os_pretty="$(. /etc/os-release && echo "${PRETTY_NAME:-Ubuntu 24.04 LTS}")"
+  fi
+  local backend_display="Native"
+  [ "$SUPREME_BACKEND" = "ha" ] && backend_display="Native + Home Assistant"
+  [ "$SUPREME_BACKEND" = "mock" ] && backend_display="Mock (test/CI only — never use in production)"
   cat <<EOF
 
+  SupremeOS Native Installation
+
+  Target OS:          ${os_pretty}
+  Backend:             ${backend_display}
+  Deployment:          Systemd
+  Container Runtime:   Not Used
+
   System name:    ${SUPREME_SYSTEM_NAME}
-  Backend:        ${SUPREME_BACKEND}
   Access:         https://${SUPREME_DOMAIN}/   (installer portal: https://${SUPREME_DOMAIN}/installer/)
   Config:         ${SUPREME_CONFIG_DIR}
   Secrets:        ${SUPREME_SECRETS_DIR}  (mode 0700 — back these up, see backup.sh)

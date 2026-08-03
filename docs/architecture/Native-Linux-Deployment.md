@@ -23,6 +23,58 @@ operational SupremeOS controller — the same Gateway, LAN service, Commissionin
 UI, wired to real PostgreSQL/Redis/NATS/Mosquitto instead of containers, supervised by systemd
 instead of `docker compose`.
 
+## Installation wizard
+
+`sudo ./install.sh` asks the fewest questions that produce a valid, unambiguous
+configuration — no invalid states, no legacy-architecture assumptions:
+
+```
+System Name
+  ↓
+Domain
+  ↓
+Timezone
+  ↓
+Install Home Assistant? (Yes/No)
+  ↓
+  (if Yes)
+  Home Assistant Username
+  ↓
+  Home Assistant Password
+  ↓
+Installation Begins
+```
+
+There is **no separate "Backend" question**. The backend is derived automatically from
+the Home Assistant answer (ADR-0023's provider architecture: Home Assistant is an
+optional provider, never a required backend):
+
+- **"Install Home Assistant?" → No** — `SUPREME_BACKEND=native` is configured silently.
+  No Home Assistant username, password, or any other Home Assistant question is ever
+  shown. This is the production default and the fastest path through the wizard.
+- **"Install Home Assistant?" → Yes** — `SUPREME_BACKEND=ha` is configured
+  automatically; the wizard asks for a Home Assistant admin username and password
+  (minimum 8 characters), then proceeds. No additional backend question is needed.
+
+Every answer is validated before installation begins (domain format, timezone against
+`/usr/share/zoneinfo`, Home Assistant credentials when applicable, and the resulting
+backend against the fixed set `native | ha | mock`) — an invalid value fails loudly
+with a clear error rather than being silently accepted. `mock` is a valid backend
+value (unattended/CI installs may set `SUPREME_BACKEND=mock` explicitly via
+environment) but is never prompted for and never the default — it exists for testing
+only and must never be used in a production install.
+
+On completion the installer prints a clear summary of what was actually configured:
+
+```
+SupremeOS Native Installation
+
+Target OS:          Ubuntu 24.04 LTS
+Backend:             Native
+Deployment:          Systemd
+Container Runtime:   Not Used
+```
+
 ## Directory layout
 
 ```
