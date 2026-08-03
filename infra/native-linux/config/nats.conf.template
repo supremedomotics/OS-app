@@ -1,0 +1,13 @@
+# SupremeOS native-linux — NATS JetStream config.
+#
+# Identical settings to infra/hub-compose/nats/nats.conf (the Docker deployment's config) —
+# only `store_dir` changes, from the Docker volume mount `/data` to this deployment's own
+# data directory convention. Everything else (port, memory/file store limits, max_payload)
+# is byte-for-byte the same, so JetStream behaves identically either way.
+port: 4222
+jetstream {
+  store_dir: ___SUPREME_DATA_DIR___/nats
+  max_memory_store: 256MB
+  max_file_store: 2GB
+}
+max_payload: 1MB

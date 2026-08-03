@@ -1,0 +1,44 @@
+# supreme-commissioning — SupremeOS protocol-commissioning tooling (KNX/DALI/Modbus),
+# native-linux production deployment.
+#
+# Same FastAPI/uvicorn app the Docker deployment runs (services/commissioning-py/app,
+# see infra/hub-compose's build via services/commissioning-py/Dockerfile), served from a
+# dedicated Python virtualenv (___SUPREME_APP_DIR___/venvs/commissioning) that install.sh
+# creates with exactly the three dependencies the Dockerfile installs
+# (fastapi, "uvicorn[standard]", pydantic) — no extra packages, no version drift from what
+# Docker ships. Stateless: reads no environment variables (confirmed by inspecting
+# services/commissioning-py/app — grep finds no os.environ/getenv usage), so no env file.
+#
+# Bound to loopback only (127.0.0.1:9100) — the Gateway's commissioning orchestrator is
+# the only real caller, matching the Docker deployment's internal-only `supreme-core`
+# network isolation for this service.
+
+[Unit]
+Description=SupremeOS Protocol Commissioning Service (KNX/DALI/Modbus)
+Documentation=file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=___SUPREME_APP_DIR___/venvs/commissioning/bin/uvicorn app.main:app --host 127.0.0.1 --port 9100
+WorkingDirectory=___SUPREME_APP_DIR___/current/services/commissioning-py
+Restart=always
+RestartSec=2
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

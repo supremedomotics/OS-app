@@ -1,0 +1,96 @@
+# SupremeOS native-linux edge TLS terminator.
+#
+# Deliberately the SAME routing rules as infra/hub-compose/Caddyfile (the Docker
+# deployment's Caddyfile), adapted only where the deployment layer itself differs:
+#   - `gateway:8080` / `streamer:1984` / `installer-portal:80` (Docker service DNS names)
+#     become `127.0.0.1:8080` etc. (native processes on loopback, no container network).
+#   - `homeowner:80` / `installer-portal:80` (nginx containers serving a static bundle)
+#     become `file_server` blocks pointed directly at the built dist/ directories — Caddy
+#     serves static files natively, so a separate nginx process is unneeded here. This is a
+#     deployment-layer simplification (one fewer moving part), not a behavior change: same
+#     routes, same static assets, same response bytes reach the client either way.
+#
+# Everything below is wrapped in an explicit `route` block with `handle`/`handle_path`
+# branches, NOT bare top-level directives. This was verified the hard way: Caddy does NOT
+# execute top-level directives in the order they appear in the file — it applies its own
+# fixed directive-priority order (https://caddyserver.com/docs/caddyfile/directives), in
+# which `file_server`/`root` are evaluated ahead of `reverse_proxy`. An earlier, bare-
+# directive version of this file passed `caddy validate` cleanly but, when actually run,
+# served `/healthz` from the homeowner app's `index.html` instead of reverse-proxying it to
+# the gateway — a real, confirmed bug, not a hypothetical one. `route`/`handle` blocks
+# execute their contents in the exact order written, which is what every branch below now
+# relies on.
+#
+# Placeholders (___LIKE_THIS___) are substituted by install.sh from the answers file —
+# see lib/common.sh and install.sh's `render_template()`. This file is never edited by hand
+# in place on a live system; re-run install.sh or update.sh to regenerate it.
+{
+	email {$ACME_EMAIL:admin@supreme.local}
+}
+
+(supreme_routes) {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	route {
+		# Supreme API + realtime stream → the gateway process on loopback. /metrics and
+		# /readyz are deliberately NOT routed here — same operator-only boundary as Docker.
+		handle /v1/* {
+			reverse_proxy 127.0.0.1:8080
+		}
+		handle /healthz {
+			reverse_proxy 127.0.0.1:8080
+		}
+
+		# Camera streaming engine (go2rtc) — only routed if go2rtc was installed; see
+		# install.sh's optional-components section. Left in place even when unused: an
+		# unreachable upstream just 502s on that one path, matching Docker's own behavior
+		# when `streamer` isn't running.
+		handle_path /stream/* {
+			reverse_proxy 127.0.0.1:1984
+		}
+
+		# Installer Portal — static bundle, served directly (see header comment above).
+		handle_path /installer/* {
+			root * ___SUPREME_APP_DIR___/current/apps/web-installer/dist
+			try_files {path} /index.html
+			file_server
+		}
+
+		# Everything else → the homeowner app (the primary web UI) — same static-serving
+		# pattern as the installer portal above. `handle` (not `handle_path`) so the
+		# unmatched path is preserved for `try_files`/`file_server` to resolve real assets.
+		handle {
+			root * ___SUPREME_APP_DIR___/current/apps/web-homeowner/dist
+			try_files {path} /index.html
+			file_server
+		}
+	}
+}
+
+# Primary named site: a real ACME domain when SUPREME_DOMAIN is set to one, otherwise
+# `localhost` and Caddy's internal CA — identical logic to the Docker Caddyfile.
+{$SUPREME_DOMAIN:localhost} {
+	import supreme_routes
+}
+
+# Local-network catch-all — same `on_demand` internal-CA pattern as the Docker Caddyfile,
+# for the same reason: an IP address or `.local` name has no hostname to pre-issue a cert
+# for, so Caddy must synthesize one at handshake time instead.
+:443 {
+	tls internal {
+		on_demand
+	}
+	import supreme_routes
+}
+
+:80 {
+	redir https://{host}{uri} permanent
+}
