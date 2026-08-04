@@ -109,13 +109,13 @@ export function SimpleMediaDetail({
 
       <div className="aureon-detail-grid">
         <div className="aureon-detail-main">
-          <div className={`avr-now avr-now--wash${!on ? " offline" : ""}`} style={{ "--hero-wash-tint": "var(--aureon-color-gold-400)" } as CSSProperties}>
+          <div className={`avr-now avr-now--wash${!on ? " offline" : ""}`} style={{ "--hero-wash-tint": on ? "var(--aureon-color-category-media)" : "var(--aureon-color-gold-400)" } as CSSProperties}>
             <div className="avr-art-wrap" style={{ width: 228, height: 128 }}>
-              <div className={`avr-halo${on ? " on" : ""}`} style={{ "--avr-halo-tint": "var(--aureon-color-gold-400)" } as CSSProperties} />
+              <div className={`avr-halo${on ? " on" : ""}`} style={{ "--avr-halo-tint": "var(--aureon-color-category-media)" } as CSSProperties} />
               <div className={`avr-art-float${on ? " on" : ""}`}>
                 <div
                   className={`avr-art avr-art-placeholder hero-ic-plate${busy ? " busy" : ""}`}
-                  style={{ width: 228, height: 128, borderRadius: 16 }}
+                  style={{ width: 228, height: 128, borderRadius: 16, color: on ? "var(--aureon-color-category-media)" : undefined }}
                 >
                   <Icon name={on ? kindMeta.iconName : "power"} size={56} />
                 </div>

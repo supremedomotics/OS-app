@@ -30,11 +30,11 @@ export function NvrDetail({ cameras, onBack }: { cameras: CameraView[]; onBack: 
 
       <div className="aureon-detail-grid">
         <div className="aureon-detail-main">
-          <div className="avr-now avr-now--wash offline" style={{ "--hero-wash-tint": "var(--aureon-color-gold-400)" } as CSSProperties}>
+          <div className="avr-now avr-now--wash offline" style={{ "--hero-wash-tint": "var(--aureon-color-category-security)" } as CSSProperties}>
             <div className="avr-art-wrap" style={{ width: 160, height: 160 }}>
-              <div className="avr-halo" style={{ "--avr-halo-tint": "var(--aureon-color-gold-400)" } as CSSProperties} />
+              <div className="avr-halo" style={{ "--avr-halo-tint": "var(--aureon-color-category-security)" } as CSSProperties} />
               <div className="avr-art-float">
-                <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160 }}><Icon name="monitor" size={72} /></div>
+                <div className="avr-art avr-art-placeholder" style={{ width: 160, height: 160, color: "var(--aureon-color-category-security)" }}><Icon name="monitor" size={72} /></div>
               </div>
             </div>
             <div className="avr-now-meta">

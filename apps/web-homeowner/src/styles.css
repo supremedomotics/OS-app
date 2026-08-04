@@ -11,8 +11,13 @@
   --aureon-color-text-primary: #f4f1ea;
   --aureon-color-text-secondary: #b6b2a8;
   --aureon-color-status-good: #6fbf8b;
+  --aureon-color-status-info: #6fa8bf;
   --aureon-color-status-warning: #d9a441;
   --aureon-color-status-critical: #cf6b5a;
+  /* Device-category ambient identity (§ UI & UX standards, Device Personality) — a resting-state
+     hero wash only; real state colors (locked/armed/alarm) always take priority over these. */
+  --aureon-color-category-security: var(--aureon-color-status-info);
+  --aureon-color-category-media: #8f85c2;
 }
 
 /* Luxury White (light mode) — overrides the dark base; accents untouched. */
@@ -1273,10 +1278,19 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
  * with real overlay badges (LIVE / gated REC / gated AI detections / gated stream quality)
  * exactly like a commercial NVR client's live view. */
 .camera-hero {
+  position: relative;
   background: linear-gradient(165deg, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 2.5%) 0%, var(--aureon-color-base-surface-raised) 55%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, black 12%) 100%);
-  border: 1px solid var(--aureon-color-base-hairline); border-radius: 24px; padding: 14px;
-  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 24px 48px -28px rgba(0,0,0,0.6);
+  border: 1px solid color-mix(in srgb, var(--aureon-color-category-security) 20%, var(--aureon-color-base-hairline));
+  border-radius: 24px; padding: 14px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 4%, transparent) inset, 0 24px 48px -28px rgba(0,0,0,0.6), 0 0 0 1px color-mix(in srgb, var(--aureon-color-category-security) 8%, transparent) inset;
 }
+/* Surveillance/technology category identity: a faint blue corner wash behind the frame, never
+   over the live feed itself — the preview stays a true, uncolored representation of the camera. */
+.camera-hero::before {
+  content: ""; position: absolute; inset: 0; border-radius: 24px; pointer-events: none; z-index: 0;
+  background: radial-gradient(45% 60% at 100% 0%, color-mix(in srgb, var(--aureon-color-category-security) 10%, transparent) 0%, transparent 70%);
+}
+.camera-hero > * { position: relative; z-index: 1; }
 .camera-hero-preview {
   position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 16px; overflow: hidden;
   background: #000; display: flex; align-items: center; justify-content: center;

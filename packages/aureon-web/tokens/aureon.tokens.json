@@ -32,6 +32,10 @@
       "info": "#6FA8BF",
       "warning": "#D9A441",
       "critical": "#CF6B5A"
+    },
+    "category": {
+      "$comment": "Per-device-category ambient hero identity (§ UI & UX standards, Device Personality). Applied as a resting-state wash only — never overrides a real status/state tint (locked/armed/alarm colors stay on `color.status`). `security` intentionally reuses `color.status.info` rather than duplicating it — camera/NVR surveillance heroes read as 'technology blue' with no second blue value to keep in sync.",
+      "media": "#8F85C2"
     }
   },
   "typography": {

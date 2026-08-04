@@ -35,17 +35,25 @@
 ## High
 
 ### Finish the UI/UX Design Polish phase
-- **Description:** The user-directed polish brief (Phase 2) is partially done — icon system and
-  card/button/capability-chip polish shipped. Remaining: device-category ambient color identity
-  (camera=blue-tech, media=cinematic, lighting=warm-gold, etc. — without conflicting with
-  existing state-driven tinting), and layout-rhythm variation so each device category feels
-  structurally distinct rather than reusing one hero→controls→more-controls shape everywhere.
+- **Description:** The user-directed polish brief (Phase 2) is partially done — icon system,
+  card/button/capability-chip polish, and a first slice of device-category ambient color identity
+  now shipped (`color.category.security`/`color.category.media` in `aureon.tokens.json`; Camera +
+  NVR heroes use the blue "surveillance tech" identity, Television/Projector's `on` state uses the
+  violet "cinematic" identity — all via existing/new tokens, zero new component API). Remaining:
+  extend category identity to Lighting/Climate (brief calls for warm-gold/amber — Lighting's
+  existing gold may already satisfy this, needs a deliberate check not just an assumption) and to
+  the Infrastructure module once it exists; and layout-rhythm variation so each device category
+  feels structurally distinct rather than reusing one hero→controls→more-controls shape everywhere
+  (not started at all — the color pass didn't touch composition/layout).
 - **Reason:** explicit, repeated user request — "not a CRUD app," compete visually with
   Control4/Savant/Crestron/Tesla/Sonos.
 - **Dependencies:** none — builds on the now-complete icon/card/button work.
 - **Complexity:** Large — touches every premium device page's composition, not just its colors.
-- **Status:** Not started (blocked on user confirming direction before continuing, per the
-  last session's handoff message).
+- **Status:** In progress. Color identity: Security (Camera/NVR) + Media (TV/Projector) done;
+  Lock/Alarm deliberately left on their existing state-driven red/green/gold (jammed/unlocked/
+  armed are safety-meaningful, not arbitrary, so category tint would compete with real state
+  semantics there); AVR/Speaker's rich console deliberately left untouched (its own tuned
+  album-art/halo system predates this brief). Layout-rhythm variation: not started.
 
 ### Infrastructure module (Premium Device Experience Library, remaining device types)
 - **Description:** Build the remaining device types from the original 18-item priority list:
