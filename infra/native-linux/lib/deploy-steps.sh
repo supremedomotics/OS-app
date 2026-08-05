@@ -40,9 +40,15 @@ sync_repo() {
     log_info "Synced from ${src} to ${SUPREME_REPO_DIR}."
   fi
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_REPO_DIR"
-  # § Transactional updates: staged into SUPREME_REPO_DIR only — NOT switched live yet.
-  # The caller (install.sh/update.sh) snapshots + switches only after verification passes.
-  SUPREME_RELEASE_VERSION="dev-$(date -u +%Y%m%dT%H%M%SZ)"
+}
+
+# § Checkpoint validation: sync_repo's only real output is SUPREME_REPO_DIR itself — if
+# uninstall.sh (or anything else) removed it, the checkpoint is a lie regardless of what
+# install.state says.
+validate_phase_sync_repo() {
+  [ -d "$SUPREME_REPO_DIR" ] \
+    && [ -f "${SUPREME_REPO_DIR}/package.json" ] \
+    && [ -f "${SUPREME_REPO_DIR}/pnpm-workspace.yaml" ]
 }
 
 # ── Source-mode build/verify (§ Development deployment) ─────────────────────────────────
@@ -57,6 +63,14 @@ build_workspace() {
   run_as_supreme pnpm install --frozen-lockfile
   run_as_supreme pnpm turbo run build
   log_info "Workspace build complete."
+}
+
+# § Checkpoint validation: the one build output every service unit actually depends on to
+# start (see supreme-gateway.service's ExecStart) — if it's missing, the build didn't
+# survive whatever happened since the checkpoint was recorded (e.g. the repo was wiped and
+# resynced by validate_phase_sync_repo, or someone manually cleaned dist/).
+validate_phase_build_workspace() {
+  [ -f "${SUPREME_REPO_DIR}/services/gateway/dist/main.js" ]
 }
 
 verify_workspace() {
@@ -100,12 +114,15 @@ extract_release_tarball() {
 # every compatibility field in the manifest), not the source code (already verified once,
 # in CI) — see run_runtime_verification() in common.sh for the runtime half (services/DB/
 # health) that runs after service startup.
-install_release_artifact() {
-  log_step "Verifying and staging release artifact into ${SUPREME_REPO_DIR}"
-  local src="$1"
-  local manifest="${src}/release-manifest.json"
+# § Runtime context reconstruction: every SUPREME_RELEASE_* variable below is RUNTIME
+# state, derived fresh from the manifest every time — never persisted, never assumed to
+# survive a skipped phase. Shared by install_release_artifact() (called when the phase
+# actually runs) AND reconstruct_runtime_context() (called unconditionally on every install
+# run, including one where this phase is skipped as already-checkpointed) so the two can
+# never drift apart.
+load_release_manifest_metadata() {
+  local manifest="$1"
   [ -r "$manifest" ] || die "No release-manifest.json at ${manifest} — this does not look like a release artifact."
-
   command_exists jq || die "jq is required to read release-manifest.json (should have been installed by install_apt_dependencies)."
   SUPREME_RELEASE_VERSION="$(jq -r '.version' "$manifest")"
   SUPREME_RELEASE_GIT_SHA="$(jq -r '.git_sha' "$manifest")"
@@ -122,6 +139,32 @@ install_release_artifact() {
   SUPREME_RELEASE_MIN_UPGRADE_SCHEMA="$(jq -r '.compatibility_matrix.min_upgrade_from_schema_version // 0' "$manifest")"
   [ -n "$SUPREME_RELEASE_VERSION" ] && [ "$SUPREME_RELEASE_VERSION" != "null" ] \
     || die "release-manifest.json is missing 'version' — refusing to install an unversioned artifact."
+}
+
+# § Issue 2 (runtime context reconstruction): SUPREME_RELEASE_VERSION and its siblings used
+# to be set ONLY inside sync_repo()/install_release_artifact() — both skippable phases. A
+# resumed install that skipped either one left SUPREME_RELEASE_VERSION completely unset,
+# and stage_and_switch_release's `:?` guard failed. Persistent state (install.conf, the
+# secrets files, install.state) is reloaded explicitly wherever it's needed; this is the
+# equivalent reload for RUNTIME state — cheap, side-effect-free, and called unconditionally
+# before any resumable phase runs, so it is correct regardless of what gets skipped.
+reconstruct_runtime_context() {
+  local src="$1"
+  if [ "$SUPREME_INSTALL_MODE" = "release" ]; then
+    load_release_manifest_metadata "${src}/release-manifest.json"
+  else
+    # Source-mode "versions" are single-machine build labels with no cross-run persistent
+    # meaning (unlike a signed release's version) — always fresh is correct, not a bug.
+    SUPREME_RELEASE_VERSION="dev-$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+  log_info "Runtime context reconstructed: release version ${SUPREME_RELEASE_VERSION}."
+}
+
+install_release_artifact() {
+  log_step "Verifying and staging release artifact into ${SUPREME_REPO_DIR}"
+  local src="$1"
+  local manifest="${src}/release-manifest.json"
+  load_release_manifest_metadata "$manifest"
 
   log_info "Release ${SUPREME_RELEASE_VERSION} (git ${SUPREME_RELEASE_GIT_SHA:0:12}), schema ${SUPREME_RELEASE_SCHEMA_VERSION}, ${SUPREME_RELEASE_MIGRATION_COUNT} migration(s) expected."
 
@@ -189,6 +232,16 @@ install_release_artifact() {
   rsync -a --delete --exclude '.git' "${src}/" "${SUPREME_REPO_DIR}/"
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_REPO_DIR"
   log_info "Release ${SUPREME_RELEASE_VERSION} staged into ${SUPREME_REPO_DIR} (not yet active — switch_active_release runs after verification)."
+}
+
+# § Checkpoint validation: confirms the staged copy is still there AND is still the same
+# version reconstruct_runtime_context() just re-derived from the (possibly re-supplied)
+# release source — a stale/mismatched staged copy is exactly as invalid as a missing one.
+validate_phase_install_release_artifact() {
+  [ -r "${SUPREME_REPO_DIR}/release-manifest.json" ] || return 1
+  local staged_version
+  staged_version="$(jq -r '.version' "${SUPREME_REPO_DIR}/release-manifest.json" 2>/dev/null || true)"
+  [ -n "$staged_version" ] && [ "$staged_version" = "${SUPREME_RELEASE_VERSION:-}" ]
 }
 
 # § requirement 2/11: validate EVERY manifest field before installation, and reject
@@ -267,11 +320,21 @@ current_release_schema_version() {
 # updates: this is the ONE moment code actually goes live — everything before it only
 # touched the staging area, never a path a running service reads).
 stage_and_switch_release() {
-  local version="${SUPREME_RELEASE_VERSION:?stage_and_switch_release requires SUPREME_RELEASE_VERSION to be set (sync_repo/install_release_artifact set it)}"
+  local version="${SUPREME_RELEASE_VERSION:?stage_and_switch_release requires SUPREME_RELEASE_VERSION to be set (reconstruct_runtime_context sets it every run, unconditionally — see lib/deploy-steps.sh)}"
   release_state_set pending_release "$version"
   stage_release_version "$version" >/dev/null
   switch_active_release "$version"
   release_state_record_switch "$version"
+}
+
+# § Checkpoint validation: the active-release symlink must exist, resolve to a real
+# directory, and contain the one build output every service unit's ExecStart actually reads.
+validate_phase_stage_and_switch_release() {
+  [ -L "$SUPREME_RELEASE_DIR" ] || [ -d "$SUPREME_RELEASE_DIR" ] || return 1
+  [ -f "${SUPREME_RELEASE_DIR}/services/gateway/dist/main.js" ] || return 1
+  local active
+  active="$(current_release_version)"
+  [ -n "$active" ]
 }
 
 render_template() {

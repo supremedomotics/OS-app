@@ -212,18 +212,49 @@ mark_phase_done() {
   echo "$1" >> "$SUPREME_STATE_FILE"
 }
 
-# Runs one named phase with a checkpoint: skipped entirely (not even invoked) if already
-# recorded complete in SUPREME_STATE_FILE, so re-running the installer after an interruption
-# — a dropped SSH session mid-`apt-get`, a reboot mid-way — resumes from the first
+# § Checkpoint validation (requirement: "the filesystem is the source of truth, checkpoint
+# files are only hints"). Removes `name` and every phase recorded AFTER it in
+# SUPREME_STATE_FILE — since phases are always appended in the single fixed order install.sh
+# calls run_phase in, "everything after this line" IS "everything that depends on this
+# phase's output," with no separate dependency graph to maintain.
+invalidate_phase_and_dependents() {
+  local name="$1"
+  [ -r "$SUPREME_STATE_FILE" ] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  awk -v target="$name" '$0 == target { skipping = 1 } !skipping { print }' "$SUPREME_STATE_FILE" > "$tmp"
+  mv "$tmp" "$SUPREME_STATE_FILE"
+}
+
+# Runs one named phase with a checkpoint: skipped (not even invoked) if already recorded
+# complete in SUPREME_STATE_FILE, so re-running the installer after an interruption — a
+# dropped SSH session mid-`apt-get`, a reboot mid-way — resumes from the first
 # NOT-yet-completed phase instead of redoing everything already known-good. Structured,
 # greppable log line per phase (name, elapsed seconds, exit status) regardless of outcome.
 # SUPREME_FORCE_REDO=1 re-runs every phase even if checkpointed (e.g. after hand-editing
 # config) — opt-in, never the default, so "resume" stays the normal behavior.
+#
+# § Checkpoint validation: a checkpoint recorded complete is only ever a HINT. If a
+# `validate_phase_<name>` function exists, it is called before honoring the checkpoint — it
+# must return 0 if the phase's actual on-disk artifacts still look correct, non-zero
+# otherwise (e.g. uninstall.sh removed the repository sync_repo produced). A failed
+# validation invalidates this phase AND every phase after it, then falls through to actually
+# re-run — never requires the operator to delete install.state by hand. Phases with no
+# validator function keep the original trust-the-checkpoint behavior unchanged.
 run_phase() {
   local name="$1"; shift
   if [ "${SUPREME_FORCE_REDO:-0}" != "1" ] && phase_done "$name"; then
-    log_info "[phase] ${name}: already completed — skipping (SUPREME_FORCE_REDO=1 to re-run)."
-    return 0
+    if declare -f "validate_phase_${name}" >/dev/null 2>&1; then
+      if "validate_phase_${name}"; then
+        log_info "[phase] ${name}: already completed — skipping (artifact validated)."
+        return 0
+      fi
+      log_warn "[phase] ${name}: checkpoint says complete, but its artifacts failed validation — invalidating this phase and every phase after it, then re-running."
+      invalidate_phase_and_dependents "$name"
+    else
+      log_info "[phase] ${name}: already completed — skipping (SUPREME_FORCE_REDO=1 to re-run)."
+      return 0
+    fi
   fi
   local start end elapsed
   start="$(date +%s)"

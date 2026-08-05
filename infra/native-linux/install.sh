@@ -126,12 +126,65 @@ validate_answers() {
   log_info "Answers validated: backend=${SUPREME_BACKEND}, domain=${SUPREME_DOMAIN}, tz=${SUPREME_TZ}, install_ha=${SUPREME_INSTALL_HA}."
 }
 
+# § Issue 4 (install.conf validation): install.conf is operator/installer-owned config that
+# an OLDER or hand-edited installer may have left in a state this installer doesn't expect.
+# It must NEVER be blindly `source`d — that executes it as shell. Instead, read it as data:
+# every non-comment line must match install.sh's own writer format EXACTLY
+# (`VARNAME="value"`, one per line, no command substitution, no `$()`, no backticks, no
+# `;`). A line that doesn't match means the file is corrupt/foreign/malicious — the whole
+# file is rejected (never partially trusted) and treated as absent, so collect_answers falls
+# through to prompting/defaults exactly like a fresh install. Known fields with a
+# semantically invalid value (e.g. an unrecognized backend) are dropped individually rather
+# than failing the whole file, so one bad field doesn't force re-answering everything.
+load_install_conf_safely() {
+  local file="$1"
+  [ -r "$file" ] || return 0
+  local line key value corrupt=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+      [A-Za-z_]*=\"*\")
+        key="${line%%=*}"
+        value="${line#*=}"
+        value="${value#\"}"
+        value="${value%\"}"
+        # Reject any value containing shell metacharacters — belt-and-braces on top of the
+        # pattern match above, since the pattern alone doesn't inspect the value's content.
+        case "$value" in
+          *'$'*|*'`'*|*';'*|*'&'*|*'|'*|*'\n'*)
+            log_warn "${file}: field '${key}' contains disallowed characters — dropping this field."
+            continue
+            ;;
+        esac
+        if [ "$key" = "SUPREME_BACKEND" ] && ! is_valid_backend "$value"; then
+          log_warn "${file}: SUPREME_BACKEND='${value}' is not a recognized backend (${SUPREME_VALID_BACKENDS[*]}) — dropping it; it will be re-derived from the Home Assistant answer."
+          continue
+        fi
+        printf -v "$key" '%s' "$value"
+        ;;
+      *)
+        log_warn "${file}: unrecognized line (not a simple VARNAME=\"value\" assignment) — the entire file is corrupt or foreign, ignoring it: ${line}"
+        corrupt=1
+        break
+        ;;
+    esac
+  done < "$file"
+
+  if [ "$corrupt" = "1" ]; then
+    local quarantine="${file}.invalid-$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$file" "$quarantine"
+    log_warn "Moved corrupt ${file} to ${quarantine} and will regenerate it from scratch — no manual cleanup needed."
+    return 0
+  fi
+  log_info "Loaded and validated ${file}."
+}
+
 collect_answers() {
   log_step "Collecting installation answers"
   if [ -r "$ANSWERS_FILE" ]; then
-    log_info "Existing ${ANSWERS_FILE} found — reusing prior answers (re-run/upgrade)."
-    # shellcheck source=/dev/null
-    source "$ANSWERS_FILE"
+    log_info "Existing ${ANSWERS_FILE} found — validating and reusing prior answers (re-run/upgrade)."
+    load_install_conf_safely "$ANSWERS_FILE"
   fi
 
   prompt_default SUPREME_SYSTEM_NAME "System name" "Supreme Residence"
@@ -210,7 +263,30 @@ EOF
   chmod 0640 "$ANSWERS_FILE"
 }
 
+validate_phase_collect_answers() {
+  [ -r "$ANSWERS_FILE" ]
+}
+
+# § Issue 2 (runtime context reconstruction): collect_answers is a checkpointed, skippable
+# phase — but SUPREME_DOMAIN/SUPREME_BACKEND/SUPREME_TOKEN_SECRET/etc. are RUNTIME
+# variables it sets, gone the instant this process exits. On a resumed run where
+# collect_answers itself is skipped, every later phase that references one of those
+# variables would otherwise fail on an unset variable. Persisted state (install.conf, the
+# secrets files) is the source of truth; this reloads it into THIS run's shell
+# unconditionally, whether collect_answers just ran fresh or was skipped as already done.
+load_persisted_answers() {
+  load_install_conf_safely "$ANSWERS_FILE"
+  if [ -r "${SUPREME_SECRETS_DIR}/token-secret" ] && [ -r "${SUPREME_SECRETS_DIR}/postgres-password" ]; then
+    load_secrets
+  fi
+  validate_answers
+}
+
 # ── Steps ───────────────────────────────────────────────────────────────────────────────
+
+validate_phase_create_system_user() {
+  getent group "$SUPREME_GROUP" >/dev/null && id "$SUPREME_USER" >/dev/null 2>&1
+}
 
 create_system_user() {
   log_step "Creating the ${SUPREME_USER} system account"
@@ -226,6 +302,12 @@ create_system_user() {
   fi
 }
 
+validate_phase_create_directories() {
+  [ -d "$SUPREME_APP_DIR" ] && [ -d "$SUPREME_REPO_DIR" ] && [ -d "$SUPREME_CONFIG_DIR" ] \
+    && [ -d "$SUPREME_SECRETS_DIR" ] && [ -d "$SUPREME_DATA_DIR" ] && [ -d "$SUPREME_BACKUP_DIR" ] \
+    && [ -d "${SUPREME_APP_DIR}/venvs" ]
+}
+
 create_directories() {
   log_step "Creating directory layout"
   mkdir -p "$SUPREME_APP_DIR" "$SUPREME_REPO_DIR" "$SUPREME_CONFIG_DIR" "$SUPREME_SECRETS_DIR" \
@@ -237,6 +319,11 @@ create_directories() {
   chown "root:${SUPREME_GROUP}" "$SUPREME_SECRETS_DIR"
 }
 
+validate_phase_persist_secrets() {
+  [ -r "${SUPREME_SECRETS_DIR}/token-secret" ] && [ -s "${SUPREME_SECRETS_DIR}/token-secret" ] \
+    && [ -r "${SUPREME_SECRETS_DIR}/postgres-password" ] && [ -s "${SUPREME_SECRETS_DIR}/postgres-password" ]
+}
+
 persist_secrets() {
   # Written once ANY time collect_answers generated a fresh value; re-writing an identical
   # value on every run is harmless and keeps this idempotent without extra bookkeeping.
@@ -245,6 +332,12 @@ persist_secrets() {
   echo -n "$POSTGRES_PASSWORD" > "${SUPREME_SECRETS_DIR}/postgres-password"
   chown "root:${SUPREME_GROUP}" "${SUPREME_SECRETS_DIR}"/*
   chmod 0640 "${SUPREME_SECRETS_DIR}"/*
+}
+
+validate_phase_install_apt_dependencies() {
+  command_exists git && command_exists rsync && command_exists jq \
+    && command_exists psql && command_exists mosquitto && command_exists redis-server \
+    && command_exists python3
 }
 
 install_apt_dependencies() {
@@ -269,6 +362,11 @@ install_apt_dependencies() {
   log_info "Base OS packages installed."
 }
 
+validate_phase_install_node() {
+  command_exists node && [ "$(node -p 'process.versions.node.split(".")[0]')" = "$SUPREME_NODE_MAJOR" ] \
+    && command_exists corepack
+}
+
 install_node() {
   log_step "Installing Node.js ${SUPREME_NODE_MAJOR}.x"
   if command_exists node && [ "$(node -p 'process.versions.node.split(".")[0]')" = "$SUPREME_NODE_MAJOR" ]; then
@@ -289,6 +387,10 @@ install_node() {
     corepack prepare "$pinned" --activate
   fi
   log_info "node $(node -v), pnpm $(pnpm -v 2>/dev/null || echo 'via corepack')"
+}
+
+validate_phase_install_nats() {
+  command_exists nats-server && nats-server --version 2>/dev/null | grep -q "$NATS_VERSION"
 }
 
 install_nats() {
@@ -313,6 +415,10 @@ install_nats() {
   log_info "nats-server $(nats-server --version) installed and checksum-verified."
 }
 
+validate_phase_install_caddy() {
+  command_exists caddy && caddy version 2>/dev/null | grep -q "v${CADDY_VERSION}"
+}
+
 install_caddy() {
   log_step "Installing Caddy ${CADDY_VERSION}"
   if command_exists caddy && caddy version 2>/dev/null | grep -q "v${CADDY_VERSION}"; then
@@ -335,6 +441,10 @@ install_caddy() {
   log_info "caddy $(caddy version) installed and checksum-verified (ships its own caddy.service unit)."
 }
 
+validate_phase_install_commissioning_venv() {
+  [ -x "${SUPREME_APP_DIR}/venvs/commissioning/bin/uvicorn" ]
+}
+
 install_commissioning_venv() {
   log_step "Installing the commissioning service's Python environment"
   local venv="${SUPREME_APP_DIR}/venvs/commissioning"
@@ -343,6 +453,10 @@ install_commissioning_venv() {
   # Exactly the three packages services/commissioning-py/Dockerfile installs — no more.
   sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet fastapi "uvicorn[standard]" pydantic
   log_info "Commissioning venv ready at ${venv}."
+}
+
+validate_phase_install_homeassistant_venv() {
+  [ "${SUPREME_INSTALL_HA}" != "1" ] || [ -x "${SUPREME_APP_DIR}/venvs/homeassistant/bin/hass" ]
 }
 
 install_homeassistant_venv() {
@@ -371,6 +485,18 @@ EOF
     chown "${SUPREME_USER}:${SUPREME_GROUP}" "${ha_config}/configuration.yaml"
   fi
   log_info "Home Assistant Core venv ready at ${venv}. Config: ${ha_config}."
+}
+
+# § Checkpoint validation: only meaningful with a live systemd/Postgres to actually query —
+# if this environment has neither (e.g. a CI sandbox), there's nothing real to check against,
+# so trust the checkpoint rather than force a doomed re-run. On a real target, this is the
+# actual check that matters ("does the role/db exist and answer"), not just "did the phase
+# exit 0 once."
+validate_phase_configure_postgres() {
+  systemd_is_live || return 0
+  sudo -u postgres pg_isready >/dev/null 2>&1 || return 1
+  sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='supreme'" 2>/dev/null | grep -q 1 || return 1
+  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='supreme'" 2>/dev/null | grep -q 1
 }
 
 configure_postgres() {
@@ -408,6 +534,10 @@ configure_postgres() {
   log_info "Database 'supreme' ready and reachable (schema migrations apply automatically when the gateway starts)."
 }
 
+validate_phase_configure_redis() {
+  grep -q '^save ""' /etc/redis/redis.conf 2>/dev/null && grep -q '^appendonly no' /etc/redis/redis.conf 2>/dev/null
+}
+
 configure_redis() {
   log_step "Configuring Redis"
   # Matches the Docker deployment's `redis-server --save "" --appendonly no` — no
@@ -423,11 +553,19 @@ configure_redis() {
   systemctl_enable_now redis-server
 }
 
+validate_phase_configure_mosquitto() {
+  [ -r /etc/mosquitto/conf.d/supremeos.conf ]
+}
+
 configure_mosquitto() {
   log_step "Configuring Mosquitto"
   render_template "${SCRIPT_DIR}/config/mosquitto-supremeos.conf.template" /etc/mosquitto/conf.d/supremeos.conf
   systemctl_enable_now mosquitto
   if systemd_is_live; then systemctl restart mosquitto; fi
+}
+
+validate_phase_configure_nats() {
+  [ -r "${SUPREME_CONFIG_DIR}/nats.conf" ] && [ -r /etc/systemd/system/supreme-nats.service ]
 }
 
 configure_nats() {
@@ -438,6 +576,10 @@ configure_nats() {
   systemctl_enable_now supreme-nats
 }
 
+validate_phase_configure_caddy() {
+  [ -r /etc/caddy/Caddyfile ]
+}
+
 configure_caddy() {
   log_step "Configuring Caddy edge proxy"
   render_template "${SCRIPT_DIR}/config/Caddyfile.template" /etc/caddy/Caddyfile
@@ -446,11 +588,22 @@ configure_caddy() {
   if systemd_is_live; then systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
 }
 
+validate_phase_configure_gateway_env() {
+  [ -r "${SUPREME_CONFIG_DIR}/gateway.env" ]
+}
+
 configure_gateway_env() {
   log_step "Rendering Gateway environment"
   render_template "${SCRIPT_DIR}/config/gateway.env.template" "${SUPREME_CONFIG_DIR}/gateway.env"
   chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/gateway.env"
   chmod 0640 "${SUPREME_CONFIG_DIR}/gateway.env"
+}
+
+validate_phase_install_systemd_units() {
+  [ -r /etc/systemd/system/supreme-gateway.service ] \
+    && [ -r /etc/systemd/system/supreme-commissioning.service ] \
+    && [ -r /etc/systemd/system/supreme-lan.service ] \
+    && { [ "${SUPREME_INSTALL_HA}" != "1" ] || [ -r /etc/systemd/system/supreme-homeassistant.service ]; }
 }
 
 install_systemd_units() {
@@ -472,6 +625,12 @@ install_systemd_units() {
 # wrapper so `sudo supremeos-support` works from anywhere, not just `sudo ./supremeos-
 # support.sh` from this directory. Symlinked (not copied) so it always runs the version
 # shipped with whatever release is currently active.
+validate_phase_install_cli_commands() {
+  # -e (not -r) on a symlink follows it — catches a dangling link left by a plain
+  # (non-purge) uninstall.sh removing SUPREME_APP_DIR without removing this symlink.
+  [ -e /usr/local/bin/supremeos-support ]
+}
+
 install_cli_commands() {
   log_step "Installing CLI commands (supremeos-support)"
   ln -sfn "${SUPREME_RELEASE_DIR}/infra/native-linux/supremeos-support.sh" /usr/local/bin/supremeos-support
@@ -555,6 +714,40 @@ run_verify_runtime() {
   fi
 }
 
+# § Runtime context reconstruction — instrumentation. Logs every runtime variable a later
+# phase depends on, immediately after reconstruction and BEFORE the first phase that could
+# be skipped as already-checkpointed runs. Exists so that IF a resumed run ever again
+# reaches stage_and_switch_release with a missing/wrong value, the install log shows exactly
+# what reconstruct_runtime_context/load_persisted_answers actually produced on that run,
+# rather than requiring a fresh audit to find out. Values persisted in install.conf or
+# static path constants are included too (not just the manifest-derived ones) since a
+# later phase does not distinguish "runtime-reconstructed" from "always-available" when it
+# fails on an unset variable — the full context, not just the newest addition, is what's
+# diagnostic.
+log_runtime_context_snapshot() {
+  log_step "Runtime context snapshot (post-reconstruction, pre-phase-execution)"
+  log_info "  SUPREME_RELEASE_VERSION = ${SUPREME_RELEASE_VERSION:-<UNSET>}"
+  log_info "  SUPREME_INSTALL_MODE    = ${SUPREME_INSTALL_MODE:-<UNSET>}"
+  log_info "  SUPREME_BACKEND         = ${SUPREME_BACKEND:-<UNSET>}"
+  log_info "  SUPREME_DOMAIN          = ${SUPREME_DOMAIN:-<UNSET>}"
+  log_info "  SUPREME_SYSTEM_NAME     = ${SUPREME_SYSTEM_NAME:-<UNSET>}"
+  log_info "  SUPREME_REPO_DIR        = ${SUPREME_REPO_DIR:-<UNSET>} (static constant, always set)"
+  log_info "  SUPREME_RELEASE_DIR     = ${SUPREME_RELEASE_DIR:-<UNSET>} (static constant, always set)"
+  log_info "  SUPREME_RELEASES_DIR    = ${SUPREME_RELEASES_DIR:-<UNSET>} (static constant, always set)"
+  log_info "  SUPREME_CONFIG_DIR      = ${SUPREME_CONFIG_DIR:-<UNSET>} (static constant, always set)"
+  log_info "  SUPREME_DATA_DIR        = ${SUPREME_DATA_DIR:-<UNSET>} (static constant, always set)"
+  if [ "${SUPREME_INSTALL_MODE:-}" = "release" ]; then
+    log_info "  SUPREME_RELEASE_GIT_SHA           = ${SUPREME_RELEASE_GIT_SHA:-<UNSET>}"
+    log_info "  SUPREME_RELEASE_SCHEMA_VERSION    = ${SUPREME_RELEASE_SCHEMA_VERSION:-<UNSET>}"
+    log_info "  SUPREME_RELEASE_MIGRATION_COUNT   = ${SUPREME_RELEASE_MIGRATION_COUNT:-<UNSET>}"
+    log_info "  SUPREME_RELEASE_REQUIRED_DISK_MB  = ${SUPREME_RELEASE_REQUIRED_DISK_MB:-<UNSET>}"
+    log_info "  SUPREME_RELEASE_REQUIRED_RAM_MB   = ${SUPREME_RELEASE_REQUIRED_RAM_MB:-<UNSET>}"
+  fi
+  if [ -z "${SUPREME_RELEASE_VERSION:-}" ]; then
+    die "Runtime context snapshot shows SUPREME_RELEASE_VERSION is UNSET after reconstruct_runtime_context — refusing to proceed to stage_and_switch_release with an invalid context. This is the exact condition that used to fail deep inside stage_and_switch_release's own guard; failing here instead, with the full snapshot above, so the cause is visible in the log rather than a bare variable-name error."
+  fi
+}
+
 main() {
   require_root
 
@@ -602,6 +795,11 @@ main() {
   log_info "Logging to ${logfile}. Re-run this script any time — completed phases are skipped (see ${SUPREME_STATE_FILE})."
 
   run_phase "collect_answers" collect_answers
+  # § Issue 2: unconditional, every run, regardless of whether collect_answers itself just
+  # ran or was skipped — see load_persisted_answers's own comment.
+  load_persisted_answers
+  log_info "Runtime context reconstructed from ${ANSWERS_FILE}: system_name=${SUPREME_SYSTEM_NAME:-<UNSET>}, domain=${SUPREME_DOMAIN:-<UNSET>}, backend=${SUPREME_BACKEND:-<UNSET>}, install_ha=${SUPREME_INSTALL_HA:-<UNSET>}, secrets loaded=$([ -n "${SUPREME_TOKEN_SECRET:-}" ] && echo yes || echo no)."
+
   run_phase "create_system_user" create_system_user
   run_phase "create_directories" create_directories
   run_phase "persist_secrets" persist_secrets
@@ -612,6 +810,13 @@ main() {
     run_phase "install_nats" install_nats
     run_phase "install_caddy" install_caddy
   fi
+
+  # § Issue 2: reconstruct SUPREME_RELEASE_VERSION (and, in release mode, every other
+  # manifest-derived variable) unconditionally, every run — after jq is guaranteed available
+  # (installed above, or pre-provisioned on an appliance image) and before ANY phase that
+  # might be skipped-as-already-checkpointed but whose output later phases still depend on.
+  reconstruct_runtime_context "$src_root"
+  log_runtime_context_snapshot
 
   if [ "$SUPREME_INSTALL_MODE" = "release" ]; then
     run_phase "install_release_artifact" install_release_artifact "$src_root"
