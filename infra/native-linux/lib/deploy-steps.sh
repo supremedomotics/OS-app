@@ -57,9 +57,40 @@ validate_phase_sync_repo() {
 # build typecheck test` runs. This is the only path allowed to run it; release mode below
 # never recompiles or re-tests (that already happened once, in CI, before the artifact was
 # signed — see .github/workflows/release.yml and package-release.sh).
+# Every package here compiles with TypeScript `composite`/`incremental` (tsconfig.base.json),
+# so each writes `tsconfig.tsbuildinfo` NEXT TO its tsconfig — deliberately outside `dist/`.
+# That file records "these outputs are already emitted." If `dist/` is gone while the
+# tsbuildinfo survives, `tsc -p` trusts the stale state and emits NOTHING, leaving the
+# package with no `dist/` at all. Downstream packages then fail pointing at the wrong place
+# (`TS2307: Cannot find module '@supreme/crypto'`, `TS2305: ... has no exported member
+# 'CapabilityCommand'`), the build aborts partway, and packages later in the graph —
+# `@supreme/lan` among them — are never built. That surfaces much later, and very
+# confusingly, as vitest's `Failed to load url @supreme/lan` during verify_workspace.
+#
+# sync_repo's rsync path already avoids this by excluding both `dist` and `*.tsbuildinfo`.
+# The IN-PLACE path (`$src` = `$SUPREME_REPO_DIR`, which is every `update.sh` upgrade and
+# any re-run of install.sh from inside the release dir) copies nothing and so cleans
+# nothing — a tree left half-built by an interrupted or failed earlier run keeps exactly
+# that inconsistent pair. This drops only the stale half, restoring the invariant tsc
+# relies on. No-op on a fully clean tree and on a healthy fully-built one.
+prune_stale_incremental_state() {
+  local info pkg_dir pruned=0
+  while IFS= read -r info; do
+    pkg_dir="$(dirname "$info")"
+    if [ ! -d "${pkg_dir}/dist" ]; then
+      rm -f "$info"
+      pruned=$((pruned + 1))
+    fi
+  done < <(find . -name node_modules -prune -o -name '*.tsbuildinfo' -print 2>/dev/null)
+  if [ "$pruned" -gt 0 ]; then
+    log_warn "Pruned ${pruned} stale TypeScript incremental file(s) with no matching dist/ — tsc would otherwise skip emitting those packages entirely."
+  fi
+}
+
 build_workspace() {
   log_step "Building the complete SupremeOS workspace (source mode)"
   cd "$SUPREME_REPO_DIR"
+  prune_stale_incremental_state
   run_as_supreme pnpm install --frozen-lockfile
   run_as_supreme pnpm turbo run build
   log_info "Workspace build complete."
