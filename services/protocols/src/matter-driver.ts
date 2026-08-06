@@ -70,6 +70,13 @@ export interface MatterDriverOptions {
   storagePath?: string;
   /** Injectable controller (tests pass a fake; prod wires the @matter/main controller). */
   createController?: (opts: { storagePath?: string }) => Promise<MatterController>;
+  /** § Correctness Fix — optional lifecycle/diagnostics sink, same shape every other
+   * protocol driver's `onLog` already uses (see `avr-driver.ts`/`heos-driver.ts`).
+   * Fires a "warn" when a node's clusters map to zero Supreme capabilities (e.g. a
+   * real Matter `FanControl`/RVC node — this codec doesn't recognize either cluster
+   * yet), so that case is observable instead of the node just quietly not appearing
+   * anywhere. */
+  onLog?: (level: "info" | "warn" | "error", message: string) => void;
 }
 
 interface MatterBinding {
@@ -167,14 +174,34 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
   async discover(): Promise<DiscoveredDevice[]> {
     if (!this.controller) return [];
     const nodes = await this.controller.nodes();
-    return nodes
-      .map((n) => ({
+    // § Correctness Fix — a node whose clusters map to zero Supreme capabilities (a
+    // real Matter FanControl or RVC/robot-vacuum node — this codec doesn't recognize
+    // either cluster) used to be filtered out here with no trace at all: it never
+    // reached the discovery list, no error, no log (§ Never silently drop a device).
+    // It now stays in the result — `capabilities: []` and `raw.unmappedClusters`
+    // disclose exactly why, and `onLog` (if wired) surfaces the same fact as a
+    // warning. This does not make the node commissionable (an empty capability list
+    // still fails commissioning's own "device must declare at least one capability"
+    // check, honestly), it just stops the node from vanishing invisibly.
+    return nodes.map((n) => {
+      const capabilities = capabilitiesFromClusters(n.clusters);
+      if (capabilities.length === 0) {
+        this.opts.onLog?.(
+          "warn",
+          `matter: node ${n.nodeId}/${n.endpoint} exposes no Supreme-mapped capability — clusters: ${n.clusters.join(", ") || "(none)"}`,
+        );
+      }
+      return {
         backendId: `${n.nodeId}/${n.endpoint}`,
         suggestedName: n.product ?? `Matter ${n.nodeId}/${n.endpoint}`,
-        capabilities: capabilitiesFromClusters(n.clusters),
-        raw: { vendor: n.vendor ?? null, product: n.product ?? null },
-      }))
-      .filter((d) => d.capabilities.length > 0);
+        capabilities,
+        raw: {
+          vendor: n.vendor ?? null,
+          product: n.product ?? null,
+          ...(capabilities.length === 0 ? { unmappedClusters: n.clusters } : {}),
+        },
+      };
+    });
   }
 
   onState(listener: StateListener): () => void {
@@ -199,7 +226,13 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
     const node = await this.controller.commission(payload);
     for (const l of this.commissionListeners) l(node);
     const caps = capabilitiesFromClusters(node.clusters);
-    if (caps.length === 0) throw new Error(`matter: node ${node.nodeId} exposes no controllable capability`);
+    if (caps.length === 0) {
+      this.opts.onLog?.(
+        "warn",
+        `matter: node ${node.nodeId}/${node.endpoint} exposes no Supreme-mapped capability — clusters: ${node.clusters.join(", ") || "(none)"}`,
+      );
+      throw new Error(`matter: node ${node.nodeId} exposes no controllable capability`);
+    }
     return {
       backendId: `${node.nodeId}/${node.endpoint}`,
       suggestedName: node.product ?? `Matter ${node.nodeId}/${node.endpoint}`,

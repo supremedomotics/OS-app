@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyFromText, classifyFunctionalBlock, mergeCapabilityHints } from "./capability-mapper.js";
+import { classifyEtsSignal, classifyFromText, classifyFunctionalBlock, mergeCapabilityHints } from "./capability-mapper.js";
 import { parseFunctionalBlocks } from "./functional-block-parser.js";
 
 describe("classifyFromText", () => {
@@ -16,6 +16,24 @@ describe("classifyFromText", () => {
   it("returns unknown, never a guessed capability, for unrecognized text", () => {
     const hint = classifyFromText("Xyzzy Foo Bar");
     expect(hint).toEqual({ capabilities: [], deviceKind: "unknown", matchedOn: [] });
+  });
+
+  it("§ Correctness Fix — classifies a fan by name for diagnostics, but never advertises the unsupported fan capability", () => {
+    // knx-codec.ts has no case for the `fan` capability at all — commanding one would
+    // always throw, so this must never appear in `capabilities` (§ Never advertise
+    // unsupported functionality). `deviceKind` still reports "fan" — that's
+    // driver-internal labeling, never part of the outward capability contract.
+    const hint = classifyFromText("Bathroom Ventilation Fan");
+    expect(hint.deviceKind).toBe("fan");
+    expect(hint.capabilities).toEqual([]);
+  });
+
+  it("§ Correctness Fix — same for the DPT-based fan_speed_percentage/hvac_fan_speed signals", () => {
+    // DPT 5.100 (Fan Speed %) and DPT 20.105 (HVAC Fan Speed) both classify their
+    // device kind correctly for diagnostics, but neither advertises `fan` since
+    // knx-codec.ts still can't execute it.
+    expect(classifyEtsSignal("5.100", "AHU Fan Speed")).toMatchObject({ deviceKind: "fan", capabilities: [] });
+    expect(classifyEtsSignal("20.105", "AHU Fan Speed Mode")).toMatchObject({ deviceKind: "fan", capabilities: [] });
   });
 });
 

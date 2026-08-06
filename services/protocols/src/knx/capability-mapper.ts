@@ -56,7 +56,13 @@ const RULES: KeywordRule[] = [
 
   { keywords: ["blind", "shutter"], deviceKind: "blind", capabilities: ["position"] },
   { keywords: ["curtain", "awning", "cover"], deviceKind: "curtain", capabilities: ["position"] },
-  { keywords: ["fan", "ventilation"], deviceKind: "fan", capabilities: ["fan"] },
+  // § Correctness Fix — knx-codec.ts's valueFromCommand()/stateFromValue() has no case
+  // for the `fan` capability at all, so a device classified with it was GUARANTEED to
+  // throw on the very first command (§ Never advertise unsupported functionality).
+  // `deviceKind: "fan"` is kept (driver-internal diagnostics/labeling only, per this
+  // file's own doc comment — never part of the outward `DiscoveredDevice.capabilities`
+  // contract); `capabilities` is empty until the codec genuinely supports fan control.
+  { keywords: ["fan", "ventilation"], deviceKind: "fan", capabilities: [] },
 
   { keywords: ["lock", "latch"], deviceKind: "lock", capabilities: ["lock"] },
   { keywords: ["window", "contact"], deviceKind: "window_contact", capabilities: ["sensor"] },
@@ -116,7 +122,10 @@ const DPT_CATEGORY_CAPABILITY: Partial<Record<DptCategory, { capabilities: Capab
   // stepping (a 3-bit controlled value has no room to encode which), so DPT alone can't
   // resolve it; the name is consulted only for this one, otherwise-unresolvable case.
   percentage: { capabilities: ["brightness"], deviceKind: "light" },
-  fan_speed_percentage: { capabilities: ["fan"], deviceKind: "fan" },
+  // § Correctness Fix — see the identical note on the "fan"/"ventilation" keyword rule
+  // above: knx-codec.ts cannot execute a fan command, so this DPT category classifies
+  // the device kind for diagnostics only, without advertising an unsupported capability.
+  fan_speed_percentage: { capabilities: [], deviceKind: "fan" },
   step_blind: { capabilities: ["position"], deviceKind: "blind" },
   binary_updown: { capabilities: ["position"], deviceKind: "blind" },
   binary_openclose: { capabilities: ["position"], deviceKind: "blind" },
@@ -125,7 +134,8 @@ const DPT_CATEGORY_CAPABILITY: Partial<Record<DptCategory, { capabilities: Capab
   color_rgbw: { capabilities: ["color"], deviceKind: "rgbw_light" },
   float_temperature: { capabilities: ["temperature"], deviceKind: "thermostat" },
   hvac_mode: { capabilities: ["temperature"], deviceKind: "climate" },
-  hvac_fan_speed: { capabilities: ["fan"], deviceKind: "fan" },
+  // § Correctness Fix — same reason as fan_speed_percentage above.
+  hvac_fan_speed: { capabilities: [], deviceKind: "fan" },
   binary_occupancy: { capabilities: ["sensor"], deviceKind: "presence_sensor" },
   binary_windowdoor: { capabilities: ["sensor"], deviceKind: "window_contact" },
 };

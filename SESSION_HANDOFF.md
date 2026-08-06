@@ -4,6 +4,55 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: SupremeOS Core Capability Audit — Phase 1 (Correctness Fixes)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:
+**`docs/architecture/SupremeOS-Core-Capability-Audit-Phase1-Fixes.md`** (Correctness
+Fix Report, Capability Compliance Report, Regression Report, Updated Capability
+Matrix). Fixes only the 5 correctness bugs named in the prior session's
+**`docs/architecture/SupremeOS-Core-Capability-Audit.md`** §6 items 1–7 — no new
+capabilities, no protocol expansion, no deployment change, no UI redesign, `vacuum`
+support NOT implemented, no new KNX/Matter fan features implemented.
+
+**Fixed, each with new/updated tests:**
+1. `apps/web-homeowner/src/device-sheets.tsx` — a sensor-only device's Expanded Sheet
+   fabricated a "Turn on/off" button (sensor is read-only). Added a `SensorSheet`
+   read-only readout.
+2. `services/protocols/src/sip-driver.ts` — the SIP door station's `"lock"` action
+   fabricated `locked: true` with zero hardware confirmation (no relatch API exists).
+   Now throws a clear error instead.
+3. `services/protocols/src/knx/capability-mapper.ts` — KNX discovery classified
+   fan/ventilation-named devices with a `fan` capability that `knx-codec.ts` cannot
+   execute (guaranteed throw). Now classifies `deviceKind: "fan"` for diagnostics
+   only, `capabilities: []`.
+4. `services/protocols/src/matter-driver.ts` — `discover()` silently filtered out any
+   node whose clusters map to zero capabilities (a real Matter `FanControl`/RVC
+   node). Now keeps the node in the result with `raw.unmappedClusters` disclosed, and
+   fires a new optional `onLog` warning (mirrors the existing avr/heos/yamaha
+   pattern) — not commissionable, but no longer invisible.
+5. `cloud/voice/src/alexa.ts`, `google.ts`, `services/homekit/src/bridge.ts` — a
+   device whose capabilities produced zero real Alexa interfaces / Google traits /
+   HomeKit services was still discovered/synced/published (visible, uncontrollable,
+   or an empty accessory). All three now omit such a device entirely; a device with
+   at least one genuinely mapped capability (e.g. `fan`+`onoff`) is unaffected.
+
+**A real regression was found and fixed during full verification** (not just
+touched-package testing): Fix 3 broke `knx-installer-workflow.e2e.test.ts`'s two
+"KNX Automatic Room Creation" tests — their fixture device was incidentally named
+"Vent Fan Switch" (testing room assignment, not fan control), which now correctly
+gets zero bindable capabilities and fails KNX approval. Renamed the fixture to
+"Attic Utility Switch" (classifies as `onoff`) — not a flaw in Fix 3.
+
+**Verification:** full monorepo `pnpm turbo run build typecheck test` —
+**173/173 tasks successful** (one unrelated `heos-driver.test.ts` `ECONNRESET` flake,
+confirmed non-reproducing, matching this repo's already-known flaky-test class).
+
+**Disclosed, not silently skipped:** Fix 1 (Sensor Expanded Sheet) has no automated
+UI test in this repo and was not verified live via Playwright this session — verified
+by typecheck and code review only. A follow-up session should open the app against a
+sensor-only device and confirm the Expanded Sheet renders a read-only readout with no
+command firing.
+
 ## Session: Native Backend Implementation — Home Assistant becomes optional
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. New docs:

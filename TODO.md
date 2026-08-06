@@ -807,6 +807,25 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **SupremeOS Core Capability Audit — Phase 1 (Correctness Fixes)** — fixed the 5
+  fabrication/silent-failure bugs the prior Capability Audit identified, with no new
+  capabilities, protocol expansion, deployment change, or UI redesign (`vacuum`
+  support and new KNX/Matter fan features explicitly NOT implemented, per the
+  phase's own rules). A sensor-only device's Expanded Sheet no longer fabricates a
+  "Turn on/off" button (sensor is read-only); the SIP door station driver no longer
+  fabricates `locked: true` with zero hardware confirmation (throws instead); KNX
+  discovery no longer advertises a `fan` capability its own command codec can't
+  execute (classifies the device kind for diagnostics only, capabilities stay
+  empty); Matter's `discover()` no longer silently drops a real Matter fan/vacuum
+  node (keeps it in the result with `raw.unmappedClusters` disclosed + a new `onLog`
+  warning); Alexa/Google/HomeKit no longer discover/sync/publish a device with zero
+  real controllable interface/trait/service (omitted entirely, matching a real
+  fan+onoff device still publishing correctly). A real regression surfaced during
+  full verification — `knx-installer-workflow.e2e.test.ts`'s room-creation tests used
+  an incidentally fan-named fixture device — fixed by renaming the fixture, not by
+  reverting the correctness fix. Full monorepo 173/173 build+typecheck+test tasks
+  green. See `docs/architecture/SupremeOS-Core-Capability-Audit-Phase1-Fixes.md`.
+
 - **Native Backend Implementation — Home Assistant becomes optional** — the brief's stated
   "current architecture" didn't match the code: `SupremeNativeAdapter` already existed and was
   already wired as `RoutingBackendAdapter`'s unconditional `native` slot — it already *was* the

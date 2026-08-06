@@ -696,8 +696,9 @@ export class AppContext {
     }
 
     // Local HomeKit (Apple Home / Siri) bridge — opt-in, runs entirely on the hub. Present only when
-    // a HAP transport is injected; we publish every device as an accessory and route HomeKit writes
-    // back through the SIL (identity/RBAC enforced as for any command).
+    // a HAP transport is injected; we offer every device as an accessory (HapBridge itself skips
+    // publishing one with no mapped HAP service at all — § Never publish an empty accessory) and
+    // route HomeKit writes back through the SIL (identity/RBAC enforced as for any command).
     if (deps.homekitTransport) {
       const bridge = new HapBridge({
         transport: deps.homekitTransport,
