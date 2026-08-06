@@ -22,8 +22,62 @@ Assistant) is present" and fails loudly rather than falling back to a simulator 
 the same goal that session pursued via now-superseded files. `home-service.ts`'s
 `bind()` on `native-linux` already uses explicit provider assignment (ADR-0023 §
 Commissioning), so the "defaults ownership to ha" bug that session fixed does not
-exist here in the first place. Full comparison, every excluded file, and why:
+exist here in the first place. **This directly resolves the Production Readiness
+Audit's Critical Blocker #1 below** ("two incompatible unmerged core-architecture
+rewrites") — `native-linux`'s ADR-0023 Provider architecture is confirmed the one
+production line of development; the `RoutingBackendAdapter`/`OwnershipRegistry` line
+is superseded, not merged. Full comparison, every excluded file, and why:
 `docs/architecture/Native-Linux-Casambi-Branch-Sync-Report.md`.
+
+## Session: SupremeOS Production Readiness Audit (Commercial Release Assessment)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. Read-only audit, no application code
+modified. New doc: **`docs/architecture/SupremeOS-Production-Readiness-Audit.md`** —
+covers all 10 requested phases and 9 deliverables (Production Readiness Report, Driver
+Readiness Matrix, Installer Workflow Audit, Diagnostics Coverage Report, Backup & Recovery
+Report, Security Assessment, Performance Assessment, Commercial Competitiveness Assessment,
+Remaining Blocker Roadmap) plus a Final Production Readiness Score. Evidence gathered via
+7 parallel research passes (each citing file:line) plus this session's own direct
+investigation and synthesis for Phase 9/10.
+
+**Final score: 3.6/10 — Pre-Production.** Top 5 Critical blockers found:
+
+1. **Two incompatible, unmerged core-architecture rewrites of device lifecycle exist
+   simultaneously.** This branch extended `OwnershipRegistry`/added `HaUnavailableAdapter`
+   (Native Backend session). Independently, the `native-linux` branch replaced the same
+   subsystem with a `provider`+`DeviceLifecycleState` model under its own ADR-0023
+   ("Native Device Lifecycle Architecture" — note: **ADR number collision** with this
+   branch's `docs/architecture/adr/0023-native-backend-default.md`, different content).
+   Neither branch's device-lifecycle work exists on the other. This needs a dedicated
+   reconciliation session before either branch can be called "the" production architecture.
+2. **Backup-signing keypair is ephemeral** (`services/gateway/src/installer-context.ts:294,305`)
+   — regenerated fresh on every gateway process start, no persistence, no config override.
+   Any backup taken via the API becomes unrestorable after the gateway restarts — breaks
+   the wipe+reinstall+restore and hardware-replacement recovery stories entirely.
+3. **Matter, DALI, and Zigbee drivers are structurally non-functional in production** —
+   default controller/bus factories throw unconditionally; nothing in `bootstrap.ts` or
+   `native-driver-factory.ts` ever injects a real one.
+4. **`assertSecureConfig()` doesn't require `setupWizard=true` in production** — a
+   misconfigured deployment (`SUPREME_SETUP_WIZARD=0`) silently gets a Master account at a
+   hardcoded, source-visible password with zero warning.
+5. **Zero verified evidence of performance/scale at any device count.** The CI job meant to
+   produce a real load number (100 VUs/60s) has failed 100% of its 32 scheduled runs
+   (broken pnpm invocation) and has never been triggered manually.
+
+Full ranked blocker list (5 Critical / 10 High / 9 Medium / 4 Low), the complete
+Driver Readiness Matrix (~22 drivers), and category-by-category Commercial Competitiveness
+scoring (vs. RTI/Savant/Crestron/Control4) are in the audit doc — not duplicated here.
+
+**Rules honored per the task brief:** no application code modified, no architecture
+redesigned or resolved (the branch-fork finding is reported, not decided), no new protocol
+features, nothing removed. This document and this handoff entry are the only changes this
+session produced.
+
+**Recommended next session**: per the user's own closing note in the audit brief, resolve
+the 5 Critical blockers (especially C1, the branch fork, and C2, the backup-key defect)
+before any Fan/Vacuum/RGB/protocol-expansion feature work.
+
+---
 
 ## Session: SupremeOS Core Capability Audit — Phase 1 (Correctness Fixes)
 
