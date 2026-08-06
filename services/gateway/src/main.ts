@@ -82,6 +82,10 @@ async function main(): Promise<void> {
     guard("occupancy", ctx.occupancy.tickNow());
     guard("backup", ctx.installer.runScheduledBackupIfDue(Date.now()));
     guard("expiry", ctx.sweepExpiredAccess());
+    // § Native Backend Implementation — catches a driver's own silent internal
+    // reconnect/drop that doesn't flow through the driver lifecycle pipeline (which
+    // already reconciles on every explicit connect/disconnect/reconnect trigger).
+    guard("deviceStatus", ctx.installer.reconcileDeviceStatuses());
   }, 60_000);
   tick.unref();
 

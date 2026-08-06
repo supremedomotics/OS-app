@@ -51,9 +51,9 @@ export class HomeService {
   }
 
   /** Rebind every stored device's capabilities into the SIL registry (on boot). Runs
-   * BEFORE the native driver lifecycle (§ Driver Lifecycle) so a device that's
-   * actually native-bound gets its ownership correctly overwritten from "ha" to
-   * "native" moments later, rather than racing it. */
+   * BEFORE the native driver lifecycle (§ Driver Lifecycle), so a device that's
+   * actually native-bound gets its ownership confirmed (with its real protocol name)
+   * moments later, rather than racing it. */
   async rebindRegistry(): Promise<void> {
     for (const { device, backendIds } of await this.store.listDevices()) {
       await this.bind(device, backendIds);
@@ -117,6 +117,23 @@ export class HomeService {
     const nextState = { ...stored.device.state, [state.kind]: state };
     await this.store.updateDeviceState(deviceId, nextState);
     return { ...stored.device, state: nextState };
+  }
+
+  /** Update a device's real online/offline/unavailable status (§ Native Backend
+   * Implementation — Device.status reconciliation). Unlike {@link applyState}, this
+   * DOES emit a topology change: a genuine connectivity transition is exactly the
+   * kind of change a client needs to react to (e.g. graying out a card), unlike a
+   * routine live-state tick. A no-op (no store write, no event) when the status
+   * hasn't actually changed, so a caller can call this on every reconciliation pass
+   * without spamming clients with redundant "upsert" events. */
+  async setDeviceStatus(deviceId: DeviceId, status: Device["status"]): Promise<Device | null> {
+    const stored = await this.store.getDevice(deviceId);
+    if (!stored) return null;
+    if (stored.device.status === status) return stored.device;
+    const device = { ...stored.device, status };
+    await this.store.putDevice(device, stored.backendIds);
+    this.emitChanged({ type: "upsert", device });
+    return device;
   }
 
   async roomOf(deviceId: DeviceId): Promise<string | null> {
@@ -251,11 +268,21 @@ export class HomeService {
   }
 
   /** Map every backend-id'd capability into the SIL's HA-side registry, and — if this
-   * device was actually mapped to anything — record ownership as "ha" (§ Device
-   * Ownership: explicit, never inferred). A subsequent native `bindNative()` call
-   * (the driver lifecycle's Rebind Devices stage) correctly overwrites this to
-   * "native" for devices that are actually native-bound; this is always a safe
-   * starting default because it never runs after that stage in the boot sequence. */
+   * device was actually mapped to anything and doesn't already have an ownership
+   * record — assign a starting default (§ Native Backend Implementation, § Device
+   * Ownership: explicit, never inferred by a naming convention or "nothing else
+   * claimed it"). The default is "ha" only when the hub's HA-compatibility slot has
+   * a WORKING backend behind it — a real `HaAdapter` (`SUPREME_BACKEND=ha`), or
+   * `MockAdapter` standing in for one (the explicit test/dev-only offline vertical
+   * slice, where a `backendId` is deliberately HA-shaped test fixture data). The
+   * production default — no HA compatibility plugin configured at all
+   * (`HaUnavailableAdapter`) — defaults every device to "native" instead. For a
+   * device that's actually native-bus-bound, this is just a starting point: the
+   * driver lifecycle's Rebind Devices stage calls `bindNative()` moments later,
+   * which confirms ownership as "native" with the device's real owning protocol. A
+   * device with no ownership record yet (unassigned) is left untouched here —
+   * commanding it fails loudly until something explicitly claims it, never silently
+   * defaulted. */
   private async bind(device: Device, backendIds: Record<string, string>): Promise<void> {
     let mapped = false;
     for (const cap of device.capabilities) {
@@ -269,7 +296,9 @@ export class HomeService {
       }
     }
     if (mapped && this.sil.ownership.get(device.id)?.kind !== "native") {
-      await this.sil.ownership.set(device.id, "ha");
+      const haCompatKind = this.sil.haCompatBackendKind;
+      const defaultOwner = haCompatKind === "ha" || haCompatKind === "mock" ? "ha" : "native";
+      await this.sil.ownership.set(device.id, defaultOwner);
     }
   }
 }

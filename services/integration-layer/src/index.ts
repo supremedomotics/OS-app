@@ -26,6 +26,7 @@ export {
 } from "./ownership.js";
 export { SupremeIntegrationLayer, type SilOptions } from "./sil.js";
 export { MockAdapter } from "./mock-adapter.js";
+export { HaUnavailableAdapter } from "./ha-unavailable-adapter.js";
 export {
   SupremeNativeAdapter,
   type SupremeNativeAdapterOptions,

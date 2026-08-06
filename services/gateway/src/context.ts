@@ -493,6 +493,18 @@ export class AppContext {
       await seedDemoHome(ctx.home, home);
     }
     await ctx.initWithHome(home);
+    // § Native Backend Implementation — prime whichever in-process engine owns each
+    // device with its already-persisted state, so a simulated device (a seeded demo
+    // device, or any native/mock-owned device with no real driver bound) resumes
+    // where it left off instead of starting from an empty cache on its first command
+    // after boot. See `SupremeIntegrationLayer.primeState` — this is the ONE place it
+    // runs, so every boot path (the real hub via bootstrap.ts, and every test that
+    // builds its own AppContext directly) gets it uniformly.
+    for (const device of await ctx.home.listDevices()) {
+      for (const state of Object.values(device.state ?? {})) {
+        ctx.sil.primeState(device.id, state.kind, state);
+      }
+    }
     // Default developer account (DEV BUILDS ONLY): logging in as `supreme` / `supreme@72` gives a
     // full-access master with Developer Mode already on (SUPREME_DEV_MODE). NEVER seeded in
     // production — guarded by config.devMode, which production builds never set.
@@ -873,6 +885,17 @@ const EVENT_NOTIFICATIONS: Record<
   smoke: { level: "critical", title: "Smoke detector", body: "Smoke detected" },
 };
 
+/**
+ * Test-only fallback: builds a bare (non-routing) SIL directly over `MockAdapter`,
+ * for the handful of test harnesses that call `AppContext.create(config)` without
+ * going through `bootstrap.createHubContext` (which is what the real hub process —
+ * `main.ts` — always uses, and which wires the production-default Supreme-native
+ * engine + optional HA compatibility plugin behind a real `RoutingBackendAdapter`;
+ * see bootstrap.ts). This bare adapter has no ownership registry to consult at all —
+ * `SupremeIntegrationLayer.command()` calls straight through to it — so it stays
+ * exactly what it always was: the offline vertical slice, never reachable from a
+ * real hub boot (§ Native Backend Implementation — MockAdapter is test-only).
+ */
 function buildSil(config: GatewayConfig): SupremeIntegrationLayer {
   if (config.backend === "ha") {
     // The HaAdapter needs a concrete HA WebSocket transport injected at the hub

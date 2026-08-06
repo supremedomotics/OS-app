@@ -18,8 +18,12 @@ export interface GatewayConfig {
   host: string;
   port: number;
   tokenSecret: string;
-  /** "mock" runs the offline vertical slice; "ha" uses the real HA backend. */
-  backend: "mock" | "ha";
+  /** § Native Backend Implementation — "native" (the production default) runs every
+   * device on the Supreme-native engine with Home Assistant as an optional
+   * compatibility plugin; "ha" additionally enables that plugin as a real backend for
+   * imported HA entities; "mock" is the test/dev-only offline vertical slice and is
+   * refused outright in production (see `assertSecureConfig`). */
+  backend: "native" | "mock" | "ha";
   haUrl: string;
   /** HA long-lived token. Optional: when empty and backend=ha, the hub provisions HA
    * headlessly on first boot and stores the generated token in the secrets manager. */
@@ -196,7 +200,8 @@ export interface GatewayConfig {
 export const DEV_TOKEN_SECRET = "dev-only-insecure-secret-change-me-change-me";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
-  const backend = env.SUPREME_BACKEND === "ha" ? "ha" : "mock";
+  const backend: GatewayConfig["backend"] =
+    env.SUPREME_BACKEND === "ha" ? "ha" : env.SUPREME_BACKEND === "mock" ? "mock" : "native";
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
@@ -305,6 +310,11 @@ export function assertSecureConfig(config: GatewayConfig): void {
   if (config.tokenSecret === DEV_TOKEN_SECRET) problems.push("SUPREME_TOKEN_SECRET is the insecure dev default");
   if (config.tokenSecret.length < 32) problems.push("SUPREME_TOKEN_SECRET must be >= 32 chars");
   if (config.corsOrigins.length === 0) problems.push("SUPREME_CORS_ORIGINS must be set in production");
+  // § Native Backend Implementation — the offline mock vertical slice must never run a
+  // real production hub (§ Never fabricate data or capabilities): a mock-backed device
+  // silently "succeeds" against in-memory state that was never real. Use the default
+  // ("native") or "ha" instead.
+  if (config.backend === "mock") problems.push('SUPREME_BACKEND=mock is not permitted in production — use "native" (the default) or "ha"');
   if (problems.length > 0) {
     throw new Error(`refusing to boot (production hardening): ${problems.join("; ")}`);
   }

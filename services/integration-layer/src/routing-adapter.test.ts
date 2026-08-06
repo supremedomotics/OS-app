@@ -6,6 +6,7 @@ import { RoutingBackendAdapter } from "./routing-adapter.js";
 import { EntityRegistryMirror } from "./registry.js";
 import { OwnershipRegistry } from "./ownership.js";
 import { SupremeIntegrationLayer } from "./sil.js";
+import { HaUnavailableAdapter } from "./ha-unavailable-adapter.js";
 
 /**
  * Phase-4 migration proof: with HA (mock) + native engine behind the router, a
@@ -72,6 +73,47 @@ describe("RoutingBackendAdapter — native migration", () => {
 
     const status = Object.fromEntries(sil.migrationStatus().map((s) => [s.domain, s.engine]));
     expect(status).toEqual({ light: "native", lock: "ha" });
+  });
+
+  it("§ Native Backend Implementation — boots and commands native devices with no HA at all", async () => {
+    const ha = new HaUnavailableAdapter();
+    const native = new SupremeNativeAdapter();
+    const registry = new EntityRegistryMirror();
+    const ownership = new OwnershipRegistry();
+    const router = new RoutingBackendAdapter({ ha, native, registry, ownership });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry, ownership });
+    expect(sil.haCompatBackendKind).toBe("ha-unavailable");
+
+    await sil.start();
+    expect(sil.isHealthy()).toBe(true); // native connected; ha's own isConnected() is false but router ORs them
+
+    const light = newId("device") as DeviceId;
+    // In-process simulation (no real driver bound) — exactly how a device commissioned
+    // on a native-default hub with no matching bus hardware yet is primed at boot
+    // (see bootstrap.ts's per-device priming loop).
+    native.provision(light, "onoff");
+    await sil.ownership.set(light, "native");
+    await sil.command(light, { capability: "onoff", action: "on" });
+    expect(await sil.getState(light, "onoff")).toEqual({ kind: "onoff", on: true });
+
+    // Discovery never blows up or fabricates HA devices just because HA is absent.
+    expect(await sil.discover()).toEqual([]);
+  });
+
+  it("§ Native Backend Implementation — a device still (incorrectly) owned by 'ha' fails loudly, never silently, when HA compatibility is disabled", async () => {
+    const ha = new HaUnavailableAdapter();
+    const native = new SupremeNativeAdapter();
+    const registry = new EntityRegistryMirror();
+    const ownership = new OwnershipRegistry();
+    const router = new RoutingBackendAdapter({ ha, native, registry, ownership });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry, ownership });
+    await sil.start();
+
+    const light = newId("device") as DeviceId;
+    await sil.ownership.set(light, "ha");
+    await expect(sil.command(light, { capability: "onoff", action: "on" })).rejects.toThrow(
+      /Home Assistant compatibility plugin is not enabled/,
+    );
   });
 
   it("forwards native state events up through the SIL subscription", async () => {

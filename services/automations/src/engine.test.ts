@@ -160,21 +160,82 @@ describe("AutomationEngine — time & interval triggers", () => {
 });
 
 describe("engine selection + HA compile", () => {
-  it("native engine ignores engine='ha' automations", async () => {
+  it("§ Native Backend Implementation — rejects creating a new engine='ha' automation instead of silently accepting-but-never-running it", async () => {
     const ex = executors();
     const engine = new AutomationEngine({ executors: ex });
     const svc = new AutomationService(engine);
     await svc.start();
     const d = devId();
-    await svc.create({
+    await expect(
+      svc.create({
+        homeId: homeId(),
+        name: "HA-compiled",
+        engine: "ha",
+        triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+        actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+      }),
+    ).rejects.toThrow(/engine "ha" automations are not executable/);
+  });
+
+  it("rejects re-pointing an existing automation at engine='ha' via update", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const created = await svc.create({
       homeId: homeId(),
-      name: "HA-compiled",
-      engine: "ha",
-      triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
-      actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+      name: "Native automation",
+      triggers: [{ type: "interval", everyMinutes: 5 }],
+      actions: [{ type: "notify", level: "info", title: "tick", body: "", userId: null }],
     });
-    await svc.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
+    await expect(svc.update(created.id, { engine: "ha" })).rejects.toThrow(/engine "ha" automations are not executable/);
+  });
+
+  it("native engine never executes a legacy, already-persisted engine='ha' row (a pre-fix row loaded from storage)", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const d = devId();
+    // Bypasses the service layer's create()/update() guard on purpose — simulates a
+    // row that predates this fix and is still sitting in a real database.
+    engine.setAutomations([
+      {
+        id: newId("automation") as never,
+        homeId: homeId(),
+        name: "Legacy HA automation",
+        enabled: true,
+        engine: "ha",
+        triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+        conditions: [],
+        actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+        externalRef: null,
+        aiGenerated: false,
+        tags: [],
+      },
+    ]);
+    await engine.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
     expect(ex.command).not.toHaveBeenCalled();
+  });
+
+  it("health() reports a legacy engine='ha' automation as broken — never silently 'healthy'/'waiting'", () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const d = devId();
+    const legacy = {
+      id: newId("automation") as never,
+      homeId: homeId(),
+      name: "Legacy HA automation",
+      enabled: true,
+      engine: "ha" as const,
+      triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" as const }],
+      conditions: [],
+      actions: [{ type: "device_command" as const, deviceId: d, command: { capability: "onoff" as const, action: "toggle" as const } }],
+      externalRef: null,
+      aiGenerated: false,
+      tags: [],
+    };
+    const health = engine.health(legacy);
+    expect(health.status).toBe("broken");
+    expect(health.reason).toMatch(/Home Assistant/);
   });
 
   it("compiles a Supreme automation to an HA config shape", () => {

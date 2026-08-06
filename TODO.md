@@ -430,6 +430,43 @@
 
 ## Medium
 
+### Live execution path for `engine: "ha"` automations
+- **Description:** `services/automations/src/compiler.ts`'s `compileToHa()` produces a real Home
+  Assistant automation config from the Supreme DSL, but nothing ever calls it outside its own
+  tests — no live push-to-HA / `externalRef` sync lifecycle exists. As of this session,
+  `AutomationService.create()`/`update()` reject `engine: "ha"` outright rather than silently
+  accepting a row that never actually runs; a legacy, already-persisted `engine: "ha"` row now
+  reports `health() === "broken"` instead of looking idle-but-fine.
+- **Reason:** the brief that surfaced this (Native Backend Implementation) explicitly offered
+  "execute them or reject them" — reject was chosen because building the live lifecycle (push a
+  compiled config to HA on create/update, track `externalRef`, keep it in sync on edit, handle a
+  push failure, tear it down on delete/HA-disconnect) is a substantial, independently-risky
+  feature outside that session's scope, and unverifiable end-to-end without a live HA instance.
+- **Dependencies:** a live HA instance to validate the push/sync/teardown lifecycle against for
+  real, not just against a fake transport.
+- **Complexity:** Medium — the DSL→HA compiler already exists; the missing piece is the
+  `HaAdapter`-side push/sync/teardown wiring plus `AutomationService` orchestration.
+- **Status:** Not started (deliberately rejected-not-implemented as of this session).
+
+### `HaAdapter` doesn't implement the richer optional `IBackendAdapter` members
+- **Description:** `HaAdapter` implements only the required `IBackendAdapter` members
+  (`kind`/`connect`/`disconnect`/`isConnected`/`command`/`getState`/`discover`/`onState`) — none
+  of the optional ones (`getArtwork`, `getQueue`, `getCapabilityConfig`, `getDiagnostics`,
+  `getTrace`, `exportDiagnosticsLog`, `sendRaw`, `unbindDevice`, `refreshCapabilities`,
+  `getKeypadCapabilities`, `onInputEvent`, `sendKeypadFeedback`). `SupremeNativeAdapter`
+  implements all of them.
+- **Reason:** pre-existing, not a regression from any recent session; most are individually
+  reasonable ("no generic HA entity concept for a media queue/keypad/raw-token" — HA's own REST/WS
+  API genuinely doesn't expose most of these per-entity), but this hasn't been audited
+  member-by-member against what HA's API actually can/can't expose, so it's an open question
+  rather than a settled "unsupported" for every member.
+- **Dependencies:** none for the audit itself; a live HA instance to validate any member that
+  turns out to be genuinely implementable.
+- **Complexity:** Small (audit) to Medium (implementing any member the audit finds is real and
+  HA-supportable).
+- **Status:** Not started — surfaced during the Native Backend Implementation session's
+  method-by-method `IBackendAdapter` classification, not previously tracked.
+
 ### AVR renamed-input capability-config race condition
 - **Description:** `AvrProtocolDriver.refreshInputEnrichment()` is called fire-and-forget (`void
   this.refreshInputEnrichment(...)`) at both `installer-context.ts:412` and
@@ -769,6 +806,25 @@
 
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
+
+- **Native Backend Implementation — Home Assistant becomes optional** — the brief's stated
+  "current architecture" didn't match the code: `SupremeNativeAdapter` already existed and was
+  already wired as `RoutingBackendAdapter`'s unconditional `native` slot — it already *was* the
+  Native Backend. The real gaps: the router's `ha` slot silently got `MockAdapter` whenever
+  `SUPREME_BACKEND !== "ha"` (the config type had no `"native"` value at all), and
+  `HomeService.bind()` defaulted every device's ownership to `"ha"` unconditionally — the exact
+  "nothing else claimed it" heuristic `OwnershipRegistry`'s own docstring forbids. Fixed:
+  `SUPREME_BACKEND=native` is now the default (`"mock"` refused in production); a new
+  `HaUnavailableAdapter` honestly represents "HA compatibility plugin not installed" (no
+  connection, no discovered devices, every command refused with a clear error — never a silent
+  fabricated success); commissioning ownership now defaults to native unless HA is genuinely the
+  configured backend; `Device.status` is now reconciled from each device's owning driver's real
+  connectivity (`getDiagnostics().connectionStatus`, falling back to protocol-level status, never
+  touching a device with no honest signal); `engine: "ha"` automations are now rejected at
+  creation (a legacy row reports `health() === "broken"` instead of looking idle-but-fine). Zero
+  protocol driver, deployment file, or UI component touched. Full monorepo 173/173 build+typecheck
+  +test tasks green (one unrelated `heos-driver.test.ts` socket flake, confirmed non-reproducing).
+  See `docs/architecture/Native-Backend-Implementation.md` and ADR 0023.
 
 - **Runtime Data Path Verification — Casambi UDP receive-path evidence tooling** — built an
   independent UDP probe (`SUPREME_LAN_PROBE_PORT`, no decoder/NATS/Casambi) to split "why zero

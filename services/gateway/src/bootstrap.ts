@@ -1,6 +1,7 @@
 import {
   EntityRegistryMirror,
   HaAdapter,
+  HaUnavailableAdapter,
   HaWsTransport,
   MigrationPolicy,
   MockAdapter,
@@ -92,8 +93,11 @@ async function resolveHaToken(config: GatewayConfig): Promise<string> {
  * where the Postgres-backed stores are connected and migrated. Everything above
  * receives a ready {@link AppContext} and never learns a backend or DB exists.
  *
- * Defaults (no DATABASE_URL, SUPREME_BACKEND=mock) give the standalone slice used
- * in dev and tests: in-memory stores + the mock backend.
+ * Defaults (no DATABASE_URL, no SUPREME_BACKEND) give the standalone slice used in
+ * dev and tests: in-memory stores + the Supreme-native engine, with Home Assistant
+ * compatibility disabled (§ Native Backend Implementation — the same default a
+ * production hub uses; explicit `SUPREME_BACKEND=mock` opts back into the legacy
+ * offline vertical slice for tests that specifically need it).
  */
 export async function createHubContext(config: GatewayConfig): Promise<AppContext> {
   // Fail closed: never boot a production hub with insecure defaults.
@@ -147,8 +151,17 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     const token = await resolveHaToken(config);
     const transport = new HaWsTransport({ url: config.haUrl, token });
     haSide = new HaAdapter({ transport, registry });
-  } else {
+  } else if (config.backend === "mock") {
+    // Test/dev-only opt-in — never the production default, and refused outright in
+    // production by assertSecureConfig above.
     haSide = new MockAdapter();
+  } else {
+    // Production default (§ Native Backend Implementation): no Home Assistant
+    // compatibility plugin configured. Every device is native by default (the
+    // SupremeNativeAdapter wired below, unconditionally); this is an honest "plugin
+    // not installed" placeholder for the ha-compatibility slot, never a silent
+    // stand-in that fabricates state the way MockAdapter would have.
+    haSide = new HaUnavailableAdapter();
   }
   // Real native protocol stacks the Supreme-native engine fronts (§3, §7). Loaded
   // only when configured; the in-process model serves everything else, so the hub
@@ -301,25 +314,10 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.voicePublisher = new VoiceStatePublisher({ baseUrl: config.voiceCloudUrl, hubKey: config.voiceHubKey });
   }
 
-  const ctx = await AppContext.create(config, deps);
-
-  // The mock backend computes each command's result from ITS OWN in-memory cache of the
-  // device's previous state (see MockAdapter.apply → applyCommand), which starts empty on
-  // every process boot. Any device whose current state lives only in HomeService (seeded
-  // demo devices, or any mock-backed device on a persisted home) would otherwise have that
-  // richer state silently discarded — reset to applyCommand's bare defaults — the moment
-  // its FIRST command after boot arrives, because the mock adapter didn't know it existed.
-  // Priming the cache from HomeService's already-persisted truth keeps the two in sync from
-  // boot, so a demo device's seeded title/artwork/etc. survives the first play/pause/volume
-  // command instead of vanishing. No-op for real HA/native-bound devices, which never route
-  // through this cache in the first place.
-  if (haSide instanceof MockAdapter) {
-    for (const device of await ctx.home.listDevices()) {
-      for (const state of Object.values(device.state ?? {})) {
-        haSide.seedState(device.id, state);
-      }
-    }
-  }
-
-  return ctx;
+  // Priming each in-process engine's state cache from HomeService's already-persisted
+  // truth (so a simulated device resumes where it left off instead of starting from
+  // an empty cache) happens ONCE, centrally, inside AppContext.create() itself — see
+  // SupremeIntegrationLayer.primeState — so every boot path gets it uniformly rather
+  // than re-deriving it here.
+  return AppContext.create(config, deps);
 }

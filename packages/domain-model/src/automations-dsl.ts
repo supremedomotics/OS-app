@@ -8,9 +8,15 @@ import { ScheduleWindow } from "./users.js";
 /**
  * The Supreme automation DSL (§10) — engine-agnostic by construction. The visual
  * Automation Builder edits this JSON DSL (never HA YAML). A native Supreme engine
- * executes it directly (`engine = "supreme"`); the SIL can also compile it to an HA
- * automation (`engine = "ha"`) and store an `externalRef`. Same DSL, swappable
- * executor — the migration guarantee applied to automations.
+ * executes it directly (`engine = "supreme"`, the only engine the Automation Builder
+ * itself ever creates and the only one `AutomationService.create/update` currently
+ * accept). `engine = "ha"` and `externalRef` remain part of the shape — a compiler
+ * to Home Assistant's automation config exists (`compileToHa()` in
+ * `services/automations/src/compiler.ts`) — but no live push-to-HA/externalRef
+ * lifecycle has been built (§ Native Backend Implementation): creating a NEW
+ * `engine: "ha"` automation is rejected with a clear error rather than silently
+ * accepted-but-never-run, and any already-persisted legacy row surfaces as
+ * `health() === "broken"` instead of looking idle-but-fine.
  */
 
 const Comparator = z.enum(["eq", "ne", "gt", "lt", "gte", "lte", "changed"]);

@@ -16,6 +16,7 @@ import type { SupremeNativeAdapter } from "./native-adapter.js";
 import type { EngineKind } from "./migration.js";
 import { OwnershipRegistry, type IDeviceOwnershipStore } from "./ownership.js";
 import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.js";
+import { MockAdapter } from "./mock-adapter.js";
 
 /**
  * Supreme Integration Layer — the facade the rest of the hub talks to.
@@ -63,6 +64,20 @@ export class SupremeIntegrationLayer {
 
   get backendKind(): string {
     return this.adapter.kind;
+  }
+
+  /**
+   * The real kind of whatever currently occupies the router's HA-compatibility slot
+   * (§ Native Backend Implementation) — `"ha"` when the compatibility plugin is
+   * enabled (a real `HaAdapter`), `"mock"` in explicit test/dev opt-in,
+   * `"ha-unavailable"` when it's absent (the production default). `null` for a bare
+   * (non-routing) adapter setup, which has no separate HA slot to report. Used to
+   * decide whether a newly-mapped device's ownership may safely default to "ha" —
+   * only ever true when HA is genuinely the configured backend, never a blind
+   * fallback (§ Device Ownership: explicit, never inferred).
+   */
+  get haCompatBackendKind(): string | null {
+    return this.router?.ha.kind ?? null;
   }
 
   /**
@@ -140,6 +155,33 @@ export class SupremeIntegrationLayer {
     if (!router) throw new SupremeError("conflict", "native protocol binding is not enabled on this hub");
     await router.native.bind(binding, protocol);
     await this.ownership.set(binding.deviceId, "native", protocol);
+  }
+
+  /**
+   * Prime whichever in-process engine currently owns a device with its already-
+   * persisted state (§ Native Backend Implementation), so a device with no real
+   * driver/live-HA connection resumes from where it left off instead of starting
+   * from an empty in-memory cache the moment its first command after boot arrives
+   * (see `SupremeNativeAdapter`/`MockAdapter`'s shared `applyCommand`-based
+   * in-process model — both start empty on every process boot). Callers: the ONE
+   * place this runs is `AppContext.create()`, right after devices are loaded/seeded,
+   * so every boot path (the real hub AND every test that builds its own
+   * `AppContext` directly) gets this for free rather than each caller re-deriving
+   * it. A no-op for a device bound to a real native driver or a live HA connection —
+   * those read their own truth from the wire, never this cache — and for any
+   * adapter/ownership combination this doesn't apply to (never a throw: priming is
+   * best-effort bookkeeping, not a correctness requirement for a freshly-provisioned
+   * device that has no prior state to resume anyway).
+   */
+  primeState(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
+    const owner = this.ownership.get(deviceId);
+    const router = this.router;
+    if (!owner || !router) return;
+    if (owner.kind === "native" && !router.native.manages(deviceId)) {
+      router.native.provision(deviceId, capability, state);
+    } else if (owner.kind === "ha" && router.ha instanceof MockAdapter) {
+      router.ha.seedState(deviceId, state);
+    }
   }
 
   /** Register a Supreme device capability ↔ backend entity mapping (HA-side registry —

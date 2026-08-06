@@ -1,6 +1,7 @@
 import {
   newId,
   type CapabilityKind,
+  type Device,
   type DeviceId,
   type DriverId,
   type HomeId,
@@ -1181,7 +1182,14 @@ export class InstallerServices {
       this.setStage(protocol, { stage: "stopping" });
       const owned = this.d.sil.ownership.devicesOwnedByProtocol(protocol);
       await this.d.sil.unregisterNativeProtocol(protocol); // Stop + Unbind (every owned device's driver-level state released) + Destroy (driver instance dereferenced)
-      for (const deviceId of owned) await this.d.sil.ownership.clear(deviceId);
+      for (const deviceId of owned) {
+        await this.d.sil.ownership.clear(deviceId);
+        // § Native Backend Implementation — a device released to "unassigned" has no
+        // backend at all anymore; leaving its status at a stale "online" would be
+        // exactly the fabrication this feature exists to close (this is a genuine,
+        // known fact, not a guess — its driver just stopped).
+        await this.d.home.setDeviceStatus(deviceId, "offline");
+      }
       this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
       this.lifecycleStatus.delete(protocol);
       return;
@@ -1234,6 +1242,46 @@ export class InstallerServices {
     this.appendLog(key, failures.length ? "warn" : "info", `${bound}/${bindings.length} device binding(s) restored for ${protocol} (${trigger})`);
 
     this.setStage(protocol, { stage: "ready", healthy: !connStatus?.error, lastError: connStatus?.error ?? null });
+    await this.reconcileDeviceStatuses();
+  }
+
+  /**
+   * § Native Backend Implementation — Device.status reconciliation (the audit finding
+   * that `Device.status` is set once at commissioning and never updated again). The
+   * correct native owner of "is this device really reachable" is each device's
+   * OWNING protocol driver's own already-tracked connectivity — never a guess:
+   *
+   *  - Per-device: `getDiagnostics(deviceId).connectionStatus` when the owning
+   *    driver reports one (real, synchronous, already-tracked — see
+   *    `driver-diagnostics.ts`) — "connected" → online, "connecting"/"disconnected" → offline.
+   *  - Falls back to the owning PROTOCOL's own connect/disconnect status
+   *    (`nativeProtocolStatus()`) when the driver doesn't report per-device
+   *    diagnostics — still a real, already-tracked signal, not fabricated.
+   *  - Anything else — HA-owned, unassigned, or native-owned with no bound driver at
+   *    all yet (e.g. an in-process simulated device, or a persisted binding that
+   *    hasn't restored on this boot) — is left untouched. There is no honest signal
+   *    to move it from wherever it already is, and "do not fabricate availability"
+   *    cuts both ways: this class of device already defaults to "online" at
+   *    commissioning and stays there, rather than being guessed into "offline" just
+   *    because it has nothing else to report.
+   *
+   * Called once at boot (after native drivers finish registering) and after every
+   * subsequent driver lifecycle transition (connect/disconnect/reconnect/config
+   * change/teardown), plus once a minute from the gateway's own tick loop (main.ts)
+   * to catch a driver's own silent internal reconnect/drop that doesn't flow through
+   * this pipeline at all.
+   */
+  async reconcileDeviceStatuses(): Promise<void> {
+    const protocolStatus = new Map(this.d.sil.nativeProtocolStatus().map((p) => [p.protocol, p.connected] as const));
+    for (const device of await this.d.home.listDevices()) {
+      const owner = this.d.sil.ownership.get(device.id);
+      if (owner?.kind !== "native" || !owner.protocol) continue;
+      const diag = await this.d.sil.getDiagnostics(device.id);
+      const connected = diag ? diag.connectionStatus === "connected" : protocolStatus.get(owner.protocol);
+      if (connected === undefined) continue; // no honest signal either way — leave it alone
+      const status: Device["status"] = connected ? "online" : "offline";
+      if (device.status !== status) await this.d.home.setDeviceStatus(device.id, status);
+    }
   }
 
   /** Driver Diagnostics (§ Diagnostics): every driver's full lifecycle picture in one

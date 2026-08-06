@@ -4,6 +4,72 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Native Backend Implementation — Home Assistant becomes optional
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New docs:
+**`docs/architecture/Native-Backend-Implementation.md`**,
+**`docs/architecture/adr/0023-native-backend-default.md`**. No protocol, deployment, or
+UI file modified — confirmed via a scoped `git diff`.
+
+**The ask:** replace the production use of `MockAdapter` with a true Native Backend;
+make Home Assistant a genuinely optional compatibility adapter; classify every
+`IBackendAdapter` method; fix commissioning ownership defaults, `Device.status`
+reconciliation, and `engine: "ha"` automations.
+
+**Key finding before writing any code:** the brief's stated "current architecture"
+(`RoutingBackendAdapter → {Home Assistant, Mock Adapter}`) didn't match the code.
+`SupremeNativeAdapter` already existed, was already a complete `IBackendAdapter`, and
+was **already** wired unconditionally as the router's `native` slot — it already *is*
+the Native Backend. The real gaps were narrower: the router's `ha` slot silently got
+`MockAdapter` whenever `SUPREME_BACKEND !== "ha"` (the type didn't even have a
+`"native"` value), and `HomeService.bind()` defaulted every device's ownership to
+`"ha"` unconditionally — the exact "nothing else claimed it" heuristic
+`OwnershipRegistry`'s own docstring forbids. See the architecture doc's §0 for the
+full account.
+
+**Changes, in order:**
+- `services/gateway/src/config.ts` — `backend: "native" | "mock" | "ha"`, defaulting
+  to `"native"`; `assertSecureConfig()` now refuses `SUPREME_BACKEND=mock` in production.
+- `services/integration-layer/src/ha-unavailable-adapter.ts` (new) — the honest "HA
+  compatibility plugin not installed" placeholder, replacing `MockAdapter`'s old
+  implicit role in the router's `ha` slot.
+- `services/gateway/src/bootstrap.ts` — three-way `haSide` selection (`ha`/`mock`/
+  `HaUnavailableAdapter`).
+- `services/integration-layer/src/sil.ts` — new `haCompatBackendKind` accessor and
+  `primeState()` (centralizes in-process engine state priming, previously
+  bootstrap.ts-only and broken for every test that builds its own `AppContext`).
+- `services/home/src/home-service.ts` — `bind()`'s default ownership is now `"ha"`
+  only when the hub's HA-compatibility slot has a working backend behind it (real or
+  mock-standing-in-for-tests); `"native"` otherwise. New `setDeviceStatus()`.
+- `services/gateway/src/{context,installer-context,main}.ts` — centralized state
+  priming in `AppContext.create()`; `InstallerServices.reconcileDeviceStatuses()`
+  (per-device `getDiagnostics().connectionStatus`, falling back to protocol-level
+  connect status; never touches a device with no honest signal), called on every
+  driver lifecycle transition and once a minute from the tick loop.
+- `services/automations/src/service.ts` + `engine.ts` — `create()`/`update()` reject
+  new `engine: "ha"` automations; `health()` reports a legacy one as `"broken"`.
+- `packages/domain-model/src/automations-dsl.ts` — doc comment updated to match.
+
+**Tests added:** `ha-unavailable-adapter.test.ts`, two new cases in
+`routing-adapter.test.ts`, four new cases in `config.test.ts`,
+`native-backend-boot.e2e.test.ts` (the first test in this repo to exercise the real
+`bootstrap.createHubContext` production path — every other gateway e2e test builds
+its own `AppContext` directly), `device-status-reconciliation.e2e.test.ts`, and four
+new cases in `services/automations/src/engine.test.ts`.
+
+**Verification:** full monorepo `pnpm turbo run build typecheck test` — **173/173
+tasks successful** (one unrelated `heos-driver.test.ts` `ECONNRESET` flake on the
+first run, confirmed non-reproducing on an isolated rerun, matching this repo's
+already-known flaky-test class — not a regression from this work). Gateway package
+alone: 74/74 test files, 306/306 tests.
+
+**Disclosed, deliberate scope boundaries (not bugs):** `engine: "ha"` automations are
+rejected, not executed — no live push-to-HA/`externalRef` lifecycle exists
+(`compileToHa()` is a pure compiler nothing calls), and building one was out of this
+milestone's scope and unverifiable without a live HA instance in this sandbox.
+`Device.status` for HA-owned, unassigned, or native-owned-but-never-bound devices is
+left untouched — no honest per-device connectivity signal exists for them.
+
 ## Session: Runtime Data Path Verification — Casambi UDP receive-path evidence tooling
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:

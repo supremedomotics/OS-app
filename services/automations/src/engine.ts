@@ -224,6 +224,15 @@ export class AutomationEngine {
    */
   health(automation: Automation): { status: "disabled" | "waiting" | "healthy" | "warning" | "broken"; reason: string } {
     if (!automation.enabled) return { status: "disabled", reason: "Automation is turned off." };
+    // § Native Backend Implementation — a legacy engine="ha" row (creating new ones is
+    // now rejected at the service layer, but an existing one must never look silently
+    // "healthy"/"waiting" while it in fact never runs — see setAutomations() below).
+    if (automation.engine === "ha") {
+      return {
+        status: "broken",
+        reason: "This automation targets Home Assistant execution, which is not supported on this hub — it will never run. Recreate it using the native engine.",
+      };
+    }
     // Dry-runs are synthetic (§ Phase 1 — never a real side effect) and share the same history
     // ring buffer as real runs purely so the debugger can show them inline; Health must reflect
     // only REAL executions, or a passing dry-run could mask (or a "would fail" dry-run could

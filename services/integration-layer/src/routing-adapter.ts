@@ -236,9 +236,16 @@ export class RoutingBackendAdapter implements IBackendAdapter {
     }
     if (owner.kind === "native") {
       if (!this.native.manages(deviceId)) {
+        // `owner.protocol` is unset for a device that has a native ownership record but
+        // has never actually been bound to a specific protocol driver yet (e.g. a
+        // device just commissioned on a native-default hub, before its own
+        // bindProtocol()/bindNative() call — or a device whose driver's bind restore
+        // failed on this boot). Named or not, the answer is the same: it will NOT fall
+        // back to Home Assistant.
+        const driverLabel = owner.protocol ? `the native "${owner.protocol}" driver` : "a native driver";
         throw new SupremeError(
           "backend_unavailable",
-          `device ${deviceId} is owned by the native "${owner.protocol}" driver, but that driver is not currently bound — it will NOT fall back to Home Assistant; reconnect or reconfigure the "${owner.protocol}" driver`,
+          `device ${deviceId} is owned by ${driverLabel}, but it is not currently bound — it will NOT fall back to Home Assistant; reconnect or reconfigure ${owner.protocol ? `the "${owner.protocol}" driver` : "its driver"}`,
         );
       }
       return this.native;
