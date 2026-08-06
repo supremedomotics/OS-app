@@ -7,6 +7,76 @@
 
 ## Critical
 
+### Reconcile the two unmerged core-architecture rewrites of device lifecycle
+- **Description:** `claude/casambi-driver-refactor-lvu23e` (this branch) extended
+  `OwnershipRegistry`/added `HaUnavailableAdapter` to make Home Assistant optional.
+  Independently, the `native-linux` branch replaced the same subsystem with a different
+  `provider`+`DeviceLifecycleState` model (its own ADR-0023 "Native Device Lifecycle
+  Architecture" — note an ADR-number collision with this branch's
+  `docs/architecture/adr/0023-native-backend-default.md`). Neither branch's device-lifecycle
+  work exists on the other branch. Full detail:
+  `docs/architecture/SupremeOS-Production-Readiness-Audit.md` §9 (C1).
+- **Reason:** the codebase currently has no single coherent "production" architecture for
+  device lifecycle — every future session must first determine which branch/reality it's
+  building on. Blocks a clean production release from either branch alone.
+- **Dependencies:** none, but should be resolved before most other backlog items to avoid
+  duplicating work across both realities.
+- **Complexity:** High (dedicated architecture-reconciliation session).
+- **Status:** Not started. Found during the Production Readiness Audit.
+
+### Backup-signing keypair is ephemeral — API-driven backups unrestorable after restart
+- **Description:** `services/gateway/src/installer-context.ts:294,305` generates a fresh,
+  unpersisted Ed25519 signing keypair on every `InstallerServices` construction, with no
+  config override (unlike `licensingPublicKey`/`driverStorePublicKey`, which are
+  configurable). A backup created via the gateway API cannot be restored once that gateway
+  process restarts — `restore()` throws `"backup signature verification failed"`. Breaks
+  the wipe+reinstall+restore and hardware-replacement recovery stories. Full detail:
+  `docs/architecture/SupremeOS-Production-Readiness-Audit.md` §5 / §9 (C2).
+- **Reason:** disaster recovery via the API-driven backup path (what both installer apps'
+  UI calls) is currently non-functional for its primary purpose.
+- **Dependencies:** none; should be sequenced with the plaintext-driver-secrets item below
+  since both touch the backup/secret-handling surface.
+- **Complexity:** Low–Medium — persist the keypair (config-backed) or derive it
+  deterministically from a stored secret.
+- **Status:** Not started. Found during the Production Readiness Audit.
+
+### Matter, DALI, and Zigbee drivers cannot connect to any real device in production
+- **Description:** `matter-driver.ts`, `dali-driver.ts`, `zigbee-driver.ts` each ship a
+  default controller/bus factory that throws unconditionally; nothing in `bootstrap.ts` or
+  `native-driver-factory.ts` ever injects a real one. Discovery/capability-mapping code is
+  real but structurally unreachable. Full detail:
+  `docs/architecture/SupremeOS-Production-Readiness-Audit.md` §2 / §9 (C3).
+- **Reason:** three advertised protocols are non-functional out of the box.
+- **Dependencies:** none.
+- **Complexity:** High (Matter especially — full `@matter/main` integration).
+- **Status:** Not started. Found during the Production Readiness Audit.
+
+### `assertSecureConfig()` doesn't guard against a silently-created default admin account
+- **Description:** `services/gateway/src/config.ts:307–321` validates only `tokenSecret`,
+  `corsOrigins`, and `backend !== "mock"` — not `setupWizard`. If a production deployment
+  ever has `SUPREME_SETUP_WIZARD=0`, `context.ts:474–493` silently commissions a Master
+  account at `owner@supreme.local` / `supreme-owner-demo-pass` (a password visible in this
+  source tree) with zero runtime warning. Full detail:
+  `docs/architecture/SupremeOS-Production-Readiness-Audit.md` §6 / §9 (C4).
+- **Reason:** a real, if avoidable, path to a full-master-account compromise in production.
+- **Dependencies:** none.
+- **Complexity:** Low — reject `setupWizard=false` in production inside `assertSecureConfig()`.
+- **Status:** Not started. Found during the Production Readiness Audit.
+
+### Zero verified performance/scale evidence at any device count
+- **Description:** The CI job meant to produce a real load number (100 VUs/60s,
+  `.github/workflows/loadtest.yml`) has failed 100% of its 32 scheduled runs (broken pnpm
+  invocation: `run -- load` isn't a valid script name) and has never been triggered
+  manually. No test simulates 100/500/1000/5000 devices/entities — only the fixed ~12-device
+  demo home. Full detail: `docs/architecture/SupremeOS-Production-Readiness-Audit.md` §7 /
+  §9 (C5).
+- **Reason:** the platform's readiness for real residential/commercial installs is
+  completely unproven at any meaningful scale.
+- **Dependencies:** none, but should precede any commercial scale claim.
+- **Complexity:** Medium — fix the CI invocation, then extend the harness to simulate
+  device/entity count, not just concurrent users.
+- **Status:** Not started. Found during the Production Readiness Audit.
+
 ### Real-world deployment readiness gap
 - **Description:** `docs/production-readiness.md`'s own assessment: feature-complete
   development is ~80%, but real-world deployment readiness is ~25–30%. Nothing has run against
@@ -33,6 +103,35 @@
 ---
 
 ## High
+
+### Production Readiness Audit — High-priority findings (batch)
+- **Description:** From `docs/architecture/SupremeOS-Production-Readiness-Audit.md` §9
+  (H1–H10), not individually expanded here to keep this file navigable — see the audit doc
+  for full file:line evidence per item:
+  - H1: AirPlay/SIP/Tuya/Ajax drivers have no real production control transport wired —
+    `connect()` throws in production for all four.
+  - H2: Driver plugins run fully in-process with no isolation boundary — a compromised
+    driver has full gateway privileges.
+  - H3: Driver/integration secrets stored as plaintext JSON in Postgres
+    (`installed_drivers.config`, `home_config`).
+  - H4: No scheduled/automatic health monitoring — `health-check.sh` is manual-invocation
+    only, no systemd timer/cron.
+  - H5: `update.sh` rollback cannot survive `SIGKILL`/lost SSH session (bash `ERR` trap is
+    uncatchable on kill -9).
+  - H6: No schema-level migration rollback — a failing migration leaves prior ones
+    committed with no automatic reversal.
+  - H7: `apps/web-installer` is missing restore, driver config/update, and
+    floor/automation/scene UI — only `apps/web-homeowner` has them.
+  - H8: No networking configuration UI/API anywhere (static IP/DNS/WiFi).
+  - H9: No factory reset or broken-install recovery UI — both are CLI/SSH/root-only.
+  - H10: NATS connection health has no accessor at all; Voice assistants have no
+    diagnostics surface; Scenes/Commissioning compute real failure data that never reaches
+    the UI.
+- **Reason:** each is independently evidence-backed as blocking commercial deployment; see
+  the audit doc's Phase 2–8 sections for full detail per item.
+- **Dependencies:** varies per item, see audit doc.
+- **Complexity:** varies per item (Low–High), see audit doc.
+- **Status:** Not started. Found during the Production Readiness Audit.
 
 ### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
 - **Description:** `local-discovery.ts` (real, PR-2) deliberately does NOT map NotifyControlValues
