@@ -170,9 +170,17 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     await driver.connect();
     await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
     await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
-    // Wait for the link to actually finish connecting (the init query round-trip) before
-    // issuing commands — command() now correctly rejects a write to a still-connecting link.
-    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+    // § Regression fix — waiting only for "PW?" to appear in `received` proves the FIRST
+    // of the 9 paced init-sync tokens (PW?, ZM?, MV?, MU?, SI?, ...) was sent; it proves
+    // nothing about MV? (3rd in the queue) having been answered yet, since InitHandshake
+    // sends one token at a time and only advances once a reply arrives (av-sdk/init-
+    // handshake.ts). Under any real latency this leaves a window where a test's own
+    // nextEvent() listener attaches BEFORE the init-sync's own MV50->51% event has fired,
+    // races it against the real command's echo, and can resolve on the STALE init value
+    // instead — reproduced directly (12/40 runs) by injecting a realistic ~15ms per-token
+    // response delay into the fake receiver. `fullySynced` (see driver-diagnostics.ts) is
+    // only set true once the WHOLE handshake drains, which is the only safe barrier.
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
   });
   afterAll(async () => {
     await driver.disconnect();
@@ -294,9 +302,11 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
     await driver.bind({ deviceId: mainDev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
     await driver.bind({ deviceId: zone2Dev, capability: "onoff", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
     await driver.bind({ deviceId: zone2Dev, capability: "media", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
-    // Wait for the link to actually finish connecting before issuing commands — command()
-    // now correctly rejects a write to a still-connecting link.
-    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+    // § Regression fix — see the identical fix + comment in the main describe block above:
+    // waiting for "PW?" alone does not prove the full paced init-sync handshake (including
+    // MV?/Z2?/Z2MU? — this zone2 link's Zone 2 volume tests read exactly the state that
+    // race can corrupt) has drained yet.
+    await vi.waitFor(() => expect(driver.getDiagnostics(mainDev)?.fullySynced).toBe(true));
   });
   afterAll(async () => {
     await driver.disconnect();
