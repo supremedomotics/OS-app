@@ -309,6 +309,11 @@ export function assertSecureConfig(config: GatewayConfig): void {
   if (config.tokenSecret === DEV_TOKEN_SECRET) problems.push("SUPREME_TOKEN_SECRET is the insecure dev default");
   if (config.tokenSecret.length < 32) problems.push("SUPREME_TOKEN_SECRET must be >= 32 chars");
   if (config.corsOrigins.length === 0) problems.push("SUPREME_CORS_ORIGINS must be set in production");
+  // § Native Backend Implementation — the offline mock vertical slice must never run a
+  // real production hub (§ Never fabricate data or capabilities): a mock-backed device
+  // silently "succeeds" against in-memory state that was never real. Use the default
+  // ("native") or "ha" instead.
+  if (config.backend === "mock") problems.push('SUPREME_BACKEND=mock is not permitted in production — use "native" (the default) or "ha"');
   if (problems.length > 0) {
     throw new Error(`refusing to boot (production hardening): ${problems.join("; ")}`);
   }

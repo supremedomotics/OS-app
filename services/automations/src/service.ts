@@ -54,7 +54,30 @@ export class AutomationService {
     return a;
   }
 
+  /**
+   * § Native Backend Implementation — `engine: "ha"` automations are DSL that compiles
+   * to a Home Assistant automation config (see `compileToHa()` in compiler.ts), but no
+   * live push-to-HA / externalRef lifecycle was ever wired up (the audit finding: they
+   * were silently accepted and stored, yet `AutomationEngine.setAutomations()` only
+   * ever loads `engine === "supreme"` rows, so an "ha" automation just never ran,
+   * despite the UI showing it enabled). Rather than build that live-HA lifecycle now —
+   * a substantial, independently-risky feature this task's scope doesn't call for —
+   * new/edited automations reject `engine: "ha"` outright with a clear reason, so the
+   * gap is loud instead of silent. Already-persisted `engine: "ha"` rows (from before
+   * this fix) are left as-is (never mutated/deleted here) but now surface as `health()
+   * === "broken"` with an explicit reason instead of silently sitting idle.
+   */
+  private assertSupportedEngine(engine: "ha" | "supreme" | undefined): void {
+    if (engine === "ha") {
+      throw new SupremeError(
+        "validation_failed",
+        'engine "ha" automations are not executable on this hub (Home Assistant automation push/sync is not implemented) — use the default "supreme" engine',
+      );
+    }
+  }
+
   async create(input: CreateAutomationInput): Promise<Automation> {
+    this.assertSupportedEngine(input.engine);
     const automation: Automation = {
       id: newId("automation") as AutomationId,
       homeId: input.homeId,
@@ -74,6 +97,7 @@ export class AutomationService {
   }
 
   async update(id: AutomationId, patch: Partial<CreateAutomationInput>): Promise<Automation> {
+    if (patch.engine !== undefined) this.assertSupportedEngine(patch.engine);
     const current = await this.get(id);
     const next: Automation = {
       ...current,
