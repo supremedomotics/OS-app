@@ -845,6 +845,53 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
+  both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and
+  the Production Readiness Audit (docs, clean cherry-picks) plus the automations
+  `engine: "ha"` rejection and `assertSecureConfig` mock-in-production refusal from
+  Native Backend Implementation. That session's adapter-wiring work was NOT ported —
+  it targets `routing-adapter.ts`, which native-linux had already replaced with its own
+  ADR-0023 Provider architecture achieving the same goal by a different, superseding
+  mechanism. Full report: `docs/architecture/Native-Linux-Casambi-Branch-Sync-Report.md`.
+
+- **SupremeOS Core Capability Audit — Phase 1 (Correctness Fixes)** — fixed the 5
+  fabrication/silent-failure bugs the prior Capability Audit identified, with no new
+  capabilities, protocol expansion, deployment change, or UI redesign (`vacuum`
+  support and new KNX/Matter fan features explicitly NOT implemented, per the
+  phase's own rules). A sensor-only device's Expanded Sheet no longer fabricates a
+  "Turn on/off" button (sensor is read-only); the SIP door station driver no longer
+  fabricates `locked: true` with zero hardware confirmation (throws instead); KNX
+  discovery no longer advertises a `fan` capability its own command codec can't
+  execute (classifies the device kind for diagnostics only, capabilities stay
+  empty); Matter's `discover()` no longer silently drops a real Matter fan/vacuum
+  node (keeps it in the result with `raw.unmappedClusters` disclosed + a new `onLog`
+  warning); Alexa/Google/HomeKit no longer discover/sync/publish a device with zero
+  real controllable interface/trait/service (omitted entirely, matching a real
+  fan+onoff device still publishing correctly). A real regression surfaced during
+  full verification — `knx-installer-workflow.e2e.test.ts`'s room-creation tests used
+  an incidentally fan-named fixture device — fixed by renaming the fixture, not by
+  reverting the correctness fix. Full monorepo 173/173 build+typecheck+test tasks
+  green. See `docs/architecture/SupremeOS-Core-Capability-Audit-Phase1-Fixes.md`.
+
+- **Native Backend Implementation — Home Assistant becomes optional** — the brief's stated
+  "current architecture" didn't match the code: `SupremeNativeAdapter` already existed and was
+  already wired as `RoutingBackendAdapter`'s unconditional `native` slot — it already *was* the
+  Native Backend. The real gaps: the router's `ha` slot silently got `MockAdapter` whenever
+  `SUPREME_BACKEND !== "ha"` (the config type had no `"native"` value at all), and
+  `HomeService.bind()` defaulted every device's ownership to `"ha"` unconditionally — the exact
+  "nothing else claimed it" heuristic `OwnershipRegistry`'s own docstring forbids. Fixed:
+  `SUPREME_BACKEND=native` is now the default (`"mock"` refused in production); a new
+  `HaUnavailableAdapter` honestly represents "HA compatibility plugin not installed" (no
+  connection, no discovered devices, every command refused with a clear error — never a silent
+  fabricated success); commissioning ownership now defaults to native unless HA is genuinely the
+  configured backend; `Device.status` is now reconciled from each device's owning driver's real
+  connectivity (`getDiagnostics().connectionStatus`, falling back to protocol-level status, never
+  touching a device with no honest signal); `engine: "ha"` automations are now rejected at
+  creation (a legacy row reports `health() === "broken"` instead of looking idle-but-fine). Zero
+  protocol driver, deployment file, or UI component touched. Full monorepo 173/173 build+typecheck
+  +test tasks green (one unrelated `heos-driver.test.ts` socket flake, confirmed non-reproducing).
+  See `docs/architecture/Native-Backend-Implementation.md` and ADR 0023.
+
 - **Runtime Data Path Verification — Casambi UDP receive-path evidence tooling** — built an
   independent UDP probe (`SUPREME_LAN_PROBE_PORT`, no decoder/NATS/Casambi) to split "why zero
   packets?" into below-SupremeOS vs. inside-SupremeOS; real `/proc/net/route`/`/proc/net/udp`

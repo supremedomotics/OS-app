@@ -365,7 +365,13 @@ describe("KNX Automatic Room Creation (§ Generic Room Assignment Engine)", () =
     const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
       method: "POST",
       headers: auth(),
-      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "4/1/1", name: "Vent Fan Switch", room: "Attic" }] }),
+      // § Correctness Fix (Capability Audit Phase 1) — deliberately NOT named with a
+      // "fan"/"ventilation" token: the KNX capability mapper no longer classifies
+      // those as a bindable capability at all (knx-codec.ts can't execute a fan
+      // command), so a device named that way would have zero bindable plans and
+      // fail approval — a fixture-naming collision, not a bug in this test's actual
+      // subject (room assignment), which is why the name changed here.
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "4/1/1", name: "Attic Utility Switch", room: "Attic" }] }),
     });
     const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown; room: { room: string | null } }> };
     expect(queue).toHaveLength(1);
@@ -375,7 +381,7 @@ describe("KNX Automatic Room Creation (§ Generic Room Assignment Engine)", () =
       method: "POST",
       headers: auth(),
       // No roomId at all — this is the case that used to require a pre-existing room.
-      body: JSON.stringify({ device: queue[0]!.device, name: "Vent Fan", plans: queue[0]!.plans }),
+      body: JSON.stringify({ device: queue[0]!.device, name: "Attic Utility", plans: queue[0]!.plans }),
     });
     expect(approveRes.status).toBe(201);
     const approved = (await approveRes.json()) as { device: { id: string }; status: string };

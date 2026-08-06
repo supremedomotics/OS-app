@@ -35,7 +35,7 @@ class FakeFabric implements MatterController {
   async nodes(): Promise<MatterNodeInfo[]> {
     return [
       { nodeId: "5", endpoint: 1, clusters: ["OnOff", "LevelControl"], vendor: "Acme", product: "Dimmable Bulb" },
-      { nodeId: "6", endpoint: 1, clusters: ["Descriptor"] }, // no Supreme capability → filtered
+      { nodeId: "6", endpoint: 1, clusters: ["Descriptor"] }, // no Supreme capability mapping
     ];
   }
   commissioned: MatterOnboardingPayload[] = [];
@@ -100,9 +100,31 @@ describe("MatterProtocolDriver (fake fabric)", () => {
     const driver = new MatterProtocolDriver({ createController: async () => fabric });
     await driver.connect();
     const found = await driver.discover();
-    expect(found).toHaveLength(1);
+    expect(found).toHaveLength(2);
     expect(found[0]?.backendId).toBe("5/1");
     expect(found[0]?.capabilities).toEqual(["onoff", "brightness"]);
+  });
+
+  it("§ Correctness Fix — never silently drops a node whose clusters map to zero capabilities; discloses why instead", async () => {
+    const fabric = new FakeFabric();
+    const logs: { level: string; message: string }[] = [];
+    const driver = new MatterProtocolDriver({
+      createController: async () => fabric,
+      onLog: (level, message) => logs.push({ level, message }),
+    });
+    await driver.connect();
+    const found = await driver.discover();
+
+    const unmapped = found.find((d) => d.backendId === "6/1");
+    expect(unmapped).toBeDefined();
+    expect(unmapped?.capabilities).toEqual([]);
+    expect(unmapped?.raw.unmappedClusters).toEqual(["Descriptor"]);
+
+    // The gap is observable, not silent.
+    expect(logs).toContainEqual({
+      level: "warn",
+      message: "matter: node 6/1 exposes no Supreme-mapped capability — clusters: Descriptor",
+    });
   });
 
   it("commissions a node from a setup code and emits the onCommissioned event", async () => {

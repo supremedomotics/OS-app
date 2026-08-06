@@ -66,8 +66,13 @@ export class HapBridge {
     this.opts.transport.onWrite((w) => void this.handleWrite(w));
   }
 
-  /** Expose a Supreme device to HomeKit as an accessory (merging each capability's HAP services). */
-  addDevice(device: SupremeDeviceView): HapAccessory {
+  /** Expose a Supreme device to HomeKit as an accessory (merging each capability's HAP
+   * services). Returns `null` — and publishes nothing — for a device whose capabilities
+   * map to zero HAP services at all (e.g. `media`/`vacuum`-only, per `hap-mapping.ts`'s
+   * own disclosed gap): § Never publish an empty accessory. A device that showed up in
+   * the Apple Home app with no service at all would look paired but do nothing, which
+   * is worse than not appearing (§ Never advertise unsupported functionality). */
+  addDevice(device: SupremeDeviceView): HapAccessory | null {
     const merged = new Map<string, HapService>();
     const charMap = new Map<string, CapabilityKind>();
     for (const cap of device.capabilities) {
@@ -79,6 +84,13 @@ export class HapBridge {
       }
     }
     const accessory: HapAccessory = { id: device.id, name: device.name, services: [...merged.values()] };
+    if (accessory.services.length === 0) {
+      this.opts.log?.("homekit: no HAP service for this device's capabilities — not publishing", {
+        deviceId: device.id,
+        capabilities: device.capabilities,
+      });
+      return null;
+    }
     this.devices.set(device.id, device);
     this.charCapability.set(device.id, charMap);
     this.opts.transport.publishAccessory(accessory);

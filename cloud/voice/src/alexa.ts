@@ -75,10 +75,21 @@ function capabilityResource(iface: { interface: string; properties: string[] }) 
 }
 
 export function buildDiscoveryResponse(devices: HubDevice[]): unknown {
-  const endpoints = devices.map((d) => {
-    const caps = d.capabilities.map((c) => c.kind);
-    const ifaces = [...new Map(caps.flatMap(alexaInterfaces).map((i) => [i.interface, i])).values()];
-    return {
+  const endpoints = devices
+    .map((d) => {
+      const caps = d.capabilities.map((c) => c.kind);
+      const ifaces = [...new Map(caps.flatMap(alexaInterfaces).map((i) => [i.interface, i])).values()];
+      return { d, ifaces };
+    })
+    // § Correctness Fix — a device whose capabilities map to zero real Alexa
+    // interfaces (e.g. `fan`/`vacuum`/`media`/`sensor`-only) previously still got
+    // discovered with a display category (`ALEXA_DISPLAY`) and only the mandatory
+    // base `Alexa` interface: it showed up in the Alexa app but had no operable
+    // control at all — advertised, unusable (§ Never advertise unsupported
+    // functionality). Omitting it entirely is the honest choice the phase calls
+    // for: a device with nothing Alexa can genuinely control is not discoverable.
+    .filter(({ ifaces }) => ifaces.length > 0)
+    .map(({ d, ifaces }) => ({
       endpointId: d.id,
       manufacturerName: "Supreme",
       friendlyName: d.name,
@@ -88,8 +99,7 @@ export function buildDiscoveryResponse(devices: HubDevice[]): unknown {
         { type: "AlexaInterface", interface: "Alexa", version: "3" },
         ...ifaces.map(capabilityResource),
       ],
-    };
-  });
+    }));
   return { event: { header: header("Alexa.Discovery", "Discover.Response"), payload: { endpoints } } };
 }
 

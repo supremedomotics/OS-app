@@ -57,4 +57,20 @@ describe("SipProtocolDriver (fake door station)", () => {
       driver.bind({ deviceId: "x" as DeviceId, capability: "brightness", address: "sip:door@pbx" }),
     ).rejects.toThrow(/not supported/);
   });
+
+  it("§ Correctness Fix — refuses to fabricate a 'lock' action instead of confirming one it can't perform", async () => {
+    const station = new FakeStation();
+    const driver = new SipProtocolDriver({ createStation: async () => station });
+    await driver.connect();
+    const dev = "device-front-door" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "lock", address: "sip:door@pbx" });
+
+    // A door station has no relatch/close hardware — "lock" must throw, never
+    // silently report locked:true with zero hardware interaction.
+    await expect(driver.command(dev, { capability: "lock", action: "lock" })).rejects.toThrow(
+      /cannot confirm "lock"/,
+    );
+    // No fabricated state was recorded for the refused command.
+    expect(driver.getState(dev, "lock")).toBeNull();
+  });
 });

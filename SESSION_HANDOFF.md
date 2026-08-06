@@ -4,6 +4,142 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e
+
+Compared both branches commit-by-commit (11 unique to `native-linux`, 4 unique to
+`claude/casambi-driver-refactor-lvu23e`). Ported: `SupremeOS Core Capability Audit`
+(docs), `Capability Audit Phase 1` fixes (fully, clean cherry-pick), the automations
+`engine: "ha"` rejection + `assertSecureConfig` mock-in-production refusal from
+`Native Backend Implementation`, and `SupremeOS Production Readiness Audit` (docs).
+
+**`Native Backend Implementation`'s adapter-wiring work (see that session's own entry
+below) was NOT ported wholesale** — it targets `RoutingBackendAdapter`/
+`routing-adapter.ts`, which `native-linux` had already deleted in favor of its own,
+independently-developed ADR-0023 Provider architecture
+(`ProviderRegistry`/`DriverBindingEngine`/`ProviderRouter`). `provider-router.ts`'s own
+docstring already states it "never assumes any particular provider (including Home
+Assistant) is present" and fails loudly rather than falling back to a simulator —
+the same goal that session pursued via now-superseded files. `home-service.ts`'s
+`bind()` on `native-linux` already uses explicit provider assignment (ADR-0023 §
+Commissioning), so the "defaults ownership to ha" bug that session fixed does not
+exist here in the first place. Full comparison, every excluded file, and why:
+`docs/architecture/Native-Linux-Casambi-Branch-Sync-Report.md`.
+
+## Session: SupremeOS Core Capability Audit — Phase 1 (Correctness Fixes)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:
+**`docs/architecture/SupremeOS-Core-Capability-Audit-Phase1-Fixes.md`** (Correctness
+Fix Report, Capability Compliance Report, Regression Report, Updated Capability
+Matrix). Fixes only the 5 correctness bugs named in the prior session's
+**`docs/architecture/SupremeOS-Core-Capability-Audit.md`** §6 items 1–7 — no new
+capabilities, no protocol expansion, no deployment change, no UI redesign, `vacuum`
+support NOT implemented, no new KNX/Matter fan features implemented.
+
+**Fixed, each with new/updated tests:**
+1. `apps/web-homeowner/src/device-sheets.tsx` — a sensor-only device's Expanded Sheet
+   fabricated a "Turn on/off" button (sensor is read-only). Added a `SensorSheet`
+   read-only readout.
+2. `services/protocols/src/sip-driver.ts` — the SIP door station's `"lock"` action
+   fabricated `locked: true` with zero hardware confirmation (no relatch API exists).
+   Now throws a clear error instead.
+3. `services/protocols/src/knx/capability-mapper.ts` — KNX discovery classified
+   fan/ventilation-named devices with a `fan` capability that `knx-codec.ts` cannot
+   execute (guaranteed throw). Now classifies `deviceKind: "fan"` for diagnostics
+   only, `capabilities: []`.
+4. `services/protocols/src/matter-driver.ts` — `discover()` silently filtered out any
+   node whose clusters map to zero capabilities (a real Matter `FanControl`/RVC
+   node). Now keeps the node in the result with `raw.unmappedClusters` disclosed, and
+   fires a new optional `onLog` warning (mirrors the existing avr/heos/yamaha
+   pattern) — not commissionable, but no longer invisible.
+5. `cloud/voice/src/alexa.ts`, `google.ts`, `services/homekit/src/bridge.ts` — a
+   device whose capabilities produced zero real Alexa interfaces / Google traits /
+   HomeKit services was still discovered/synced/published (visible, uncontrollable,
+   or an empty accessory). All three now omit such a device entirely; a device with
+   at least one genuinely mapped capability (e.g. `fan`+`onoff`) is unaffected.
+
+**A real regression was found and fixed during full verification** (not just
+touched-package testing): Fix 3 broke `knx-installer-workflow.e2e.test.ts`'s two
+"KNX Automatic Room Creation" tests — their fixture device was incidentally named
+"Vent Fan Switch" (testing room assignment, not fan control), which now correctly
+gets zero bindable capabilities and fails KNX approval. Renamed the fixture to
+"Attic Utility Switch" (classifies as `onoff`) — not a flaw in Fix 3.
+
+**Verification:** full monorepo `pnpm turbo run build typecheck test` —
+**173/173 tasks successful** (one unrelated `heos-driver.test.ts` `ECONNRESET` flake,
+confirmed non-reproducing, matching this repo's already-known flaky-test class).
+
+**Disclosed, not silently skipped:** Fix 1 (Sensor Expanded Sheet) has no automated
+UI test in this repo and was not verified live via Playwright this session — verified
+by typecheck and code review only. A follow-up session should open the app against a
+sensor-only device and confirm the Expanded Sheet renders a read-only readout with no
+command firing.
+
+## Session: Native Backend Implementation — Home Assistant becomes optional
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New docs:
+**`docs/architecture/Native-Backend-Implementation.md`**,
+**`docs/architecture/adr/0023-native-backend-default.md`**. No protocol, deployment, or
+UI file modified — confirmed via a scoped `git diff`.
+
+**The ask:** replace the production use of `MockAdapter` with a true Native Backend;
+make Home Assistant a genuinely optional compatibility adapter; classify every
+`IBackendAdapter` method; fix commissioning ownership defaults, `Device.status`
+reconciliation, and `engine: "ha"` automations.
+
+**Key finding before writing any code:** the brief's stated "current architecture"
+(`RoutingBackendAdapter → {Home Assistant, Mock Adapter}`) didn't match the code.
+`SupremeNativeAdapter` already existed, was already a complete `IBackendAdapter`, and
+was **already** wired unconditionally as the router's `native` slot — it already *is*
+the Native Backend. The real gaps were narrower: the router's `ha` slot silently got
+`MockAdapter` whenever `SUPREME_BACKEND !== "ha"` (the type didn't even have a
+`"native"` value), and `HomeService.bind()` defaulted every device's ownership to
+`"ha"` unconditionally — the exact "nothing else claimed it" heuristic
+`OwnershipRegistry`'s own docstring forbids. See the architecture doc's §0 for the
+full account.
+
+**Changes, in order:**
+- `services/gateway/src/config.ts` — `backend: "native" | "mock" | "ha"`, defaulting
+  to `"native"`; `assertSecureConfig()` now refuses `SUPREME_BACKEND=mock` in production.
+- `services/integration-layer/src/ha-unavailable-adapter.ts` (new) — the honest "HA
+  compatibility plugin not installed" placeholder, replacing `MockAdapter`'s old
+  implicit role in the router's `ha` slot.
+- `services/gateway/src/bootstrap.ts` — three-way `haSide` selection (`ha`/`mock`/
+  `HaUnavailableAdapter`).
+- `services/integration-layer/src/sil.ts` — new `haCompatBackendKind` accessor and
+  `primeState()` (centralizes in-process engine state priming, previously
+  bootstrap.ts-only and broken for every test that builds its own `AppContext`).
+- `services/home/src/home-service.ts` — `bind()`'s default ownership is now `"ha"`
+  only when the hub's HA-compatibility slot has a working backend behind it (real or
+  mock-standing-in-for-tests); `"native"` otherwise. New `setDeviceStatus()`.
+- `services/gateway/src/{context,installer-context,main}.ts` — centralized state
+  priming in `AppContext.create()`; `InstallerServices.reconcileDeviceStatuses()`
+  (per-device `getDiagnostics().connectionStatus`, falling back to protocol-level
+  connect status; never touches a device with no honest signal), called on every
+  driver lifecycle transition and once a minute from the tick loop.
+- `services/automations/src/service.ts` + `engine.ts` — `create()`/`update()` reject
+  new `engine: "ha"` automations; `health()` reports a legacy one as `"broken"`.
+- `packages/domain-model/src/automations-dsl.ts` — doc comment updated to match.
+
+**Tests added:** `ha-unavailable-adapter.test.ts`, two new cases in
+`routing-adapter.test.ts`, four new cases in `config.test.ts`,
+`native-backend-boot.e2e.test.ts` (the first test in this repo to exercise the real
+`bootstrap.createHubContext` production path — every other gateway e2e test builds
+its own `AppContext` directly), `device-status-reconciliation.e2e.test.ts`, and four
+new cases in `services/automations/src/engine.test.ts`.
+
+**Verification:** full monorepo `pnpm turbo run build typecheck test` — **173/173
+tasks successful** (one unrelated `heos-driver.test.ts` `ECONNRESET` flake on the
+first run, confirmed non-reproducing on an isolated rerun, matching this repo's
+already-known flaky-test class — not a regression from this work). Gateway package
+alone: 74/74 test files, 306/306 tests.
+
+**Disclosed, deliberate scope boundaries (not bugs):** `engine: "ha"` automations are
+rejected, not executed — no live push-to-HA/`externalRef` lifecycle exists
+(`compileToHa()` is a pure compiler nothing calls), and building one was out of this
+milestone's scope and unverifiable without a live HA instance in this sandbox.
+`Device.status` for HA-owned, unassigned, or native-owned-but-never-bound devices is
+left untouched — no honest per-device connectivity signal exists for them.
+
 ## Session: Runtime Data Path Verification — Casambi UDP receive-path evidence tooling
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:
