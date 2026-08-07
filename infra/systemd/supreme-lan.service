@@ -12,21 +12,37 @@
 # The entire class of Docker networking problems documented in
 # docs/architecture/Casambi-LAN-Receive-Path-Investigation.md simply does not exist here.
 #
-# Install:
-#   install -m 0644 infra/systemd/supreme-lan.service /etc/systemd/system/
+# Install: rendered by infra/native-linux (install.sh/update.sh/recover.sh) via
+# render_template, substituting the ___PLACEHOLDER___ tokens below from lib/common.sh's
+# path constants — never installed as a raw, unmodified copy (see § Bug fix below).
 #   systemctl daemon-reload && systemctl enable --now supreme-lan
+#
+# § Bug fix (Phase 2 runtime investigation): this unit used to hardcode
+# /opt/supreme/services/lan directly, which never existed under this deployment's actual
+# staged-release layout (/opt/supreme/releases/<version>, symlinked from /opt/supreme/
+# current) — every OTHER native-linux unit (supreme-gateway, supreme-commissioning) already
+# runs from ___SUPREME_APP_DIR___/current/services/<name>. Real evidence:
+# `status=200/CHDIR — No such file or directory`, because that directory was never staged
+# anywhere. Fixed to use the same ___SUPREME_APP_DIR___/current/... convention as every
+# sibling unit — there is now exactly one deployment path model, not two.
 
 [Unit]
 Description=SupremeOS LAN Transport Service (supreme-lan)
-Documentation=file:///opt/supreme/docs/architecture/Supreme-LAN-Transport-Architecture.md
+Documentation=file://___SUPREME_APP_DIR___/current/docs/architecture/Supreme-LAN-Transport-Architecture.md
 # Ordering only — supreme-lan does not require NATS to be healthy to start; it reconnects.
-After=network-online.target nats-server.service
+# § Bug fix (Phase 3 repo-wide deployment audit): this referenced a unit named
+# `nats-server.service`, which has never existed in this deployment — the real unit
+# install.sh renders and enables is `supreme-nats.service` (see install.sh's
+# configure_nats()). Referencing a nonexistent unit in `After=` is not an error systemd
+# reports; it silently no-ops the ordering constraint instead, so this line has never
+# actually done anything. Fixed to the real unit name.
+After=network-online.target supreme-nats.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /opt/supreme/services/lan/dist/server/main.js
-WorkingDirectory=/opt/supreme/services/lan
+ExecStart=/usr/bin/node ___SUPREME_APP_DIR___/current/services/lan/dist/server/main.js
+WorkingDirectory=___SUPREME_APP_DIR___/current/services/lan
 Restart=always
 RestartSec=2
 

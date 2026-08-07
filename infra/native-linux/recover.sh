@@ -40,6 +40,12 @@ detect_and_repair() {
   if [ -d "$SUPREME_APP_DIR" ]; then
     chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_APP_DIR" 2>/dev/null && note_fixed "Ownership of ${SUPREME_APP_DIR}"
   fi
+  # § Bug fix (Phase 2 runtime investigation): `chown -R` above fixes ownership but not the
+  # MODE bit — a releases dir left at 700 by a leaked umask (see install.sh's
+  # persist_secrets()) stays untraversable by the supreme user even after this chown.
+  if [ -d "$SUPREME_RELEASES_DIR" ]; then
+    chmod 0750 "$SUPREME_RELEASES_DIR" 2>/dev/null && note_fixed "Permissions on ${SUPREME_RELEASES_DIR}"
+  fi
   if [ -d "$SUPREME_DATA_DIR" ]; then
     chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_DATA_DIR" 2>/dev/null && note_fixed "Ownership of ${SUPREME_DATA_DIR}"
   fi
@@ -70,6 +76,11 @@ detect_and_repair() {
   chmod 0640 "${SUPREME_CONFIG_DIR}/gateway.env" 2>/dev/null
   render_template "${SCRIPT_DIR}/config/nats.conf.template" "${SUPREME_CONFIG_DIR}/nats.conf" \
     && note_fixed "Regenerated nats.conf" || note_issue "Failed to regenerate nats.conf from template — on-disk copy left untouched."
+  # § Bug fix (Phase 2 runtime investigation) — see install.sh's configure_nats() for the
+  # full evidence (a leaked umask left this file root:root 600, unreadable by
+  # supreme-nats.service's User=supreme).
+  chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/nats.conf" 2>/dev/null
+  chmod 0640 "${SUPREME_CONFIG_DIR}/nats.conf" 2>/dev/null
 
   # § A regenerated-but-invalid Caddyfile must never be left live: the service-restart loop
   # below unconditionally restarts caddy, and restarting it against a config already known
@@ -93,7 +104,9 @@ detect_and_repair() {
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
   if [ -r "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" ]; then
-    cp "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
+    # § Bug fix (Phase 2 runtime investigation) — render, don't cp raw (see the file's own
+    # header comment for the path-mismatch this used to bake in unmodified).
+    render_template "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
   fi
   if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then
     render_template "${SCRIPT_DIR}/systemd/supreme-homeassistant.service" /etc/systemd/system/supreme-homeassistant.service

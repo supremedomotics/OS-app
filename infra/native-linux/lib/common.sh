@@ -33,8 +33,9 @@ SUPREME_USER="${SUPREME_USER:-supreme}"
 SUPREME_GROUP="${SUPREME_GROUP:-supreme}"
 
 # systemd units this deployment owns. `supreme-lan` is intentionally NOT redefined here —
-# it installs the repo's own infra/systemd/supreme-lan.service unmodified (§ requirement:
-# "do not modify" the existing native-linux precedent for the LAN service).
+# it's the repo's own infra/systemd/supreme-lan.service (a real template, rendered like
+# every sibling unit — see that file's own header comment for the Phase 2 path-mismatch
+# fix), not a competing definition invented in infra/native-linux/systemd/.
 SUPREME_NODE_SERVICES=(supreme-gateway supreme-lan)
 SUPREME_PY_SERVICES=(supreme-commissioning)
 # Third-party services this deployment configures but does not author the unit for
@@ -87,13 +88,36 @@ require_ubuntu_24_04() {
 # in a container without systemd as init, which install.sh and health-check.sh both need to
 # tell apart from "systemd is present but the unit failed to start". Never assumed true;
 # every caller checks this before trusting `systemctl is-active` as a real signal.
+#
+# § Bug fix (Phase 2 runtime investigation): the previous implementation trusted ONLY the
+# exit code of `systemctl is-system-running` — but systemd's own exit-code contract does
+# NOT distinguish "degraded" from "no bus reachable at all": both return exit code 1
+# (verified: `man systemctl` documents is-system-running returns 0 only for "running", and
+# every other state — degraded, maintenance, starting, stopping, AND the D-Bus-unreachable
+# case — returns non-zero with no dedicated code of its own). Checking `rc -ne 1` as the
+# "live" test therefore treated a perfectly healthy-but-degraded production system (real
+# evidence: PID 1 = systemd, `is-system-running` prints "degraded", `postgresql.service` is
+# genuinely active) identically to a container with no init process at all — the installer
+# then skipped every `systemctl enable --now` call, so the Gateway/LAN/Commissioning never
+# started and migrations never ran.
+#
+# Fixed to check two INDEPENDENT, unambiguous signals instead of one ambiguous exit code:
+#   1. PID 1 is genuinely `systemd` (`ps -p 1 -o comm=`) — the one thing no container
+#      without systemd as init, no WSL1, and no CI sandbox can fake.
+#   2. `systemctl is-system-running`'s actual STDOUT (not exit code) is one of the known
+#      "the bus is reachable and systemd is answering" words. "degraded"/"maintenance"/
+#      "starting"/"stopping" all mean a live, queryable systemd — just not fully settled.
+#      An unreachable bus prints nothing recognizable on stdout (an error goes to stderr
+#      instead, or the command produces no output at all) and correctly falls through to
+#      "not live".
 systemd_is_live() {
-  systemctl is-system-running >/dev/null 2>&1
-  local rc=$?
-  # is-system-running exits non-zero for "degraded"/"starting" too — those still mean a
-  # LIVE systemd, just not fully settled. Only "Failed to connect to bus"/no PID 1 means dead.
-  [ "$rc" -ne 1 ] || return 1
-  return 0
+  [ "$(ps -p 1 -o comm= 2>/dev/null)" = "systemd" ] || return 1
+  local state
+  state="$(systemctl is-system-running 2>/dev/null)"
+  case "$state" in
+    running|degraded|maintenance|starting|stopping) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -595,6 +619,16 @@ stage_release_version() {
   local target="${SUPREME_RELEASES_DIR}/${version}"
   local building="${target}.building"
   mkdir -p "$SUPREME_RELEASES_DIR"
+  # § Bug fix (Phase 2 runtime investigation) — defense in depth, independent of whatever
+  # the calling shell's umask happens to be: every service that reads staged code
+  # (supreme-gateway/lan/commissioning) runs as User=supreme, so this directory must always
+  # be traversable by that account regardless of how it was created. install.sh's
+  # create_directories() also creates+owns this directory up front now (the primary fix),
+  # but this is the one place that can recreate it standalone (e.g. after it's been removed
+  # outside install.sh) — real evidence showed a leaked umask alone was enough to produce
+  # `drwx------ root root` here, silently blocking every service with `status=200/CHDIR`.
+  chown "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_RELEASES_DIR"
+  chmod 0750 "$SUPREME_RELEASES_DIR"
   rm -rf "$building"
   cp -a "$SUPREME_REPO_DIR" "$building"
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$building"

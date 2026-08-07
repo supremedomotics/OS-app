@@ -89,10 +89,20 @@ prune_stale_incremental_state() {
 
 build_workspace() {
   log_step "Building the complete SupremeOS workspace (source mode)"
-  cd "$SUPREME_REPO_DIR"
-  prune_stale_incremental_state
-  run_as_supreme pnpm install --frozen-lockfile
-  run_as_supreme pnpm turbo run build
+  # § Bug fix (Phase 3 state-leak audit) — a bare `cd` here used to change install.sh's
+  # own working directory for the REST of the process (bash `cd` is shell-wide, not scoped
+  # to the function it's called from — the exact same class of bug as persist_secrets()'s
+  # leaked umask). Every later phase happened to still work only because this codebase
+  # consistently uses absolute paths ($SCRIPT_DIR/..., $SUPREME_*_DIR) rather than anything
+  # relative to CWD — but that was luck, not a guarantee, and is exactly the kind of latent
+  # bug the umask leak already proved this pattern produces. Scoped to a subshell instead,
+  # so install.sh's own CWD is provably untouched once this function returns.
+  (
+    cd "$SUPREME_REPO_DIR"
+    prune_stale_incremental_state
+    run_as_supreme pnpm install --frozen-lockfile
+    run_as_supreme pnpm turbo run build
+  )
   log_info "Workspace build complete."
 }
 
@@ -110,9 +120,12 @@ verify_workspace() {
     return
   fi
   log_step "Verifying the workspace (typecheck + test) — same suite as CI/main"
-  cd "$SUPREME_REPO_DIR"
-  run_as_supreme pnpm turbo run typecheck test \
-    || die "Workspace verification failed — see the failing task's own output above. Refusing to deploy an unverified build. Re-run with SUPREME_SKIP_TESTS=1 only if you have already verified this build elsewhere."
+  # § Bug fix (Phase 3 state-leak audit) — same fix as build_workspace() above: `cd`
+  # scoped to a subshell so it can never leak into later installer phases.
+  (
+    cd "$SUPREME_REPO_DIR"
+    run_as_supreme pnpm turbo run typecheck test
+  ) || die "Workspace verification failed — see the failing task's own output above. Refusing to deploy an unverified build. Re-run with SUPREME_SKIP_TESTS=1 only if you have already verified this build elsewhere."
   log_info "typecheck + test: all green."
 }
 

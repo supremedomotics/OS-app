@@ -305,16 +305,22 @@ create_system_user() {
 validate_phase_create_directories() {
   [ -d "$SUPREME_APP_DIR" ] && [ -d "$SUPREME_REPO_DIR" ] && [ -d "$SUPREME_CONFIG_DIR" ] \
     && [ -d "$SUPREME_SECRETS_DIR" ] && [ -d "$SUPREME_DATA_DIR" ] && [ -d "$SUPREME_BACKUP_DIR" ] \
-    && [ -d "${SUPREME_APP_DIR}/venvs" ]
+    && [ -d "${SUPREME_APP_DIR}/venvs" ] && [ -d "$SUPREME_RELEASES_DIR" ]
 }
 
 create_directories() {
   log_step "Creating directory layout"
+  # § Bug fix (Phase 2 runtime investigation): SUPREME_RELEASES_DIR is created explicitly
+  # here now (was previously left to stage_release_version()'s own `mkdir -p`, which ran
+  # AFTER the umask-leak above had already tightened the shell's umask to 077 — see
+  # persist_secrets()'s comment) so it's covered by this phase's own chown -R/chmod 0750
+  # sweep below, the same as every other directory this deployment owns, rather than being
+  # created fresh — and unowned — later.
   mkdir -p "$SUPREME_APP_DIR" "$SUPREME_REPO_DIR" "$SUPREME_CONFIG_DIR" "$SUPREME_SECRETS_DIR" \
     "$SUPREME_DATA_DIR"/{nats,matter,homeassistant,appletv} "$SUPREME_BACKUP_DIR" \
-    "${SUPREME_APP_DIR}/venvs"
+    "${SUPREME_APP_DIR}/venvs" "$SUPREME_RELEASES_DIR"
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR"
-  chmod 0750 "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR"
+  chmod 0750 "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR" "$SUPREME_RELEASES_DIR"
   chmod 0700 "$SUPREME_SECRETS_DIR"
   chown "root:${SUPREME_GROUP}" "$SUPREME_SECRETS_DIR"
 }
@@ -327,9 +333,23 @@ validate_phase_persist_secrets() {
 persist_secrets() {
   # Written once ANY time collect_answers generated a fresh value; re-writing an identical
   # value on every run is harmless and keeps this idempotent without extra bookkeeping.
-  umask 077
-  echo -n "$SUPREME_TOKEN_SECRET" > "${SUPREME_SECRETS_DIR}/token-secret"
-  echo -n "$POSTGRES_PASSWORD" > "${SUPREME_SECRETS_DIR}/postgres-password"
+  #
+  # § Bug fix (Phase 2 runtime investigation): `umask 077` here used to leak for the REST
+  # of install.sh's process — `umask` is a shell-wide setting, not scoped to this function,
+  # and nothing ever reset it. Every directory/file this script created AFTER this phase ran
+  # (stage_release_version()'s `mkdir -p "$SUPREME_RELEASES_DIR"`, every render_template()
+  # output not explicitly chmod'd afterward — nats.conf, the mosquitto/Caddy configs)
+  # silently inherited mode 700/600 instead of the intended 750/640/644, breaking every
+  # service that isn't root. Confirmed by real evidence: `/opt/supreme/releases` came out
+  # `drwx------ root root` (777 & ~077 = 700) and `/etc/supremeos/nats.conf` came out `root:
+  # root 600` — exactly the 077 leak's signature, not two unrelated bugs. Fixed by scoping
+  # the tightened umask to a subshell, so it can never affect anything that runs after this
+  # function returns, regardless of what gets added later.
+  (
+    umask 077
+    echo -n "$SUPREME_TOKEN_SECRET" > "${SUPREME_SECRETS_DIR}/token-secret"
+    echo -n "$POSTGRES_PASSWORD" > "${SUPREME_SECRETS_DIR}/postgres-password"
+  )
   chown "root:${SUPREME_GROUP}" "${SUPREME_SECRETS_DIR}"/*
   chmod 0640 "${SUPREME_SECRETS_DIR}"/*
 }
@@ -560,6 +580,13 @@ validate_phase_configure_mosquitto() {
 configure_mosquitto() {
   log_step "Configuring Mosquitto"
   render_template "${SCRIPT_DIR}/config/mosquitto-supremeos.conf.template" /etc/mosquitto/conf.d/supremeos.conf
+  # § Bug fix (Phase 2 runtime investigation): explicit, matching Ubuntu's own package
+  # convention for /etc/mosquitto/conf.d/*.conf (root:root, world-readable, no secrets in
+  # this file) — never left to inherit whatever umask happened to be active. Mosquitto's
+  # own systemd unit runs as `User=mosquitto`, a different account entirely from `supreme`,
+  # so this must be readable by "other", not by group membership.
+  chown root:root /etc/mosquitto/conf.d/supremeos.conf
+  chmod 0644 /etc/mosquitto/conf.d/supremeos.conf
   systemctl_enable_now mosquitto
   if systemd_is_live; then systemctl restart mosquitto; fi
 }
@@ -571,6 +598,14 @@ validate_phase_configure_nats() {
 configure_nats() {
   log_step "Configuring supreme-nats"
   render_template "${SCRIPT_DIR}/config/nats.conf.template" "${SUPREME_CONFIG_DIR}/nats.conf"
+  # § Bug fix (Phase 2 runtime investigation): render_template's output is never
+  # explicitly owned/permissioned here (unlike gateway.env below), so it silently inherited
+  # whatever the calling shell's umask happened to be. Real evidence: nats.conf came out
+  # `root:root 600` — unreadable by supreme-nats.service's `User=supreme Group=supreme` —
+  # and NATS failed with a bare "permission denied". Explicit now, matching gateway.env's
+  # existing pattern, so this is correct regardless of umask.
+  chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/nats.conf"
+  chmod 0640 "${SUPREME_CONFIG_DIR}/nats.conf"
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
   if systemd_is_live; then systemctl daemon-reload; fi
   systemctl_enable_now supreme-nats
@@ -583,6 +618,11 @@ validate_phase_configure_caddy() {
 configure_caddy() {
   log_step "Configuring Caddy edge proxy"
   render_template "${SCRIPT_DIR}/config/Caddyfile.template" /etc/caddy/Caddyfile
+  # § Bug fix (Phase 2 runtime investigation): same umask-independence fix as nats.conf/
+  # mosquitto above — Caddy's own package-provided systemd unit runs as `User=caddy`, so
+  # this must be readable by "other", matching the .deb package's own default.
+  chown root:root /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
   caddy validate --config /etc/caddy/Caddyfile || die "Generated Caddyfile failed validation — see caddy's own error above."
   systemctl_enable_now caddy
   if systemd_is_live; then systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
@@ -610,11 +650,13 @@ install_systemd_units() {
   log_step "Installing systemd units"
   render_template "${SCRIPT_DIR}/systemd/supreme-gateway.service" /etc/systemd/system/supreme-gateway.service
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
-  # supreme-lan: install the repo's OWN, pre-existing native unit unmodified (§ requirement
-  # — do not create a parallel/competing definition for a service that already has a
-  # documented native-linux deployment target). Only the placeholder substitution (none
-  # today — that file hardcodes /opt/supreme already) would ever apply here.
-  cp "${SUPREME_REPO_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
+  # supreme-lan: the repo's own, pre-existing native unit — reused, not redefined here (§
+  # requirement — do not create a parallel/competing definition for a service that already
+  # has a documented native-linux deployment target) — but now RENDERED like every sibling
+  # unit, not copied verbatim. § Bug fix (Phase 2 runtime investigation): a raw `cp` baked
+  # in that file's own hardcoded /opt/supreme/services/lan path, which never matched this
+  # deployment's staged-release layout — see the file's own header comment for the evidence.
+  render_template "${SUPREME_REPO_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
   if [ "${SUPREME_INSTALL_HA}" = "1" ]; then
     render_template "${SCRIPT_DIR}/systemd/supreme-homeassistant.service" /etc/systemd/system/supreme-homeassistant.service
   fi

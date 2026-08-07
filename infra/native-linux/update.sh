@@ -42,12 +42,20 @@ render_config() {
   chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/gateway.env"
   chmod 0640 "${SUPREME_CONFIG_DIR}/gateway.env"
   render_template "${SCRIPT_DIR}/config/nats.conf.template" "${SUPREME_CONFIG_DIR}/nats.conf"
+  # § Bug fix (Phase 2 runtime investigation) — see install.sh's configure_nats() for the
+  # full evidence; same fix applied here since update.sh re-renders this file independently.
+  chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/nats.conf"
+  chmod 0640 "${SUPREME_CONFIG_DIR}/nats.conf"
   render_template "${SCRIPT_DIR}/config/Caddyfile.template" /etc/caddy/Caddyfile
+  chown root:root /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
   caddy validate --config /etc/caddy/Caddyfile || die "Regenerated Caddyfile failed validation — see caddy's own error above. Old config left in place is NOT guaranteed; check /etc/caddy/Caddyfile before relying on it."
   render_template "${SCRIPT_DIR}/systemd/supreme-gateway.service" /etc/systemd/system/supreme-gateway.service
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
-  cp "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
+  # § Bug fix (Phase 2 runtime investigation) — supreme-lan.service is now a real template
+  # (see its own header comment); render it like every sibling unit, never `cp` it raw.
+  render_template "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
   if [ "${SUPREME_INSTALL_HA}" = "1" ]; then
     render_template "${SCRIPT_DIR}/systemd/supreme-homeassistant.service" /etc/systemd/system/supreme-homeassistant.service
   fi
