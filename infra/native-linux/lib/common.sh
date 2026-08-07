@@ -122,6 +122,44 @@ systemd_is_live() {
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# § Bug fix (Phase 4 — Redis native-linux investigation, real Ubuntu 24.04 VM evidence):
+# `/run` is tmpfs, wiped empty on every reboot. Ubuntu's redis-server package is
+# responsible for recreating `/run/redis` itself (via its own package-provided systemd
+# RuntimeDirectory=/tmpfiles.d mechanism) — but that mechanism only reliably fires at BOOT
+# time, when systemd-tmpfiles-setup.service runs once, early. install.sh runs
+# `apt-get install redis-server` mid-session on an already-booted machine, with no reboot
+# anywhere in the installer's flow — the boot-time tmpfiles pass already happened before
+# the package even existed on disk, so `/run/redis` is never created this session.
+# `redis-server.service` runs as the unprivileged `User=redis`, which cannot create a
+# directory under root-owned `/run` itself: `Can't open PID file ... Operation not
+# permitted` — the exact reported symptom, and confirmed NOT caused by anything else in
+# this deployment layer (a full grep of infra/native-linux/ found zero references to
+# `/run`, `RuntimeDirectory`, `tmpfiles`, or any redis path anywhere outside this fix —
+# and Phase 2/3's umask/CWD fixes cannot be the cause either: those affect only
+# install.sh's own process, which exits long before any later, separately-booted systemd
+# service invocation — systemd does not inherit an installer script's umask). See
+# docs/architecture/Native-Linux-Deployment-Hardening-Phase4.md for the full investigation.
+#
+# Ships an idempotent tmpfiles.d rule so `/run/redis` is correct on every FUTURE boot too
+# (not just once), and applies it immediately so the CURRENT session — the one that just
+# installed the package and is about to start it, with no reboot — doesn't need one either.
+ensure_redis_runtime_dir() {
+  cat > /etc/tmpfiles.d/supremeos-redis.conf <<'EOF'
+# SupremeOS-managed. Ensures /run/redis exists with correct ownership on every boot, even
+# though it's normally the redis-server package's own responsibility — see
+# docs/architecture/Native-Linux-Deployment-Hardening-Phase4.md for why this is still
+# needed. Safe/idempotent alongside whatever the package's own tmpfiles rule (if any)
+# already declares for the same path.
+d /run/redis 0755 redis redis -
+EOF
+  if command_exists systemd-tmpfiles; then
+    systemd-tmpfiles --create /etc/tmpfiles.d/supremeos-redis.conf \
+      || log_warn "systemd-tmpfiles --create failed for /etc/tmpfiles.d/supremeos-redis.conf — /run/redis may still be missing this session; it will exist after the next reboot regardless."
+  else
+    log_warn "systemd-tmpfiles not available in this environment — /etc/tmpfiles.d/supremeos-redis.conf written but not applied (expected outside a real systemd target)."
+  fi
+}
+
 # Enables and starts a unit, but ONLY when systemd is genuinely live — never attempts (and
 # never dies on) a systemctl call that can't possibly succeed in an environment with no
 # real PID 1 (e.g. this repo's own CI/test sandboxes). On a live systemd, failure to

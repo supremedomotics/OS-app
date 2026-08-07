@@ -268,6 +268,49 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "Redis /run runtime directory — must never rely on a reboot that never happens"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: /run/redis (tmpfs) not existing when redis-server.service starts,
+# because the package's own boot-time tmpfiles pass already ran before `apt-get install
+# redis-server` (mid-session, no reboot) put the package on disk — "Can't open PID file
+# ... Operation not permitted" (Phase 4).
+
+if declare -f ensure_redis_runtime_dir >/dev/null 2>&1; then
+  pass "ensure_redis_runtime_dir() is defined in lib/common.sh"
+else
+  fail "ensure_redis_runtime_dir() is defined in lib/common.sh" "not found after sourcing"
+fi
+
+# Static content check — doesn't write to the real /etc/tmpfiles.d on the machine running
+# this test suite (unsafe/undesirable outside a real target); confirms the function BODY
+# would produce the correct tmpfiles.d(5) rule if it ran for real: `d <path> <mode> <owner>
+# <group> <age>` creating /run/redis 0755 owned redis:redis.
+_redis_tmpfiles_rule="$(sed -n '/^ensure_redis_runtime_dir()/,/^}/p' "${SCRIPT_DIR}/lib/common.sh" | grep -E '^d /run/redis ')"
+assert_eq "ensure_redis_runtime_dir() declares 'd /run/redis 0755 redis redis -'" "$_redis_tmpfiles_rule" "d /run/redis 0755 redis redis -"
+
+if grep -q "ensure_redis_runtime_dir" "${SCRIPT_DIR}/install.sh"; then
+  pass "install.sh's configure_redis() calls ensure_redis_runtime_dir()"
+else
+  fail "install.sh's configure_redis() calls ensure_redis_runtime_dir()" "not called anywhere in install.sh"
+fi
+if grep -q "ensure_redis_runtime_dir" "${SCRIPT_DIR}/recover.sh"; then
+  pass "recover.sh's repair flow calls ensure_redis_runtime_dir()"
+else
+  fail "recover.sh's repair flow calls ensure_redis_runtime_dir()" "not called anywhere in recover.sh"
+fi
+
+# Ordering: ensure_redis_runtime_dir must run BEFORE systemctl_enable_now redis-server in
+# configure_redis() — calling it after would defeat the purpose (the service would already
+# have failed to start by then).
+_redis_call_line="$(grep -n 'ensure_redis_runtime_dir' "${SCRIPT_DIR}/install.sh" | head -1 | cut -d: -f1)"
+_redis_enable_line="$(grep -n 'systemctl_enable_now redis-server' "${SCRIPT_DIR}/install.sh" | head -1 | cut -d: -f1)"
+if [ -n "$_redis_call_line" ] && [ -n "$_redis_enable_line" ] && [ "$_redis_call_line" -lt "$_redis_enable_line" ]; then
+  pass "ensure_redis_runtime_dir() runs before systemctl_enable_now redis-server"
+else
+  fail "ensure_redis_runtime_dir() runs before systemctl_enable_now redis-server" "call at line ${_redis_call_line:-?}, enable at line ${_redis_enable_line:-?}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Installer idempotency — checkpoint validators exist for every artifact-producing phase"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 # Regression target: a phase whose checkpoint is trusted blindly (no validate_phase_<name>)

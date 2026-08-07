@@ -116,6 +116,12 @@ detect_and_repair() {
     note_fixed "systemd unit files re-rendered + daemon-reload"
   fi
 
+  # § Bug fix (Phase 4 Redis investigation) — /run is tmpfs; a controller that's been
+  # running a while (this is a repair run, not a fresh install) may have had redis-server
+  # restarted or reinstalled since the last reboot with /run/redis still missing. See
+  # ensure_redis_runtime_dir()'s own comment in lib/common.sh for the full trace.
+  ensure_redis_runtime_dir && note_fixed "Ensured /run/redis exists with correct ownership"
+
   if [ "$RESTORE_BACKUP" = "1" ]; then
     log_step "Restoring the most recent backup"
     local latest

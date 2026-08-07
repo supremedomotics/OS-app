@@ -555,7 +555,8 @@ configure_postgres() {
 }
 
 validate_phase_configure_redis() {
-  grep -q '^save ""' /etc/redis/redis.conf 2>/dev/null && grep -q '^appendonly no' /etc/redis/redis.conf 2>/dev/null
+  grep -q '^save ""' /etc/redis/redis.conf 2>/dev/null && grep -q '^appendonly no' /etc/redis/redis.conf 2>/dev/null \
+    && [ -r /etc/tmpfiles.d/supremeos-redis.conf ]
 }
 
 configure_redis() {
@@ -570,6 +571,9 @@ configure_redis() {
     /etc/redis/redis.conf
   grep -q '^save ""' /etc/redis/redis.conf || echo 'save ""' >> /etc/redis/redis.conf
   grep -q '^appendonly no' /etc/redis/redis.conf || echo 'appendonly no' >> /etc/redis/redis.conf
+  # § Bug fix (Phase 4 Redis investigation) — see ensure_redis_runtime_dir()'s own comment
+  # in lib/common.sh for the full root-cause trace. Must run BEFORE the service starts.
+  ensure_redis_runtime_dir
   systemctl_enable_now redis-server
 }
 
