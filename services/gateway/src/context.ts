@@ -64,7 +64,7 @@ import { SecurityService, type ISecurityStore } from "@supreme/security";
 import { StreamGateway, NullStreamGateway, type ICameraStreamGateway } from "@supreme/cameras";
 import { CameraService } from "./camera-service.js";
 import type { GatewayConfig } from "./config.js";
-import { InstallerServices } from "./installer-context.js";
+import { InstallerServices, type KnxDiscoveryDriverFactory } from "./installer-context.js";
 import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protocols";
 import type { VoiceStatePublisher } from "./voice-publisher.js";
 import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit";
@@ -142,6 +142,9 @@ export interface AppDeps {
   /** Env-configured native driver instances (bootstrap.ts), fed into the unified
    * Driver Lifecycle pipeline alongside manifest-configured ones (§ Driver Lifecycle). */
   envDrivers?: Map<string, INativeProtocolDriver>;
+  /** Test-only seam for the KNX installer discovery pipeline (§ InstallerDeps.
+   * knxDiscoveryDriverFactory's own doc comment) — omitted in production. */
+  knxDiscoveryDriverFactory?: KnxDiscoveryDriverFactory;
 }
 
 /**
@@ -537,6 +540,7 @@ export class AppContext {
       configStore: this.homeConfig,
       envDrivers: deps.envDrivers,
       bus: this.bus,
+      knxDiscoveryDriverFactory: deps.knxDiscoveryDriverFactory,
     });
     await this.installer.init();
 

@@ -20,6 +20,13 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import type { HomeView } from "@supreme/contracts";
+import {
+  SupremeKnxDriver,
+  type IKnxProvider,
+  type KnxProviderDiagnostics,
+  type KnxProviderHealth,
+  type KnxTask,
+} from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
@@ -44,6 +51,36 @@ class FakeKnx implements INativeProtocolDriver {
   onState(l: StateListener): () => void { this.listeners.add(l); return () => this.listeners.delete(l); }
 }
 
+/** § Test isolation fix — this suite hits the real HTTP installer route, which builds a
+ * REAL `SupremeKnxDriver` for discovery via `InstallerServices.knxDiscoveryDriver()`
+ * (never `FakeKnx` above — that's only the "knx" protocol's live command/binding driver,
+ * a completely different object). Left unmocked, `SupremeKnxDriver`'s default
+ * `KnxIotProvider` performs REAL CoAP multicast discovery on whatever network this suite
+ * runs on, picking up real/other KNX-IoT devices and making the resulting queue length
+ * nondeterministic (observed: expected 1, got 3; expected 0, got 2).
+ *
+ * This fake implements the same `IKnxProvider` seam `SupremeKnxDriver` already supports
+ * for tests (see services/protocols/src/knx/supreme-knx-driver.test.ts's own
+ * `FakeKnxIotProvider`) — `discover()` deterministically returns no devices, so every
+ * device in this suite's queue comes from the ETS signals under test, never from
+ * whatever happens to be on the network. Every other stage of the real pipeline
+ * (`discoverUnified()`, ETS merge, grouping, capability mapping) is exercised unchanged. */
+class FakeEmptyKnxIotProvider implements IKnxProvider {
+  readonly name = "fake-empty-knx-iot";
+  async initialize(): Promise<void> {}
+  async discover(): Promise<DiscoveredDevice[]> { return []; }
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  async shutdown(): Promise<void> {}
+  async execute(_task: KnxTask): Promise<unknown> { throw new Error("not applicable — discover() never returns a device to run a task against"); }
+  subscribe(): void { throw new Error("not applicable"); }
+  unsubscribe(): void {}
+  health(): KnxProviderHealth { return { connected: true, lastError: null }; }
+  diagnostics(): KnxProviderDiagnostics {
+    return { provider: this.name, connected: true, packetsSent: 0, packetsReceived: 0, lastTelegramAt: null, lastCommandAt: null, lastError: null, reconnectAttempts: 0 };
+  }
+}
+
 /**
  * Production KNX onboarding pipeline (§ Phase 5): the real HTTP surface an installer
  * client calls — Scan → discoverUnified() → Confidence/Room/Duplicate/Binding engines →
@@ -66,6 +103,10 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,
       protocolBindingStore: new InMemoryProtocolBindingStore(),
+      // § Test isolation fix — see FakeEmptyKnxIotProvider's own doc comment. Builds the
+      // REAL SupremeKnxDriver (discoverUnified(), ETS merge, grouping, capability mapping
+      // all stay real); only the physical CoAP multicast discovery is deterministic.
+      knxDiscoveryDriverFactory: (config) => new SupremeKnxDriver({ ...config, iotProvider: new FakeEmptyKnxIotProvider() }),
     });
     app = await buildServer(ctx);
     await app.listen({ host: "127.0.0.1", port: 0 });
@@ -214,6 +255,193 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
   }, 10000);
 });
 
+/** § Development Strategy Part 4 — ETS + KNX-IoT correlation.
+ *
+ * Before writing these tests, the actual correlation mechanism was inspected, not assumed
+ * (services/protocols/src/knx/unified-device-mapper.ts +
+ * packages/domain-model/src/device-grouping.ts):
+ *
+ *   - KnxIotProvider.discover()'s REAL, documented CoAP `/.well-known/core` response only
+ *     ever yields a `host` (IP) and a `linkFormat` string (which may carry a self-
+ *     advertised `title=`) — no KNX Individual Address, no serial number, no group-address
+ *     mapping. `discovery.resource_model`/`discovery.semantic` (which the KNX IoT Point API
+ *     spec could in principle carry stronger identity through) are honestly left
+ *     unimplemented — this codebase's own comment says why: no live device exists in this
+ *     environment to validate a real GET/parse cycle against, so it isn't guessed at.
+ *   - `mapUnifiedDevices()` correlates KNX-IoT and ETS signals by feeding BOTH into the
+ *     exact same protocol-agnostic `groupByCircuitName` engine used to fuse an ETS
+ *     circuit's own SW/STATUS pairs — i.e. cross-source correlation today is NAME-BASED,
+ *     the same mechanism, not a separate identity/correlation layer.
+ *
+ * Conclusion, reached from that evidence, not decided in advance: this IS a real,
+ * disclosed architectural gap relative to the SupremeOS Development Strategy's "authoritative
+ * protocol data over guesses" / "deterministic and trustworthy commissioning" goals — but it
+ * is NOT a bug to silently patch here. A stronger identity signal does not exist to fabricate
+ * (that would itself violate "never fabricate data"), and building one requires a live device
+ * to validate a real `discovery.resource_model` GET/parse cycle against, which this
+ * environment doesn't have — exactly the same honesty bar `KnxIotProvider` itself already
+ * holds. Silently forcing/hiding a stronger match, or blindly trusting every name match, would
+ * both be worse than the current, disclosed, name-based-with-full-provenance behavior.
+ *
+ * So these tests validate what the architecture ACTUALLY, SAFELY guarantees today:
+ *   Test B1 — when the only available evidence (names) genuinely agrees, KNX-IoT and ETS
+ *             signals for the same circuit DO merge into one device, and every merged
+ *             communication object still carries its own `source` ("ets"/"knx_iot") — the
+ *             correlation is real, but never opaque; a consumer can always see it happened.
+ *   Test B2 — when that evidence does NOT agree (the realistic case — most real KNX-IoT
+ *             devices advertise a manufacturer/model string, not the installer's ETS
+ *             circuit name), the system does NOT invent a relationship: two independent
+ *             devices stay two independent queue items. No silent merge, no duplicate
+ *             hidden, no fabricated identity.
+ */
+describe("KNX Unified Device Intelligence — ETS + KNX-IoT correlation (§ Development Strategy Part 4)", () => {
+  let app: FastifyInstance;
+  let ctx: AppContext;
+  let baseUrl: string;
+  let token = "";
+  /** Mutated per-test (queue is a fresh HTTP request each time — knxDiscoveryDriver()
+   * constructs a fresh SupremeKnxDriver per call, never cached — so this is safely
+   * reassignable between `it()` blocks sharing one beforeAll-built server). */
+  let scriptedIotDevices: DiscoveredDevice[] = [];
+
+  /** A deterministic, scripted KNX-IoT provider — never the physical network. Returns
+   * exactly whatever `scriptedIotDevices` holds at request time; `execute()` for
+   * `discovery.functional_blocks` throws (matches a real device that hasn't answered a
+   * `/fb` GET yet — `discoverUnified()` already treats that as "no functional blocks
+   * available", not an error, see its own try/catch), so classification falls back to the
+   * title/name-based path under test. */
+  class ScriptedKnxIotProvider implements IKnxProvider {
+    readonly name = "scripted-knx-iot";
+    async initialize(): Promise<void> {}
+    async discover(): Promise<DiscoveredDevice[]> { return scriptedIotDevices; }
+    async connect(): Promise<void> {}
+    async disconnect(): Promise<void> {}
+    async shutdown(): Promise<void> {}
+    async execute(_task: KnxTask): Promise<unknown> { throw new Error("no functional-block response for this fixture device"); }
+    subscribe(): void { throw new Error("not applicable"); }
+    unsubscribe(): void {}
+    health(): KnxProviderHealth { return { connected: true, lastError: null }; }
+    diagnostics(): KnxProviderDiagnostics {
+      return { provider: this.name, connected: true, packetsSent: 0, packetsReceived: 0, lastTelegramAt: null, lastCommandAt: null, lastError: null, reconnectAttempts: 0 };
+    }
+  }
+
+  beforeAll(async () => {
+    const registry = new EntityRegistryMirror();
+    const routerEngineB = new SupremeNativeAdapter({ drivers: [new FakeKnx()] });
+    const routerProvidersB = new ProviderRegistry();
+    const router = new ProviderRouter({ engine: routerEngineB, registry: routerProvidersB, bindingEngine: new DriverBindingEngine(routerEngineB, routerProvidersB) });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+      sil,
+      protocolBindingStore: new InMemoryProtocolBindingStore(),
+      knxDiscoveryDriverFactory: (config) => new SupremeKnxDriver({ ...config, iotProvider: new ScriptedKnxIotProvider() }),
+    });
+    app = await buildServer(ctx);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const addr = app.server.address();
+    baseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    const res = await fetch(`${baseUrl}/v1/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+    });
+    token = ((await res.json()) as { accessToken: string }).accessToken;
+  });
+  afterAll(async () => {
+    await app.close();
+    await ctx.shutdown();
+  });
+
+  const auth = () => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+  const kitchenEts = [
+    { id: "1/1/1", name: "Kitchen Light SW", room: "Kitchen" },
+    { id: "1/1/2", name: "Kitchen Light STATUS", room: "Kitchen" },
+  ];
+
+  it("Test B1 — matching identity evidence: KNX-IoT and ETS signals for the SAME circuit merge into one device, provenance preserved per communication object", async () => {
+    scriptedIotDevices = [{
+      backendId: "knx-iot:10.0.0.50",
+      suggestedName: "10.0.0.50",
+      capabilities: [],
+      raw: { host: "10.0.0.50", port: 5683, linkFormat: '</dev>;title="Kitchen Light"', source: "knx-iot" },
+    }];
+
+    const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: kitchenEts }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      queue: Array<{ device: { suggestedName: string; raw: { communicationObjects: Array<{ id: string; source: string }> } } }>;
+      summary: { totalGroupAddresses: number; circuitsCreated: number; devicesCreated: number };
+    };
+
+    // ONE logical device — the only available evidence (circuit name, after the same
+    // stopword-stripping ETS's own SW/STATUS pair already goes through) genuinely agreed.
+    expect(body.queue).toHaveLength(1);
+    expect(body.summary.circuitsCreated).toBe(1);
+    expect(body.summary.devicesCreated).toBe(1);
+
+    const item = body.queue[0]!;
+    expect(item.device.suggestedName).toBe("Kitchen Light");
+
+    // The merge is never opaque: all 3 communication objects (2 ETS + 1 KNX-IoT) are
+    // present, each still tagged with exactly where it came from — a consumer (installer
+    // UI, duplicate detection, a future stronger-identity pass) can always tell this device
+    // was cross-source-correlated, never a silently blended fabrication.
+    expect(body.summary.totalGroupAddresses).toBe(3);
+    const sources = item.device.raw.communicationObjects.map((o) => o.source).sort();
+    expect(sources).toEqual(["ets", "ets", "knx_iot"]);
+    expect(item.device.raw.communicationObjects.some((o) => o.id === "1/1/1")).toBe(true);
+    expect(item.device.raw.communicationObjects.some((o) => o.id === "1/1/2")).toBe(true);
+    expect(item.device.raw.communicationObjects.some((o) => o.id === "10.0.0.50")).toBe(true);
+  });
+
+  it("Test B2 — NO matching identity evidence: an unrelated KNX-IoT device never gets fabricated into the ETS circuit — two independent devices, not a false merge", async () => {
+    // Realistic case: a device that hasn't been given (or doesn't advertise) a name
+    // matching the installer's ETS project — e.g. its own raw model/serial string. This is
+    // the common case for real KNX-IoT hardware, not a contrived edge case.
+    scriptedIotDevices = [{
+      backendId: "knx-iot:10.0.0.51",
+      suggestedName: "10.0.0.51",
+      capabilities: [],
+      raw: { host: "10.0.0.51", port: 5683, linkFormat: '</dev>;title="Device-A1B2C3"', source: "knx-iot" },
+    }];
+
+    const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: kitchenEts }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      queue: Array<{ device: { suggestedName: string; raw: { communicationObjects: Array<{ id: string; source: string }> } } }>;
+      summary: { totalGroupAddresses: number; circuitsCreated: number; devicesCreated: number };
+    };
+
+    // TWO independent devices — no shared evidence, so no invented relationship. The
+    // system must never silently merge, and must never silently drop the unrelated device
+    // either (that would hide a real, discovered device from the installer).
+    expect(body.queue).toHaveLength(2);
+    expect(body.summary.circuitsCreated).toBe(2);
+    expect(body.summary.devicesCreated).toBe(2);
+    expect(body.summary.totalGroupAddresses).toBe(3); // same 3 raw objects, just not blended
+
+    const kitchen = body.queue.find((i) => i.device.suggestedName === "Kitchen Light");
+    expect(kitchen).toBeTruthy();
+    expect(kitchen!.device.raw.communicationObjects.map((o) => o.source).sort()).toEqual(["ets", "ets"]);
+
+    const orphanIot = body.queue.find((i) => i.device.raw.communicationObjects.some((o) => o.source === "knx_iot"));
+    expect(orphanIot).toBeTruthy();
+    expect(orphanIot!.device.raw.communicationObjects).toHaveLength(1);
+    expect(orphanIot!.device.raw.communicationObjects[0]!.id).toBe("10.0.0.51");
+    // Never fabricated into the Kitchen Light circuit.
+    expect(orphanIot).not.toBe(kitchen);
+  });
+});
+
 describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import & Discovery Pipeline)", () => {
   let app: FastifyInstance;
   let ctx: AppContext;
@@ -226,7 +454,12 @@ describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import &
     const routerProviders1 = new ProviderRegistry();
     const router = new ProviderRouter({ engine: routerEngine1, registry: routerProviders1, bindingEngine: new DriverBindingEngine(routerEngine1, routerProviders1) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
-    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), { sil, protocolBindingStore: new InMemoryProtocolBindingStore() });
+    // § Test isolation fix — see FakeEmptyKnxIotProvider's own doc comment.
+    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+      sil,
+      protocolBindingStore: new InMemoryProtocolBindingStore(),
+      knxDiscoveryDriverFactory: (config) => new SupremeKnxDriver({ ...config, iotProvider: new FakeEmptyKnxIotProvider() }),
+    });
     app = await buildServer(ctx);
     await app.listen({ host: "127.0.0.1", port: 0 });
     const addr = app.server.address();
@@ -337,6 +570,8 @@ describe("KNX Automatic Room Creation (§ Generic Room Assignment Engine)", () =
     ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
       sil,
       protocolBindingStore: new InMemoryProtocolBindingStore(),
+      // § Test isolation fix — see FakeEmptyKnxIotProvider's own doc comment.
+      knxDiscoveryDriverFactory: (config) => new SupremeKnxDriver({ ...config, iotProvider: new FakeEmptyKnxIotProvider() }),
     });
     app = await buildServer(ctx);
     await app.listen({ host: "127.0.0.1", port: 0 });

@@ -247,6 +247,21 @@ export interface DriverDiagnosticsEntry {
   lastError: string | null;
 }
 
+/**
+ * Builds the {@link SupremeKnxDriver} instance {@link InstallerServices.knxInstallerQueue}
+ * uses for DISCOVERY ONLY (§ reuse pattern for future protocol commissioning tests). The
+ * production default (used when {@link InstallerDeps.knxDiscoveryDriverFactory} is
+ * omitted) constructs a real driver with its real {@link KnxIotProvider} — genuine CoAP
+ * multicast discovery, unchanged. An E2E test can inject a factory that still builds a
+ * real `SupremeKnxDriver` (so `discoverUnified()`, ETS merging, functional-block parsing,
+ * grouping, and capability mapping all stay real) but swaps in a deterministic
+ * `IKnxProvider` for the ONE thing a test environment can't do safely: physical network
+ * discovery. Every other protocol's installer E2E tests can follow this exact same shape
+ * — a factory field on {@link InstallerDeps}/`AppDeps`, defaulting to the real
+ * production constructor — without inventing a new pattern per protocol.
+ */
+export type KnxDiscoveryDriverFactory = (config: { host: string; port?: number }) => SupremeKnxDriver;
+
 export interface InstallerDeps {
   config: GatewayConfig;
   sil: SupremeIntegrationLayer;
@@ -274,6 +289,14 @@ export interface InstallerDeps {
    * which `UdpTransport` a LAN-dependent native driver (Casambi today) gets — see
    * `nativeDriverContext()`. Never used for anything protocol-specific here. */
   bus?: IEventBus;
+  /** Injectable seam for {@link knxDiscoveryDriver} (§ reuse pattern for future protocol
+   * commissioning tests). Omitted in production — falls back to the real
+   * `new SupremeKnxDriver(config)` constructor, real {@link KnxIotProvider}, real CoAP
+   * multicast discovery. Tests inject a factory that builds a real `SupremeKnxDriver` with
+   * a fake `IKnxProvider` instead, so the discovery pipeline (`discoverUnified()`, ETS
+   * merge, grouping, capability mapping) stays real and only physical discovery is
+   * deterministic. */
+  knxDiscoveryDriverFactory?: KnxDiscoveryDriverFactory;
 }
 
 /**
@@ -487,7 +510,11 @@ export class InstallerServices {
    * see the KNX IoT Compatibility Report + each phase's Migration Notes for why the
    * production driver hasn't been cut over yet). */
   private async knxDiscoveryDriver(override?: { host: string; port?: number }): Promise<SupremeKnxDriver | null> {
-    if (override) return new SupremeKnxDriver(override);
+    // § reuse pattern (see KnxDiscoveryDriverFactory's own doc comment) — production
+    // omits `knxDiscoveryDriverFactory`, so this is exactly `new SupremeKnxDriver(config)`,
+    // unchanged from before this seam existed.
+    const buildDriver = this.d.knxDiscoveryDriverFactory ?? ((config) => new SupremeKnxDriver(config));
+    if (override) return buildDriver(override);
     // The manifest key is "supreme-knx" (§ manifests.ts) — match by protocol, the same
     // field NATIVE_DRIVER_FACTORIES is keyed by, not the catalog key (§ don't re-derive
     // a mapping that already exists elsewhere under a different name).
@@ -495,7 +522,7 @@ export class InstallerServices {
     const host = entry?.config.host;
     if (typeof host !== "string" || host.length === 0) return null;
     const port = Number(entry?.config.port);
-    return new SupremeKnxDriver({ host, port: Number.isFinite(port) ? port : undefined });
+    return buildDriver({ host, port: Number.isFinite(port) ? port : undefined });
   }
 
   /** The installer's selected Group Address Schema (§ Configurable Group Address Schema
