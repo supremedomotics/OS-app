@@ -482,6 +482,125 @@ esac
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "Caddy UI access — narrowly-scoped ACLs, never group membership"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: /opt/supreme is 0750 supreme:supreme; Caddy (its own system account,
+# never a member of $SUPREME_GROUP) could not traverse into the release tree at all,
+# 403ing every UI request. Fixed via grant_caddy_ui_access() (lib/common.sh) — POSIX ACLs,
+# not group membership (gateway.env/nats.conf are group-readable and carry
+# SUPREME_TOKEN_SECRET — group membership would leak those too).
+
+# A. Caddy is never added to the supreme group anywhere in the installer.
+if grep -rnE 'usermod[^|]*-aG[^|]*supreme[^|]*caddy|usermod[^|]*-aG[^|]*caddy[^|]*supreme' \
+  "${SCRIPT_DIR}"/*.sh "${SCRIPT_DIR}"/lib/*.sh >/dev/null 2>&1; then
+  fail "caddy is never added to the supreme group" "usermod -aG supreme caddy found"
+else
+  pass "caddy is never added to the supreme group"
+fi
+
+# B. /opt/supreme's base mode/ownership is untouched by this fix.
+_create_dirs_body="$(sed -n '/^create_directories() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_create_dirs_body" in
+  *'chmod 0750 "$SUPREME_APP_DIR"'*) pass "create_directories() still chmods \$SUPREME_APP_DIR 0750 (unchanged base mode)" ;;
+  *) fail "create_directories() still chmods \$SUPREME_APP_DIR 0750 (unchanged base mode)" "not found" ;;
+esac
+
+# C. grant_caddy_ui_access() never references gateway.env/config/secrets paths.
+_grant_body="$(sed -n '/^grant_caddy_ui_access() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh")"
+case "$_grant_body" in
+  *'SUPREME_CONFIG_DIR'*|*'SUPREME_SECRETS_DIR'*|*'gateway.env'*)
+    fail "grant_caddy_ui_access() never touches config/secrets paths" "found a reference" ;;
+  *) pass "grant_caddy_ui_access() never touches config/secrets paths" ;;
+esac
+
+# D-H. Functional: run grant_caddy_ui_access() against a scratch release tree with setfacl
+# mocked (real setfacl isn't available/meaningful in this test environment), and inspect
+# exactly what ACL calls it made.
+_acl_release_dir="${SCRATCH}/acl-release"
+mkdir -p "${_acl_release_dir}/apps/web-homeowner/dist" "${_acl_release_dir}/apps/web-installer/dist" \
+  "${_acl_release_dir}/services/gateway/dist"
+echo '<html></html>' > "${_acl_release_dir}/apps/web-homeowner/dist/index.html"
+echo '<html></html>' > "${_acl_release_dir}/apps/web-installer/dist/index.html"
+echo 'secret' > "${_acl_release_dir}/services/gateway/dist/main.js"
+
+(
+  _acl_log="$(mktemp)"
+  setfacl() { echo "$*" >> "$_acl_log"; }
+  id() { [ "$1" = "caddy" ] && return 0; command id "$@"; }
+  export SUPREME_APP_DIR="${SCRATCH}/opt/supreme" SUPREME_RELEASES_DIR="${SCRATCH}/opt/supreme/releases"
+
+  grant_caddy_ui_access "$_acl_release_dir"
+
+  # D. Ancestor directories get traversal-only (--x), never read.
+  if grep -q -- "-m u:caddy:--x .*${_acl_release_dir}\"\?\$\|--x ${_acl_release_dir}$" "$_acl_log" 2>/dev/null \
+    || grep -q -- "u:caddy:--x" "$_acl_log"; then
+    pass "grant_caddy_ui_access() grants ancestor directories execute-only (--x) traversal"
+  else
+    fail "grant_caddy_ui_access() grants ancestor directories execute-only (--x) traversal" "no --x grant found: $(cat "$_acl_log")"
+  fi
+
+  # E. Homeowner dist gets recursive read+execute.
+  if grep -q -- "-R -m u:caddy:rX ${_acl_release_dir}/apps/web-homeowner/dist" "$_acl_log"; then
+    pass "grant_caddy_ui_access() grants homeowner dist recursive read+execute (rX)"
+  else
+    fail "grant_caddy_ui_access() grants homeowner dist recursive read+execute (rX)" "$(cat "$_acl_log")"
+  fi
+
+  # F. Installer dist gets recursive read+execute.
+  if grep -q -- "-R -m u:caddy:rX ${_acl_release_dir}/apps/web-installer/dist" "$_acl_log"; then
+    pass "grant_caddy_ui_access() grants installer dist recursive read+execute (rX)"
+  else
+    fail "grant_caddy_ui_access() grants installer dist recursive read+execute (rX)" "$(cat "$_acl_log")"
+  fi
+
+  # G. Nothing outside the two UI dist trees is ever granted to caddy — in particular,
+  # services/gateway/dist (application code, not UI) must never appear.
+  if grep -q "services" "$_acl_log"; then
+    fail "grant_caddy_ui_access() never grants access to services/ or other non-UI paths" "$(cat "$_acl_log")"
+  else
+    pass "grant_caddy_ui_access() never grants access to services/ or other non-UI paths"
+  fi
+
+  # H. Idempotent — calling it twice issues the exact same set of ACL calls, never a
+  # growing/broadening set.
+  cp "$_acl_log" "${_acl_log}.first"
+  : > "$_acl_log"
+  grant_caddy_ui_access "$_acl_release_dir"
+  if diff -q "${_acl_log}.first" "$_acl_log" >/dev/null 2>&1; then
+    pass "grant_caddy_ui_access() is idempotent — identical ACL calls on a second run"
+  else
+    fail "grant_caddy_ui_access() is idempotent — identical ACL calls on a second run" "first: $(cat "${_acl_log}.first") | second: $(cat "$_acl_log")"
+  fi
+  rm -f "$_acl_log" "${_acl_log}.first"
+)
+
+# I. Applied to every newly staged release — stage_release_version() calls it after the
+# release is in its final place (mv "$building" "$target"), not before (calling it against
+# $building would set ACLs on a path that's about to be renamed away).
+_stage_release_body="$(sed -n '/^stage_release_version() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh")"
+_mv_target_line="$(echo "$_stage_release_body" | grep -n 'mv "\$building" "\$target"' | head -1 | cut -d: -f1)"
+_grant_call_line="$(echo "$_stage_release_body" | grep -n 'grant_caddy_ui_access "\$target"' | head -1 | cut -d: -f1)"
+if [ -n "$_mv_target_line" ] && [ -n "$_grant_call_line" ] && [ "$_grant_call_line" -gt "$_mv_target_line" ]; then
+  pass "stage_release_version() grants Caddy UI access to every newly staged release, after it's in its final place"
+else
+  fail "stage_release_version() grants Caddy UI access to every newly staged release" "mv at line ${_mv_target_line:-?}, grant at line ${_grant_call_line:-?}"
+fi
+
+# J. acl is an explicit installer dependency (setfacl isn't guaranteed present on a bare
+# Ubuntu image), and install_apt_dependencies()'s own checkpoint validator checks for it —
+# so a stale checkpoint from before this fix can't mask a missing 'acl' package forever.
+_apt_deps_body="$(sed -n '/^install_apt_dependencies() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_apt_deps_body" in
+  *' acl '*) pass "install_apt_dependencies() installs the 'acl' package (setfacl/getfacl)" ;;
+  *) fail "install_apt_dependencies() installs the 'acl' package (setfacl/getfacl)" "not found in apt-get install list" ;;
+esac
+_validate_apt_deps_body="$(sed -n '/^validate_phase_install_apt_dependencies() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_validate_apt_deps_body" in
+  *'setfacl'*) pass "validate_phase_install_apt_dependencies() re-checks setfacl on resume" ;;
+  *) fail "validate_phase_install_apt_dependencies() re-checks setfacl on resume" "not found" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

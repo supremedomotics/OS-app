@@ -357,7 +357,7 @@ persist_secrets() {
 validate_phase_install_apt_dependencies() {
   command_exists git && command_exists rsync && command_exists jq \
     && command_exists psql && command_exists mosquitto && command_exists redis-server \
-    && command_exists python3
+    && command_exists python3 && command_exists setfacl
 }
 
 install_apt_dependencies() {
@@ -373,7 +373,7 @@ install_apt_dependencies() {
     log_warn "SUPREME_OFFLINE=1 — skipping 'apt-get update'. Requires a pre-seeded local apt cache/mirror with every package below already available."
   fi
   apt-get install -y -qq \
-    curl ca-certificates gnupg lsb-release git rsync jq build-essential pkg-config \
+    curl ca-certificates gnupg lsb-release git rsync jq acl build-essential pkg-config \
     postgresql postgresql-contrib \
     redis-server \
     mosquitto mosquitto-clients \
@@ -626,6 +626,13 @@ configure_caddy() {
   chown root:root /etc/caddy/Caddyfile
   chmod 0644 /etc/caddy/Caddyfile
   caddy validate --config /etc/caddy/Caddyfile || die "Generated Caddyfile failed validation — see caddy's own error above."
+  # § Bug fix — repairs the CURRENTLY active release too, not just future ones: a release
+  # already staged by an older install (before this ACL grant existed) would otherwise stay
+  # 403-for-caddy until the next update. See grant_caddy_ui_access() (lib/common.sh) — same
+  # idempotent call stage_release_version() makes for every future release.
+  local active_release_real
+  active_release_real="$(readlink -f "$SUPREME_RELEASE_DIR" 2>/dev/null || true)"
+  [ -n "$active_release_real" ] && [ -d "$active_release_real" ] && grant_caddy_ui_access "$active_release_real"
   systemctl_enable_now caddy
   if systemd_is_live; then systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
 }

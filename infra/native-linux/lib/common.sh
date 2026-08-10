@@ -706,7 +706,50 @@ stage_release_version() {
   [ -e "$target" ] && mv "$target" "$old_aside"
   mv "$building" "$target"
   rm -rf "$old_aside"
+  grant_caddy_ui_access "$target"
   echo "$target"
+}
+
+# § Bug fix — Caddy (`caddy`, a distinct system account from its own apt package) must
+# read the built UI to serve it, but $SUPREME_APP_DIR is 0750 supreme:supreme and every
+# release directory inherits that ownership — Caddy has no path in by owner, group, or
+# world bit. Adding caddy to $SUPREME_GROUP was considered and rejected: gateway.env and
+# nats.conf are group-readable (0640 root:supreme, see configure_gateway_env()/
+# configure_nats()) and gateway.env carries SUPREME_TOKEN_SECRET — group membership would
+# hand caddy read access to those too, not just the UI. POSIX ACLs grant caddy exactly
+# what it needs instead: execute-only (traversal, no listing) on every ancestor directory
+# a request must pass through, and read+execute (recursive) on ONLY the two trees
+# config/Caddyfile.template's file_server blocks actually serve
+# (apps/web-homeowner/dist, apps/web-installer/dist) — nothing else in the release
+# (services/, node_modules/, source, configs) is touched, and the 0750 base mode /
+# supreme:supreme ownership are never changed.
+#
+# Idempotent (`setfacl -m` re-asserting an existing entry is a no-op, never broadens), and
+# scoped to files that only exist because THIS release exists — when a release directory
+# is later deleted (stage_release_version's own $old_aside cleanup, or
+# prune_old_releases), its ACL entries are deleted with it. Nothing to leak, nothing to
+# accumulate.
+grant_caddy_ui_access() {
+  local release_dir="$1"
+  if ! command_exists setfacl; then
+    log_warn "setfacl not available (acl package missing?) — Caddy will not be able to read the staged UI at ${release_dir}. Install the 'acl' package and re-run."
+    return 0
+  fi
+  if ! id caddy >/dev/null 2>&1; then
+    log_warn "caddy system user not found — skipping UI ACL grant for ${release_dir} (install_caddy should have created it before this runs)."
+    return 0
+  fi
+
+  local ancestor
+  for ancestor in "$SUPREME_APP_DIR" "$SUPREME_RELEASES_DIR" "$release_dir" \
+    "${release_dir}/apps" "${release_dir}/apps/web-homeowner" "${release_dir}/apps/web-installer"; do
+    [ -d "$ancestor" ] && setfacl -m u:caddy:--x "$ancestor"
+  done
+
+  local dist_dir
+  for dist_dir in "${release_dir}/apps/web-homeowner/dist" "${release_dir}/apps/web-installer/dist"; do
+    [ -d "$dist_dir" ] && setfacl -R -m u:caddy:rX "$dist_dir"
+  done
 }
 
 switch_active_release() {
