@@ -636,6 +636,52 @@ case "$_run_as_supreme_body" in
 esac
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "backup.sh — EXIT trap must survive set -u after main() returns"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: `work` is local to main(); the EXIT trap fires once the whole script
+# exits (after main() has already returned and `work` is out of scope) — under `set -u`
+# that made cleanup itself fail with "work: unbound variable" on every successful backup.
+
+if bash -n "${SCRIPT_DIR}/backup.sh"; then
+  pass "backup.sh passes bash -n syntax validation"
+else
+  fail "backup.sh passes bash -n syntax validation" "bash -n reported a syntax error"
+fi
+
+_backup_trap_line="$(grep -n "^  trap .* EXIT\$" "${SCRIPT_DIR}/backup.sh" | head -1)"
+case "$_backup_trap_line" in
+  *'${work:-}'*) pass "backup.sh's EXIT trap guards \$work with \${work:-} before rm -rf" ;;
+  *) fail "backup.sh's EXIT trap guards \$work with \${work:-} before rm -rf" "got: ${_backup_trap_line:-<trap line not found>}" ;;
+esac
+
+# The exact bug, reproduced structurally: a `local` var set inside a function, referenced
+# by an unguarded EXIT trap, fails under set -u once that function returns — and does NOT
+# fail once guarded with ${var:-}. Proves the fix class, not backup.sh's full behavior
+# (which needs root/postgres this suite deliberately never requires).
+_trap_repro="$(mktemp -d)"
+cat > "${_trap_repro}/unguarded.sh" <<'EOF'
+set -euo pipefail
+main() { local work; work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT; }
+main "$@"
+EOF
+cat > "${_trap_repro}/guarded.sh" <<'EOF'
+set -euo pipefail
+main() { local work; work="$(mktemp -d)"; trap 'if [ -n "${work:-}" ]; then rm -rf "$work"; fi' EXIT; }
+main "$@"
+EOF
+_unguarded_out="$(bash "${_trap_repro}/unguarded.sh" 2>&1)"
+case "$_unguarded_out" in
+  *"unbound variable"*) pass "reproduces the exact reported bug: unguarded EXIT trap fails under set -u once the local var's function has returned" ;;
+  *) fail "reproduces the exact reported bug: unguarded EXIT trap fails under set -u once the local var's function has returned" "expected an 'unbound variable' error, got: ${_unguarded_out}" ;;
+esac
+if bash "${_trap_repro}/guarded.sh" >/dev/null 2>&1; then
+  pass "the \${work:-}-guarded EXIT trap pattern (backup.sh's actual fix) exits 0 under the same conditions"
+else
+  fail "the \${work:-}-guarded EXIT trap pattern (backup.sh's actual fix) exits 0 under the same conditions" "guarded version still failed"
+fi
+rm -rf "$_trap_repro"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""
