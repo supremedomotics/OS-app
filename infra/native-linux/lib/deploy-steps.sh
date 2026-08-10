@@ -100,10 +100,52 @@ build_workspace() {
   (
     cd "$SUPREME_REPO_DIR"
     prune_stale_incremental_state
+    prepare_pinned_pnpm_for_supreme
     run_as_supreme pnpm install --frozen-lockfile
     run_as_supreme pnpm turbo run build
   )
   log_info "Workspace build complete."
+}
+
+# § Bug fix — Corepack's activation state is per-user, cached under
+# $HOME/.cache/node/corepack. install_node()'s `corepack enable` only installs the global
+# shim (system-wide, harmless to run once as root); it never activates the EXACT pinned
+# version for the `supreme` system user, whose $HOME (/opt/supreme, per create_system_user's
+# --home-dir) is separate from root's. The pin also can't be read any earlier than this —
+# ${SUPREME_REPO_DIR}/package.json doesn't exist until sync_repo (this function's own
+# prerequisite phase) has populated it. The first time `run_as_supreme pnpm install`
+# resolved the shim, Corepack had nothing cached for `supreme` and attempted a fresh
+# download — with install.sh's own stdout piped through `tee`, where its interactive
+# confirmation prompt could never be reliably answered (real evidence: process parked at
+# ep_poll, 0% CPU, for ~14 minutes; answering "Y" at the terminal did not unblock it).
+#
+# Fixed by preparing AND verifying the pinned version for `supreme` here, before pnpm is
+# ever invoked. COREPACK_ENABLE_DOWNLOAD_PROMPT=0 is Corepack's own documented variable for
+# exactly this case — skip the interactive confirmation and proceed, never a global
+# Corepack disable, never bypassing the pin itself.
+prepare_pinned_pnpm_for_supreme() {
+  local pinned expected actual
+  pinned="$(node -p "require('${SUPREME_REPO_DIR}/package.json').packageManager || ''" 2>/dev/null || true)"
+  if [ -z "$pinned" ]; then
+    log_warn "No packageManager field in ${SUPREME_REPO_DIR}/package.json — skipping pinned pnpm activation; pnpm install will use whatever Corepack resolves by default."
+    return 0
+  fi
+  expected="${pinned#pnpm@}"
+
+  actual="$(run_as_supreme pnpm --version 2>/dev/null || true)"
+  if [ "$actual" = "$expected" ]; then
+    log_info "pnpm ${actual} already prepared and active for ${SUPREME_USER} — skipping."
+    return 0
+  fi
+
+  log_step "Preparing pinned package manager (${pinned}) for ${SUPREME_USER} — non-interactive"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 run_as_supreme corepack prepare "$pinned" --activate \
+    || die "Failed to prepare ${pinned} for ${SUPREME_USER} — see corepack's own error above."
+
+  actual="$(run_as_supreme pnpm --version 2>/dev/null || true)"
+  [ "$actual" = "$expected" ] \
+    || die "Pinned pnpm activation for ${SUPREME_USER} did not take effect — expected pnpm ${expected}, 'sudo -u ${SUPREME_USER} pnpm --version' reports '${actual:-<none>}'. The later 'pnpm install' would hang waiting on an interactive Corepack download prompt it can never answer; fix before re-running."
+  log_info "pnpm ${actual} prepared and verified for ${SUPREME_USER}."
 }
 
 # § Checkpoint validation: the one build output every service unit actually depends on to

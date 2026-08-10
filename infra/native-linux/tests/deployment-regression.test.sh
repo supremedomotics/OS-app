@@ -330,6 +330,158 @@ for phase in "${_critical_phases[@]}"; do
 done
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "Corepack/pnpm bootstrap — pinned version must activate for supreme, non-interactively"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: install_node() used to `corepack prepare "$pinned" --activate` as
+# ROOT ONLY, reading the pin from ${SUPREME_REPO_DIR}/package.json before sync_repo ever
+# populated it (always empty) — so `supreme`'s own Corepack cache (a different $HOME) was
+# never prepared, and the first `run_as_supreme pnpm install` in build_workspace() lazily
+# triggered an interactive download prompt that could never be answered (real VM evidence:
+# 14-minute hang at ep_poll, unblocked by neither "Y" nor further input). Fixed by
+# prepare_pinned_pnpm_for_supreme() in lib/deploy-steps.sh, called from build_workspace()
+# after sync_repo has run.
+
+_pnpm_repo_dir="${SCRATCH}/pnpm-repo"
+mkdir -p "$_pnpm_repo_dir"
+cat > "${_pnpm_repo_dir}/package.json" <<'EOF'
+{ "name": "fixture", "packageManager": "pnpm@10.33.0" }
+EOF
+
+# `node` is mocked in every case below (rather than relying on a real `require()` resolving
+# ${SUPREME_REPO_DIR}/package.json) so these assertions are deterministic across dev
+# environments — matches this file's own established pattern of mocking ps/systemctl
+# rather than depending on real system behavior.
+
+# 1. Already-correct version: no re-activation attempted (idempotent — requirement:
+#    rerunning must not unnecessarily reinstall/reconfigure an already-valid toolchain).
+(
+  SUPREME_REPO_DIR="$_pnpm_repo_dir"
+  node() { echo "pnpm@10.33.0"; }
+  _prepare_called=0
+  run_as_supreme() {
+    case "$*" in
+      *"pnpm --version"*) echo "10.33.0" ;;
+      *"corepack prepare"*) _prepare_called=1 ;;
+    esac
+  }
+  prepare_pinned_pnpm_for_supreme >/dev/null 2>&1
+  rc=$?
+  assert_eq "prepare_pinned_pnpm_for_supreme() skips corepack prepare when already active" "$_prepare_called" "0"
+  assert_eq "prepare_pinned_pnpm_for_supreme() exits 0 on the fast path" "$rc" "0"
+)
+
+# 2. Mismatched version: activates non-interactively, then verifies the exact pinned
+#    version resolves for supreme afterward.
+(
+  SUPREME_REPO_DIR="$_pnpm_repo_dir"
+  node() { echo "pnpm@10.33.0"; }
+  # `run_as_supreme` is invoked via command substitution inside the function under test,
+  # which forks — so state must live in files, not shell variables, to survive back out.
+  _version_calls_file="$(mktemp)"; echo 0 > "$_version_calls_file"
+  _prepare_called_file="$(mktemp)"; echo 0 > "$_prepare_called_file"
+  _prepare_prompt_var_file="$(mktemp)"; echo "" > "$_prepare_prompt_var_file"
+  run_as_supreme() {
+    case "$*" in
+      *"pnpm --version"*)
+        n="$(($(cat "$_version_calls_file") + 1))"; echo "$n" > "$_version_calls_file"
+        if [ "$n" -eq 1 ]; then echo "8.0.0"; else echo "10.33.0"; fi
+        ;;
+      *"corepack prepare"*)
+        echo 1 > "$_prepare_called_file"
+        echo "${COREPACK_ENABLE_DOWNLOAD_PROMPT:-<unset>}" > "$_prepare_prompt_var_file"
+        ;;
+    esac
+  }
+  prepare_pinned_pnpm_for_supreme >/dev/null 2>&1
+  rc=$?
+  assert_eq "prepare_pinned_pnpm_for_supreme() activates on version mismatch" "$(cat "$_prepare_called_file")" "1"
+  assert_eq "prepare_pinned_pnpm_for_supreme() sets COREPACK_ENABLE_DOWNLOAD_PROMPT=0 (non-interactive, never a global disable)" "$(cat "$_prepare_prompt_var_file")" "0"
+  assert_eq "prepare_pinned_pnpm_for_supreme() re-verifies the version after activating" "$(cat "$_version_calls_file")" "2"
+  assert_eq "prepare_pinned_pnpm_for_supreme() exits 0 once verified" "$rc" "0"
+  rm -f "$_version_calls_file" "$_prepare_called_file" "$_prepare_prompt_var_file"
+)
+
+# 3. Activation that still doesn't resolve to the pinned version must fail loudly, not
+#    silently continue into a build that would hang later.
+(
+  SUPREME_REPO_DIR="$_pnpm_repo_dir"
+  node() { echo "pnpm@10.33.0"; }
+  run_as_supreme() {
+    case "$*" in
+      *"pnpm --version"*) echo "8.0.0" ;;
+      *"corepack prepare"*) : ;;
+    esac
+  }
+  _out="$(prepare_pinned_pnpm_for_supreme 2>&1)"
+  rc=$?
+  assert_eq "prepare_pinned_pnpm_for_supreme() dies (not silently continues) when activation doesn't take" "$rc" "1"
+  case "$_out" in
+    *"did not take effect"*) pass "failure message names the actual cause (pinned version mismatch)" ;;
+    *) fail "failure message names the actual cause (pinned version mismatch)" "got: $_out" ;;
+  esac
+)
+
+# 4. Ordering: build_workspace() must prepare the toolchain for supreme BEFORE invoking
+#    `pnpm install` — calling it after would defeat the whole fix.
+_build_ws_prep_line="$(grep -n 'prepare_pinned_pnpm_for_supreme' "${SCRIPT_DIR}/lib/deploy-steps.sh" | grep -v '^[0-9]*:prepare_pinned_pnpm_for_supreme()' | head -1 | cut -d: -f1)"
+_build_ws_install_line="$(grep -n 'run_as_supreme pnpm install --frozen-lockfile' "${SCRIPT_DIR}/lib/deploy-steps.sh" | head -1 | cut -d: -f1)"
+if [ -n "$_build_ws_prep_line" ] && [ -n "$_build_ws_install_line" ] && [ "$_build_ws_prep_line" -lt "$_build_ws_install_line" ]; then
+  pass "build_workspace() calls prepare_pinned_pnpm_for_supreme() before 'pnpm install --frozen-lockfile'"
+else
+  fail "build_workspace() calls prepare_pinned_pnpm_for_supreme() before 'pnpm install --frozen-lockfile'" "prep at line ${_build_ws_prep_line:-?}, install at line ${_build_ws_install_line:-?}"
+fi
+
+# 5. run_as_supreme must forward COREPACK_ENABLE_DOWNLOAD_PROMPT — otherwise setting it in
+#    the caller's environment silently has no effect on the sudo'd child (sudo drops
+#    unlisted vars by default).
+if grep -q 'COREPACK_ENABLE_DOWNLOAD_PROMPT' "${SCRIPT_DIR}/lib/common.sh"; then
+  pass "run_as_supreme() forwards COREPACK_ENABLE_DOWNLOAD_PROMPT to the supreme user"
+else
+  fail "run_as_supreme() forwards COREPACK_ENABLE_DOWNLOAD_PROMPT to the supreme user" "corepack prepare would prompt interactively as supreme even with the var set in root's env"
+fi
+
+# 6. install_node() must no longer read a pin from ${SUPREME_REPO_DIR}/package.json — that
+#    phase runs before sync_repo populates it, so the read was always empty (dead code
+#    masking the real bug). Its only remaining pnpm-related job is the global shim.
+_install_node_body="$(sed -n '/^install_node() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_install_node_body" in
+  *'corepack prepare'*) fail "install_node() no longer attempts corepack prepare/activate (moved to build_workspace, where repo data actually exists)" "still present in install_node()" ;;
+  *) pass "install_node() no longer attempts corepack prepare/activate (moved to build_workspace, where repo data actually exists)" ;;
+esac
+case "$_install_node_body" in
+  *'corepack enable'*) pass "install_node() still installs the global corepack shim" ;;
+  *) fail "install_node() still installs the global corepack shim" "corepack enable missing" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "PROTOCOLS stage — must not assert per-driver state that can't exist pre-setup"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: _stage_protocols used to call the AUTHENTICATED /v1/drivers/diagnostics
+# unauthenticated, always getting 401 on a fresh install — and even with a token, that route
+# depends on ctx.installer, which the gateway never constructs until a home is commissioned.
+# Fixed to check the unauthenticated /healthz endpoint's `backendHealthy` field instead — the
+# only protocol-adjacent signal that genuinely exists before Setup Wizard commissioning.
+
+_protocols_body="$(sed -n '/^_stage_protocols() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh" | grep -v '^\s*#')"
+case "$_protocols_body" in
+  *'/v1/drivers/diagnostics'*) fail "_stage_protocols() no longer calls the authenticated /v1/drivers/diagnostics endpoint" "still present in live code" ;;
+  *) pass "_stage_protocols() no longer calls the authenticated /v1/drivers/diagnostics endpoint" ;;
+esac
+case "$_protocols_body" in
+  *'/healthz'*'backendHealthy'*) pass "_stage_protocols() checks backendHealthy via the existing /healthz endpoint" ;;
+  *) fail "_stage_protocols() checks backendHealthy via the existing /healthz endpoint" "not found" ;;
+esac
+
+(
+  curl() { echo '{"status":"ok","backend":"mock","backendHealthy":true}'; }
+  out="$(_stage_protocols 2>&1)"
+  case "$out" in
+    *"pre-setup"*"Setup Wizard"*) pass "_stage_protocols() success message names the pre-setup/Setup-Wizard lifecycle accurately" ;;
+    *) fail "_stage_protocols() success message names the pre-setup/Setup-Wizard lifecycle accurately" "got: $out" ;;
+  esac
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

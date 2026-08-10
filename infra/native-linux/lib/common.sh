@@ -200,7 +200,7 @@ run_as_supreme() {
   # behaves exactly as if this array didn't exist.
   local -a env_args=("PATH=$PATH")
   local var
-  for var in NODE_EXTRA_CA_CERTS HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy npm_config_https_proxy npm_config_proxy npm_config_noproxy npm_config_ca npm_config_cafile; do
+  for var in NODE_EXTRA_CA_CERTS HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy npm_config_https_proxy npm_config_proxy npm_config_noproxy npm_config_ca npm_config_cafile COREPACK_ENABLE_DOWNLOAD_PROMPT; do
     if [ -n "${!var:-}" ]; then
       env_args+=("${var}=${!var}")
     fi
@@ -591,7 +591,30 @@ _stage_supreme_services() {
   if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then rc_check_service supreme-homeassistant; else rc_not_applicable "Home Assistant (not installed)"; fi
 }
 _stage_protocols() {
-  rc_check_http "Driver diagnostics reachable (proves protocol drivers loaded)" "http://127.0.0.1:8080/v1/drivers/diagnostics"
+  # § Bug fix — /v1/drivers/diagnostics requires an authenticated user (services/gateway/
+  # src/routes/installer.ts), and even with a token, per-driver diagnostics don't exist
+  # yet: ctx.installer (owner of driverDiagnostics()) is only constructed once a home is
+  # commissioned (services/gateway/src/context.ts's setupRequired early-return runs BEFORE
+  # initWithHome()). On a fresh install there is no protocol driver to report on — asserting
+  # "drivers loaded" here was checking a claim that cannot yet be true.
+  #
+  # What DOES exist unconditionally at this point is the SIL backend/adapter connection
+  # (ctx.sil.start() runs before the setupRequired check) — already surfaced, unauthenticated,
+  # as `backendHealthy` on /healthz. That's the earliest honest signal this stage can verify;
+  # real per-driver diagnostics belong in a later, authenticated, post-setup check.
+  local body
+  if body="$(curl -fsS -k --max-time 5 "http://127.0.0.1:8080/healthz" 2>&1)"; then
+    case "$body" in
+      *'"backendHealthy":true'*)
+        rc_pass "Protocol/SIL backend connected (pre-setup; protocol drivers activate after Setup Wizard commissioning) — ${body:0:120}"
+        ;;
+      *)
+        rc_fail "Protocol/SIL backend not connected (pre-setup) — /healthz reports: ${body:0:120}"
+        ;;
+    esac
+  else
+    rc_fail "Protocol/SIL backend check — /healthz did NOT respond at http://127.0.0.1:8080/healthz"
+  fi
 }
 _stage_web_ui() {
   rc_check_http "Web UI (via Caddy)" "https://127.0.0.1/"

@@ -397,16 +397,14 @@ install_node() {
     curl -fsSL "https://deb.nodesource.com/setup_${SUPREME_NODE_MAJOR}.x" | bash -
     apt-get install -y -qq nodejs
   fi
+  # Installs the global pnpm/yarn shim only — NOT the exact pinned version. That happens
+  # in build_workspace() (lib/deploy-steps.sh), the earliest point where two things are
+  # both true: ${SUPREME_REPO_DIR}/package.json actually exists (populated by sync_repo,
+  # which runs after this phase) and the activation can be done for the `supreme` user
+  # (whose $HOME — and therefore Corepack's per-user activation cache — is separate from
+  # root's). See prepare_pinned_pnpm_for_supreme() there for the full rationale.
   corepack enable
-  # Pin the exact pnpm version this repo's own package.json declares under
-  # `packageManager`, when present, so native and Docker deployments resolve dependencies
-  # identically — never a silently different pnpm resolving the same lockfile differently.
-  local pinned
-  pinned="$(node -p "require('${SUPREME_REPO_DIR}/package.json').packageManager || ''" 2>/dev/null || true)"
-  if [ -n "$pinned" ]; then
-    corepack prepare "$pinned" --activate
-  fi
-  log_info "node $(node -v), pnpm $(pnpm -v 2>/dev/null || echo 'via corepack')"
+  log_info "node $(node -v), corepack $(corepack --version 2>/dev/null || echo 'enabled')"
 }
 
 validate_phase_install_nats() {
