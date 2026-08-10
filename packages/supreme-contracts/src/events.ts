@@ -79,12 +79,50 @@ export const ErrorFrame = z.object({
   message: z.string(),
 });
 
+/** § Realtime State Architecture — a driver's CONNECTION lifecycle (is the live link up),
+ * distinct from `StateDeltaFrame` (a device's capability values). "connecting"/
+ * "disconnecting" are request-in-flight states the gateway publishes the instant a
+ * connect/disconnect is accepted, so the UI never has to treat a request as equivalent to
+ * successful execution — "connected"/"disconnected"/"error" only follow real confirmation.
+ * Driver-agnostic: any current or future native driver going through the installer's
+ * generic connect/disconnect + lifecycle pipeline gets this for free.
+ *
+ * § Realtime State Hardening — considered expanding to a 9-state model (unknown,
+ * discovering, connecting, connected, degraded, reconnecting, disconnecting,
+ * disconnected, error) and deliberately did NOT: this 5-state enum is already threaded
+ * through the wire contract (this file), the gateway (installer-context.ts,
+ * DriverStateEvent in context.ts), and the frontend (LiveContext/drivers.tsx) — widening
+ * it is a real migration, not a free addition. More importantly, the backend has no
+ * actual signal to back "degraded" (partial health short of a hard error) or
+ * "discovering"/"unknown" (states no driver lifecycle stage or connection status
+ * currently distinguishes — see installer-context.ts's DriverLifecycleStage) — adding
+ * them now would mean fabricating a state the UI shows without a real capability behind
+ * it, which this codebase's own "never fabricate data or capabilities" rule forbids.
+ * "reconnecting" is deliberately covered by the existing "connecting" value (the
+ * lifecycle pipeline's "registering" stage runs identically for a first connect or an
+ * autonomous reconnect — see LIFECYCLE_STAGE_TO_CONNECTION_STATE) rather than a distinct
+ * enum member with no different meaning. Revisit if/when a driver actually reports a
+ * genuine intermediate health signal worth its own state. */
+export const DriverConnectionState = z.enum([
+  "disconnected", "connecting", "connected", "disconnecting", "error",
+]);
+export type DriverConnectionState = z.infer<typeof DriverConnectionState>;
+
+export const DriverStateFrame = z.object({
+  type: z.literal("driver"),
+  driverId: z.string(),
+  state: DriverConnectionState,
+  error: z.string().nullable().optional(),
+  ts: z.string().datetime(),
+});
+
 export const ServerFrame = z.discriminatedUnion("type", [
   StateDeltaFrame,
   CommandAckFrame,
   NotificationFrame,
   PongFrame,
   ErrorFrame,
+  DriverStateFrame,
 ]);
 export type ServerFrame = z.infer<typeof ServerFrame>;
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, StatusDot } from "@supreme/aureon-web";
+import { useLive, type DriverConnectionState } from "./live.js";
 import {
   type CasambiDiagnostics,
   type CasambiTestConnectionResult,
@@ -75,11 +76,36 @@ export function statusLabel(d: DriverEntry, connected?: boolean | null): { text:
   return { text: "Active", cls: "ok" };
 }
 
+/** § Realtime State Architecture — command state ("connecting"/"disconnecting") is never
+ * shown as equivalent to the confirmed outcome; each has its own label/class so the UI
+ * can never claim "Connected" before the backend has actually said so. */
+const DRIVER_CONNECTION_LABEL: Record<DriverConnectionState, { text: string; cls: string }> = {
+  connecting: { text: "Connecting…", cls: "pending" },
+  connected: { text: "Connected", cls: "ok" },
+  disconnecting: { text: "Disconnecting…", cls: "pending" },
+  disconnected: { text: "Disconnected", cls: "err" },
+  error: { text: "Error", cls: "err" },
+};
+
+/** Merges the driver's install/enable/error facts with whatever the realtime layer
+ * currently knows about its LIVE connection state, preferring the live signal once one
+ * exists (§16 Initial State + Realtime State: initial snapshot until the first event,
+ * the event thereafter — never both fighting for the same badge). */
+export function liveStatusLabel(d: DriverEntry, live: DriverConnectionState | undefined, connected?: boolean | null): { text: string; cls: string } {
+  if (!d.installed) return { text: "Not installed", cls: "off" };
+  if (!d.enabled) return { text: "Disabled", cls: "off" };
+  if (live) return DRIVER_CONNECTION_LABEL[live];
+  return statusLabel(d, connected);
+}
+
 function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEntry; expanded: boolean; onToggle: () => void; onChanged: () => void }) {
   // Real connection state, not just install/enable — see `statusLabel`'s doc comment.
   // Only fetched for drivers where it's meaningful (installed + enabled); "Not
   // installed"/"Disabled" is already the honest, complete answer without a health call.
+  // This REST fetch is the INITIAL snapshot only (§16) — `useLive()`'s driverStates below
+  // is what keeps the badge current afterward, without a refresh or remount.
   const [connected, setConnected] = useState<boolean | null | undefined>(undefined);
+  const { driverStates } = useLive();
   useEffect(() => {
     if (!driver.installed || !driver.enabled || !driver.installedId) return;
     let cancelled = false;
@@ -90,7 +116,8 @@ function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEn
       cancelled = true;
     };
   }, [driver.installedId, driver.installed, driver.enabled]);
-  const s = statusLabel(driver, connected);
+  const live = driver.installedId ? driverStates[driver.installedId]?.state : undefined;
+  const s = liveStatusLabel(driver, live, connected);
   return (
     <div className={`drv-row${expanded ? " open" : ""}`}>
       <button className="drv-head" onClick={onToggle}>
@@ -113,6 +140,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const [schema, setSchema] = useState<DriverConfigField[]>(driver.configSchema);
   const [values, setValues] = useState<Record<string, unknown>>(driver.config ?? {});
   const [health, setHealth] = useState<DriverHealth | null>(null);
+  const { driverStates, applyDriverState } = useLive();
   const [logs, setLogs] = useState<{ ts: string; level: string; message: string }[]>([]);
 
   useEffect(() => {
@@ -195,8 +223,14 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           <>
             {driver.updateAvailable && <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>}
             {has("enable") && <button disabled={busy} onClick={() => run(() => setDriverEnabled(id, !driver.enabled), driver.enabled ? "Disabled" : "Enabled")}>{driver.enabled ? "Disable" : "Enable"}</button>}
-            {isProtocol && has("connect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, true), "Connect requested")}>Connect</button>}
-            {isProtocol && has("disconnect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, false), "Disconnect requested")}>Disconnect</button>}
+            {/* § Realtime State Architecture — the button click sets an immediate optimistic
+                "connecting"/"disconnecting" (§10, instant feedback for the request itself),
+                but "Connected"/"Disconnected" only ever comes from the real driverState
+                event the backend publishes on confirmation (see liveStatusLabel/badge below
+                and installer-context.ts's connectDriver()/disconnectDriver()) — never from
+                this click handler alone. */}
+            {isProtocol && has("connect") && <button disabled={busy} onClick={() => { applyDriverState(id, "connecting"); void run(() => connectDriver(id, true), "Connect requested"); }}>Connect</button>}
+            {isProtocol && has("disconnect") && <button disabled={busy} onClick={() => { applyDriverState(id, "disconnecting"); void run(() => connectDriver(id, false), "Disconnect requested"); }}>Disconnect</button>}
             {has("uninstall") && <button className="danger" disabled={busy} onClick={() => run(() => uninstallDriver(id), "Uninstalled")}>Uninstall</button>}
           </>
         )}
@@ -242,6 +276,18 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           Gateway, Latency, Entities, Online/Offline, Reconnects, Last Event, REST/UDP Status,
           Health), driver-level rather than per-device. */}
       {driver.installed && driver.protocols.includes("casambi") && <CasambiDiagnosticsPanel driverId={id} />}
+
+      {/* § Realtime State Architecture — the live connection-state badge, driven entirely
+          by driverState WS events (falls back to nothing until the first one arrives;
+          `health` below remains the separate, REST-only config/verdict snapshot). */}
+      {isProtocol && driverStates[id]?.state && (
+        <div className="drv-health">
+          <span className={`drv-badge ${DRIVER_CONNECTION_LABEL[driverStates[id]!.state].cls}`}>
+            {DRIVER_CONNECTION_LABEL[driverStates[id]!.state].text}
+          </span>
+          {driverStates[id]?.error && <span className="err"> · {driverStates[id]!.error}</span>}
+        </div>
+      )}
 
       {/* Health */}
       {health && (

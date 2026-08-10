@@ -75,4 +75,9 @@ export const subjects = {
   /** Universal Input Engine's normalized keypad input stream (§ Universal Keypad
    * Framework) — fans out across gateway processes exactly like `deviceState`. */
   keypadInput: (homeId: string): string => `supreme.home.${homeId}.keypad.input`,
+  /** Driver connection-state stream (§ Realtime State Architecture) — a driver's
+   * connecting/connected/disconnecting/disconnected/error transitions, distinct from
+   * `deviceState` (per-device capability values). Fans out across gateway processes
+   * identically to `deviceState`. */
+  driverState: (homeId: string): string => `supreme.home.${homeId}.driver.state`,
 } as const;

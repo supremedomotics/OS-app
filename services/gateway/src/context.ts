@@ -156,6 +156,15 @@ export interface AppDeps {
  */
 export type StateSubscriber = (event: BackendStateEvent) => void;
 export type NotificationSubscriber = (n: Notification) => void;
+/** § Realtime State Architecture — a driver connection-state transition, distinct from a
+ * device's capability state (StateSubscriber). See DriverStateFrame (supreme-contracts). */
+export interface DriverStateEvent {
+  driverId: string;
+  state: "disconnected" | "connecting" | "connected" | "disconnecting" | "error";
+  error?: string | null;
+  ts: string;
+}
+export type DriverStateSubscriber = (event: DriverStateEvent) => void;
 
 export class AppContext {
   readonly identity: IdentityService;
@@ -246,6 +255,7 @@ export class AppContext {
   private readonly deps: AppDeps;
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
+  private readonly driverStateSubs = new Set<DriverStateSubscriber>();
   /** Last value seen per event-sensor (deviceId:measure) for rising-edge detection. */
   private readonly lastEventValue = new Map<string, number>();
 
@@ -458,6 +468,19 @@ export class AppContext {
     await this.bus.subscribe<Notification>("supreme.home.*.notification", (n) => {
       for (const sub of this.notifySubs) sub(n);
     });
+    await this.bus.subscribe<DriverStateEvent>("supreme.home.*.driver.state", (event) => {
+      for (const sub of this.driverStateSubs) sub(event);
+    });
+  }
+
+  /** Publish a driver connection-state transition (§ Realtime State Architecture) — the
+   * bus fan-out drives WSS delivery identically to device state/notifications (in-process
+   * today, cross-process under NATS). Called from the generic connect/disconnect handlers
+   * and the driver lifecycle pipeline (installer-context.ts), never per-driver-type code. */
+  async publishDriverState(driverId: string, state: DriverStateEvent["state"], error?: string | null): Promise<void> {
+    await this.bus.publish(subjects.driverState(this.homeId), {
+      driverId, state, error: error ?? null, ts: new Date().toISOString(),
+    } satisfies DriverStateEvent);
   }
 
   /**
@@ -825,6 +848,10 @@ export class AppContext {
   onNotification(sub: NotificationSubscriber): () => void {
     this.notifySubs.add(sub);
     return () => this.notifySubs.delete(sub);
+  }
+  onDriverState(sub: DriverStateSubscriber): () => void {
+    this.driverStateSubs.add(sub);
+    return () => this.driverStateSubs.delete(sub);
   }
 
   roomOf(deviceId: DeviceId): Promise<string | null> {

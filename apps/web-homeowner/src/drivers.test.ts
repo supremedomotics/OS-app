@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { statusLabel } from "./drivers.js";
+import { statusLabel, liveStatusLabel } from "./drivers.js";
 import type { DriverEntry } from "./api.js";
 
 function driver(overrides: Partial<DriverEntry> = {}): DriverEntry {
@@ -50,5 +50,42 @@ describe("statusLabel", () => {
   it("falls back to 'Active' (install/enable-only) when connection state isn't known yet — never fabricates a 'Disconnected' from a still-loading health check", () => {
     expect(statusLabel(driver(), undefined)).toMatchObject({ text: "Active" });
     expect(statusLabel(driver(), null)).toMatchObject({ text: "Active" });
+  });
+});
+
+// § Realtime State Architecture — KNX Connect/Disconnect (and every other driver, since
+// this is generic) must render the ACTUAL confirmed connection state, never treat a
+// request as equivalent to success. See installer-context.ts's connectDriver()/
+// disconnectDriver() for the backend half of this same fix.
+describe("liveStatusLabel", () => {
+  it("shows 'Connecting…' immediately on request, distinct from 'Connected'", () => {
+    expect(liveStatusLabel(driver(), "connecting", null)).toMatchObject({ text: "Connecting…", cls: "pending" });
+  });
+
+  it("does not show 'Connected' until the realtime layer confirms it", () => {
+    expect(liveStatusLabel(driver(), "connecting", null)).not.toMatchObject({ text: "Connected" });
+    expect(liveStatusLabel(driver(), "connected", null)).toMatchObject({ text: "Connected", cls: "ok" });
+  });
+
+  it("shows 'Disconnecting…' immediately on request, distinct from 'Disconnected'", () => {
+    expect(liveStatusLabel(driver(), "disconnecting", null)).toMatchObject({ text: "Disconnecting…", cls: "pending" });
+  });
+
+  it("shows 'Disconnected' only once confirmed", () => {
+    expect(liveStatusLabel(driver(), "disconnected", null)).toMatchObject({ text: "Disconnected", cls: "err" });
+  });
+
+  it("shows 'Error' on a failed connect/disconnect", () => {
+    expect(liveStatusLabel(driver(), "error", null)).toMatchObject({ text: "Error", cls: "err" });
+  });
+
+  it("falls back to the install/enable/REST-health verdict when no live state has arrived yet (§16 Initial State + Realtime State)", () => {
+    expect(liveStatusLabel(driver(), undefined, true)).toMatchObject({ text: "Active" });
+    expect(liveStatusLabel(driver(), undefined, false)).toMatchObject({ text: "Disconnected" });
+  });
+
+  it("still reads 'Not installed'/'Disabled' regardless of a stale live state (e.g. driver was uninstalled after connecting)", () => {
+    expect(liveStatusLabel(driver({ installed: false }), "connected", null)).toMatchObject({ text: "Not installed" });
+    expect(liveStatusLabel(driver({ enabled: false }), "connected", null)).toMatchObject({ text: "Disabled" });
   });
 });

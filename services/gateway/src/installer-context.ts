@@ -28,7 +28,7 @@ import {
   type IInstalledDriverStore,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
-import type { IEventBus } from "@supreme/messaging";
+import { subjects, type IEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient, LocalDirectUdpTransport } from "@supreme/lan";
 import { buildNativeDriver, hasNativeFactory, type NativeDriverFactoryContext } from "./native-driver-factory.js";
 import {
@@ -236,6 +236,20 @@ export interface DriverLifecycleStatus {
   reconnects: number;
   updatedAt: string;
 }
+
+/** § Realtime State Hardening — maps the install/bind pipeline's internal stage
+ * vocabulary onto the small, user-facing connection-state vocabulary the frontend
+ * actually renders (see DriverConnectionState, supreme-contracts/events.ts). Kept
+ * deliberately partial: "validating"/"restoring_bindings"/"rebinding_devices"/
+ * "recalculating_providers"/"publishing" are all still "connecting" from the outside —
+ * "registering" already covers that transition, so those sub-steps don't each re-publish
+ * an identical-looking event. */
+const LIFECYCLE_STAGE_TO_CONNECTION_STATE: Partial<Record<DriverLifecycleStage, "connecting" | "disconnecting" | "ready_or_error" | "error">> = {
+  registering: "connecting",
+  stopping: "disconnecting",
+  ready: "ready_or_error",
+  failed: "error",
+};
 
 export interface DriverDiagnosticsEntry {
   key: string;
@@ -1103,6 +1117,29 @@ export class InstallerServices {
       lastError: null, boundCount: 0, ownedCount: 0, bindingCount: 0, reconnects: 0, updatedAt: "",
     };
     this.lifecycleStatus.set(protocol, { ...prev, ...patch, updatedAt: new Date().toISOString() });
+    // § Realtime State Hardening — this is THE single funnel every native driver's boot,
+    // install, config-change, AND reconnect pass already goes through (runDriverLifecycle
+    // below), so hooking publication here — once, generically — surfaces driver
+    // initialization/startup-failure/reconnect-attempt/automatic-reconnect-success for
+    // every current and future driver, with no per-driver code. Not every stage maps to a
+    // user-facing connection-state change (the intermediate binding/publishing sub-steps
+    // are all still "connecting" from the outside) — only the ones that do are listed.
+    if (patch.stage && patch.stage in LIFECYCLE_STAGE_TO_CONNECTION_STATE) {
+      const mapped = LIFECYCLE_STAGE_TO_CONNECTION_STATE[patch.stage]!;
+      const merged = this.lifecycleStatus.get(protocol)!;
+      const state = mapped === "ready_or_error" ? (merged.healthy ? "connected" : "error") : mapped;
+      void this.publishDriverStateForProtocol(protocol, state, merged.lastError);
+    }
+  }
+
+  /** § Realtime State Hardening — resolves protocol → the installedId the frontend keys
+   * off (DriverEntry.installedId), then publishes through the same generic channel
+   * connectDriver()/disconnectDriver() already use. A protocol with no matching installed
+   * entry (e.g. mid-uninstall) is a silent no-op — there's no driverId left to address. */
+  private async publishDriverStateForProtocol(protocol: string, state: "connecting" | "connected" | "disconnecting" | "disconnected" | "error", error?: string | null): Promise<void> {
+    const entry = (await this.drivers.registry()).find((e) => e.protocols.includes(protocol));
+    if (!entry?.installedId) return;
+    await this.publishDriverState(entry.installedId, state, error);
   }
 
   /** Boot only: register every env-configured native driver (bootstrap.ts) through
@@ -1200,6 +1237,10 @@ export class InstallerServices {
     trigger: DriverLifecycleTrigger,
   ): Promise<void> {
     if (!driver) {
+      // § Realtime State Hardening — resolved BEFORE teardown mutates anything, since
+      // the registry entry (and therefore its installedId) may no longer be findable by
+      // protocol once unregister/uninstall has run.
+      const entry = (await this.drivers.registry()).find((e) => e.protocols.includes(protocol));
       // § Driver Lifecycle Completion — Stop → Unbind → Destroy, made observable
       // (previously the driver just vanished from `lifecycleStatus` with no visible
       // transitional state). `unregisterNativeProtocol` is idempotent (a no-op if
@@ -1211,6 +1252,7 @@ export class InstallerServices {
       for (const deviceId of owned) await this.d.sil.providers.remove(deviceId);
       this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
       this.lifecycleStatus.delete(protocol);
+      if (entry?.installedId) void this.publishDriverState(entry.installedId, "disconnected");
       return;
     }
 
@@ -1356,15 +1398,30 @@ export class InstallerServices {
   async connectDriver(id: DriverId): Promise<{ connected: boolean }> {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
+    // § Realtime State Architecture — published the instant the request is accepted, so
+    // the UI shows "Connecting…" from a real backend event, not local-only optimism it
+    // has to guess is still valid. Generic across every driver id — no per-driver code.
+    void this.publishDriverState(id, "connecting");
     let connected = false;
-    for (const p of entry.protocols) {
-      if (await this.d.sil.connectNativeProtocol(p)) {
-        connected = true;
-        const prev = this.lifecycleStatus.get(p);
-        if (prev) this.setStage(p, { stage: "ready", healthy: true, lastError: null, reconnects: prev.reconnects + 1 });
+    try {
+      for (const p of entry.protocols) {
+        if (await this.d.sil.connectNativeProtocol(p)) {
+          connected = true;
+          // § Realtime State Hardening — unconditional, not `if (prev)`: a driver
+          // connected without ever passing through the full boot/config-change pipeline
+          // (e.g. no config fields required, or connected before its first full pass)
+          // still needs a "ready" lifecycleStatus entry, or reconcileDriverConnectivity()
+          // — which only watches drivers already confirmed "ready" — can never see it.
+          const prev = this.lifecycleStatus.get(p);
+          this.setStage(p, { key: entry.key, stage: "ready", healthy: true, lastError: null, reconnects: (prev?.reconnects ?? 0) + (prev ? 1 : 0) });
+        }
       }
+    } catch (err) {
+      void this.publishDriverState(id, "error", err instanceof Error ? err.message : String(err));
+      throw err;
     }
     this.appendLog(entry.key, connected ? "info" : "warn", connected ? "Connected" : "No native driver to connect (managed by backend)");
+    void this.publishDriverState(id, connected ? "connected" : "error", connected ? null : "No native driver to connect (managed by backend)");
     return { connected };
   }
 
@@ -1372,10 +1429,40 @@ export class InstallerServices {
   async disconnectDriver(id: DriverId): Promise<{ disconnected: boolean }> {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
+    void this.publishDriverState(id, "disconnecting");
     let disconnected = false;
-    for (const p of entry.protocols) if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+    try {
+      for (const p of entry.protocols) if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+    } catch (err) {
+      void this.publishDriverState(id, "error", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
     this.appendLog(entry.key, "info", disconnected ? "Disconnected" : "No native driver to disconnect");
+    void this.publishDriverState(id, "disconnected");
     return { disconnected };
+  }
+
+  /** § Realtime State Architecture — the single publish point every driver connect/
+   * disconnect AND the lifecycle pipeline (setStage()) flow through (this generic,
+   * driver-id-parameterized method, not a per-protocol special case). Fans out over the
+   * same event bus device-state and notifications already use (in-process today,
+   * cross-process under NATS) — see context.ts's onDriverState()/publishDriverState()
+   * and stream.ts's WSS delivery. */
+  private readonly lastPublishedDriverState = new Map<string, string>();
+  private async publishDriverState(driverId: string, state: "connecting" | "connected" | "disconnecting" | "disconnected" | "error", error?: string | null): Promise<void> {
+    if (!this.d.bus) return;
+    // § Realtime State Hardening — coalesce identical back-to-back publishes. Two
+    // independent paths can legitimately observe the SAME transition (e.g. connectDriver()'s
+    // own explicit "connected" publish and setStage()'s generic ready→connected hook,
+    // when a driver reconnects after already having reached "ready" once at boot) — this
+    // is the single low-level publish point, so it's the one place that can de-duplicate
+    // for every caller at once, never a per-caller guard duplicated across call sites.
+    const fingerprint = `${state}:${error ?? ""}`;
+    if (this.lastPublishedDriverState.get(driverId) === fingerprint) return;
+    this.lastPublishedDriverState.set(driverId, fingerprint);
+    await this.d.bus.publish(subjects.driverState(this.d.homeId), {
+      driverId, state, error: error ?? null, ts: new Date().toISOString(),
+    });
   }
 
   /** Toggle the runtime Developer-Mode override and re-resolve the license. */
@@ -1805,6 +1892,46 @@ export class InstallerServices {
       nextDueAt,
       lastRestoreAt: lastRestore?.at ?? null,
     };
+  }
+
+  /** § Realtime State Hardening — Runner hook (main.ts's existing 60s tick loop, same
+   * cadence every other reconciliation runner here already uses — no new timer). Detects
+   * a native driver's connection state drifting AUTONOMOUSLY (connection lost, network
+   * failure, or an automatic recovery) — i.e. a change `setStage()` never saw because
+   * nothing user-initiated (Connect/Disconnect) or pipeline-driven (install/config-change)
+   * caused it. Reuses the existing `nativeProtocolStatus()` getter (no new backend
+   * mechanism); only drivers already confirmed "ready" are watched — mid-installation
+   * churn is setStage()'s job, not this reconciliation's. */
+  async reconcileDriverConnectivity(): Promise<void> {
+    for (const status of this.d.sil.nativeProtocolStatus()) {
+      const prev = this.lifecycleStatus.get(status.protocol);
+      if (!prev || prev.stage !== "ready") continue;
+      // § Bug avoided — `status.error` is only ever populated at CONNECT time (a boot/
+      // connect-attempt failure record); it does NOT reflect an established connection
+      // dropping later. The live signal for "is this driver actually connected right
+      // now" is `status.connected` (native-adapter.ts's protocolStatus(), which calls
+      // the driver's own isConnected() fresh on every call) — using `!status.error`
+      // here would never detect an autonomous drop at all.
+      const nowHealthy = status.connected;
+      if (nowHealthy === prev.healthy) continue; // no autonomous drift — nothing to reconcile
+      const errorMessage = nowHealthy ? null : (status.error ?? "connection lost");
+      this.setStage(status.protocol, { healthy: nowHealthy, lastError: errorMessage });
+      // setStage()'s own stage-transition hook doesn't fire here (stage stays "ready") —
+      // publish explicitly; this IS the autonomous connection-lost/auto-reconnected event.
+      // § Bug fix — publishDriverStateForProtocol()'s registry lookup is genuinely async
+      // (a real store query, not a synchronous dispatch like the event bus itself) —
+      // fire-and-forgetting it here let the actual publish land AFTER this function had
+      // already returned to its caller (the tick loop, or a test asserting immediately
+      // afterward). This function is already fully async with nothing time-sensitive
+      // after it, so there's no reason not to await it properly.
+      await this.publishDriverStateForProtocol(status.protocol, nowHealthy ? "connected" : "error", errorMessage);
+      this.appendLog(
+        prev.key, nowHealthy ? "info" : "warn",
+        nowHealthy
+          ? `Native ${status.protocol} driver reconnected automatically`
+          : `Native ${status.protocol} driver connection lost: ${errorMessage}`,
+      );
+    }
   }
 
   /** Runner hook: create a scheduled backup if the schedule is enabled and one is due. */
