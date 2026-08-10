@@ -601,6 +601,41 @@ case "$_validate_apt_deps_body" in
 esac
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "Web UI same-origin build — VITE_SUPREME_API_URL must be empty, not unset"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: apps/web-homeowner bakes `import.meta.env.VITE_SUPREME_API_URL ??
+# "http://127.0.0.1:8080"` into the built bundle at build time — left unset (not merely
+# empty), the native build shipped a hardcoded absolute HTTP URL, which the browser then
+# blocked as mixed content once served over Caddy's HTTPS, breaking first-boot setup
+# detection and login. Docker's own build (web-homeowner.Dockerfile) already defaults this
+# to an empty string for same-origin relative fetches; native was missing the equivalent.
+
+_build_ws_body="$(sed -n '/^build_workspace() {/,/^}/p' "${SCRIPT_DIR}/lib/deploy-steps.sh")"
+case "$_build_ws_body" in
+  *'env VITE_SUPREME_API_URL= pnpm turbo run build'*)
+    pass "build_workspace() sets VITE_SUPREME_API_URL= (empty, same-origin) on the pnpm turbo build invocation" ;;
+  *)
+    fail "build_workspace() sets VITE_SUPREME_API_URL= (empty, same-origin) on the pnpm turbo build invocation" "not found" ;;
+esac
+case "$_build_ws_body" in
+  *'VITE_SUPREME_API_URL=http'*)
+    fail "VITE_SUPREME_API_URL is never set to a hardcoded http(s) gateway URL" "found a hardcoded URL" ;;
+  *)
+    pass "VITE_SUPREME_API_URL is never set to a hardcoded http(s) gateway URL" ;;
+esac
+
+# run_as_supreme()'s forwarding loop only forwards non-empty vars ([ -n "${!var:-}" ]) —
+# adding VITE_SUPREME_API_URL to that allowlist would never actually forward it (an
+# intentionally-empty value can't pass that check), so the fix must NOT rely on it.
+_run_as_supreme_body="$(sed -n '/^run_as_supreme() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh")"
+case "$_run_as_supreme_body" in
+  *'VITE_SUPREME_API_URL'*)
+    fail "VITE_SUPREME_API_URL is not routed through run_as_supreme()'s non-empty-only allowlist (it would never forward)" "found in run_as_supreme()'s forwarded-var list" ;;
+  *)
+    pass "VITE_SUPREME_API_URL is not routed through run_as_supreme()'s non-empty-only allowlist (it would never forward)" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

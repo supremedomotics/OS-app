@@ -102,7 +102,21 @@ build_workspace() {
     prune_stale_incremental_state
     prepare_pinned_pnpm_for_supreme
     run_as_supreme pnpm install --frozen-lockfile
-    run_as_supreme pnpm turbo run build
+    # § Bug fix — apps/web-homeowner (homes.ts) bakes VITE_SUPREME_API_URL into the built
+    # bundle at build time: `import.meta.env.VITE_SUPREME_API_URL ?? "http://127.0.0.1:8080"`.
+    # Left unset, native builds shipped that hardcoded absolute HTTP URL, which the browser
+    # then blocked as mixed content once the UI was served over Caddy's HTTPS — the
+    # `??` fallback only triggers on null/undefined, so this MUST be explicitly set to an
+    # empty string, not merely left unset. infra/hub-compose's Docker build already does
+    # this (web-homeowner.Dockerfile's `ARG VITE_SUPREME_API_URL=` defaults to empty) for
+    # the same same-origin-relative-fetch reason; native was simply missing the equivalent.
+    #
+    # run_as_supreme()'s own forwarding loop (lib/common.sh) only forwards variables that
+    # are non-empty (`[ -n "${!var:-}" ]`) — by design, for its actual purpose (optional
+    # proxy/CA passthrough). An intentionally-EMPTY value can never satisfy that check, so
+    # this cannot be added to that allowlist; it's set explicitly on the build command
+    # itself instead, via an inner `env`, scoped to only this one invocation.
+    run_as_supreme env VITE_SUPREME_API_URL= pnpm turbo run build
   )
   log_info "Workspace build complete."
 }
