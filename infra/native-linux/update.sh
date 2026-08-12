@@ -66,7 +66,13 @@ restart_services() {
   log_step "Restarting SupremeOS-owned services"
   # Order matches dependency direction: the bus/broker before the services that talk to
   # it, the Gateway last (it's the one thing every client actually connects to).
-  systemctl_restart supreme-nats
+  # § NATS deployment contract — a bare systemctl_restart would only prove "systemd
+  # accepted the restart command", not "nats-server is the pinned version, at the
+  # canonical executable, actually listening". nats_ensure_ready() (lib/common.sh) is the
+  # ONE authoritative validate/repair/start/readiness mechanism, reused here so an update
+  # can never accidentally leave NATS broken (self-heals it if it was) — see requirement:
+  # "update.sh must not accidentally break NATS".
+  nats_ensure_ready
   systemctl_restart supreme-commissioning
   systemctl_restart supreme-lan
   if [ "${SUPREME_INSTALL_HA}" = "1" ]; then

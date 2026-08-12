@@ -51,8 +51,9 @@ fi
 # `curl | bash`, every third-party binary here is fetched from its vendor's own GitHub
 # release and checked against a hash independently confirmed against that same release's
 # own published checksum manifest before this script was written).
-NATS_VERSION="2.10.24"
-NATS_DEB_SHA256="1978312aff8d667796cdac9f1edba2bd78676e596181963934780ac34ace8486"
+# NATS_VERSION/NATS_DEB_SHA256 moved to lib/common.sh (§ NATS deployment contract) — update.sh
+# and recover.sh both need the same pin to repair a broken NATS install, so it lives in the
+# one file every native-linux script already sources, not duplicated here.
 CADDY_VERSION="2.8.4"
 CADDY_DEB_SHA512="b2f101291ef1a9359717a6349b90ac44d43e3087b87f975f3d4eb5eb22d6bd8af0b1a3a85d7aa9a9b8ba2ad0fbc2ad165c8631c57e0dbf4ca3df986ee728e205"
 
@@ -407,30 +408,33 @@ install_node() {
   log_info "node $(node -v), corepack $(corepack --version 2>/dev/null || echo 'enabled')"
 }
 
+# § NATS deployment contract — package/executable installation is only the first half of
+# nats_ensure_ready() (lib/common.sh); the second half (start + readiness) needs nats.conf
+# and the rendered systemd unit, neither of which exist yet this early in install.sh's
+# phase order. This phase therefore installs the pinned package/executable ONLY — the
+# validator used to gate its own checkpoint (below) checks package+executable+version
+# ONLY too, for the same reason. configure_nats() (later) calls nats_ensure_ready() again,
+# which is the one that actually starts the service and blocks on real readiness.
 validate_phase_install_nats() {
-  command_exists nats-server && nats-server --version 2>/dev/null | grep -q "$NATS_VERSION"
+  nats_validate 2>/dev/null
+  case "${NATS_VALIDATION_REASON:-}" in
+    ""|*"config missing"*|*"store_dir missing"*|*"ExecStart"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 install_nats() {
   log_step "Installing NATS JetStream ${NATS_VERSION}"
-  if command_exists nats-server && nats-server --version 2>/dev/null | grep -q "$NATS_VERSION"; then
-    log_info "nats-server ${NATS_VERSION} already installed — skipping."
-    return
+  if command_exists "$SUPREME_NATS_BIN" || command_exists nats-server; then
+    local current
+    current="$("$SUPREME_NATS_BIN" --version 2>/dev/null || nats-server --version 2>/dev/null || true)"
+    if [ -x "$SUPREME_NATS_BIN" ] && echo "$current" | grep -q "v${NATS_VERSION}"; then
+      log_info "nats-server ${NATS_VERSION} already installed at ${SUPREME_NATS_BIN} — skipping reinstall."
+      return
+    fi
   fi
-  local tmp deb_path
-  tmp="$(mktemp -d)"
-  if [ "$SUPREME_OFFLINE" = "1" ]; then
-    deb_path="${SUPREME_NATS_DEB_PATH:?SUPREME_OFFLINE=1 requires SUPREME_NATS_DEB_PATH pointing at a local nats-server-v${NATS_VERSION}-amd64.deb (no network download in offline mode)}"
-    [ -r "$deb_path" ] || die "SUPREME_NATS_DEB_PATH=${deb_path} is not readable."
-    cp "$deb_path" "${tmp}/nats-server.deb"
-  else
-    curl -fsSL "https://github.com/nats-io/nats-server/releases/download/v${NATS_VERSION}/nats-server-v${NATS_VERSION}-amd64.deb" -o "${tmp}/nats-server.deb"
-  fi
-  echo "${NATS_DEB_SHA256}  ${tmp}/nats-server.deb" | sha256sum -c - \
-    || die "nats-server .deb checksum mismatch — refusing to install a package that doesn't match the pinned, verified hash."
-  dpkg -i "${tmp}/nats-server.deb"
-  rm -rf "$tmp"
-  log_info "nats-server $(nats-server --version) installed and checksum-verified."
+  _nats_fetch_and_install_deb
+  log_info "nats-server $("$SUPREME_NATS_BIN" --version) installed and checksum-verified at ${SUPREME_NATS_BIN}."
 }
 
 validate_phase_install_caddy() {
@@ -594,7 +598,8 @@ configure_mosquitto() {
 }
 
 validate_phase_configure_nats() {
-  [ -r "${SUPREME_CONFIG_DIR}/nats.conf" ] && [ -r /etc/systemd/system/supreme-nats.service ]
+  [ -r "${SUPREME_CONFIG_DIR}/nats.conf" ] && [ -r /etc/systemd/system/supreme-nats.service ] \
+    && nats_check_ready
 }
 
 configure_nats() {
@@ -609,8 +614,12 @@ configure_nats() {
   chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/nats.conf"
   chmod 0640 "${SUPREME_CONFIG_DIR}/nats.conf"
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
-  if systemd_is_live; then systemctl daemon-reload; fi
-  systemctl_enable_now supreme-nats
+  # § NATS deployment contract — nats_ensure_ready() (lib/common.sh) is the ONE
+  # authoritative validate/repair/start/readiness mechanism, reused here instead of a
+  # bare systemctl_enable_now: install.sh must not report this phase successful until the
+  # executable, version, config, AND the running service are all verified ready — not just
+  # "the command exists" (the exact shortcut that let the original production bug through).
+  nats_ensure_ready
 }
 
 validate_phase_configure_caddy() {

@@ -1,21 +1,37 @@
 # supreme-nats — NATS JetStream event bus, native-linux production deployment.
 #
-# Ubuntu 24.04's default apt repos carry no `nats-server` package, so install.sh fetches
-# the official static binary from NATS' GitHub releases (checksum-verified) to
-# /usr/local/bin/nats-server, exactly as `nats:2.10-alpine`'s own image does internally —
-# same binary, same version, just not inside a container. Config is byte-equivalent to
-# infra/hub-compose/nats/nats.conf (see config/nats.conf.template's own comment for the
-# one real difference: `store_dir`).
+# Ubuntu 24.04's default apt repos carry no `nats-server` package, so install.sh fetches the
+# official checksum-verified .deb from NATS' GitHub releases and installs it via dpkg — same
+# binary/version `nats:2.10-alpine`'s own image runs, just not inside a container.
+#
+# § Canonical executable path (§ NATS deployment contract, lib/common.sh SUPREME_NATS_BIN).
+# Inspecting the actual pinned .deb shows it installs the real binary at /usr/bin/nats-server
+# and ALSO ships /usr/local/bin/nats-server as its own symlink to that same file. A previous
+# version of this unit pointed ExecStart at the symlink — real production evidence showed
+# `status=203/EXEC` because that symlink (not the real binary) had gone missing while dpkg's
+# package database still reported "install ok installed" (dpkg tracks package state, not
+# live file presence). ExecStart now points at the canonical, non-symlink file directly, so
+# a missing/dangling compat symlink elsewhere on the host can never break this service.
+# Config is byte-equivalent to infra/hub-compose/nats/nats.conf (see config/nats.conf.template's
+# own comment for the one real difference: `store_dir`).
 
 [Unit]
 Description=SupremeOS NATS JetStream Event Bus
 Documentation=https://docs.nats.io/ file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
 After=network.target
 Wants=network.target
+# § Restart-storm prevention: allow up to 5 restarts in a 60s window before systemd gives
+# up and marks the unit failed, rather than restarting forever at RestartSec=2 against a
+# root cause (e.g. a corrupt package) that will never self-resolve just by retrying. This
+# is the SAME storm-prevention pattern applied to supreme-gateway.service below — a broken
+# NATS install must fail loudly (visible in `systemctl status`/`journalctl`) once repeated
+# restarts have clearly not helped, not spin CPU/log-write forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/nats-server -js -c ___SUPREME_CONFIG_DIR___/nats.conf
+ExecStart=/usr/bin/nats-server -js -c ___SUPREME_CONFIG_DIR___/nats.conf
 Restart=always
 RestartSec=2
 

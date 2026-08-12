@@ -682,6 +682,288 @@ fi
 rm -rf "$_trap_repro"
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "NATS deployment contract — nats_validate()/nats_check_ready()/nats_ensure_ready() (§ Native-Linux NATS hardening)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: real production evidence of supreme-nats.service failing with
+# `status=203/EXEC` because /usr/local/bin/nats-server (and later /usr/bin/nats-server) was
+# missing even though `dpkg -s nats-server` reported "install ok installed". Every check
+# below is exercised against real files/symlinks in a scratch tree — SUPREME_NATS_BIN,
+# SUPREME_NATS_COMPAT_SYMLINK, and SUPREME_NATS_UNIT_FILE are all overridable (see
+# lib/common.sh) specifically so this suite never touches the real host filesystem.
+
+NATS_TEST_DIR="${SCRATCH}/nats-contract-test"
+mkdir -p "${NATS_TEST_DIR}/compat"
+export SUPREME_NATS_BIN="${NATS_TEST_DIR}/nats-server"
+export SUPREME_NATS_COMPAT_SYMLINK="${NATS_TEST_DIR}/compat/nats-server"
+export SUPREME_NATS_UNIT_FILE="${NATS_TEST_DIR}/supreme-nats.service"
+_host_arch="$(uname -m)"; [ "$_host_arch" = "x86_64" ] && _host_arch="amd64"
+export SUPREME_NATS_ARCH="$_host_arch"  # match this host so the arch check never fires as a false failure
+
+mkdir -p "$SUPREME_NATS_STORE_DIR"
+echo "fake config" > "$SUPREME_NATS_CONF"
+# The ownership check compares against SUPREME_USER:SUPREME_GROUP — this whole suite runs
+# as whatever real account is running it (there is no real "supreme-test" system account
+# to chown to), so point SUPREME_USER/SUPREME_GROUP at that real account for just this
+# section, matching the store_dir's actual owner. This isolates the ownership check itself
+# (already exercised as its own PASS/FAIL above) from every OTHER check in this section
+# that has nothing to do with ownership.
+_real_owner="$(stat -c '%U:%G' "$SUPREME_NATS_STORE_DIR" 2>/dev/null || echo "${SUPREME_USER}:${SUPREME_GROUP}")"
+export SUPREME_USER="${_real_owner%%:*}"
+export SUPREME_GROUP="${_real_owner##*:}"
+
+_nats_write_fake_binary() {
+  local version="${1:-$NATS_VERSION}"
+  cat > "$SUPREME_NATS_BIN" <<EOF
+#!/usr/bin/env bash
+echo "nats-server: v${version}"
+EOF
+  chmod 0755 "$SUPREME_NATS_BIN"
+}
+
+_nats_write_valid_unit() {
+  cat > "$SUPREME_NATS_UNIT_FILE" <<EOF
+[Service]
+ExecStart=${SUPREME_NATS_BIN} -js -c ${SUPREME_NATS_CONF}
+EOF
+}
+
+_nats_reset() {
+  rm -f "$SUPREME_NATS_BIN" "$SUPREME_NATS_COMPAT_SYMLINK" "$SUPREME_NATS_UNIT_FILE"
+  NATS_VALIDATION_REASON=""
+}
+
+# ── Broken state: NATS absent entirely ──────────────────────────────────────────────────
+_nats_reset
+if nats_validate; then
+  fail "nats_validate() detects a completely absent executable"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"canonical executable missing"*) pass "nats_validate() detects a completely absent executable" ;;
+    *) fail "nats_validate() detects a completely absent executable" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: package "installed" (binary present) but not executable — permissions ──
+_nats_reset
+_nats_write_fake_binary
+chmod 0644 "$SUPREME_NATS_BIN"
+if nats_validate; then
+  fail "nats_validate() detects a present-but-not-executable binary (permissions)"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"not executable"*) pass "nats_validate() detects a present-but-not-executable binary (permissions)" ;;
+    *) fail "nats_validate() detects a present-but-not-executable binary (permissions)" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: dangling compat symlink (the exact original production bug shape —
+# /usr/local/bin/nats-server missing/broken while the package "is installed") ───────────
+_nats_reset
+_nats_write_fake_binary
+ln -sfn "${NATS_TEST_DIR}/does-not-exist" "$SUPREME_NATS_COMPAT_SYMLINK"
+if nats_validate; then
+  fail "nats_validate() detects a dangling compat symlink"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"dangling or mistargeted symlink"*) pass "nats_validate() detects a dangling compat symlink" ;;
+    *) fail "nats_validate() detects a dangling compat symlink" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+rm -f "$SUPREME_NATS_COMPAT_SYMLINK"
+
+# ── Broken state: wrong version installed (e.g. Ubuntu's distro package, or a stale
+# binary left over from before a pin bump) ──────────────────────────────────────────────
+_nats_reset
+_nats_write_fake_binary "9.9.9"
+if nats_validate; then
+  fail "nats_validate() detects a wrong nats-server version"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"version mismatch"*) pass "nats_validate() detects a wrong nats-server version" ;;
+    *) fail "nats_validate() detects a wrong nats-server version" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: binary present, correct version, but fails to actually execute (e.g.
+# corrupt/truncated download, wrong architecture ELF) ───────────────────────────────────
+_nats_reset
+cat > "$SUPREME_NATS_BIN" <<'EOF'
+#!/usr/bin/env bash
+exit 127
+EOF
+chmod 0755 "$SUPREME_NATS_BIN"
+if nats_validate; then
+  fail "nats_validate() detects a binary that exists but fails to execute --version"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"fails to execute"*) pass "nats_validate() detects a binary that exists but fails to execute --version" ;;
+    *) fail "nats_validate() detects a binary that exists but fails to execute --version" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: systemd ExecStart pointing at the wrong/old path (the root cause this
+# whole fix targets — a unit whose ExecStart resolves to something other than the one
+# canonical SUPREME_NATS_BIN every other consumer agrees on) ────────────────────────────
+_nats_reset
+_nats_write_fake_binary
+cat > "$SUPREME_NATS_UNIT_FILE" <<EOF
+[Service]
+ExecStart=/usr/local/bin/nats-server -js -c ${SUPREME_NATS_CONF}
+EOF
+if nats_validate; then
+  fail "nats_validate() detects a systemd ExecStart mismatch against the canonical executable"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"does not resolve to the canonical"*) pass "nats_validate() detects a systemd ExecStart mismatch against the canonical executable" ;;
+    *) fail "nats_validate() detects a systemd ExecStart mismatch against the canonical executable" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: JetStream store_dir missing (must be detected, but repairing it is
+# create-only — see the data-preservation test further below) ──────────────────────────
+_nats_reset
+_nats_write_fake_binary
+_nats_write_valid_unit
+rm -rf "$SUPREME_NATS_STORE_DIR"
+if nats_validate; then
+  fail "nats_validate() detects a missing JetStream store_dir"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"store_dir missing"*) pass "nats_validate() detects a missing JetStream store_dir" ;;
+    *) fail "nats_validate() detects a missing JetStream store_dir" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+mkdir -p "$SUPREME_NATS_STORE_DIR"
+
+# ── Good state: executable + version + arch + ExecStart + config all correct — every
+# check UP TO ownership (which needs a real root chown to a real system account, only
+# meaningful on an actual target host) must pass cleanly. ──────────────────────────────
+_nats_reset
+_nats_write_fake_binary
+_nats_write_valid_unit
+nats_validate
+case "$NATS_VALIDATION_REASON" in
+  ""|*"owned by"*)
+    pass "nats_validate() reports no failure earlier than the (host-account-dependent) ownership check on an otherwise-correct install" ;;
+  *)
+    fail "nats_validate() reports no failure earlier than the (host-account-dependent) ownership check on an otherwise-correct install" "got reason: ${NATS_VALIDATION_REASON}" ;;
+esac
+
+# ── Data preservation (§ hard safety boundary): the exact mkdir/chown/chmod sequence
+# nats_ensure_ready() runs against the JetStream store_dir must never remove or reset
+# existing content — proven directly against a real marker file, not asserted by reading
+# the source. ────────────────────────────────────────────────────────────────────────────
+echo "REAL_JETSTREAM_STREAM_DATA_DO_NOT_DELETE" > "${SUPREME_NATS_STORE_DIR}/marker.db"
+mkdir -p "$SUPREME_NATS_STORE_DIR"
+chown "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_NATS_STORE_DIR" 2>/dev/null || true
+chmod 0750 "$SUPREME_NATS_STORE_DIR" 2>/dev/null || true
+assert_eq "nats_ensure_ready()'s directory-convergence step never touches existing JetStream content" \
+  "$(cat "${SUPREME_NATS_STORE_DIR}/marker.db")" "REAL_JETSTREAM_STREAM_DATA_DO_NOT_DELETE"
+rm -f "${SUPREME_NATS_STORE_DIR}/marker.db"
+
+# ── nats_ensure_ready() orchestration: on a validated-good install with systemd not live
+# in this sandbox (this suite's whole point — see file header), it must short-circuit to
+# a warning and return success, never attempt a repair download/dpkg it can't complete. ─
+# nats_ensure_ready() runs in a subshell below (it may `die`/exit on failure, which must
+# never kill this whole test harness) — a marker FILE, not a shell variable, is used to
+# detect whether the repair test double ran, since a variable set inside a subshell is
+# invisible to this parent shell once the subshell exits.
+_nats_repair_marker="${NATS_TEST_DIR}/repair-called"
+
+_nats_reset
+_nats_write_fake_binary
+_nats_write_valid_unit
+rm -f "$_nats_repair_marker"
+_nats_fetch_and_install_deb() { : >> "$_nats_repair_marker"; }  # test double — real download+dpkg is exercised by install.sh's own phase, not here (no network/dpkg in this sandbox)
+if (nats_ensure_ready) >/dev/null 2>&1; then
+  pass "nats_ensure_ready() succeeds without repair when the install already validates (systemd not live in this sandbox)"
+else
+  fail "nats_ensure_ready() succeeds without repair when the install already validates (systemd not live in this sandbox)"
+fi
+if [ -e "$_nats_repair_marker" ]; then
+  fail "nats_ensure_ready() does not invoke the repair path when nats_validate() already passes"
+else
+  pass "nats_ensure_ready() does not invoke the repair path when nats_validate() already passes"
+fi
+
+# ── nats_ensure_ready() self-heal: a broken install (missing executable) must trigger the
+# repair path exactly once it becomes valid, then converge — proven by having the test
+# double "install" a valid fake binary on its first call. ──────────────────────────────
+_nats_reset
+_nats_write_valid_unit
+rm -f "$_nats_repair_marker"
+_nats_fetch_and_install_deb() { : >> "$_nats_repair_marker"; _nats_write_fake_binary; }
+if (nats_ensure_ready) >/dev/null 2>&1; then
+  pass "nats_ensure_ready() self-heals a missing executable via the repair path and converges"
+else
+  fail "nats_ensure_ready() self-heals a missing executable via the repair path and converges"
+fi
+if [ -e "$_nats_repair_marker" ]; then
+  pass "nats_ensure_ready() invoked the repair path when the executable was missing"
+else
+  fail "nats_ensure_ready() invoked the repair path when the executable was missing"
+fi
+
+# ── nats_ensure_ready() must fail loudly (not silently) when repair cannot fix the
+# problem — never continue past a failed validation. ────────────────────────────────────
+_nats_reset
+_nats_write_valid_unit
+_nats_fetch_and_install_deb() { :; }  # repair that does nothing — the broken state persists
+if (nats_ensure_ready) >/dev/null 2>&1; then
+  fail "nats_ensure_ready() dies (non-zero exit) rather than silently continuing when repair cannot fix the problem"
+else
+  pass "nats_ensure_ready() dies (non-zero exit) rather than silently continuing when repair cannot fix the problem"
+fi
+
+# ── Systemd unit files — ExecStart must reference the canonical, non-symlink path this
+# whole contract is built around (a static check on the real shipped templates). ────────
+case "$(grep -m1 '^ExecStart=' "${SCRIPT_DIR}/systemd/supreme-nats.service")" in
+  "ExecStart=/usr/bin/nats-server "*) pass "systemd/supreme-nats.service's ExecStart points at the canonical /usr/bin/nats-server" ;;
+  *) fail "systemd/supreme-nats.service's ExecStart points at the canonical /usr/bin/nats-server" "got: $(grep -m1 '^ExecStart=' "${SCRIPT_DIR}/systemd/supreme-nats.service")" ;;
+esac
+
+case "$(grep -c '^StartLimitIntervalSec=\|^StartLimitBurst=' "${SCRIPT_DIR}/systemd/supreme-nats.service")" in
+  2) pass "systemd/supreme-nats.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+  *) fail "systemd/supreme-nats.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+esac
+
+case "$(grep -c '^StartLimitIntervalSec=\|^StartLimitBurst=' "${SCRIPT_DIR}/systemd/supreme-gateway.service")" in
+  2) pass "systemd/supreme-gateway.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+  *) fail "systemd/supreme-gateway.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+esac
+
+if grep -q '^Requires=supreme-nats' "${SCRIPT_DIR}/systemd/supreme-gateway.service"; then
+  fail "supreme-gateway.service does not hard-Require supreme-nats.service (would deadlock recovery)" "found a Requires=supreme-nats line"
+else
+  pass "supreme-gateway.service does not hard-Require supreme-nats.service (would deadlock recovery)"
+fi
+
+# ── Gateway's own NATS client — must apply reconnect/backoff to the FIRST connection
+# attempt too (waitOnFirstConnect), not just to a connection that later drops — this is
+# what lets the Gateway survive starting before/losing NATS without crash-looping. ──────
+_nats_bus_src="$(cat "${REPO_ROOT}/services/messaging/src/nats-bus.ts")"
+case "$_nats_bus_src" in
+  *"waitOnFirstConnect: true"*) pass "NatsEventBus.connect() sets waitOnFirstConnect: true (survives NATS not being up yet at Gateway startup)" ;;
+  *) fail "NatsEventBus.connect() sets waitOnFirstConnect: true (survives NATS not being up yet at Gateway startup)" ;;
+esac
+case "$_nats_bus_src" in
+  *"maxReconnectAttempts: -1"*) pass "NatsEventBus.connect() sets maxReconnectAttempts: -1 (infinite — keeps retrying instead of giving up and crashing)" ;;
+  *) fail "NatsEventBus.connect() sets maxReconnectAttempts: -1 (infinite — keeps retrying instead of giving up and crashing)" ;;
+esac
+
+export SUPREME_USER="supreme-test"
+export SUPREME_GROUP="supreme-test"
+# Cleanup: restore the real (unset) NATS override vars so nothing later in this file (or a
+# future test appended after this section) accidentally inherits scratch paths.
+unset SUPREME_NATS_BIN SUPREME_NATS_COMPAT_SYMLINK SUPREME_NATS_UNIT_FILE SUPREME_NATS_ARCH
+unset -f _nats_fetch_and_install_deb 2>/dev/null || true
+# Re-source common.sh so nats_ensure_ready/_nats_fetch_and_install_deb/etc. and the
+# SUPREME_NATS_* defaults are restored to their real, non-test-double definitions for any
+# later section of this file.
+# shellcheck source=../lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

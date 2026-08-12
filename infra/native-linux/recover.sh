@@ -136,7 +136,24 @@ detect_and_repair() {
   log_step "Resetting failed-unit state and restarting services"
   if systemd_is_live; then
     systemctl reset-failed 2>/dev/null || true
-    for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}" supreme-nats "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
+    for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}"; do
+      systemctl_restart "$svc" 2>/dev/null || note_issue "Could not restart ${svc} — see: journalctl -u ${svc} -n 50"
+    done
+    # § NATS deployment contract — recover.sh must never assume the executable it's about
+    # to invoke already exists (that assumption is exactly the original production bug).
+    # nats_ensure_ready() (lib/common.sh) is the ONE authoritative validate/repair/start/
+    # readiness mechanism: it reinstalls the pinned package if the executable/version/
+    # symlink/ExecStart is broken, converges the JetStream directory's ownership without
+    # ever touching its contents, then blocks on real readiness.
+    # Run in a subshell: nats_ensure_ready() calls die() (exit 1) on unrecoverable
+    # failure, which recover.sh's own "keep going and report" contract (see header) must
+    # survive — a subshell contains that exit to just this one step, not the whole script.
+    if (nats_ensure_ready) 2>/dev/null; then
+      note_fixed "supreme-nats validated/repaired and ready"
+    else
+      note_issue "supreme-nats could not be brought to a ready state — see: journalctl -u supreme-nats -n 50"
+    fi
+    for svc in "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
       systemctl_restart "$svc" 2>/dev/null || note_issue "Could not restart ${svc} — see: journalctl -u ${svc} -n 50"
     done
     if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then

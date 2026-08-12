@@ -225,6 +225,235 @@ generate_secret() {
 # and the Dockerfiles silently drifting apart.
 SUPREME_NODE_MAJOR="22"
 
+# ── NATS deployment contract (§ Native-Linux NATS hardening) ────────────────────────────
+# Real production evidence: supreme-nats.service failed with `status=203/EXEC` because
+# /usr/local/bin/nats-server (and later /usr/bin/nats-server) was missing, even though
+# `dpkg -s nats-server` reported "Status: install ok installed". Inspecting the ACTUAL
+# pinned .deb (nats-server-v2.10.24-amd64.deb — sha256 verified against NATS_DEB_SHA256
+# below) shows it ships the real binary at /usr/bin/nats-server (a regular ELF file) and a
+# symlink /usr/local/bin/nats-server -> /usr/bin/nats-server, both owned by the package. The
+# systemd unit used to point ExecStart at the SYMLINK. dpkg's package database tracks
+# "was this package installed", never "do these exact files still exist on disk right now"
+# — if anything (autoremove, disk cleanup, an image snapshot restore, a hand-run `rm`) ever
+# removes just the symlink, dpkg keeps reporting "install ok installed" while ExecStart
+# resolves to nothing. SUPREME_NATS_BIN is the one canonical path — the real, non-symlink,
+# dpkg-owned file — that every consumer (installer, systemd unit, updater, recovery,
+# validator) agrees on from here on. Never redefined per-script; this is the ONE place.
+NATS_VERSION="2.10.24"
+NATS_DEB_SHA256="1978312aff8d667796cdac9f1edba2bd78676e596181963934780ac34ace8486"
+# Overridable (like every SUPREME_*_DIR above) so the regression test suite can point
+# these at scratch paths instead of the real host filesystem — production always gets the
+# real defaults, nothing here changes for a real install/update/recover run.
+SUPREME_NATS_BIN="${SUPREME_NATS_BIN:-/usr/bin/nats-server}"
+# Shipped by the .deb itself (its own data.tar.gz contains this exact symlink) — kept valid
+# for anything on the host that still expects the traditional /usr/local/bin location, but
+# nothing in this deployment's own ExecStart/validation depends on it existing.
+SUPREME_NATS_COMPAT_SYMLINK="${SUPREME_NATS_COMPAT_SYMLINK:-/usr/local/bin/nats-server}"
+SUPREME_NATS_ARCH="${SUPREME_NATS_ARCH:-amd64}"
+SUPREME_NATS_CONF="${SUPREME_CONFIG_DIR}/nats.conf"
+# Matches config/nats.conf.template's own `store_dir: ___SUPREME_DATA_DIR___/nats` — one
+# constant, so the validator and the template can never quietly drift apart.
+SUPREME_NATS_STORE_DIR="${SUPREME_DATA_DIR}/nats"
+
+NATS_VALIDATION_REASON=""
+
+# TCP reachability without depending on rc_check_tcp's print-and-count side effects — a
+# plain boolean primitive the NATS readiness check below can branch on directly.
+_tcp_reachable() {
+  local host="$1" port="$2"
+  if command_exists nc; then
+    nc -z -w2 "$host" "$port" 2>/dev/null
+  elif command_exists bash; then
+    timeout 2 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+# Downloads (or, offline, copies) + checksum-verifies + dpkg-installs the pinned nats-server
+# .deb. The ONLY way nats-server ever lands on disk in this deployment — never an
+# unauthenticated `curl | bash`, never a fallback to Ubuntu's own (unpinned, unverified)
+# distro package. Idempotent: dpkg -i on an already-correct install is a safe no-op.
+_nats_fetch_and_install_deb() {
+  local tmp deb_path
+  tmp="$(mktemp -d)"
+  if [ "${SUPREME_OFFLINE:-0}" = "1" ]; then
+    deb_path="${SUPREME_NATS_DEB_PATH:?SUPREME_OFFLINE=1 requires SUPREME_NATS_DEB_PATH pointing at a local nats-server-v${NATS_VERSION}-amd64.deb (no network download in offline mode)}"
+    [ -r "$deb_path" ] || die "SUPREME_NATS_DEB_PATH=${deb_path} is not readable."
+    cp "$deb_path" "${tmp}/nats-server.deb"
+  else
+    curl -fsSL "https://github.com/nats-io/nats-server/releases/download/v${NATS_VERSION}/nats-server-v${NATS_VERSION}-amd64.deb" -o "${tmp}/nats-server.deb" \
+      || die "Failed to download nats-server v${NATS_VERSION} .deb."
+  fi
+  echo "${NATS_DEB_SHA256}  ${tmp}/nats-server.deb" | sha256sum -c - \
+    || die "nats-server .deb checksum mismatch — refusing to install a package that doesn't match the pinned, verified hash."
+  dpkg -i "${tmp}/nats-server.deb" || die "dpkg -i failed for the pinned nats-server .deb — see dpkg's own error above."
+  rm -rf "$tmp"
+  # § Original production bug, closed at the source: the .deb's own postinst ships the
+  # compat symlink, but dpkg -i over an already-"installed" version does not reliably
+  # re-run maintainer scripts identically on every dpkg version — recreate it explicitly
+  # rather than assuming it exists after this call.
+  if [ -x "$SUPREME_NATS_BIN" ] && { [ ! -e "$SUPREME_NATS_COMPAT_SYMLINK" ] || [ -L "$SUPREME_NATS_COMPAT_SYMLINK" ]; }; then
+    ln -sfn "$SUPREME_NATS_BIN" "$SUPREME_NATS_COMPAT_SYMLINK"
+  fi
+}
+
+# Pure read-only check — every one of the ten broken states this deployment must self-heal
+# fails exactly one of these in a way distinguishable via NATS_VALIDATION_REASON. Never
+# mutates anything; nats_ensure_ready() below is the only function allowed to repair.
+nats_validate() {
+  NATS_VALIDATION_REASON=""
+
+  if [ ! -e "$SUPREME_NATS_BIN" ]; then
+    NATS_VALIDATION_REASON="canonical executable missing: ${SUPREME_NATS_BIN}"; return 1
+  fi
+  if [ -L "$SUPREME_NATS_BIN" ]; then
+    NATS_VALIDATION_REASON="${SUPREME_NATS_BIN} is a symlink, expected a real regular file (the pinned .deb ships it as one — something replaced it)"; return 1
+  fi
+  if [ ! -x "$SUPREME_NATS_BIN" ]; then
+    NATS_VALIDATION_REASON="${SUPREME_NATS_BIN} exists but is not executable (permissions)"; return 1
+  fi
+
+  # Compat symlink, if present at all, must genuinely resolve to the canonical binary — a
+  # dangling or wrongly-targeted one is reported, never silently ignored.
+  if [ -L "$SUPREME_NATS_COMPAT_SYMLINK" ]; then
+    local target
+    target="$(readlink -f "$SUPREME_NATS_COMPAT_SYMLINK" 2>/dev/null || true)"
+    if [ -z "$target" ] || [ "$target" != "$(readlink -f "$SUPREME_NATS_BIN")" ]; then
+      NATS_VALIDATION_REASON="${SUPREME_NATS_COMPAT_SYMLINK} is a dangling or mistargeted symlink (expected -> ${SUPREME_NATS_BIN})"; return 1
+    fi
+  elif [ -e "$SUPREME_NATS_COMPAT_SYMLINK" ] && [ ! -x "$SUPREME_NATS_COMPAT_SYMLINK" ]; then
+    NATS_VALIDATION_REASON="${SUPREME_NATS_COMPAT_SYMLINK} exists but is neither the expected symlink nor executable"; return 1
+  fi
+
+  local version_output
+  if ! version_output="$("$SUPREME_NATS_BIN" --version 2>&1)"; then
+    NATS_VALIDATION_REASON="${SUPREME_NATS_BIN} --version failed to run (binary present but fails to execute): ${version_output}"; return 1
+  fi
+  case "$version_output" in
+    *"v${NATS_VERSION}"*) ;;
+    *) NATS_VALIDATION_REASON="version mismatch — expected v${NATS_VERSION}, got: ${version_output}"; return 1 ;;
+  esac
+
+  local host_arch
+  host_arch="$(uname -m)"
+  [ "$host_arch" = "x86_64" ] && host_arch="amd64"
+  if [ "$host_arch" != "$SUPREME_NATS_ARCH" ]; then
+    NATS_VALIDATION_REASON="host architecture ${host_arch} does not match the pinned .deb's architecture ${SUPREME_NATS_ARCH}"; return 1
+  fi
+
+  if command_exists dpkg-query; then
+    local dpkg_status
+    dpkg_status="$(dpkg-query -W -f='${Status}' nats-server 2>/dev/null || true)"
+    case "$dpkg_status" in
+      *"install ok installed"*) ;;
+      *) NATS_VALIDATION_REASON="dpkg package state for nats-server is '${dpkg_status:-not installed}', not 'install ok installed' — package is absent, half-installed, or removed-but-not-purged"; return 1 ;;
+    esac
+  fi
+
+  local unit_file="${SUPREME_NATS_UNIT_FILE:-/etc/systemd/system/supreme-nats.service}"
+  if [ -r "$unit_file" ]; then
+    local exec_line
+    exec_line="$(grep -m1 '^ExecStart=' "$unit_file" 2>/dev/null || true)"
+    if [ -z "$exec_line" ]; then
+      NATS_VALIDATION_REASON="${unit_file} has no ExecStart line"; return 1
+    fi
+    case "$exec_line" in
+      "ExecStart=${SUPREME_NATS_BIN} "*) ;;
+      *) NATS_VALIDATION_REASON="${unit_file}'s ExecStart does not resolve to the canonical ${SUPREME_NATS_BIN}: ${exec_line}"; return 1 ;;
+    esac
+  fi
+
+  [ -r "$SUPREME_NATS_CONF" ] || { NATS_VALIDATION_REASON="NATS config missing: ${SUPREME_NATS_CONF}"; return 1; }
+
+  # JetStream store_dir: existence + ownership only, NEVER content — this function never
+  # writes to, reads inside, or otherwise touches what NATS has stored there.
+  if [ ! -d "$SUPREME_NATS_STORE_DIR" ]; then
+    NATS_VALIDATION_REASON="JetStream store_dir missing: ${SUPREME_NATS_STORE_DIR}"; return 1
+  fi
+  if command_exists stat; then
+    local owner
+    owner="$(stat -c '%U:%G' "$SUPREME_NATS_STORE_DIR" 2>/dev/null || echo "")"
+    if [ -n "$owner" ] && [ "$owner" != "${SUPREME_USER}:${SUPREME_GROUP}" ]; then
+      NATS_VALIDATION_REASON="JetStream store_dir ${SUPREME_NATS_STORE_DIR} is owned by ${owner}, expected ${SUPREME_USER}:${SUPREME_GROUP}"; return 1
+    fi
+  fi
+
+  # The service user must actually be able to execute the binary — mirrors the unit's own
+  # User=supreme, catching a permissions/ACL edge case a root-only `-x` test would miss.
+  # Gated on systemd_is_live (same convention rc_check_service etc. already use): a real
+  # `sudo -u` impersonation check is only meaningful against a real target host's real
+  # accounts — on a non-systemd dev/CI sandbox (no real `supreme` user, and on Windows a
+  # same-named `sudo.exe` that behaves nothing like Linux sudo) it would misfire.
+  if systemd_is_live && command_exists sudo && id "$SUPREME_USER" >/dev/null 2>&1; then
+    if ! sudo -u "$SUPREME_USER" test -x "$SUPREME_NATS_BIN" 2>/dev/null; then
+      NATS_VALIDATION_REASON="${SUPREME_USER} cannot execute ${SUPREME_NATS_BIN} (permissions/ACL)"; return 1
+    fi
+  fi
+
+  return 0
+}
+
+# "NATS ready" means the process is actually running, actually the right version, AND
+# actually accepting a real TCP connection on 4222 — never merely "dpkg says installed" or
+# "command -v succeeds".
+nats_check_ready() {
+  nats_validate || return 1
+  if systemd_is_live && ! systemctl is-active --quiet supreme-nats; then
+    NATS_VALIDATION_REASON="supreme-nats.service is not active"; return 1
+  fi
+  if systemd_is_live && ! _tcp_reachable 127.0.0.1 4222; then
+    NATS_VALIDATION_REASON="port 4222 is not accepting connections"; return 1
+  fi
+  return 0
+}
+
+# The ONE authoritative NATS ensure/repair entry point — install.sh, update.sh, and
+# recover.sh all call this instead of maintaining separate NATS logic. detect (nats_validate)
+# -> repair (_nats_fetch_and_install_deb, reinstalling the pinned package) -> re-validate ->
+# ensure the JetStream directory exists (never resets/deletes it) -> enable+start the
+# service -> block until real readiness or fail loudly. Never continues silently past a
+# failure — either it converges within the retry budget, or it `die`s with the exact reason.
+nats_ensure_ready() {
+  local attempt
+  for attempt in 1 2; do
+    if nats_validate; then
+      log_info "nats-server ${NATS_VERSION}: validated OK (${SUPREME_NATS_BIN})."
+      break
+    fi
+    log_warn "nats-server validation failed (attempt ${attempt}/2): ${NATS_VALIDATION_REASON} — repairing by reinstalling the pinned package."
+    _nats_fetch_and_install_deb
+    if [ "$attempt" = "2" ] && ! nats_validate; then
+      die "nats-server still fails validation after repair: ${NATS_VALIDATION_REASON}"
+    fi
+  done
+
+  # Existence + ownership only — mkdir -p is a no-op if it already exists, chown/chmod are
+  # never recursive, so no existing JetStream stream data is ever touched.
+  mkdir -p "$SUPREME_NATS_STORE_DIR"
+  chown "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_NATS_STORE_DIR" 2>/dev/null || true
+  chmod 0750 "$SUPREME_NATS_STORE_DIR" 2>/dev/null || true
+
+  if ! systemd_is_live; then
+    log_warn "systemd is not live in this environment — nats-server package/executable/config validated, but service start and readiness cannot be exercised here. This runs for real on the target machine."
+    return 0
+  fi
+
+  systemctl daemon-reload
+  systemctl_enable_now supreme-nats
+
+  local waited
+  for waited in $(seq 1 30); do
+    : "$waited"
+    if nats_check_ready; then
+      log_info "supreme-nats is ready — active, version v${NATS_VERSION}, port 4222 accepting connections."
+      return 0
+    fi
+    sleep 1
+  done
+  die "supreme-nats did not become ready within 30s: ${NATS_VALIDATION_REASON:-unknown reason}. See: journalctl -u supreme-nats -n 50"
+}
+
 # ── Install mode detection (§ CI/Production verification split) ────────────────────────
 # The installer verifies what it's actually installing, not a fixed assumption:
 #   "source"  — a git checkout (has .git). A developer workflow: full build + typecheck +
