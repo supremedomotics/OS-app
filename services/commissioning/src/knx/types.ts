@@ -48,7 +48,16 @@ export interface KnxGroupAddressRecord {
 }
 
 /** One communication object instance on a device: its function ("Switch", "Status
- * Feedback", "Brightness"), DPT, flags, and the group address(es) it sends/receives on. */
+ * Feedback", "Brightness"), DPT, flags, and the group address(es) it sends/receives on.
+ *
+ * § Critical Group Address Requirement (Production KNX Driver 2.0, cross-source merge
+ * pass) — ETS's real `<Connectors>` structure distinguishes `<Send>` from `<Receive>`
+ * GroupAddressRefs per comm object (confirmed in the real XML shape this parser reads);
+ * collapsing both into one undifferentiated list (the original `groupAddressIds`)
+ * discarded exactly the command-vs-feedback distinction this feature needs.
+ * `sendGroupAddressIds`/`receiveGroupAddressIds` preserve that distinction;
+ * `groupAddressIds` remains the union of both, unchanged in meaning, so every existing
+ * consumer that only needs "which GAs does this comm object touch" is unaffected. */
 export interface KnxCommunicationObject {
   id: string;
   deviceInstanceId: string;
@@ -58,7 +67,12 @@ export interface KnxCommunicationObject {
   text: string;
   dpt: string | null;
   flags: KnxComFlags;
+  /** Union of send + receive — backward-compatible with every pre-existing consumer. */
   groupAddressIds: string[];
+  /** GAs this comm object WRITES to (ETS `<Send>`) — a command/write target. */
+  sendGroupAddressIds: string[];
+  /** GAs this comm object READS/LISTENS to (ETS `<Receive>`) — a feedback/status source. */
+  receiveGroupAddressIds: string[];
 }
 
 /** A physical device placed on the bus (an ETS DeviceInstance). */

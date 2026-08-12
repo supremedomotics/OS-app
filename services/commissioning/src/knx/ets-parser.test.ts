@@ -75,6 +75,7 @@ describe("ETS project parser", () => {
 
     const device = model.deviceInstances.get("M-01_H-1-1-1_DI-1");
     expect(device?.name).toBe("Living Spot 1 Actuator");
+    expect(device?.individualAddress).toBe("1.1.1"); // already-dotted Address is used as-is, not re-composed
     expect(device?.comObjectIds).toHaveLength(2);
     expect(device?.spaceId).toBeTruthy();
 
@@ -82,15 +83,113 @@ describe("ETS project parser", () => {
     expect(room?.name).toBe("Living Room");
     expect(room?.type).toBe("room");
 
-    const switchObj = model.communicationObjects.get("O-1_R-1");
+    const switchId = device!.comObjectIds[0]!;
+    const switchObj = model.communicationObjects.get(switchId);
     expect(switchObj?.groupAddressIds).toEqual(["GA-1"]);
     expect(switchObj?.flags).toMatchObject({ write: true, communicate: true, transmit: false });
 
-    const statusObj = model.communicationObjects.get("O-2_R-1");
+    const statusId = device!.comObjectIds[1]!;
+    const statusObj = model.communicationObjects.get(statusId);
     expect(statusObj?.flags).toMatchObject({ read: true, transmit: true, write: false });
 
     // The GA record itself was back-linked to its comm object.
-    expect(model.groupAddresses.get("GA-1")?.comObjectIds).toEqual(["O-1_R-1"]);
+    expect(model.groupAddresses.get("GA-1")?.comObjectIds).toEqual([switchId]);
+  });
+
+  it("§ Real ETS5 export compatibility — DeviceInstance Address is only the per-line device number; the full individual address composes Area.Line.Device, and devices on different lines never collide just because their bare device numbers match (confirmed regression: real multi-area/multi-line ETS5 projects were reading a bare single-digit 'Address' as the entire identity before this fix)", () => {
+    const xml = `<KNX>
+      <Topology>
+        <Area Address="1">
+          <Line Address="0">
+            <DeviceInstance Id="DI-MAIN-1" Name="Main Line Device" Address="1" ProductRefId="M-01_H-1_P-1" />
+          </Line>
+          <Line Address="1">
+            <DeviceInstance Id="DI-NEW-1" Name="New Line Device" Address="1" ProductRefId="M-01_H-1_P-1" />
+          </Line>
+        </Area>
+      </Topology>
+    </KNX>`;
+    const model = parseEtsProject(xmlFile(xml));
+    expect(model.deviceInstances.get("DI-MAIN-1")?.individualAddress).toBe("1.0.1");
+    expect(model.deviceInstances.get("DI-NEW-1")?.individualAddress).toBe("1.1.1");
+    // Different lines, same bare device number ("1") — must NOT resolve to the same identity.
+    expect(model.deviceInstances.get("DI-MAIN-1")?.individualAddress).not.toBe(model.deviceInstances.get("DI-NEW-1")?.individualAddress);
+  });
+
+  it("§ Real ETS5 export compatibility — two devices sharing one application program's RefId (e.g. \"O-0_R-1\") stay as separate comm objects, not silently collapsed into one (confirmed regression: a real 217-device project collided 2,954 refs down to 391 map entries before this fix)", () => {
+    const xml = `<KNX>
+      <GroupAddresses>
+        <GroupRange Name="Lighting">
+          <GroupAddress Id="GA-1" Address="1/1/1" Name="Device A Command" DatapointType="DPST-1-1" />
+          <GroupAddress Id="GA-2" Address="1/1/2" Name="Device B Command" DatapointType="DPST-1-1" />
+        </GroupRange>
+      </GroupAddresses>
+      <Topology>
+        <Area Address="1">
+          <Line Address="1">
+            <DeviceInstance Id="DI-A" Name="Actuator A" Address="1.1.10" ProductRefId="M-01_H-1_P-1">
+              <ComObjectInstanceRefs>
+                <ComObjectInstanceRef RefId="O-0_R-1" Links="GA-1" />
+              </ComObjectInstanceRefs>
+            </DeviceInstance>
+            <DeviceInstance Id="DI-B" Name="Actuator B" Address="1.1.11" ProductRefId="M-01_H-1_P-1">
+              <ComObjectInstanceRefs>
+                <ComObjectInstanceRef RefId="O-0_R-1" Links="GA-2" />
+              </ComObjectInstanceRefs>
+            </DeviceInstance>
+          </Line>
+        </Area>
+      </Topology>
+    </KNX>`;
+    const model = parseEtsProject(xmlFile(xml));
+
+    const deviceA = model.deviceInstances.get("DI-A")!;
+    const deviceB = model.deviceInstances.get("DI-B")!;
+    expect(deviceA.comObjectIds).toHaveLength(1);
+    expect(deviceB.comObjectIds).toHaveLength(1);
+    // Same source RefId ("O-0_R-1") but two DISTINCT model entries, one per device.
+    expect(deviceA.comObjectIds[0]).not.toBe(deviceB.comObjectIds[0]);
+    expect(model.communicationObjects.size).toBe(2);
+
+    const objA = model.communicationObjects.get(deviceA.comObjectIds[0]!)!;
+    const objB = model.communicationObjects.get(deviceB.comObjectIds[0]!)!;
+    expect(objA.deviceInstanceId).toBe("DI-A");
+    expect(objB.deviceInstanceId).toBe("DI-B");
+    expect(objA.groupAddressIds).toEqual(["GA-1"]);
+    expect(objB.groupAddressIds).toEqual(["GA-2"]);
+  });
+
+  it("§ Real ETS5 export compatibility — a flat Links=\"GA-x GA-y\" attribute on <ComObjectInstanceRef> (no nested <Connectors>) still associates the comm object with its group addresses, both directions", () => {
+    const xml = `<KNX>
+      <GroupAddresses>
+        <GroupRange Name="Lighting">
+          <GroupAddress Id="GA-1" Address="1/1/1" Name="Command" DatapointType="DPST-1-1" />
+          <GroupAddress Id="GA-2" Address="1/1/2" Name="Central Command" DatapointType="DPST-1-1" />
+        </GroupRange>
+      </GroupAddresses>
+      <Topology>
+        <Area Address="1">
+          <Line Address="1">
+            <DeviceInstance Id="DI-1" Name="Actuator" Address="1.1.20" ProductRefId="M-01_H-1_P-1">
+              <ComObjectInstanceRefs>
+                <ComObjectInstanceRef RefId="O-0_R-1" Links="GA-1 GA-2" />
+              </ComObjectInstanceRefs>
+            </DeviceInstance>
+          </Line>
+        </Area>
+      </Topology>
+    </KNX>`;
+    const model = parseEtsProject(xmlFile(xml));
+    const device = model.deviceInstances.get("DI-1")!;
+    const obj = model.communicationObjects.get(device.comObjectIds[0]!)!;
+    expect(obj.groupAddressIds).toEqual(["GA-1", "GA-2"]);
+    // No Send/Receive distinction is available from this schema variant — never
+    // fabricated; sendGroupAddressIds/receiveGroupAddressIds stay empty, and downstream
+    // role resolution honestly falls back to name/DPT heuristics for these objects.
+    expect(obj.sendGroupAddressIds).toEqual([]);
+    expect(obj.receiveGroupAddressIds).toEqual([]);
+    expect(model.groupAddresses.get("GA-1")?.comObjectIds).toEqual([obj.id]);
+    expect(model.groupAddresses.get("GA-2")?.comObjectIds).toEqual([obj.id]);
   });
 
   it("falls back to the legacy <Function> grouping when there's no Topology", () => {

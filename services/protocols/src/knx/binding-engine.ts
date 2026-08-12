@@ -28,7 +28,23 @@ export interface BindingPlanItem {
   capability: CapabilityKind;
   /** Present only when a real group address was found; the exact address to write to. */
   address: string | null;
-  config: { statusAddress?: string; stepAddress?: string; dpt: string };
+  config: {
+    statusAddress?: string;
+    stepAddress?: string;
+    dpt: string;
+    /** § Shared/central relationships (fifth pass) — additional GAs this capability
+     * receives feedback from beyond the primary `statusAddress` (e.g. a local status
+     * object AND a central "All Lights OFF" GA both feed the same `onoff` capability).
+     * Never replaces the local mapping — see `planBindings`'s doc comment. Omitted when
+     * there is nothing beyond the primary status address. */
+    extraStatusAddresses?: string[];
+    /** Additional GAs this device could also be commanded from beyond the primary
+     * `address` (rare — a device with more than one ETS-confirmed send relationship for
+     * the same capability). Never actively written to by `SupremeKnxDriver.command()`
+     * today (§ known limitation, disclosed rather than silently dropped); preserved here
+     * so the relationship isn't lost and future multi-write support has real data to use. */
+    extraCommandAddresses?: string[];
+  };
   bindable: boolean;
   reason: string;
   /** The communication object(s) this plan was derived from — traceability (§ Diagnostics
@@ -45,17 +61,36 @@ export interface BindingPlanItem {
  * devices). Within a capability's own objects: the `"primary"` one is the write
  * address, a `"status"` one (if present) is the feedback address, a `"step"` one (if
  * present — e.g. "Relative Dimming"/"Relative Color Temperature") is the nudge/warmer-
- * cooler address — never guessed beyond what the grouped signals actually contain. A
- * capability with no `"primary"` object among its own tagged objects (KNX IoT-only, or
- * a capability that only ever had a step/status object) falls back to any bindable
- * object it does have rather than silently doing nothing. */
+ * cooler address — never guessed beyond what the grouped signals actually contain.
+ *
+ * § Command/Feedback Binding Architecture (Production KNX Driver 2.0, third pass) — a
+ * capability whose only tagged object is `"status"` (a real ETS Receive-only
+ * relationship, or a step-only object) is correctly `bindable: false`, never silently
+ * promoted to a write target. This used to fall back to "any bindable object it does
+ * have" (`?? own[0]`), which was safe ONLY because every KNX-IoT/functional-block object
+ * was already pre-tagged `"primary"` by default (`fallbackTag`, unified-device-mapper.ts)
+ * and so never actually reached that fallback — but once real ETS Send/Receive data
+ * could legitimately tag an object `"status"` with no `"primary"` object anywhere in the
+ * capability's own set, that same fallback would have silently written commands to a
+ * device's FEEDBACK address, exactly the failure mode this architecture exists to
+ * prevent. Removed — a capability with no explicit write relationship is honestly
+ * unbindable, not guessed at. */
 export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
   return device.capabilities.map((capability) => {
     const own = device.raw.communicationObjects.filter(
       (o) => GROUP_ADDRESS_RE.test(o.id) && o.capabilities.includes(capability),
     );
-    const writeObj = own.find((o) => o.role === "primary") ?? own[0];
-    const statusObj = own.find((o) => o.role === "status");
+    // § Shared/central relationships (fifth pass) — a device can legitimately have MORE
+    // than one "primary" or "status" object for the same capability (its own local
+    // switch/status pair PLUS a central "All Lights OFF" GA that also feeds it — §5/§6
+    // of the relationship-specific role audit). The first of each becomes the binding's
+    // main write/status address (unchanged contract for every existing caller); any
+    // additional ones are preserved in `config.extra*Addresses` rather than silently
+    // dropped — never forced into the primary slot, never lost.
+    const primaryObjs = own.filter((o) => o.role === "primary");
+    const statusObjs = own.filter((o) => o.role === "status");
+    const writeObj = primaryObjs[0];
+    const statusObj = statusObjs[0];
     const stepObj = own.find((o) => o.role === "step");
     const dpt = defaultDpt(capability as CapabilityState["kind"]);
 
@@ -71,14 +106,24 @@ export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
         sourceObjects: own.length > 0 ? own : device.raw.communicationObjects,
       };
     }
+    const extraStatusAddresses = statusObjs.slice(1).map((o) => o.id);
+    const extraCommandAddresses = primaryObjs.slice(1).map((o) => o.id);
     const parts = [`write via ${writeObj.id}`];
     if (statusObj) parts.push(`feedback via ${statusObj.id}`);
     if (stepObj) parts.push(`step via ${stepObj.id}`);
     if (!statusObj && !stepObj) parts.push("no separate feedback address discovered — optimistic state only");
+    if (extraStatusAddresses.length > 0) parts.push(`additional feedback via ${extraStatusAddresses.join(", ")}`);
+    if (extraCommandAddresses.length > 0) parts.push(`additional command relationship via ${extraCommandAddresses.join(", ")}`);
     return {
       capability,
       address: writeObj.id,
-      config: { statusAddress: statusObj?.id, stepAddress: stepObj?.id, dpt },
+      config: {
+        statusAddress: statusObj?.id,
+        stepAddress: stepObj?.id,
+        dpt,
+        ...(extraStatusAddresses.length > 0 ? { extraStatusAddresses } : {}),
+        ...(extraCommandAddresses.length > 0 ? { extraCommandAddresses } : {}),
+      },
       bindable: true,
       reason: parts.join(", "),
       sourceObjects: own,

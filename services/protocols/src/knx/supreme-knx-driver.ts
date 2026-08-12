@@ -50,6 +50,12 @@ interface KnxDeviceBinding {
   capability: CapabilityKind;
   writeGa: string;
   statusGa: string;
+  /** § Shared/central relationships (fifth pass) — additional feedback GAs beyond
+   * `statusGa` (e.g. a central "All Lights OFF" GA feeding a device that also has its
+   * own local status object). Observed the same way as `statusGa` — same capability,
+   * same `record()` — never a second event system, just more subscriptions on the
+   * SAME provider fan-out `KnxUltimateProvider` already supports. */
+  extraStatusGas: string[];
   dpt: string;
   config: Record<string, unknown>;
 }
@@ -149,6 +155,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       capability: binding.capability,
       writeGa: binding.address,
       statusGa: typeof cfg.statusAddress === "string" ? cfg.statusAddress : binding.address,
+      extraStatusGas: Array.isArray(cfg.extraStatusAddresses) ? cfg.extraStatusAddresses.filter((g): g is string => typeof g === "string") : [],
       dpt: typeof cfg.dpt === "string" ? cfg.dpt : defaultDpt(binding.capability as CapabilityState["kind"]),
       config: cfg,
     };
@@ -173,9 +180,9 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     this.devices.delete(deviceId);
     removeDeviceStates(this.states, deviceId);
     this.offlineQueue.evict((subject) => subject === deviceId);
-    const releasedGas = new Set(removed.map((b) => b.statusGa));
+    const releasedGas = new Set(removed.flatMap((b) => [b.statusGa, ...b.extraStatusGas]));
     for (const ga of releasedGas) {
-      if (this.bindings.some((b) => b.statusGa === ga)) continue;
+      if (this.bindings.some((b) => b.statusGa === ga || b.extraStatusGas.includes(ga))) continue;
       this.ultimate.unsubscribe(ga);
     }
   }
@@ -295,11 +302,13 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   async syncAll(): Promise<{ requested: number; failed: number }> {
     let failed = 0;
     for (const b of this.bindings) {
-      try {
-        await this.router.execute({ kind: "bus.group_read", groupAddress: b.statusGa, dpt: b.dpt });
-      } catch {
-        failed++; // a provider without a real group-read implementation, or a transient
-        // failure — never lets one binding's failure stop the rest from syncing.
+      for (const ga of [b.statusGa, ...b.extraStatusGas]) {
+        try {
+          await this.router.execute({ kind: "bus.group_read", groupAddress: ga, dpt: b.dpt });
+        } catch {
+          failed++; // a provider without a real group-read implementation, or a transient
+          // failure — never lets one binding's failure stop the rest from syncing.
+        }
       }
     }
     this.lastSyncAt = new Date().toISOString();
@@ -353,10 +362,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   }
 
   private observe(b: KnxDeviceBinding): void {
-    this.ultimate.subscribe(b.statusGa, b.dpt, (value) => {
-      const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config);
-      if (state) this.record(b, state);
-    });
+    for (const ga of [b.statusGa, ...b.extraStatusGas]) {
+      this.ultimate.subscribe(ga, b.dpt, (value) => {
+        const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config);
+        if (state) this.record(b, state);
+      });
+    }
   }
 
   private record(b: KnxDeviceBinding, state: CapabilityState): void {
