@@ -155,6 +155,20 @@ export interface CommunicationObject {
    * diagnostics, telegram tracing, and future per-sub-function configuration). Null for
    * a KNX IoT object or an ETS object whose text carries no channel token. */
   channel: number | null;
+  /** § Binding Evidence Hierarchy (Pass 11.4) — true when this GA's own ETS `links[]`
+   * name at most ONE distinct physical device (the SAME "is this GA shared across
+   * multiple physical devices" test `attachSharedGaSignals` itself uses to decide
+   * whether to fan a GA out at all — see that function's `distinctAddresses.size < 2`
+   * check). A GA one device sends and a second/third device only receives (a central
+   * "All Lights Off") is `local: false` for every device, INCLUDING the one that owns
+   * it in `groupByPhysicalChannel`'s clustering — being the physical owner of a group
+   * address is not the same as it being that device's own local circuit command, and
+   * conflating the two was the actual bug (see the unit tests this field was added to
+   * satisfy: a central GA that happens to share its physical/channel identity with a
+   * real device must still rank below that device's own plain, unshared local switch).
+   * Always `true` for a KNX IoT object or an ETS signal with no `links` at all (no
+   * relationship data to prove sharing — never assumed shared). */
+  local: boolean;
 }
 
 export interface UnifiedKnxDevice extends DiscoveredDevice {
@@ -918,9 +932,13 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
     const merged = mergeMetadata(sources);
     const metadata = flattenMergedMetadata(merged);
 
+    const isSharedAcrossDevices = (s: (typeof etsSignals)[number]) => {
+      const addrs = new Set((s.links ?? []).map((l) => l.individualAddress).filter((a): a is string => !!a));
+      return addrs.size >= 2;
+    };
     const communicationObjects: CommunicationObject[] = [
-      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const, channel: s.channel ?? null, ...(etsTagById.get(s.id) ?? fallbackTag) })),
-      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const, channel: null, ...fallbackTag })),
+      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const, channel: s.channel ?? null, local: !isSharedAcrossDevices(s), ...(etsTagById.get(s.id) ?? fallbackTag) })),
+      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const, channel: null, local: true, ...fallbackTag })),
     ];
 
     // Universal Device Intelligence Engine (§ Intelligence Priority): pool circuit name,

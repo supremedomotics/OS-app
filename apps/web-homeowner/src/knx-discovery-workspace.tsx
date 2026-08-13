@@ -1,12 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   approveKnxDevice,
   client,
   knxDiscoveryQueue,
+  knxDiscoveryQueueJobCancel,
+  knxDiscoveryQueueJobStart,
+  knxDiscoveryQueueJobStatus,
   type KnxApprovalResult,
+  type KnxImportJobStatus,
   type KnxInstallerQueueItem,
   type KnxQueueSection,
 } from "./api.js";
+
+// § Pass 11.2 — persists the in-flight job's id so a page refresh/navigation can
+// re-poll it instead of losing track of (or, worse, re-starting) a running import.
+// Same localStorage-for-client-side-continuity idiom this app already uses elsewhere
+// (homes.ts active-home id, screens.tsx scene order, settings.tsx a11y prefs).
+const KNX_JOB_KEY = "supreme.knxImportJobId";
+const JOB_POLL_MS = 1200;
 
 /**
  * KNX Discovery Summary + Device Review Workspace (§ Discovery Workflow, § Final
@@ -42,6 +53,17 @@ const SORT_LABEL: Record<SortKey, string> = {
   device_type: "Device type",
 };
 
+// § Pass 11.2 — real, coarse stages only (see KnxImportJobStage in installer-context.ts);
+// no fabricated fine-grained progress bar over a pipeline that isn't actually instrumented
+// stage-by-stage internally.
+function jobStatusLabel(status: KnxImportJobStatus | null): string {
+  switch (status) {
+    case "queued": return "Queued…";
+    case "running": return "Parsing & synthesizing devices…";
+    default: return "Starting…";
+  }
+}
+
 function itemFilters(item: KnxInstallerQueueItem, rejected: boolean): Filter[] {
   const f: Filter[] = [item.section];
   if (item.device.capabilities.length === 0 || item.device.raw.deviceKind === "unknown") f.push("unsupported");
@@ -54,6 +76,12 @@ export function KnxDiscoveryWorkspace() {
   const [phase, setPhase] = useState<"idle" | "scanning" | "done" | "error">("idle");
   const [result, setResult] = useState<Awaited<ReturnType<typeof knxDiscoveryQueue>> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // § Pass 11.2 async job tracking — jobId/jobStatus drive the "Scanning…" progress
+  // display; the actual pipeline runs in the gateway, not on this request, so the
+  // browser stays fully usable while it's in flight.
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<KnxImportJobStatus | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [approved, setApproved] = useState<Record<string, KnxApprovalResult>>({});
   const [approving, setApproving] = useState<string | null>(null);
@@ -82,6 +110,79 @@ export function KnxDiscoveryWorkspace() {
     void client.home().then((h) => setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name }))));
   }, []);
 
+  // § Pass 11.2 refresh/navigation recovery — a job started before this component
+  // mounted (previous page load) keeps running on the gateway regardless (it's a
+  // background worker thread tied to the job map, not to the original request's
+  // lifecycle); on mount, re-adopt any jobId left in localStorage and resume
+  // polling instead of silently losing track of it. Never auto-starts a NEW import.
+  useEffect(() => {
+    const saved = localStorage.getItem(KNX_JOB_KEY);
+    if (saved) {
+      setPhase("scanning");
+      setJobId(saved);
+    }
+    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const activeJobId = jobId;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const job = await knxDiscoveryQueueJobStatus(activeJobId);
+        if (cancelled) return;
+        setJobStatus(job.status);
+        if (job.status === "completed" && job.result) {
+          finishScan(job.result);
+        } else if (job.status === "failed") {
+          setError(job.error ?? "The import failed for an unknown reason.");
+          setPhase("error");
+          clearJob();
+        } else if (job.status === "cancelled") {
+          setPhase("idle");
+          clearJob();
+        } else {
+          pollRef.current = setTimeout(() => void poll(), JOB_POLL_MS);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        // The job is gone (e.g. gateway restarted since — jobs are in-memory only,
+        // § job durability) — surface that honestly instead of polling forever.
+        setError(e instanceof Error ? e.message : "Lost track of the import job.");
+        setPhase("error");
+        clearJob();
+      }
+    }
+    void poll();
+    return () => { cancelled = true; if (pollRef.current) clearTimeout(pollRef.current); };
+  }, [jobId]);
+
+  function clearJob() {
+    localStorage.removeItem(KNX_JOB_KEY);
+    setJobId(null);
+    setJobStatus(null);
+  }
+
+  function finishScan(out: Awaited<ReturnType<typeof knxDiscoveryQueue>>) {
+    setResult(out);
+    const initial: Record<string, { name: string; roomId: string }> = {};
+    for (const item of out.queue) {
+      const matchedRoom = rooms.find((r) => r.name.toLowerCase() === (item.room.room ?? "").toLowerCase());
+      initial[item.device.backendId] = { name: item.device.suggestedName, roomId: matchedRoom?.id ?? "" };
+    }
+    setEdits(initial);
+    setPhase("done");
+    clearJob();
+  }
+
+  async function cancelScan() {
+    if (!jobId) return;
+    try { await knxDiscoveryQueueJobCancel(jobId); } catch { /* best-effort — see cancellation doc */ }
+    setPhase("idle");
+    clearJob();
+  }
+
   async function onFile(file: File) {
     setNeedsPassword(false);
     setEtsPassword("");
@@ -97,6 +198,12 @@ export function KnxDiscoveryWorkspace() {
     }
   }
 
+  // § Pass 11.2/11.3 — starts the NON-blocking job route and returns immediately; the
+  // actual parse/synthesize/classify pipeline runs on the gateway in a real WORKER THREAD
+  // (see startKnxImportJob → knxInstallerQueueThreaded in installer-context.ts), so the
+  // hub keeps serving every other client while it runs — not just this browser tab, which
+  // was never the part at risk. Progress is surfaced by the jobId effect above, which polls
+  // GET .../job/:jobId until it lands on completed/failed/cancelled.
   async function scan() {
     setPhase("scanning");
     setError(null);
@@ -109,21 +216,10 @@ export function KnxDiscoveryWorkspace() {
         : etsText.trim()
           ? { content: etsText }
           : undefined;
-      const out = await knxDiscoveryQueue(ets);
-      setResult(out);
-      // Pre-fill each device's editable name/room from the backend's own recommendation —
-      // the installer only overrides what they disagree with (§ Editing). Leaving roomId
-      // "" (Automatic) is a real, valid choice now, not a blocked state: the Room
-      // Assignment Engine finds-or-creates a room from the Confidence Engine's own room
-      // hint at approval time (§ Automatic Room Creation) — the installer never has to
-      // pre-create a room before approving.
-      const initial: Record<string, { name: string; roomId: string }> = {};
-      for (const item of out.queue) {
-        const matchedRoom = rooms.find((r) => r.name.toLowerCase() === (item.room.room ?? "").toLowerCase());
-        initial[item.device.backendId] = { name: item.device.suggestedName, roomId: matchedRoom?.id ?? "" };
-      }
-      setEdits(initial);
-      setPhase("done");
+      const started = await knxDiscoveryQueueJobStart(ets);
+      localStorage.setItem(KNX_JOB_KEY, started.jobId);
+      setJobId(started.jobId);
+      setJobStatus(started.status);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Discovery failed.";
       if (etsProject && /password/i.test(message)) setNeedsPassword(true);
@@ -249,9 +345,20 @@ export function KnxDiscoveryWorkspace() {
       )}
       <div className="drv-actions" style={{ marginTop: 8 }}>
         <button className="primary" disabled={phase === "scanning"} onClick={() => void scan()}>
-          {phase === "scanning" ? "Scanning…" : result ? "Scan again" : "Discover devices"}
+          {phase === "scanning" ? jobStatusLabel(jobStatus) : result ? "Scan again" : "Discover devices"}
         </button>
+        {phase === "scanning" && jobId && (
+          <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>
+            Cancel
+          </button>
+        )}
       </div>
+      {phase === "scanning" && (
+        <p className="muted" style={{ marginTop: 4 }}>
+          Running in the background — the import doesn't block the rest of the app; leave this page
+          and come back, or refresh, and this will pick the same job back up.
+        </p>
+      )}
       {phase === "error" && <p className="err">{error}</p>}
 
       {result && (

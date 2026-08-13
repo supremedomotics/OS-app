@@ -717,6 +717,62 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Non-blocking counterpart (§ Pass 11.1): same inputs, but returns a jobId immediately
+  // instead of awaiting the parse/synthesize/classify pipeline inline on the request
+  // thread — poll GET .../job/:jobId for status/result. See `startKnxImportJob` doc.
+  app.post("/v1/commissioning/knx/queue/job", { bodyLimit: ETS_IMPORT_BODY_LIMIT }, async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as {
+        ets?: unknown;
+        gateway?: { host?: unknown; port?: unknown };
+        content?: unknown;
+        knxproj?: unknown;
+        password?: unknown;
+      } | undefined;
+      const ets = Array.isArray(body?.ets) ? (body!.ets as { id: string; name: string; room?: string | null; description?: string | null }[]) : undefined;
+      const gateway = typeof body?.gateway?.host === "string"
+        ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
+        : undefined;
+      const etsSource = typeof body?.knxproj === "string" && body.knxproj.length > 0
+        ? { kind: "knxproj" as const, base64: body.knxproj, password: typeof body.password === "string" ? body.password : undefined }
+        : typeof body?.content === "string" && body.content.length > 0
+          ? { kind: "text" as const, content: body.content }
+          : undefined;
+      const job = i().startKnxImportJob({ ets, gateway, etsSource });
+      reply.code(202).send({ jobId: job.jobId, status: job.status, stage: job.stage });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.get("/v1/commissioning/knx/queue/job/:jobId", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "view");
+      const { jobId } = req.params as { jobId: string };
+      const job = i().getKnxImportJob(jobId);
+      if (!job) throw new SupremeError("not_found", "no import job with that id (never started, or this gateway restarted since)");
+      reply.send(job);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/knx/queue/job/:jobId/cancel", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { jobId } = req.params as { jobId: string };
+      const cancelled = i().cancelKnxImportJob(jobId);
+      if (!cancelled) throw new SupremeError("conflict", "job is already finished (or does not exist) — nothing to cancel");
+      reply.send({ jobId, status: "cancelled" });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Single-action approval: commission + bind every plan-supplied capability + validate,
   // rolling back automatically on any binding/validation failure (§ Rollback Flow).
   app.post("/v1/commissioning/knx/approve", async (req, reply) => {

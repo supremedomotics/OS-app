@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { Worker } from "node:worker_threads";
 import {
   newId,
   type CapabilityKind,
@@ -9,7 +11,7 @@ import {
   type Room,
   type RoomId,
 } from "@supreme/domain-model";
-import { SupremeError } from "@supreme/contracts";
+import { SupremeError, type ErrorCode } from "@supreme/contracts";
 import { generateSigningKeyPair, type KeyPairPem } from "@supreme/crypto";
 import type {
   IProtocolBindingStore,
@@ -138,6 +140,44 @@ function extractMediaZones(raw: Record<string, unknown> | undefined): { id: stri
   return (raw.zones as unknown[]).filter(
     (z): z is { id: string; label: string } => !!z && typeof z === "object" && typeof (z as Record<string, unknown>).id === "string" && typeof (z as Record<string, unknown>).label === "string",
   );
+}
+
+/**
+ * KNX Import Job (§ Pass 11.1 — non-blocking ETS import). `knxInstallerQueue` is fully
+ * stateless (pure parse → synthesize → classify, nothing persisted), so there is no
+ * "active workspace" it could corrupt — the only thing this job model needs to manage is
+ * NOT blocking the Fastify event loop while that (real, ~1s on a small project, and
+ * proportionally longer on a large one) computation runs. Ponytail: no new queue/DB
+ * infra — an in-memory Map plus `setImmediate` is enough to get the heavy work off the
+ * request thread; upgrade to a durable store only if imports need to survive a gateway
+ * restart, which nothing here requires today.
+ */
+export type KnxImportJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+/** Coarse, real stages — `knxInstallerQueue` itself isn't instrumented internally (that
+ * would mean touching the parser/grouping/classification pipeline, out of scope for this
+ * pass), so PARSE_AND_SYNTHESIZE covers everything from XML parse through binding-plan
+ * generation as one honest stage rather than fabricating sub-stage timestamps we can't
+ * actually observe. */
+export type KnxImportJobStage = "queued" | "parse_and_synthesize" | "complete";
+
+/** What `worker/knx-import-worker.mjs` posts back (§ Pass 11.3). Declared here because
+ * the worker is deliberately plain `.mjs` (see its own doc comment for why) — this is the
+ * one place its contract is typed, and the main thread validates nothing beyond `ok`
+ * because both sides ship together in the same package. */
+type KnxImportWorkerResult =
+  | { ok: true; discoveryMs: number; items: Omit<KnxInstallerQueueItem, "section">[] }
+  | { ok: false; code: ErrorCode | null; message: string };
+
+export interface KnxImportJob {
+  jobId: string;
+  status: KnxImportJobStatus;
+  stage: KnxImportJobStage;
+  progress: number; // 0-100
+  startedAt: string;
+  completedAt: string | null;
+  error: string | null;
+  result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
 }
 
 /** Discover Devices workspace sections (§ Phase 5) — every discovered device lands in
@@ -335,6 +375,14 @@ export class InstallerServices {
   readonly licenseService: LicenseService;
   /** Runtime Developer-Mode override (UI toggle), OR-ed with the SUPREME_DEV_MODE env flag. */
   private devModeOverride = false;
+  /** § Pass 11.1 non-blocking KNX import — jobId → job. In-memory only (see
+   * {@link KnxImportJob} doc): the queue computation itself persists nothing, so losing
+   * this map on a gateway restart loses nothing an installer can't recreate by re-scanning. */
+  private readonly knxImportJobs = new Map<string, KnxImportJob>();
+  /** § Pass 11.3 — jobId → the worker thread currently running THAT job's heavy import,
+   * so cancellation terminates exactly one thread. Entries exist only while a job is
+   * genuinely in flight; both settle paths delete their own. */
+  private readonly knxImportWorkers = new Map<string, Worker>();
 
   constructor(deps: InstallerDeps) {
     this.d = deps;
@@ -600,25 +648,26 @@ export class InstallerServices {
      * (real metadata, not guessed) and is still subject to the same "explicit signal
      * beats inference" merge priority every other signal source already follows. */
     etsSource?: { kind: "text"; content: string } | { kind: "knxproj"; base64: string; password?: string };
-  } = {}): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+  } = {},
+  /** Internal (§ Pass 11.3): receives the worker running the heavy import, so
+   * {@link cancelKnxImportJob} can terminate THAT job's thread and only that one. Never
+   * set by a route — the synchronous `/queue` endpoint has no cancellation surface. */
+  onWorker?: (worker: Worker) => void,
+  ): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
     const driver = await this.knxDiscoveryDriver(opts.gateway);
     if (!driver) throw new SupremeError("not_found", "the KNX driver is not configured on this hub yet");
     const schemaId = opts.schemaId ?? (await this.knxConfiguredSchemaId());
 
-    let ets = opts.ets;
-    if (opts.etsSource) {
-      const source = opts.etsSource.kind === "knxproj"
-        ? await this.knxProjectSource(opts.etsSource.base64, opts.etsSource.password)
-        : { kind: "text" as const, content: opts.etsSource.content };
-      const model = parseKnxSource(source);
-      const etsSignals = knxSignalsFromModel(model);
-      if (etsSignals.length === 0) throw new SupremeError("validation_failed", "no group addresses were found in this project — check that you exported the correct file, or that the ETS project isn't empty.");
-      ets = [...(ets ?? []), ...etsSignals];
-    }
+    // § Pass 11.3 — an ETS FILE import is the only genuinely CPU-heavy input (unzip + XML
+    // parse + synthesis + per-device engines: measured ~690 ms for a real 4.1 MB project,
+    // during which every other API request was starved). That work runs in a real worker
+    // thread; a plain `ets` signal array (a handful of addresses from live discovery or a
+    // test) stays inline, where the thread's own startup would cost more than the work.
+    if (opts.etsSource) return this.knxInstallerQueueThreaded(opts, driver, schemaId, onWorker);
 
     const startedAt = Date.now();
     const [devices, existing] = await Promise.all([
-      driver.discoverUnified(ets, opts.userOverrides, schemaId),
+      driver.discoverUnified(opts.ets, opts.userOverrides, schemaId),
       this.knxExistingState(),
     ]);
     const discoveryMs = Date.now() - startedAt;
@@ -632,6 +681,131 @@ export class InstallerServices {
     });
 
     return { queue, summary: summarizeKnxQueue(queue, discoveryMs, schemaId) };
+  }
+
+  /**
+   * The ETS-file half of {@link knxInstallerQueue}, run in a real worker thread (§ Pass
+   * 11.3). The boundary is exactly the CPU-bound, pure section of the pipeline — unzip,
+   * XML parse, signal extraction, `mapUnifiedDevices`, and the per-device confidence/
+   * room/duplicate/binding engines. Everything needing a LIVE handle stays here on the
+   * main thread and crosses as plain data: the driver's KNX-IoT signals
+   * (`collectKnxIotSignals`, the only networked stage) and the existing-installation
+   * state read from the real stores. Nothing durable is written on either side, so a
+   * terminated or crashed worker can never leave half-imported state behind.
+   */
+  private async knxInstallerQueueThreaded(
+    opts: NonNullable<Parameters<InstallerServices["knxInstallerQueue"]>[0]>,
+    driver: SupremeKnxDriver,
+    schemaId: string | undefined,
+    onWorker?: (worker: Worker) => void,
+  ): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+    const [knxIot, existing] = await Promise.all([driver.collectKnxIotSignals(), this.knxExistingState()]);
+    const worker = new Worker(new URL("../worker/knx-import-worker.mjs", import.meta.url), {
+      workerData: { etsSource: opts.etsSource, ets: opts.ets, userOverrides: opts.userOverrides, schemaId, knxIot, existing },
+    });
+    onWorker?.(worker);
+
+    const outcome = await new Promise<KnxImportWorkerResult>((resolve, reject) => {
+      let settled = false;
+      const done = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+      worker.once("message", (msg: KnxImportWorkerResult) => done(() => resolve(msg)));
+      worker.once("error", (err) => done(() => reject(new SupremeError("internal", `the ETS import failed: ${err.message}`))));
+      // A worker that exits without ever posting a result (OOM, a hard crash, an explicit
+      // terminate) must FAIL the job — never leave it stuck in "running" forever.
+      worker.once("exit", (code) => done(() => reject(new SupremeError("internal", `the ETS import worker exited unexpectedly (code ${code})`))));
+    }).finally(() => void worker.terminate());
+
+    if (!outcome.ok) throw new SupremeError(outcome.code ?? "internal", outcome.message);
+
+    driver.recordUnifiedResult(outcome.items.map((i) => i.device));
+    const queue = outcome.items.map((i) => ({ ...i, section: knxQueueSection(i.duplicate.decision, i.confidence, i.plans) }));
+    return { queue, summary: summarizeKnxQueue(queue, outcome.discoveryMs, schemaId) };
+  }
+
+  /**
+   * Non-blocking counterpart of {@link knxInstallerQueue} (§ Pass 11.1, corrected in Pass
+   * 11.3): creates a job in "queued" state and returns its id IMMEDIATELY.
+   *
+   * `setImmediate` alone only got the work off the REQUEST — not off the event loop, which
+   * is a different thing this comment previously conflated. Measured on a real 4.1 MB
+   * .knxproj: with `setImmediate` only, `GET /v1/home` from an external client went from a
+   * 2 ms warm average to a 372 ms average / 682 ms max for the whole import, and even the
+   * HTTP 202 itself couldn't flush until the CPU work finished. The heavy stages now run in
+   * a real worker thread ({@link knxInstallerQueueThreaded}), so `setImmediate` here is
+   * only what keeps the "queued" → "running" transition off the request's own tick.
+   *
+   * Cancellation is therefore no longer best-effort for a running job: it terminates that
+   * job's worker thread (and only that one). Nothing this pipeline touches is durable
+   * either way, so there is never partial state to roll back.
+   */
+  startKnxImportJob(opts: Parameters<InstallerServices["knxInstallerQueue"]>[0] = {}): KnxImportJob {
+    const job: KnxImportJob = {
+      jobId: `knximp_${randomUUID()}`,
+      status: "queued",
+      stage: "queued",
+      progress: 0,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      error: null,
+      result: null,
+    };
+    this.knxImportJobs.set(job.jobId, job);
+
+    setImmediate(() => {
+      const current = this.knxImportJobs.get(job.jobId);
+      if (!current || current.status === "cancelled") return;
+      current.status = "running";
+      current.stage = "parse_and_synthesize";
+      current.progress = 10;
+      this.knxInstallerQueue(opts, (worker) => this.knxImportWorkers.set(job.jobId, worker)).then(
+        (result) => {
+          this.knxImportWorkers.delete(job.jobId);
+          const j = this.knxImportJobs.get(job.jobId);
+          if (!j || j.status === "cancelled") return; // preserve cancellation — never overwrite it with a late result
+          j.status = "completed";
+          j.stage = "complete";
+          j.progress = 100;
+          j.completedAt = new Date().toISOString();
+          j.result = result;
+        },
+        (err) => {
+          this.knxImportWorkers.delete(job.jobId);
+          const j = this.knxImportJobs.get(job.jobId);
+          if (!j || j.status === "cancelled") return;
+          j.status = "failed";
+          j.completedAt = new Date().toISOString();
+          // Real error, not a generic string (§ Part J) — SupremeError messages are
+          // already installer-facing text; anything else falls back to its own message.
+          j.error = err instanceof SupremeError ? err.message : err instanceof Error ? err.message : "the import failed for an unknown reason";
+        },
+      );
+    });
+
+    return job;
+  }
+
+  /** Current status/result of a job started by {@link startKnxImportJob}, or `null` if
+   * unknown (never started, or evicted — nothing evicts them today; add a TTL sweep only
+   * if job volume ever makes the in-memory map a real memory concern). */
+  getKnxImportJob(jobId: string): KnxImportJob | null {
+    return this.knxImportJobs.get(jobId) ?? null;
+  }
+
+  /** Real cancellation (§ Part L, upgraded in Pass 11.3): a job still "queued" never runs
+   * its heavy work at all; a job already "running" in a worker thread has THAT thread
+   * terminated — only that job's, never the gateway process — and its result is discarded
+   * even if it lands first. Nothing this pipeline touches is durable, so a half-finished
+   * import can never become approved state. Returns `false` for an already-terminal job
+   * (completed/failed/cancelled) — cancellation only applies to work still in flight. */
+  cancelKnxImportJob(jobId: string): boolean {
+    const job = this.knxImportJobs.get(jobId);
+    if (!job || job.status === "completed" || job.status === "failed" || job.status === "cancelled") return false;
+    job.status = "cancelled";
+    job.completedAt = new Date().toISOString();
+    const worker = this.knxImportWorkers.get(jobId);
+    this.knxImportWorkers.delete(jobId);
+    void worker?.terminate();
+    return true;
   }
 
   /**

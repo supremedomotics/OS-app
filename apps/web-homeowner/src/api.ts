@@ -539,6 +539,38 @@ export async function knxDiscoveryQueue(ets?: { content?: string; knxproj?: stri
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary };
 }
+
+// ── Non-blocking counterpart (§ Pass 11.2) — same inputs, returns a jobId immediately
+// instead of awaiting the whole parse/synthesize/classify pipeline on this request.
+// This is the path the production "Discover devices" button uses; `knxDiscoveryQueue`
+// above is kept only for internal/test callers (see knx-installer-workflow.e2e.test.ts).
+export type KnxImportJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type KnxImportJobStage = "queued" | "parse_and_synthesize" | "complete";
+export interface KnxImportJob {
+  jobId: string;
+  status: KnxImportJobStatus;
+  stage: KnxImportJobStage;
+  progress: number;
+  startedAt: string;
+  completedAt: string | null;
+  error: string | null;
+  result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
+}
+export async function knxDiscoveryQueueJobStart(ets?: { content?: string; knxproj?: string; password?: string }): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
+  const res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
+  return (await res.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
+}
+export async function knxDiscoveryQueueJobStatus(jobId: string): Promise<KnxImportJob> {
+  const res = await authed(`/v1/commissioning/knx/queue/job/${encodeURIComponent(jobId)}`, { method: "GET" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not check import job status."));
+  return (await res.json()) as KnxImportJob;
+}
+export async function knxDiscoveryQueueJobCancel(jobId: string): Promise<{ jobId: string; status: "cancelled" }> {
+  const res = await authed(`/v1/commissioning/knx/queue/job/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not cancel import job."));
+  return (await res.json()) as { jobId: string; status: "cancelled" };
+}
 export interface KnxApprovalResult {
   device: { id: string; name: string };
   status: "ready" | "warning" | "error";

@@ -658,4 +658,211 @@ describe("KNX Automatic Room Creation (§ Generic Room Assignment Engine)", () =
     const devices = (await (await fetch(`${baseUrl}/v1/rooms/${atticRoom.id}/devices`, { headers: auth() })).json()) as { devices: { id: string }[] };
     expect(devices.devices.some((d) => d.id === approved.device.id)).toBe(true); // landed in the SAME existing room
   }, 10000);
+
+  // § Pass 11.1 — non-blocking ETS import job (Part E/F/H/L). Proves the route hands back
+  // a jobId immediately (never awaits the pipeline inline) and that polling reaches the
+  // same real result the synchronous /knx/queue route would have produced.
+  it("returns 202 + jobId immediately, then the job completes with the same real queue the sync route would produce", async () => {
+    const jobRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({
+        gateway: { host: "127.0.0.1" },
+        ets: [
+          { id: "5/1/1", name: "Study Light SW", room: "Study" },
+          { id: "5/1/2", name: "Study Light STATUS", room: "Study" },
+        ],
+      }),
+    });
+    expect(jobRes.status).toBe(202);
+    const created = (await jobRes.json()) as { jobId: string; status: string };
+    expect(created.jobId).toBeTruthy();
+    expect(created.status).toBe("queued"); // handler returned before the pipeline even started
+
+    let job: { status: string; stage: string; result: { queue: unknown[] } | null; error: string | null } | null = null;
+    for (let i = 0; i < 50; i++) {
+      const pollRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${created.jobId}`, { headers: auth() });
+      job = (await pollRes.json()) as typeof job;
+      if (job!.status === "completed" || job!.status === "failed") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(job!.status).toBe("completed");
+    expect(job!.stage).toBe("complete");
+    expect(job!.error).toBeNull();
+    expect(job!.result!.queue).toHaveLength(1); // same single circuit the sync route test above resolves
+  }, 10000);
+
+  it("polling an unknown job id 404s instead of fabricating a status", async () => {
+    const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/does-not-exist`, { headers: auth() });
+    expect(res.status).toBe(404);
+  });
+
+  it("cancelling a job before it completes marks it cancelled and never surfaces a result", async () => {
+    const jobRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "6/1/1", name: "Loft Light SW", room: "Loft" }] }),
+    });
+    const created = (await jobRes.json()) as { jobId: string };
+
+    // A 1-circuit job can finish inside the `setImmediate` callback faster than this
+    // fetch round-trip — cancel is only guaranteed to win when it beats that callback.
+    // Assert the two REAL possible outcomes instead of assuming a race we can't force:
+    // either cancel wins (still-queued job never runs, no result ever appears), or the
+    // job had already completed (cancel correctly refuses as a conflict, not a fake 200).
+    const cancelRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${created.jobId}/cancel`, { method: "POST", headers: auth() });
+    const pollRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${created.jobId}`, { headers: auth() });
+    const job = (await pollRes.json()) as { status: string; result: unknown };
+    if (cancelRes.status === 200) {
+      expect(job.status).toBe("cancelled");
+      expect(job.result).toBeNull(); // never overwritten by the deferred setImmediate callback's late result
+      // Cancelling an already-terminal job is a conflict, not a silent success.
+      const secondCancel = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${created.jobId}/cancel`, { method: "POST", headers: auth() });
+      expect(secondCancel.status).toBe(409);
+    } else {
+      expect(cancelRes.status).toBe(409);
+      expect(job.status).toBe("completed"); // it really did finish before cancel arrived — not a bug
+    }
+  });
+});
+
+/**
+ * § Pass 11.3 — worker-thread ETS import: cancellation and failure isolation.
+ *
+ * Every ETS FILE/text import now runs in a real `node:worker_threads` worker (see
+ * `InstallerServices.knxInstallerQueueThreaded`), which changes what cancellation and
+ * failure actually MEAN: a running job's thread is genuinely terminated rather than
+ * left to finish invisibly, and a worker that dies without posting a result must fail
+ * its job rather than strand it in "running" forever. These are the guarantees that
+ * matter, so they get real tests — none of them mock the worker away.
+ *
+ * The synthetic export below is deliberately large enough that the import is still in
+ * flight when cancel arrives; it is generated, not a fixture file, so this suite stays
+ * CI-portable (no absolute path, no real-project data).
+ */
+describe("KNX ETS import — worker thread cancellation & failure isolation (§ Pass 11.3)", () => {
+  let app: FastifyInstance;
+  let ctx: AppContext;
+  let baseUrl: string;
+  let token = "";
+
+  beforeAll(async () => {
+    const registry = new EntityRegistryMirror();
+    const engine = new SupremeNativeAdapter({ drivers: [new FakeKnx()] });
+    const providers = new ProviderRegistry();
+    const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+      sil,
+      protocolBindingStore: new InMemoryProtocolBindingStore(),
+      knxDiscoveryDriverFactory: (config) => new SupremeKnxDriver({ ...config, iotProvider: new FakeEmptyKnxIotProvider() }),
+    });
+    app = await buildServer(ctx);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const addr = app.server.address();
+    baseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    const res = await fetch(`${baseUrl}/v1/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+    });
+    token = ((await res.json()) as { accessToken: string }).accessToken;
+  });
+  afterAll(async () => {
+    await app.close();
+    await ctx.shutdown();
+  });
+
+  const auth = () => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
+
+  /** A real (generated) ETS group-address export — `circuits` switch/status pairs. */
+  const bigExport = (circuits: number, prefix: string) =>
+    `<GroupAddress-Export>${Array.from({ length: circuits }, (_, n) =>
+      `<GroupAddress Name="${prefix} ${n} - Light ${n} - Switch" Address="${1 + (n >> 11)}/${(n >> 8) & 7}/${n & 255}" DPTs="DPST-1-1" />` +
+      `<GroupAddress Name="${prefix} ${n} - Light ${n} - Status" Address="${5 + (n >> 11)}/${(n >> 8) & 7}/${n & 255}" DPTs="DPST-1-1" />`,
+    ).join("")}</GroupAddress-Export>`;
+
+  type Job = { status: string; stage: string; progress: number; result: { queue: unknown[] } | null; error: string | null };
+  const poll = async (jobId: string, until: (j: Job) => boolean, tries = 400): Promise<Job> => {
+    let job: Job | null = null;
+    for (let n = 0; n < tries; n++) {
+      const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${jobId}`, { headers: auth() });
+      job = (await res.json()) as Job;
+      if (until(job)) return job;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return job!;
+  };
+  const terminal = (j: Job) => j.status === "completed" || j.status === "failed" || j.status === "cancelled";
+  const start = async (body: Record<string, unknown>) => {
+    const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job`, {
+      method: "POST", headers: auth(), body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ...body }),
+    });
+    expect(res.status).toBe(202);
+    return ((await res.json()) as { jobId: string }).jobId;
+  };
+
+  it("completes a real ETS import in a worker thread with the same queue the inline path produces", async () => {
+    const jobId = await start({ content: bigExport(40, "Zone") });
+    const job = await poll(jobId, terminal);
+    expect(job.status).toBe("completed");
+    expect(job.stage).toBe("complete");
+    expect(job.progress).toBe(100);
+    expect(job.result!.queue).toHaveLength(40);
+  }, 30000);
+
+  it("fails a malformed ETS source with the real parser error instead of hanging or stranding the job in running", async () => {
+    const jobId = await start({ content: "<GroupAddress-Export><not-closed" });
+    const job = await poll(jobId, terminal);
+    expect(job.status).toBe("failed");
+    expect(job.error).toBeTruthy();
+    expect(job.result).toBeNull();
+  }, 30000);
+
+  it("cancelling a running import terminates that worker, leaves no result, and leaves the gateway itself serving", async () => {
+    const jobId = await start({ content: bigExport(3000, "Big") });
+    // Wait for it to genuinely be RUNNING — cancelling a still-queued job proves nothing
+    // about terminating a live thread.
+    const running = await poll(jobId, (j) => j.status === "running" || terminal(j), 200);
+    expect(running.status).toBe("running");
+
+    const cancelRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${jobId}/cancel`, { method: "POST", headers: auth() });
+    expect(cancelRes.status).toBe(200);
+
+    const job = await poll(jobId, terminal);
+    expect(job.status).toBe("cancelled");
+    expect(job.result).toBeNull(); // a late worker result must never overwrite a cancellation
+    // Killing a worker must never kill the gateway process, and must never leave a
+    // partial import anywhere: the API still serves, and no device was created.
+    const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    expect(Array.isArray(home.rooms)).toBe(true);
+    expect(home.rooms.flatMap((r) => r.devices ?? []).length).toBe(0);
+    // Cancelling an already-terminal job is a conflict, not a silent second success.
+    const again = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${jobId}/cancel`, { method: "POST", headers: auth() });
+    expect(again.status).toBe(409);
+  }, 60000);
+
+  it("runs multiple simultaneous imports in separate workers — one failure never affects the others", async () => {
+    const [okA, bad, okB] = await Promise.all([
+      start({ content: bigExport(25, "A") }),
+      start({ content: "<GroupAddress-Export><broken" }),
+      start({ content: bigExport(15, "B") }),
+    ]);
+    const [a, b, c] = await Promise.all([poll(okA, terminal), poll(bad, terminal), poll(okB, terminal)]);
+    expect(a.status).toBe("completed");
+    expect(a.result!.queue).toHaveLength(25);
+    expect(b.status).toBe("failed");
+    expect(c.status).toBe("completed");
+    expect(c.result!.queue).toHaveLength(15);
+  }, 60000);
+
+  it("cancelling one of two concurrent imports never disturbs the other", async () => {
+    const [victim, survivor] = await Promise.all([start({ content: bigExport(3000, "V") }), start({ content: bigExport(25, "S") })]);
+    await poll(victim, (j) => j.status === "running" || terminal(j), 200);
+    await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${victim}/cancel`, { method: "POST", headers: auth() });
+    const [v, s] = await Promise.all([poll(victim, terminal), poll(survivor, terminal)]);
+    expect(v.status).toBe("cancelled");
+    expect(s.status).toBe("completed");
+    expect(s.result!.queue).toHaveLength(25);
+  }, 60000);
 });

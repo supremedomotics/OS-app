@@ -87,11 +87,30 @@ export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
     // main write/status address (unchanged contract for every existing caller); any
     // additional ones are preserved in `config.extra*Addresses` rather than silently
     // dropped — never forced into the primary slot, never lost.
-    const primaryObjs = own.filter((o) => o.role === "primary");
-    const statusObjs = own.filter((o) => o.role === "status");
+    // § Binding Evidence Hierarchy (Pass 11.4) — `own` (and therefore `primaryObjs`/
+    // `statusObjs`) is filtered from `device.raw.communicationObjects` in ITS OWN
+    // insertion order, which is itself input-signal-order-dependent (ETS export order,
+    // permutation, etc.). When a capability legitimately has more than one write-capable
+    // (or status-capable) object — its own local circuit command PLUS a fanned-in
+    // shared/central GA (e.g. "All Lights Off") that also happens to carry a real SEND/
+    // RECEIVE relationship to this device — `[0]` picked whichever won the race in the
+    // caller's array, not the structurally-correct one. Rank deterministically instead:
+    // a LOCAL object (this device's own pre-fan-out signal — see `CommunicationObject
+    // .local`'s doc comment) always outranks a fanned-in one; among objects tied on
+    // locality (both local, or both fanned-in — e.g. two distinct shared GAs), the GA id
+    // itself breaks the tie, never insertion order. A shared GA still legitimately wins
+    // when it's the ONLY candidate (no local alternative exists) — this ranking simply
+    // never lets it win a tie it didn't earn.
+    const byEvidence = (a: CommunicationObject, b: CommunicationObject) =>
+      Number(b.local) - Number(a.local) || a.id.localeCompare(b.id);
+    const primaryObjs = own.filter((o) => o.role === "primary").sort(byEvidence);
+    const statusObjs = own.filter((o) => o.role === "status").sort(byEvidence);
     const writeObj = primaryObjs[0];
     const statusObj = statusObjs[0];
-    const stepObj = own.find((o) => o.role === "step");
+    // Same evidence-hierarchy fix as primary/status above — a plain `.find()` picked
+    // whichever step/nudge object (e.g. a local "Relative Dimming" vs a fanned-in shared
+    // one) happened to appear first in `own`'s input-order-dependent array.
+    const stepObj = own.filter((o) => o.role === "step").sort(byEvidence)[0];
     const dpt = defaultDpt(capability as CapabilityState["kind"]);
 
     if (!writeObj) {

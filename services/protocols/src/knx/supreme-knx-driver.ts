@@ -265,6 +265,19 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     schemaId?: UnifiedDeviceMapperInput["schemaId"],
     schemaOptions?: UnifiedDeviceMapperInput["schemaOptions"],
   ): Promise<UnifiedKnxDevice[]> {
+    const knxIotSignals = await this.collectKnxIotSignals();
+    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides, schemaId, schemaOptions });
+    this.recordUnifiedResult(result);
+    return result;
+  }
+
+  /** The live half of {@link discoverUnified} — the only part that touches the network
+   * (§ Pass 11.3): collecting each KNX-IoT device's link-format + functional blocks.
+   * Public so a caller that runs the PURE half ({@link mapUnifiedDevices}, plus the
+   * confidence/room/duplicate/binding engines) in a worker thread can still gather these
+   * live signals on the main thread and pass them across as plain data — the driver's
+   * live provider/router handles can't cross a worker boundary. */
+  async collectKnxIotSignals(): Promise<KnxIotDiscoverySignal[]> {
     const iotDiscovered = await this.iot.discover();
     const knxIotSignals: KnxIotDiscoverySignal[] = [];
     for (const d of iotDiscovered) {
@@ -283,12 +296,17 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       }
       knxIotSignals.push({ host, linkFormat, functionalBlocks });
     }
+    return knxIotSignals;
+  }
 
-    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides, schemaId, schemaOptions });
+  /** Records the Unified Device Pipeline's own diagnostics counters. Called by
+   * {@link discoverUnified}; also callable directly by a caller that ran
+   * {@link mapUnifiedDevices} elsewhere (e.g. in a worker thread — § Pass 11.3) so
+   * diagnostics stay identical either way instead of silently going stale. */
+  recordUnifiedResult(result: UnifiedKnxDevice[]): void {
     this.lastMetadataSync = new Date().toISOString();
     this.lastUnifiedDeviceCount = result.length;
     this.lastUnifiedCapabilityCount = result.reduce((n, d) => n + d.capabilities.length, 0);
-    return result;
   }
 
   /** State Synchronization (§ Phase 7): issues a real `bus.group_read` for every bound
