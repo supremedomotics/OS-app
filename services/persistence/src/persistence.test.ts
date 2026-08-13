@@ -223,7 +223,7 @@ describe("Postgres-backed persistence (PGlite)", () => {
       revoked: false,
       createdAt: new Date().toISOString(),
     });
-    await stores.sessions.setCurrentJti(sid, "jti-2");
+    await stores.sessions.setCurrentJti(sid, "jti-1", "jti-2");
     // A fresh repo over the same DB sees the rotated, non-revoked session.
     const { SessionRepo } = await import("./index.js");
     const fresh = new SessionRepo(stores.db);
@@ -270,6 +270,66 @@ describe("Postgres-backed persistence (PGlite)", () => {
 
     await fresh.remove(dev, "position");
     expect((await fresh.list()).some((b) => b.deviceId === dev)).toBe(false);
+  });
+
+  // § Pass 12.6, Parts B/D/F — the real-Postgres round trip Pass 12.5 never actually ran
+  // (it only verified in-memory/unit-level). This writes an AVR main-zone binding's
+  // `customInputNames` AND a Zone-2 binding's `config.zone` through the real PGlite-backed
+  // `ProtocolBindingRepo`, reads them back through a FRESH repo instance (simulating a hub
+  // restart / rediscovery re-reading from the DB), and cleans up — never touching any other
+  // row. `bindProtocol()`'s own upsert-by-(device_id,capability) semantics mean a re-run
+  // input rename overwrites in place rather than duplicating a row, which this proves too.
+  it("persists AVR customInputNames and a Zone 2 binding through real Postgres (write -> fresh-repo read -> overwrite -> restore)", async () => {
+    const mainDev = newId("device") as DeviceId;
+    const zone2Dev = newId("device") as DeviceId;
+
+    // WRITE: main zone binding with a custom input label, and a separate Zone 2 device
+    // binding, sharing the same physical receiver address.
+    await stores.protocolBindings.put({
+      deviceId: mainDev,
+      capability: "media",
+      protocol: "denon-avr",
+      address: "192.168.0.31:23",
+      config: { customInputNames: { "SAT/CBL": "Apple TV" } },
+    });
+    await stores.protocolBindings.put({
+      deviceId: zone2Dev,
+      capability: "media",
+      protocol: "denon-avr",
+      address: "192.168.0.31:23",
+      config: { zone: "zone2" },
+    });
+
+    // READ: a fresh repo instance over the SAME db (simulating a restart / rediscovery
+    // re-reading persisted bindings, not the in-process cache) sees both, correctly.
+    const { ProtocolBindingRepo } = await import("./index.js");
+    const fresh = new ProtocolBindingRepo(stores.db);
+    const all = await fresh.list();
+    const mainFound = all.find((b) => b.deviceId === mainDev);
+    const zone2Found = all.find((b) => b.deviceId === zone2Dev);
+    expect(mainFound?.config?.customInputNames).toEqual({ "SAT/CBL": "Apple TV" });
+    expect(zone2Found?.config?.zone).toBe("zone2");
+
+    // OVERWRITE (what the PATCH input-rename route does): re-put the same
+    // (deviceId, capability) key with a merged config — must upsert in place, never
+    // duplicate the row, exactly like `refreshCapabilities`'s existing setCapabilityConfig
+    // reuse and `bindProtocol`'s own ON CONFLICT upsert.
+    await stores.protocolBindings.put({
+      deviceId: mainDev,
+      capability: "media",
+      protocol: "denon-avr",
+      address: "192.168.0.31:23",
+      config: { customInputNames: { "SAT/CBL": "PS5" } },
+    });
+    const afterOverwrite = (await fresh.list()).filter((b) => b.deviceId === mainDev);
+    expect(afterOverwrite).toHaveLength(1);
+    expect(afterOverwrite[0]?.config?.customInputNames).toEqual({ "SAT/CBL": "PS5" });
+
+    // RESTORE: remove the temp rows this test created — never leaves data behind.
+    await fresh.remove(mainDev, "media");
+    await fresh.remove(zone2Dev, "media");
+    const afterCleanup = await fresh.list();
+    expect(afterCleanup.some((b) => b.deviceId === mainDev || b.deviceId === zone2Dev)).toBe(false);
   });
 
   it("persists native-migration routing so a migrated domain stays native across a restart", async () => {

@@ -698,9 +698,17 @@ export class SupremeClient {
       if (auth && res.status === 401 && !isRetry) {
         try {
           await this.refresh();
-        } catch {
-          this.setTokens(null);
-          this.onSessionExpired?.();
+        } catch (refreshErr) {
+          // Only a genuine rejection from the server (refresh() got a real response back saying
+          // the refresh token/session is invalid — code "unauthorized", the only code a 401 ever
+          // maps to per httpStatusFor) means the session is actually over. A network-level throw
+          // (fetch never got a response) or any other SupremeError (5xx on the refresh endpoint
+          // itself, parsed as "internal"/"backend_unavailable") is a transient failure: leave the
+          // tokens alone so a later request can retry the refresh once the issue clears.
+          if (refreshErr instanceof SupremeError && refreshErr.code === "unauthorized") {
+            this.setTokens(null);
+            this.onSessionExpired?.();
+          }
           throw parsed;
         }
         return this.request(method, path, body, auth, true);

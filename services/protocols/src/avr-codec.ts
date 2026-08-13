@@ -412,7 +412,15 @@ export function buildMediaState(cache: {
  * (subwoofer on/off, Cinema/Music/Game/Pro Logic mode, Cinema EQ, Loudness Management) that
  * isn't part of Audyssey calibration and shouldn't be bundled under that flag. Tone-control
  * on/off is NOT part of this flag — it's folded into `hasToneControl` instead, since it's the
- * master switch for the same bass/treble subsystem already gated there. */
+ * master switch for the same bass/treble subsystem already gated there.
+ *
+ * `customInputNames` (§ Pass 12.5, Part B/C) — a SupremeOS-side override layer ON TOP of
+ * `renamedInputs` (the AVR's own reported/renamed label). Keyed by the same stable wire `SI`
+ * token as `renamedInputs`/`hiddenInputs` — never array position, never the display label —
+ * so a rename never breaks identity. Precedence: custom name → AVR-reported/renamed name →
+ * spec-derived label → raw token id. Persisted the same way `renamedInputs`/`hiddenInputs`
+ * already are (`ProtocolBinding.config`, see avr-driver.ts's `bind()`), just written by the
+ * homeowner-facing rename API instead of discovered off the wire — no new schema. */
 export function denonCapabilityConfig(opts: {
   hasZone2: boolean;
   hasToneControl: boolean;
@@ -420,13 +428,15 @@ export function denonCapabilityConfig(opts: {
   hasExtendedAudio?: boolean;
   renamedInputs?: Map<string, string>;
   hiddenInputs?: Set<string>;
+  customInputNames?: Map<string, string>;
 }): AudioCapabilityConfig {
   const renamed = opts.renamedInputs;
   const hidden = opts.hiddenInputs;
+  const custom = opts.customInputNames;
   const hasEnrichment = (renamed && renamed.size > 0) || (hidden && hidden.size > 0);
   const inputs = DENON_INPUTS.filter((id) => !hidden?.has(id)).map((id) => ({
     id,
-    label: renamed?.get(id) ?? DENON_INPUT_LABELS[id] ?? id,
+    label: custom?.get(id) ?? renamed?.get(id) ?? DENON_INPUT_LABELS[id] ?? id,
     type: DENON_INPUT_TYPES[id],
   }));
   return {
@@ -588,7 +598,7 @@ export const DENON_INPUTS = [
  * (~2014+) — this is the real, documented answer to "why doesn't HEOS appear as an input,"
  * not a new capability being fabricated. Tokens with no meaningfully different display name
  * (e.g. "TUNER") are simply absent here and fall back to the raw id. */
-const DENON_INPUT_LABELS: Partial<Record<(typeof DENON_INPUTS)[number], string>> = {
+export const DENON_INPUT_LABELS: Partial<Record<(typeof DENON_INPUTS)[number], string>> = {
   BD: "Blu-ray",
   "SAT/CBL": "Satellite/Cable",
   MPLAY: "Media Player",

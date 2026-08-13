@@ -50,7 +50,13 @@ export interface Session {
 export interface ISessionStore {
   create(session: Session): Promise<void>;
   get(id: string): Promise<Session | null>;
-  setCurrentJti(id: string, jti: string): Promise<void>;
+  /**
+   * Compare-and-swap rotation: only sets `currentJti` to `nextJti` if the stored value still
+   * equals `expectedJti`, atomically (§ refresh-token rotation race). Returns `true` if the swap
+   * happened, `false` if someone else already rotated this session first — the caller then knows
+   * it lost a benign race (not a reuse attempt) and should not revoke.
+   */
+  setCurrentJti(id: string, expectedJti: string, nextJti: string): Promise<boolean>;
   revoke(id: string): Promise<void>;
   /** All of a user's sessions (active + revoked), newest first — the login history. */
   listByUser(userId: UserId): Promise<Session[]>;
@@ -176,9 +182,11 @@ export class InMemorySessionStore implements ISessionStore {
   async get(id: string): Promise<Session | null> {
     return this.sessions.get(id) ?? null;
   }
-  async setCurrentJti(id: string, jti: string): Promise<void> {
+  async setCurrentJti(id: string, expectedJti: string, nextJti: string): Promise<boolean> {
     const s = this.sessions.get(id);
-    if (s) s.currentJti = jti;
+    if (!s || s.currentJti !== expectedJti) return false;
+    s.currentJti = nextJti;
+    return true;
   }
   async revoke(id: string): Promise<void> {
     const s = this.sessions.get(id);

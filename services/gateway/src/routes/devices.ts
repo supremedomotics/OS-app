@@ -13,10 +13,17 @@ import {
 } from "@supreme/contracts";
 import type { DeviceId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { authenticate, enforce } from "../auth.js";
 import { ArtworkCache } from "../artwork-cache.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+
+// § Pass 12.6, Part E/H — same length bound `UpdateDeviceRequest.name` already uses
+// (rest.ts), for consistency across every homeowner-facing rename surface. Empty names are
+// rejected here too, matching how the device-rename endpoint itself behaves (no
+// "clear to fallback" via PATCH) — clearing a custom input name is a separate DELETE.
+const SetAvrInputNameRequest = z.object({ name: z.string().min(1).max(120) });
 
 /** Order-independent deep-equality check for two capability-config objects, via a
  * key-sorted JSON.stringify (§ Capability Refresh). Plain `JSON.stringify(a) ===
@@ -336,4 +343,94 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       sendError(reply, err);
     }
   });
+
+  // § Pass 12.6, Part E — GET /v1/devices/:id/avr/inputs: this AVR's real input list
+  // (technicalId/reportedName/customName/displayName), for the future input-rename UI. Same
+  // "view" permission as /diagnostics — a read, not a write.
+  app.get<{ Params: { id: string } }>("/v1/devices/:id/avr/inputs", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "view");
+      const inputs = await ctx.sil.getAvrInputs(deviceId);
+      if (inputs === null) throw new SupremeError("not_found", "this device has no AVR input list to report");
+      reply.send({ inputs });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Pass 12.6, Part E — PATCH /v1/devices/:id/avr/inputs/:technicalId: set the
+  // homeowner-facing custom label for one AVR input, keyed by the stable wire `SI` token
+  // (never a display name). Same "update" permission as PATCH /v1/devices/:id (device rename).
+  // Persists by re-running `bindProtocol()` with the merged config — the same
+  // bind-then-persist-then-refresh-capability-config path first commissioning already uses
+  // (§ installer-context.ts `bindProtocol`), no new persistence subsystem.
+  app.patch<{ Params: { id: string; technicalId: string }; Body: unknown }>(
+    "/v1/devices/:id/avr/inputs/:technicalId",
+    async (req, reply) => {
+      try {
+        const user = await authenticate(ctx, req);
+        const deviceId = req.params.id as DeviceId;
+        const technicalId = req.params.technicalId;
+        const device = await ctx.home.getDevice(deviceId);
+        if (!device) throw new SupremeError("not_found", "device not found");
+        await enforce(ctx, user, "device", deviceId, "update");
+        const { name } = SetAvrInputNameRequest.parse(req.body);
+        const device2 = await setAvrInputName(ctx, deviceId, technicalId, name);
+        reply.send({ device: device2, inputs: await ctx.sil.getAvrInputs(deviceId) });
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
+
+  // § Pass 12.6, Part E — DELETE /v1/devices/:id/avr/inputs/:technicalId: clear a custom
+  // label, falling back to the AVR-reported/spec-derived name (mirrors what an empty PATCH
+  // body would mean, but PATCH itself rejects empty names for consistency with
+  // UpdateDeviceRequest.name — see SetAvrInputNameRequest above).
+  app.delete<{ Params: { id: string; technicalId: string } }>(
+    "/v1/devices/:id/avr/inputs/:technicalId",
+    async (req, reply) => {
+      try {
+        const user = await authenticate(ctx, req);
+        const deviceId = req.params.id as DeviceId;
+        const technicalId = req.params.technicalId;
+        const device = await ctx.home.getDevice(deviceId);
+        if (!device) throw new SupremeError("not_found", "device not found");
+        await enforce(ctx, user, "device", deviceId, "update");
+        const device2 = await setAvrInputName(ctx, deviceId, technicalId, null);
+        reply.send({ device: device2, inputs: await ctx.sil.getAvrInputs(deviceId) });
+      } catch (err) {
+        sendError(reply, err);
+      }
+    },
+  );
+}
+
+/** § Pass 12.6, Part E — shared by the PATCH/DELETE input-name routes: apply the change to
+ * the live driver, then re-persist `ProtocolBinding.config` via the same `bindProtocol()`
+ * commissioning already uses so it survives a restart/rediscovery. Throws `validation_failed`
+ * for an unknown `technicalId` — the driver itself is the source of truth for which wire
+ * tokens are real, never a client-supplied string. */
+async function setAvrInputName(ctx: AppContext, deviceId: DeviceId, technicalId: string, name: string | null): Promise<DeviceResponse["device"]> {
+  const applied = await ctx.sil.setAvrInputCustomName(deviceId, technicalId, name);
+  if (!applied) throw new SupremeError("validation_failed", `"${technicalId}" is not a valid input on this device`);
+  const bindings = await ctx.installer.listProtocolBindings();
+  const binding = bindings.find((b) => b.deviceId === deviceId && b.capability === "media");
+  if (binding) {
+    const customInputNames = { ...(binding.config?.customInputNames as Record<string, string> | undefined) };
+    if (name === null) delete customInputNames[technicalId];
+    else customInputNames[technicalId] = name;
+    await ctx.installer.bindProtocol({
+      deviceId,
+      capability: binding.capability,
+      protocol: binding.protocol,
+      address: binding.address,
+      config: { ...binding.config, customInputNames },
+    });
+  }
+  return (await ctx.home.getDevice(deviceId)) as DeviceResponse["device"];
 }

@@ -296,7 +296,25 @@ export class IdentityService {
       throw new SupremeError("unauthorized", "refresh token reuse detected; session revoked");
     }
     const nextJti = newId("session") as string;
-    await this.sessions.setCurrentJti(claims.sid, nextJti);
+    // Compare-and-swap: only rotate if currentJti is still exactly claims.jti (what we just read
+    // above). Two concurrent refresh() calls for the same session (two tabs, a double-mount) can
+    // both pass the `session.currentJti !== claims.jti` check above before either writes — without
+    // a CAS here, the loser's write would silently clobber the winner's, and the loser's stale
+    // nextJti would then look like reuse on a LATER refresh and spuriously revoke the session.
+    const rotated = await this.sessions.setCurrentJti(claims.sid, claims.jti, nextJti);
+    if (!rotated) {
+      // We already confirmed (above) that session.currentJti === claims.jti at read time, so the
+      // only way the swap can fail now is a concurrent refresh() winning the race in between —
+      // this is NOT reuse (that's already caught by the check above on the *next* attempt with a
+      // stale jti). Treat it as benign: hand back valid tokens bound to whatever is current now,
+      // rather than revoking a session that's still perfectly legitimate.
+      const latest = await this.sessions.get(claims.sid);
+      if (!latest || latest.revoked) {
+        throw new SupremeError("unauthorized", "session has been revoked");
+      }
+      await this.sessions.touch(claims.sid, new Date().toISOString());
+      return this.issueTokens(user, claims.sid, latest.currentJti);
+    }
     await this.sessions.touch(claims.sid, new Date().toISOString());
     return this.issueTokens(user, claims.sid, nextJti);
   }

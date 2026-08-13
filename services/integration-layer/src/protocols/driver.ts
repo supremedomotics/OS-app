@@ -110,6 +110,19 @@ export interface INativeProtocolDriver {
    * data to render instead of a device with no config at all. */
   getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null;
 
+  /** § Pass 12.6, Part E — optional, AVR-only: this device's real input list with the
+   * pre-merge `reportedName`/`customName` layers alongside the final `displayName`, keyed by
+   * stable wire technical id. `null` when this driver doesn't manage the device or has no
+   * input-customization concept. */
+  getAvrInputs?(deviceId: DeviceId): { technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null;
+
+  /** § Pass 12.6, Part E — optional, AVR-only: set (or, with `name: null`, clear) one input's
+   * homeowner-facing custom label. Returns `false` for an unmanaged device or an unknown
+   * `technicalId` — never accepts an arbitrary string as a technical identity. Callers must
+   * re-persist the owning `ProtocolBinding.config` separately (this only updates in-memory
+   * driver state). */
+  setAvrInputCustomName?(deviceId: DeviceId, technicalId: string, name: string | null): boolean;
+
   /** Optional: this device's real connection/traffic diagnostics (§ Diagnostics
    * Console) — connection status, last command/response, RX/TX packet counts,
    * reconnect count, response time, last error. `null` when this driver doesn't
