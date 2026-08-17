@@ -198,7 +198,22 @@ run_as_supreme() {
   # corporate proxy. `sudo -u` drops the calling environment by default; only forward vars
   # that are actually set in root's environment, so a machine with none of this configured
   # behaves exactly as if this array didn't exist.
-  local -a env_args=("PATH=$PATH")
+  #
+  # § Bug fix (pnpm/Corepack EACCES on the administrator's tree) — HOME/PNPM_HOME/
+  # COREPACK_HOME are pinned explicitly rather than left to sudo's default HOME handling.
+  # Whether plain `sudo -u supreme` sets HOME to supreme's own home directory (/opt/supreme,
+  # per create_system_user's --home-dir) depends on the target machine's sudoers
+  # (`always_set_home`/`set_home`, off by default on some distros) — if it doesn't, pnpm and
+  # Corepack fall back to resolving paths from whatever HOME root's shell happened to have,
+  # which supreme cannot read. Setting all three explicitly here removes that ambiguity:
+  # every pnpm/Corepack invocation this helper runs always uses supreme's own,
+  # installer-controlled cache locations, never an inherited or ambiguous default.
+  local -a env_args=(
+    "PATH=$PATH"
+    "HOME=$SUPREME_APP_DIR"
+    "PNPM_HOME=${SUPREME_APP_DIR}/.local/share/pnpm"
+    "COREPACK_HOME=${SUPREME_APP_DIR}/.cache/node/corepack"
+  )
   local var
   for var in NODE_EXTRA_CA_CERTS HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy npm_config_https_proxy npm_config_proxy npm_config_noproxy npm_config_ca npm_config_cafile COREPACK_ENABLE_DOWNLOAD_PROMPT; do
     if [ -n "${!var:-}" ]; then

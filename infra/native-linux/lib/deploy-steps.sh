@@ -137,6 +137,73 @@ build_workspace() {
 # ever invoked. COREPACK_ENABLE_DOWNLOAD_PROMPT=0 is Corepack's own documented variable for
 # exactly this case — skip the interactive confirmation and proceed, never a global
 # Corepack disable, never bypassing the pin itself.
+# § Bug fix (installer hangs at build_workspace with no diagnostic) — the two pnpm
+# --version sanity checks below used to swallow stderr (`2>/dev/null || true`), so a real
+# failure (e.g. EACCES because CWD/HOME resolved somewhere supreme can't read, or a
+# never-answered Corepack download prompt) surfaced as nothing but an empty version string
+# — or, in the download-prompt case, as install.sh simply parked with no output at all.
+# run_pnpm_version_check() captures stderr, bounds the call with `timeout` (this is a quick
+# version query, never the actual dependency install/build — see build_workspace()'s own
+# comment on why a timeout is never applied there), and on failure prints the exact
+# command, user, cwd, exit code, and captured stderr so this phase fails loud instead of
+# hanging silent.
+# Goes through run_as_supreme() (not a duplicate sudo/env invocation) so this stays the one
+# place that command is built, and so the test harness's existing `run_as_supreme` mock
+# (deployment-regression.test.sh) still exercises this path unchanged. The 30s bound is
+# implemented as a plain background-job + watchdog race rather than the external `timeout`
+# binary, since `timeout` execs its argv and cannot wrap a shell function — this way a
+# mocked run_as_supreme runs exactly as it does today, just with a wall-clock backstop.
+run_pnpm_version_check() {
+  local out_file pid watchdog rc
+  out_file="$(mktemp)"
+  ( run_as_supreme pnpm --version >"$out_file" 2>&1 ) &
+  pid=$!
+  ( sleep 30; kill -TERM "$pid" 2>/dev/null ) &
+  watchdog=$!
+  wait "$pid" 2>/dev/null
+  rc=$?
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+  local out
+  out="$(cat "$out_file")"
+  rm -f "$out_file"
+  if [ "$rc" -ne 0 ]; then
+    log_warn "pnpm --version check failed or timed out after 30s (exit ${rc}) — command: run_as_supreme pnpm --version, cwd: $(pwd), user: ${SUPREME_USER}. Output: ${out}"
+    return "$rc"
+  fi
+  printf '%s' "$out"
+}
+
+# § PASS 15 bug fix — `corepack prepare ... --activate` itself (the actual network
+# download of the pinned pnpm tarball) previously had NO bound at all: only the
+# diagnostic `pnpm --version` checks around it were watchdog-protected. Live evidence
+# (Ubuntu host, fresh install) showed the process genuinely parked at `ep_poll` for 22+
+# minutes on a bare, unprotected `pnpm --version` from BEFORE this file's own fix existed
+# — but the same class of hang is structurally possible here too if
+# COREPACK_ENABLE_DOWNLOAD_PROMPT=0 ever fails to suppress a prompt (a future Corepack
+# version, a different prompt shape) or the registry download itself stalls. 120s is
+# generous enough for a real tarball fetch (a version *check* only needs the already-
+# cached shim; this needs an actual network round-trip) while still guaranteeing the
+# phase fails loud instead of hanging silently for the life of the installer process.
+run_corepack_prepare() {
+  local pinned="$1"
+  local out_file pid watchdog rc
+  out_file="$(mktemp)"
+  ( COREPACK_ENABLE_DOWNLOAD_PROMPT=0 run_as_supreme corepack prepare "$pinned" --activate >"$out_file" 2>&1 ) &
+  pid=$!
+  ( sleep 120; kill -TERM "$pid" 2>/dev/null ) &
+  watchdog=$!
+  wait "$pid" 2>/dev/null
+  rc=$?
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+  local out
+  out="$(cat "$out_file")"
+  rm -f "$out_file"
+  if [ "$rc" -ne 0 ]; then
+    log_warn "corepack prepare ${pinned} --activate failed or timed out after 120s (exit ${rc}) — command: COREPACK_ENABLE_DOWNLOAD_PROMPT=0 run_as_supreme corepack prepare ${pinned} --activate, cwd: $(pwd), user: ${SUPREME_USER}, HOME: ${SUPREME_APP_DIR}, node: $(node -v 2>/dev/null || echo unknown), corepack: $(corepack --version 2>/dev/null || echo unknown). Output: ${out}"
+  fi
+  return "$rc"
+}
+
 prepare_pinned_pnpm_for_supreme() {
   local pinned expected actual
   pinned="$(node -p "require('${SUPREME_REPO_DIR}/package.json').packageManager || ''" 2>/dev/null || true)"
@@ -146,19 +213,19 @@ prepare_pinned_pnpm_for_supreme() {
   fi
   expected="${pinned#pnpm@}"
 
-  actual="$(run_as_supreme pnpm --version 2>/dev/null || true)"
+  actual="$(run_pnpm_version_check || true)"
   if [ "$actual" = "$expected" ]; then
     log_info "pnpm ${actual} already prepared and active for ${SUPREME_USER} — skipping."
     return 0
   fi
 
   log_step "Preparing pinned package manager (${pinned}) for ${SUPREME_USER} — non-interactive"
-  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 run_as_supreme corepack prepare "$pinned" --activate \
-    || die "Failed to prepare ${pinned} for ${SUPREME_USER} — see corepack's own error above."
+  run_corepack_prepare "$pinned" \
+    || die "Failed to prepare ${pinned} for ${SUPREME_USER} — see the diagnostic warning above (command/user/cwd/HOME/versions/exit-code/output)."
 
-  actual="$(run_as_supreme pnpm --version 2>/dev/null || true)"
+  actual="$(run_pnpm_version_check || true)"
   [ "$actual" = "$expected" ] \
-    || die "Pinned pnpm activation for ${SUPREME_USER} did not take effect — expected pnpm ${expected}, 'sudo -u ${SUPREME_USER} pnpm --version' reports '${actual:-<none>}'. The later 'pnpm install' would hang waiting on an interactive Corepack download prompt it can never answer; fix before re-running."
+    || die "Pinned pnpm activation for ${SUPREME_USER} did not take effect — expected pnpm ${expected}, 'sudo -u ${SUPREME_USER} pnpm --version' reports '${actual:-<none>}' (see the warning above for the exact command/cwd/exit code/stderr). The later 'pnpm install' would hang waiting on an interactive Corepack download prompt it can never answer; fix before re-running."
   log_info "pnpm ${actual} prepared and verified for ${SUPREME_USER}."
 }
 
