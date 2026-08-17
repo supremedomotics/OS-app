@@ -666,6 +666,15 @@ export class SupremeClient {
   }
 
   // ── transport ────────────────────────────────────────────────────────────────
+  /** Default per-request budget (§ resilience — a hung backend call must never leave a
+   * caller awaiting forever with no error, no matter how the hang happens). Generous
+   * enough for any real Supreme endpoint (none of which do heavy inline work — see the
+   * gateway's own worker-thread offload for the one exception, the KNX ETS import,
+   * which returns its 202 immediately and is polled separately) while still bounding
+   * the wait to something a UI can recover from. A safety net, not a fix for whatever
+   * made the backend slow — see PASS 13 investigation notes on the KNX job route. */
+  private static readonly DEFAULT_TIMEOUT_MS = 20_000;
+
   private async request(
     method: string,
     path: string,
@@ -679,11 +688,28 @@ export class SupremeClient {
       if (!token) throw new SupremeError("unauthorized", "not authenticated");
       headers.authorization = `Bearer ${token}`;
     }
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SupremeClient.DEFAULT_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // A network-level throw — including our own abort — is the SAME "transient,
+      // couldn't reach the backend" condition the 401-refresh path above already
+      // treats as non-fatal (see its own comment); never mint a fake "unauthorized"
+      // from it. AbortError specifically means our own timeout fired, not the caller.
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new SupremeError("backend_unavailable", `request timed out after ${SupremeClient.DEFAULT_TIMEOUT_MS / 1000}s`);
+      }
+      throw new SupremeError("backend_unavailable", err instanceof Error ? err.message : "network request failed");
+    } finally {
+      clearTimeout(timer);
+    }
     const text = await res.text();
     const json = text ? JSON.parse(text) : undefined;
     if (!res.ok) {

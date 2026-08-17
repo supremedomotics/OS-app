@@ -92,7 +92,7 @@ function sendComObject(overrides: { id: string; deviceInstanceId: string; number
   return {
     id: overrides.id, deviceInstanceId: overrides.deviceInstanceId, number: overrides.number,
     text: overrides.text, dpt: overrides.dpt, flags: DEFAULT_COM_FLAGS,
-    groupAddressIds: overrides.gaIds, sendGroupAddressIds: overrides.gaIds, receiveGroupAddressIds: [],
+    groupAddressIds: overrides.gaIds, sendGroupAddressIds: overrides.gaIds, receiveGroupAddressIds: [], channelId: null,
   };
 }
 
@@ -166,6 +166,45 @@ describe("knxSignalsFromModel — physical device identity", () => {
     expect(signal?.channel).toBeNull();
   });
 
+  // § Module/Channel Identity — real ETS6 `ChannelId` (confirmed regression: a real
+  // Supreme Domotics Showroom DALI-gateway export). The comm-object function text is
+  // empty on this export shape (no bundled application-program catalog), so channel
+  // identity comes ONLY from `ChannelId="MD-1_M-2_MI-<n>_CH-1"` — and a plain `\bMI-\d+\b`
+  // regex never matches there because `_` is itself a `\w` character, so neither the
+  // leading nor trailing word-boundary exists around "MI-3" in "..._MI-3_CH-1".
+  it("derives channel from ChannelId's Module Instance number when the comm-object text carries no channel token at all (real DALI-gateway shape)", () => {
+    const model = emptyProjectModel();
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "DALI Gateway", individualAddress: "1.1.2",
+      manufacturer: null, product: "DALI Control 2x64 Gateway", hardwareName: null, spaceId: null, comObjectIds: ["co-1", "co-2"],
+    });
+    model.communicationObjects.set("co-1", {
+      ...sendComObject({ id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "", dpt: "1.001", gaIds: ["ga-1"] }),
+      channelId: "MD-1_M-2_MI-3_CH-1",
+    });
+    model.communicationObjects.set("co-2", {
+      ...sendComObject({ id: "co-2", deviceInstanceId: "dev-1", number: 2, text: "", dpt: "1.001", gaIds: ["ga-2"] }),
+      channelId: "MD-1_M-2_MI-7_CH-1",
+    });
+    model.groupAddresses.set("ga-1", { id: "ga-1", address: "1/1/1", name: "SW", description: null, comment: null, dpt: "1.001", mainGroup: "Showroom Light-1", middleGroup: "Living DL", comObjectIds: ["co-1"] });
+    model.groupAddresses.set("ga-2", { id: "ga-2", address: "1/1/2", name: "SW", description: null, comment: null, dpt: "1.001", mainGroup: "Showroom Light-1", middleGroup: "Passage Cove", comObjectIds: ["co-2"] });
+
+    const signals = knxSignalsFromModel(model);
+    const byGa = new Map(signals.map((s) => [s.id, s]));
+    // § Module/Channel Identity (second pass) — `MD-N` alone collides across DIFFERENT
+    // module TYPES that each restart their own `MI-1` numbering (confirmed on the same
+    // real Showroom project: a curtain module and an unrelated screen module both under
+    // "MD-2" produced the identical synthesized channel and merged into one device) — the
+    // module-type identifier `M-N` is folded into the channel number too.
+    expect(byGa.get("1/1/1")?.channel).toBe(1002003);
+    expect(byGa.get("1/1/2")?.channel).toBe(1002007);
+    // Different Module Instances of the same physical device must resolve to different
+    // channels — this is the exact distinction that lets the Unified Device Mapper keep
+    // "Living DL" and "Passage Cove" as two separate logical circuits instead of
+    // collapsing every DALI channel onto one device.
+    expect(byGa.get("1/1/1")?.channel).not.toBe(byGa.get("1/1/2")?.channel);
+  });
+
   it("returns null channel when the comm object's function text carries no channel token", () => {
     const model = emptyProjectModel();
     model.deviceInstances.set("dev-1", {
@@ -215,11 +254,11 @@ describe("knxSignalsFromModel — Group Address relationship preservation", () =
     // co-1 WRITES ga-1 (a command object) and co-2 READS ga-2 (a status/feedback object).
     model.communicationObjects.set("co-1", {
       id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Switch", dpt: "1.001",
-      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-1"], sendGroupAddressIds: ["ga-1"], receiveGroupAddressIds: [],
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-1"], sendGroupAddressIds: ["ga-1"], receiveGroupAddressIds: [], channelId: null,
     });
     model.communicationObjects.set("co-2", {
       id: "co-2", deviceInstanceId: "dev-1", number: 2, text: "Switch Status", dpt: "1.001",
-      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-2"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-2"],
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-2"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-2"], channelId: null,
     });
     model.groupAddresses.set("ga-1", { id: "ga-1", address: "1/1/1", name: "Switch", description: null, comment: null, dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-1"] });
     model.groupAddresses.set("ga-2", { id: "ga-2", address: "1/1/2", name: "Switch Status", description: null, comment: null, dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-2"] });
@@ -244,11 +283,11 @@ describe("knxSignalsFromModel — Group Address relationship preservation", () =
     // Both devices RECEIVE the same central/shared "All Off" group address.
     model.communicationObjects.set("co-1", {
       id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Central Off", dpt: "1.001",
-      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-central"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-central"],
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-central"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-central"], channelId: null,
     });
     model.communicationObjects.set("co-2", {
       id: "co-2", deviceInstanceId: "dev-2", number: 1, text: "Central Off", dpt: "1.001",
-      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-central"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-central"],
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-central"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-central"], channelId: null,
     });
     model.groupAddresses.set("ga-central", {
       id: "ga-central", address: "1/1/99", name: "Central Off", description: null, comment: null,

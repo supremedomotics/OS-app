@@ -73,6 +73,16 @@ export interface KnxCommunicationObject {
   sendGroupAddressIds: string[];
   /** GAs this comm object READS/LISTENS to (ETS `<Receive>`) — a feedback/status source. */
   receiveGroupAddressIds: string[];
+  /** § Module/Channel Identity — the real ETS6 `ChannelId` attribute on
+   * `<ComObjectInstanceRef ChannelId="MD-1_M-2_MI-1_CH-1" …/>`, present on module-based
+   * application programs (e.g. a DALI gateway's per-circuit channel blocks, a universal
+   * actuator's parameterized outputs). Confirmed against a real ETS6 DALI-gateway export
+   * with NO bundled application-program catalog at all (0 `<ComObject>` catalog entries)
+   * and no per-instance `Text=` either — in that shape, this is the ONLY structural signal
+   * distinguishing one physical device's independent logical circuits; the free-text
+   * channel heuristic (`extractChannelNumber`) has nothing to parse. Null when the export
+   * doesn't carry this attribute (the common non-module-based case) — never fabricated. */
+  channelId: string | null;
 }
 
 /** A physical device placed on the bus (an ETS DeviceInstance). */

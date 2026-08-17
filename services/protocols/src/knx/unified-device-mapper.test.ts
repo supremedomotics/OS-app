@@ -656,6 +656,31 @@ describe("mapUnifiedDevices — channel synthesis: a channel is not always a dev
     expect(new Set(devices.map((d) => d.raw.groupingKey))).toEqual(new Set(["1.1.3#1", "1.1.3#2"]));
   });
 
+  // § Real-project validation (Showroom DALI gateway) — end-to-end: a shared "All Lights"
+  // broadcast Group Address (a real, coordinating-category DPT — colour) referenced by
+  // EVERY circuit's own comm object must not chain all those genuinely-independent
+  // circuits into one device via `mergeRelatedChannels`'s union-find, even though each
+  // individual circuit's OWN combining GA (channel 1's evidence) looks locally valid.
+  it("§ a broadcast 'All Lights' colour GA shared by every channel of a multi-circuit DALI gateway never merges those channels into one device — each real circuit stays its own logical device", () => {
+    const circuits = [1, 2, 3, 4, 5, 6];
+    const ets = circuits.flatMap((ch) => [
+      { id: `sw-${ch}`, name: "SW", dpt: "1.001", individualAddress: "1.1.2", channel: ch },
+      {
+        id: "all-lights-abs-col", // the SAME broadcast GA id, referenced by every circuit
+        name: "All Lights Abs Col",
+        dpt: "7.600",
+        individualAddress: "1.1.2",
+        channel: ch,
+        links: circuits.map((c) => ({ role: "send" as const, individualAddress: "1.1.2", channel: c })),
+      },
+    ]);
+    const devices = mapUnifiedDevices({ ets });
+    const keys = new Set(devices.map((d) => d.raw.groupingKey));
+    // Every circuit keeps its own channel identity — never chained into one giant device.
+    expect(keys).toEqual(new Set(circuits.map((ch) => `1.1.2#${ch}`)));
+    expect(devices).toHaveLength(circuits.length);
+  });
+
   it("§7: Main / Sheer / combined all classify as ONE curtain's position capability, not three unrelated devices", () => {
     const device = mapUnifiedDevices({
       ets: [
@@ -802,6 +827,134 @@ describe("evaluateChannelGroupingEvidence — the capability-neutral evidence en
     const result = evaluateChannelGroupingEvidence({ dpt: "9.004", name: "Some Future Sensor Combined Reading" }, "1.1.9", new Set([1, 2]));
     expect(result.canMerge).toBe(false);
     expect(result.confidence).toBe("low");
+  });
+
+  // § Real-project validation (Showroom DALI gateway) — a real multi-circuit DALI/module
+  // gateway wires many otherwise-independent lighting circuits to a shared "All Lights"
+  // broadcast Group Address that itself carries a coordinating-category DPT (colour).
+  // That GA spans EVERY channel of the device, not a bounded functional pair/triplet — a
+  // real coordinated sub-function (Main+Sheer, RGB/RGBW) never spans more than 4.
+  it("§ a shared/broadcast Group Address spanning MANY channels of one physical device (e.g. a DALI gateway's 'All Lights' common colour object touching 14 circuits) is rejected — real coordinated relationships never span more than 4 channels", () => {
+    const result = evaluateChannelGroupingEvidence({ dpt: "7.600", name: "All Lights Abs Col" }, "1.1.2", new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]));
+    expect(result.canMerge).toBe(false);
+    expect(result.confidence).toBe("low");
+  });
+
+  // § Real-project validation (Showroom DALI gateway) — the fix for a second, subtler
+  // false positive found AFTER the "spans many channels" guard above: "Passage DL" and
+  // "Passage Cove" are two genuinely independent circuits, each with its own complete
+  // SW/Dimm/Abs Dim/Abs Col GA set under its own ETS GroupRange, sharing a small (2-3
+  // channel) "Abs Col FB" colour-temperature feedback object that itself lives in a
+  // THIRD, room-level "common" GroupRange neither circuit owns. Old code (span + DPT
+  // category alone) wrongly merged them; `channelHomeGroups` — each channel's own
+  // GroupRange, established from its OWN exclusive local signals — is real, generalizable
+  // evidence this GA is a shared broadcast object, not proof of a real fixture.
+  it("rejects a small-span, coordinating-DPT signal when every touched channel already has its OWN distinct GroupRange and the signal's own GroupRange belongs to neither (Passage DL / Passage Cove false positive)", () => {
+    const result = evaluateChannelGroupingEvidence(
+      { dpt: "7.600", name: "Abs Col FB", middleGroup: "Entry & Passage Lights" },
+      "1.1.1",
+      new Set([1, 2]),
+      ["Passage DL", "Passage Cove"],
+    );
+    expect(result.canMerge).toBe(false);
+    expect(result.confidence).toBe("low");
+    expect(result.reason).toContain("Passage DL");
+    expect(result.reason).toContain("Passage Cove");
+  });
+
+  it("still accepts a genuine multi-channel single-fixture coordination when every touched channel shares the SAME home GroupRange (Main+Sheer curtain / RGBW living under one range)", () => {
+    const result = evaluateChannelGroupingEvidence(
+      { dpt: "1.008", name: "Curtain-1-Main+Sheer Up/Down", middleGroup: "Curtain-1" },
+      "1.1.3",
+      new Set([1, 2]),
+      ["Curtain-1", "Curtain-1"],
+    );
+    expect(result.canMerge).toBe(true);
+    expect(result.confidence).toBe("medium");
+  });
+
+  it("falls back to the existing span/DPT logic when home-group evidence is incomplete (not every channel has an established home group yet)", () => {
+    const result = evaluateChannelGroupingEvidence(
+      { dpt: "7.600", name: "Bedroom Combined CCT", middleGroup: "Some Shared Range" },
+      "1.1.6",
+      new Set([1, 2]),
+      ["Bedroom", undefined],
+    );
+    expect(result.canMerge).toBe(true);
+    expect(result.confidence).toBe("medium");
+  });
+});
+
+describe("mapUnifiedDevices — real-project GroupRange evidence end-to-end (§ Passage DL/Cove class of false positive)", () => {
+  it("keeps two sibling circuits separate when they each have their own complete local GA set under their own GroupRange, and only share a small feedback GA living in a third, room-level GroupRange", () => {
+    const devices = mapUnifiedDevices({
+      ets: [
+        // Passage DL — its own complete circuit, own GroupRange.
+        { id: "8/1/0", name: "SW", dpt: "1.001", individualAddress: "1.1.1", channel: 1, middleGroup: "Passage DL", links: [{ role: "send", individualAddress: "1.1.1", channel: 1 }] },
+        { id: "8/1/3", name: "Abs Dim", dpt: "5.001", individualAddress: "1.1.1", channel: 1, middleGroup: "Passage DL", links: [{ role: "send", individualAddress: "1.1.1", channel: 1 }] },
+        { id: "8/1/5", name: "Abs Col", dpt: "7.600", individualAddress: "1.1.1", channel: 1, middleGroup: "Passage DL", links: [{ role: "send", individualAddress: "1.1.1", channel: 1 }] },
+        // Passage Cove — its own complete, independent circuit, own GroupRange.
+        { id: "8/2/0", name: "SW", dpt: "1.001", individualAddress: "1.1.1", channel: 2, middleGroup: "Passage Cove", links: [{ role: "send", individualAddress: "1.1.1", channel: 2 }] },
+        { id: "8/2/3", name: "Abs Dim", dpt: "5.001", individualAddress: "1.1.1", channel: 2, middleGroup: "Passage Cove", links: [{ role: "send", individualAddress: "1.1.1", channel: 2 }] },
+        { id: "8/2/5", name: "Abs Col", dpt: "7.600", individualAddress: "1.1.1", channel: 2, middleGroup: "Passage Cove", links: [{ role: "send", individualAddress: "1.1.1", channel: 2 }] },
+        // Shared colour-temperature feedback object — a room-level "common" GroupRange
+        // neither circuit owns, touching both channels, coordinating-category DPT.
+        {
+          id: "2/0/5",
+          name: "Abs Col FB",
+          dpt: "7.600",
+          individualAddress: "1.1.1",
+          channel: 1,
+          middleGroup: "Entry & Passage Lights",
+          links: [
+            { role: "receive", individualAddress: "1.1.1", channel: 1 },
+            { role: "receive", individualAddress: "1.1.1", channel: 2 },
+          ],
+        },
+      ],
+    });
+    // Two independent logical devices — never one collapsed "Passage" device.
+    expect(devices).toHaveLength(2);
+    const keys = devices.map((d) => d.raw.groupingKey).sort();
+    expect(keys).toEqual(["1.1.1#1", "1.1.1#2"]);
+    // No devices/signals silently dropped: every contributing signal id is still present
+    // exactly once across the two devices — the shared feedback GA attaches to BOTH as
+    // shared/runtime evidence (§ attachSharedGaSignals) rather than disappearing.
+    const allSignalIds = devices.flatMap((d) => d.raw.communicationObjects.map((o) => o.id));
+    expect(new Set(allSignalIds).has("2/0/5")).toBe(true);
+    const idCounts = new Map<string, number>();
+    for (const id of allSignalIds) idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
+    // Local signals appear exactly once each (never duplicated within one device).
+    expect(idCounts.get("8/1/0")).toBe(1);
+    expect(idCounts.get("8/2/0")).toBe(1);
+  });
+
+  it("a genuine multi-channel single-fixture RGBW coordination sharing one GroupRange still merges into one device (no regression from the GroupRange check)", () => {
+    const devices = mapUnifiedDevices({
+      ets: [
+        { id: "9/0/1", name: "Red", dpt: "5.001", individualAddress: "1.1.5", channel: 1, middleGroup: "Lounge RGBW", links: [{ role: "send", individualAddress: "1.1.5", channel: 1 }] },
+        { id: "9/0/2", name: "Green", dpt: "5.001", individualAddress: "1.1.5", channel: 2, middleGroup: "Lounge RGBW", links: [{ role: "send", individualAddress: "1.1.5", channel: 2 }] },
+        { id: "9/0/3", name: "Blue", dpt: "5.001", individualAddress: "1.1.5", channel: 3, middleGroup: "Lounge RGBW", links: [{ role: "send", individualAddress: "1.1.5", channel: 3 }] },
+        { id: "9/0/4", name: "White", dpt: "5.001", individualAddress: "1.1.5", channel: 4, middleGroup: "Lounge RGBW", links: [{ role: "send", individualAddress: "1.1.5", channel: 4 }] },
+        {
+          id: "9/0/9",
+          name: "Lounge RGBW Combined",
+          dpt: "251.600",
+          individualAddress: "1.1.5",
+          channel: 1,
+          middleGroup: "Lounge RGBW",
+          links: [
+            { role: "send", individualAddress: "1.1.5", channel: 1 },
+            { role: "send", individualAddress: "1.1.5", channel: 2 },
+            { role: "send", individualAddress: "1.1.5", channel: 3 },
+            { role: "send", individualAddress: "1.1.5", channel: 4 },
+          ],
+        },
+      ],
+    });
+    expect(devices).toHaveLength(1);
+    expect(devices[0]!.raw.physicalDevice?.channels).toEqual([1, 2, 3, 4]);
+    expect(devices[0]!.raw.groupingEvidence.length).toBeGreaterThan(0);
   });
 });
 

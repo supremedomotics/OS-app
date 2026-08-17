@@ -192,6 +192,33 @@ describe("ETS project parser", () => {
     expect(model.groupAddresses.get("GA-2")?.comObjectIds).toEqual([obj.id]);
   });
 
+  it("§ Module/Channel Identity — a real ETS6 module-based application program's <ComObjectInstanceRef ChannelId=\"MD-1_M-2_MI-3_CH-1\"/> is parsed onto the communication object verbatim (confirmed regression: a real Supreme Domotics Showroom DALI-gateway export)", () => {
+    const xml = `<KNX>
+      <GroupAddresses>
+        <GroupRange Name="Showroom Light-1">
+          <GroupRange Name="Living DL">
+            <GroupAddress Id="GA-1" Address="1/1/1" Name="SW" DatapointType="DPST-1-1" />
+          </GroupRange>
+        </GroupRange>
+      </GroupAddresses>
+      <Topology>
+        <Area Address="1">
+          <Line Address="1">
+            <DeviceInstance Id="DI-2" Name="DALI Gateway" Address="2" ProductRefId="M-01_H-1_P-SCN.2DDA642">
+              <ComObjectInstanceRefs>
+                <ComObjectInstanceRef RefId="MD-1_M-2_MI-3_O-2-0_R-11" ChannelId="MD-1_M-2_MI-3_CH-1" Links="GA-1" />
+              </ComObjectInstanceRefs>
+            </DeviceInstance>
+          </Line>
+        </Area>
+      </Topology>
+    </KNX>`;
+    const model = parseEtsProject(xmlFile(xml));
+    const device = model.deviceInstances.get("DI-2")!;
+    const obj = model.communicationObjects.get(device.comObjectIds[0]!)!;
+    expect(obj.channelId).toBe("MD-1_M-2_MI-3_CH-1");
+  });
+
   it("falls back to the legacy <Function> grouping when there's no Topology", () => {
     const xml = `<KNX>
       <GroupAddresses>

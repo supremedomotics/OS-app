@@ -296,3 +296,28 @@ describe("SupremeClient — proactive refresh ahead of token expiry", () => {
     expect(refreshCalls).toBe(1);
   });
 });
+
+describe("SupremeClient — request timeout (§ resilience)", () => {
+  it("converts a hung/aborted request into a backend_unavailable SupremeError instead of hanging forever", async () => {
+    const fetchImpl = (async () => {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 900), refreshToken: "refresh1" });
+    const client = new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    await expect(client.home()).rejects.toMatchObject({ name: "SupremeError", code: "backend_unavailable" });
+  });
+
+  it("still surfaces an ordinary network failure as backend_unavailable, not a fake unauthorized", async () => {
+    const fetchImpl = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 900), refreshToken: "refresh1" });
+    const client = new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    await expect(client.home()).rejects.toMatchObject({ name: "SupremeError", code: "backend_unavailable" });
+  });
+});

@@ -337,6 +337,7 @@ function parseTopology(
         groupAddressIds: [],
         sendGroupAddressIds: [],
         receiveGroupAddressIds: [],
+        channelId: attr(a, "ChannelId"),
       };
       // § Real ETS5 export compatibility — some exports link group addresses via a flat
       // `Links="GA-x GA-y"` attribute directly on `<ComObjectInstanceRef>` rather than

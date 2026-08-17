@@ -55,6 +55,17 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   }
 }
 
+// Carries the real HTTP status so callers (e.g. KNX job polling) can tell a definitive
+// "this resource genuinely doesn't exist" (404) apart from a transient failure (network
+// blip, 5xx) that shouldn't be treated the same way — see knx-discovery-workspace.tsx's
+// poll() for why this distinction matters.
+export class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 export interface SetupStatus {
   setupRequired: boolean;
   systemName: string;
@@ -283,7 +294,7 @@ export interface KnxImportResult {
   created: { name: string; room: string | null; capabilities: string[] }[];
 }
 async function postKnxImport(body: Record<string, string>): Promise<KnxImportResult> {
-  const res = await authed("/v1/commissioning/import/knx", { method: "POST", body: JSON.stringify(body) });
+  const res = await authed("/v1/commissioning/import/knx", { method: "POST", body: JSON.stringify(body), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
   if (!res.ok) throw new Error(await errorMessage(res, "Import failed"));
   return (await res.json()) as KnxImportResult;
 }
@@ -535,7 +546,7 @@ export interface KnxDiscoverySummary {
  * -> Room Assignment -> Duplicate Detection -> Binding Engine) — the same backend used
  * by Driver Settings, reused as-is; this is only the client entry point for it. */
 export async function knxDiscoveryQueue(ets?: { content?: string; knxproj?: string; password?: string }): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
-  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify(ets ?? {}) });
+  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary };
 }
@@ -557,13 +568,13 @@ export interface KnxImportJob {
   result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
 }
 export async function knxDiscoveryQueueJobStart(ets?: { content?: string; knxproj?: string; password?: string }): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
-  const res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}) });
+  const res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
 }
 export async function knxDiscoveryQueueJobStatus(jobId: string): Promise<KnxImportJob> {
   const res = await authed(`/v1/commissioning/knx/queue/job/${encodeURIComponent(jobId)}`, { method: "GET" });
-  if (!res.ok) throw new Error(await errorMessage(res, "Could not check import job status."));
+  if (!res.ok) throw new HttpError(res.status, await errorMessage(res, "Could not check import job status."));
   return (await res.json()) as KnxImportJob;
 }
 export async function knxDiscoveryQueueJobCancel(jobId: string): Promise<{ jobId: string; status: "cancelled" }> {
@@ -633,15 +644,35 @@ export async function devIssueLicense(sku: string): Promise<unknown> {
 }
 
 // ── Automations (authenticated) ─────────────────────────────────────────────────
-async function authed(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      authorization: `Bearer ${client.accessToken ?? ""}`,
-      ...(init?.body ? { "content-type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+// Default per-request budget — same reasoning as SupremeClient's own (§ resilience):
+// a hung backend call must never leave a page stuck on "Loading…" forever with no
+// error. ETS import routes carry a large base64 body over a real network upload, so
+// they get a longer budget rather than being cut off mid-transfer on a slow LAN.
+const DEFAULT_TIMEOUT_MS = 20_000;
+const ETS_IMPORT_TIMEOUT_MS = 90_000;
+
+async function authed(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init ?? {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${baseUrl}${path}`, {
+      ...rest,
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${client.accessToken ?? ""}`,
+        ...(rest.body ? { "content-type": "application/json" } : {}),
+        ...rest.headers,
+      },
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new HttpError(0, `Request timed out after ${timeoutMs / 1000}s. Check your connection and try again.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

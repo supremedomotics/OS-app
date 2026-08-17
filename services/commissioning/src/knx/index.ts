@@ -81,6 +81,40 @@ function extractChannelNumber(text: string): number | null {
   return bracket ? Number(bracket[1]) : null;
 }
 
+/** § Module/Channel Identity — real ETS6 `ChannelId` (e.g. "MD-1_M-2_MI-1_CH-1"), the
+ * structural per-circuit identity a module-based application program (DALI gateway,
+ * parameterized universal actuator) carries — confirmed on a real ETS6 export with no
+ * bundled application-program catalog and no per-instance comm-object `Text=` at all,
+ * where `extractChannelNumber` (text-only) has nothing to work with and every one of the
+ * device's genuinely independent lighting circuits collapsed onto the same "no channel
+ * token" bucket. `MI-N` ("Module Instance N") is the real per-circuit counter; `MD-N`
+ * ("Module Definition/bank N", e.g. two independent DALI lines off one gateway) offsets it
+ * the same way the existing bank-letter convention above does, so instances under
+ * different module banks never collide. Returns null when the id carries no MI token —
+ * never fabricated. */
+function channelFromChannelId(channelId: string | null): number | null {
+  if (!channelId) return null;
+  // Underscore is a `\w` character, so a plain `\bMI-` boundary never matches after the
+  // preceding "..._MI-1..." underscore — match on the `_`/start delimiter explicitly.
+  const mi = /(?:^|_)MI-(\d+)(?:_|$)/.exec(channelId);
+  if (!mi) return null;
+  // § Real-project validation — `MD-N` ("Module Definition bank") ALONE is not a unique
+  // parent for `MI-N`: a real multi-function actuator (one physical device driving a
+  // curtain AND a screen AND other unrelated outputs through several DIFFERENT catalog
+  // module TYPES) restarts its own `MI-1` numbering independently PER module type
+  // (`M-N`), so "MD-2_M-9_MI-1" (a curtain's own channel 1) and "MD-2_M-12_MI-1" (an
+  // unrelated screen's own channel 1) share the same MD+MI pair and, without also
+  // weighting in `M-N`, collapsed onto the identical synthesized channel number —
+  // confirmed on a real project where this false collision fused a curtain, a projector
+  // screen, a door lock, and several unrelated lighting circuits into one giant "device".
+  // `M-N` is the real module-TYPE identity; both `MD-N` and `M-N` combine with `MI-N`
+  // into one deterministic, real-evidence-only channel number — never fabricated beyond
+  // what these three real ETS6 identifiers already say.
+  const md = /(?:^|_)MD-(\d+)(?:_|$)/.exec(channelId);
+  const module = /(?:^|_)M-(\d+)(?:_|$)/.exec(channelId);
+  return (md ? Number(md[1]) : 0) * 1_000_000 + (module ? Number(module[1]) : 0) * 1_000 + Number(mi[1]);
+}
+
 /** § Critical Group Address Requirement (Production KNX Driver 2.0) — one comm-object's
  * relationship to a group address, preserved rather than discarded. A GA can legally be
  * referenced by several comm objects (on the same device or different devices) in a real
@@ -184,7 +218,10 @@ export function knxSignalsFromModel(model: KnxProjectModel): KnxEtsSignal[] {
         comObjectId: co.id,
         comObjectText: co.text,
         role,
-        channel: extractChannelNumber(co.text),
+        // § Module/Channel Identity — the structural ChannelId signal (when the export
+        // carries it) is stronger evidence than a free-text heuristic; text extraction is
+        // the fallback for exports that never used ETS6's module/channel schema at all.
+        channel: channelFromChannelId(co.channelId) ?? extractChannelNumber(co.text),
       };
       const list = linksByGaId.get(gaId);
       if (list) list.push(link); else linksByGaId.set(gaId, [link]);

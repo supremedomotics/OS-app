@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   approveKnxDevice,
   client,
+  HttpError,
   knxDiscoveryQueue,
   knxDiscoveryQueueJobCancel,
   knxDiscoveryQueueJobStart,
@@ -103,6 +104,7 @@ export function KnxDiscoveryWorkspace() {
   // backend as-is, which parses (never commissions) and merges them into the same queue.
   const [etsText, setEtsText] = useState("");
   const [etsProject, setEtsProject] = useState<string | null>(null);
+  const [etsFileName, setEtsFileName] = useState<string | null>(null);
   const [etsPassword, setEtsPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
 
@@ -128,10 +130,20 @@ export function KnxDiscoveryWorkspace() {
     if (!jobId) return;
     const activeJobId = jobId;
     let cancelled = false;
+    // A transient poll failure (a network blip, a tab briefly backgrounded, or — since
+    // KNX_JOB_KEY is one shared localStorage slot across every tab of this browser — a
+    // sibling tab's own reload racing this one) must NOT be treated the same as "the job
+    // genuinely no longer exists." Only a real 404 from the job-status endpoint means
+    // that; anything else gets a bounded number of retries before giving up, so switching
+    // tabs/briefly losing network doesn't make a perfectly-healthy background import look
+    // like it "vanished."
+    let consecutiveFailures = 0;
+    const MAX_TRANSIENT_FAILURES = 5;
     async function poll() {
       try {
         const job = await knxDiscoveryQueueJobStatus(activeJobId);
         if (cancelled) return;
+        consecutiveFailures = 0;
         setJobStatus(job.status);
         if (job.status === "completed" && job.result) {
           finishScan(job.result);
@@ -147,11 +159,20 @@ export function KnxDiscoveryWorkspace() {
         }
       } catch (e) {
         if (cancelled) return;
-        // The job is gone (e.g. gateway restarted since — jobs are in-memory only,
-        // § job durability) — surface that honestly instead of polling forever.
-        setError(e instanceof Error ? e.message : "Lost track of the import job.");
-        setPhase("error");
-        clearJob();
+        const definitelyGone = e instanceof HttpError && e.status === 404;
+        consecutiveFailures += 1;
+        if (definitelyGone || consecutiveFailures >= MAX_TRANSIENT_FAILURES) {
+          // Either the gateway confirmed this job id is unknown (genuinely gone — jobs
+          // are in-memory only, § job durability), or enough consecutive attempts failed
+          // that this is no longer plausibly transient — surface that honestly.
+          setError(e instanceof Error ? e.message : "Lost track of the import job.");
+          setPhase("error");
+          clearJob();
+        } else {
+          // Transient — keep the job tracked and retry rather than wiping the shared
+          // localStorage key out from under every tab watching this import.
+          pollRef.current = setTimeout(() => void poll(), JOB_POLL_MS);
+        }
       }
     }
     void poll();
@@ -186,6 +207,7 @@ export function KnxDiscoveryWorkspace() {
   async function onFile(file: File) {
     setNeedsPassword(false);
     setEtsPassword("");
+    setEtsFileName(file.name);
     if (file.name.toLowerCase().endsWith(".knxproj")) {
       const buf = new Uint8Array(await file.arrayBuffer());
       let bin = "";
@@ -196,6 +218,13 @@ export function KnxDiscoveryWorkspace() {
       setEtsText(await file.text());
       setEtsProject(null);
     }
+  }
+
+  function removeEtsFile() {
+    setEtsProject(null);
+    setEtsFileName(null);
+    setEtsPassword("");
+    setNeedsPassword(false);
   }
 
   // § Pass 11.2/11.3 — starts the NON-blocking job route and returns immediately; the
@@ -321,7 +350,7 @@ export function KnxDiscoveryWorkspace() {
         <span className="lbl">ETS project (optional)</span>
         <input
           type="file"
-          accept=".knxproj,.csv,.xml,text/xml,text/csv"
+          accept=".knxproj,.esf,.csv,.xml,text/xml,text/csv"
           disabled={phase === "scanning"}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
         />
@@ -330,6 +359,20 @@ export function KnxDiscoveryWorkspace() {
           through this same review workspace — approve them exactly like a live-discovered device.
         </span>
       </label>
+      {etsFileName && (
+        <div className="drv-field" style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span
+            className="muted"
+            title={etsFileName}
+            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+          >
+            Selected: {etsFileName}
+          </span>
+          <button type="button" className="danger" disabled={phase === "scanning"} onClick={removeEtsFile} style={{ flexShrink: 0 }}>
+            Remove
+          </button>
+        </div>
+      )}
       <textarea
         value={etsText}
         onChange={(e) => { setEtsText(e.target.value); setEtsProject(null); }}
@@ -337,6 +380,13 @@ export function KnxDiscoveryWorkspace() {
         rows={4}
         style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
       />
+      {etsText && (
+        <div className="drv-field" style={{ marginTop: 4 }}>
+          <button type="button" className="danger" disabled={phase === "scanning"} onClick={() => setEtsText("")}>
+            Clear pasted group addresses
+          </button>
+        </div>
+      )}
       {needsPassword && etsProject && (
         <label className="drv-field" style={{ marginTop: 8 }}>
           <span className="lbl">Project password</span>

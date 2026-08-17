@@ -1,4 +1,4 @@
-import { classifyDevice, groupByCircuitName, type CapabilityKind, type DeviceClassification, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
+import { classifyDevice, DEFAULT_OPERATION_WORDS, groupByCircuitName, type CapabilityKind, type DeviceClassification, type DeviceCluster, type GroupingSignal } from "@supreme/domain-model";
 import type { DiscoveredDevice } from "@supreme/integration-layer";
 import {
   classifyEtsSignal,
@@ -364,6 +364,19 @@ const COORDINATING_DPT_CATEGORIES: ReadonlySet<string> = new Set([
   "color_temperature_kelvin",
 ]);
 
+/** § Real-project validation (Showroom DALI gateway) — a genuinely coordinated multi-
+ * object sub-function spans a SMALL, bounded set of channels: a Main+Sheer curtain pair
+ * (2), an RGB/RGBW color group (3-4). A real ETS DALI/multi-circuit gateway also wires
+ * many otherwise-independent lighting circuits to a handful of shared/common or broadcast
+ * Group Addresses (e.g. a "common color" or "common relative dim" object every circuit's
+ * module listens to) — those legitimately carry a COORDINATING_DPT_CATEGORIES DPT (color,
+ * movement) too, but span the entire gateway's circuit count (confirmed on a real project:
+ * one such shared GA spanned 14 channels of one physical DALI gateway device), not a
+ * bounded functional group. Confirmed against every real fixture this architecture is
+ * validated against (Nirma, Juhu, the curtain/RGB/RGBW unit tests below) that no genuine
+ * coordinated relationship ever spans more than 4 channels — RGBW is the widest real case. */
+const MAX_COORDINATING_CHANNEL_SPAN = 4;
+
 /** § Confidence tiers (fifth pass, real three-tier model):
  *   - LOW: fewer than 2 channels span this GA, or the combining signal's DPT is not one
  *     of `COORDINATING_DPT_CATEGORIES` — a plain "operate these together" toggle,
@@ -386,9 +399,17 @@ const COORDINATING_DPT_CATEGORIES: ReadonlySet<string> = new Set([
  * membership") — requires the signal's own DPT to NOT be a known convenience-macro
  * category. Exported for direct unit testing (§ "test new evidence engine"). */
 export function evaluateChannelGroupingEvidence(
-  signal: { dpt?: string | null; name: string },
+  signal: { dpt?: string | null; name: string; middleGroup?: string | null },
   address: string,
   channels: Set<number>,
+  /** § GroupRange-scoped identity (real-project validation, Showroom DALI gateway —
+   * Passage DL/Cove, Living DL/Projector Cove/Stretch Ceiling, Sample Led Strip/Track
+   * Lights) — one entry per channel in `channels`, ONLY when every touched channel
+   * already has its OWN independently-established "home" GroupRange (the middleGroup
+   * shared by GAs that exclusively belong to that one channel — see
+   * `mergeRelatedChannels`'s `channelHomeGroup`). Undefined/partial when that isn't
+   * known for every channel — the caller never guesses. */
+  channelHomeGroups?: readonly (string | undefined)[],
 ): ChannelGroupingEvidence {
   const evidence: string[] = [];
   if (channels.size < 2) {
@@ -396,6 +417,50 @@ export function evaluateChannelGroupingEvidence(
   }
   const sortedChannels = [...channels].sort((a, b) => a - b);
   evidence.push(`shared Group Address referenced by communication objects on channels ${sortedChannels.join(", ")} of physical device ${address}`);
+
+  // § GroupRange-scoped identity (real-project validation) — a channel's own local,
+  // exclusive GAs are authoritative for its identity. Real confirmed evidence: Passage
+  // Cove/Living Projector Cove/Living Stretch Ceiling/Sample Track Lights each already
+  // have their OWN complete SW/Dimm/Abs Dim/Abs Col set under their OWN GroupRange
+  // ("Passage Cove", "Living Projector Cove", …) — distinct from the sibling range they
+  // were wrongly merging into ("Passage DL", "Living DL", …). The DALI gateway's "Abs
+  // Col"/"Abs Col FB" feedback objects are ALSO wired to a small (2-3 channel) shared GA
+  // living in a THIRD, room-level "common" GroupRange ("Entry & Passage Lights", "Living
+  // Lights") that belongs to none of the sibling circuits — structurally identical to a
+  // genuine RGBW color-temperature coordination (same DPT category, span within
+  // `MAX_COORDINATING_CHANNEL_SPAN`) but for a totally different reason: it's a
+  // convenience broadcast object, not one physical fixture's own sub-function. A GA whose
+  // own GroupRange is NOT any touched channel's home range — while EVERY touched channel
+  // already has its own DISTINCT home range — is exactly that signature: it must never
+  // merge two clusters that already have independent, complete local identity. (A genuine
+  // multi-channel single-fixture coordination, e.g. Main+Sheer curtain or a real RGBW
+  // fixture, has both channels sharing the SAME home range — `distinctHomeGroups.size ===
+  // 1` — so this check never fires for it.) Checked BEFORE span/DPT below: this is
+  // stronger, more specific evidence than either.
+  if (channelHomeGroups && channelHomeGroups.length === channels.size) {
+    const definiteHomeGroups = channelHomeGroups.filter((g): g is string => !!g);
+    if (definiteHomeGroups.length === channels.size) {
+      const distinctHomeGroups = new Set(definiteHomeGroups);
+      const signalGroup = signal.middleGroup?.trim();
+      if (distinctHomeGroups.size > 1 && signalGroup && !distinctHomeGroups.has(signalGroup)) {
+        return {
+          canMerge: false,
+          confidence: "low",
+          evidence,
+          reason: `each touched channel already has its own distinct, independently-established GroupRange (${[...distinctHomeGroups].sort().join(", ")}), and this combining signal's own GroupRange ("${signalGroup}") is a different, shared/common range that belongs to none of them — the signature of a room-level or gateway-wide broadcast/feedback object reused across sibling circuits, not a genuine single-fixture coordinated sub-function`,
+        };
+      }
+    }
+  }
+
+  if (channels.size > MAX_COORDINATING_CHANNEL_SPAN) {
+    return {
+      canMerge: false,
+      confidence: "low",
+      evidence,
+      reason: `signal spans ${channels.size} channels — wider than any genuine coordinated sub-function (Main+Sheer, RGB/RGBW) ever legitimately does; this is the signature of a shared/common or broadcast Group Address on a multi-circuit device (e.g. a DALI gateway's common color/dim object), not real evidence those channels form one circuit`,
+    };
+  }
 
   const category = dptStructuralCategory(signal.dpt);
   if (!COORDINATING_DPT_CATEGORIES.has(category)) {
@@ -444,6 +509,43 @@ function mergeRelatedChannels(
   // caused the merge).
   const acceptedEvidence: { channelKeys: string[]; evidence: ChannelGroupingEvidence }[] = [];
 
+  // § GroupRange-scoped identity (real-project validation) — each physical channel's own
+  // "home" GroupRange, established ONLY from signals that EXCLUSIVELY touch one channel
+  // of one device (never a signal already shared across channels — that would beg the
+  // question). Majority middleGroup wins when a channel's own local signals disagree
+  // (rare; mirrors the same majority-tally pattern `deriveDeviceNameEvidence` already uses
+  // for `middleGroup`). Feeds `evaluateChannelGroupingEvidence`'s GroupRange check below —
+  // see that function's doc comment for the real-project evidence this exists to catch
+  // (Passage DL/Cove, Living DL/Projector Cove/Stretch Ceiling, Sample Led Strip/Track
+  // Lights all wrongly merging via a shared "Abs Col FB" object living in a third,
+  // room-level GroupRange neither sibling circuit owns).
+  const channelHomeGroup = new Map<string, string>();
+  {
+    const tally = new Map<string, Map<string, number>>();
+    for (const s of etsSignals) {
+      const mg = s.middleGroup?.trim();
+      if (!mg || !s.links) continue;
+      const byDevice = new Map<string, Set<number>>();
+      for (const l of s.links) {
+        if (!l.individualAddress || l.channel === null || l.channel === undefined) continue;
+        const set = byDevice.get(l.individualAddress);
+        if (set) set.add(l.channel);
+        else byDevice.set(l.individualAddress, new Set([l.channel]));
+      }
+      for (const [address, channels] of byDevice) {
+        if (channels.size !== 1) continue; // only an exclusive, single-channel signal establishes a "home"
+        const channelKey = `${address}#${[...channels][0]}`;
+        const counts = tally.get(channelKey) ?? new Map<string, number>();
+        counts.set(mg, (counts.get(mg) ?? 0) + 1);
+        tally.set(channelKey, counts);
+      }
+    }
+    for (const [channelKey, counts] of tally) {
+      const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      if (top) channelHomeGroup.set(channelKey, top[0]);
+    }
+  }
+
   for (const s of etsSignals) {
     const links = s.links;
     if (!links || links.length < 2) continue;
@@ -460,7 +562,8 @@ function mergeRelatedChannels(
       else channelsByDevice.set(l.individualAddress, new Set([l.channel]));
     }
     for (const [address, channels] of channelsByDevice) {
-      const result = evaluateChannelGroupingEvidence(s, address, channels);
+      const homeGroups = [...channels].map((c) => channelHomeGroup.get(`${address}#${c}`));
+      const result = evaluateChannelGroupingEvidence(s, address, channels, homeGroups);
       if (!result.canMerge) continue;
       const channelKeys = [...channels].map((c) => `${address}#${c}`).filter((k) => parent.has(k));
       // § Bug found via real-project validation — fewer than 2 SURVIVING channel keys
@@ -492,7 +595,24 @@ function mergeRelatedChannels(
     }
   }
 
-  return [...groups.values()].map((g) => {
+  return [...groups.values()].flatMap((g) => {
+    // § Real-project validation (Showroom DALI gateway/universal actuator) — pairwise
+    // evidence is checked per-signal in `evaluateChannelGroupingEvidence` (never merges a
+    // single signal spanning >4 channels), but a CHAIN of otherwise-valid small merges
+    // (GA-A links channels 1+2, GA-B links 2+3, GA-C links 3+4, …) can still transitively
+    // union many genuinely-independent channels of one large multi-function physical
+    // device (a room controller wired to a curtain, a screen, a door lock, and several
+    // lighting circuits) into one giant final group — confirmed on a real project, where
+    // several shared/broadcast "All Lights"/generic command GAs chained an unrelated
+    // curtain, screen, lock, and lighting circuits onto one device via a sequence of
+    // individually-plausible pairwise unions. No genuine coordinated circuit (Main+Sheer,
+    // RGB/RGBW) ever spans more than `MAX_COORDINATING_CHANNEL_SPAN` channels even after
+    // full transitive closure — a final group wider than that is chaining, not one real
+    // circuit, so it's undone here: each original channel cluster stands on its own again,
+    // with no fabricated grouping evidence attached.
+    if (g.channels.size > MAX_COORDINATING_CHANNEL_SPAN) {
+      return clusters.filter((c) => g.keys.has(c.key));
+    }
     const sortedChannels = [...g.channels].sort((a, b) => a - b);
     const key = sortedChannels.length > 1 ? `${g.address}#${sortedChannels.join("+")}` : `${g.address}#${sortedChannels[0]}`;
     const contributing = acceptedEvidence.filter((e) => e.channelKeys.every((k) => g.keys.has(k)));
@@ -502,7 +622,7 @@ function mergeRelatedChannels(
     const groupingEvidence = contributing.map((e) =>
       contributing.length >= 2 ? { ...e.evidence, confidence: "high" as const } : e.evidence,
     );
-    return { key, signals: g.signals, ...(groupingEvidence.length > 0 ? { groupingEvidence } : {}) };
+    return [{ key, signals: g.signals, ...(groupingEvidence.length > 0 ? { groupingEvidence } : {}) }];
   });
 }
 
@@ -591,7 +711,29 @@ function attachSharedGaSignals(
     if (distinctAddresses.size < 2) continue;
 
     for (const address of distinctAddresses) {
+      // § Real-project validation (Showroom DALI gateway/universal actuator) — a big
+      // multi-function physical device (a "logic"/room controller with several
+      // genuinely independent circuits, each its own module/channel) has MULTIPLE
+      // clusters sharing this same address prefix. Fanning a shared GA into EVERY one
+      // of them — the previous behavior — polluted every unrelated circuit of that
+      // device with every other circuit's shared/central signals (confirmed on a real
+      // project: a curtain, a projector screen, a door lock, and several lighting
+      // circuits on one physical device all absorbed each other's "Entry Door Light"/
+      // "All Lights"/etc. central signals just for sharing a physical address). Only
+      // fan into the cluster(s) whose OWN channel matches what THIS address's link(s)
+      // actually report — real per-relationship channel evidence, already captured by
+      // `KnxGroupAddressLink.channel`. Falls back to the old broad by-address fan-out
+      // only when this address's own link carries no channel information at all (a
+      // flat export with no module/channel data — nothing more specific to match on,
+      // same behavior as before this fix for that case).
+      const channelsForAddress = new Set(
+        links.filter((l) => l.individualAddress === address).map((l) => l.channel).filter((c): c is number => c !== null && c !== undefined),
+      );
       for (const cluster of byAddressPrefix.get(address) ?? []) {
+        if (channelsForAddress.size > 0) {
+          const clusterChannels = cluster.key.split("#")[1]?.split("+").map(Number) ?? [];
+          if (!clusterChannels.some((ch) => channelsForAddress.has(ch))) continue;
+        }
         if (!cluster.signals.some((sig) => sig.id === s.id)) {
           cluster.signals.push({ id: s.id, name: s.name });
         }
@@ -649,7 +791,13 @@ export function deriveDeviceNameEvidence(
     return [{ source: "physical_identity", value: physicalKey, confidence: "fallback", reason: "no ETS signal names available — only bare physical identity (individual address + channel)" }];
   }
 
-  const stripped = groupByCircuitName(etsSignals.map((s, i) => ({ id: String(i), name: s.name })));
+  // § Real-project validation (Showroom DALI gateway) — must strip the SAME KNX operation
+  // words `nameCluster` already does ("abs"/"dimm"/"rel"/"relative"/"col"/…). Omitting
+  // `extraOperationWords` here let "Abs Dim"/"Abs Col"/"Relative Color" survive stripping
+  // as if "Abs"/"Relative" were real circuit identity, when they're just KNX-standard
+  // operation-word fragments — the generic domain-model stop-word list has no KNX
+  // vocabulary of its own to catch them.
+  const stripped = groupByCircuitName(etsSignals.map((s, i) => ({ id: String(i), name: s.name })), { extraOperationWords: KNX_EXTRA_OPERATION_WORDS });
   // § Naming Determinism (Pass 10.2). Equal-`signals.length` candidates used to fall through
   // to Array.prototype.sort's stability guarantee, silently picking whichever candidate
   // happened to appear first in the (uncanonicalized) input ETS signal order. Add an
@@ -658,16 +806,28 @@ export function deriveDeviceNameEvidence(
   // evidence-count difference still wins exactly as before.
   const best = [...stripped].sort((a, b) => b.signals.length - a.signals.length || a.key.localeCompare(b.key))[0]!;
   const strippedSomething = best.key.length > 0 && best.signals.some((s) => s.name.toLowerCase().trim() !== best.key);
+  // § Real-project validation (Showroom DALI gateway) — `groupByCircuitName` always keeps
+  // AT LEAST one token so a bare "Switch" doesn't collapse to an empty key (see its own
+  // doc comment) — but when a signal's name is composed ENTIRELY of operation/modifier
+  // words ("Abs Dim", "Abs Col FB"), that one surviving token ("abs") is itself just
+  // another operation-word fragment, not real circuit identity — confirmed on a real
+  // project where every one of a circuit's own ETS signal names is a pure operation-word
+  // combination (SW / Dimm / Abs Dim / Abs Col FB / Relative Color, …), so this tier
+  // would otherwise "successfully" converge 30+ signals on the meaningless stem "Abs".
+  // Never trusted as HIGH/MEDIUM evidence in that case — falls through to the
+  // structurally stronger `middle_group` tier below instead.
+  const knownOperationWords = new Set([...DEFAULT_OPERATION_WORDS, ...KNX_EXTRA_OPERATION_WORDS].map((w) => w.toLowerCase()));
+  const survivorIsOperationWordOnly = best.key.split(/\s+/).every((t) => knownOperationWords.has(t));
 
   const evidence: DeviceNameEvidence[] = [];
-  if (strippedSomething && best.signals.length >= 2) {
+  if (strippedSomething && !survivorIsOperationWordOnly && best.signals.length >= 2) {
     evidence.push({
       source: "circuit_name",
       value: titleCase(best.key),
       confidence: "high",
       reason: `${best.signals.length} ETS signal names converge on the same circuit identity after stripping their trailing operation word(s)`,
     });
-  } else if (strippedSomething) {
+  } else if (strippedSomething && !survivorIsOperationWordOnly) {
     evidence.push({
       source: "circuit_name",
       value: titleCase(best.key),

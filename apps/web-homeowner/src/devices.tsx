@@ -100,25 +100,35 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkRoom, setBulkRoom] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const fav = useFavorites();
   const { refreshToken } = useOpenDevice();
 
   const toggleSelect = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  // Promise.allSettled, not Promise.all (§ resilience): a single slow/failed endpoint must
+  // never hold the WHOLE page in "Loading…" forever — each source applies its own result
+  // independently, so devices can render even if, say, scene-usage counts fail to load.
+  // Only `devices()` failing blocks the device list itself (there's nothing to show without
+  // it); every other source degrades gracefully to its prior/empty value.
   async function load() {
-    const [devs, home, reg, scenes] = await Promise.all([
+    setLoadError(null);
+    const [devsR, homeR, regR, scenesR] = await Promise.allSettled([
       client.devices(), client.home(), fetchDriverRegistry(), client.scenes(),
     ]);
-    setDevices(devs.devices);
-    setRooms(home.rooms.map((r) => ({ id: r.id, name: r.name })));
-    setRegistry(reg);
-    // Real scene-usage count per device: how many scenes drive it (§ Device Manager scene count).
-    const use: Record<string, number> = {};
-    for (const sc of scenes.scenes) {
-      const ids = new Set((sc.steps ?? []).map((st) => st.deviceId));
-      for (const id of ids) use[id] = (use[id] ?? 0) + 1;
+    if (devsR.status === "fulfilled") setDevices(devsR.value.devices);
+    else setLoadError(friendlyError(devsR.reason, "Couldn't load your devices. Please try again."));
+    if (homeR.status === "fulfilled") setRooms(homeR.value.rooms.map((r) => ({ id: r.id, name: r.name })));
+    if (regR.status === "fulfilled") setRegistry(regR.value);
+    if (scenesR.status === "fulfilled") {
+      // Real scene-usage count per device: how many scenes drive it (§ Device Manager scene count).
+      const use: Record<string, number> = {};
+      for (const sc of scenesR.value.scenes) {
+        const ids = new Set((sc.steps ?? []).map((st) => st.deviceId));
+        for (const id of ids) use[id] = (use[id] ?? 0) + 1;
+      }
+      setSceneUse(use);
     }
-    setSceneUse(use);
   }
   useEffect(() => { void load(); }, [refreshToken]);
 
@@ -156,12 +166,18 @@ export function DeviceManager({ onNavigate, devMode = false }: { onNavigate?: (t
       <div className="page-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <h1 className="title">Devices</h1>
-          <p className="sub">{devices ? `${filtered.length} devices · ${onlineCount} online` : "Loading…"}</p>
+          <p className="sub">{devices ? `${filtered.length} devices · ${onlineCount} online` : loadError ? "Couldn't load devices." : "Loading…"}</p>
         </div>
         {(devices?.length ?? 0) > 0 && (
           <Button onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}>{selectMode ? "Done" : "Select"}</Button>
         )}
       </div>
+      {loadError && (
+        <div className="drv-field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <p className="err" style={{ margin: 0 }}>{loadError}</p>
+          <Button onClick={() => void load()}>Retry</Button>
+        </div>
+      )}
       <PendingApproval rooms={rooms} onChanged={load} />
 
       {selectMode && (
