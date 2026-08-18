@@ -67,6 +67,40 @@ export interface ProviderDiagnostics {
    * connectionless CoAP). Optional/nullable so no existing provider's diagnostics()
    * literal needs to change. */
   connectionState?: import("./connection-manager.js").ConnectionState | null;
+  /** § PASS 19 diagnostic (KNX feedback pipeline investigation) — a real telegram
+   * arrived on the bus (destination GA + payload both decoded successfully) but no
+   * `subscribe()`'d handler was registered for that exact destination address string,
+   * so it was silently dropped before ever reaching the driver/binding layer. A
+   * nonzero, growing count here — while `packetsReceived` also grows — is the direct,
+   * unambiguous signature of a GA-string-format mismatch between what the binding
+   * engine stored (from ETS parsing) and what this provider's underlying KNX client
+   * library reports at runtime (e.g. differing zero-padding, casing, or 2-level vs
+   * 3-level group address notation) — NOT a bus/transport/actuator problem, which ETS's
+   * own Group Monitor has already ruled out. Optional/nullable so no other provider's
+   * `diagnostics()` literal needs to change (only `KnxUltimateProvider` populates it). */
+  unmatchedFeedbackTelegrams?: number;
+  /** § PASS 20 diagnostic (Part A) — the most recent feedback telegram that DID match a
+   * subscribed observer, and the most recent one that DIDN'T, as two separate bounded
+   * (one-entry) snapshots — never an unbounded log, never exposed for any capability
+   * this provider isn't actively diagnosing. `null` until the first relevant telegram
+   * of each kind ever arrives. Optional/nullable so no other provider's diagnostics()
+   * literal needs to change. */
+  lastFeedbackTelegram?: KnxFeedbackTelegramSnapshot | null;
+  lastUnmatchedFeedback?: KnxFeedbackTelegramSnapshot | null;
+}
+
+/** § PASS 20 diagnostic (Part A) — one bounded snapshot of a feedback telegram, matched
+ * or not. `value`/`dpt` are populated only for the matched case, where the DPT is
+ * actually known (from the observer that matched) — decoding an unmatched telegram's
+ * raw bytes with an assumed/guessed DPT would be unsafe and potentially misleading, so
+ * the unmatched snapshot deliberately omits them. */
+export interface KnxFeedbackTelegramSnapshot {
+  source: string | null;
+  destination: string;
+  matched: boolean;
+  dpt?: string;
+  value?: unknown;
+  ts: string;
 }
 
 export interface IKnxProvider {

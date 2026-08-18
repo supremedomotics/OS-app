@@ -357,6 +357,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     queuedCommandCount: number;
     lastQueueDrainAt: string | null;
     lastQueueDrainResult: DrainResult | null;
+    /** § PASS 20 diagnostic (KNX feedback pipeline investigation, Part D) — the most
+     * recent capability state this driver actually recorded from real feedback (a
+     * decoded status-GA telegram that changed state), regardless of which device/
+     * capability it was for. `null` until the first one ever arrives. Bounded to one
+     * entry — this is "did feedback reach record() at all, and for what," not a log. */
+    lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null;
   } {
     return {
       protocol: this.protocol,
@@ -376,6 +382,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       queuedCommandCount: this.offlineQueue.size(),
       lastQueueDrainAt: this.lastQueueDrainAt,
       lastQueueDrainResult: this.lastQueueDrainResult,
+      lastRecordedState: this.lastRecordedState,
     };
   }
 
@@ -388,11 +395,18 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     }
   }
 
+  /** § PASS 20 diagnostic (Part D) — backing field for `diagnostics().lastRecordedState`. */
+  private lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null = null;
+
   private record(b: KnxDeviceBinding, state: CapabilityState): void {
     const k = bindingKey(b.deviceId, b.capability);
     const prev = this.states.get(k);
     if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
     this.states.set(k, state);
-    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, ts: new Date().toISOString() });
+    const ts = new Date().toISOString();
+    // § PASS 20 diagnostic (Part D) — record BEFORE fan-out, so this reflects state
+    // that genuinely reached this point even if a listener throws downstream.
+    this.lastRecordedState = { deviceId: b.deviceId, capability: b.capability, kind: state.kind, ts };
+    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, ts });
   }
 }

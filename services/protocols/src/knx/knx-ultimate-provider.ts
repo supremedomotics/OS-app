@@ -1,5 +1,5 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
-import type { IKnxProvider, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
+import type { IKnxProvider, KnxFeedbackTelegramSnapshot, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
 import { ConnectionManager, type ConnectionManagerMetrics, type ConnectionState } from "./connection-manager.js";
 
 /**
@@ -39,6 +39,7 @@ interface KnxUltimateDptLib {
 interface KnxUltimateIndication {
   cEMIMessage?: {
     dstAddress?: { toString(): string };
+    srcAddress?: { toString(): string };
     npdu?: { dataValue?: Buffer; isGroupWrite?: boolean; isGroupResponse?: boolean };
   };
 }
@@ -93,6 +94,10 @@ export class KnxUltimateProvider implements IKnxProvider {
   private lastCommandAt: string | null = null;
   private lastError: string | null = null;
   private reconnectAttempts = 0;
+  private unmatchedFeedbackTelegrams = 0;
+  // § PASS 20 diagnostic (Part A) — bounded, one-entry snapshots; never an unbounded log.
+  private lastFeedbackTelegram: KnxFeedbackTelegramSnapshot | null = null;
+  private lastUnmatchedFeedback: KnxFeedbackTelegramSnapshot | null = null;
 
   constructor(opts: KnxUltimateProviderOptions) {
     this.opts = opts;
@@ -238,12 +243,26 @@ export class KnxUltimateProvider implements IKnxProvider {
       if (this.client !== client) return;
       const cemi = packet.cEMIMessage;
       const dst = cemi?.dstAddress?.toString?.();
+      const src = cemi?.srcAddress?.toString?.() ?? null;
       const raw = cemi?.npdu?.dataValue;
       if (!dst || !raw) return;
       this.packetsReceived++;
-      this.lastTelegramAt = new Date().toISOString();
+      const ts = new Date().toISOString();
+      this.lastTelegramAt = ts;
       const handlers = this.observers.get(dst);
-      if (!handlers?.length) return;
+      if (!handlers?.length) {
+        this.unmatchedFeedbackTelegrams++;
+        this.lastUnmatchedFeedback = { source: src, destination: dst, matched: false, ts };
+        return;
+      }
+      // § PASS 20 diagnostic (Part A) — decode using the FIRST matched observer's own
+      // DPT for the snapshot (a GA can have multiple observers in principle, but always
+      // the same real DPT in practice — this is diagnostic visibility, not a second
+      // decode path); every matched handler still gets called exactly as before.
+      const { dpt: firstDpt } = handlers[0]!;
+      let decodedForDiagnostics: unknown;
+      try { decodedForDiagnostics = dptlib.fromBuffer(raw, dptlib.resolve(firstDpt)); } catch { /* diagnostic-only, never block real handling */ }
+      this.lastFeedbackTelegram = { source: src, destination: dst, matched: true, dpt: firstDpt, value: decodedForDiagnostics, ts };
       for (const { dpt, handler } of handlers) handler(dptlib.fromBuffer(raw, dptlib.resolve(dpt)));
     });
   }
@@ -277,6 +296,12 @@ export class KnxUltimateProvider implements IKnxProvider {
 
   unsubscribe(groupAddress: string): void {
     this.observers.delete(groupAddress);
+  }
+
+  /** § PASS 20 diagnostic (Part A) — a safe way to check whether an exact GA string
+   * currently has a registered observer, without exposing the observer map itself. */
+  isSubscribed(groupAddress: string): boolean {
+    return (this.observers.get(groupAddress)?.length ?? 0) > 0;
   }
 
   health(): ProviderHealth {
@@ -314,6 +339,9 @@ export class KnxUltimateProvider implements IKnxProvider {
       // back to the pre-first-connect local count otherwise.
       reconnectAttempts: this.connectionManager?.metrics().reconnectAttempts ?? this.reconnectAttempts,
       connectionState: this.connectionManager?.state ?? null,
+      unmatchedFeedbackTelegrams: this.unmatchedFeedbackTelegrams,
+      lastFeedbackTelegram: this.lastFeedbackTelegram,
+      lastUnmatchedFeedback: this.lastUnmatchedFeedback,
     };
   }
 }

@@ -113,6 +113,32 @@ describe("SupremeKnxDriver", () => {
     expect(diag.providers[0]?.packetsSent).toBe(1);
     expect(diag.unifiedDeviceCount).toBeNull(); // discoverUnified() never ran this test
   });
+
+  it("§ PASS 20 diagnostic (Part D) — diagnostics().lastRecordedState reflects real feedback that changed state", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    await driver.connect();
+    expect(driver.diagnostics().lastRecordedState).toBeNull(); // nothing recorded yet
+    provider.emit("1/1/2", true); // real feedback on the status GA
+    const snap = driver.diagnostics().lastRecordedState;
+    expect(snap?.deviceId).toBe(deviceId);
+    expect(snap?.capability).toBe("onoff");
+    expect(snap?.kind).toBe("onoff");
+  });
+
+  it("§ PASS 20 diagnostic (Part D) — feedback that doesn't change state (dedup) does not update lastRecordedState", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    await driver.connect();
+    provider.emit("1/1/2", true);
+    const first = driver.diagnostics().lastRecordedState;
+    provider.emit("1/1/2", true); // identical value — deduped by record()'s own existing guard
+    expect(driver.diagnostics().lastRecordedState?.ts).toBe(first?.ts); // unchanged, not a new record
+  });
 });
 
 describe("SupremeKnxDriver.unbind (§ Driver Lifecycle Completion)", () => {

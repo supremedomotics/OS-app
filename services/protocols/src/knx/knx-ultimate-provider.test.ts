@@ -107,6 +107,67 @@ describe("KnxUltimateProvider", () => {
     expect(values).toEqual([true]);
   });
 
+  it("§ PASS 19 diagnostic — a telegram on a GA with no subscribed handler counts as unmatchedFeedbackTelegrams, not silently dropped with zero trace", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("1/1/1", "1.001", () => {});
+    await provider.connect();
+    // A real telegram on a DIFFERENT group address than anything subscribed — e.g. the
+    // exact live symptom under investigation: a binding's feedback GA differs (even
+    // subtly — casing/padding/notation) from what the underlying KNX client reports.
+    FakeClient.instances[0]!.emitIndication("5/3/1", Buffer.from([1]));
+    expect(provider.diagnostics().unmatchedFeedbackTelegrams).toBe(1);
+    expect(provider.diagnostics().packetsReceived).toBe(1); // the telegram WAS received — just not matched
+  });
+
+  it("§ PASS 19 diagnostic — a matched telegram does NOT count as unmatched", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("1/1/1", "1.001", () => {});
+    await provider.connect();
+    FakeClient.instances[0]!.emitIndication("1/1/1", Buffer.from([1]));
+    expect(provider.diagnostics().unmatchedFeedbackTelegrams).toBe(0);
+  });
+
+  it("§ PASS 20 diagnostic (Part A) — lastFeedbackTelegram captures the matched telegram's destination, dpt, and decoded value", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("5/3/1", "1.001", () => {});
+    await provider.connect();
+    FakeClient.instances[0]!.emitIndication("5/3/1", Buffer.from([1]));
+    const snap = provider.diagnostics().lastFeedbackTelegram;
+    expect(snap?.matched).toBe(true);
+    expect(snap?.destination).toBe("5/3/1");
+    expect(snap?.dpt).toBe("1.001");
+    expect(snap?.value).toBe(true); // fakeDptlib.fromBuffer: raw[0] === 1
+    expect(provider.diagnostics().lastUnmatchedFeedback).toBeNull();
+  });
+
+  it("§ PASS 20 diagnostic (Part A) — lastUnmatchedFeedback captures destination only, never a guessed dpt/value for an unknown GA", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("1/1/1", "1.001", () => {});
+    await provider.connect();
+    FakeClient.instances[0]!.emitIndication("5/3/1", Buffer.from([1]));
+    const snap = provider.diagnostics().lastUnmatchedFeedback;
+    expect(snap?.matched).toBe(false);
+    expect(snap?.destination).toBe("5/3/1");
+    expect(snap?.dpt).toBeUndefined();
+    expect(snap?.value).toBeUndefined();
+    expect(provider.diagnostics().lastFeedbackTelegram).toBeNull();
+  });
+
+  it("§ PASS 20 diagnostic (Part A) — isSubscribed() reports the true, current subscription state for an exact GA", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    expect(provider.isSubscribed("5/3/1")).toBe(false);
+    provider.subscribe("5/3/1", "1.001", () => {});
+    expect(provider.isSubscribed("5/3/1")).toBe(true);
+    expect(provider.isSubscribed("5/3/2")).toBe(false); // a different, unsubscribed GA
+    provider.unsubscribe("5/3/1");
+    expect(provider.isSubscribed("5/3/1")).toBe(false);
+  });
+
   it("fires onConnectionStateChange('connected') on the very first connect", async () => {
     const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
     const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
@@ -154,4 +215,28 @@ describe("KnxUltimateProvider", () => {
     expect(rate).not.toBeNull();
     expect(rate!).toBeGreaterThan(0); // 2 packets over ~1.1s of uptime — a real, positive rate
   }, 10000);
+});
+
+/**
+ * § PASS 20 (Part B) — GA string matching. Deliberately imports the REAL `knxultimate`
+ * package (no mock, unlike the suite above) to settle, with actual executed proof
+ * rather than source-reading, whether an ETS-style group-address string ("5/3/1")
+ * survives the library's own encode → wire-buffer → decode round trip unchanged. This
+ * is exactly the path a real incoming telegram's `cemi.dstAddress.toString()` takes
+ * (`KNXAddress.createFromBuffer` in the installed package, confirmed by inspecting
+ * `node_modules/knxultimate/build/protocol/{KNXAddress,cEMI/LDataInd}.js`), and exactly
+ * the string the binding engine stores from ETS parsing (`GROUP_ADDRESS_RE` in
+ * binding-engine.ts already requires this same "n/n/n" 3-level notation). If this test
+ * ever fails, the GA-format-mismatch hypothesis (Pass 19) would need to be reopened.
+ */
+describe("KNX group-address string round-trip through the REAL knxultimate library (§ PASS 20 Part B)", () => {
+  it("an ETS-style 3-level GA string ('5/3/1') survives encode→buffer→decode unchanged — rejects the GA-mismatch hypothesis", async () => {
+    const { default: KNXAddress } = await import("knxultimate/build/protocol/KNXAddress.js");
+    for (const ga of ["5/3/1", "5/3/0", "5/3/3", "5/3/4", "1/1/1", "31/7/255"]) {
+      const encoded = KNXAddress.createFromString(ga, KNXAddress.TYPE_GROUP);
+      const buf = encoded.toBuffer();
+      const decoded = KNXAddress.createFromBuffer(buf, 0, KNXAddress.TYPE_GROUP);
+      expect(decoded.toString()).toBe(ga);
+    }
+  });
 });
