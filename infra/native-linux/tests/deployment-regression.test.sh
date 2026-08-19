@@ -964,6 +964,33 @@ unset -f _nats_fetch_and_install_deb 2>/dev/null || true
 source "${SCRIPT_DIR}/lib/common.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "update.sh — SUPREME_RELEASE_VERSION must be set before stage_and_switch_release (live deployment bug fix)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# A live `sudo ./update.sh` run failed with "SUPREME_RELEASE_VERSION: stage_and_switch_release
+# requires SUPREME_RELEASE_VERSION to be set" — update.sh's main() never called
+# reconstruct_runtime_context (the one function that sets it in source mode; install.sh
+# already calls it at the equivalent point), and because the ERR trap wasn't inherited by
+# called functions either (see the `set -E` check below), the failure fell straight back to
+# the shell prompt instead of triggering rollback_update — no partial state, but no
+# successful update either. Both are now fixed; these two checks guard against either
+# regressing silently.
+_update_sh_src="$(cat "${SCRIPT_DIR}/update.sh")"
+case "$_update_sh_src" in
+  *"set -E"*) pass "update.sh sets errtrace (set -E) so its ERR trap fires for failures inside called functions, not just top-level commands" ;;
+  *) fail "update.sh sets errtrace (set -E) so its ERR trap fires for failures inside called functions, not just top-level commands" "without it, a failure inside e.g. stage_and_switch_release silently skips rollback_update" ;;
+esac
+# Order matters: reconstruct_runtime_context must appear BEFORE stage_and_switch_release is
+# INVOKED (not merely mentioned in a comment) in main() — strip comment lines first so an
+# earlier doc-comment referencing the function name by name doesn't produce a false
+# truncation point.
+_update_sh_code_only="$(grep -v '^\s*#' "${SCRIPT_DIR}/update.sh")"
+_before_stage="${_update_sh_code_only%%stage_and_switch_release*}"
+case "$_before_stage" in
+  *"reconstruct_runtime_context"*) pass "update.sh calls reconstruct_runtime_context before stage_and_switch_release (sets SUPREME_RELEASE_VERSION)" ;;
+  *) fail "update.sh calls reconstruct_runtime_context before stage_and_switch_release (sets SUPREME_RELEASE_VERSION)" "without this, every source-mode update fails inside stage_and_switch_release's own :? guard" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

@@ -17,6 +17,12 @@
 #                                                        never ran them anyway
 
 set -euo pipefail
+# § Bug fix (live deployment) — without errtrace, the `trap ... ERR` set in main() below
+# does not fire for a failure inside a called function (e.g. stage_and_switch_release's
+# own `:?` guard) — a failure there was observed to fall straight back to the shell prompt
+# instead of triggering rollback_update, defeating this script's own documented
+# transactional-update guarantee. `set -E` makes the ERR trap inherited by functions too.
+set -E
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -148,6 +154,15 @@ main() {
     src_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
   fi
   detect_install_mode "$src_root"
+  # § Bug fix (live deployment) — stage_and_switch_release requires SUPREME_RELEASE_VERSION
+  # (and its siblings) to already be set, but update.sh never called the one function that
+  # sets it (install.sh does, at the equivalent point — see reconstruct_runtime_context's
+  # own doc comment: "called unconditionally on every install run"). Source-mode updates
+  # hit this every time; release-mode updates happened to survive it only because
+  # install_release_artifact() (called below) also calls load_release_manifest_metadata
+  # itself — but reconstruct_runtime_context is the correct, single place for this,
+  # regardless of mode, exactly as install.sh already does it.
+  reconstruct_runtime_context "$src_root"
 
   local prev_version
   prev_version="$(current_release_version)"
