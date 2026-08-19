@@ -212,6 +212,55 @@ describe("planBindings", () => {
       expect(reversedBrightness.config.stepAddress).toBe("3/0/3");
     });
 
+    // § Pass 26 — finding traced against a real customer ETS6 project: a multi-channel
+    // DALI actuator shares ONE individual address across every output channel, so one
+    // output's onoff command/status GA is ALSO referenced by a second, unrelated
+    // physical device (a diagnostics/logic module reading the same switch GA — real,
+    // legitimate KNX wiring) while a DIFFERENT sibling channel's onoff pair has no such
+    // cross-device reference. Before this fix, both onoff candidates tied on
+    // `local: false`/`local: true` in a way that let the wrong sibling channel's GA win
+    // purely by lexical id — even though this device's OWN brightness capability
+    // (genuinely local, no cross-device reference) unambiguously anchors it to the
+    // correct channel.
+    it("prefers the capability's own channel (evidenced by another unambiguous LOCAL capability on the same device) over a lexically-smaller sibling-channel GA, when the correct GA is itself shared with a second device", () => {
+      const fixture = {
+        ets: [
+          // This device's own output channel — onoff's write/status GA is legitimately
+          // ALSO read by a second device, so both objects are `local: false`.
+          {
+            id: "5/3/0",
+            name: "SW",
+            dpt: "1.001",
+            individualAddress: "1.1.9",
+            channel: 9,
+            // The second device (a diagnostics/logic module) reading the same switch
+            // GA — this is what makes 5/3/0 legitimately "shared", not a fabrication.
+            links: [
+              { role: "send" as const, individualAddress: "1.1.9" },
+              { role: "receive" as const, individualAddress: "1.1.20" },
+            ],
+          },
+          { id: "5/3/1", name: "SW Status", dpt: "1.001", individualAddress: "1.1.9", channel: 9 },
+          // This device's brightness pair on the SAME channel/device — genuinely local
+          // (no second device references it) — this is the anchor evidence.
+          { id: "5/3/3", name: "Abs Dim", dpt: "5.001", individualAddress: "1.1.9", channel: 9 },
+          { id: "5/3/4", name: "Abs Dim FB", dpt: "5.001", individualAddress: "1.1.9", channel: 9 },
+          // A sibling DALI output channel (channel 1) of the SAME actuator individual
+          // address, with its own onoff pair that lexically sorts BEFORE 5/3/x but
+          // belongs to a completely different physical output.
+          { id: "0/0/1", name: "SW", dpt: "1.001", individualAddress: "1.1.9", channel: 1 },
+          { id: "0/0/2", name: "SW Status", dpt: "1.001", individualAddress: "1.1.9", channel: 1 },
+        ],
+      };
+      const device = mapUnifiedDevices(fixture).find((d) =>
+        d.raw.communicationObjects.some((o) => o.id === "5/3/3"),
+      )!;
+      expect(device).toBeDefined();
+      const onoff = planBindings(device).find((p) => p.capability === "onoff")!;
+      expect(onoff.address).toBe("5/3/0");
+      expect(onoff.config.statusAddress).toBe("5/3/1");
+    });
+
     it("a DPT-incompatible candidate is filtered out upstream (per-signal capability tagging) and never wins primary — no capability-mismatched binding is ever produced", () => {
       // "3/0/9" is a genuine binary switch (DPT 1.001, onoff) on the SAME physical
       // device/channel as a brightness object — it must never be considered for the

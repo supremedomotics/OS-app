@@ -76,6 +76,24 @@ export interface BindingPlanItem {
  * prevent. Removed — a capability with no explicit write relationship is honestly
  * unbindable, not guessed at. */
 export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
+  // § Pass 26 — multi-channel actuator home-channel evidence. A multi-channel actuator
+  // (e.g. a DALI gateway) shares ONE individual address across every output channel, so
+  // the Unified Device Mapper's clustering (out of scope for this fix — see the binding-
+  // engine-only mandate this was found under) can legitimately land more than one real
+  // channel's group addresses under a single merged `UnifiedKnxDevice`. When that
+  // happens, a capability whose OWN command/status GA is legitimately shared with a
+  // second physical device (e.g. a diagnostics/logic module also reading the same
+  // switch GA — real, valid KNX wiring) gets `local: false` for every candidate, and the
+  // `byEvidence` tie-break below used to fall through to a bare lexical GA-id compare —
+  // "0/0/1" sorts before "5/3/0" for no reason connected to which channel is actually
+  // THIS device's own (confirmed against a real ETS6 project: a DALI gateway's Conference
+  // Hanging channel's onoff capability bound to a sibling channel's "0/0/1"/"0/0/2" pair
+  // instead of its own "5/3/0"/"5/3/1", while its brightness/color capabilities — which
+  // happened to have no cross-device sharing — resolved correctly via `local: true`
+  // alone). Anchor the tie-break on whichever channel this device's OTHER, unambiguous
+  // (`local: true`) evidence already points to — never fabricated, only read from
+  // signals this same device already carries.
+  const homeChannel = device.raw.communicationObjects.find((o) => o.local && o.channel != null)?.channel ?? null;
   return device.capabilities.map((capability) => {
     const own = device.raw.communicationObjects.filter(
       (o) => GROUP_ADDRESS_RE.test(o.id) && o.capabilities.includes(capability),
@@ -102,7 +120,9 @@ export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
     // when it's the ONLY candidate (no local alternative exists) — this ranking simply
     // never lets it win a tie it didn't earn.
     const byEvidence = (a: CommunicationObject, b: CommunicationObject) =>
-      Number(b.local) - Number(a.local) || a.id.localeCompare(b.id);
+      Number(b.local) - Number(a.local) ||
+      Number(b.channel === homeChannel) - Number(a.channel === homeChannel) ||
+      a.id.localeCompare(b.id);
     const primaryObjs = own.filter((o) => o.role === "primary").sort(byEvidence);
     const statusObjs = own.filter((o) => o.role === "status").sort(byEvidence);
     const writeObj = primaryObjs[0];
