@@ -623,6 +623,17 @@ export class SupremeClient {
   backupSchedule(): Promise<BackupScheduleResponse> {
     return this.request("GET", "/v1/backup/schedule") as Promise<BackupScheduleResponse>;
   }
+
+  // ── System Reset (§ PASS 22 Part B) — admin, factory-reset back to first-run Setup ──
+  /** Real counts for the confirmation dialog, not vague "everything" language. */
+  systemResetInfo(): Promise<{ users: number; devices: number; rooms: number; installedDrivers: number }> {
+    return this.request("GET", "/v1/system/reset-info") as Promise<{ users: number; devices: number; rooms: number; installedDrivers: number }>;
+  }
+  /** Wipes users/homes/devices/drivers and re-enters first-run Setup. Requires the literal
+   * confirmation phrase "RESET SYSTEM" as a second, deliberate step beyond the UI dialog. */
+  systemReset(): Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }> {
+    return this.request("POST", "/v1/system/reset", { confirm: "RESET SYSTEM" }) as Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }>;
+  }
   setBackupSchedule(input: { enabled?: boolean; everyHours?: number; retain?: number }): Promise<BackupScheduleResponse> {
     return this.request("PUT", "/v1/backup/schedule", input) as Promise<BackupScheduleResponse>;
   }

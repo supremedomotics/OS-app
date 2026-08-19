@@ -141,6 +141,46 @@ describe("SupremeKnxDriver", () => {
   });
 });
 
+describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorModes from the real DPT)", () => {
+  it("a color binding with DPT7.600 (absolute Kelvin) reports cct-only, never RGB", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "5/3/5", config: { dpt: "DPT7.600" } });
+    expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: false, cct: true } });
+  });
+
+  it("a color binding with DPT232.600 (RGB) reports rgb-only, never CCT", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "2/1/1", config: { dpt: "DPT232.600" } });
+    expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
+  });
+
+  it("a color binding with DPT251.600 (RGBW) reports rgb-only (Supreme's ColorState has no white channel)", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "2/1/2", config: { dpt: "DPT251.600" } });
+    expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
+  });
+
+  it("returns null for a non-color capability", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    expect(driver.getCapabilityConfig?.(deviceId, "onoff")).toBeNull();
+  });
+
+  it("returns null for an unmanaged device — never fabricated", () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    expect(driver.getCapabilityConfig?.(newId("device") as DeviceId, "color")).toBeNull();
+  });
+});
+
 describe("SupremeKnxDriver.unbind (§ Driver Lifecycle Completion)", () => {
   it("unsubscribes the status GA — a later telegram no longer resurrects state for the unbound device", async () => {
     const provider = new FakeKnxProvider();

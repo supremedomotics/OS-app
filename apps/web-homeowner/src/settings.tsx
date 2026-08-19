@@ -51,6 +51,8 @@ export function ThemeSettings({ role }: { role?: string | null } = {}) {
     { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
     { id: "backup", label: "Backup & restore", icon: "❖", hint: "Backups, schedule & restore", el: <BackupCenter /> },
     { id: "update", label: "Software update", icon: "⤓", hint: "Version & updates", el: <UpdateCenter /> },
+    // Master-only: this wipes the home, including every other user's account.
+    ...(role === "master" ? [{ id: "reset", label: "Reset System", icon: "⌫", hint: "Erase everything & start over", el: <ResetSystemSettings /> }] : []),
   ];
 
   const current = pages.find((p) => p.id === open);
@@ -1339,6 +1341,93 @@ function RestoreWizard({ document: doc, fmt, onClose, onDone }: {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * System Reset (§ PASS 22 Part B, P0). Full factory reset: wipes every installed driver (and
+ * its devices/bindings), every room, every remaining device, and every user account — then
+ * returns the hub to first-run Setup. Two-step confirmation: a warning + counts, then a typed
+ * "RESET SYSTEM" phrase, mirroring the RestoreWizard's preview→confirm→run shape above.
+ */
+function ResetSystemSettings() {
+  const [step, setStep] = useState<"idle" | "warn" | "confirm" | "running" | "done">("idle");
+  const [info, setInfo] = useState<{ users: number; devices: number; rooms: number; installedDrivers: number } | null>(null);
+  const [phrase, setPhrase] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  async function begin() {
+    setErr(null);
+    try {
+      setInfo(await client.systemResetInfo());
+      setStep("warn");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not read current system state.");
+    }
+  }
+
+  async function run() {
+    setStep("running");
+    setErr(null);
+    try {
+      await client.systemReset();
+      setStep("done");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Reset failed — nothing further was changed.");
+      setStep("confirm");
+    }
+  }
+
+  if (step === "done") {
+    // The hub is back in first-run Setup; there's no session left to stay signed into.
+    window.location.reload();
+    return <p className="muted">Reset complete — reloading…</p>;
+  }
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Reset System</h2>
+      <div className="danger-zone">
+        <p className="opt-label danger-label">Erase everything &amp; start over</p>
+        <p className="muted">
+          Permanently removes every installed driver, discovered/commissioned device, room, and user
+          account, then returns this hub to first-run Setup. This does not remove the operating
+          system or reinstall software — only the app's configured state.
+        </p>
+
+        {step === "idle" && <button className="danger" onClick={begin} style={{ marginTop: 8 }}>Reset System…</button>}
+
+        {step === "warn" && info && (
+          <>
+            <p className="err" style={{ marginTop: 10 }}>
+              This will permanently delete {info.users} user account{info.users === 1 ? "" : "s"},{" "}
+              {info.devices} device{info.devices === 1 ? "" : "s"}, {info.rooms} room{info.rooms === 1 ? "" : "s"}, and{" "}
+              {info.installedDrivers} installed driver{info.installedDrivers === 1 ? "" : "s"}. This cannot be undone.
+            </p>
+            <div className="dev-row2" style={{ marginTop: 8 }}>
+              <button className="danger" onClick={() => setStep("confirm")}>Continue</button>
+              <button onClick={() => setStep("idle")}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {(step === "confirm" || step === "running") && (
+          <>
+            <p className="err" style={{ marginTop: 10 }}>Type RESET SYSTEM to confirm.</p>
+            <input value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder="RESET SYSTEM" disabled={step === "running"} />
+            {err && <p className="err">{err}</p>}
+            <div className="dev-row2" style={{ marginTop: 8 }}>
+              <button className="danger" disabled={step === "running" || phrase !== "RESET SYSTEM"} onClick={run}>
+                {step === "running" ? "Resetting…" : "Reset now"}
+              </button>
+              <button disabled={step === "running"} onClick={() => { setStep("idle"); setPhrase(""); setErr(null); }}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {err && step === "warn" && <p className="err">{err}</p>}
+      </div>
+    </section>
   );
 }
 

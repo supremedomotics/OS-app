@@ -65,10 +65,39 @@ describe("planBindings", () => {
     expect(color.address).toBe("5/3/5");
     expect(color.config.statusAddress).toBe("5/3/6");
     expect(color.config.stepAddress).toBe("5/3/7");
+    // § PASS 17 bug fix — this fixture's real ETS DPT for the color capability is
+    // 7.600 (absolute Kelvin, tunable-white) — the binding must carry that REAL dpt,
+    // not the generic per-capability default (which was hardcoded to DPT232.600 RGB
+    // and would have silently mis-driven this genuinely CCT-only circuit as RGB).
+    expect(color.config.dpt).toBe("DPT7.600");
+    expect(brightness.config.dpt).toBe("DPT5.001");
+    expect(onoff.config.dpt).toBe("DPT1.001");
 
     // Every capability got a DIFFERENT write address — the bug this test guards
     // against bound all three to whichever address came first (5/3/0).
     expect(new Set([onoff.address, brightness.address, color.address]).size).toBe(3);
+  });
+
+  it("§ PASS 17 — a genuine RGB(W) color circuit's real DPT (232.600) is preserved, not overwritten by a CCT assumption", () => {
+    const device = mapUnifiedDevices({
+      ets: [
+        { id: "2/1/0", name: "Living Accent SW", dpt: "1.001" },
+        { id: "2/1/1", name: "Living Accent Colour RGB", dpt: "232.600" },
+      ],
+    })[0]!;
+    const plans = planBindings(device);
+    const color = plans.find((p) => p.capability === "color")!;
+    expect(color.address).toBe("2/1/1");
+    expect(color.config.dpt).toBe("DPT232.600");
+  });
+
+  it("§ PASS 17 — a color capability with NO real DPT reported on any of its objects falls back to the generic default, never fabricated", () => {
+    const device = mapUnifiedDevices({
+      ets: [{ id: "2/2/0", name: "Mystery Colour Object" }],
+    })[0]!;
+    const plans = planBindings(device);
+    const color = plans.find((p) => p.capability === "color");
+    if (color?.bindable) expect(color.config.dpt).toBe("DPT232.600"); // defaultDpt("color")
   });
 
   // § Binding Evidence Hierarchy (Pass 11.4) — the real Nirma-project finding: a

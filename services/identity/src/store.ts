@@ -19,6 +19,12 @@ export interface StoredCredential {
 export interface IIdentityStore {
   getHome(): Promise<Home | null>;
   putHome(home: Home): Promise<void>;
+  /** § PASS 22B (System Reset) — clear the commissioned home record so `commission()`'s
+   * "home is already commissioned" guard doesn't wrongly reject re-provisioning after a
+   * reset. Identity's own home row is a SEPARATE record from HomeService's (see
+   * AppContext.completeSetup's own doc comment on why both stores exist) — resetting
+   * devices/rooms/users alone never touches it. */
+  deleteHome(): Promise<void>;
   findUserByEmail(email: string): Promise<User | null>;
   getUser(id: UserId): Promise<User | null>;
   listUsers(): Promise<User[]>;
@@ -213,6 +219,9 @@ export class InMemoryIdentityStore implements IIdentityStore {
   }
   async putHome(home: Home): Promise<void> {
     this.home = home;
+  }
+  async deleteHome(): Promise<void> {
+    this.home = null;
   }
   async findUserByEmail(email: string): Promise<User | null> {
     const needle = email.toLowerCase();

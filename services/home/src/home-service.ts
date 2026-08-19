@@ -4,6 +4,7 @@ import {
   type CapabilityState,
   type Device,
   type DeviceId,
+  type DriverId,
   type Favorite,
   type Home,
   type Room,
@@ -185,6 +186,26 @@ export class HomeService {
     await this.store.putDevice(device, stored.backendIds);
     this.emitChanged({ type: "upsert", device });
     return device;
+  }
+
+  /** § PASS 22 (Part K, driver-owned resource cleanup) — records which installed
+   * driver actually commissioned this device: the real ownership signal
+   * `InstallerServices.uninstallDriver()` already reads (`dv.driverId === id`) to find
+   * and clean up its own orphaned devices on uninstall — but nothing in the real
+   * commissioning path ever set it (only the first-boot demo/seed helper did, via its
+   * own hardcoded `driverId: null`), so that cleanup filter silently matched nothing
+   * for every real device. Called once per successful `bindProtocol()`; idempotent
+   * (a no-op once already set to the same value), safe to call on every capability of
+   * a multi-capability device. Never overwrites an existing owner with a different
+   * driver — a device is owned by whichever driver commissioned it first. */
+  async setDriverOwner(deviceId: DeviceId, driverId: DriverId): Promise<void> {
+    const stored = await this.store.getDevice(deviceId);
+    // Skip if unowned target, or already owned (by this driver — no-op; by a different
+    // driver — first-commission wins per this method's own contract above).
+    if (!stored || stored.device.driverId) return;
+    const device: Device = { ...stored.device, driverId };
+    await this.store.putDevice(device, stored.backendIds);
+    this.emitChanged({ type: "upsert", device });
   }
 
   /**

@@ -11,7 +11,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { defaultDpt, stateFromValue, valueFromCommand } from "../knx-codec.js";
+import { defaultDpt, dptParts, stateFromValue, valueFromCommand } from "../knx-codec.js";
 import { KnxTaskRouter } from "./task-router.js";
 import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
 import { KnxIotProvider } from "./knx-iot-provider.js";
@@ -166,6 +166,30 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § PASS 17 bug fix — a `color` capability's REAL DPT (now correctly preserved
+   * through binding-engine.ts's `planBindings()`, see that file's own PASS 17 comment)
+   * already tells us at commissioning time whether a fixture is genuinely RGB(W)-
+   * capable (DPT232.600/251.600) or Kelvin-only tunable-white (DPT7.600) — there is no
+   * need to wait for a live state telegram to arrive before the UI can gate the RGB
+   * wheel correctly (the previous behavior: `colormode.ts`'s state-nullability fallback
+   * shows BOTH controls until real feedback disambiguates them, which is honest but
+   * needlessly slow, and was actively wrong while the DPT bug this pass also fixed was
+   * still mis-decoding feedback). Reports the same `ColorCapabilityConfig.colorModes`
+   * shape the frontend's `device-ui-capabilities.ts` already prefers over the state
+   * fallback (§ ADR 0017). `null` for every other capability/unmanaged device — never
+   * fabricated, mirrors `AvrDriver.getCapabilityConfig`'s own contract. */
+  getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
+    if (capability !== "color") return null;
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
+    if (!b) return null;
+    const { major } = dptParts(b.dpt);
+    if (major === 7) return { colorModes: { rgb: false, cct: true } };
+    if (major === 232 || major === 251) return { colorModes: { rgb: true, cct: false } };
+    // An unrecognized/unknown DPT for this capability — honestly report nothing rather
+    // than guess; the frontend's existing state-nullability fallback still applies.
+    return null;
   }
 
   /** § Driver Lifecycle Completion — releases everything THIS device holds without

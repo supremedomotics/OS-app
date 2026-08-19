@@ -735,6 +735,21 @@ export class IdentityService {
     await this.store.deleteUser(id);
   }
 
+  /** § PASS 22 (Part B, System Reset) — deletes EVERY user including the master account,
+   * bypassing {@link deleteUser}'s master-guard. Only for a full system reset (which then
+   * flips `ctx.setupRequired` back to true so the Setup Wizard re-provisions a master). */
+  async resetAllUsers(): Promise<number> {
+    const users = await this.store.listUsers();
+    for (const u of users) await this.store.deleteUser(u.id);
+    // § PASS 22B — also clear the identity-store's own commissioned-home record, a
+    // SEPARATE row from HomeService's home (see AppContext.completeSetup's doc comment).
+    // Leaving it behind made `commission()` reject every post-reset re-provisioning
+    // attempt with "home is already commissioned", even though every user/device/room
+    // had genuinely been wiped.
+    await this.store.deleteHome();
+    return users.length;
+  }
+
   /** Self-service account deletion — re-authenticate with the current password, then delete. */
   async deleteOwnAccount(userId: UserId, currentPassword: string): Promise<void> {
     const cred = await this.store.getCredential(userId);

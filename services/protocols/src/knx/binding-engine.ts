@@ -111,7 +111,20 @@ export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
     // whichever step/nudge object (e.g. a local "Relative Dimming" vs a fanned-in shared
     // one) happened to appear first in `own`'s input-order-dependent array.
     const stepObj = own.filter((o) => o.role === "step").sort(byEvidence)[0];
-    const dpt = defaultDpt(capability as CapabilityState["kind"]);
+    // § PASS 17 bug fix — a capability's write/status/step group addresses are not
+    // guaranteed to share a single DPT family (a `color` capability in particular: KNX
+    // has no single "color" DPT — DPT232.600/251.600 are RGB(W), DPT7.600 is a plain
+    // absolute Kelvin value for tunable-white fixtures). Previously this ALWAYS used
+    // `defaultDpt(capability)`, hardcoding RGB for every color-capability binding
+    // regardless of what the real ETS group address actually was — a tunable-white
+    // circuit's genuine DPT7.600 object got driven/decoded as if it were 3-byte RGB.
+    // Prefer the real DPT the ETS project reported on whichever object actually carries
+    // the write relationship (falling back to the status/step object's DPT if the write
+    // object itself didn't have one, e.g. a KNX IoT resource with no DPT concept), and
+    // only fall back to the generic per-capability default when NONE of this capability's
+    // real objects reported a DPT at all.
+    const realDpt = writeObj?.dpt ?? statusObj?.dpt ?? stepObj?.dpt ?? null;
+    const dpt = realDpt ? `DPT${realDpt}` : defaultDpt(capability as CapabilityState["kind"]);
 
     if (!writeObj) {
       return {

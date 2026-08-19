@@ -497,6 +497,22 @@ export class InstallerServices {
       binding.protocol,
     );
     await this.d.protocolBindingStore?.put(binding);
+    // § PASS 22 (Part K, hardened Pass 22B Part G) — record real ownership: the driver
+    // instance that actually commissioned this device, so a later uninstall can find and
+    // clean up its own devices instead of silently leaving them behind (see
+    // setDriverOwner's own doc comment for why this was previously always null in
+    // production). The DriverManager registry lookup alone is NOT sufficient: every
+    // real-hub protocol (KNX/AVR/CoolMaster/…) is normally wired through env-var
+    // configuration straight into `envDrivers` (bootstrap.ts) — a completely separate
+    // path from the catalog/installed-store DriverManager tracks — so `registry().find(e
+    // => e.installed)` matches nothing for them and ownership silently stayed null on
+    // every production hub. A catalog-installed entry (Extension Center flow) still wins
+    // when present; an env-configured driver for the same protocol is the fallback,
+    // identified the SAME `env:${protocol}` key runDriverLifecycle already uses.
+    const ownerEntry = (await this.drivers.registry()).find((e) => e.protocols.includes(binding.protocol) && e.installed);
+    const ownerId = (ownerEntry?.installedId as DriverId | null | undefined)
+      ?? (this.d.envDrivers?.has(binding.protocol) ? (`env:${binding.protocol}` as DriverId) : null);
+    if (ownerId) await this.d.home.setDriverOwner(binding.deviceId, ownerId);
     // If the driver has a real AudioCapabilityConfig (inputs/sound modes/zones/
     // advancedControls) for this device now that it's bound, persist it onto the
     // device's capability config so the UI has real, capability-driven data to render

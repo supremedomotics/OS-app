@@ -72,6 +72,9 @@ export class IdentityRepo implements IIdentityStore {
       [home.id, home.name, home.address, home.tier, home.masterUserId, home.createdAt],
     );
   }
+  async deleteHome(): Promise<void> {
+    await this.db.query("DELETE FROM homes");
+  }
 
   async findUserByEmail(email: string): Promise<User | null> {
     const { rows } = await this.db.query<UserRow>(

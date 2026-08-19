@@ -185,6 +185,16 @@ export function KnxDiscoveryWorkspace() {
     setJobStatus(null);
   }
 
+  // § PASS 16 bug fix (scan result persistence) — this used to call clearJob() right here,
+  // deleting the ONE piece of state (the job id in localStorage) that lets the mount-time
+  // recovery effect above re-fetch a completed job's result. Since the backend keeps a
+  // completed job's full result in memory indefinitely (nothing evicts it — see
+  // getKnxImportJob's own doc comment in installer-context.ts), the fix is simply to stop
+  // deleting our own reference to it: leave the job id in place so a later remount/refresh
+  // still finds `saved`, calls knxDiscoveryQueueJobStatus(saved), sees status "completed"
+  // with a `result`, and lands right back here — same review queue, nothing re-scanned.
+  // The job reference is now cleared only by explicit user action (clearScanResults(),
+  // "Clear results" below) or by starting a new scan, never automatically on success.
   function finishScan(out: Awaited<ReturnType<typeof knxDiscoveryQueue>>) {
     setResult(out);
     const initial: Record<string, { name: string; roomId: string }> = {};
@@ -194,7 +204,19 @@ export function KnxDiscoveryWorkspace() {
     }
     setEdits(initial);
     setPhase("done");
+  }
+
+  // Deliberate, user-driven cleanup (§ job lifecycle) — the installer is done with this
+  // review queue (everything they wanted approved/rejected) and wants a clean slate. Only
+  // now does the completed job's reference actually get dropped.
+  function clearScanResults() {
     clearJob();
+    setResult(null);
+    setEdits({});
+    setApproved({});
+    setSelected(new Set());
+    setRejected(new Set());
+    setPhase("idle");
   }
 
   async function cancelScan() {
@@ -400,6 +422,11 @@ export function KnxDiscoveryWorkspace() {
         {phase === "scanning" && jobId && (
           <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>
             Cancel
+          </button>
+        )}
+        {phase === "done" && result && (
+          <button onClick={clearScanResults} style={{ marginLeft: 8 }} title="Dismiss this scan's review queue — approved devices are unaffected, already saved.">
+            Clear results
           </button>
         )}
       </div>

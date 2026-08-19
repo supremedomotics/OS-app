@@ -169,6 +169,17 @@ export interface CommunicationObject {
    * Always `true` for a KNX IoT object or an ETS signal with no `links` at all (no
    * relationship data to prove sharing — never assumed shared). */
   local: boolean;
+  /** § PASS 17 bug fix — the real ETS DPT for this SPECIFIC group address (normalized
+   * "major.minor", e.g. "7.600" for an absolute colour-temperature object vs "232.600"
+   * for RGB), preserved from the source signal all the way through to the binding
+   * engine. Previously dropped at this exact object-construction step — `planBindings()`
+   * (binding-engine.ts) had no way to know a `color`-capability object's REAL datapoint
+   * type, so it always fell back to `defaultDpt("color")` (hardcoded RGB, DPT232.600)
+   * even for a tunable-white fixture whose actual group address is a plain DPT7.600
+   * Kelvin object — sending/decoding it as a 3-byte RGB payload instead of a 2-byte
+   * Kelvin value. Null for a KNX IoT object (no DPT concept in that transport) or when
+   * the source ETS signal genuinely didn't carry one. */
+  dpt: string | null;
 }
 
 export interface UnifiedKnxDevice extends DiscoveredDevice {
@@ -1097,8 +1108,8 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
       return addrs.size >= 2;
     };
     const communicationObjects: CommunicationObject[] = [
-      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const, channel: s.channel ?? null, local: !isSharedAcrossDevices(s), ...(etsTagById.get(s.id) ?? fallbackTag) })),
-      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const, channel: null, local: true, ...fallbackTag })),
+      ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const, channel: s.channel ?? null, local: !isSharedAcrossDevices(s), dpt: s.dpt ?? null, ...(etsTagById.get(s.id) ?? fallbackTag) })),
+      ...iotSignals.map((s) => ({ id: s.host, name: knxIotTitle ?? s.host, source: "knx_iot" as const, channel: null, local: true, dpt: null, ...fallbackTag })),
     ];
 
     // Universal Device Intelligence Engine (§ Intelligence Priority): pool circuit name,
