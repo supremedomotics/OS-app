@@ -44,6 +44,51 @@ SUPREME_THIRDPARTY_SERVICES=(postgresql redis-server mosquitto caddy)
 # Present only when Home Assistant was installed (optional — see install.sh).
 SUPREME_HA_SERVICE=supreme-homeassistant
 
+# § UI-triggered update (§ web-homeowner Settings > Software update, "Update now") — the ONE
+# root-level action the unprivileged supreme-gateway process (User=supreme, see
+# systemd/supreme-gateway.service) may ever trigger. update.sh itself still requires real root
+# (require_root at the top of its main()) — this sudoers rule does not weaken that, it only lets
+# the gateway user hand off to sudo for this EXACT command, no arguments, no shell.
+SUPREME_UPDATE_SCRIPT="${SUPREME_REPO_DIR}/infra/native-linux/update.sh"
+SUPREME_UPDATE_LOG="${SUPREME_DATA_DIR}/update.log"
+SUPREME_UPDATE_LOCK_FILE="/run/supremeos-update.lock"
+SUPREME_UPDATE_SUDOERS_FILE="/etc/sudoers.d/supremeos-update"
+
+# Provisions the exact-command, NOPASSWD sudoers rule the gateway needs to launch update.sh via
+# `sudo systemd-run` (services/gateway/src/system-update-runner.ts's buildUpdateTriggerArgv() —
+# the two must stay byte-for-byte in sync, each documents the other). No wildcards beyond the
+# fixed unit name/path already baked into both sides, and no shell metacharacters are reachable
+# from anything request-controlled — the gateway never accepts a request field into this command.
+# Idempotent (safe to call from both install.sh and update.sh's render_config(), so an
+# already-provisioned host and an upgrading older one converge on the same file) and
+# visudo-validated before being trusted — a malformed sudoers file can lock out `sudo` entirely
+# on some configurations, so this never writes directly to the live file without a syntax check.
+configure_update_sudoers() {
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<EOF
+# Managed by SupremeOS (infra/native-linux/lib/common.sh's configure_update_sudoers). Do not
+# hand-edit — install.sh/update.sh regenerate this file on every run.
+#
+# Lets ${SUPREME_USER} (the gateway's own service user, never root) launch update.sh as a
+# detached, --collect'ed transient systemd unit — WITHOUT ever making the gateway process itself
+# run as root. update.sh's own require_root guard is unchanged; this only authorizes handing off
+# to sudo for this one exact invocation, matching services/gateway/src/system-update-runner.ts's
+# buildUpdateTriggerArgv() field-for-field. No wildcard, no user-supplied argument.
+${SUPREME_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit=supreme-update --collect --property=Type=oneshot --property=StandardOutput=append:${SUPREME_UPDATE_LOG} --property=StandardError=inherit -- ${SUPREME_UPDATE_SCRIPT}
+EOF
+  chmod 0440 "$tmp"
+  if command_exists visudo; then
+    visudo -cf "$tmp" || die "Generated sudoers rule for ${SUPREME_UPDATE_SUDOERS_FILE} failed visudo syntax validation — refusing to install it. See ${tmp}."
+  else
+    log_warn "visudo not available — installing ${SUPREME_UPDATE_SUDOERS_FILE} without a syntax pre-check."
+  fi
+  mv "$tmp" "$SUPREME_UPDATE_SUDOERS_FILE"
+  chown root:root "$SUPREME_UPDATE_SUDOERS_FILE"
+  chmod 0440 "$SUPREME_UPDATE_SUDOERS_FILE"
+  log_info "Provisioned ${SUPREME_UPDATE_SUDOERS_FILE} (UI-triggered update trigger, ${SUPREME_USER} only)."
+}
+
 # ── Logging ─────────────────────────────────────────────────────────────────────────────
 # Plain, greppable, timestamped — every script's stdout is safe to redirect to a log file
 # without losing information (no reliance on TTY color codes surviving a pipe).

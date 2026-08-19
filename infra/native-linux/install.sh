@@ -668,6 +668,13 @@ install_systemd_units() {
   log_step "Installing systemd units"
   render_template "${SCRIPT_DIR}/systemd/supreme-gateway.service" /etc/systemd/system/supreme-gateway.service
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
+  # § UI-triggered update (see lib/common.sh's configure_update_sudoers doc comment). The log file
+  # itself is created group-readable up front so the gateway (User=supreme) can tail it even
+  # before the first update ever runs and creates it via systemd-run's append redirect as root.
+  touch "$SUPREME_UPDATE_LOG"
+  chown "root:${SUPREME_GROUP}" "$SUPREME_UPDATE_LOG"
+  chmod 0640 "$SUPREME_UPDATE_LOG"
+  configure_update_sudoers
   # supreme-lan: the repo's own, pre-existing native unit — reused, not redefined here (§
   # requirement — do not create a parallel/competing definition for a service that already
   # has a documented native-linux deployment target) — but now RENDERED like every sibling

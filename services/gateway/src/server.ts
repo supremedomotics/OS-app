@@ -19,6 +19,7 @@ import { registerKeypadRoutes } from "./routes/keypad.js";
 import { registerIntentRoutes } from "./routes/intents.js";
 import { registerSecurityRoutes } from "./routes/security.js";
 import { registerSystemRoutes } from "./routes/system.js";
+import { registerSystemUpdateRoutes } from "./routes/system-update.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
 import { registerMatterRoutes } from "./routes/matter.js";
 import { registerIntelligenceRoutes } from "./routes/intelligence.js";
@@ -110,6 +111,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerNotificationRoutes(app, ctx);
   registerInstallerRoutes(app, ctx);
   registerSystemRoutes(app, ctx);
+  registerSystemUpdateRoutes(app, ctx);
   registerPhase3Routes(app, ctx);
   registerKeypadRoutes(app, ctx);
   registerIntentRoutes(app, ctx);

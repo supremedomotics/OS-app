@@ -140,6 +140,13 @@ export interface SupremeClientOptions {
   onSessionExpired?: () => void;
 }
 
+/** GET /v1/system/source-update/status response — see services/gateway/src/routes/system-update.ts.
+ * Declared inline (not in @supreme/contracts) — single-consumer shape, matching this file's own
+ * systemResetInfo()/systemReset() precedent rather than round-tripping through a shared schema. */
+export type SourceUpdateStatus =
+  | { enabled: false; status: "unavailable" }
+  | { enabled: true; status: "idle" | "running" | "completed" | "failed"; phase: string | null; error: string | null; startedAt: string | null; logTail: string[] };
+
 export class SupremeClient {
   private readonly baseUrl: string;
   private readonly tokens: TokenStore;
@@ -633,6 +640,17 @@ export class SupremeClient {
    * confirmation phrase "RESET SYSTEM" as a second, deliberate step beyond the UI dialog. */
   systemReset(): Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }> {
     return this.request("POST", "/v1/system/reset", { confirm: "RESET SYSTEM" }) as Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }>;
+  }
+  // ── Source-mode "Update now" (native-linux only) — triggers infra/native-linux/update.sh on
+  // the host via a narrowly-scoped sudoers rule. A DIFFERENT concern from systemUpdate() above
+  // (which only checks a signed OTA-artifact channel); unavailable (enabled:false) on the
+  // hub-compose/Docker deployment, which has no equivalent privileged host script.
+  sourceUpdateStatus(): Promise<SourceUpdateStatus> {
+    return this.request("GET", "/v1/system/source-update/status") as Promise<SourceUpdateStatus>;
+  }
+  /** Admin-only. Rejects (409) if an update is already running. */
+  sourceUpdateTrigger(): Promise<{ ok: true; triggeredAt: string }> {
+    return this.request("POST", "/v1/system/source-update/trigger") as Promise<{ ok: true; triggeredAt: string }>;
   }
   setBackupSchedule(input: { enabled?: boolean; everyHours?: number; retain?: number }): Promise<BackupScheduleResponse> {
     return this.request("PUT", "/v1/backup/schedule", input) as Promise<BackupScheduleResponse>;

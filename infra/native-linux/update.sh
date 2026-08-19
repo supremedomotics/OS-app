@@ -59,6 +59,10 @@ render_config() {
   render_template "${SCRIPT_DIR}/systemd/supreme-gateway.service" /etc/systemd/system/supreme-gateway.service
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
+  # § Re-provisioned on every update (not just fresh installs) so a host installed before this
+  # feature existed picks up the sudoers rule the next time it updates — never requires a manual
+  # step on an existing box.
+  configure_update_sudoers
   # § Bug fix (Phase 2 runtime investigation) — supreme-lan.service is now a real template
   # (see its own header comment); render it like every sibling unit, never `cp` it raw.
   render_template "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
@@ -142,6 +146,15 @@ rollback_update() {
 
 main() {
   require_root
+
+  # § Concurrency guard (non-negotiable — the UI's "Update now" trigger and an admin's own `sudo
+  # ./update.sh` over SSH must never both run at once, regardless of which one started first or
+  # how each was invoked). A non-blocking flock on a well-known path is the one guard both paths
+  # share unconditionally — the UI trigger launches this exact script via systemd-run, so it goes
+  # through this same main() and the same lock, no separate locking logic to keep in sync.
+  exec 9>"${SUPREME_UPDATE_LOCK_FILE:-/run/supremeos-update.lock}"
+  flock -n 9 || die "Another update is already running (lock: ${SUPREME_UPDATE_LOCK_FILE:-/run/supremeos-update.lock}) — refusing to run concurrently."
+
   load_answers
 
   local src_root

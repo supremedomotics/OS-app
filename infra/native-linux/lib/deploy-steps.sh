@@ -529,5 +529,7 @@ render_template() {
     -e "s|___POSTGRES_PASSWORD___|${POSTGRES_PASSWORD}|g" \
     -e "s|___SUPREME_HUB_VERSION___|${SUPREME_HUB_VERSION}|g" \
     -e "s|___SUPREME_LOG_LEVEL___|${SUPREME_LOG_LEVEL}|g" \
+    -e "s|___SUPREME_UPDATE_SCRIPT___|${SUPREME_UPDATE_SCRIPT}|g" \
+    -e "s|___SUPREME_UPDATE_LOG___|${SUPREME_UPDATE_LOG}|g" \
     "$tmpl" > "$out"
 }

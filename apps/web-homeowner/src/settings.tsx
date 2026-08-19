@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { SourceUpdateStatus } from "@supreme/sdk";
 import {
   AUREON_ACCENTS,
   AUREON_MODES,
@@ -1124,7 +1125,119 @@ function UpdateCenter() {
 
       <button disabled={busy} onClick={check} style={{ marginTop: 12 }}>{busy ? "Checking…" : "Check for updates"}</button>
       {err && <p className="err">{err}</p>}
+
+      <SourceUpdateSection />
     </section>
+  );
+}
+
+/**
+ * "Apply latest committed update (source mode)" (§ UI-triggered update). Deliberately a SEPARATE
+ * action from the OTA-channel check above it — that one asks "does a signed release artifact
+ * exist"; this one runs infra/native-linux/update.sh, which builds and switches to whatever is
+ * currently checked out in this box's own git repo. Conflating the two copy-wise would imply one
+ * "update" concept when they're mechanically different update paths. Renders nothing at all when
+ * the hub reports the feature unavailable (Docker/hub-compose deployments, or a native box that
+ * hasn't been provisioned with SUPREME_UPDATE_SCRIPT) — never a dead/greyed-out button with no
+ * explanation.
+ *
+ * § Self-restart tolerance: update.sh's own restart_services() step restarts the gateway process
+ * serving this very poll partway through a real run — a plain "poll failed once → show error"
+ * would misreport an update that's actually still progressing normally as failed. Polling here
+ * follows knx-discovery-workspace.tsx's own established pattern (consecutive-failure-tolerant,
+ * not immediate-failure-on-first-disconnect): only a run of several consecutive failures — long
+ * enough to rule out "the gateway is mid-restart" — is treated as a real problem.
+ */
+function SourceUpdateSection() {
+  const [status, setStatus] = useState<SourceUpdateStatus | null>(null);
+  const [triggerErr, setTriggerErr] = useState<string | null>(null);
+  const [pollErr, setPollErr] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let consecutiveFailures = 0;
+    const MAX_TRANSIENT_FAILURES = 8; // ~40s at 5s intervals — generous enough to ride out a real gateway restart
+    const POLL_MS = 5_000;
+
+    async function poll() {
+      try {
+        const s = (await client.sourceUpdateStatus()) as SourceUpdateStatus;
+        if (cancelled) return;
+        consecutiveFailures = 0;
+        setPollErr(null);
+        setStatus(s);
+        if (s.enabled && s.status === "running") {
+          pollRef.current = setTimeout(() => void poll(), POLL_MS);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_TRANSIENT_FAILURES) {
+          setPollErr(e instanceof Error ? e.message : "Lost contact with the hub while checking update progress.");
+        } else {
+          pollRef.current = setTimeout(() => void poll(), POLL_MS);
+        }
+      }
+    }
+    void poll();
+    return () => { cancelled = true; if (pollRef.current) clearTimeout(pollRef.current); };
+  }, []);
+
+  async function trigger() {
+    setTriggerErr(null);
+    try {
+      await client.sourceUpdateTrigger();
+      // Immediately re-enter the polling loop at "running" — the actual authoritative status
+      // arrives on the next poll tick above; this just avoids a dead button in the interim.
+      setStatus((s) => (s && s.enabled ? { ...s, status: "running", phase: null, error: null } : s));
+      if (pollRef.current) clearTimeout(pollRef.current);
+      const repoll = () => {
+        void client.sourceUpdateStatus().then((s) => {
+          setStatus(s as SourceUpdateStatus);
+          const s2 = s as SourceUpdateStatus;
+          if (s2.enabled && s2.status === "running") pollRef.current = setTimeout(repoll, 5_000);
+        }).catch(() => { pollRef.current = setTimeout(repoll, 5_000); });
+      };
+      pollRef.current = setTimeout(repoll, 1_000);
+    } catch (e) {
+      setTriggerErr(e instanceof Error ? e.message : "Could not start the update.");
+    }
+  }
+
+  if (!status || !status.enabled) return null; // feature not available on this deployment — say nothing, never a dead control
+
+  const running = status.status === "running";
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid var(--aureon-color-base-hairline, #333)" }}>
+      <p className="opt-label">Apply latest committed update (source mode)</p>
+      <p className="muted" style={{ marginTop: 4 }}>
+        Builds and switches to whatever is currently checked out on this hub's own repository — a
+        different action from the OTA channel check above. Automatically backs up first and rolls
+        back on failure.
+      </p>
+
+      <div className="lic-grid" style={{ marginTop: 10 }}>
+        <div><span className="k">Status</span><span className="v">
+          {status.status === "idle" && "Idle"}
+          {status.status === "running" && (status.phase ? `Running — ${status.phase}` : "Running…")}
+          {status.status === "completed" && "Completed"}
+          {status.status === "failed" && "Failed"}
+        </span></div>
+        {status.startedAt && <div><span className="k">Started</span><span className="v">{new Date(status.startedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span></div>}
+      </div>
+
+      {status.status === "failed" && (
+        <p className="err" style={{ marginTop: 8 }}>
+          Update failed{status.error ? `: ${status.error}` : "."} The hub automatically rolled back to the previous working version.
+        </p>
+      )}
+      {pollErr && <p className="err" style={{ marginTop: 8 }}>{pollErr} (the hub may still be restarting as part of the update — this page will recover automatically once it's back)</p>}
+      {triggerErr && <p className="err" style={{ marginTop: 8 }}>{triggerErr}</p>}
+
+      <button disabled={running} onClick={trigger} style={{ marginTop: 12 }}>{running ? "Updating…" : "Update now"}</button>
+    </div>
   );
 }
 
