@@ -246,6 +246,20 @@ export class KnxUltimateProvider implements IKnxProvider {
       const src = cemi?.srcAddress?.toString?.() ?? null;
       const raw = cemi?.npdu?.dataValue;
       if (!dst || !raw) return;
+      // § PASS 23 bug fix — `NPDU.dataValue` (knxultimate) ALWAYS returns a Buffer, even
+      // for a GroupValueRead REQUEST with no payload (1-6 bit KNX values are packed into
+      // the low 6 bits of the APCI byte itself, and `dataValue`'s getter falls back to
+      // `Buffer.alloc(1, apci & 0x3f)` whenever `_data` is null — verified against the
+      // installed `knxultimate@6.0.1` package's `NPDU.js`). A GroupValueRead's APCI has
+      // those bits at 0, so `raw` was previously non-null/non-empty and got decoded as if
+      // it were real feedback — silently overwriting a device's true state with a bogus
+      // "0"/false the instant ANY GroupValueRead hit its status GA (a legitimate KNX bus
+      // event: another device's poll, an ETS Group Monitor read, or this driver's own
+      // `syncAll()`/State-Synchronization group-reads reflecting off the bus). This is the
+      // concrete mechanism behind "physical=ON shows OFF in the app" — only a real
+      // GroupValueWrite or GroupValueResponse telegram carries genuine feedback.
+      const npdu = cemi?.npdu as { isGroupWrite?: boolean; isGroupResponse?: boolean } | undefined;
+      if (!npdu?.isGroupWrite && !npdu?.isGroupResponse) return;
       this.packetsReceived++;
       const ts = new Date().toISOString();
       this.lastTelegramAt = ts;

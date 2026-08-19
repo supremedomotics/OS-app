@@ -34,9 +34,18 @@ class FakeClient extends EventEmitter {
   read(groupAddress: string): void {
     this.readCalls.push(groupAddress);
   }
-  /** Test helper: simulate a real GroupValueResponse/status indication arriving. */
+  /** Test helper: simulate a real GroupValueWrite/status indication arriving. */
   emitIndication(groupAddress: string, raw: Buffer): void {
-    this.emit("indication", { cEMIMessage: { dstAddress: { toString: () => groupAddress }, npdu: { dataValue: raw } } });
+    this.emit("indication", {
+      cEMIMessage: { dstAddress: { toString: () => groupAddress }, npdu: { dataValue: raw, isGroupWrite: true, isGroupResponse: false } },
+    });
+  }
+  /** Test helper: simulate a GroupValueRead REQUEST (no real feedback payload) arriving
+   * on a subscribed GA — must never be decoded as state (§ PASS 23 bug fix). */
+  emitGroupRead(groupAddress: string, raw: Buffer): void {
+    this.emit("indication", {
+      cEMIMessage: { dstAddress: { toString: () => groupAddress }, npdu: { dataValue: raw, isGroupWrite: false, isGroupResponse: false } },
+    });
   }
 }
 
@@ -126,6 +135,25 @@ describe("KnxUltimateProvider", () => {
     provider.subscribe("1/1/1", "1.001", () => {});
     await provider.connect();
     FakeClient.instances[0]!.emitIndication("1/1/1", Buffer.from([1]));
+    expect(provider.diagnostics().unmatchedFeedbackTelegrams).toBe(0);
+  });
+
+  it("§ PASS 23 bug fix — a GroupValueRead REQUEST on a subscribed status GA is never decoded as feedback (knxultimate's NPDU.dataValue always returns a Buffer, even for a read with no real payload)", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    const values: unknown[] = [];
+    provider.subscribe("1/1/1", "1.001", (v) => values.push(v));
+    await provider.connect();
+    // A real GroupValueWrite establishes the true state first (e.g. a physical ON press).
+    FakeClient.instances[0]!.emitIndication("1/1/1", Buffer.from([1]));
+    // A GroupValueRead REQUEST arrives on the SAME GA afterwards (another device polling,
+    // an ETS Group Monitor read, or this driver's own State-Synchronization group-read
+    // reflecting off the bus) — its APCI's data bits are 0, which used to be misdecoded
+    // as a spurious "off"/0 and silently overwrite the real state.
+    FakeClient.instances[0]!.emitGroupRead("1/1/1", Buffer.from([0]));
+    expect(values).toEqual([true]); // only the real GroupValueWrite ever reached the handler
+    // Not counted as unmatched either — it's a different telegram TYPE, not feedback that
+    // failed to find a binding.
     expect(provider.diagnostics().unmatchedFeedbackTelegrams).toBe(0);
   });
 
