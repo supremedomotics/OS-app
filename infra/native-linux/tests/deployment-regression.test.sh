@@ -991,6 +991,51 @@ case "$_before_stage" in
 esac
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "configure_update_sudoers() — generated rule must be valid sudoers syntax (live deployment bug fix)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# A live run failed visudo validation: "syntax error: expected host name" at the unescaped ':'
+# in `--property=StandardOutput=append:/path` — sudoers requires ',', ':', '=', and '\' inside a
+# command's arguments to be backslash-escaped (`man sudoers`, Command grammar). A first attempted
+# fix (`${x//:/\\:}`) LOOKED right but silently produced NO escaping at all — bash's own
+# parameter-substitution strips a backslash preceding a non-special replacement character unless
+# the backslash is already a real character in a variable, not written inline in the pattern —
+# so this test calls the REAL function and inspects its REAL output, not just greps for the
+# fix being attempted, to catch exactly this class of "looks fixed, isn't" regression.
+( # subshell — configure_update_sudoers exits early via `die` on failure; isolate that
+  export SUPREME_USER="supreme-test"
+  export SUPREME_UPDATE_LOG="/tmp/sudoers-test/update.log"
+  export SUPREME_UPDATE_SCRIPT="/tmp/sudoers-test/update.sh"
+  export SUPREME_UPDATE_SUDOERS_FILE="${SCRATCH}/sudoers-test/supremeos-update"
+  mkdir -p "$(dirname "$SUPREME_UPDATE_SUDOERS_FILE")"
+  configure_update_sudoers 2>"${SCRATCH}/sudoers-test/stderr.log"
+)
+_sudoers_rc=$?
+_sudoers_file="${SCRATCH}/sudoers-test/supremeos-update"
+if [ "$_sudoers_rc" -eq 0 ] && [ -r "$_sudoers_file" ]; then
+  pass "configure_update_sudoers() runs to completion against real inputs (would have died on a visudo failure, if visudo is present)"
+  _sudoers_content="$(cat "$_sudoers_file")"
+  case "$_sudoers_content" in
+    *'append\:/tmp/sudoers-test/update.log'*) pass "generated rule escapes the ':' in 'append:<path>' (the exact character visudo rejected live)" ;;
+    *) fail "generated rule escapes the ':' in 'append:<path>' (the exact character visudo rejected live)" "got: $(grep -o 'append[^ ]*' <<<"$_sudoers_content")" ;;
+  esac
+  case "$_sudoers_content" in
+    *'--unit\=supreme-update'*) pass "generated rule escapes '=' in command-line flags (e.g. --unit=...)" ;;
+    *) fail "generated rule escapes '=' in command-line flags (e.g. --unit=...)" "got: $(grep -o -- '--unit[^ ]*' <<<"$_sudoers_content")" ;;
+  esac
+  if command_exists visudo; then
+    if visudo -cf "$_sudoers_file" >/dev/null 2>&1; then
+      pass "generated rule passes real visudo -cf validation (the actual live failure mode)"
+    else
+      fail "generated rule passes real visudo -cf validation (the actual live failure mode)" "$(visudo -cf "$_sudoers_file" 2>&1)"
+    fi
+  else
+    log_warn "visudo not available in this sandbox — content-level escaping checks above are the best available proxy here; the live Ubuntu box is the real validator."
+  fi
+else
+  fail "configure_update_sudoers() runs to completion against real inputs (would have died on a visudo failure, if visudo is present)" "$(cat "${SCRATCH}/sudoers-test/stderr.log" 2>/dev/null)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

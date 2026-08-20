@@ -66,6 +66,26 @@ SUPREME_UPDATE_SUDOERS_FILE="/etc/sudoers.d/supremeos-update"
 configure_update_sudoers() {
   local tmp
   tmp="$(mktemp)"
+  # § Bug fix (live deployment) — sudoers requires ',', ':', '=', and '\' inside a command's
+  # arguments to be backslash-escaped (see `man sudoers`, "Command" grammar); an unescaped ':'
+  # in `append:${SUPREME_UPDATE_LOG}` made visudo treat the rule as ending mid-line and expect
+  # a new Host_List next ("syntax error: expected host name"), refusing to install the file —
+  # confirmed live. Escaping is a sudoers-FILE-parsing concern only: `sudo`/systemd-run receive
+  # the real, unescaped argv exactly as execFile() built it (see system-update-runner.ts's
+  # buildUpdateTriggerArgv doc comment) — the backslashes here are stripped by sudoers' own
+  # parser and never become part of the string actually matched or executed, so this cannot
+  # create a mismatch with the fixed argv the gateway invokes.
+  # A literal backslash built via a variable, not written directly in the substitution's
+  # replacement text — `${x//pat/\Y}` strips a backslash preceding a non-special character
+  # like ':'/'=' during bash's own word expansion (confirmed empirically: it silently produces
+  # NO escaping at all, the exact bug being fixed here), so the replacement must already
+  # CONTAIN a real backslash character rather than ask bash to insert one inline.
+  local bs='\'
+  local escaped_cmd="/usr/bin/systemd-run --unit=supreme-update --collect --property=Type=oneshot --property=StandardOutput=append:${SUPREME_UPDATE_LOG} --property=StandardError=inherit -- ${SUPREME_UPDATE_SCRIPT}"
+  escaped_cmd="${escaped_cmd//${bs}/${bs}${bs}}"
+  escaped_cmd="${escaped_cmd//,/${bs},}"
+  escaped_cmd="${escaped_cmd//:/${bs}:}"
+  escaped_cmd="${escaped_cmd//=/${bs}=}"
   cat > "$tmp" <<EOF
 # Managed by SupremeOS (infra/native-linux/lib/common.sh's configure_update_sudoers). Do not
 # hand-edit — install.sh/update.sh regenerate this file on every run.
@@ -74,8 +94,11 @@ configure_update_sudoers() {
 # detached, --collect'ed transient systemd unit — WITHOUT ever making the gateway process itself
 # run as root. update.sh's own require_root guard is unchanged; this only authorizes handing off
 # to sudo for this one exact invocation, matching services/gateway/src/system-update-runner.ts's
-# buildUpdateTriggerArgv() field-for-field. No wildcard, no user-supplied argument.
-${SUPREME_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit=supreme-update --collect --property=Type=oneshot --property=StandardOutput=append:${SUPREME_UPDATE_LOG} --property=StandardError=inherit -- ${SUPREME_UPDATE_SCRIPT}
+# buildUpdateTriggerArgv() field-for-field. No wildcard, no user-supplied argument. The ',', ':',
+# and '=' below are backslash-escaped per sudoers' own command-argument syntax — this changes
+# nothing about what actually runs, only how the sudoers parser reads this line (see comment
+# above this function's cat block for the full explanation).
+${SUPREME_USER} ALL=(root) NOPASSWD: ${escaped_cmd}
 EOF
   chmod 0440 "$tmp"
   if command_exists visudo; then
