@@ -57,6 +57,15 @@ const SORT_LABEL: Record<SortKey, string> = {
 // § Pass 11.2 — real, coarse stages only (see KnxImportJobStage in installer-context.ts);
 // no fabricated fine-grained progress bar over a pipeline that isn't actually instrumented
 // stage-by-stage internally.
+/** § Live-reproduced bug fix (Mode A) — pure gate so the Scan/Discover button (and the
+ * file input) stay disabled for the whole async-read + CPU-bound base64-encode window
+ * `onFile()` runs in, not just while `phase === "scanning"`. Extracted so the exact
+ * condition is unit-testable without mounting the component (no React Testing Library
+ * in this app's test setup — see other *.test.ts files in this directory). */
+export function canStartKnxScan(phase: "idle" | "scanning" | "done" | "error", readingFile: boolean): boolean {
+  return phase !== "scanning" && !readingFile;
+}
+
 function jobStatusLabel(status: KnxImportJobStatus | null): string {
   switch (status) {
     case "queued": return "Queued…";
@@ -107,6 +116,17 @@ export function KnxDiscoveryWorkspace() {
   const [etsFileName, setEtsFileName] = useState<string | null>(null);
   const [etsPassword, setEtsPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
+  // § Live-reproduced bug (Mode A — fast empty scan): onFile() sets `etsFileName`
+  // synchronously (so "Selected: <name>" renders immediately) but `etsProject` only
+  // after an async file read PLUS a synchronous, CPU-bound base64-encode loop over
+  // the whole file — measurably slow for a real multi-MB .knxproj. Scan()/the Scan
+  // button were only disabled by `phase === "scanning"`, so a click during that window
+  // (file already shown as "Selected", encoding not yet done) sent no `ets` source at
+  // all: a silent fall-through to a bare live KNX-IoT scan, which returns all-zeros in
+  // exactly ~3000ms on a hub with no live KNX-IoT devices (KnxIotProvider's own default
+  // `discoveryTimeoutMs`, services/protocols/src/knx/knx-iot-provider.ts:49) — matching
+  // the live-captured "3002ms twice" evidence exactly. `readingFile` closes that window.
+  const [readingFile, setReadingFile] = useState(false);
 
   useEffect(() => {
     void client.home().then((h) => setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name }))));
@@ -230,15 +250,20 @@ export function KnxDiscoveryWorkspace() {
     setNeedsPassword(false);
     setEtsPassword("");
     setEtsFileName(file.name);
-    if (file.name.toLowerCase().endsWith(".knxproj")) {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
-      setEtsProject(btoa(bin));
-      setEtsText("");
-    } else {
-      setEtsText(await file.text());
-      setEtsProject(null);
+    setReadingFile(true);
+    try {
+      if (file.name.toLowerCase().endsWith(".knxproj")) {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let bin = "";
+        for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
+        setEtsProject(btoa(bin));
+        setEtsText("");
+      } else {
+        setEtsText(await file.text());
+        setEtsProject(null);
+      }
+    } finally {
+      setReadingFile(false);
     }
   }
 
@@ -373,7 +398,7 @@ export function KnxDiscoveryWorkspace() {
         <input
           type="file"
           accept=".knxproj,.esf,.csv,.xml,text/xml,text/csv"
-          disabled={phase === "scanning"}
+          disabled={!canStartKnxScan(phase, readingFile)}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
         />
         <span className="help">
@@ -416,8 +441,8 @@ export function KnxDiscoveryWorkspace() {
         </label>
       )}
       <div className="drv-actions" style={{ marginTop: 8 }}>
-        <button className="primary" disabled={phase === "scanning"} onClick={() => void scan()}>
-          {phase === "scanning" ? jobStatusLabel(jobStatus) : result ? "Scan again" : "Discover devices"}
+        <button className="primary" disabled={!canStartKnxScan(phase, readingFile)} onClick={() => void scan()}>
+          {phase === "scanning" ? jobStatusLabel(jobStatus) : readingFile ? "Reading file…" : result ? "Scan again" : "Discover devices"}
         </button>
         {phase === "scanning" && jobId && (
           <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>
