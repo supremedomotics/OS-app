@@ -319,6 +319,18 @@ export class SupremeIntegrationLayer {
     return this.router?.engine.driverFor(protocol) ?? null;
   }
 
+  /** § Live Feedback Diagnostic Pass — thin passthrough to the KNX driver's own
+   * composed diagnostic snapshot for one device (see `SupremeKnxDriver.knxFeedbackDiagnostics`).
+   * `null` when no "knx" driver is registered, or that driver doesn't manage this device. */
+  getKnxFeedbackDiagnostics(deviceId: DeviceId): unknown {
+    return this.getNativeDriver("knx")?.knxFeedbackDiagnostics?.(deviceId) ?? null;
+  }
+
+  /** § Live Feedback Diagnostic Pass — whether an arbitrary GA has a live KNX subscription. */
+  isKnxGaSubscribed(groupAddress: string): boolean {
+    return this.getNativeDriver("knx")?.isSubscribedToGa?.(groupAddress) ?? false;
+  }
+
   /** Runtime diagnostics (ADR-0023 § Runtime Diagnostics): provider, lifecycle
    * state, binding/connection health — never fabricated. Null when this hub isn't
    * backed by a router (no provider concept to report). */

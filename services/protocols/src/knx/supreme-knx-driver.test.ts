@@ -32,6 +32,7 @@ class FakeKnxProvider implements IKnxProvider {
   }
   subscribe(ga: string, _dpt: string, handler: (value: unknown) => void): void { this.observers.set(ga, handler); }
   unsubscribe(ga: string): void { this.observers.delete(ga); }
+  isSubscribed(ga: string): boolean { return this.observers.has(ga); }
   health(): ProviderHealth { return { connected: this.connected, lastError: null }; }
   diagnostics(): ProviderDiagnostics {
     return { provider: this.name, connected: this.connected, packetsSent: this.writes.length, packetsReceived: 0, lastTelegramAt: null, lastCommandAt: null, lastError: null, reconnectAttempts: 0 };
@@ -138,6 +139,49 @@ describe("SupremeKnxDriver", () => {
     const first = driver.diagnostics().lastRecordedState;
     provider.emit("1/1/2", true); // identical value — deduped by record()'s own existing guard
     expect(driver.diagnostics().lastRecordedState?.ts).toBe(first?.ts); // unchanged, not a new record
+  });
+
+  it("§ Live Feedback Diagnostic Pass — knxFeedbackDiagnostics() composes provider counters, binding, subscription, and last matched/recorded state for one device", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    await driver.connect();
+
+    // Nothing has arrived yet.
+    const before = driver.knxFeedbackDiagnostics(deviceId);
+    expect(before?.connected).toBe(true);
+    expect(before?.binding).toEqual({ writeGa: "1/1/1", statusGa: "1/1/2", extraStatusGas: [], dpt: expect.any(String) });
+    expect(before?.isSubscribed).toBe(true); // observe() subscribed the status GA on connect()
+    expect(before?.lastMatchedFeedback).toBeNull();
+    expect(before?.lastRecordedState).toBeNull();
+
+    provider.emit("1/1/2", true);
+    const after = driver.knxFeedbackDiagnostics(deviceId);
+    expect(after?.lastMatchedFeedback).toMatchObject({ deviceId, capability: "onoff", destination: "1/1/2", value: true });
+    expect(after?.lastRecordedState).toMatchObject({ deviceId, capability: "onoff", kind: "onoff" });
+  });
+
+  it("§ Live Feedback Diagnostic Pass — knxFeedbackDiagnostics() is null for a device this driver doesn't manage", () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    expect(driver.knxFeedbackDiagnostics(newId("device") as DeviceId)).toBeNull();
+  });
+
+  it("§ Live Feedback Diagnostic Pass — isSubscribedToGa() and getBindingInfo()/getRuntimeBinding() report the real, resolved runtime binding, not guessed", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    expect(driver.isSubscribedToGa("1/1/2")).toBe(false);
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    await driver.connect();
+    expect(driver.isSubscribedToGa("1/1/2")).toBe(true);
+    expect(driver.isSubscribedToGa("9/9/9")).toBe(false); // an unrelated, unbound GA
+    expect(driver.getRuntimeBinding(deviceId, "onoff")).toEqual({ writeGa: "1/1/1", statusGa: "1/1/2", extraStatusGas: [], dpt: expect.any(String) });
+    expect(driver.getBindingInfo(deviceId)).toEqual([
+      { capability: "onoff", writeGa: "1/1/1", statusGa: "1/1/2", extraStatusGas: [], dpt: expect.any(String) },
+    ]);
+    expect(driver.getBindingInfo(newId("device") as DeviceId)).toEqual([]); // unbound device — empty, never fabricated
   });
 });
 

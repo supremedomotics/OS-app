@@ -1,5 +1,5 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
-import type { IKnxProvider, KnxFeedbackTelegramSnapshot, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
+import type { IKnxProvider, KnxFeedbackTelegramSnapshot, KnxRawTelegramSnapshot, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
 import { ConnectionManager, type ConnectionManagerMetrics, type ConnectionState } from "./connection-manager.js";
 
 /**
@@ -98,6 +98,11 @@ export class KnxUltimateProvider implements IKnxProvider {
   // § PASS 20 diagnostic (Part A) — bounded, one-entry snapshots; never an unbounded log.
   private lastFeedbackTelegram: KnxFeedbackTelegramSnapshot | null = null;
   private lastUnmatchedFeedback: KnxFeedbackTelegramSnapshot | null = null;
+  // § Live Feedback Diagnostic Pass — real, incrementing-only breakdowns of packetsReceived.
+  private groupWritesReceived = 0;
+  private groupResponsesReceived = 0;
+  private groupReadsIgnored = 0;
+  private lastTelegram: KnxRawTelegramSnapshot | null = null;
 
   constructor(opts: KnxUltimateProviderOptions) {
     this.opts = opts;
@@ -259,14 +264,23 @@ export class KnxUltimateProvider implements IKnxProvider {
       // concrete mechanism behind "physical=ON shows OFF in the app" — only a real
       // GroupValueWrite or GroupValueResponse telegram carries genuine feedback.
       const npdu = cemi?.npdu as { isGroupWrite?: boolean; isGroupResponse?: boolean } | undefined;
-      if (!npdu?.isGroupWrite && !npdu?.isGroupResponse) return;
+      if (!npdu?.isGroupWrite && !npdu?.isGroupResponse) {
+        // § Live Feedback Diagnostic Pass — a real GroupValueRead REQUEST, correctly
+        // ignored per the § PASS 23 fix above; counted separately so a tester can see
+        // "reads are arriving" without them ever masquerading as feedback.
+        this.groupReadsIgnored++;
+        return;
+      }
       this.packetsReceived++;
+      const telegramType: "write" | "response" = npdu.isGroupResponse ? "response" : "write";
+      if (telegramType === "write") this.groupWritesReceived++; else this.groupResponsesReceived++;
       const ts = new Date().toISOString();
       this.lastTelegramAt = ts;
       const handlers = this.observers.get(dst);
       if (!handlers?.length) {
         this.unmatchedFeedbackTelegrams++;
         this.lastUnmatchedFeedback = { source: src, destination: dst, matched: false, ts };
+        this.lastTelegram = { source: src, destination: dst, type: telegramType, ts };
         return;
       }
       // § PASS 20 diagnostic (Part A) — decode using the FIRST matched observer's own
@@ -277,6 +291,7 @@ export class KnxUltimateProvider implements IKnxProvider {
       let decodedForDiagnostics: unknown;
       try { decodedForDiagnostics = dptlib.fromBuffer(raw, dptlib.resolve(firstDpt)); } catch { /* diagnostic-only, never block real handling */ }
       this.lastFeedbackTelegram = { source: src, destination: dst, matched: true, dpt: firstDpt, value: decodedForDiagnostics, ts };
+      this.lastTelegram = { source: src, destination: dst, type: telegramType, dpt: firstDpt, value: decodedForDiagnostics, ts };
       for (const { dpt, handler } of handlers) handler(dptlib.fromBuffer(raw, dptlib.resolve(dpt)));
     });
   }
@@ -356,6 +371,10 @@ export class KnxUltimateProvider implements IKnxProvider {
       unmatchedFeedbackTelegrams: this.unmatchedFeedbackTelegrams,
       lastFeedbackTelegram: this.lastFeedbackTelegram,
       lastUnmatchedFeedback: this.lastUnmatchedFeedback,
+      groupWritesReceived: this.groupWritesReceived,
+      groupResponsesReceived: this.groupResponsesReceived,
+      groupReadsIgnored: this.groupReadsIgnored,
+      lastTelegram: this.lastTelegram,
     };
   }
 }

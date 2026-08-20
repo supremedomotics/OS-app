@@ -196,6 +196,48 @@ describe("KnxUltimateProvider", () => {
     expect(provider.isSubscribed("5/3/1")).toBe(false);
   });
 
+  it("§ Live Feedback Diagnostic Pass — a matched GroupValueWrite increments groupWritesReceived and sets lastTelegram, but never groupResponsesReceived", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("5/3/1", "1.001", () => {});
+    await provider.connect();
+    FakeClient.instances[0]!.emitIndication("5/3/1", Buffer.from([1]));
+    const diag = provider.diagnostics();
+    expect(diag.groupWritesReceived).toBe(1);
+    expect(diag.groupResponsesReceived).toBe(0);
+    expect(diag.groupReadsIgnored).toBe(0);
+    expect(diag.lastTelegram).toMatchObject({ destination: "5/3/1", type: "write", dpt: "1.001", value: true });
+  });
+
+  it("§ Live Feedback Diagnostic Pass — an UNMATCHED telegram still updates lastTelegram (superset of lastUnmatchedFeedback) and counts groupWritesReceived, but never touches lastFeedbackTelegram", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("1/1/1", "1.001", () => {});
+    await provider.connect();
+    FakeClient.instances[0]!.emitIndication("5/3/1", Buffer.from([1]));
+    const diag = provider.diagnostics();
+    expect(diag.groupWritesReceived).toBe(1);
+    expect(diag.lastTelegram).toMatchObject({ destination: "5/3/1", type: "write" });
+    expect(diag.lastFeedbackTelegram).toBeNull();
+    expect(diag.lastUnmatchedFeedback).toMatchObject({ destination: "5/3/1", matched: false });
+  });
+
+  it("§ Live Feedback Diagnostic Pass — a real GroupValueRead REQUEST increments groupReadsIgnored ONLY, touching no other counter or snapshot (§ PASS 23 regression guard)", async () => {
+    const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
+    const provider = new KnxUltimateProvider({ host: "10.0.0.1" });
+    provider.subscribe("1/1/1", "1.001", () => {});
+    await provider.connect();
+    FakeClient.instances[0]!.emitGroupRead("1/1/1", Buffer.from([0]));
+    const diag = provider.diagnostics();
+    expect(diag.groupReadsIgnored).toBe(1);
+    expect(diag.groupWritesReceived).toBe(0);
+    expect(diag.groupResponsesReceived).toBe(0);
+    expect(diag.packetsReceived).toBe(0); // never counted as a real received telegram either
+    expect(diag.lastTelegram).toBeNull();
+    expect(diag.lastFeedbackTelegram).toBeNull();
+    expect(diag.lastUnmatchedFeedback).toBeNull();
+  });
+
   it("fires onConnectionStateChange('connected') on the very first connect", async () => {
     const { KnxUltimateProvider } = await import("./knx-ultimate-provider.js");
     const provider = new KnxUltimateProvider({ host: "10.0.0.1" });

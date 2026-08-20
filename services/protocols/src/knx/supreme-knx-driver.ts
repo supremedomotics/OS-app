@@ -422,6 +422,10 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   private observe(b: KnxDeviceBinding): void {
     for (const ga of [b.statusGa, ...b.extraStatusGas]) {
       this.ultimate.subscribe(ga, b.dpt, (value) => {
+        // § Live Feedback Diagnostic Pass — record BEFORE decode/record() so this
+        // reflects "a subscribed telegram for THIS device's GA reached the driver's own
+        // handler," independent of whether stateFromValue() then accepted it.
+        this.lastMatchedFeedback = { deviceId: b.deviceId, capability: b.capability, destination: ga, dpt: b.dpt, value, ts: new Date().toISOString() };
         const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config);
         if (state) this.record(b, state);
       });
@@ -430,6 +434,62 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
 
   /** § PASS 20 diagnostic (Part D) — backing field for `diagnostics().lastRecordedState`. */
   private lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null = null;
+
+  /** § Live Feedback Diagnostic Pass — the most recent feedback telegram that reached a
+   * SUBSCRIBED handler for a bound device's status GA, enriched with the deviceId a
+   * provider-level snapshot can't know. `null` until the first one ever arrives. */
+  private lastMatchedFeedback: { deviceId: string; capability: string; destination: string; dpt: string; value: unknown; ts: string } | null = null;
+
+  /** § Live Feedback Diagnostic Pass — safe passthrough so a caller can check whether an
+   * arbitrary GA currently has a live subscription, without reaching into the provider. */
+  isSubscribedToGa(groupAddress: string): boolean {
+    return this.ultimate.isSubscribed?.(groupAddress) ?? false;
+  }
+
+  /** § Live Feedback Diagnostic Pass — the real, RESOLVED runtime binding (write GA,
+   * status GA, DPT) for one device+capability, distinct from the design-time
+   * `ProtocolBinding` type model. `null` when this device/capability isn't bound. */
+  getRuntimeBinding(deviceId: DeviceId, capability: CapabilityKind): { writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string } | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === capability);
+    if (!b) return null;
+    return { writeGa: b.writeGa, statusGa: b.statusGa, extraStatusGas: b.extraStatusGas, dpt: b.dpt };
+  }
+
+  /** § Decisive KNX Feedback Diagnostic — alias consumed by `AppContext.getFeedbackDiagnostics`
+   * (context.ts): every runtime binding this device has, across all its capabilities
+   * (a device can have more than one, e.g. onoff + brightness). Empty array, never
+   * fabricated, for a device with no KNX bindings. */
+  getBindingInfo(deviceId: DeviceId): { capability: CapabilityKind; writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string }[] {
+    return this.bindings
+      .filter((b) => b.deviceId === deviceId)
+      .map((b) => ({ capability: b.capability, writeGa: b.writeGa, statusGa: b.statusGa, extraStatusGas: b.extraStatusGas, dpt: b.dpt }));
+  }
+
+  /** § Live Feedback Diagnostic Pass — one composed snapshot of the ENTIRE KNX feedback
+   * pipeline for one device, from bus telegram through to the last state this driver
+   * itself recorded. Gateway-level hops (backend fan-out/persistence/WSS broadcast) are
+   * NOT this driver's business — the gateway composes those onto this snapshot itself
+   * (see `context.ts`'s `getKnxFeedbackDiagnostics`). `null` when this device isn't
+   * bound to any KNX capability. */
+  knxFeedbackDiagnostics(deviceId: DeviceId): {
+    connected: boolean;
+    provider: ProviderDiagnostics;
+    isSubscribed: boolean;
+    binding: { writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string } | null;
+    lastMatchedFeedback: { deviceId: string; capability: string; destination: string; dpt: string; value: unknown; ts: string } | null;
+    lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null;
+  } | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return {
+      connected: this.connected,
+      provider: this.ultimate.diagnostics(),
+      isSubscribed: this.isSubscribedToGa(b.statusGa),
+      binding: this.getRuntimeBinding(deviceId, b.capability),
+      lastMatchedFeedback: this.lastMatchedFeedback?.deviceId === deviceId ? this.lastMatchedFeedback : null,
+      lastRecordedState: this.lastRecordedState?.deviceId === deviceId ? this.lastRecordedState : null,
+    };
+  }
 
   private record(b: KnxDeviceBinding, state: CapabilityState): void {
     const k = bindingKey(b.deviceId, b.capability);

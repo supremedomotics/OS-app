@@ -257,6 +257,31 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
     }
   });
 
+  // § Decisive KNX Feedback Diagnostic (temporary, built for a human tester to run one
+  // physical keypad press against and see exactly which hop breaks): GET
+  // /v1/devices/:id/diagnostics/knx-feedback — the full cross-hop snapshot (bus →
+  // provider → driver → gateway-backend → gateway-persisted → gateway-broadcast) for
+  // one device, from `AppContext.getFeedbackDiagnostics`. `knx: null` when this device
+  // isn't KNX-managed — never fabricated. Optional `?ga=` also checks whether that
+  // exact group address currently has a live bus subscription. Same permission posture
+  // as `/diagnostics` (devMode-gated on the client, "view" — a read).
+  app.get<{ Params: { id: string }; Querystring: { ga?: string } }>("/v1/devices/:id/diagnostics/knx-feedback", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "view");
+      const ga = req.query.ga;
+      reply.send({
+        ...ctx.getFeedbackDiagnostics(deviceId),
+        isSubscribed: ga ? ctx.sil.isKnxGaSubscribed(ga) : null,
+      });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // § AVR Diagnostic Mode: GET /v1/devices/:id/diagnostics/export — the device's owning
   // driver's complete diagnostic trace log (every captured event, under its correlation
   // ID, ending with the session summary — see `AvrDiagnosticsRecorder.exportLog`). `null`

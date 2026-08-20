@@ -155,6 +155,18 @@ export interface INativeProtocolDriver {
    * that doesn't implement diagnostics (i.e. everything but AVR-with-diagnostics-on). */
   recordDiagnosticStage?(traceId: string, stage: string, fields: Record<string, unknown>): void;
 
+  /** § Live Feedback Diagnostic Pass — optional, KNX-only: one composed snapshot of the
+   * bus→provider→driver feedback pipeline for a device (provider counters, subscription
+   * status, resolved runtime binding, last matched feedback, last recorded state).
+   * `null`/absent for every driver but `SupremeKnxDriver`. Return type is `unknown` here
+   * (not `@supreme/protocols`-typed) so this generic interface never needs to import a
+   * single protocol's shape — the gateway route that calls this owns the real cast. */
+  knxFeedbackDiagnostics?(deviceId: DeviceId): unknown;
+
+  /** § Live Feedback Diagnostic Pass — optional, KNX-only: whether an arbitrary group
+   * address currently has a live bus subscription. */
+  isSubscribedToGa?(groupAddress: string): boolean;
+
   /** § AVR Diagnostic Mode — optional: the complete, human-readable trace log this
    * driver has buffered since diagnostics was enabled, ending with a session summary
    * (counters + top unknown commands). `null` when diagnostics isn't enabled/supported.
