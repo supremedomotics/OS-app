@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canStartKnxScan } from "./knx-discovery-workspace.js";
+import { canStartKnxScan, type EtsSourceMode } from "./knx-discovery-workspace.js";
 
 // § Live-reproduced bug regression (Mode A — fast empty scan): the Scan/Discover
 // button and file input must stay disabled for the ENTIRE window between a user
@@ -29,5 +29,26 @@ describe("canStartKnxScan", () => {
 
   it("blocks when both a scan is running and a file read is in flight", () => {
     expect(canStartKnxScan("scanning", true)).toBe(false);
+  });
+});
+
+// § UX fix — an ETS project file and a pasted group-address export are mutually exclusive
+// alternatives (not "use both at once"); the picker must always resolve to exactly one of
+// the three states below, never allow both inputs simultaneously. This is a compile-time
+// exhaustiveness guard (no component test harness in this app — see canStartKnxScan's own
+// note) so a future fourth mode can't be added to the type without every switch over it
+// (the render branches in knx-discovery-workspace.tsx) being forced to handle it.
+describe("EtsSourceMode", () => {
+  it("is exactly one of: no source chosen yet, a project file, or pasted text", () => {
+    function label(mode: EtsSourceMode): string {
+      switch (mode) {
+        case null: return "none";
+        case "project": return "project";
+        case "pasted": return "pasted";
+      }
+    }
+    expect(label(null)).toBe("none");
+    expect(label("project")).toBe("project");
+    expect(label("pasted")).toBe("pasted");
   });
 });

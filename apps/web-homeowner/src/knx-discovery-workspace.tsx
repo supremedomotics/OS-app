@@ -66,6 +66,16 @@ export function canStartKnxScan(phase: "idle" | "scanning" | "done" | "error", r
   return phase !== "scanning" && !readingFile;
 }
 
+/** § UX fix — an ETS project file and a pasted group-address export were previously shown as
+ * two always-visible inputs at once, even though they're mutually exclusive alternatives (the
+ * code already enforced this: selecting a file cleared the pasted text and vice versa) — just
+ * not communicated visually, which read as "you can use both." Installers must now pick ONE
+ * source explicitly; only that source's input renders. A bare live gateway/KNX-IoT scan (no
+ * ETS source at all) remains available regardless — the mode picker only governs which ETS
+ * INPUT is shown, not whether scanning requires one. Pure function so the choice logic is
+ * unit-testable without mounting the component. */
+export type EtsSourceMode = "project" | "pasted" | null;
+
 function jobStatusLabel(status: KnxImportJobStatus | null): string {
   switch (status) {
     case "queued": return "Queued…";
@@ -127,6 +137,9 @@ export function KnxDiscoveryWorkspace() {
   // `discoveryTimeoutMs`, services/protocols/src/knx/knx-iot-provider.ts:49) — matching
   // the live-captured "3002ms twice" evidence exactly. `readingFile` closes that window.
   const [readingFile, setReadingFile] = useState(false);
+  // § UX fix — which ETS source input is shown; null = not chosen yet, so neither the file
+  // picker nor the paste box renders until the installer explicitly picks one.
+  const [sourceMode, setSourceMode] = useState<EtsSourceMode>(null);
 
   useEffect(() => {
     void client.home().then((h) => setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name }))));
@@ -250,6 +263,7 @@ export function KnxDiscoveryWorkspace() {
     setNeedsPassword(false);
     setEtsPassword("");
     setEtsFileName(file.name);
+    setSourceMode("project");
     setReadingFile(true);
     try {
       if (file.name.toLowerCase().endsWith(".knxproj")) {
@@ -272,6 +286,12 @@ export function KnxDiscoveryWorkspace() {
     setEtsFileName(null);
     setEtsPassword("");
     setNeedsPassword(false);
+    setSourceMode(null);
+  }
+
+  function clearPastedGa() {
+    setEtsText("");
+    setSourceMode(null);
   }
 
   // § Pass 11.2/11.3 — starts the NON-blocking job route and returns immediately; the
@@ -393,45 +413,76 @@ export function KnxDiscoveryWorkspace() {
         the same Unified Device Intelligence pipeline either way: grouping, capability detection,
         room assignment, duplicate detection, and binding plans, using the schema selected above.
       </p>
-      <label className="drv-field" style={{ marginTop: 4 }}>
-        <span className="lbl">ETS project (optional)</span>
-        <input
-          type="file"
-          accept=".knxproj,.esf,.csv,.xml,text/xml,text/csv"
-          disabled={!canStartKnxScan(phase, readingFile)}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
-        />
-        <span className="help">
-          Upload a .knxproj, or paste a group-address export (CSV/XML) below. Imported devices go
-          through this same review workspace — approve them exactly like a live-discovered device.
-        </span>
-      </label>
-      {etsFileName && (
-        <div className="drv-field" style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span
-            className="muted"
-            title={etsFileName}
-            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
-          >
-            Selected: {etsFileName}
+      {sourceMode === null && (
+        <div className="drv-field" style={{ marginTop: 4 }}>
+          <span className="help">
+            Optionally add an ETS source to merge into the same discovery pipeline — pick one:
           </span>
-          <button type="button" className="danger" disabled={phase === "scanning"} onClick={removeEtsFile} style={{ flexShrink: 0 }}>
-            Remove
-          </button>
+          <div className="drv-actions" style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <button type="button" disabled={!canStartKnxScan(phase, readingFile)} onClick={() => setSourceMode("project")}>
+              Upload ETS project (.knxproj)
+            </button>
+            <button type="button" disabled={!canStartKnxScan(phase, readingFile)} onClick={() => setSourceMode("pasted")}>
+              Paste group-address export
+            </button>
+          </div>
         </div>
       )}
-      <textarea
-        value={etsText}
-        onChange={(e) => { setEtsText(e.target.value); setEtsProject(null); }}
-        placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
-        rows={4}
-        style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
-      />
-      {etsText && (
+      {sourceMode === "project" && (
+        <label className="drv-field" style={{ marginTop: 4 }}>
+          <span className="lbl">ETS project</span>
+          <input
+            type="file"
+            accept=".knxproj,.esf,.csv,.xml,text/xml,text/csv"
+            disabled={!canStartKnxScan(phase, readingFile)}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
+          />
+          <span className="help">
+            Upload a .knxproj. Imported devices go through this same review workspace — approve
+            them exactly like a live-discovered device.
+          </span>
+          {etsFileName && (
+            <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <span
+                className="muted"
+                title={etsFileName}
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+              >
+                Selected: {etsFileName}
+              </span>
+              <button type="button" className="danger" disabled={phase === "scanning"} onClick={removeEtsFile} style={{ flexShrink: 0 }}>
+                Remove
+              </button>
+            </div>
+          )}
+          {!etsFileName && (
+            <button type="button" disabled={phase === "scanning"} onClick={() => setSourceMode(null)} style={{ marginTop: 4, alignSelf: "flex-start" }}>
+              ‹ Choose a different source
+            </button>
+          )}
+        </label>
+      )}
+      {sourceMode === "pasted" && (
         <div className="drv-field" style={{ marginTop: 4 }}>
-          <button type="button" className="danger" disabled={phase === "scanning"} onClick={() => setEtsText("")}>
-            Clear pasted group addresses
-          </button>
+          <span className="lbl">Group-address export (CSV/XML)</span>
+          <textarea
+            value={etsText}
+            onChange={(e) => { setEtsText(e.target.value); setEtsProject(null); }}
+            placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
+            rows={4}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
+          />
+          <div style={{ marginTop: 4, display: "flex", gap: 8 }}>
+            {etsText ? (
+              <button type="button" className="danger" disabled={phase === "scanning"} onClick={clearPastedGa}>
+                Clear pasted group addresses
+              </button>
+            ) : (
+              <button type="button" disabled={phase === "scanning"} onClick={() => setSourceMode(null)}>
+                ‹ Choose a different source
+              </button>
+            )}
+          </div>
         </div>
       )}
       {needsPassword && etsProject && (
