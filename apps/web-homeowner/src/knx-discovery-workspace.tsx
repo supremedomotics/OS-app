@@ -19,6 +19,15 @@ import {
 // (homes.ts active-home id, screens.tsx scene order, settings.tsx a11y prefs).
 const KNX_JOB_KEY = "supreme.knxImportJobId";
 const JOB_POLL_MS = 1200;
+// § Room-selector fix — a sentinel roomId value meaning "installer typed a brand-new room
+// name," distinct from "" (Automatic — accept whatever room-assignment already inferred,
+// see room-assignment.ts). Neither the existing room list nor the auto-detected hint always
+// has the right answer (e.g. a KNX actuator's ETS-recorded mounting location, now correctly
+// excluded from being trusted as a room name for technical/utility spaces — see room-
+// assignment.ts's TECHNICAL_ROOM_NAMES — still leaves nothing for circuit_intelligence to
+// find on a device whose own name doesn't carry a room prefix), so installers need an
+// explicit way to just type the room they want.
+const NEW_ROOM_SENTINEL = "__new_room__";
 
 /**
  * KNX Discovery Summary + Device Review Workspace (§ Discovery Workflow, § Final
@@ -105,7 +114,7 @@ export function KnxDiscoveryWorkspace() {
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [approved, setApproved] = useState<Record<string, KnxApprovalResult>>({});
   const [approving, setApproving] = useState<string | null>(null);
-  const [edits, setEdits] = useState<Record<string, { name: string; roomId: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { name: string; roomId: string; newRoomName?: string }>>({});
 
   // Review workspace: search / filter / sort / bulk selection / reject (§ Device Review
   // Workspace — all purely client-side over the one queue the backend already returned).
@@ -330,8 +339,11 @@ export function KnxDiscoveryWorkspace() {
     try {
       // roomId "" means Automatic — the Room Assignment Engine finds-or-creates a room
       // from the queue's own room hint (§ Automatic Room Creation), so there is nothing
-      // to block approval on here anymore.
-      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: edit.roomId || undefined, roomNameHint: item.room.room ?? undefined, plans: item.plans });
+      // to block approval on here anymore. NEW_ROOM_SENTINEL means the installer typed an
+      // explicit new room name themselves, overriding whatever hint room-assignment found.
+      const isNewRoom = edit.roomId === NEW_ROOM_SENTINEL;
+      const roomNameHint = isNewRoom ? (edit.newRoomName?.trim() || undefined) : (item.room.room ?? undefined);
+      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: isNewRoom ? undefined : (edit.roomId || undefined), roomNameHint, plans: item.plans });
       setApproved((cur) => ({ ...cur, [item.device.backendId]: res }));
     } catch (e) {
       setApproved((cur) => ({ ...cur, [item.device.backendId]: { device: { id: "", name: edit.name }, status: "error", reason: e instanceof Error ? e.message : "Approval failed." } }));
@@ -633,8 +645,8 @@ function DeviceCard({
 }: {
   item: KnxInstallerQueueItem;
   rooms: { id: string; name: string }[];
-  edit: { name: string; roomId: string };
-  onEdit: (patch: Partial<{ name: string; roomId: string }>) => void;
+  edit: { name: string; roomId: string; newRoomName?: string };
+  onEdit: (patch: Partial<{ name: string; roomId: string; newRoomName: string }>) => void;
   approval?: KnxApprovalResult;
   busy: boolean;
   onApprove: () => void;
@@ -662,10 +674,26 @@ function DeviceCard({
       </div>
       <label className="knx-device-room">
         Room
-        <select value={edit.roomId} onChange={(e) => onEdit({ roomId: e.target.value })} disabled={!!approval || rejected}>
+        <select
+          value={edit.roomId}
+          onChange={(e) => onEdit({ roomId: e.target.value, ...(e.target.value === NEW_ROOM_SENTINEL ? { newRoomName: edit.newRoomName ?? item.room.room ?? "" } : {}) })}
+          disabled={!!approval || rejected}
+        >
           <option value="">Automatic{item.room.room ? ` (${item.room.room})` : " (Unassigned)"}</option>
           {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          <option value={NEW_ROOM_SENTINEL}>+ Add new room…</option>
         </select>
+        {edit.roomId === NEW_ROOM_SENTINEL && (
+          <input
+            type="text"
+            className="knx-device-new-room"
+            placeholder="New room name"
+            value={edit.newRoomName ?? ""}
+            onChange={(e) => onEdit({ newRoomName: e.target.value })}
+            disabled={!!approval || rejected}
+            style={{ marginTop: 4 }}
+          />
+        )}
       </label>
 
       <button type="button" className="link" onClick={() => setShowWhy((s) => !s)}>{showWhy ? "Hide explanation" : "Why was this device created?"}</button>
