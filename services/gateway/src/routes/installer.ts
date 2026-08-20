@@ -724,6 +724,16 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     // ponytail: diagnostic timing only, to pin down the 111s-hang report against real
     // production data — remove once the live bottleneck is confirmed and fixed for good.
     const t0 = Date.now();
+    // § Live investigation — a real stuck request (93s) produced ZERO "knx queue/job
+    // timing" log lines, not even "authenticate". That leaves two very different
+    // possibilities indistinguishable without this line: (a) Fastify itself is still
+    // blocked receiving/parsing the large JSON body and hasn't invoked this handler at
+    // all yet, or (b) the handler started immediately and authenticate() itself is what
+    // hangs. This fires the instant the handler function body starts executing, before
+    // ANY other work — if THIS is also missing from the log on the next stuck attempt,
+    // the bottleneck is conclusively before/outside this route's own code (Fastify body
+    // parsing, or something upstream of it), not inside authenticate()/enforce().
+    req.log.info({ elapsedMs: 0, stage: "handler_entered", contentLength: req.headers["content-length"] }, "knx queue/job timing");
     try {
       const user = await authenticate(ctx, req);
       req.log.info({ elapsedMs: Date.now() - t0, stage: "authenticate" }, "knx queue/job timing");
