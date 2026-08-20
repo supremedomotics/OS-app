@@ -145,6 +145,8 @@ export interface AppDeps {
   /** Test-only seam for the KNX installer discovery pipeline (§ InstallerDeps.
    * knxDiscoveryDriverFactory's own doc comment) — omitted in production. */
   knxDiscoveryDriverFactory?: KnxDiscoveryDriverFactory;
+  /** Test-only seam (§ InstallerDeps.knxWorkerTimeoutMs) — omitted in production. */
+  knxWorkerTimeoutMs?: number;
 }
 
 /**
@@ -564,6 +566,7 @@ export class AppContext {
       envDrivers: deps.envDrivers,
       bus: this.bus,
       knxDiscoveryDriverFactory: deps.knxDiscoveryDriverFactory,
+      knxWorkerTimeoutMs: deps.knxWorkerTimeoutMs,
     });
     await this.installer.init();
 

@@ -721,9 +721,14 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   // instead of awaiting the parse/synthesize/classify pipeline inline on the request
   // thread — poll GET .../job/:jobId for status/result. See `startKnxImportJob` doc.
   app.post("/v1/commissioning/knx/queue/job", { bodyLimit: ETS_IMPORT_BODY_LIMIT }, async (req, reply) => {
+    // ponytail: diagnostic timing only, to pin down the 111s-hang report against real
+    // production data — remove once the live bottleneck is confirmed and fixed for good.
+    const t0 = Date.now();
     try {
       const user = await authenticate(ctx, req);
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "authenticate" }, "knx queue/job timing");
       await enforce(ctx, user, "device", null, "create");
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "enforce" }, "knx queue/job timing");
       const body = req.body as {
         ets?: unknown;
         gateway?: { host?: unknown; port?: unknown };
@@ -740,7 +745,9 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         : typeof body?.content === "string" && body.content.length > 0
           ? { kind: "text" as const, content: body.content }
           : undefined;
-      const job = i().startKnxImportJob({ ets, gateway, etsSource });
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "body_destructured", base64Bytes: etsSource?.kind === "knxproj" ? etsSource.base64.length : undefined }, "knx queue/job timing");
+      const job = i().startKnxImportJob({ ets, gateway, etsSource }, req.log);
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "startKnxImportJob_returned", jobId: job.jobId }, "knx queue/job timing");
       reply.code(202).send({ jobId: job.jobId, status: job.status, stage: job.stage });
     } catch (err) {
       sendError(reply, err);

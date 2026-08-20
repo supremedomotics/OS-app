@@ -351,6 +351,10 @@ export interface InstallerDeps {
    * merge, grouping, capability mapping) stays real and only physical discovery is
    * deterministic. */
   knxDiscoveryDriverFactory?: KnxDiscoveryDriverFactory;
+  /** Test seam for the KNX import worker's bounded completion wait (§ 111s-hang fix) —
+   * production always uses the 5-minute default; tests inject a small value to verify
+   * a hung worker fails the job instead of waiting forever. */
+  knxWorkerTimeoutMs?: number;
 }
 
 /**
@@ -669,6 +673,7 @@ export class InstallerServices {
    * {@link cancelKnxImportJob} can terminate THAT job's thread and only that one. Never
    * set by a route — the synchronous `/queue` endpoint has no cancellation surface. */
   onWorker?: (worker: Worker) => void,
+  log?: { info: (obj: Record<string, unknown>, msg: string) => void },
   ): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
     const driver = await this.knxDiscoveryDriver(opts.gateway);
     if (!driver) throw new SupremeError("not_found", "the KNX driver is not configured on this hub yet");
@@ -679,7 +684,7 @@ export class InstallerServices {
     // during which every other API request was starved). That work runs in a real worker
     // thread; a plain `ets` signal array (a handful of addresses from live discovery or a
     // test) stays inline, where the thread's own startup would cost more than the work.
-    if (opts.etsSource) return this.knxInstallerQueueThreaded(opts, driver, schemaId, onWorker);
+    if (opts.etsSource) return this.knxInstallerQueueThreaded(opts, driver, schemaId, onWorker, log);
 
     const startedAt = Date.now();
     const [devices, existing] = await Promise.all([
@@ -714,22 +719,35 @@ export class InstallerServices {
     driver: SupremeKnxDriver,
     schemaId: string | undefined,
     onWorker?: (worker: Worker) => void,
+    log?: { info: (obj: Record<string, unknown>, msg: string) => void },
   ): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+    const t0 = Date.now();
     const [knxIot, existing] = await Promise.all([driver.collectKnxIotSignals(), this.knxExistingState()]);
+    log?.info({ elapsedMs: Date.now() - t0, stage: "collectKnxIotSignals_and_existingState" }, "knx worker timing");
     const worker = new Worker(new URL("../worker/knx-import-worker.mjs", import.meta.url), {
       workerData: { etsSource: opts.etsSource, ets: opts.ets, userOverrides: opts.userOverrides, schemaId, knxIot, existing },
     });
+    log?.info({ elapsedMs: Date.now() - t0, stage: "worker_constructed" }, "knx worker timing");
     onWorker?.(worker);
 
     const outcome = await new Promise<KnxImportWorkerResult>((resolve, reject) => {
       let settled = false;
       const done = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
-      worker.once("message", (msg: KnxImportWorkerResult) => done(() => resolve(msg)));
-      worker.once("error", (err) => done(() => reject(new SupremeError("internal", `the ETS import failed: ${err.message}`))));
+      // ponytail: bounded wait — the promise previously had no timeout at all, so a
+      // genuinely hung worker (infinite loop, pathological input) left the job "running"
+      // forever with no way to ever surface a failure. 5 minutes is generous for even a
+      // large real .knxproj (measured baseline: ~690ms for 4.1MB) but finite.
+      const timeoutMs = this.d.knxWorkerTimeoutMs ?? 5 * 60_000;
+      const timer = setTimeout(() => done(() => {
+        void worker.terminate();
+        reject(new SupremeError("internal", `the ETS import worker did not finish within ${timeoutMs}ms and was terminated`));
+      }), timeoutMs);
+      worker.once("message", (msg: KnxImportWorkerResult) => done(() => { clearTimeout(timer); resolve(msg); }));
+      worker.once("error", (err) => done(() => { clearTimeout(timer); reject(new SupremeError("internal", `the ETS import failed: ${err.message}`)); }));
       // A worker that exits without ever posting a result (OOM, a hard crash, an explicit
       // terminate) must FAIL the job — never leave it stuck in "running" forever.
-      worker.once("exit", (code) => done(() => reject(new SupremeError("internal", `the ETS import worker exited unexpectedly (code ${code})`))));
-    }).finally(() => void worker.terminate());
+      worker.once("exit", (code) => done(() => { clearTimeout(timer); reject(new SupremeError("internal", `the ETS import worker exited unexpectedly (code ${code})`)); }));
+    }).finally(() => { log?.info({ elapsedMs: Date.now() - t0, stage: "worker_settled" }, "knx worker timing"); void worker.terminate(); });
 
     if (!outcome.ok) throw new SupremeError(outcome.code ?? "internal", outcome.message);
 
@@ -754,7 +772,13 @@ export class InstallerServices {
    * job's worker thread (and only that one). Nothing this pipeline touches is durable
    * either way, so there is never partial state to roll back.
    */
-  startKnxImportJob(opts: Parameters<InstallerServices["knxInstallerQueue"]>[0] = {}): KnxImportJob {
+  startKnxImportJob(
+    opts: Parameters<InstallerServices["knxInstallerQueue"]>[0] = {},
+    // ponytail: diagnostic-only logger for the 111s-hang investigation, plain pino-shaped
+    // to reuse the fastify request logger without inventing a new logging mechanism.
+    log?: { info: (obj: Record<string, unknown>, msg: string) => void },
+  ): KnxImportJob {
+    const jobT0 = Date.now();
     const job: KnxImportJob = {
       jobId: `knximp_${randomUUID()}`,
       status: "queued",
@@ -773,8 +797,10 @@ export class InstallerServices {
       current.status = "running";
       current.stage = "parse_and_synthesize";
       current.progress = 10;
-      this.knxInstallerQueue(opts, (worker) => this.knxImportWorkers.set(job.jobId, worker)).then(
+      log?.info({ elapsedMs: Date.now() - jobT0, stage: "setImmediate_fired", jobId: job.jobId }, "knx import job timing");
+      this.knxInstallerQueue(opts, (worker) => this.knxImportWorkers.set(job.jobId, worker), log).then(
         (result) => {
+          log?.info({ elapsedMs: Date.now() - jobT0, stage: "knxInstallerQueue_resolved", jobId: job.jobId }, "knx import job timing");
           this.knxImportWorkers.delete(job.jobId);
           const j = this.knxImportJobs.get(job.jobId);
           if (!j || j.status === "cancelled") return; // preserve cancellation — never overwrite it with a late result
