@@ -185,8 +185,17 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
     if (!b) return null;
     const { major } = dptParts(b.dpt);
-    if (major === 7) return { colorModes: { rgb: false, cct: true } };
-    if (major === 232 || major === 251) return { colorModes: { rgb: true, cct: false } };
+    // § Live-reproduced bug fix — DPT7 (percentage-scaled tunable white) was the only
+    // Kelvin-style CCT DPT recognized here; DPT9 (DPST-9-22, 2-byte float Kelvin — the
+    // standard absolute colour-temperature datapoint per the KNX spec, and what a real
+    // "Conference Hanging"-style fixture with a genuine Kelvin object uses) fell through
+    // to `null`, leaving the frontend's live-state tri-state fallback stuck on "unknown"
+    // forever if physical feedback never arrives — showing NEITHER slider, matching this
+    // exact live symptom (no CCT slider, no colour wheel, "Colour light" mislabeled).
+    if (major === 7 || major === 9) return { colorModes: { rgb: false, cct: true } };
+    // DPT233 (RGB, 3×1-byte) was missing alongside the already-handled DPT232 (HSV) and
+    // DPT251 (RGBW) — a device bound on 233.600 fell through the same way.
+    if (major === 232 || major === 233 || major === 251) return { colorModes: { rgb: true, cct: false } };
     // An unrecognized/unknown DPT for this capability — honestly report nothing rather
     // than guess; the frontend's existing state-nullability fallback still applies.
     return null;

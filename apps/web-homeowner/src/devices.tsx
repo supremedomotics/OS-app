@@ -11,6 +11,7 @@ import { mediaDeviceKind, mediaKindMeta } from "./features/media/capability-mapp
 import { securityLockKind, securityLockKindMeta } from "./features/security/capability-mapper.js";
 import { energyDeviceKind, energyKindMeta, isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 import { useOpenDevice } from "./device-detail-router.js";
+import { getDeviceUiCapabilities } from "./device-ui-capabilities.js";
 
 /**
  * Device Manager (§ Device Manager) — every device the home knows about, grouped by room, with the
@@ -28,7 +29,20 @@ type DriverInfo = { name: string; protocol: string | null };
 export function friendlyType(d: Device): string {
   const t = d.supremeType.toLowerCase();
   const caps = d.capabilities.map((c) => c.kind);
-  if (t.includes("dimmer") || (caps.includes("brightness"))) return caps.includes("color") ? "Colour light" : "Dimmable light";
+  if (t.includes("dimmer") || (caps.includes("brightness"))) {
+    if (!caps.includes("color")) return "Dimmable light";
+    // § Live-reproduced bug fix — a bare `caps.includes("color")` check called every light
+    // with a color capability "Colour light", even a CCT-only tunable-white fixture with no
+    // RGB capability at all — the exact live-confirmed symptom ("Conference Hanging" showing
+    // Type: Colour light instead of Colour temperature light). Uses the SAME structural
+    // rgb/cct source the device detail page's slider gating already uses (§ ADR 0017), so the
+    // label and the actual controls shown can never disagree. `unknown` (neither confirmed
+    // yet) intentionally still reads as "Colour light" here — a generic-but-honest label,
+    // never wrong the way defaulting straight to RGB would be.
+    const ui = getDeviceUiCapabilities(d.capabilities);
+    if (ui.showCCT && !ui.showRGB) return "Colour temperature light";
+    return "Colour light";
+  }
   if (t.includes("light") || caps.includes("onoff") && !caps.includes("position")) {
     if (t.includes("light") || caps.length === 1) return "Light";
   }

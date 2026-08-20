@@ -166,6 +166,26 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
   });
 
+  // § Live-reproduced bug fix — a real "Conference Hanging" fixture with a genuine 2-byte
+  // Kelvin colour-temperature object (DPST-9-22 / DPT9.022) fell through this switch
+  // entirely (only DPT7 was recognized as CCT), returning null and leaving the frontend's
+  // live-state fallback stuck on "unknown" — showing neither a CCT slider nor an RGB wheel.
+  it("a color binding with DPT9.022 (2-byte Kelvin) reports cct-only, never RGB", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "5/3/6", config: { dpt: "DPT9.022" } });
+    expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: false, cct: true } });
+  });
+
+  it("a color binding with DPT233.600 (RGB, 3x1-byte) reports rgb-only, never CCT", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "2/1/3", config: { dpt: "DPT233.600" } });
+    expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
+  });
+
   it("returns null for a non-color capability", async () => {
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
