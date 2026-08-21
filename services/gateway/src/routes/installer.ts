@@ -773,22 +773,57 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       req.log.info({ elapsedMs: Date.now() - t0, stage: "authenticate" }, "knx queue/job timing");
       await enforce(ctx, user, "device", null, "create");
       req.log.info({ elapsedMs: Date.now() - t0, stage: "enforce" }, "knx queue/job timing");
-      const body = req.body as {
-        ets?: unknown;
-        gateway?: { host?: unknown; port?: unknown };
-        content?: unknown;
-        knxproj?: unknown;
-        password?: unknown;
-      } | undefined;
-      const ets = Array.isArray(body?.ets) ? (body!.ets as { id: string; name: string; room?: string | null; description?: string | null }[]) : undefined;
-      const gateway = typeof body?.gateway?.host === "string"
-        ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
-        : undefined;
-      const etsSource = typeof body?.knxproj === "string" && body.knxproj.length > 0
-        ? { kind: "knxproj" as const, base64: body.knxproj, password: typeof body.password === "string" ? body.password : undefined }
-        : typeof body?.content === "string" && body.content.length > 0
-          ? { kind: "text" as const, content: body.content }
+
+      // § Native file upload (fixes a real browser-extension-vs-giant-base64-JSON
+      // interference bug: the same request succeeded via curl/Node but hung in the
+      // user's normal Chrome profile, and succeeded instantly in Incognito — pointing at
+      // an extension mangling the huge JSON `fetch()` body). The `.knxproj` FILE now
+      // travels as a real `multipart/form-data` part instead of a base64 JSON field,
+      // which also removes the client-side base64-encode step entirely. The `content`
+      // (pasted text) and `ets` (structured array) paths are untouched — still plain JSON.
+      let etsSource: { kind: "text"; content: string } | { kind: "knxproj"; base64: string; password?: string } | undefined;
+      let ets: { id: string; name: string; room?: string | null; description?: string | null }[] | undefined;
+      let gateway: { host: string; port?: number } | undefined;
+
+      if (req.isMultipart()) {
+        let password: string | undefined;
+        try {
+          for await (const part of req.parts()) {
+            if (part.type === "file" && part.fieldname === "knxproj") {
+              const buffer = await part.toBuffer();
+              etsSource = { kind: "knxproj", base64: buffer.toString("base64"), password };
+            } else if (part.type === "field" && part.fieldname === "password" && typeof part.value === "string") {
+              password = part.value;
+              if (etsSource?.kind === "knxproj") etsSource.password = password;
+            }
+          }
+        } catch (err) {
+          // @fastify/multipart's own oversized-file error carries statusCode 413 but isn't
+          // a SupremeError, so sendError() would otherwise flatten it to a generic 500 —
+          // the client needs a real 4xx to tell "your file is too big" from "we broke".
+          if ((err as { code?: string }).code === "FST_REQ_FILE_TOO_LARGE") {
+            throw new SupremeError("validation_failed", "the .knxproj file exceeds the 64MB upload limit");
+          }
+          throw err;
+        }
+      } else {
+        const body = req.body as {
+          ets?: unknown;
+          gateway?: { host?: unknown; port?: unknown };
+          content?: unknown;
+          knxproj?: unknown;
+          password?: unknown;
+        } | undefined;
+        ets = Array.isArray(body?.ets) ? (body!.ets as { id: string; name: string; room?: string | null; description?: string | null }[]) : undefined;
+        gateway = typeof body?.gateway?.host === "string"
+          ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
           : undefined;
+        etsSource = typeof body?.knxproj === "string" && body.knxproj.length > 0
+          ? { kind: "knxproj" as const, base64: body.knxproj, password: typeof body.password === "string" ? body.password : undefined }
+          : typeof body?.content === "string" && body.content.length > 0
+            ? { kind: "text" as const, content: body.content }
+            : undefined;
+      }
       req.log.info({ elapsedMs: Date.now() - t0, stage: "body_destructured", base64Bytes: etsSource?.kind === "knxproj" ? etsSource.base64.length : undefined }, "knx queue/job timing");
       const job = i().startKnxImportJob({ ets, gateway, etsSource }, req.log);
       req.log.info({ elapsedMs: Date.now() - t0, stage: "startKnxImportJob_returned", jobId: job.jobId }, "knx queue/job timing");

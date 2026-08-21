@@ -66,13 +66,18 @@ const SORT_LABEL: Record<SortKey, string> = {
 // § Pass 11.2 — real, coarse stages only (see KnxImportJobStage in installer-context.ts);
 // no fabricated fine-grained progress bar over a pipeline that isn't actually instrumented
 // stage-by-stage internally.
-/** § Live-reproduced bug fix (Mode A) — pure gate so the Scan/Discover button (and the
- * file input) stay disabled for the whole async-read + CPU-bound base64-encode window
- * `onFile()` runs in, not just while `phase === "scanning"`. Extracted so the exact
+/** Pure gate for the Scan/Discover button and the file input — extracted so the
  * condition is unit-testable without mounting the component (no React Testing Library
- * in this app's test setup — see other *.test.ts files in this directory). */
-export function canStartKnxScan(phase: "idle" | "scanning" | "done" | "error", readingFile: boolean): boolean {
-  return phase !== "scanning" && !readingFile;
+ * in this app's test setup — see other *.test.ts files in this directory).
+ *
+ * § Formerly also gated on a `readingFile` flag covering the async-read + CPU-bound
+ * base64-encode window `onFile()` used to run in for a `.knxproj` upload. That entire
+ * window is now structurally gone: the file travels to the backend as a real
+ * `multipart/form-data` upload (see `knxDiscoveryQueueJobStart` in api.ts), so
+ * `onFile()` just stores the `File` object — no async read, no encode loop, nothing
+ * to race the button click against. */
+export function canStartKnxScan(phase: "idle" | "scanning" | "done" | "error"): boolean {
+  return phase !== "scanning";
 }
 
 /** § UX fix — an ETS project file and a pasted group-address export were previously shown as
@@ -131,21 +136,15 @@ export function KnxDiscoveryWorkspace() {
   // commissioning logic lives in this file — `content`/`knxproj` are handed to the
   // backend as-is, which parses (never commissions) and merges them into the same queue.
   const [etsText, setEtsText] = useState("");
-  const [etsProject, setEtsProject] = useState<string | null>(null);
+  // The selected `.knxproj` File object itself — travels to the backend as a real
+  // multipart file upload (§ fixes a real production bug: a browser extension in the
+  // user's normal Chrome profile interfered with the previous ~13-18MB base64 JSON
+  // body; native file upload sidesteps that, and also removes the need to ever read/
+  // encode the file client-side at all).
+  const [etsFile, setEtsFile] = useState<File | null>(null);
   const [etsFileName, setEtsFileName] = useState<string | null>(null);
   const [etsPassword, setEtsPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
-  // § Live-reproduced bug (Mode A — fast empty scan): onFile() sets `etsFileName`
-  // synchronously (so "Selected: <name>" renders immediately) but `etsProject` only
-  // after an async file read PLUS a synchronous, CPU-bound base64-encode loop over
-  // the whole file — measurably slow for a real multi-MB .knxproj. Scan()/the Scan
-  // button were only disabled by `phase === "scanning"`, so a click during that window
-  // (file already shown as "Selected", encoding not yet done) sent no `ets` source at
-  // all: a silent fall-through to a bare live KNX-IoT scan, which returns all-zeros in
-  // exactly ~3000ms on a hub with no live KNX-IoT devices (KnxIotProvider's own default
-  // `discoveryTimeoutMs`, services/protocols/src/knx/knx-iot-provider.ts:49) — matching
-  // the live-captured "3002ms twice" evidence exactly. `readingFile` closes that window.
-  const [readingFile, setReadingFile] = useState(false);
   // § UX fix — which ETS source input is shown; null = not chosen yet, so neither the file
   // picker nor the paste box renders until the installer explicitly picks one.
   const [sourceMode, setSourceMode] = useState<EtsSourceMode>(null);
@@ -268,30 +267,22 @@ export function KnxDiscoveryWorkspace() {
     clearJob();
   }
 
-  async function onFile(file: File) {
+  function onFile(file: File) {
     setNeedsPassword(false);
     setEtsPassword("");
     setEtsFileName(file.name);
     setSourceMode("project");
-    setReadingFile(true);
-    try {
-      if (file.name.toLowerCase().endsWith(".knxproj")) {
-        const buf = new Uint8Array(await file.arrayBuffer());
-        let bin = "";
-        for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
-        setEtsProject(btoa(bin));
-        setEtsText("");
-      } else {
-        setEtsText(await file.text());
-        setEtsProject(null);
-      }
-    } finally {
-      setReadingFile(false);
+    if (file.name.toLowerCase().endsWith(".knxproj")) {
+      setEtsFile(file);
+      setEtsText("");
+    } else {
+      setEtsFile(null);
+      void file.text().then((text) => setEtsText(text));
     }
   }
 
   function removeEtsFile() {
-    setEtsProject(null);
+    setEtsFile(null);
     setEtsFileName(null);
     setEtsPassword("");
     setNeedsPassword(false);
@@ -316,8 +307,8 @@ export function KnxDiscoveryWorkspace() {
     setSelected(new Set());
     setRejected(new Set());
     try {
-      const ets = etsProject
-        ? { knxproj: etsProject, password: etsPassword || undefined }
+      const ets = etsFile
+        ? { knxprojFile: etsFile, password: etsPassword || undefined }
         : etsText.trim()
           ? { content: etsText }
           : undefined;
@@ -327,7 +318,7 @@ export function KnxDiscoveryWorkspace() {
       setJobStatus(started.status);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Discovery failed.";
-      if (etsProject && /password/i.test(message)) setNeedsPassword(true);
+      if (etsFile && /password/i.test(message)) setNeedsPassword(true);
       setError(message);
       setPhase("error");
     }
@@ -431,10 +422,10 @@ export function KnxDiscoveryWorkspace() {
             Optionally add an ETS source to merge into the same discovery pipeline — pick one:
           </span>
           <div className="drv-actions" style={{ marginTop: 8, display: "flex", gap: 8 }}>
-            <button type="button" disabled={!canStartKnxScan(phase, readingFile)} onClick={() => setSourceMode("project")}>
+            <button type="button" disabled={!canStartKnxScan(phase)} onClick={() => setSourceMode("project")}>
               Upload ETS project (.knxproj)
             </button>
-            <button type="button" disabled={!canStartKnxScan(phase, readingFile)} onClick={() => setSourceMode("pasted")}>
+            <button type="button" disabled={!canStartKnxScan(phase)} onClick={() => setSourceMode("pasted")}>
               Paste group-address export
             </button>
           </div>
@@ -446,8 +437,8 @@ export function KnxDiscoveryWorkspace() {
           <input
             type="file"
             accept=".knxproj,.esf,.csv,.xml,text/xml,text/csv"
-            disabled={!canStartKnxScan(phase, readingFile)}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
+            disabled={!canStartKnxScan(phase)}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
           />
           <span className="help">
             Upload a .knxproj. Imported devices go through this same review workspace — approve
@@ -479,7 +470,7 @@ export function KnxDiscoveryWorkspace() {
           <span className="lbl">Group-address export (CSV/XML)</span>
           <textarea
             value={etsText}
-            onChange={(e) => { setEtsText(e.target.value); setEtsProject(null); }}
+            onChange={(e) => { setEtsText(e.target.value); setEtsFile(null); }}
             placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
             rows={4}
             style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
@@ -497,15 +488,15 @@ export function KnxDiscoveryWorkspace() {
           </div>
         </div>
       )}
-      {needsPassword && etsProject && (
+      {needsPassword && etsFile && (
         <label className="drv-field" style={{ marginTop: 8 }}>
           <span className="lbl">Project password</span>
           <input type="password" value={etsPassword} onChange={(e) => setEtsPassword(e.target.value)} placeholder="ETS project password" />
         </label>
       )}
       <div className="drv-actions" style={{ marginTop: 8 }}>
-        <button className="primary" disabled={!canStartKnxScan(phase, readingFile)} onClick={() => void scan()}>
-          {phase === "scanning" ? jobStatusLabel(jobStatus) : readingFile ? "Reading file…" : result ? "Scan again" : "Discover devices"}
+        <button className="primary" disabled={!canStartKnxScan(phase)} onClick={() => void scan()}>
+          {phase === "scanning" ? jobStatusLabel(jobStatus) : result ? "Scan again" : "Discover devices"}
         </button>
         {phase === "scanning" && jobId && (
           <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>

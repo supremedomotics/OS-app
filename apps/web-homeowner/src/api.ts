@@ -567,8 +567,24 @@ export interface KnxImportJob {
   error: string | null;
   result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
 }
-export async function knxDiscoveryQueueJobStart(ets?: { content?: string; knxproj?: string; password?: string }): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
-  const res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
+/**
+ * `knxprojFile` (a real `.knxproj` upload) travels as `multipart/form-data` — a native
+ * file upload, not a giant base64 JSON field (§ fixes a real production bug: an
+ * extension in the user's normal Chrome profile was interfering with the ~13-18MB
+ * base64 JSON `fetch()` body; native multipart is far less commonly touched by
+ * extensions, and it also eliminates the expensive client-side base64-encode step).
+ * `content` (pasted CSV/XML text) stays small plain JSON — no reason to change it.
+ */
+export async function knxDiscoveryQueueJobStart(ets?: { content?: string; knxprojFile?: File; password?: string }): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
+  let res: Response;
+  if (ets?.knxprojFile) {
+    const form = new FormData();
+    form.append("knxproj", ets.knxprojFile);
+    if (ets.password) form.append("password", ets.password);
+    res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: form, timeoutMs: ETS_IMPORT_TIMEOUT_MS });
+  } else {
+    res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
+  }
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
 }
@@ -661,7 +677,10 @@ async function authed(path: string, init?: RequestInit & { timeoutMs?: number })
       signal: controller.signal,
       headers: {
         authorization: `Bearer ${client.accessToken ?? ""}`,
-        ...(rest.body ? { "content-type": "application/json" } : {}),
+        // FormData bodies (native file uploads) must NOT get a manual content-type —
+        // the browser sets `multipart/form-data; boundary=...` itself, and overriding
+        // it here would break the boundary and corrupt the upload.
+        ...(rest.body && !(rest.body instanceof FormData) ? { "content-type": "application/json" } : {}),
         ...rest.headers,
       },
     });

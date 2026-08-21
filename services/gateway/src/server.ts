@@ -2,6 +2,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import fastifyHelmet from "@fastify/helmet";
 import fastifyCors from "@fastify/cors";
 import fastifyRateLimit from "@fastify/rate-limit";
+import fastifyMultipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import type { AppContext } from "./context.js";
@@ -91,6 +92,10 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   );
 
   await app.register(fastifyWebsocket);
+  // Multipart/form-data support — currently only the KNX .knxproj file upload
+  // (POST /v1/commissioning/knx/queue/job) uses this; its per-file size cap matches
+  // ETS_IMPORT_BODY_LIMIT (installer.ts) so a large real project isn't rejected here.
+  await app.register(fastifyMultipart, { limits: { fileSize: 64 * 1024 * 1024 } });
 
   // Metrics collection + /metrics scrape endpoint + dependency-aware /readyz (§6).
   attachObservability(app, ctx);
