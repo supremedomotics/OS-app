@@ -63,6 +63,18 @@ const SORT_LABEL: Record<SortKey, string> = {
   device_type: "Device type",
 };
 
+// § Pass 27 P0-A — a resumed job id from localStorage must never disable the Scan
+// button before its status is actually confirmed. Import jobs live ONLY in the
+// gateway's in-memory map (nothing evicts them, but a gateway restart wipes them, and
+// `finishScan` deliberately leaves a COMPLETED job's id in place — see Pass 16 fix
+// below), so a leftover id from any earlier session/tab/reused Incognito window is
+// common, not exceptional. Pure so the branch is unit-testable without mounting.
+export function resumeAction(status: KnxImportJobStatus | "gone"): "scanning" | "done" | "reset" {
+  if (status === "queued" || status === "running") return "scanning";
+  if (status === "completed") return "done";
+  return "reset"; // failed, cancelled, or gone (404/unreachable) — never block a fresh scan on this
+}
+
 // § Pass 11.2 — real, coarse stages only (see KnxImportJobStage in installer-context.ts);
 // no fabricated fine-grained progress bar over a pipeline that isn't actually instrumented
 // stage-by-stage internally.
@@ -153,18 +165,50 @@ export function KnxDiscoveryWorkspace() {
     void client.home().then((h) => setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name }))));
   }, []);
 
-  // § Pass 11.2 refresh/navigation recovery — a job started before this component
-  // mounted (previous page load) keeps running on the gateway regardless (it's a
-  // background worker thread tied to the job map, not to the original request's
-  // lifecycle); on mount, re-adopt any jobId left in localStorage and resume
-  // polling instead of silently losing track of it. Never auto-starts a NEW import.
+  // § Pass 11.2 refresh/navigation recovery, hardened in Pass 27 (P0-A) — a job started
+  // before this component mounted (previous page load) keeps running on the gateway
+  // regardless (a background worker thread tied to the job map, not the original
+  // request's lifecycle), so re-adopting a saved jobId and resuming polling is correct
+  // when that job is real. But blindly trusting ANY id found in localStorage and
+  // immediately flipping `phase` to "scanning" — before ever confirming the job still
+  // exists — disables the Scan button (canStartKnxScan gates on phase !== "scanning")
+  // for however long the first poll takes. Jobs are in-memory only on the gateway
+  // (nothing evicts a completed one, but a gateway restart wipes them, and a
+  // completed job's id is deliberately left in place — see finishScan's Pass 16 fix
+  // below), so a stale id from an earlier session/tab/reused Incognito window is
+  // common. The fix: resolve the real status once, eagerly, BEFORE touching `phase`
+  // at all — a dead/stale job never disables the button, so the very first click
+  // after page load is never silently swallowed.
   useEffect(() => {
     const saved = localStorage.getItem(KNX_JOB_KEY);
-    if (saved) {
-      setPhase("scanning");
-      setJobId(saved);
-    }
-    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+    if (!saved) return;
+    let cancelled = false;
+    void (async () => {
+      let status: KnxImportJobStatus | "gone" = "gone";
+      let job: Awaited<ReturnType<typeof knxDiscoveryQueueJobStatus>> | null = null;
+      try {
+        job = await knxDiscoveryQueueJobStatus(saved);
+        status = job.status;
+      } catch {
+        status = "gone"; // 404 (genuinely gone) or a transient error — either way, never block on it
+      }
+      if (cancelled) return;
+      switch (resumeAction(status)) {
+        case "scanning":
+          setPhase("scanning");
+          setJobId(saved); // hands off to the polling effect below
+          break;
+        case "done":
+          if (job!.result) finishScan(job!.result);
+          else localStorage.removeItem(KNX_JOB_KEY); // "completed" with no result shouldn't happen, but never resume garbage
+          break;
+        case "reset":
+          localStorage.removeItem(KNX_JOB_KEY); // stale/dead — leave phase at "idle", button stays enabled
+          break;
+      }
+    })();
+    return () => { cancelled = true; if (pollRef.current) clearTimeout(pollRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only recovery, intentionally
   }, []);
 
   useEffect(() => {
