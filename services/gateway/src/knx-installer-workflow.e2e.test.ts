@@ -927,7 +927,7 @@ describe("KNX ETS import — worker thread cancellation & failure isolation (§ 
       body: form,
     });
     expect(res.status).toBe(422); // SupremeError("validation_failed") — not a fabricated job, not a 500
-  }, 30000);
+  }, 60000); // allocating/transferring a 64MB+1 buffer is slow under full-suite parallel load
 
   it("runs multiple simultaneous imports in separate workers — one failure never affects the others", async () => {
     const [okA, bad, okB] = await Promise.all([
