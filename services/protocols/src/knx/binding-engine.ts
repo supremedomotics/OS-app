@@ -1,5 +1,6 @@
 import type { CapabilityKind, CapabilityState } from "@supreme/domain-model";
 import { defaultDpt } from "../knx-codec.js";
+import { colorModesFromDpt } from "./capability-mapper.js";
 import type { CommunicationObject, UnifiedKnxDevice } from "./unified-device-mapper.js";
 
 /**
@@ -44,6 +45,13 @@ export interface BindingPlanItem {
      * today (§ known limitation, disclosed rather than silently dropped); preserved here
      * so the relationship isn't lost and future multi-write support has real data to use. */
     extraCommandAddresses?: string[];
+    /** § P0-C (Pass 28) — for a `color` capability only: whether the REAL DPT this plan
+     * bound to is RGB(W) or Kelvin-only tunable-white (§ `colorModesFromDpt` — the same
+     * evidence `SupremeKnxDriver.getCapabilityConfig` uses once bound, computed here so
+     * the DISCOVERY/REVIEW stage — before any binding exists — already knows which, not
+     * just "color: true"). `undefined` for every non-`color` capability, and for a
+     * `color` capability whose DPT doesn't structurally resolve to either. */
+    colorModes?: { rgb: boolean; cct: boolean };
   };
   bindable: boolean;
   reason: string;
@@ -145,12 +153,15 @@ export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
     // real objects reported a DPT at all.
     const realDpt = writeObj?.dpt ?? statusObj?.dpt ?? stepObj?.dpt ?? null;
     const dpt = realDpt ? `DPT${realDpt}` : defaultDpt(capability as CapabilityState["kind"]);
+    // § P0-C (Pass 28) — computed at DISCOVERY/REVIEW time, before any binding exists,
+    // from the same real-DPT evidence just resolved above — never a name/label guess.
+    const colorModes = capability === "color" ? (colorModesFromDpt(dpt) ?? undefined) : undefined;
 
     if (!writeObj) {
       return {
         capability,
         address: null,
-        config: { dpt },
+        config: { dpt, ...(colorModes ? { colorModes } : {}) },
         bindable: false,
         reason: own.length > 0
           ? "only a feedback/step group address was discovered for this capability — no write address to bind"
@@ -175,6 +186,7 @@ export function planBindings(device: UnifiedKnxDevice): BindingPlanItem[] {
         dpt,
         ...(extraStatusAddresses.length > 0 ? { extraStatusAddresses } : {}),
         ...(extraCommandAddresses.length > 0 ? { extraCommandAddresses } : {}),
+        ...(colorModes ? { colorModes } : {}),
       },
       bindable: true,
       reason: parts.join(", "),

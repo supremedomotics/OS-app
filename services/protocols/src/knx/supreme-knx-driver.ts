@@ -11,12 +11,13 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { defaultDpt, dptParts, stateFromValue, valueFromCommand } from "../knx-codec.js";
+import { defaultDpt, stateFromValue, valueFromCommand } from "../knx-codec.js";
 import { KnxTaskRouter } from "./task-router.js";
 import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
 import { KnxIotProvider } from "./knx-iot-provider.js";
 import { parseFunctionalBlocks } from "./functional-block-parser.js";
 import { mapUnifiedDevices, type KnxIotDiscoverySignal, type UnifiedKnxDevice, type UnifiedDeviceMapperInput } from "./unified-device-mapper.js";
+import { colorModesFromDpt } from "./capability-mapper.js";
 import { OfflineCommandQueue, type DrainResult } from "./offline-command-queue.js";
 import type { IKnxProvider, ProviderDiagnostics } from "./provider.js";
 import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
@@ -184,21 +185,13 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     if (capability !== "color") return null;
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
     if (!b) return null;
-    const { major } = dptParts(b.dpt);
-    // § Live-reproduced bug fix — DPT7 (percentage-scaled tunable white) was the only
-    // Kelvin-style CCT DPT recognized here; DPT9 (DPST-9-22, 2-byte float Kelvin — the
-    // standard absolute colour-temperature datapoint per the KNX spec, and what a real
-    // "Conference Hanging"-style fixture with a genuine Kelvin object uses) fell through
-    // to `null`, leaving the frontend's live-state tri-state fallback stuck on "unknown"
-    // forever if physical feedback never arrives — showing NEITHER slider, matching this
-    // exact live symptom (no CCT slider, no colour wheel, "Colour light" mislabeled).
-    if (major === 7 || major === 9) return { colorModes: { rgb: false, cct: true } };
-    // DPT233 (RGB, 3×1-byte) was missing alongside the already-handled DPT232 (HSV) and
-    // DPT251 (RGBW) — a device bound on 233.600 fell through the same way.
-    if (major === 232 || major === 233 || major === 251) return { colorModes: { rgb: true, cct: false } };
-    // An unrecognized/unknown DPT for this capability — honestly report nothing rather
-    // than guess; the frontend's existing state-nullability fallback still applies.
-    return null;
+    // § P0-C (Pass 28) — `colorModesFromDpt` is the single shared evidence function (also
+    // used by `planBindings` at discovery/review time, before this driver's binding even
+    // exists) recognizing DPT7/9 (Kelvin, tunable-white) vs DPT232/233/251 (RGB/RGBW).
+    // An unrecognized/unknown DPT for this capability honestly reports nothing rather
+    // than guess — the frontend's existing state-nullability fallback still applies.
+    const modes = colorModesFromDpt(b.dpt);
+    return modes ? { colorModes: modes } : null;
   }
 
   /** § Driver Lifecycle Completion — releases everything THIS device holds without

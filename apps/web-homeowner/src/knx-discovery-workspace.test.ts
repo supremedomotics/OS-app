@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canStartKnxScan, type EtsSourceMode } from "./knx-discovery-workspace.js";
+import { canStartKnxScan, capabilityDisplayLabels, type EtsSourceMode } from "./knx-discovery-workspace.js";
 
 // § The old "reading/encoding a huge file" race window this used to guard against is
 // gone: a `.knxproj` now travels as a real multipart file upload (no client-side
@@ -41,5 +41,46 @@ describe("EtsSourceMode", () => {
     expect(label(null)).toBe("none");
     expect(label("project")).toBe("project");
     expect(label("pasted")).toBe("pasted");
+  });
+});
+
+// § P0-C (Pass 28) — the review card must show "CCT"/"RGB" instead of the ambiguous
+// generic "color" the moment the server-computed plan reveals it (§ colorModesFromDpt,
+// services/protocols/src/knx/binding-engine.ts) — this reads ONLY that server-sent
+// evidence, never re-derives anything from a device/GA name itself.
+describe("capabilityDisplayLabels", () => {
+  it("TEST 6: CCT-only — labels the color capability 'cct', not 'rgb'", () => {
+    const labels = capabilityDisplayLabels(
+      ["onoff", "brightness", "color"],
+      [{ capability: "color", config: { colorModes: { rgb: false, cct: true } } }],
+    );
+    expect(labels).toEqual(["onoff", "brightness", "cct"]);
+    expect(labels).not.toContain("rgb");
+  });
+
+  it("TEST 7: RGB-only — labels the color capability 'rgb', not 'cct'", () => {
+    const labels = capabilityDisplayLabels(
+      ["onoff", "brightness", "color"],
+      [{ capability: "color", config: { colorModes: { rgb: true, cct: false } } }],
+    );
+    expect(labels).toEqual(["onoff", "brightness", "rgb"]);
+    expect(labels).not.toContain("cct");
+  });
+
+  it("RGB+CCT — labels the color capability 'rgb+cct'", () => {
+    const labels = capabilityDisplayLabels(
+      ["onoff", "brightness", "color"],
+      [{ capability: "color", config: { colorModes: { rgb: true, cct: true } } }],
+    );
+    expect(labels).toEqual(["onoff", "brightness", "rgb+cct"]);
+  });
+
+  it("TEST 8: unknown — no plan resolved colorModes, falls back to the plain 'color' label rather than guessing", () => {
+    const labels = capabilityDisplayLabels(["onoff", "brightness", "color"], [{ capability: "color", config: {} }]);
+    expect(labels).toEqual(["onoff", "brightness", "color"]);
+  });
+
+  it("no color capability at all — every label passes through unchanged", () => {
+    expect(capabilityDisplayLabels(["onoff", "brightness"], [])).toEqual(["onoff", "brightness"]);
   });
 });

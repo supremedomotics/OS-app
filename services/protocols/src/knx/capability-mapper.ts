@@ -1,6 +1,7 @@
 import { classifyDpt, type DptCategory } from "@supreme/commissioning";
 import type { CapabilityKind } from "@supreme/domain-model";
 import type { FunctionalBlock } from "./functional-block-parser.js";
+import { dptParts } from "../knx-codec.js";
 
 /**
  * KNX Capability Mapper (§ Unified Device Intelligence — Phase 3).
@@ -398,6 +399,26 @@ export function roleOfEtsSignal(
   }
   const hasStatusWord = tokensOf(name).some((t) => STATUS_NAME_WORDS.has(t));
   return hasStatusWord ? "status" : "primary";
+}
+
+/** § P0-C (Pass 28) — single source of truth for "is this KNX `color`-capability DPT
+ * RGB(W) or Kelvin-only tunable-white," reused by BOTH the runtime driver
+ * (`SupremeKnxDriver.getCapabilityConfig`, evaluated once a device is bound) and the
+ * DISCOVERY-time binding engine (`planBindings`, evaluated before approval even
+ * exists) — previously only the runtime driver had this logic, so the discovery/review
+ * stage had no way to tell a CCT-only fixture from an RGB one before an installer
+ * approved it. Accepts a DPT string in either "7.600" or "DPT7.600" form (both appear
+ * across this codebase's binding config). `null` for anything not structurally RGB(W)
+ * or Kelvin — never guessed from a name/label, only from the real DPT major number:
+ *   - DPT 7 (Percentage-scaled Kelvin, tunable-white) / DPT 9 (2-byte float Kelvin) → CCT
+ *   - DPT 232 (HSV) / DPT 233 (RGB) / DPT 251 (RGBW) → RGB(W)
+ */
+export function colorModesFromDpt(dpt: string | null | undefined): { rgb: boolean; cct: boolean } | null {
+  if (!dpt) return null;
+  const { major } = dptParts(dpt);
+  if (major === 7 || major === 9) return { rgb: false, cct: true };
+  if (major === 232 || major === 233 || major === 251) return { rgb: true, cct: false };
+  return null;
 }
 
 /** Classifies a parsed functional block using its resource types, interfaces, and title

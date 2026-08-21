@@ -276,4 +276,98 @@ describe("planBindings", () => {
       expect(brightness.address).not.toBe("3/0/9");
     });
   });
+
+  // § P0-C (Pass 28) — the discovery/review-time `colorModes` signal (§ colorModesFromDpt,
+  // capability-mapper.ts) that lets a review card show "CCT"/"RGB" instead of the
+  // ambiguous "color" BEFORE approval even exists. Anonymized fixtures modeled on a real
+  // ETS tunable-white lighting circuit's actual GA/DPT shape (SW/SW-Status/Dimm/Abs Dim/
+  // Abs Dim FB/Abs Col/Abs Col FB, DPT1.001/3.007/5.001/7.600) — no real group addresses,
+  // room names, project names, or individual addresses from that project appear here.
+  describe("§ P0-C colorModes on the color capability's plan", () => {
+    it("TEST 1: onoff only — no color capability at all", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "SW", dpt: "1.001" },
+          { id: "1/1/1", name: "SW Status", dpt: "1.001" },
+        ],
+      })[0]!;
+      const plans = planBindings(device);
+      expect(plans.map((p) => p.capability)).toEqual(["onoff"]);
+      expect(plans.find((p) => p.capability === "color")).toBeUndefined();
+    });
+
+    it("TEST 2: onoff + brightness — still no color capability", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/2", name: "Fixture Abs Dim", dpt: "5.001" },
+          { id: "1/1/3", name: "Fixture Abs Dim FB", dpt: "5.001" },
+        ],
+      })[0]!;
+      const plans = planBindings(device);
+      expect(plans.map((p) => p.capability).sort()).toEqual(["brightness", "onoff"]);
+      expect(plans.find((p) => p.capability === "color")).toBeUndefined();
+    });
+
+    it("TEST 3: onoff + brightness + CCT (DPT 7.600) — color capability resolves colorModes.cct=true, rgb=false", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/2", name: "Fixture Abs Dim", dpt: "5.001" },
+          { id: "1/1/3", name: "Fixture Abs Dim FB", dpt: "5.001" },
+          { id: "1/1/4", name: "Fixture Abs Col", dpt: "7.600" },
+          { id: "1/1/5", name: "Fixture Abs Col FB", dpt: "7.600" },
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.bindable).toBe(true);
+      expect(color.config.dpt).toBe("DPT7.600");
+      expect(color.config.colorModes).toEqual({ rgb: false, cct: true });
+    });
+
+    it("TEST 4: onoff + brightness + RGB (DPT 232.600) — color capability resolves colorModes.rgb=true, cct=false", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/2", name: "Fixture Abs Dim", dpt: "5.001" },
+          { id: "1/1/3", name: "Fixture Abs Dim FB", dpt: "5.001" },
+          { id: "1/1/4", name: "Fixture Colour RGB", dpt: "232.600" },
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.bindable).toBe(true);
+      expect(color.config.dpt).toBe("DPT232.600");
+      expect(color.config.colorModes).toEqual({ rgb: true, cct: false });
+    });
+
+    it("TEST 9: write and status GAs stay distinct on a color capability with colorModes resolved — never merged into one address", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/4", name: "Fixture Abs Col", dpt: "7.600" },
+          { id: "1/1/5", name: "Fixture Abs Col FB", dpt: "7.600" },
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.address).toBe("1/1/4");
+      expect(color.config.statusAddress).toBe("1/1/5");
+      expect(color.address).not.toBe(color.config.statusAddress);
+    });
+
+    it("a color capability with no real project DPT at all falls back to the generic legacy default (RGB) — pre-existing, disclosed behavior, not changed by this pass", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture Colour RGB" }, // classified by name; no dpt attribute at all
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.config.dpt).toBe("DPT232.600"); // defaultDpt("color") — unchanged legacy fallback
+      expect(color.config.colorModes).toEqual({ rgb: true, cct: false });
+    });
+  });
 });

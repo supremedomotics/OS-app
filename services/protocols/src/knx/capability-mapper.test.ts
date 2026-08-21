@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyEtsSignal, classifyFromText, classifyFunctionalBlock, mergeCapabilityHints, resolveDpt5001Semantic } from "./capability-mapper.js";
+import { classifyEtsSignal, classifyFromText, classifyFunctionalBlock, colorModesFromDpt, mergeCapabilityHints, resolveDpt5001Semantic } from "./capability-mapper.js";
 import { parseFunctionalBlocks } from "./functional-block-parser.js";
 
 describe("classifyFromText", () => {
@@ -148,5 +148,36 @@ describe("classifyEtsSignal — safe DPT 5.001 production integration (Pass 7)",
   it("non-5.001 DPTs are completely unaffected by this integration", () => {
     expect(classifyEtsSignal("1.001", "circuit-key", "Switch").capabilities).toEqual(["onoff"]);
     expect(classifyEtsSignal("1.008", "circuit-key", "Up/Down").capabilities).toEqual(["position"]);
+  });
+});
+
+// § P0-C (Pass 28) — single evidence function shared by planBindings (discovery/review
+// time) and SupremeKnxDriver.getCapabilityConfig (runtime, once bound) so both stages
+// agree on the same real-DPT-derived answer, never two independently-guessed ones.
+describe("colorModesFromDpt", () => {
+  it("DPT 7.x (percentage-scaled Kelvin) resolves CCT-only", () => {
+    expect(colorModesFromDpt("7.600")).toEqual({ rgb: false, cct: true });
+    expect(colorModesFromDpt("DPT7.600")).toEqual({ rgb: false, cct: true });
+  });
+
+  it("DPT 9.x (2-byte float, incl. absolute Kelvin) resolves CCT-only", () => {
+    expect(colorModesFromDpt("9.22")).toEqual({ rgb: false, cct: true });
+  });
+
+  it("DPT 232.x (HSV) / 233.x (RGB) / 251.x (RGBW) resolve RGB-only", () => {
+    expect(colorModesFromDpt("232.600")).toEqual({ rgb: true, cct: false });
+    expect(colorModesFromDpt("233.600")).toEqual({ rgb: true, cct: false });
+    expect(colorModesFromDpt("251.600")).toEqual({ rgb: true, cct: false });
+  });
+
+  it("an unrecognized DPT resolves null — never guessed", () => {
+    expect(colorModesFromDpt("5.001")).toBeNull();
+    expect(colorModesFromDpt("1.001")).toBeNull();
+  });
+
+  it("no DPT at all resolves null", () => {
+    expect(colorModesFromDpt(null)).toBeNull();
+    expect(colorModesFromDpt(undefined)).toBeNull();
+    expect(colorModesFromDpt("")).toBeNull();
   });
 });

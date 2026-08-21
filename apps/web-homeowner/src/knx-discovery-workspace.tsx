@@ -110,6 +110,28 @@ function jobStatusLabel(status: KnxImportJobStatus | null): string {
   }
 }
 
+// § P0-C (Pass 28) — the generic "color" capability name doesn't distinguish a Kelvin-
+// only tunable-white fixture from an RGB(W) one, which is exactly what a real ETS
+// project's DPT tells you (DPT7/9 = Kelvin, DPT232/233/251 = RGB(W)) — the binding
+// engine already computes this (`colorModesFromDpt`, § services/protocols/src/knx/
+// binding-engine.ts) and sends it down on the "color" plan's `config.colorModes`. This
+// reads ONLY that server-computed evidence — never re-derives from a device/GA name —
+// so the review card can show "CCT"/"RGB" instead of the ambiguous "color" the moment
+// the DPT evidence exists, without waiting for approval + live state feedback. Falls
+// back to the plain capability name when no plan resolved colorModes (DPT genuinely
+// unknown/absent) — an honest "we don't know which yet," never a guess.
+export function capabilityDisplayLabels(capabilities: string[], plans: { capability: string; config: Record<string, unknown> }[]): string[] {
+  return capabilities.map((cap) => {
+    if (cap !== "color") return cap;
+    const modes = plans.find((p) => p.capability === "color")?.config.colorModes as { rgb: boolean; cct: boolean } | undefined;
+    if (!modes) return "color";
+    if (modes.rgb && modes.cct) return "rgb+cct";
+    if (modes.cct) return "cct";
+    if (modes.rgb) return "rgb";
+    return "color";
+  });
+}
+
 function itemFilters(item: KnxInstallerQueueItem, rejected: boolean): Filter[] {
   const f: Filter[] = [item.section];
   if (item.device.capabilities.length === 0 || item.device.raw.deviceKind === "unknown") f.push("unsupported");
@@ -705,7 +727,7 @@ function DeviceCard({
         <span className={`drv-badge ${item.confidence.overall >= 85 ? "ok" : item.confidence.overall >= 70 ? "" : "err"}`}>{item.confidence.overall}% confidence</span>
       </div>
       <div className="knx-device-meta">
-        {item.device.raw.classification.category} → {item.device.raw.classification.type} · {item.device.capabilities.join(", ") || "no capability detected"} · {item.device.raw.communicationObjects.length} communication object{item.device.raw.communicationObjects.length === 1 ? "" : "s"} · {item.duplicate.decision}
+        {item.device.raw.classification.category} → {item.device.raw.classification.type} · {capabilityDisplayLabels(item.device.capabilities, item.plans).join(", ") || "no capability detected"} · {item.device.raw.communicationObjects.length} communication object{item.device.raw.communicationObjects.length === 1 ? "" : "s"} · {item.duplicate.decision}
       </div>
       <label className="knx-device-room">
         Room
