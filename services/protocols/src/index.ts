@@ -30,7 +30,7 @@ export { KnxIotProvider, type KnxIotProviderOptions } from "./knx/knx-iot-provid
 export { KnxTaskRouter } from "./knx/task-router.js";
 export type { IKnxProvider, KnxTask, KnxTaskKind, ProviderDiagnostics as KnxProviderDiagnostics, ProviderHealth as KnxProviderHealth } from "./knx/provider.js";
 export { parseFunctionalBlocks, type FunctionalBlock, type ParsedFunctionalBlocks } from "./knx/functional-block-parser.js";
-export { classifyFromText, classifyFunctionalBlock, mergeCapabilityHints, type CapabilityHint, type KnxDeviceKind } from "./knx/capability-mapper.js";
+export { classifyFromText, classifyFunctionalBlock, colorModesFromDpt, mergeCapabilityHints, type CapabilityHint, type KnxDeviceKind } from "./knx/capability-mapper.js";
 export {
   EMPTY_SEMANTIC_METADATA,
   semanticMetadataFromEts,

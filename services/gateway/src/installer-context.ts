@@ -859,6 +859,21 @@ export class InstallerServices {
    * convenience wrapper). On any binding failure, rolls back everything already bound
    * and the device itself — no half-registered device is ever left behind.
    */
+  /** § P0-C follow-up (capability persistence lifecycle) — every one of `bindablePlans`'
+   * write addresses is already owned by an existing device, AND all of them agree on the
+   * SAME device, this IS that device being re-discovered (a real ETS re-import/re-scan
+   * naturally produces a fresh `UnifiedKnxDevice` for a fixture that's already approved —
+   * `checkDuplicate`'s "merge"/"update" decisions already detect exactly this case, see
+   * duplicate-detection.ts). Returns `null` for every other case (a genuinely new device,
+   * or an ambiguous partial/cross-device address overlap) — never a guess. */
+  private async findSoleExistingKnxOwner(bindablePlans: { address: string }[]): Promise<DeviceId | null> {
+    const existing = await this.listProtocolBindings();
+    const owners = bindablePlans.map((p) => existing.find((b) => b.protocol === "knx" && b.address === p.address)?.deviceId ?? null);
+    if (owners.some((o) => o === null)) return null; // at least one address is genuinely new — not a pure re-discovery
+    const distinct = new Set(owners);
+    return distinct.size === 1 ? owners[0]! : null; // more than one owner = ambiguous, never guessed
+  }
+
   async approveKnxDevice(input: {
     device: UnifiedKnxDevice;
     name: string;
@@ -873,6 +888,35 @@ export class InstallerServices {
     const bindablePlans = input.plans.filter((p): p is typeof p & { address: string } => p.bindable && p.address !== null);
     if (bindablePlans.length === 0) {
       throw new SupremeError("validation_failed", "this device has no bindable communication object yet — needs installer review, not approval");
+    }
+
+    // § P0-C follow-up — re-discovering an already-approved fixture (every bindable
+    // address here already belongs to ONE existing device) must refresh THAT device's
+    // bindings/capability config in place — never silently commission a second device
+    // sharing the same bus addresses, and never leave its capability model stale just
+    // because it happened to be approved before this DPT evidence existed. Reuses
+    // `bindProtocol` unchanged (it already recomputes + persists `getCapabilityConfig`
+    // fresh on every call — see P0-C's own investigation) — no new persistence path.
+    const existingDeviceId = await this.findSoleExistingKnxOwner(bindablePlans);
+    if (existingDeviceId) {
+      const existingDevice = await this.d.home.getDevice(existingDeviceId);
+      if (!existingDevice) {
+        // An orphaned binding (its device was deleted without cleaning up the binding
+        // store) — a real data-integrity gap, never silently papered over as "new".
+        throw new SupremeError("conflict", "found an existing bus binding for this device's group addresses, but its device record no longer exists — remove the stale binding before re-approving");
+      }
+      const bound: CapabilityKind[] = [];
+      try {
+        for (const plan of bindablePlans) {
+          await this.bindProtocol({ deviceId: existingDeviceId, capability: plan.capability, protocol: "knx", address: plan.address, config: plan.config });
+          bound.push(plan.capability);
+        }
+      } catch (err) {
+        return { device: existingDevice, status: "error", reason: `refreshing existing device failed: ${(err as Error).message}` };
+      }
+      const validation = await this.validateKnxDevice(existingDeviceId);
+      const refreshedDevice = await this.d.home.getDevice(existingDeviceId);
+      return { device: refreshedDevice ?? existingDevice, ...validation };
     }
 
     // § Universal Commissioning Architecture — converges on the SAME commissionDevice()
@@ -904,8 +948,15 @@ export class InstallerServices {
     const validation = await this.validateKnxDevice(device.id);
     if (validation.status === "error") {
       await this.rollbackKnxDevice(device.id, bound);
+      return { device, ...validation };
     }
-    return { device, ...validation };
+    // § P0-C follow-up — `device` above is the commission-time snapshot, captured BEFORE
+    // the bind loop ran; each `bindProtocol` call may have since written a real
+    // driver-reported capability config (e.g. KNX's `colorModes`) on top of the empty
+    // `{}` every capability starts with. Re-fetch so the response the installer/frontend
+    // actually sees reflects what just got persisted, not a stale pre-binding snapshot.
+    const commissioned = await this.d.home.getDevice(device.id);
+    return { device: commissioned ?? device, ...validation };
   }
 
   /**
