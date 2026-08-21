@@ -720,7 +720,41 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   // Non-blocking counterpart (§ Pass 11.1): same inputs, but returns a jobId immediately
   // instead of awaiting the parse/synthesize/classify pipeline inline on the request
   // thread — poll GET .../job/:jobId for status/result. See `startKnxImportJob` doc.
-  app.post("/v1/commissioning/knx/queue/job", { bodyLimit: ETS_IMPORT_BODY_LIMIT }, async (req, reply) => {
+  // ponytail: diagnostic-only lifecycle tracing (KNX_TRACE), scoped to this one route via
+  // Fastify's per-route hook options — never fires for any other route in the app, so it
+  // cannot regress unrelated tests. Each hook logs only request metadata (id/method/url/
+  // headers), never the body. Purpose: `handler_entered` above only proves the LAST stage
+  // (the handler itself) was reached — it cannot tell us whether a slow Fastify lifecycle
+  // stage (onRequest/preParsing/preValidation/preHandler, all of which run BEFORE the
+  // handler function is even invoked) is where a stuck request is actually stalling. On
+  // the next live hang, whichever KNX_TRACE line is the LAST one logged for that request's
+  // reqId identifies the exact stage Fastify itself is stuck in — remove once resolved.
+  const knxTraceHook = (stage: string) => async (req: import("fastify").FastifyRequest) => {
+    req.log.info(
+      {
+        stage: `KNX_TRACE ${stage}`,
+        reqId: req.id,
+        method: req.method,
+        url: req.url,
+        contentType: req.headers["content-type"],
+        contentLength: req.headers["content-length"],
+        transferEncoding: req.headers["transfer-encoding"],
+        remoteAddress: req.ip,
+      },
+      "knx queue/job lifecycle trace",
+    );
+  };
+
+  app.post(
+    "/v1/commissioning/knx/queue/job",
+    {
+      bodyLimit: ETS_IMPORT_BODY_LIMIT,
+      onRequest: knxTraceHook("onRequest"),
+      preParsing: knxTraceHook("preParsing"),
+      preValidation: knxTraceHook("preValidation"),
+      preHandler: knxTraceHook("preHandler"),
+    },
+    async (req, reply) => {
     // ponytail: diagnostic timing only, to pin down the 111s-hang report against real
     // production data — remove once the live bottleneck is confirmed and fixed for good.
     const t0 = Date.now();
@@ -762,7 +796,8 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     } catch (err) {
       sendError(reply, err);
     }
-  });
+    },
+  );
 
   app.get("/v1/commissioning/knx/queue/job/:jobId", async (req, reply) => {
     try {
