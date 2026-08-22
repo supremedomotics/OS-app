@@ -12,13 +12,45 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { colorModesFromDpt } from "@supreme/protocols";
+import {
+  colorModesFromDpt,
+  SupremeKnxDriver,
+  type IKnxProvider,
+  type KnxProviderDiagnostics,
+  type KnxProviderHealth,
+  type KnxTask,
+} from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
 import { InMemoryHomeStore } from "@supreme/home";
+
+/** § Test isolation (mirrors knx-installer-workflow.e2e.test.ts's own fix, same reason)
+ * — the discovery-time driver `installer-context.ts`'s `knxDiscoveryDriver()` builds is
+ * a REAL `SupremeKnxDriver`. Left with its default `KnxIotProvider`, it performs REAL
+ * CoAP multicast discovery on whatever network this suite runs on — harmless noise on a
+ * dev machine with nothing to answer, but on any host actually reachable by real KNX-IoT
+ * devices (e.g. a KNX installer's LAN, or a hub machine with local KNX-IoT services
+ * running) it silently adds extra, non-deterministic queue items. `discover()`
+ * deterministically returns none, so every device in this suite's queue comes only from
+ * the ETS fixture under test. */
+class FakeEmptyKnxIotProvider implements IKnxProvider {
+  readonly name = "fake-empty-knx-iot";
+  async initialize(): Promise<void> {}
+  async discover(): Promise<never[]> { return []; }
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  async shutdown(): Promise<void> {}
+  async execute(_task: KnxTask): Promise<unknown> { throw new Error("not applicable — discover() never returns a device to run a task against"); }
+  subscribe(): void { throw new Error("not applicable"); }
+  unsubscribe(): void {}
+  health(): KnxProviderHealth { return { connected: true, lastError: null }; }
+  diagnostics(): KnxProviderDiagnostics {
+    return { provider: this.name, connected: true, packetsSent: 0, packetsReceived: 0, lastTelegramAt: null, lastCommandAt: null, lastError: null, reconnectAttempts: 0 };
+  }
+}
 
 /**
  * § P0-C follow-up (Pass 28.1) — capability persistence lifecycle.
@@ -73,7 +105,12 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
     const providers = new ProviderRegistry();
     const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
-    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), { sil, protocolBindingStore, homeStore });
+    ctx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+      sil,
+      protocolBindingStore,
+      homeStore,
+      knxDiscoveryDriverFactory: (config) => new SupremeKnxDriver({ ...config, iotProvider: new FakeEmptyKnxIotProvider() }),
+    });
     app = await buildServer(ctx);
     await app.listen({ host: "127.0.0.1", port: 0 });
     const addr = app.server.address();
@@ -91,14 +128,27 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
   });
   const auth = () => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
 
-  async function scan(exportXml: string): Promise<{ device: unknown; plans: unknown; duplicate: { decision: string } }[]> {
+  type QueueItem = { device: { suggestedName: string }; plans: unknown; duplicate: { decision: string } };
+
+  async function scan(exportXml: string): Promise<QueueItem[]> {
     const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
       method: "POST",
       headers: auth(),
       body: JSON.stringify({ gateway: { host: "127.0.0.1" }, content: exportXml }),
     });
     expect(res.status).toBe(200);
-    return ((await res.json()) as { queue: { device: unknown; plans: unknown; duplicate: { decision: string } }[] }).queue;
+    return ((await res.json()) as { queue: QueueItem[] }).queue;
+  }
+
+  // § Never assume `queue[0]` — a scan can legitimately return more than one item (this
+  // suite's own fixtures already do, once KNX-IoT live discovery is allowed to run
+  // alongside the ETS signals — see `FakeEmptyKnxIotProvider` above). Select the queue
+  // item that IS the fixture under test by its own known identity (`suggestedName`,
+  // derived deterministically from the ETS circuit name), never by position.
+  function pickFixture(queue: QueueItem[], n: number): QueueItem {
+    const item = queue.find((q) => q.device.suggestedName === `Fixture ${n}`);
+    if (!item) throw new Error(`expected a queue item named "Fixture ${n}", got: ${queue.map((q) => q.device.suggestedName).join(", ")}`);
+    return item;
   }
 
   async function approve(item: { device: unknown; plans: unknown }, name: string): Promise<{ device: { id: string; capabilities: { kind: string; config: Record<string, unknown> }[] }; status: string }> {
@@ -124,17 +174,17 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
 
   it("TEST 1: a new CCT device (DPT 7.600) persists colorModes.cct=true on first approval", async () => {
     const queue = await scan(fixtureExport(1, "DPST-7-600"));
-    expect(queue).toHaveLength(1);
-    expect(queue[0]!.duplicate.decision).toBe("new");
-    const { device } = await approve(queue[0]! as { device: unknown; plans: unknown }, "Fixture 1");
+    const item = pickFixture(queue, 1);
+    expect(item.duplicate.decision).toBe("new");
+    const { device } = await approve(item as { device: unknown; plans: unknown }, "Fixture 1");
     const color = device.capabilities.find((c) => c.kind === "color")!;
     expect(color.config.colorModes).toEqual({ rgb: false, cct: true });
   });
 
   it("TEST 2: an existing RGB device rediscovered with DPT 7.600 evidence updates the SAME device to CCT — never creates a duplicate", async () => {
-    const before = await scan(fixtureExport(2, "DPST-232-600"));
-    expect(before[0]!.duplicate.decision).toBe("new");
-    const approved1 = await approve(before[0]! as { device: unknown; plans: unknown }, "Fixture 2");
+    const before = pickFixture(await scan(fixtureExport(2, "DPST-232-600")), 2);
+    expect(before.duplicate.decision).toBe("new");
+    const approved1 = await approve(before as { device: unknown; plans: unknown }, "Fixture 2");
     const colorBefore = approved1.device.capabilities.find((c) => c.kind === "color")!;
     expect(colorBefore.config.colorModes).toEqual({ rgb: true, cct: false });
 
@@ -145,14 +195,13 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
     // corrected a mis-tagged DPT in ETS, or upgraded the fixture's actuator). Every
     // communication object is already bound to the device just approved above, so
     // duplicate-detection must classify this as re-discovery, not a brand-new device.
-    const after = await scan(fixtureExport(2, "DPST-7-600"));
-    expect(after).toHaveLength(1);
+    const after = pickFixture(await scan(fixtureExport(2, "DPST-7-600")), 2);
     // § the status GAs are never recorded in `boundAddresses` (only write addresses
     // are — see TEST 3's own note), so a device with separate write/status objects
     // lands in "ask_installer" here, not "merge" — real re-discovery evidence either
     // way, since `findSoleExistingKnxOwner` keys off the WRITE addresses, not the label.
-    expect(after[0]!.duplicate.decision).toBe("ask_installer");
-    const approved2 = await approve(after[0]! as { device: unknown; plans: unknown }, "Fixture 2");
+    expect(after.duplicate.decision).toBe("ask_installer");
+    const approved2 = await approve(after as { device: unknown; plans: unknown }, "Fixture 2");
 
     // Same device, not a new one.
     expect(approved2.device.id).toBe(approved1.device.id);
@@ -164,9 +213,9 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
   });
 
   it("TEST 3: an existing RGB device rediscovered with the SAME DPT evidence stays RGB — no spurious flip", async () => {
-    const first = await scan(fixtureExport(3, "DPST-232-600"));
-    const approved1 = await approve(first[0]! as { device: unknown; plans: unknown }, "Fixture 3");
-    const second = await scan(fixtureExport(3, "DPST-232-600"));
+    const first = pickFixture(await scan(fixtureExport(3, "DPST-232-600")), 3);
+    const approved1 = await approve(first as { device: unknown; plans: unknown }, "Fixture 3");
+    const second = pickFixture(await scan(fixtureExport(3, "DPST-232-600")), 3);
     // § Every capability's WRITE group address already belongs to the device just
     // approved above, so `findSoleExistingKnxOwner` resolves the SAME existing device
     // regardless of which duplicate-decision label `checkDuplicate` assigns here — the
@@ -174,24 +223,24 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
     // device with separate write/status objects lands in "ask_installer" ("some but not
     // ALL of this device's group addresses are already bound"), not "merge" — real,
     // pre-existing `checkDuplicate` behavior, not something this fix changes.
-    expect(second[0]!.duplicate.decision).toBe("ask_installer");
-    const approved2 = await approve(second[0]! as { device: unknown; plans: unknown }, "Fixture 3");
+    expect(second.duplicate.decision).toBe("ask_installer");
+    const approved2 = await approve(second as { device: unknown; plans: unknown }, "Fixture 3");
     expect(approved2.device.id).toBe(approved1.device.id);
     const color = approved2.device.capabilities.find((c) => c.kind === "color")!;
     expect(color.config.colorModes).toEqual({ rgb: true, cct: false });
   });
 
   it("TEST 5: a CCT-only device (no RGB objects anywhere in its plan) persists cct=true, rgb=false", async () => {
-    const queue = await scan(fixtureExport(5, "DPST-7-600"));
-    const { device } = await approve(queue[0]! as { device: unknown; plans: unknown }, "Fixture 5");
+    const item = pickFixture(await scan(fixtureExport(5, "DPST-7-600")), 5);
+    const { device } = await approve(item as { device: unknown; plans: unknown }, "Fixture 5");
     const color = device.capabilities.find((c) => c.kind === "color")!;
     expect(color.config.colorModes).toEqual({ rgb: false, cct: true });
     expect(color.config.colorModes).not.toMatchObject({ rgb: true });
   });
 
   it("TEST 6: colorModes survives a simulated gateway restart (fresh AppContext over the SAME persisted stores)", async () => {
-    const queue = await scan(fixtureExport(6, "DPST-7-600"));
-    const { device } = await approve(queue[0]! as { device: unknown; plans: unknown }, "Fixture 6");
+    const item = pickFixture(await scan(fixtureExport(6, "DPST-7-600")), 6);
+    const { device } = await approve(item as { device: unknown; plans: unknown }, "Fixture 6");
     const deviceId = device.id;
 
     // Simulate a restart: a BRAND NEW AppContext/server/SIL/driver instance, reusing
@@ -215,10 +264,10 @@ describe("KNX capability persistence lifecycle (§ P0-C follow-up)", () => {
   });
 
   it("TEST 9/10: ON/OFF and brightness bindings are unaffected by any of the above — the color-only refresh path never touches other capabilities", async () => {
-    const queue = await scan(fixtureExport(9, "DPST-7-600"));
-    const { device } = await approve(queue[0]! as { device: unknown; plans: unknown }, "Fixture 9");
-    const rescan = await scan(fixtureExport(9, "DPST-7-600"));
-    const reapproved = await approve(rescan[0]! as { device: unknown; plans: unknown }, "Fixture 9");
+    const item = pickFixture(await scan(fixtureExport(9, "DPST-7-600")), 9);
+    const { device } = await approve(item as { device: unknown; plans: unknown }, "Fixture 9");
+    const rescanItem = pickFixture(await scan(fixtureExport(9, "DPST-7-600")), 9);
+    const reapproved = await approve(rescanItem as { device: unknown; plans: unknown }, "Fixture 9");
     expect(reapproved.device.id).toBe(device.id);
     const onoff = reapproved.device.capabilities.find((c) => c.kind === "onoff");
     const brightness = reapproved.device.capabilities.find((c) => c.kind === "brightness");
