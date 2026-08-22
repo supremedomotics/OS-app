@@ -26,9 +26,7 @@
 # in place on a live system; re-run install.sh or update.sh to regenerate it.
 {
 	email {$ACME_EMAIL:admin@supreme.local}
-}
 
-(supreme_routes) {
 	# § Live-confirmed fix — Caddy enables HTTP/3 (QUIC-over-UDP) by default the moment
 	# TLS is configured, and advertises it via `Alt-Svc: h3=...` on every response. Chrome
 	# races a QUIC connection attempt against the normal TCP one whenever a server
@@ -42,8 +40,18 @@
 	# Chrome never attempts the QUIC path at all. A local hub has no real use for QUIC's
 	# actual benefits (its whole draw is surviving lossy/roaming mobile networks over the
 	# open internet) — h2 is more than sufficient for a LAN device.
-	protocols h1 h2
+	#
+	# `protocols` is a GLOBAL option (belongs inside a `servers` block here, in the
+	# top-level options block) — NOT a per-site or per-snippet directive. An earlier
+	# version of this fix put it inside the `(supreme_routes)` snippet directly, which
+	# `caddy validate` (confirmed live) correctly rejected: "unrecognized directive:
+	# protocols" — Caddyfile has no such site-level directive at all.
+	servers {
+		protocols h1 h2
+	}
+}
 
+(supreme_routes) {
 	encode zstd gzip
 
 	header {
