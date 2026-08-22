@@ -149,6 +149,10 @@ export function KnxDiscoveryWorkspace() {
   // browser stays fully usable while it's in flight.
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<KnxImportJobStatus | null>(null);
+  // True only while the initial multipart POST itself is still in flight (no jobId
+  // yet) — distinct from "queued"/"running", which only exist once the gateway has
+  // actually received the file and created the job. See scan()'s own comment.
+  const [uploading, setUploading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [approved, setApproved] = useState<Record<string, KnxApprovalResult>>({});
@@ -372,6 +376,13 @@ export function KnxDiscoveryWorkspace() {
     setApproved({});
     setSelected(new Set());
     setRejected(new Set());
+    // § live-confirmed fix — a real `.knxproj` upload over a slow link can take minutes
+    // (see api.ts's ETS_IMPORT_TIMEOUT_MS), and the POST itself doesn't resolve — so
+    // `jobId`/`jobStatus` stay null and the button's default "Starting…" label sits
+    // there with zero feedback the whole time, indistinguishable from a genuine hang.
+    // `uploading` covers exactly that window (POST in flight, no jobId yet) so the
+    // button can say something honest about what's actually happening.
+    setUploading(Boolean(etsFile));
     try {
       const ets = etsFile
         ? { knxprojFile: etsFile, password: etsPassword || undefined }
@@ -387,6 +398,8 @@ export function KnxDiscoveryWorkspace() {
       if (etsFile && /password/i.test(message)) setNeedsPassword(true);
       setError(message);
       setPhase("error");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -562,7 +575,7 @@ export function KnxDiscoveryWorkspace() {
       )}
       <div className="drv-actions" style={{ marginTop: 8 }}>
         <button className="primary" disabled={!canStartKnxScan(phase)} onClick={() => void scan()}>
-          {phase === "scanning" ? jobStatusLabel(jobStatus) : result ? "Scan again" : "Discover devices"}
+          {phase === "scanning" ? (uploading ? "Uploading project file…" : jobStatusLabel(jobStatus)) : result ? "Scan again" : "Discover devices"}
         </button>
         {phase === "scanning" && jobId && (
           <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>
@@ -577,8 +590,9 @@ export function KnxDiscoveryWorkspace() {
       </div>
       {phase === "scanning" && (
         <p className="muted" style={{ marginTop: 4 }}>
-          Running in the background — the import doesn't block the rest of the app; leave this page
-          and come back, or refresh, and this will pick the same job back up.
+          {uploading
+            ? "Uploading the project file — a large project on a slow connection can take several minutes; this page will update once the upload finishes."
+            : "Running in the background — the import doesn't block the rest of the app; leave this page and come back, or refresh, and this will pick the same job back up."}
         </p>
       )}
       {phase === "error" && <p className="err">{error}</p>}
