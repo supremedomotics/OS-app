@@ -16,8 +16,10 @@ class FakeTransport implements IKnxIotTransport {
     return this.entries;
   }
 
-  async get(host: string, port: number, pathname: string): Promise<string> {
+  lastGetTimeoutMs: number | undefined;
+  async get(host: string, port: number, pathname: string, timeoutMs?: number): Promise<string> {
     this.getCalls.push({ host, port, pathname });
+    this.lastGetTimeoutMs = timeoutMs;
     if (this.shouldFailGet) throw new Error("no response");
     return this.functionalBlocksResponse;
   }
@@ -48,6 +50,13 @@ describe("KnxIotProvider", () => {
     const body = await provider.execute({ kind: "discovery.functional_blocks", host: "10.0.0.42" });
     expect(body).toBe(transport.functionalBlocksResponse);
     expect(transport.getCalls).toEqual([{ host: "10.0.0.42", port: 5683, pathname: "/fb" }]);
+  });
+
+  it("§ production defect fix — passes its configured discoveryTimeoutMs through to the functional-blocks GET, so a non-responding device can never hang the scan forever", async () => {
+    const transport = new FakeTransport();
+    const provider = new KnxIotProvider({ transport, discoveryTimeoutMs: 1234 });
+    await provider.execute({ kind: "discovery.functional_blocks", host: "10.0.0.42" });
+    expect(transport.lastGetTimeoutMs).toBe(1234);
   });
 
   it("throws for any task kind outside its registered responsibilities, rather than silently no-op'ing", async () => {
