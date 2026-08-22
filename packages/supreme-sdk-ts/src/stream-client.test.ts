@@ -92,6 +92,72 @@ describe("SupremeStream — reconnection", () => {
     vi.useRealTimers();
   });
 
+  // § Live-confirmed fix — a real network with intermittent connectivity made this
+  // socket FLAP (open, then drop again within a couple seconds) rather than staying
+  // down cleanly. Resetting backoff on bare "open" (the old behavior) let a flapping
+  // socket reconnect at roughly the base interval forever, since it kept "succeeding"
+  // just long enough to reset the counter before dying again — defeating the entire
+  // point of exponential backoff, and (via `onOpen`'s reconciliation-fetch trigger in
+  // App.tsx) flooding the origin with a fresh REST fetch on every flap.
+  it("keeps escalating backoff across repeated brief opens — a flapping connection must not reset it", () => {
+    vi.useFakeTimers();
+    const ctor = freshCtor();
+    const stream = new SupremeStream("wss://hub", "tok", ctor);
+    stream.connect({});
+
+    // Attempt 1: opens, then dies almost immediately (well under the stability window).
+    FakeSocket.instances[0]!.triggerOpen();
+    vi.advanceTimersByTime(500);
+    FakeSocket.instances[0]!.triggerClose();
+
+    // First reconnect fires at the base backoff (1000ms) — advancing less must not
+    // have already reconnected.
+    vi.advanceTimersByTime(999);
+    expect(FakeSocket.instances.length).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeSocket.instances.length).toBe(2);
+
+    // Attempt 2: same pattern — opens, dies immediately, well before stabilizing.
+    FakeSocket.instances[1]!.triggerOpen();
+    vi.advanceTimersByTime(500);
+    FakeSocket.instances[1]!.triggerClose();
+
+    // If backoff had wrongly reset to base on the attempt-2 "open", this would
+    // reconnect at 1000ms again. It must instead wait the DOUBLED interval (2000ms).
+    vi.advanceTimersByTime(1999);
+    expect(FakeSocket.instances.length).toBe(2); // still waiting — proves it did NOT reset
+    vi.advanceTimersByTime(1);
+    expect(FakeSocket.instances.length).toBe(3);
+    vi.useRealTimers();
+  });
+
+  it("resets backoff only after the connection has genuinely stayed open past the stability window", () => {
+    vi.useFakeTimers();
+    const ctor = freshCtor();
+    const stream = new SupremeStream("wss://hub", "tok", ctor);
+    stream.connect({});
+
+    // Attempt 1 flaps quickly, escalating backoff to 2000ms for attempt 2.
+    FakeSocket.instances[0]!.triggerOpen();
+    vi.advanceTimersByTime(500);
+    FakeSocket.instances[0]!.triggerClose();
+    vi.advanceTimersByTime(1000);
+
+    // Attempt 2 opens and this time genuinely STAYS open past the stability window
+    // (10s) before eventually dropping — a real recovered connection.
+    FakeSocket.instances[1]!.triggerOpen();
+    vi.advanceTimersByTime(10_000);
+    FakeSocket.instances[1]!.triggerClose();
+
+    // Backoff is back to the base interval — a genuinely-stable connection earns the
+    // reset, unlike the flapping case above.
+    vi.advanceTimersByTime(999);
+    expect(FakeSocket.instances.length).toBe(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeSocket.instances.length).toBe(3);
+    vi.useRealTimers();
+  });
+
   it("dispatches driver-state frames to onDriverState only, distinct from device-state frames", () => {
     const ctor = freshCtor();
     const stream = new SupremeStream("wss://hub", "tok", ctor);

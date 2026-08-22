@@ -162,6 +162,16 @@ export function App() {
   // stream that somehow redelivers/reorders frames can't apply a stale one over a newer.
   const lastLiveAtRef = useRef<Record<string, number>>({});
   const lastSeqRef = useRef<Record<string, number>>({});
+  // § Live-confirmed fix — a flapping WebSocket (see SupremeStream's own doc comment on
+  // STABLE_CONNECTION_MS) used to fire `onOpen` repeatedly in quick succession, and
+  // every one queued a FRESH, un-deduplicated `reconcileSnapshot()` — hundreds of
+  // overlapping `client.devices()`/registry/health fetches piling up concurrently on
+  // the same origin, live-confirmed crowding out an unrelated large upload. The stream
+  // client's own backoff fix addresses the root flapping; this guard is the
+  // independent, defense-in-depth fix on the caller's side — reconciliation is
+  // idempotent (it only ever reconciles the CURRENT snapshot), so a reconnect that
+  // arrives while one is still in flight has nothing new to gain from starting another.
+  const reconciling = useRef(false);
 
   const apply = (deviceId: string, capability: string, state: unknown, seq?: number) => {
     const key = `${deviceId}:${capability}`;
@@ -186,6 +196,8 @@ export function App() {
   // load — pages already fetch their own initial data; this exists purely to close the
   // gap for whatever changed while the socket was down.
   const reconcileSnapshot = async () => {
+    if (reconciling.current) return; // already reconciling — nothing new for another pass to do
+    reconciling.current = true;
     const sinceMs = Date.now();
     try {
       const { devices } = await client.devices();
@@ -212,6 +224,8 @@ export function App() {
       }
     } catch {
       // Best-effort, same as above.
+    } finally {
+      reconciling.current = false;
     }
   };
 

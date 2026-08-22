@@ -35,6 +35,18 @@ export interface StreamHandlers {
 
 const BASE_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
+// § Live-confirmed fix — a FLAPPING connection (opens, then drops again within a
+// couple seconds — real symptom observed on a network with intermittent connectivity
+// issues) defeated exponential backoff entirely: `backoffMs` reset to `BASE_BACKOFF_MS`
+// the instant "open" fired, before the connection had proven it would actually stay up,
+// so a socket that kept briefly opening and immediately dying reconnected at roughly
+// the base interval forever instead of backing off — and every "open" also fires
+// `onOpen` (a full REST reconciliation fetch, see App.tsx's `reconcileSnapshot`), so a
+// flapping socket compounded into hundreds of queued/competing requests, live-confirmed
+// crowding out an unrelated large upload on the same origin. The backoff now resets
+// only after the connection has genuinely stayed open for this long — a socket that
+// dies faster than this keeps escalating, exactly like a normal broken connection.
+const STABLE_CONNECTION_MS = 10_000;
 
 export class SupremeStream {
   private ws: WebSocketLike | null = null;
@@ -43,6 +55,7 @@ export class SupremeStream {
   private reconnectEnabled = false;
   private backoffMs = BASE_BACKOFF_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly wsBaseUrl: string,
@@ -66,7 +79,9 @@ export class SupremeStream {
     const ws = new this.ctor(url);
     this.ws = ws;
     ws.addEventListener("open", () => {
-      this.backoffMs = BASE_BACKOFF_MS;
+      // Only counts as "recovered" once it's proven it can stay up — see
+      // STABLE_CONNECTION_MS's own doc comment above for why this isn't reset here.
+      this.stableTimer = setTimeout(() => { this.backoffMs = BASE_BACKOFF_MS; }, STABLE_CONNECTION_MS);
       // § Avoid Duplicate Event Listeners / subscriptions — re-issue exactly the rooms
       // this client had subscribed to before the drop, not a fresh empty subscription
       // set the caller has to remember to rebuild.
@@ -74,6 +89,7 @@ export class SupremeStream {
       this.handlers.onOpen?.();
     });
     ws.addEventListener("close", () => {
+      if (this.stableTimer) { clearTimeout(this.stableTimer); this.stableTimer = null; }
       this.handlers.onClose?.();
       if (!this.reconnectEnabled) return;
       this.reconnectTimer = setTimeout(() => this.openSocket(), this.backoffMs);
@@ -109,6 +125,7 @@ export class SupremeStream {
   close(): void {
     this.reconnectEnabled = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.stableTimer) clearTimeout(this.stableTimer);
     this.ws?.close();
     this.ws = null;
   }
