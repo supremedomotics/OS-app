@@ -662,10 +662,24 @@ export async function devIssueLicense(sku: string): Promise<unknown> {
 // ── Automations (authenticated) ─────────────────────────────────────────────────
 // Default per-request budget — same reasoning as SupremeClient's own (§ resilience):
 // a hung backend call must never leave a page stuck on "Loading…" forever with no
-// error. ETS import routes carry a large base64 body over a real network upload, so
-// they get a longer budget rather than being cut off mid-transfer on a slow LAN.
+// error. ETS import routes carry a large multipart file (or base64 JSON) body over a
+// real network upload, so they get a longer budget rather than being cut off
+// mid-transfer on a slow LAN.
+//
+// § Live-confirmed (real hub, journalctl-traced) — a real ~10MB .knxproj upload was
+// still actively transferring, not stalled, when this timeout's own AbortController
+// fired at 90s and killed the connection mid-stream (server saw "Premature close"
+// exactly at that mark, after zero progress for the preceding ~109s of otherwise-
+// instant handler stages). 90s assumed a fast LAN; a real installer network (WiFi at
+// distance, VPN, a modest hub uplink) can genuinely need much longer to move several
+// megabytes — the async job pipeline this feeds is already bounded far more generously
+// (the import worker's own 5-minute cap, see installer-context.ts), so the upload leg
+// was the tightest, least justified limit in the whole pipeline. 10 minutes covers a
+// realistically slow real-world link for a realistically large real ETS project
+// without silently masking a genuine hang (the job-processing bounds below this are
+// unchanged and still fail fast on an actually-stuck import).
 const DEFAULT_TIMEOUT_MS = 20_000;
-const ETS_IMPORT_TIMEOUT_MS = 90_000;
+const ETS_IMPORT_TIMEOUT_MS = 600_000;
 
 async function authed(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init ?? {};
