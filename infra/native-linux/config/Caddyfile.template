@@ -29,6 +29,21 @@
 }
 
 (supreme_routes) {
+	# § Live-confirmed fix — Caddy enables HTTP/3 (QUIC-over-UDP) by default the moment
+	# TLS is configured, and advertises it via `Alt-Svc: h3=...` on every response. Chrome
+	# races a QUIC connection attempt against the normal TCP one whenever a server
+	# advertises h3, and on a network where UDP/443 is silently dropped or mishandled
+	# (many routers/firewalls only expect TCP for HTTPS) that race can leave the request
+	# permanently "Stalled" in Chrome's own Network panel — confirmed via a live
+	# `chrome://net-internals` + DevTools Timing trace: `curl`/`ping` (pure TCP/ICMP,
+	# never touch QUIC) were instant on the exact same network where every real Chrome
+	# request — normal, Incognito, every extension disabled, every profile — stalled
+	# indefinitely. Restricting to h1/h2 removes the Alt-Svc advertisement entirely, so
+	# Chrome never attempts the QUIC path at all. A local hub has no real use for QUIC's
+	# actual benefits (its whole draw is surviving lossy/roaming mobile networks over the
+	# open internet) — h2 is more than sufficient for a LAN device.
+	protocols h1 h2
+
 	encode zstd gzip
 
 	header {
