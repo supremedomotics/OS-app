@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   approveKnxDevice,
+  cleanupOrphanedKnxBindings,
   client,
   HttpError,
   knxDiscoveryQueue,
@@ -195,6 +196,8 @@ export function KnxDiscoveryWorkspace() {
   // so the installer sees an honest reason instead of just landing back at a blank idle
   // screen wondering where their results went.
   const [lostScanNotice, setLostScanNotice] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [etsPassword, setEtsPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
   // § UX fix — which ETS source input is shown; null = not chosen yet, so neither the file
@@ -340,6 +343,26 @@ export function KnxDiscoveryWorkspace() {
     }
     setEdits(initial);
     setPhase("done");
+  }
+
+  // § live-confirmed fix — a bulk escape hatch for every "stale binding" conflict at
+  // once, rather than hitting it one device at a time on re-approval. Safe to run any
+  // time: only touches bindings whose device no longer exists, never a live one.
+  async function cleanupOrphanedBindings() {
+    setCleanupBusy(true);
+    setCleanupResult(null);
+    try {
+      const res = await cleanupOrphanedKnxBindings();
+      setCleanupResult(
+        res.removedDevices === 0
+          ? "No orphaned bindings found."
+          : `Removed ${res.removedBindings} orphaned binding(s) from ${res.removedDevices} device(s) that no longer exist. Re-approving should work now.`,
+      );
+    } catch (e) {
+      setCleanupResult(e instanceof Error ? e.message : "Cleanup failed.");
+    } finally {
+      setCleanupBusy(false);
+    }
   }
 
   // Deliberate, user-driven cleanup (§ job lifecycle) — the installer is done with this
@@ -619,7 +642,17 @@ export function KnxDiscoveryWorkspace() {
             Clear results
           </button>
         )}
+        <button
+          type="button"
+          disabled={cleanupBusy}
+          onClick={() => void cleanupOrphanedBindings()}
+          style={{ marginLeft: 8 }}
+          title='Removes bus bindings left behind by devices deleted before their bindings were cleaned up — fixes "found an existing bus binding... but its device record no longer exists" without retrying each device one at a time.'
+        >
+          {cleanupBusy ? "Cleaning up…" : "Clean up orphaned bindings"}
+        </button>
       </div>
+      {cleanupResult && <p className="muted" style={{ marginTop: 4 }}>{cleanupResult}</p>}
       {phase === "scanning" && (
         <p className="muted" style={{ marginTop: 4 }}>
           {uploadProgress

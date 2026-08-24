@@ -658,6 +658,16 @@ export async function approveKnxDevice(input: { device: KnxUnifiedDevice; name: 
   return (await res.json()) as KnxApprovalResult;
 }
 
+/** § live-confirmed fix — bulk cleanup for bindings orphaned before a device delete
+ * cleaned up after itself (every device deleted before that fix left its bus binding
+ * behind forever). Removes every binding whose device no longer exists in one action,
+ * instead of hitting the same "stale binding" conflict on every re-approval one at a time. */
+export async function cleanupOrphanedKnxBindings(): Promise<{ removedBindings: number; removedDevices: number }> {
+  const res = await authed("/v1/commissioning/bindings/cleanup-orphaned", { method: "POST", body: JSON.stringify({}) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Cleanup failed."));
+  return (await res.json()) as { removedBindings: number; removedDevices: number };
+}
+
 // ── Licensing (authenticated) ────────────────────────────────────────────────────
 export interface LicenseService {
   active: boolean;

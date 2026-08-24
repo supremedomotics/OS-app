@@ -278,6 +278,43 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
     10000,
   );
 
+  it("cleanup-orphaned removes every binding whose device no longer exists, in one call, and never touches a live device's bindings (§ live-confirmed fix)", async () => {
+    const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "9/9/2", name: "Live Device Switch" }] }),
+    });
+    const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown }> };
+    const liveApprove = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ device: queue[0]!.device, name: "Live Device", plans: queue[0]!.plans }),
+    });
+    const liveDevice = (await liveApprove.json()) as { device: { id: string } };
+
+    // Two ghost bindings — different addresses, both owned by deviceIds with no device record.
+    const plans = queue[0]!.plans as { capability: "onoff"; address: string; config?: Record<string, unknown> }[];
+    await ctx.installer.bindProtocol({ deviceId: "dev_ghost_a" as DeviceId, capability: "onoff", protocol: "knx", address: "9/9/3", config: plans[0]!.config });
+    await ctx.installer.bindProtocol({ deviceId: "dev_ghost_b" as DeviceId, capability: "onoff", protocol: "knx", address: "9/9/4", config: plans[0]!.config });
+
+    const cleanup = await fetch(`${baseUrl}/v1/commissioning/bindings/cleanup-orphaned`, { method: "POST", headers: auth() });
+    expect(cleanup.status).toBe(200);
+    const cleanupBody = (await cleanup.json()) as { removedBindings: number; removedDevices: number };
+    expect(cleanupBody.removedDevices).toBe(2);
+    expect(cleanupBody.removedBindings).toBe(2);
+
+    const bindings = (await (await fetch(`${baseUrl}/v1/commissioning/bindings`, { headers: auth() })).json()) as {
+      bindings: { deviceId: string }[];
+    };
+    expect(bindings.bindings.some((b) => b.deviceId === "dev_ghost_a" || b.deviceId === "dev_ghost_b")).toBe(false);
+    // The live device's own binding survived untouched.
+    expect(bindings.bindings.some((b) => b.deviceId === liveDevice.device.id)).toBe(true);
+
+    // Running it again finds nothing left to clean — idempotent, never fabricates a count.
+    const again = await fetch(`${baseUrl}/v1/commissioning/bindings/cleanup-orphaned`, { method: "POST", headers: auth() });
+    expect((await again.json()) as { removedDevices: number }).toMatchObject({ removedDevices: 0 });
+  });
+
   it("rolls back cleanly when approving a device with no bindable communication object", async () => {
     const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
     const roomId = home.rooms[0]!.id;

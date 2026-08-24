@@ -1008,6 +1008,20 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // § live-confirmed fix — bulk cleanup for bindings orphaned before removeProtocolBindings
+  // existed (every device deleted before that fix left its bindings behind). Same
+  // installer:delete permission as a device delete, since this is destructive cleanup of
+  // real binding state, not a read.
+  app.post("/v1/commissioning/bindings/cleanup-orphaned", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "delete");
+      reply.send(await i().cleanupOrphanedProtocolBindings());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Diagnostics ──────────────────────────────────────────────────────────────
   app.get("/v1/diagnostics", async (req, reply) => {
     try {

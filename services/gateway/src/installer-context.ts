@@ -551,6 +551,32 @@ export class InstallerServices {
     for (const b of stale) await this.d.protocolBindingStore.remove(b.deviceId, b.capability);
   }
 
+  /** § live-confirmed fix — a bulk companion to {@link removeProtocolBindings} for
+   * bindings that were ALREADY orphaned before that fix existed (every device deleted
+   * before tonight left its bindings behind). Scans the whole store for bindings whose
+   * deviceId has no matching device record, releases each orphaned deviceId from the
+   * live driver via `sil.unmapDevice()` (never leave it silently observing bus addresses
+   * until the next restart), then removes the binding entries. Never touches a binding
+   * whose device genuinely still exists. */
+  async cleanupOrphanedProtocolBindings(): Promise<{ removedBindings: number; removedDevices: number }> {
+    if (!this.d.protocolBindingStore) return { removedBindings: 0, removedDevices: 0 };
+    const all = await this.d.protocolBindingStore.list();
+    const orphanedDeviceIds = new Set<DeviceId>();
+    for (const b of all) {
+      if (orphanedDeviceIds.has(b.deviceId)) continue;
+      if (!(await this.d.home.getDevice(b.deviceId))) orphanedDeviceIds.add(b.deviceId);
+    }
+    let removedBindings = 0;
+    for (const deviceId of orphanedDeviceIds) {
+      await this.d.sil.unmapDevice(deviceId);
+      for (const b of all.filter((x) => x.deviceId === deviceId)) {
+        await this.d.protocolBindingStore.remove(b.deviceId, b.capability);
+        removedBindings++;
+      }
+    }
+    return { removedBindings, removedDevices: orphanedDeviceIds.size };
+  }
+
   /**
    * Commission a device and, when it was discovered on a native bus, immediately bind
    * every capability to that bus (discover → commission → bind in one step). The bus
