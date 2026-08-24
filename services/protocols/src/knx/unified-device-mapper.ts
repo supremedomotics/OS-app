@@ -1037,6 +1037,27 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
         }
       });
     }
+    // § live-confirmed fix — same isolation discipline as the 5.001 semantic override
+    // above (only ever replaces a still-default "brightness" verdict, touches nothing
+    // else), but for stronger evidence: DPST-1-8 (Up/Down) and DPST-1-9 (Open/Close) are
+    // structurally unambiguous cover controls — a distinct DPT subtype from a plain
+    // switch, no name/comObjectText keyword needed at all — unlike DPT 5.001 (genuinely
+    // overloaded between brightness/position/generic percentage). A real circuit named
+    // with no cover keyword anywhere (confirmed live: one named just "Main") had its
+    // OWN percentage position/feedback object defaulting to `brightness` even though an
+    // up/down object on the SAME cluster already proves it's a cover.
+    if (functionalBlocks.length === 0 && etsSignals.length > 0) {
+      const hasUnambiguousCoverControl = etsSignals.some((s) => {
+        const cat = dptStructuralCategory(s.dpt ?? null);
+        return cat === "binary_updown" || cat === "binary_openclose";
+      });
+      if (hasUnambiguousCoverControl) {
+        etsSignals.forEach((s, i) => {
+          if (hints[i]!.capabilities.length !== 1 || hints[i]!.capabilities[0] !== "brightness") return;
+          hints[i] = { capabilities: ["position"], deviceKind: "blind", matchedOn: [`dpt:${s.dpt}`, "cluster-has-unambiguous-updown-control"] };
+        });
+      }
+    }
     const { capabilities, deviceKind, matchedOn } = mergeCapabilityHints(hints);
 
     // Per-signal capability/role tagging (§ Binding Engine input — see

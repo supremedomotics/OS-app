@@ -1159,6 +1159,34 @@ describe("mapUnifiedDevices — real ETS Communication-Object context feeds DPT 
     })[0]!;
     expect(device.capabilities).toEqual(["brightness"]); // step_dimming's own branch, untouched by the 5.001-only override
   });
+
+  it(
+    "§ live-confirmed fix — a percentage position object on a cluster that ALSO has an unambiguous DPST-1-8 Up/Down control classifies as position, even with NO cover keyword anywhere in any signal's name",
+    () => {
+      // No "curtain"/"blind"/"shutter"/"position" word anywhere — the only evidence this
+      // is a cover is the up/down object's own DPT, structurally unambiguous regardless
+      // of naming (unlike the percentage object, genuinely overloaded by itself).
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "2/2/1", name: "Main Up/Down", dpt: "1.008", individualAddress: "1.1.30", channel: 1 },
+          { id: "2/2/2", name: "Main Value", dpt: "5.001", individualAddress: "1.1.30", channel: 1 },
+        ],
+      })[0]!;
+      expect(device.capabilities).toEqual(expect.arrayContaining(["position"]));
+      expect(device.capabilities).not.toContain("brightness");
+    },
+  );
+
+  it("does NOT reclassify a genuine dimmer's brightness object just because an unrelated cluster in the same import has an up/down control", () => {
+    const devices = mapUnifiedDevices({
+      ets: [
+        { id: "2/2/1", name: "Curtain Up/Down", dpt: "1.008", individualAddress: "1.1.31", channel: 1 },
+        { id: "3/3/1", name: "Kitchen Light Value", dpt: "5.001", individualAddress: "1.1.32", channel: 1 },
+      ],
+    });
+    const light = devices.find((d) => d.suggestedName.includes("Kitchen"))!;
+    expect(light.capabilities).toEqual(["brightness"]); // a DIFFERENT cluster's up/down control never leaks in
+  });
 });
 
 describe("mapUnifiedDevices — naming evidence (Pass 10)", () => {
