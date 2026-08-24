@@ -19,6 +19,11 @@ import {
 // Same localStorage-for-client-side-continuity idiom this app already uses elsewhere
 // (homes.ts active-home id, screens.tsx scene order, settings.tsx a11y prefs).
 const KNX_JOB_KEY = "supreme.knxImportJobId";
+// § live-confirmed fix — the installer had no way to tell, after a page reload, which
+// project file the currently-shown scan results came from (the file input itself is
+// naturally empty again after a reload — this is a SEPARATE, persisted record of the
+// name, same lifecycle as KNX_JOB_KEY: set when a scan starts, cleared together with it).
+const KNX_FILENAME_KEY = "supreme.knxImportFileName";
 const JOB_POLL_MS = 1200;
 // § Room-selector fix — a sentinel roomId value meaning "installer typed a brand-new room
 // name," distinct from "" (Automatic — accept whatever room-assignment already inferred,
@@ -183,6 +188,13 @@ export function KnxDiscoveryWorkspace() {
   // encode the file client-side at all).
   const [etsFile, setEtsFile] = useState<File | null>(null);
   const [etsFileName, setEtsFileName] = useState<string | null>(null);
+  // § live-confirmed fix — import jobs (and their queue results) live ONLY in the
+  // gateway's in-memory map; a hub restart between scanning and coming back to this
+  // page silently wipes them. `lostScanNotice` distinguishes THAT specific case (a
+  // saved jobId that no longer resolves at all) from an ordinary failed/cancelled scan,
+  // so the installer sees an honest reason instead of just landing back at a blank idle
+  // screen wondering where their results went.
+  const [lostScanNotice, setLostScanNotice] = useState(false);
   const [etsPassword, setEtsPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
   // § UX fix — which ETS source input is shown; null = not chosen yet, so neither the file
@@ -208,6 +220,11 @@ export function KnxDiscoveryWorkspace() {
   // at all — a dead/stale job never disables the button, so the very first click
   // after page load is never silently swallowed.
   useEffect(() => {
+    // Restore the last-uploaded project's filename regardless of what the job resolves
+    // to below — even a dead job's filename is worth showing until a new scan replaces it.
+    const savedFileName = localStorage.getItem(KNX_FILENAME_KEY);
+    if (savedFileName) setEtsFileName(savedFileName);
+
     const saved = localStorage.getItem(KNX_JOB_KEY);
     if (!saved) return;
     let cancelled = false;
@@ -231,6 +248,10 @@ export function KnxDiscoveryWorkspace() {
           else localStorage.removeItem(KNX_JOB_KEY); // "completed" with no result shouldn't happen, but never resume garbage
           break;
         case "reset":
+          // A saved job id that no longer resolves at all (vs. one that resolved to a
+          // real failed/cancelled status) means the hub's in-memory job map was wiped —
+          // almost always a restart — since the map itself never evicts entries otherwise.
+          if (status === "gone") setLostScanNotice(true);
           localStorage.removeItem(KNX_JOB_KEY); // stale/dead — leave phase at "idle", button stays enabled
           break;
       }
@@ -294,8 +315,10 @@ export function KnxDiscoveryWorkspace() {
 
   function clearJob() {
     localStorage.removeItem(KNX_JOB_KEY);
+    localStorage.removeItem(KNX_FILENAME_KEY);
     setJobId(null);
     setJobStatus(null);
+    setEtsFileName(null);
   }
 
   // § PASS 16 bug fix (scan result persistence) — this used to call clearJob() right here,
@@ -378,6 +401,8 @@ export function KnxDiscoveryWorkspace() {
     setApproved({});
     setSelected(new Set());
     setRejected(new Set());
+    setLostScanNotice(false);
+    if (etsFile) localStorage.setItem(KNX_FILENAME_KEY, etsFile.name);
     // § live-confirmed fix — a real `.knxproj` upload over a slow/lossy connection can
     // take minutes even chunked (see api.ts's uploadKnxprojChunked), and the button's
     // default "Starting…" label would otherwise sit there with zero feedback the whole
@@ -603,9 +628,20 @@ export function KnxDiscoveryWorkspace() {
         </p>
       )}
       {phase === "error" && <p className="err">{error}</p>}
+      {lostScanNotice && (
+        <p className="muted" style={{ marginTop: 4 }}>
+          Your previous scan result is gone — the hub restarted since then (import jobs
+          aren't kept across a restart). Scan again to rebuild the review queue.
+        </p>
+      )}
 
       {result && (
         <>
+          {etsFileName && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              Project file: <strong title={etsFileName}>{etsFileName}</strong>
+            </p>
+          )}
           <DiscoverySummary summary={result.summary} />
 
           <div className="knx-toolbar">
