@@ -13,6 +13,7 @@ import {
 } from "@supreme/integration-layer";
 import { defaultDpt, stateFromValue, valueFromCommand, type KnxValue } from "./knx-codec.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
+import { colorModesFromDpt } from "./knx/capability-mapper.js";
 
 /**
  * KNXnet/IP transport seam. A real KNXnet/IP connection (tunnelling or routing) is
@@ -104,6 +105,23 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § live-confirmed fix — this is the driver actually bound to a real KNX bus in
+   * production (`bootstrap.ts` wires it from `config.knxHost`); `SupremeKnxDriver`'s
+   * own `getCapabilityConfig` (same logic, duplicated here) only backs the discovery/
+   * scan pipeline, never live commands, so its colorModes evidence never reached a real
+   * device's persisted capability config — `InstallerServices.bindProtocol` calls
+   * THIS driver's `getCapabilityConfig` right after binding, and with no implementation
+   * here it silently fell back to `null`, leaving every KNX color capability's `config`
+   * permanently `{}` regardless of what the scan/binding correctly computed. See
+   * `colorModesFromDpt`'s own doc comment for the DPT-major evidence rule. */
+  getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
+    if (capability !== "color") return null;
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
+    if (!b) return null;
+    const modes = colorModesFromDpt(b.dpt);
+    return modes ? { colorModes: modes } : null;
   }
 
   /** § Driver Lifecycle Completion — unsubscribes this device's group-address
