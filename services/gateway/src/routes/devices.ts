@@ -128,6 +128,7 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "device", deviceId, "delete");
 
       await ctx.home.removeDevice(deviceId);
+      await ctx.installer.removeProtocolBindings(deviceId);
       await ctx.audit?.record({
         homeId: ctx.homeId,
         actorUserId: user.id,
@@ -171,6 +172,7 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       } else {
         await enforce(ctx, user, "device", null, "delete");
         const removed = await ctx.home.removeDevices(ids);
+        for (const id of ids) await ctx.installer.removeProtocolBindings(id);
         await ctx.audit?.record({ homeId: ctx.homeId, actorUserId: user.id, action: "device.bulk_remove", resourceType: "device", resourceId: null, metadata: { count: removed } });
         reply.send({ affected: removed });
       }

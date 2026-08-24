@@ -536,6 +536,21 @@ export class InstallerServices {
     return this.d.protocolBindingStore?.list() ?? Promise.resolve([]);
   }
 
+  /** § live-confirmed fix — `HomeService.removeDevice`/`removeDevices` (the ONLY code
+   * `DELETE /v1/devices/:id` and the bulk-delete route call) only clean up the SIL's own
+   * registry/driver-lifecycle state via `sil.unmapDevice()` — they have no knowledge of
+   * `protocolBindingStore`, which is entirely gateway/installer-layer state. Deleting a
+   * device through either normal delete route therefore left its protocol binding(s)
+   * behind forever, orphaned — live-confirmed as the actual cause of "found an existing
+   * bus binding... but its device record no longer exists" on a real hub tonight. Called
+   * from the delete routes alongside (never instead of) `home.removeDevice(s)`, not a
+   * replacement for it. Safe to call for a device with no bindings at all (no-op). */
+  async removeProtocolBindings(deviceId: DeviceId): Promise<void> {
+    if (!this.d.protocolBindingStore) return;
+    const stale = (await this.d.protocolBindingStore.list()).filter((b) => b.deviceId === deviceId);
+    for (const b of stale) await this.d.protocolBindingStore.remove(b.deviceId, b.capability);
+  }
+
   /**
    * Commission a device and, when it was discovered on a native bus, immediately bind
    * every capability to that bus (discover → commission → bind in one step). The bus
@@ -940,6 +955,9 @@ export class InstallerServices {
      * used to find-or-create a room only when `roomId` is not supplied. */
     roomNameHint?: string | null;
     plans: BindingPlanItem[];
+    /** Installer explicitly confirmed removal of an orphaned binding (§ live-confirmed
+     * fix below) — never assumed, always a deliberate retry after seeing the conflict. */
+    force?: boolean;
   }): Promise<KnxApprovalResult> {
     const bindablePlans = input.plans.filter((p): p is typeof p & { address: string } => p.bindable && p.address !== null);
     if (bindablePlans.length === 0) {
@@ -957,22 +975,35 @@ export class InstallerServices {
     if (existingDeviceId) {
       const existingDevice = await this.d.home.getDevice(existingDeviceId);
       if (!existingDevice) {
-        // An orphaned binding (its device was deleted without cleaning up the binding
-        // store) — a real data-integrity gap, never silently papered over as "new".
-        throw new SupremeError("conflict", "found an existing bus binding for this device's group addresses, but its device record no longer exists — remove the stale binding before re-approving");
-      }
-      const bound: CapabilityKind[] = [];
-      try {
-        for (const plan of bindablePlans) {
-          await this.bindProtocol({ deviceId: existingDeviceId, capability: plan.capability, protocol: "knx", address: plan.address, config: plan.config });
-          bound.push(plan.capability);
+        // An orphaned binding (its device was deleted — e.g. an earlier approval attempt
+        // that failed/rolled back — without cleaning up the binding store) — a real
+        // data-integrity gap, never silently papered over as "new" on a bare retry.
+        if (!input.force) {
+          throw new SupremeError("conflict", "found an existing bus binding for this device's group addresses, but its device record no longer exists — remove the stale binding before re-approving");
         }
-      } catch (err) {
-        return { device: existingDevice, status: "error", reason: `refreshing existing device failed: ${(err as Error).message}` };
+        // § live-confirmed fix — installer explicitly confirmed the removal (`force`):
+        // release the orphaned deviceId from the live driver too, not just the store,
+        // so it stops silently observing these group addresses on this hub tonight —
+        // never wait for the next restart's binding-replay to notice. Then fall through
+        // to the same fresh-commission path below, exactly as if this were a new device.
+        for (const plan of bindablePlans) {
+          await this.d.protocolBindingStore?.remove(existingDeviceId, plan.capability);
+        }
+        await this.d.sil.unmapDevice(existingDeviceId);
+      } else {
+        const bound: CapabilityKind[] = [];
+        try {
+          for (const plan of bindablePlans) {
+            await this.bindProtocol({ deviceId: existingDeviceId, capability: plan.capability, protocol: "knx", address: plan.address, config: plan.config });
+            bound.push(plan.capability);
+          }
+        } catch (err) {
+          return { device: existingDevice, status: "error", reason: `refreshing existing device failed: ${(err as Error).message}` };
+        }
+        const validation = await this.validateKnxDevice(existingDeviceId);
+        const refreshedDevice = await this.d.home.getDevice(existingDeviceId);
+        return { device: refreshedDevice ?? existingDevice, ...validation };
       }
-      const validation = await this.validateKnxDevice(existingDeviceId);
-      const refreshedDevice = await this.d.home.getDevice(existingDeviceId);
-      return { device: refreshedDevice ?? existingDevice, ...validation };
     }
 
     // § Universal Commissioning Architecture — converges on the SAME commissionDevice()

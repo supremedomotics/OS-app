@@ -404,7 +404,7 @@ export function KnxDiscoveryWorkspace() {
     }
   }
 
-  async function approve(item: KnxInstallerQueueItem) {
+  async function approve(item: KnxInstallerQueueItem, force = false) {
     const edit = edits[item.device.backendId] ?? { name: item.device.suggestedName, roomId: "" };
     setApproving(item.device.backendId);
     try {
@@ -414,7 +414,7 @@ export function KnxDiscoveryWorkspace() {
       // explicit new room name themselves, overriding whatever hint room-assignment found.
       const isNewRoom = edit.roomId === NEW_ROOM_SENTINEL;
       const roomNameHint = isNewRoom ? (edit.newRoomName?.trim() || undefined) : (item.room.room ?? undefined);
-      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: isNewRoom ? undefined : (edit.roomId || undefined), roomNameHint, plans: item.plans });
+      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: isNewRoom ? undefined : (edit.roomId || undefined), roomNameHint, plans: item.plans, force });
       setApproved((cur) => ({ ...cur, [item.device.backendId]: res }));
     } catch (e) {
       setApproved((cur) => ({ ...cur, [item.device.backendId]: { device: { id: "", name: edit.name }, status: "error", reason: e instanceof Error ? e.message : "Approval failed." } }));
@@ -676,6 +676,7 @@ export function KnxDiscoveryWorkspace() {
                 approval={approved[item.device.backendId]}
                 busy={approving === item.device.backendId}
                 onApprove={() => approve(item)}
+                onForceApprove={() => approve(item, true)}
                 selected={selected.has(item.device.backendId)}
                 onToggleSelect={() => setSelected((cur) => { const next = new Set(cur); if (next.has(item.device.backendId)) next.delete(item.device.backendId); else next.add(item.device.backendId); return next; })}
                 rejected={rejected.has(item.device.backendId)}
@@ -719,7 +720,7 @@ function DiscoverySummary({ summary }: { summary: NonNullable<Awaited<ReturnType
 }
 
 function DeviceCard({
-  item, rooms, edit, onEdit, approval, busy, onApprove, selected, onToggleSelect, rejected, onReject, onUnreject, schemaUsed,
+  item, rooms, edit, onEdit, approval, busy, onApprove, onForceApprove, selected, onToggleSelect, rejected, onReject, onUnreject, schemaUsed,
 }: {
   item: KnxInstallerQueueItem;
   rooms: { id: string; name: string }[];
@@ -728,6 +729,7 @@ function DeviceCard({
   approval?: KnxApprovalResult;
   busy: boolean;
   onApprove: () => void;
+  onForceApprove: () => void;
   selected: boolean;
   onToggleSelect: () => void;
   rejected: boolean;
@@ -804,10 +806,17 @@ function DeviceCard({
             <button type="button" onClick={onReject}>Reject</button>
           </>
         ) : (
-          <span className={`drv-badge ${approval.status === "ready" ? "ok" : approval.status === "warning" ? "" : "err"}`}>
-            {approval.status === "ready" ? "Commissioned" : approval.status === "warning" ? "Commissioned (unverified)" : "Failed"}
-            {approval.reason ? ` — ${approval.reason}` : ""}
-          </span>
+          <>
+            <span className={`drv-badge ${approval.status === "ready" ? "ok" : approval.status === "warning" ? "" : "err"}`}>
+              {approval.status === "ready" ? "Commissioned" : approval.status === "warning" ? "Commissioned (unverified)" : "Failed"}
+              {approval.reason ? ` — ${approval.reason}` : ""}
+            </span>
+            {approval.status === "error" && approval.reason?.includes("stale binding") && (
+              <button type="button" disabled={busy} onClick={onForceApprove} title="Removes the orphaned binding for these exact group addresses, then commissions this device fresh.">
+                {busy ? "Removing stale binding…" : "Remove stale binding & retry"}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

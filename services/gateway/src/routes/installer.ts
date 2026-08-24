@@ -916,7 +916,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const body = req.body as { device?: UnifiedKnxDevice; name?: string; roomId?: string; roomNameHint?: string; plans?: BindingPlanItem[] };
+      const body = req.body as { device?: UnifiedKnxDevice; name?: string; roomId?: string; roomNameHint?: string; plans?: BindingPlanItem[]; force?: boolean };
       if (!body.device || typeof body.name !== "string" || !Array.isArray(body.plans)) {
         throw new SupremeError("validation_failed", "provide `device`, `name`, and `plans` from a prior queue response — `roomId` is optional, the Room Assignment Engine finds-or-creates a room when omitted");
       }
@@ -926,6 +926,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         roomId: typeof body.roomId === "string" && body.roomId.length > 0 ? (body.roomId as RoomId) : undefined,
         roomNameHint: typeof body.roomNameHint === "string" ? body.roomNameHint : undefined,
         plans: body.plans,
+        force: body.force === true,
       });
       reply.code(201).send(result);
     } catch (err) {

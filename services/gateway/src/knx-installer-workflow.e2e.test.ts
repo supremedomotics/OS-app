@@ -222,6 +222,62 @@ describe("KNX Unified Device Intelligence — installer workflow", () => {
     expect(bindings.bindings.some((b) => b.deviceId === approved.device.id && b.protocol === "knx" && b.address === "2/2/2")).toBe(true);
   }, 10000);
 
+  it(
+    "an orphaned binding (device deleted without cleanup) blocks re-approval by default, but `force` clears it and commissions fresh (§ live-confirmed fix)",
+    async () => {
+      const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ gateway: { host: "127.0.0.1" }, ets: [{ id: "9/9/1", name: "Conference Hanging Switch" }] }),
+      });
+      const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown }> };
+      expect(queue).toHaveLength(1);
+
+      // Simulate the real-world gap this fix targets directly: a binding exists for
+      // these exact group addresses, owned by a deviceId that was never actually
+      // commissioned (e.g. an installer cleaning up after an earlier bad import, or a
+      // crash between binding and device creation) — an orphaned binding store entry,
+      // reproduced deterministically rather than guessing which historical code path
+      // produced the one seen live.
+      const plans = queue[0]!.plans as { capability: "onoff" | "brightness" | "color"; address: string; config?: Record<string, unknown> }[];
+      const ghostDeviceId = "dev_ghost_never_existed" as DeviceId;
+      for (const plan of plans) {
+        await ctx.installer.bindProtocol({ deviceId: ghostDeviceId, capability: plan.capability, protocol: "knx", address: plan.address, config: plan.config });
+      }
+
+      // Re-approving the SAME group addresses without `force` must refuse — a real
+      // data-integrity gap, never silently treated as new or silently refreshed.
+      const reApprove = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ device: queue[0]!.device, name: "Conference Hanging", plans: queue[0]!.plans }),
+      });
+      expect(reApprove.status).toBe(409);
+      const reApproveBody = (await reApprove.json()) as { message?: string; error?: string };
+      expect(JSON.stringify(reApproveBody)).toMatch(/stale binding/);
+
+      // `force: true` clears the orphaned binding and commissions a fresh device.
+      const forced = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ device: queue[0]!.device, name: "Conference Hanging", plans: queue[0]!.plans, force: true }),
+      });
+      expect(forced.status).toBe(201);
+      const forcedDevice = (await forced.json()) as { device: { id: string; name: string } };
+      expect(forcedDevice.device.name).toBe("Conference Hanging");
+      expect(forcedDevice.device.id).not.toBe(ghostDeviceId); // a genuinely new device, not a resurrection
+
+      const bindings = (await (await fetch(`${baseUrl}/v1/commissioning/bindings`, { headers: auth() })).json()) as {
+        bindings: { deviceId: string; address: string }[];
+      };
+      // Only the forced device owns these addresses now — no leftover orphaned entry.
+      const addresses = plans.map((p) => p.address);
+      const owners = new Set(bindings.bindings.filter((b) => addresses.includes(b.address)).map((b) => b.deviceId));
+      expect(owners).toEqual(new Set([forcedDevice.device.id]));
+    },
+    10000,
+  );
+
   it("rolls back cleanly when approving a device with no bindable communication object", async () => {
     const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
     const roomId = home.rooms[0]!.id;
