@@ -242,11 +242,21 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           <h4>Configuration</h4>
           {driver.protocols.includes("knx") && (
             <KnxGatewayDiscoveryPanel
+              // § live-confirmed fix — `gw.individualAddress` is the GATEWAY's own KNX
+              // identity (what SEARCH_RESPONSE reports about the interface itself), never
+              // a free address for a client to claim. Auto-filling "Physical address"
+              // with it guarantees a collision the moment this hub tries to tunnel in —
+              // live-confirmed on a real interface: the tunnel connection still reports
+              // "connected", but the interface silently stops forwarding real bus
+              // telegrams to a client sharing its own address, indistinguishable from
+              // "nothing is on the bus" without a bus monitor to compare against. Host
+              // and port genuinely describe the selected gateway, so those still apply;
+              // the installer's own physical address (already typed, or left for them to
+              // pick from the interface's own tunnelling address pool in ETS) is untouched.
               onSelect={(gw) => setValues((cur) => ({
                 ...cur,
                 host: gw.address,
                 port: gw.port,
-                individualAddress: gw.individualAddress,
               }))}
             />
           )}
