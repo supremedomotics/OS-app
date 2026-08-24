@@ -96,6 +96,17 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   // (POST /v1/commissioning/knx/queue/job) uses this; its per-file size cap matches
   // ETS_IMPORT_BODY_LIMIT (installer.ts) so a large real project isn't rejected here.
   await app.register(fastifyMultipart, { limits: { fileSize: 64 * 1024 * 1024 } });
+  // § Chunked KNX upload (§ live-confirmed fix — a real sustained ~4KB/s connection,
+  // confirmed via packet capture, made a single giant multipart upload unreliable no
+  // matter how generous the timeout: one dropped/retransmitted segment anywhere in a
+  // 10MB body cost the whole request. Splitting the file into small chunks the
+  // installer's own browser retries independently means a bad connection costs one
+  // slow chunk, not the entire transfer). Raw binary body, no multipart envelope —
+  // `parseAs: "buffer"` is Fastify's own built-in mechanism for a non-JSON content
+  // type, nothing custom. Same per-chunk cap as a generous single chunk would need.
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
 
   // Metrics collection + /metrics scrape endpoint + dependency-aware /readyz (§6).
   attachObservability(app, ctx);

@@ -567,24 +567,71 @@ export interface KnxImportJob {
   error: string | null;
   result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
 }
-/**
- * `knxprojFile` (a real `.knxproj` upload) travels as `multipart/form-data` — a native
- * file upload, not a giant base64 JSON field (§ fixes a real production bug: an
- * extension in the user's normal Chrome profile was interfering with the ~13-18MB
- * base64 JSON `fetch()` body; native multipart is far less commonly touched by
- * extensions, and it also eliminates the expensive client-side base64-encode step).
- * `content` (pasted CSV/XML text) stays small plain JSON — no reason to change it.
- */
-export async function knxDiscoveryQueueJobStart(ets?: { content?: string; knxprojFile?: File; password?: string }): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
-  let res: Response;
-  if (ets?.knxprojFile) {
-    const form = new FormData();
-    form.append("knxproj", ets.knxprojFile);
-    if (ets.password) form.append("password", ets.password);
-    res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: form, timeoutMs: ETS_IMPORT_TIMEOUT_MS });
-  } else {
-    res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
+// § Chunked KNX upload (§ live-confirmed fix) — a real installer network can sustain
+// only a few KB/s for a large POST body (confirmed via a live packet capture: regular
+// retransmissions roughly every 300ms), which makes a single giant multipart upload
+// unreliable no matter how generous the timeout — one lost segment anywhere in a 10MB
+// body costs the ENTIRE request. Splitting the file into small chunks this function
+// sends (and retries) independently means a bad connection costs one slow chunk, not
+// the whole transfer — and gives real progress instead of an opaque "uploading…" for
+// however many minutes it takes. 256KB keeps a single chunk's worst-case retry cost
+// low even at a genuinely bad few-KB/s rate, without so many chunks that per-request
+// overhead (auth header, TLS reuse) dominates.
+export const KNX_UPLOAD_CHUNK_BYTES = 256 * 1024;
+const KNX_UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
+const KNX_UPLOAD_CHUNK_MAX_RETRIES = 6;
+
+async function uploadKnxprojChunked(file: File, password: string | undefined, onProgress?: (sentChunks: number, totalChunks: number) => void): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
+  const totalChunks = Math.max(1, Math.ceil(file.size / KNX_UPLOAD_CHUNK_BYTES));
+  const initRes = await authed("/v1/commissioning/knx/upload/init", { method: "POST", body: JSON.stringify({ totalChunks }) });
+  if (!initRes.ok) throw new Error(await errorMessage(initRes, "Could not start the upload."));
+  const { uploadId } = (await initRes.json()) as { uploadId: string };
+
+  for (let index = 0; index < totalChunks; index++) {
+    const chunk = file.slice(index * KNX_UPLOAD_CHUNK_BYTES, (index + 1) * KNX_UPLOAD_CHUNK_BYTES);
+    let lastError: unknown;
+    let sent = false;
+    for (let attempt = 0; attempt < KNX_UPLOAD_CHUNK_MAX_RETRIES && !sent; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 15_000)));
+      try {
+        const res = await authed(`/v1/commissioning/knx/upload/${uploadId}/chunk/${index}`, {
+          method: "POST",
+          body: chunk,
+          timeoutMs: KNX_UPLOAD_CHUNK_TIMEOUT_MS,
+          headers: { "content-type": "application/octet-stream" },
+        });
+        if (!res.ok) throw new Error(await errorMessage(res, `Chunk ${index + 1} of ${totalChunks} failed.`));
+        sent = true;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (!sent) throw lastError instanceof Error ? lastError : new Error(`Chunk ${index + 1} of ${totalChunks} failed after ${KNX_UPLOAD_CHUNK_MAX_RETRIES} attempts.`);
+    onProgress?.(index + 1, totalChunks);
   }
+
+  const completeRes = await authed(`/v1/commissioning/knx/upload/${uploadId}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ password }),
+    timeoutMs: KNX_UPLOAD_CHUNK_TIMEOUT_MS,
+  });
+  if (!completeRes.ok) throw new Error(await errorMessage(completeRes, "Could not finalize the upload."));
+  return (await completeRes.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
+}
+
+/**
+ * `knxprojFile` (a real `.knxproj` upload) now travels as a series of small chunked
+ * requests (see {@link uploadKnxprojChunked}) — never one giant single-shot body,
+ * which live testing proved unreliable on a genuinely slow/lossy connection regardless
+ * of timeout. `content` (pasted CSV/XML text) stays small plain JSON — no reason to
+ * change it; it was never the thing that was actually failing.
+ */
+export async function knxDiscoveryQueueJobStart(
+  ets?: { content?: string; knxprojFile?: File; password?: string },
+  onUploadProgress?: (sentChunks: number, totalChunks: number) => void,
+): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
+  if (ets?.knxprojFile) return uploadKnxprojChunked(ets.knxprojFile, ets.password, onUploadProgress);
+  const res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
 }

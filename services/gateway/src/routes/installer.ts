@@ -847,6 +847,56 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // § Chunked KNX upload (§ live-confirmed fix — see InstallerServices
+  // .startKnxChunkedUpload's own doc comment) — an alternative to the single-shot
+  // multipart upload above for a large `.knxproj` over a real, measured-slow/lossy
+  // connection: the browser splits the file client-side and sends each piece as its
+  // own small request, retrying only the failed piece rather than the whole transfer.
+  app.post("/v1/commissioning/knx/upload/init", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { totalChunks?: unknown } | undefined;
+      const totalChunks = typeof body?.totalChunks === "number" ? body.totalChunks : NaN;
+      if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+        throw new SupremeError("validation_failed", "provide a positive integer `totalChunks`");
+      }
+      const started = i().startKnxChunkedUpload(totalChunks);
+      reply.code(201).send(started);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/knx/upload/:uploadId/chunk/:index", { bodyLimit: 4 * 1024 * 1024 }, async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { uploadId, index } = req.params as { uploadId: string; index: string };
+      const i10 = Number(index);
+      if (!Number.isInteger(i10) || i10 < 0) throw new SupremeError("validation_failed", "chunk index must be a non-negative integer");
+      if (!Buffer.isBuffer(req.body)) throw new SupremeError("validation_failed", "chunk body must be raw binary (application/octet-stream)");
+      i().receiveKnxUploadChunk(uploadId, i10, req.body);
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/knx/upload/:uploadId/complete", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { uploadId } = req.params as { uploadId: string };
+      const body = req.body as { password?: unknown } | undefined;
+      const password = typeof body?.password === "string" ? body.password : undefined;
+      const job = i().completeKnxChunkedUpload(uploadId, password, req.log);
+      reply.code(202).send({ jobId: job.jobId, status: job.status, stage: job.stage });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post("/v1/commissioning/knx/queue/job/:jobId/cancel", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);

@@ -30,59 +30,70 @@ describe("resumeAction (P0-A stale-job-resume fix)", () => {
 });
 
 /**
- * § Pass 27 P0-A.3 — PATH A (select file, scan immediately, empty Group Address) and
- * PATH B (select file, wait, then scan) must produce the IDENTICAL request: a real
- * multipart/form-data body carrying the File object, never a base64 JSON field, and
- * never dependent on the Group Address textarea having been touched. This verifies
- * the actual request the browser would send, not merely that a UI callback fired.
+ * § live-confirmed fix — a real sustained ~4KB/s connection (packet-capture confirmed)
+ * made a single giant multipart upload unreliable no matter how generous the timeout,
+ * so a `.knxproj` file now travels as a sequence of small chunked `application/octet-stream`
+ * POSTs (init → chunk × N → complete) instead of one multipart request — this verifies
+ * the ACTUAL request sequence the browser sends, not merely that a UI callback fired.
+ * PATH A (scan immediately) and PATH B (scan after a delay) must produce the same shape,
+ * both dependent only on the file, never on the Group Address textarea being touched.
  */
-describe("knxDiscoveryQueueJobStart — multipart request shape (PATH A/B/C)", () => {
+describe("knxDiscoveryQueueJobStart — chunked upload request shape (PATH A/B/C)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  async function captureRequest(ets: Parameters<typeof knxDiscoveryQueueJobStart>[0]) {
-    let capturedInit: RequestInit | undefined;
+  /** Captures every fetch call made by a chunked upload: init, each chunk, then complete. */
+  async function captureChunkedUpload(ets: Parameters<typeof knxDiscoveryQueueJobStart>[0]) {
+    const calls: { url: string; init?: RequestInit }[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        capturedInit = init;
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (url.endsWith("/upload/init")) {
+          return new Response(JSON.stringify({ uploadId: "up_1" }), { status: 201 });
+        }
+        if (url.includes("/chunk/")) {
+          return new Response(null, { status: 204 });
+        }
         return new Response(JSON.stringify({ jobId: "job_1", status: "queued", stage: "queued" }), { status: 202 });
       }),
     );
     await knxDiscoveryQueueJobStart(ets);
-    return capturedInit!;
+    return calls;
   }
 
-  it("PATH A — file selected, scanned immediately with an empty Group Address: sends multipart, not base64 JSON", async () => {
+  it("PATH A — file selected, scanned immediately with an empty Group Address: sends init → raw binary chunk(s) → complete, never base64 JSON", async () => {
     const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "anon-project.knxproj");
-    const init = await captureRequest({ knxprojFile: file });
-    expect(init.body).toBeInstanceOf(FormData);
-    const form = init.body as FormData;
-    expect(form.get("knxproj")).toBe(file);
-    expect(form.has("password")).toBe(false);
-    // The browser sets its own multipart boundary — this code must never override it.
-    expect((init.headers as Record<string, string>)["content-type"]).toBeUndefined();
+    const calls = await captureChunkedUpload({ knxprojFile: file });
+    expect(calls[0]!.url).toContain("/upload/init");
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ totalChunks: 1 });
+    const chunkCall = calls.find((c) => c.url.includes("/chunk/"))!;
+    expect((chunkCall.init!.headers as Record<string, string>)["content-type"]).toBe("application/octet-stream");
+    expect(chunkCall.init!.body).toBeInstanceOf(Blob); // a File.slice() result, not base64 JSON
+    const completeCall = calls.find((c) => c.url.includes("/complete"))!;
+    expect(JSON.parse(completeCall.init!.body as string)).toEqual({ password: undefined });
   });
 
   it("PATH B — same file, scanned after a delay: identical request shape as PATH A", async () => {
     const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], "anon-project.knxproj");
     await new Promise((r) => setTimeout(r, 5));
-    const init = await captureRequest({ knxprojFile: file });
-    const form = init.body as FormData;
-    expect(form.get("knxproj")).toBe(file);
+    const calls = await captureChunkedUpload({ knxprojFile: file });
+    expect(calls[0]!.url).toContain("/upload/init");
+    expect(calls.some((c) => c.url.includes("/chunk/"))).toBe(true);
   });
 
-  it("PATH C — pasted Group Address text instead of a file: plain JSON body, no FormData", async () => {
-    const init = await captureRequest({ content: "<GroupAddress-Export></GroupAddress-Export>" });
-    expect(init.body).toBe(JSON.stringify({ content: "<GroupAddress-Export></GroupAddress-Export>" }));
-    expect((init.headers as Record<string, string>)["content-type"]).toBe("application/json");
+  it("PATH C — pasted Group Address text instead of a file: plain JSON body straight to the sync route, no chunked upload", async () => {
+    const calls = await captureChunkedUpload({ content: "<GroupAddress-Export></GroupAddress-Export>" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init!.body).toBe(JSON.stringify({ content: "<GroupAddress-Export></GroupAddress-Export>" }));
+    expect((calls[0]!.init!.headers as Record<string, string>)["content-type"]).toBe("application/json");
   });
 
-  it("a file with a password carries the password as a separate form field, not embedded in the file part", async () => {
+  it("a file with a password sends the password on the complete call, not embedded in any chunk", async () => {
     const file = new File([new Uint8Array([0x50, 0x4b])], "protected.knxproj");
-    const init = await captureRequest({ knxprojFile: file, password: "anon-pass" });
-    const form = init.body as FormData;
-    expect(form.get("password")).toBe("anon-pass");
+    const calls = await captureChunkedUpload({ knxprojFile: file, password: "anon-pass" });
+    const completeCall = calls.find((c) => c.url.includes("/complete"))!;
+    expect(JSON.parse(completeCall.init!.body as string)).toEqual({ password: "anon-pass" });
   });
 });

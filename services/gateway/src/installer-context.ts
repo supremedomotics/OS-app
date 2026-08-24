@@ -387,6 +387,12 @@ export class InstallerServices {
    * so cancellation terminates exactly one thread. Entries exist only while a job is
    * genuinely in flight; both settle paths delete their own. */
   private readonly knxImportWorkers = new Map<string, Worker>();
+  /** § Chunked KNX upload (§ live-confirmed fix — see startKnxChunkedUpload's own doc
+   * comment) — uploadId → chunks received so far. In-memory only, same durability
+   * contract as knxImportJobs above: an abandoned upload (browser closed mid-transfer,
+   * gateway restart) loses nothing an installer can't recreate by re-selecting the file. */
+  private readonly knxChunkedUploads = new Map<string, { chunks: (Buffer | undefined)[]; totalChunks: number; createdAt: number }>();
+  private static readonly CHUNKED_UPLOAD_TTL_MS = 30 * 60 * 1000;
 
   constructor(deps: InstallerDeps) {
     this.d = deps;
@@ -831,6 +837,56 @@ export class InstallerServices {
    * if job volume ever makes the in-memory map a real memory concern). */
   getKnxImportJob(jobId: string): KnxImportJob | null {
     return this.knxImportJobs.get(jobId) ?? null;
+  }
+
+  /**
+   * § Chunked KNX upload — live-confirmed fix. A real installer network can sustain
+   * only a few KB/s for a large POST body (confirmed via packet capture: regular
+   * retransmissions every ~300ms), which makes a single giant multipart upload
+   * unreliable regardless of how generous the timeout is — one lost segment anywhere
+   * in a 10MB body costs the ENTIRE request. Splitting the file into small chunks the
+   * browser sends (and retries) independently means a bad connection costs one slow
+   * chunk, not the whole transfer, and gives the installer real progress instead of an
+   * opaque "uploading…" for however many minutes it takes.
+   *
+   * Deliberately NOT a resumable-across-reload protocol (no persisted chunk state, no
+   * client-side resume-from-last-chunk logic) — that's real added complexity for a
+   * problem this doesn't have: the browser tab stays open and drives the whole
+   * sequence itself, retrying failed chunks in place. If a page reload/crash mid-
+   * upload becomes a real complaint, that's the point to add resumability, not before.
+   */
+  startKnxChunkedUpload(totalChunks: number): { uploadId: string } {
+    if (totalChunks < 1) throw new SupremeError("validation_failed", "a chunked upload needs at least one chunk");
+    const now = Date.now();
+    for (const [id, u] of this.knxChunkedUploads) {
+      if (now - u.createdAt > InstallerServices.CHUNKED_UPLOAD_TTL_MS) this.knxChunkedUploads.delete(id);
+    }
+    const uploadId = `knxup_${randomUUID()}`;
+    this.knxChunkedUploads.set(uploadId, { chunks: new Array(totalChunks), totalChunks, createdAt: now });
+    return { uploadId };
+  }
+
+  /** One chunk of an in-progress {@link startKnxChunkedUpload}. `index` is 0-based and
+   * must be within the range declared at init — never fabricated/extended here. */
+  receiveKnxUploadChunk(uploadId: string, index: number, data: Buffer): void {
+    const upload = this.knxChunkedUploads.get(uploadId);
+    if (!upload) throw new SupremeError("not_found", "no upload in progress with that id — it may have expired; start a new upload");
+    if (index < 0 || index >= upload.totalChunks) throw new SupremeError("validation_failed", `chunk index ${index} is out of range for a ${upload.totalChunks}-chunk upload`);
+    upload.chunks[index] = data;
+  }
+
+  /** Assembles every received chunk (in order — never fabricated for a missing one,
+   * see the explicit check below) and hands the reassembled `.knxproj` bytes to the
+   * SAME {@link startKnxImportJob} pipeline a direct multipart upload already uses —
+   * this is purely a different way for the bytes to ARRIVE, not a second import path. */
+  completeKnxChunkedUpload(uploadId: string, password: string | undefined, log?: { info: (obj: Record<string, unknown>, msg: string) => void }): KnxImportJob {
+    const upload = this.knxChunkedUploads.get(uploadId);
+    if (!upload) throw new SupremeError("not_found", "no upload in progress with that id — it may have expired; start a new upload");
+    const missing = upload.chunks.findIndex((c) => c === undefined);
+    if (missing !== -1) throw new SupremeError("validation_failed", `chunk ${missing} of ${upload.totalChunks} was never received — cannot assemble an incomplete upload`);
+    this.knxChunkedUploads.delete(uploadId);
+    const base64 = Buffer.concat(upload.chunks as Buffer[]).toString("base64");
+    return this.startKnxImportJob({ etsSource: { kind: "knxproj", base64, password } }, log);
   }
 
   /** Real cancellation (§ Part L, upgraded in Pass 11.3): a job still "queued" never runs

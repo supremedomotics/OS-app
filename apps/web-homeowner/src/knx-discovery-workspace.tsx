@@ -7,6 +7,7 @@ import {
   knxDiscoveryQueueJobCancel,
   knxDiscoveryQueueJobStart,
   knxDiscoveryQueueJobStatus,
+  KNX_UPLOAD_CHUNK_BYTES,
   type KnxApprovalResult,
   type KnxImportJobStatus,
   type KnxInstallerQueueItem,
@@ -149,10 +150,11 @@ export function KnxDiscoveryWorkspace() {
   // browser stays fully usable while it's in flight.
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<KnxImportJobStatus | null>(null);
-  // True only while the initial multipart POST itself is still in flight (no jobId
-  // yet) — distinct from "queued"/"running", which only exist once the gateway has
-  // actually received the file and created the job. See scan()'s own comment.
-  const [uploading, setUploading] = useState(false);
+  // Non-null only while the chunked upload itself is still in flight (no jobId yet) —
+  // distinct from "queued"/"running", which only exist once the gateway has actually
+  // received the whole file and created the job. Real chunk counts, not a guess — see
+  // scan()'s own comment and api.ts's uploadKnxprojChunked.
+  const [uploadProgress, setUploadProgress] = useState<{ sent: number; total: number } | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [approved, setApproved] = useState<Record<string, KnxApprovalResult>>({});
@@ -376,20 +378,19 @@ export function KnxDiscoveryWorkspace() {
     setApproved({});
     setSelected(new Set());
     setRejected(new Set());
-    // § live-confirmed fix — a real `.knxproj` upload over a slow link can take minutes
-    // (see api.ts's ETS_IMPORT_TIMEOUT_MS), and the POST itself doesn't resolve — so
-    // `jobId`/`jobStatus` stay null and the button's default "Starting…" label sits
-    // there with zero feedback the whole time, indistinguishable from a genuine hang.
-    // `uploading` covers exactly that window (POST in flight, no jobId yet) so the
-    // button can say something honest about what's actually happening.
-    setUploading(Boolean(etsFile));
+    // § live-confirmed fix — a real `.knxproj` upload over a slow/lossy connection can
+    // take minutes even chunked (see api.ts's uploadKnxprojChunked), and the button's
+    // default "Starting…" label would otherwise sit there with zero feedback the whole
+    // time, indistinguishable from a genuine hang. `uploadProgress` covers exactly that
+    // window (upload in flight, no jobId yet) with REAL chunk counts, not a guess.
+    if (etsFile) setUploadProgress({ sent: 0, total: Math.max(1, Math.ceil(etsFile.size / KNX_UPLOAD_CHUNK_BYTES)) });
     try {
       const ets = etsFile
         ? { knxprojFile: etsFile, password: etsPassword || undefined }
         : etsText.trim()
           ? { content: etsText }
           : undefined;
-      const started = await knxDiscoveryQueueJobStart(ets);
+      const started = await knxDiscoveryQueueJobStart(ets, (sent, total) => setUploadProgress({ sent, total }));
       localStorage.setItem(KNX_JOB_KEY, started.jobId);
       setJobId(started.jobId);
       setJobStatus(started.status);
@@ -399,7 +400,7 @@ export function KnxDiscoveryWorkspace() {
       setError(message);
       setPhase("error");
     } finally {
-      setUploading(false);
+      setUploadProgress(null);
     }
   }
 
@@ -575,7 +576,13 @@ export function KnxDiscoveryWorkspace() {
       )}
       <div className="drv-actions" style={{ marginTop: 8 }}>
         <button className="primary" disabled={!canStartKnxScan(phase)} onClick={() => void scan()}>
-          {phase === "scanning" ? (uploading ? "Uploading project file…" : jobStatusLabel(jobStatus)) : result ? "Scan again" : "Discover devices"}
+          {phase === "scanning"
+            ? uploadProgress
+              ? `Uploading project file… (${uploadProgress.sent}/${uploadProgress.total})`
+              : jobStatusLabel(jobStatus)
+            : result
+              ? "Scan again"
+              : "Discover devices"}
         </button>
         {phase === "scanning" && jobId && (
           <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>
@@ -590,8 +597,8 @@ export function KnxDiscoveryWorkspace() {
       </div>
       {phase === "scanning" && (
         <p className="muted" style={{ marginTop: 4 }}>
-          {uploading
-            ? "Uploading the project file — a large project on a slow connection can take several minutes; this page will update once the upload finishes."
+          {uploadProgress
+            ? `Uploading the project file in small chunks (${uploadProgress.sent} of ${uploadProgress.total} sent) — a large project on a slow connection can take several minutes; this page will update once the upload finishes.`
             : "Running in the background — the import doesn't block the rest of the app; leave this page and come back, or refresh, and this will pick the same job back up."}
         </p>
       )}
