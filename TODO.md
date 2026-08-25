@@ -1017,7 +1017,14 @@
   genuinely does vary per job. The health chip's "needs configuration" text no
   longer names these fields (which would point at controls that don't exist);
   for Casambi it explains the deployment has no Casambi Cloud account configured
-  instead.
+  instead. Wired into deployment tooling too: `infra/native-linux/install.sh` +
+  `config/gateway.env.template` (non-interactive pre-exported-only pattern, same
+  as `SUPREME_HA_TOKEN`/`SUPREME_UNSPLASH_KEY`) so a provisioned hub can ship
+  with the fleet default already set, never typed anywhere. Also fixed a
+  related, independently-discovered gap: `infra/hub-compose/docker-compose.yml`'s
+  gateway service never actually passed `SUPREME_CASAMBI_*` through to the
+  container despite `.env.example` documenting them — added the missing
+  `environment:` lines.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

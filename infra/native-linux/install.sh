@@ -232,6 +232,22 @@ collect_answers() {
   SUPREME_HA_TOKEN="${SUPREME_HA_TOKEN:-}"
   SUPREME_UNSPLASH_KEY="${SUPREME_UNSPLASH_KEY:-}"
 
+  # § Casambi fleet-wide Cloud account default — same non-interactive, pre-exported-only
+  # pattern as SUPREME_HA_TOKEN/SUPREME_UNSPLASH_KEY above: this is a deployment-wide account
+  # (API key + network admin email/password), not something to type at an install prompt or
+  # leave in shell history, so it's NEVER prompted for. Whoever provisions this hub's image
+  # pre-exports these before invoking install.sh (or hand-edits install.conf afterward);
+  # everyone else leaves them unset and the Casambi Driver Manager UI simply never offers
+  # Cloud-account fields to fill in (see apps/web-homeowner/src/drivers.tsx's
+  # CASAMBI_BACKEND_ONLY_KEYS). SUPREME_CASAMBI_NETWORK_ID is intentionally NOT fleet-wide —
+  # it identifies which Casambi network THIS job's fixtures live in, which genuinely varies
+  # per installation even under one shared account — but is included here so a single-site
+  # deployment can still ship fully pre-configured if desired.
+  SUPREME_CASAMBI_API_KEY="${SUPREME_CASAMBI_API_KEY:-}"
+  SUPREME_CASAMBI_EMAIL="${SUPREME_CASAMBI_EMAIL:-}"
+  SUPREME_CASAMBI_PASSWORD="${SUPREME_CASAMBI_PASSWORD:-}"
+  SUPREME_CASAMBI_NETWORK_ID="${SUPREME_CASAMBI_NETWORK_ID:-}"
+
   # Secrets: generated once, never prompted for, never logged. update.sh's config re-render
   # reuses these exact values via lib/deploy-steps.sh's load_secrets() — this is the only
   # place allowed to mint a NEW one, when neither file exists yet.
@@ -260,6 +276,10 @@ SUPREME_SETUP_WIZARD="${SUPREME_SETUP_WIZARD}"
 SUPREME_LOG_LEVEL="${SUPREME_LOG_LEVEL}"
 SUPREME_HUB_VERSION="${SUPREME_HUB_VERSION}"
 SUPREME_UNSPLASH_KEY="${SUPREME_UNSPLASH_KEY}"
+SUPREME_CASAMBI_API_KEY="${SUPREME_CASAMBI_API_KEY}"
+SUPREME_CASAMBI_EMAIL="${SUPREME_CASAMBI_EMAIL}"
+SUPREME_CASAMBI_PASSWORD="${SUPREME_CASAMBI_PASSWORD}"
+SUPREME_CASAMBI_NETWORK_ID="${SUPREME_CASAMBI_NETWORK_ID}"
 EOF
   chmod 0640 "$ANSWERS_FILE"
 }

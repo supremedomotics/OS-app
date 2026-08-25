@@ -93,6 +93,14 @@ services:
       SUPREME_LUTRON_HOST: ${SUPREME_LUTRON_HOST:-}
       SUPREME_LUTRON_USERNAME: ${SUPREME_LUTRON_USERNAME:-lutron}
       SUPREME_LUTRON_PASSWORD: ${SUPREME_LUTRON_PASSWORD:-integration}
+      # Casambi fleet-wide Cloud account default (§ Casambi fleet-wide env-var default) —
+      # already documented in .env.example but was never actually wired through to this
+      # container until now. When set, every Casambi driver instance on this hub uses this
+      # account automatically; the Driver Manager UI never asks for it.
+      SUPREME_CASAMBI_API_KEY: ${SUPREME_CASAMBI_API_KEY:-}
+      SUPREME_CASAMBI_EMAIL: ${SUPREME_CASAMBI_EMAIL:-}
+      SUPREME_CASAMBI_PASSWORD: ${SUPREME_CASAMBI_PASSWORD:-}
+      SUPREME_CASAMBI_NETWORK_ID: ${SUPREME_CASAMBI_NETWORK_ID:-}
       # Tuya (proprietary; needs a device client / local keys provisioned).
       SUPREME_TUYA_ENABLED: ${SUPREME_TUYA_ENABLED:-0}
       # Camera streaming: clients reach go2rtc (HLS/WebRTC) at /stream behind the edge.

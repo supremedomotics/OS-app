@@ -210,6 +210,45 @@ NETWORK this specific job's fixtures live in, which genuinely varies per install
 @supreme/web-homeowner --filter=@supreme/gateway --filter=@supreme/drivers
 --filter=@supreme/protocols` — 47/47 tasks green (103/103 web-homeowner tests, 3 new).
 
+**Committed and pushed** to `native-linux` (`cc0e3bd`).
+
+**User asked to wire the fleet default into the actual deployment tooling** so a
+provisioned hub ships with it pre-set, never something even a deployer types into a
+running system's UI: `infra/native-linux/install.sh` and `config/gateway.env.template`.
+
+- `install.sh`'s `collect_answers()` — `SUPREME_CASAMBI_API_KEY`/`EMAIL`/`PASSWORD`/
+  `NETWORK_ID` follow the exact same non-interactive, pre-exported-only pattern already
+  used for `SUPREME_HA_TOKEN`/`SUPREME_UNSPLASH_KEY` (`"${VAR:-}"`, never prompted,
+  never logged) — whoever provisions the hub image pre-exports these before running
+  install.sh (or hand-edits `install.conf` after). Persisted into `install.conf`
+  (`chmod 0640`) the same way every other answer is, so `update.sh`/`recover.sh`
+  re-renders pick them up automatically on every subsequent run.
+- `lib/deploy-steps.sh`'s `render_template()` — 4 new `___SUPREME_CASAMBI_*___`
+  substitutions. Guarded with `${VAR:-}` (unlike every pre-existing substitution in this
+  function, which assumes the var is always set) specifically because `update.sh`'s
+  `load_answers()` and `recover.sh` both `source` `install.conf` directly rather than
+  going through `collect_answers()`'s defaulting — an install.conf written by a
+  pre-this-change install.sh genuinely won't have these keys, and `set -euo pipefail`
+  would abort with "unbound variable" without the guard. Verified directly: simulated
+  `render_template()` against the real template both with and without the vars set —
+  correct empty-string output in the backward-compat case, correct real values when set,
+  zero leftover `___` placeholder tokens either way.
+- `config/gateway.env.template` — the 4 new lines (with the same doc comment explaining
+  the design), placed next to the existing Lutron block.
+- **Found and fixed a related, pre-existing gap while checking for docker-compose
+  parity** (the template's own header claims a direct correspondence with
+  `docker-compose.yml`'s gateway service): `infra/hub-compose/.env.example` already
+  documented `SUPREME_CASAMBI_*` (from an earlier, unrelated session that wired
+  `bootstrap.ts`'s env-only Cloud auto-connect), but `docker-compose.yml`'s gateway
+  `environment:` block never actually listed them — so setting them in `.env` never
+  reached the container on the Docker deployment path. Added the same 4
+  `${VAR:-}`-interpolated lines there, matching the existing per-driver convention (e.g.
+  the adjacent Lutron block). Verified with `docker compose config` (real Compose
+  interpolation, minimal required vars supplied) — parses clean, Casambi vars resolve
+  correctly into the rendered gateway service.
+- `shellcheck -x` on both modified scripts — zero new warnings (all pre-existing,
+  unrelated to this change); `bash -n` syntax-checks clean on both.
+
 **Committed and pushed** to `native-linux` (see commit following this entry).
 
 ---
