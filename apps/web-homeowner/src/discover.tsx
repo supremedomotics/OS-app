@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RoomId } from "@supreme/domain-model";
+import { ProgressBar } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } from "./api.js";
 
 /**
@@ -225,6 +226,13 @@ export function DiscoverDevices() {
           </button>
           {selectedIds.size === 0 && <p className="muted">Select at least one extension above to scan.</p>}
           {error && <p className="err">{error}</p>}
+          {phase === "scanning" && (
+            // § live-confirmed fix — a single batched client.discover() call across every
+            // selected driver, no per-driver completion signal arrives until the whole
+            // scan resolves, so an honest indeterminate sweep is the real state here —
+            // never a fabricated per-driver fraction the client can't actually observe.
+            <ProgressBar style={{ marginTop: 12, maxWidth: 360, marginInline: "auto" }} label="Scanning selected extensions…" />
+          )}
         </div>
       )}
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ProgressBar } from "@supreme/aureon-web";
 import {
   approveKnxDevice,
   cleanupOrphanedKnxBindings,
@@ -654,11 +655,18 @@ export function KnxDiscoveryWorkspace() {
       </div>
       {cleanupResult && <p className="muted" style={{ marginTop: 4 }}>{cleanupResult}</p>}
       {phase === "scanning" && (
-        <p className="muted" style={{ marginTop: 4 }}>
-          {uploadProgress
-            ? `Uploading the project file in small chunks (${uploadProgress.sent} of ${uploadProgress.total} sent) — a large project on a slow connection can take several minutes; this page will update once the upload finishes.`
-            : "Running in the background — the import doesn't block the rest of the app; leave this page and come back, or refresh, and this will pick the same job back up."}
-        </p>
+        <>
+          <ProgressBar
+            style={{ marginTop: 8 }}
+            label={uploadProgress ? `Uploading project file… (${uploadProgress.sent}/${uploadProgress.total} chunks)` : jobStatusLabel(jobStatus)}
+            value={uploadProgress ? uploadProgress.sent / uploadProgress.total : undefined}
+          />
+          <p className="muted" style={{ marginTop: 4 }}>
+            {uploadProgress
+              ? "A large project on a slow connection can take several minutes; this page will update once the upload finishes."
+              : "Running in the background — the import doesn't block the rest of the app; leave this page and come back, or refresh, and this will pick the same job back up."}
+          </p>
+        </>
       )}
       {phase === "error" && <p className="err">{error}</p>}
       {lostScanNotice && (
