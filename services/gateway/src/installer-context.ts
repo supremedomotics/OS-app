@@ -27,7 +27,10 @@ import {
   InMemoryCatalog,
   isConfigComplete,
   seedFirstPartyCatalog,
+  withSecretEncryption,
+  migrateDriverSecretsToEncrypted,
   type IInstalledDriverStore,
+  type DriverSecretCrypto,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
 import { subjects, type IEventBus } from "@supreme/messaging";
@@ -324,6 +327,10 @@ export interface InstallerDeps {
   identity: IdentityService;
   homeId: HomeId;
   driverStore?: IInstalledDriverStore;
+  /** § Production Readiness Audit — encryption-at-rest for driver config secret fields.
+   * Absent in dev/tests (no `driverStore` either, so nothing is actually persisted); production
+   * always supplies one (`bootstrap.ts`, keyed from the secrets manager). */
+  driverSecretCrypto?: DriverSecretCrypto;
   db?: SqlDb;
   scanners?: IProtocolScanner[];
   protocolBindingStore?: IProtocolBindingStore;
@@ -367,6 +374,12 @@ export interface InstallerDeps {
 export class InstallerServices {
   readonly drivers: DriverManager;
   readonly commissioning: CommissioningService;
+  /** § Production Readiness Audit — raw (undecorated) driver store + schema lookup, kept only so
+   * {@link init} can run the one-time legacy-secret migration directly against the RAW store
+   * (needs to tell real plaintext apart from ciphertext, which the encrypting decorator would
+   * otherwise hide). `undefined` when there's no crypto configured (dev/tests) — migration is a
+   * no-op then, matching the underlying store's own already-inert plaintext behavior. */
+  private readonly driverSecretMigration?: { rawStore: IInstalledDriverStore; crypto: DriverSecretCrypto; schemaFor: (key: string) => Promise<import("@supreme/domain-model").DriverConfigField[]> };
   /** KNX import Learning Engine — remembers installer renames across re-imports (§ Learning Engine). */
   private readonly knxLearning: ConfigKnxLearningStore;
 
@@ -408,11 +421,25 @@ export class InstallerServices {
     if (deps.config.driverStorePublicKey) {
       trustedKeys.set(deps.config.driverStoreKeyId, deps.config.driverStorePublicKey);
     }
+
+    // § Production Readiness Audit — encryption-at-rest for driver config secret fields.
+    // `schemaFor` reads the SAME catalog `DriverManager` itself will query, so "which fields are
+    // secret" is decided in exactly one place regardless of whether it's asked by the encrypting
+    // decorator or by DriverManager's own (separate) schema lookup.
+    const schemaFor = async (key: string) => (await catalog.find(key))?.bundle.manifest.configSchema ?? [];
+    const rawDriverStore = deps.driverStore;
+    const driverStore = rawDriverStore && deps.driverSecretCrypto
+      ? withSecretEncryption(rawDriverStore, deps.driverSecretCrypto, schemaFor)
+      : rawDriverStore;
+    this.driverSecretMigration = rawDriverStore && deps.driverSecretCrypto
+      ? { rawStore: rawDriverStore, crypto: deps.driverSecretCrypto, schemaFor }
+      : undefined;
+
     this.drivers = new DriverManager({
       homeId: deps.homeId,
       catalog,
       trustedKeys,
-      store: deps.driverStore,
+      store: driverStore,
       licensedSkus: () => this.licensedSkus(),
     });
 
@@ -442,6 +469,13 @@ export class InstallerServices {
    *  sources feed the same ordered sequence, per protocol, so a binding can never be
    *  replayed before the driver it needs exists. */
   async init(): Promise<void> {
+    if (this.driverSecretMigration) {
+      const { rawStore, crypto, schemaFor } = this.driverSecretMigration;
+      const result = await migrateDriverSecretsToEncrypted(rawStore, crypto, schemaFor);
+      if (result.migrated.length > 0) {
+        console.info("[driver-secret migration] plaintext -> encrypted-at-rest", { migrated: result.migrated });
+      }
+    }
     await this.loadLicense();
     await this.initializeNativeDrivers("boot");
   }

@@ -13,5 +13,11 @@ export {
   InMemoryInstalledDriverStore,
   type IInstalledDriverStore,
 } from "./store.js";
+export {
+  createDriverSecretCrypto,
+  withSecretEncryption,
+  migrateDriverSecretsToEncrypted,
+  type DriverSecretCrypto,
+} from "./secret-store.js";
 export { FIRST_PARTY_MANIFESTS } from "./manifests.js";
 export { validateDriverConfig, defaultDriverConfig, isConfigComplete, SECRET_MASK, type ConfigValidation } from "./config.js";

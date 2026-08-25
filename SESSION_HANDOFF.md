@@ -4,6 +4,66 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Casambi Local Gateway diagnosis + driver-secret encryption-at-rest
+
+**Branch:** `native-linux`. Started as a live Casambi Local Gateway debugging session
+(discovery working, per-device commands were fanning out to every light — traced the
+wire-level `Target_Type`/`Target_ID` encoding against the actual Lithernet UDP Developer
+Reference PDF and confirmed `local-command-mapper.ts`/`udp-codec.ts` match the documented
+spec exactly, so the fan-out is not a SupremeOS bug — root cause needs a real packet
+capture on the user's own network, which this session couldn't take; also confirmed Local
+mode structurally cannot fetch real fixture names from the Lithernet gateway — checked
+every locally-reachable interface (UDP `NotifyControlValues`, the entire WebAPI, the web
+UI, `.ceg` export, the Diagnostics console) and none carry a name field; names exist only
+in Casambi's Cloud account).
+
+User asked for a future one-time Cloud REST name-sync (Local UDP stays the only live
+transport) but first wanted the Casambi Cloud credential genuinely protected. Investigated
+and confirmed the codebase's own **Production Readiness Audit** already flagged this
+generally (Critical Blocker H3): driver secrets (`installed_drivers.config`) were stored
+as plaintext JSON, masked only in API responses, not encrypted at rest.
+
+**Built real AES-256-GCM encryption-at-rest for every driver's `secret: true` config
+field** (not scoped to Casambi — fixes this for every driver: Lutron, HEOS, etc. too):
+
+- `packages/crypto/src/index.ts` — `encryptSecret`/`decryptSecret`/`isEncryptedSecret`/
+  `generateEncryptionKey`. Self-describing `enc:v1:<iv>:<tag>:<ciphertext>` format so
+  encrypt/decrypt are each idempotent (safe to call on already-transformed values).
+- `services/drivers/src/secret-store.ts` (new) — `createDriverSecretCrypto`,
+  `withSecretEncryption` (a transparent `IInstalledDriverStore` decorator: every read
+  decrypts, every write encrypts — `DriverManager` itself needed zero changes),
+  `migrateDriverSecretsToEncrypted` (idempotent boot-time migration for pre-existing
+  plaintext, same pattern as ADR-0023's `migrateOwnershipToProvider`).
+- `services/gateway/src/bootstrap.ts` — the AES key is generated once and persisted via
+  the existing `SecretStore` (0600 file), same pattern as the HA token.
+- `services/gateway/src/installer-context.ts`/`context.ts` — wired `driverSecretCrypto`
+  through `InstallerServices`, wraps `deps.driverStore`, runs the migration in `init()`.
+- Tests: `packages/crypto/src/crypto.test.ts` (+6), `services/drivers/src/
+  secret-store.test.ts` (new, 10 tests), `services/gateway/src/
+  driver-secret-encryption.e2e.test.ts` (new — proves end-to-end through the real HTTP API:
+  masked over the wire, real ciphertext at rest, real plaintext still usable by the driver
+  stack, legacy plaintext migrates on next boot).
+
+**Full monorepo verification:** `pnpm turbo run build typecheck test` — 173/173 tasks
+green, 372/372 gateway tests passing (zero regressions).
+
+**Not yet built** (next session, if the user wants to proceed): the actual Casambi
+Cloud-name-sync feature itself (a `syncNamesFromCloud()` action on the driver, Local mode
+only, reusing the SAME `apiKey`/`email`/`password`/`networkId` schema fields the Cloud
+mode already has — no new config fields needed since they're already optional when
+`connectionType=local`). Scoped and ready to build; paused here to check in with the user
+before adding more scope, since the encryption prerequisite was the explicit ask.
+
+**Security note:** the user pasted real Casambi Cloud credentials directly into chat
+during this session. They were never written to any file or committed — flagged to the
+user, who was advised to rotate the password/API key as hygiene since the chat transcript
+itself is an exposure point independent of anything this session did.
+
+**Uncommitted as of this handoff** — awaiting the user's go-ahead to commit/push (this
+session did not commit or push without being asked, per this repo's standing rules).
+
+---
+
 ## Session: Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e
 
 Compared both branches commit-by-commit (11 unique to `native-linux`, 4 unique to

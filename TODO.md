@@ -143,8 +143,14 @@
     `connect()` throws in production for all four.
   - H2: Driver plugins run fully in-process with no isolation boundary — a compromised
     driver has full gateway privileges.
-  - H3: Driver/integration secrets stored as plaintext JSON in Postgres
-    (`installed_drivers.config`, `home_config`).
+  - ~~H3: Driver/integration secrets stored as plaintext JSON in Postgres
+    (`installed_drivers.config`, `home_config`).~~ **RESOLVED** — AES-256-GCM
+    encryption-at-rest for every `secret: true` driver-config field, transparent to
+    `DriverManager` and every caller above it (`services/drivers/src/secret-store.ts`,
+    `packages/crypto/src/index.ts`). Idempotent boot-time migration re-encrypts any
+    already-stored legacy plaintext. `home_config` was separately confirmed (during this
+    fix) to hold no secret values today — only backup schedule/restore metadata — so it
+    needed no change. See `services/gateway/src/driver-secret-encryption.e2e.test.ts`.
   - H4: No scheduled/automatic health monitoring — `health-check.sh` is manual-invocation
     only, no systemd timer/cron.
   - H5: `update.sh` rollback cannot survive `SIGKILL`/lost SSH session (bash `ERR` trap is
