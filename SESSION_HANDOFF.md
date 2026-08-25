@@ -249,6 +249,60 @@ running system's UI: `infra/native-linux/install.sh` and `config/gateway.env.tem
 - `shellcheck -x` on both modified scripts — zero new warnings (all pre-existing,
   unrelated to this change); `bash -n` syntax-checks clean on both.
 
+**Committed and pushed** to `native-linux` (`eec572c`).
+
+**User then pasted the same real Casambi credentials a second time** and asked to "save
+it permanently... encrypt it." Refused to write it into any repo file again — same
+reasoning, unchanged: this session only has the git repository, not the user's live
+hub; nothing in a git-tracked file is ever the right place for a real secret regardless
+of phrasing ("which file do I edit", "save it in the project repo"). Explained explicitly
+that `gateway.env`/`install.conf` never live inside the repo at all — `install.sh`
+renders them onto `/etc/supremeos` on the ACTUAL hub's filesystem, outside git entirely —
+so there genuinely is no repo file for this, not just an inconvenient one. Recommended
+rotating the password/API key since it's now been pasted into this chat transcript twice.
+
+**User then asked for automation: "whenever new installation or old it place it should
+automatically run."** Built exactly that, without ever putting the real value in git:
+
+- `infra/native-linux/config/casambi-fleet-credentials.example` (new) — git-tracked
+  TEMPLATE only (blank placeholders), documenting the real, machine-local, NEVER-tracked
+  file operators copy it to (`/etc/supremeos/casambi-fleet-credentials`, `chmod 0600`)
+  before filling in real values.
+- `infra/native-linux/lib/common.sh` — new `load_casambi_credentials_file()`, mirroring
+  install.sh's own `load_install_conf_safely` line-format discipline (only simple
+  `SUPREME_CASAMBI_*="value"` lines, shell metacharacters rejected, file never `source`d
+  as executable shell). Missing file = silent no-op (the normal case); a genuinely
+  malformed one is rejected in full with a clear warning. An already-non-empty variable
+  (an explicit one-off env-var export) is left untouched, so a deliberate override always
+  wins over the standing fleet file — verified directly (env var wins per-field, file
+  fills in the rest, both cases produce the expected result).
+- `install.sh`'s `collect_answers()` now calls this loader BEFORE the existing `"${VAR:-}"`
+  fallback, so a brand-new machine picks up the credentials file automatically from a
+  plain `./install.sh` — no env var to export, no extra flag, no manual step beyond
+  placing the file on the machine however it was provisioned (golden image, scp, USB).
+- `infra/native-linux/apply-casambi-credentials.sh` (new, executable) — the "old
+  installation" half: for an ALREADY-installed hub, loads the same credentials file,
+  rewrites ONLY the 4 `SUPREME_CASAMBI_*` lines in the existing `install.conf` (every
+  other answer/secret untouched — proven by diffing the file before/after in the
+  end-to-end simulation below), re-renders `gateway.env` via the same `render_template()`,
+  and restarts `supreme-gateway`. Idempotent — safe to re-run any time the file's values
+  change (rotation).
+- **Verified end-to-end, not just unit-by-unit**: simulated a full run against a fake
+  `SUPREME_CONFIG_DIR` with a pre-existing `install.conf` that predates this feature (no
+  Casambi keys at all, proving the backward-compat guard from the prior commit still
+  holds) — loaded a fixture credentials file, confirmed `install.conf` gained exactly the
+  4 new lines with every pre-existing line byte-for-byte unchanged, then re-rendered
+  `gateway.env` and confirmed the real fixture values landed correctly with zero leftover
+  `___` placeholder tokens. Also verified the "no credentials file at all" case (the
+  default/common case) is a clean, error-free no-op. Fixture values only — no real
+  credential in any file, test, or command in this session, consistent with the standing
+  constraint.
+- `shellcheck -x` on all three touched/new files — zero findings (the one new warning
+  introduced, SC2015 in `apply-casambi-credentials.sh`, was fixed by rewriting the
+  guard as an explicit `if`, not suppressed). `bash -n` syntax-checks clean on all three.
+- Full monorepo `pnpm turbo run build typecheck test` — 47/47 tasks cached-green
+  (infra-only change, correctly has zero effect on any JS/TS package).
+
 **Committed and pushed** to `native-linux` (see commit following this entry).
 
 ---

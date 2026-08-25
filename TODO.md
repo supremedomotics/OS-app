@@ -1024,7 +1024,18 @@
   related, independently-discovered gap: `infra/hub-compose/docker-compose.yml`'s
   gateway service never actually passed `SUPREME_CASAMBI_*` through to the
   container despite `.env.example` documenting them — added the missing
-  `environment:` lines.
+  `environment:` lines. Final automation follow-up: a new git-tracked
+  `config/casambi-fleet-credentials.example` documents a real, machine-local,
+  NEVER-tracked credentials file; `lib/common.sh`'s new
+  `load_casambi_credentials_file()` safely loads it (explicit env-var export
+  still wins per-field if both are set); `install.sh` picks it up automatically
+  on a brand-new machine with zero extra steps; new executable
+  `apply-casambi-credentials.sh` applies/rotates it on an ALREADY-installed hub
+  (rewrites only the 4 Casambi keys in `install.conf`, re-renders `gateway.env`,
+  restarts `supreme-gateway`) — covering both "new installation" and "old"
+  per the user's own framing. Verified end-to-end with fixture values against a
+  simulated pre-existing `install.conf`, proving both the backward-compat guard
+  and the line-preserving rewrite.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

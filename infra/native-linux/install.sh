@@ -232,17 +232,27 @@ collect_answers() {
   SUPREME_HA_TOKEN="${SUPREME_HA_TOKEN:-}"
   SUPREME_UNSPLASH_KEY="${SUPREME_UNSPLASH_KEY:-}"
 
-  # § Casambi fleet-wide Cloud account default — same non-interactive, pre-exported-only
-  # pattern as SUPREME_HA_TOKEN/SUPREME_UNSPLASH_KEY above: this is a deployment-wide account
-  # (API key + network admin email/password), not something to type at an install prompt or
-  # leave in shell history, so it's NEVER prompted for. Whoever provisions this hub's image
-  # pre-exports these before invoking install.sh (or hand-edits install.conf afterward);
-  # everyone else leaves them unset and the Casambi Driver Manager UI simply never offers
-  # Cloud-account fields to fill in (see apps/web-homeowner/src/drivers.tsx's
-  # CASAMBI_BACKEND_ONLY_KEYS). SUPREME_CASAMBI_NETWORK_ID is intentionally NOT fleet-wide —
-  # it identifies which Casambi network THIS job's fixtures live in, which genuinely varies
-  # per installation even under one shared account — but is included here so a single-site
-  # deployment can still ship fully pre-configured if desired.
+  # § Casambi fleet-wide Cloud account default — this is a deployment-wide account (API key +
+  # network admin email/password), not something to type at an install prompt or leave in
+  # shell history, so it's NEVER prompted for. Two ways it reaches this run, checked in
+  # order, neither of which ever puts the real value in this git repo:
+  #   1. An already-exported env var (e.g. a one-off `sudo SUPREME_CASAMBI_API_KEY=... ./
+  #      install.sh`, or a wrapper script that exports before calling this one).
+  #   2. lib/common.sh's SUPREME_CASAMBI_CREDENTIALS_FILE (default
+  #      /etc/supremeos/casambi-fleet-credentials) — an OPTIONAL, machine-local file this
+  #      hub's own provisioning process drops onto the machine ahead of time (see
+  #      config/casambi-fleet-credentials.example). Loaded here so a fresh machine picks it
+  #      up automatically from a plain `./install.sh`, no env var to remember. Values already
+  #      exported (path 1) take precedence over the file, since load_casambi_credentials_file
+  #      only sets a variable that's still genuinely unset/empty going in — an explicit
+  #      one-off override always wins over the standing fleet file.
+  # Either way, anyone left with neither set simply gets these blank, exactly as before — the
+  # Casambi Driver Manager UI never offers Cloud-account fields to fill in regardless (see
+  # apps/web-homeowner/src/drivers.tsx's CASAMBI_BACKEND_ONLY_KEYS). SUPREME_CASAMBI_NETWORK_ID
+  # is intentionally NOT fleet-wide — it identifies which Casambi network THIS job's fixtures
+  # live in, which genuinely varies per installation even under one shared account — but is
+  # included here so a single-site deployment can still ship fully pre-configured if desired.
+  load_casambi_credentials_file "$SUPREME_CASAMBI_CREDENTIALS_FILE"
   SUPREME_CASAMBI_API_KEY="${SUPREME_CASAMBI_API_KEY:-}"
   SUPREME_CASAMBI_EMAIL="${SUPREME_CASAMBI_EMAIL:-}"
   SUPREME_CASAMBI_PASSWORD="${SUPREME_CASAMBI_PASSWORD:-}"
