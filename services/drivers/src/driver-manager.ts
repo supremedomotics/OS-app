@@ -54,7 +54,7 @@ export interface DriverRegistryEntry {
   config: Record<string, unknown>;
 }
 import { verifyBundle } from "@supreme/driver-sdk";
-import { defaultDriverConfig, validateDriverConfig } from "./config.js";
+import { defaultDriverConfig, validateDriverConfig, type ConfigFallbacks } from "./config.js";
 import type { ICatalog } from "./catalog.js";
 import { InMemoryInstalledDriverStore, type IInstalledDriverStore } from "./store.js";
 
@@ -155,12 +155,14 @@ export class DriverManager {
     return inst.config;
   }
 
-  /** Validate + persist an installed driver's config against its manifest schema. */
-  async setConfig(id: DriverId, input: Record<string, unknown>): Promise<InstalledDriver> {
+  /** Validate + persist an installed driver's config against its manifest schema. `fallbacks`
+   * (e.g. Casambi's fleet-wide env-var default) satisfies a required field without it ever being
+   * written into the persisted config — see {@link ConfigFallbacks}'s own doc comment. */
+  async setConfig(id: DriverId, input: Record<string, unknown>, fallbacks: ConfigFallbacks = {}): Promise<InstalledDriver> {
     const inst = await this.store.get(id);
     if (!inst) throw new SupremeError("not_found", "driver not installed");
     const schema = await this.schemaFor(inst.key);
-    const { config, errors } = validateDriverConfig(schema, input, inst.config);
+    const { config, errors } = validateDriverConfig(schema, input, inst.config, fallbacks);
     if (errors.length > 0) throw new SupremeError("validation_failed", errors.join("; "));
     const updated: InstalledDriver = { ...inst, config };
     await this.store.put(updated);

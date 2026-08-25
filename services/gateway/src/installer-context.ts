@@ -31,11 +31,12 @@ import {
   migrateDriverSecretsToEncrypted,
   type IInstalledDriverStore,
   type DriverSecretCrypto,
+  type ConfigFallbacks,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
 import { subjects, type IEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient, LocalDirectUdpTransport } from "@supreme/lan";
-import { buildNativeDriver, hasNativeFactory, type NativeDriverFactoryContext } from "./native-driver-factory.js";
+import { buildNativeDriver, hasNativeFactory, resolveCasambiCloudCredentials, type NativeDriverFactoryContext } from "./native-driver-factory.js";
 import {
   knxSearch,
   SupremeKnxDriver,
@@ -1516,7 +1517,9 @@ export class InstallerServices {
 
   /** Validate + persist a driver's config, returning the masked result. */
   async setDriverConfig(id: DriverId, input: Record<string, unknown>) {
-    const updated = await this.drivers.setConfig(id, input);
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    const fallbacks = entry ? this.fallbacksFor(entry.protocols) : {};
+    const updated = await this.drivers.setConfig(id, input, fallbacks);
     this.appendLog(updated.key, "info", "Configuration updated");
     await this.reregisterDriver(updated.key); // apply the new config to the running native stack
     return this.getDriverConfig(id);
@@ -1608,17 +1611,34 @@ export class InstallerServices {
       // § Casambi fleet-wide default account — present only when the deployment has all three
       // required fields set (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); see the field's own doc
       // comment on `NativeDriverFactoryContext`.
-      ...(this.d.config.casambiApiKey && this.d.config.casambiEmail && this.d.config.casambiPassword
-        ? {
-            casambiCloudDefaults: {
-              apiKey: this.d.config.casambiApiKey,
-              email: this.d.config.casambiEmail,
-              password: this.d.config.casambiPassword,
-              ...(this.d.config.casambiNetworkId ? { networkId: this.d.config.casambiNetworkId } : {}),
-            },
-          }
-        : {}),
+      ...this.casambiContextDefaults(),
     };
+  }
+
+  private casambiContextDefaults(): Pick<NativeDriverFactoryContext, "casambiCloudDefaults"> {
+    const defaults = this.casambiCloudDefaults();
+    return defaults ? { casambiCloudDefaults: defaults } : {};
+  }
+
+  /** § Casambi fleet-wide default account — the single place this is read from
+   * `GatewayConfig`/env vars, shared by `nativeDriverContext()` (runtime construction) and
+   * `fallbacksFor()` (config validation/completeness, so the Driver Manager UI and boot
+   * reconciliation never require typing these fields when a fleet default already covers them).
+   * `undefined` unless all three required fields are set. */
+  private casambiCloudDefaults(): { apiKey: string; email: string; password: string; networkId?: string } | undefined {
+    const { casambiApiKey, casambiEmail, casambiPassword, casambiNetworkId } = this.d.config;
+    if (!casambiApiKey || !casambiEmail || !casambiPassword) return undefined;
+    return { apiKey: casambiApiKey, email: casambiEmail, password: casambiPassword, ...(casambiNetworkId ? { networkId: casambiNetworkId } : {}) };
+  }
+
+  /** {@link ConfigFallbacks} for a driver's config validation/completeness check, keyed off which
+   * protocols it implements. Casambi Cloud's `apiKey`/`email`/`password`/`networkId` are the only
+   * fields with a fleet-wide fallback today; every other driver gets `{}` (no change in
+   * behavior). */
+  private fallbacksFor(protocols: string[]): ConfigFallbacks {
+    if (!protocols.includes("casambi")) return {};
+    const defaults = this.casambiCloudDefaults();
+    return defaults ? { apiKey: defaults.apiKey, email: defaults.email, password: defaults.password, networkId: defaults.networkId } : {};
   }
 
   /**
@@ -1632,7 +1652,7 @@ export class InstallerServices {
     const desired = new Map<string, { config: Record<string, unknown>; key: string }>();
     for (const d of reg) {
       if (!d.installed || !d.enabled) continue;
-      if (!isConfigComplete(d.configSchema, d.config).complete) continue;
+      if (!isConfigComplete(d.configSchema, d.config, this.fallbacksFor(d.protocols)).complete) continue;
       for (const p of d.protocols) if (hasNativeFactory(p)) desired.set(p, { config: d.config, key: d.key });
     }
     for (const [protocol, { config, key }] of desired) {
@@ -1657,7 +1677,7 @@ export class InstallerServices {
     if (!entry) return;
     for (const protocol of entry.protocols) {
       if (!hasNativeFactory(protocol)) continue;
-      const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config).complete;
+      const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols)).complete;
       const driver = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key)) : null;
       if (runnable) this.desiredProtocols.set(protocol, { key, config: entry.config });
       else this.desiredProtocols.delete(protocol);
@@ -1811,7 +1831,7 @@ export class InstallerServices {
   async driverHealth(id: DriverId) {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
-    const { complete, missing } = isConfigComplete(entry.configSchema, entry.config);
+    const { complete, missing } = isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols));
     const protoStatus = this.d.sil.nativeProtocolStatus();
     const status = entry.protocols.map((p) => protoStatus.find((s) => s.protocol === p)).find(Boolean);
     const connected = status ? status.connected : null;

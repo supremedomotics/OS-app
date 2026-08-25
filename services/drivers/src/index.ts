@@ -20,4 +20,4 @@ export {
   type DriverSecretCrypto,
 } from "./secret-store.js";
 export { FIRST_PARTY_MANIFESTS } from "./manifests.js";
-export { validateDriverConfig, defaultDriverConfig, isConfigComplete, SECRET_MASK, type ConfigValidation } from "./config.js";
+export { validateDriverConfig, defaultDriverConfig, isConfigComplete, SECRET_MASK, type ConfigValidation, type ConfigFallbacks } from "./config.js";

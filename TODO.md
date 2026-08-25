@@ -1001,7 +1001,15 @@
   Cloud driver factory and the `/casambi/sync-names` route, so there's one
   credential-resolution path, not two. No credential is ever hardcoded in source —
   a literal-default option was explicitly considered and rejected for permanent
-  git-history exposure.
+  git-history exposure. Follow-up fix (found via a real screenshot showing the
+  Driver Manager UI still demanding these fields): the runtime-only fallback didn't
+  reach config SAVE/completeness at all — `validateDriverConfig()`/`isConfigComplete()`
+  (`services/drivers/src/config.ts`) now take an optional `ConfigFallbacks` parameter
+  that satisfies a required field without ever persisting it, threaded through
+  `DriverManager.setConfig()` and every `installer-context.ts` call site (config save,
+  boot/config-change reconciliation, live config-edit reconciliation, driver health) via
+  a new `fallbacksFor(protocols)` helper. An installer with the fleet env vars set can
+  now genuinely save a Cloud-mode Casambi driver with all four fields left blank.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

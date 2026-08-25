@@ -136,6 +136,48 @@ files, zero regressions elsewhere).
 was ever written to any file — the env-var approach was chosen specifically to keep it
 that way permanently, not just for this session's test fixtures.
 
+**Committed and pushed** to `native-linux` (`e3618f9`).
+
+**Found via a real screenshot from the user: the runtime-only fallback wasn't enough.**
+The Driver Manager's "Save configuration" screen still demanded API key/email/password be
+typed in, and still showed `NOT_CONFIGURED · needs configuration (apiKey, email,
+password)`, even with the fleet env vars set. Root cause: `resolveCasambiCloudCredentials()`
+only helps once a driver is already constructed — it was never wired into
+`validateDriverConfig()`/`isConfigComplete()`, the two functions that gate whether a
+config save succeeds and whether `reconcileManifestDrivers()` even starts the driver at
+boot. A blank-credentials Cloud config would fail to save at all, and even if it
+had been force-saved some other way, the driver would never be reconciled/started.
+
+**Fixed properly, not just cosmetically:**
+
+- `services/drivers/src/config.ts` — new `ConfigFallbacks` type + a `fallbacks` parameter
+  on both `validateDriverConfig()` and `isConfigComplete()`. A fallback satisfies a
+  required/`requiredIf` field WITHOUT writing it into the persisted config — the field
+  stays absent in storage, so the real credential is never written into the encrypted
+  secrets store either; it's read fresh from the environment every time it's actually
+  needed, so rotating the env var takes effect for every driver instance at once.
+- `services/drivers/src/driver-manager.ts` — `DriverManager.setConfig()` accepts and
+  threads the same `fallbacks` parameter through to `validateDriverConfig()`.
+- `services/gateway/src/installer-context.ts` — new `casambiCloudDefaults()` (single
+  source of truth, replacing the duplicated inline check in `nativeDriverContext()`) and
+  `fallbacksFor(protocols)` (keys the Casambi fallback map only for drivers whose
+  `protocols` include `"casambi"`). Threaded into `setDriverConfig()` (config save),
+  `reconcileManifestDrivers()` (boot/config-change reconciliation, 1 call site),
+  `reregisterDriver()` (live config-edit reconciliation), and `driverHealth()` (the
+  `NOT_CONFIGURED`/`configComplete`/`missing` fields the Driver Manager UI displays).
+- Tests: `services/drivers/src/config.test.ts` (+4 — fallback satisfies required without
+  persisting; explicit value still wins; still errors with no fallback; `isConfigComplete`
+  honors a fallback), new `services/gateway/src/casambi-fleet-default-config.e2e.test.ts`
+  (3 tests through the REAL HTTP API: saving a Cloud config with blank apiKey/email/
+  password succeeds and reports `configComplete: true`/non-`not_configured` health when a
+  fleet default is set; the real values are never persisted into the driver's own stored
+  config; the same blank save still correctly 422s when NO fleet default is configured).
+
+**Full verification:** `pnpm turbo run build typecheck test --filter=@supreme/gateway
+--filter=@supreme/drivers --filter=@supreme/protocols` — 42/42 tasks green, 380/380
+gateway tests passing (7 new across the two directly-touched test files, zero
+regressions elsewhere).
+
 **Committed and pushed** to `native-linux` (see commit following this entry).
 
 ---
