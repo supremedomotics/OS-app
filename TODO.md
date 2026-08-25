@@ -1010,6 +1010,14 @@
   boot/config-change reconciliation, live config-edit reconciliation, driver health) via
   a new `fallbacksFor(protocols)` helper. An installer with the fleet env vars set can
   now genuinely save a Cloud-mode Casambi driver with all four fields left blank.
+  Final UI follow-up: apiKey/network admin email/password never render as form
+  fields at all now (`CASAMBI_BACKEND_ONLY_KEYS` in `drivers.tsx`) — Cloud mode,
+  Local mode, or with connectionType unset — since they're a deployment-wide
+  account, not per-installation data; `networkId` stays visible/editable since it
+  genuinely does vary per job. The health chip's "needs configuration" text no
+  longer names these fields (which would point at controls that don't exist);
+  for Casambi it explains the deployment has no Casambi Cloud account configured
+  instead.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

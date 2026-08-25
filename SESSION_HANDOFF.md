@@ -178,6 +178,38 @@ had been force-saved some other way, the driver would never be reconciled/starte
 gateway tests passing (7 new across the two directly-touched test files, zero
 regressions elsewhere).
 
+**Committed and pushed** to `native-linux` (`2844a01`).
+
+**User pushed further, with a real screenshot: "api key, network admin email, network
+admin password, shouldnt be visible at all in ui, these parameters should be set by
+default in backend."** Distinct from the backend-completeness fix above — this is a UI
+request, and doesn't require putting a literal credential in git (already firmly
+rejected earlier this session and not revisited). The three CREDENTIAL fields (apiKey,
+network admin email, network admin password) are a deployment-wide account, so an
+installer/homeowner should never see input boxes for them at all; `networkId` stays
+visible/editable since — unlike the account credentials — it identifies which Casambi
+NETWORK this specific job's fixtures live in, which genuinely varies per installation.
+
+- `apps/web-homeowner/src/drivers.tsx` — new `CASAMBI_BACKEND_ONLY_KEYS = new
+  Set(["apiKey", "email", "password"])`. `visibleCasambiConfigSchema()` now excludes
+  these unconditionally (Cloud mode, Local mode, and with the discriminator omitted),
+  so the primary Cloud connectionType form no longer renders them — only `networkId`
+  remains, with a short note explaining the account is deployment-wide. Local Gateway's
+  "Cloud name sync (optional)" panel's `cloudSyncFields` now filters to `networkId`
+  only, with the help text rewritten to stop inviting manual credential entry. The
+  driver-health "needs configuration" chip no longer prints raw `apiKey`/`email`/
+  `password` field-key names (which now point at controls that don't exist) — for
+  Casambi it instead says the deployment itself has no Casambi Cloud account configured
+  and to contact the system administrator, distinguishing that from any other genuinely
+  missing, still-visible field.
+- `visibleCasambiConfigSchema` exported for testing.
+- Tests: `apps/web-homeowner/src/drivers.test.ts` (+3 — apiKey/email/password absent in
+  Cloud mode, Local mode, and with connectionType omitted; `networkId` still present).
+
+**Full verification:** `pnpm turbo run build typecheck test --filter=
+@supreme/web-homeowner --filter=@supreme/gateway --filter=@supreme/drivers
+--filter=@supreme/protocols` — 47/47 tasks green (103/103 web-homeowner tests, 3 new).
+
 **Committed and pushed** to `native-linux` (see commit following this entry).
 
 ---
