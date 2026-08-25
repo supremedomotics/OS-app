@@ -983,6 +983,27 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
 
   const iotByHost = new Map((input.knxIot ?? []).map((d) => [`knx-iot:${d.host}`, d]));
   const etsById = new Map((input.ets ?? []).map((s) => [s.id, s]));
+  // § live-confirmed fix — `isSharedAcrossDevices` below only recognizes sharing via ETS
+  // `<Connectors>` Send/Receive relationship data (`s.links`), which a real project's
+  // export can simply not carry for a central/group GA (confirmed live: a "Conference —
+  // all circuits" master-switch address had no `links` at all, so it was treated as one
+  // specific device's own local switch object and WON that device's primary write
+  // address over its actual dedicated one — every other device wired to the same master
+  // switch then visibly toggled together whenever that one device was commanded).
+  // Independent of `links` quality, the raw ETS export itself already proves sharing
+  // structurally: the SAME group address id shows up as its own signal entry against
+  // MULTIPLE different physical devices' `individualAddress` (that's literally how a
+  // shared/central GA appears in a per-device communication-object export — each
+  // participating actuator has its own object referencing it). `etsById` above collapses
+  // duplicate ids to whichever entry is last, so this has to be computed from the raw,
+  // pre-dedup array instead.
+  const individualAddressesByGaId = new Map<string, Set<string>>();
+  for (const s of etsSignalsAll) {
+    if (!s.individualAddress) continue;
+    const set = individualAddressesByGaId.get(s.id);
+    if (set) set.add(s.individualAddress);
+    else individualAddressesByGaId.set(s.id, new Set([s.individualAddress]));
+  }
 
   const devices: UnifiedKnxDevice[] = clusters.map((cluster) => {
     const iotSignals = cluster.signals.map((s) => iotByHost.get(s.id)).filter((d): d is KnxIotDiscoverySignal => d !== undefined);
@@ -1126,7 +1147,11 @@ export function mapUnifiedDevices(input: UnifiedDeviceMapperInput): UnifiedKnxDe
 
     const isSharedAcrossDevices = (s: (typeof etsSignals)[number]) => {
       const addrs = new Set((s.links ?? []).map((l) => l.individualAddress).filter((a): a is string => !!a));
-      return addrs.size >= 2;
+      if (addrs.size >= 2) return true;
+      // § live-confirmed fix — Connectors-based evidence above is empty for a project
+      // that doesn't export it; fall back to the raw-signal-level structural evidence
+      // computed once above (individualAddressesByGaId), independent of `links`.
+      return (individualAddressesByGaId.get(s.id)?.size ?? 0) >= 2;
     };
     const communicationObjects: CommunicationObject[] = [
       ...etsSignals.map((s) => ({ id: s.id, name: s.name, source: "ets" as const, channel: s.channel ?? null, local: !isSharedAcrossDevices(s), dpt: s.dpt ?? null, ...(etsTagById.get(s.id) ?? fallbackTag) })),

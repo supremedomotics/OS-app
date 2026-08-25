@@ -377,6 +377,37 @@ describe("mapUnifiedDevices — relationship-specific shared GA role resolution 
     expect(bOnoff.config.statusAddress === "1/0/0" || bOnoff.config.extraStatusAddresses?.includes("1/0/0")).toBe(true);
   });
 
+  it(
+    "1b: § live-confirmed fix — a shared/central GA with NO <Connectors> links data at all (a real project's export gap) is still recognized as shared from raw signal structure alone: the SAME GA id appears as its own entry against multiple different individualAddresses",
+    () => {
+      const devices = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/1", name: "A Local SW", dpt: "1.001", individualAddress: "1.1.10", channel: 1 },
+          // The shared/central GA, appearing as device A's OWN comm-object entry — no
+          // `links` at all, exactly the real-project data gap this fix targets.
+          { id: "1/4/0", name: "Conference All Circuits", dpt: "1.001", individualAddress: "1.1.10", channel: 1 },
+          { id: "1/1/2", name: "B Local SW", dpt: "1.001", individualAddress: "1.1.11", channel: 1 },
+          // Same GA id, but this time it's device B's own entry — again no `links`. The
+          // ONLY evidence this is shared is that "1/4/0" shows up against two different
+          // individual addresses across the raw signal list.
+          { id: "1/4/0", name: "Conference All Circuits", dpt: "1.001", individualAddress: "1.1.11", channel: 1 },
+        ],
+      });
+      const a = devices.find((d) => d.raw.groupingKey === "1.1.10#1")!;
+      const b = devices.find((d) => d.raw.groupingKey === "1.1.11#1")!;
+
+      const aOnoff = planBindings(a).find((p) => p.capability === "onoff")!;
+      const bOnoff = planBindings(b).find((p) => p.capability === "onoff")!;
+      // Each device's own dedicated local switch wins primary — the shared GA never
+      // displaces it, exactly like the `links`-based case above, just reached via the
+      // structural (no-links) evidence path instead.
+      expect(aOnoff.address).toBe("1/1/1");
+      expect(bOnoff.address).toBe("1/1/2");
+      expect(aOnoff.config.extraCommandAddresses).toEqual(["1/4/0"]);
+      expect(bOnoff.config.extraCommandAddresses).toEqual(["1/4/0"]);
+    },
+  );
+
   it("2: pure receive-only shared GA — every referencing device gets 'status', none gets 'primary'", () => {
     const devices = mapUnifiedDevices({
       ets: [
