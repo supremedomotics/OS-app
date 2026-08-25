@@ -487,6 +487,20 @@ export async function discoverCasambiLocalGateway(): Promise<CasambiNotImplement
   return (await res.json()) as CasambiNotImplementedResult & { gateways: unknown[] };
 }
 
+/** § Casambi Local Gateway — one-time Cloud name sync (Local UDP stays the only live transport;
+ * this is a REST-only, no-WebSocket fetch of real fixture names from the account's own Cloud
+ * credentials, reused from the same apiKey/email/password/networkId fields Cloud mode has). */
+export interface CasambiNameSyncResult {
+  matched: number;
+  total: number;
+  networkName: string | null;
+}
+export async function syncCasambiNamesFromCloud(driverId: string): Promise<CasambiNameSyncResult> {
+  const res = await authed(`/v1/drivers/${driverId}/casambi/sync-names`, { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Name sync failed."));
+  return (await res.json()) as CasambiNameSyncResult;
+}
+
 // ── Supreme KNX Unified Device Intelligence — Discovery Queue (authenticated) ─────
 // Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
 // invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines

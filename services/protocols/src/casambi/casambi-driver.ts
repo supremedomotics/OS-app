@@ -15,6 +15,7 @@ import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tr
 import { capabilitiesFromUnit, statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import {
   CasambiSessionExpiredError,
+  HttpCasambiTransport,
   type CasambiCredentials,
   type CasambiGroup,
   type CasambiSession,
@@ -111,6 +112,16 @@ interface CasambiBinding {
   deviceId: DeviceId;
   capability: CapabilityKind;
   unitId: number;
+}
+
+/** Result of {@link CasambiProtocolDriver.syncNamesFromCloud} — how many already-discovered Local
+ * units were matched to a Cloud unit with a real name, out of how many the Cloud network reports
+ * in total. `matched < total` is expected and honest (a unit not yet seen locally, e.g. one that
+ * hasn't sent its first `NotifyControlValues` packet, simply can't be named yet). */
+export interface CasambiNameSyncResult {
+  matched: number;
+  total: number;
+  networkName: string | null;
 }
 
 /** Live health snapshot for monitoring/telemetry (no secrets). */
@@ -279,6 +290,43 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       await this.loadNetwork();
     }
     return buildDiscoveredDevices(this.units, this.groups);
+  }
+
+  /**
+   * § Casambi Local Gateway — one-time Cloud name sync. Local mode has no protocol-level path to
+   * a fixture's real name — confirmed by checking every locally-reachable Lithernet interface
+   * (UDP `NotifyControlValues`, the entire documented WebAPI, the web UI, `.ceg` export, the
+   * Diagnostics console): none carry a name field. Names exist only in the Casambi Cloud account.
+   *
+   * This opens a REST-only session (`createSession` + `fetchNetwork`, no WebSocket, no
+   * `openWire`), matches each Cloud unit to an already-discovered LOCAL unit by numeric id (the
+   * same Casambi network addressing scheme both transports share), copies over `name` where
+   * present, then discards the session entirely — nothing here becomes a live connection or an
+   * ongoing dependency. Local UDP stays the only transport for discovery, commands, and live
+   * state; this method touches naming metadata only, never a device's live state. Safe to call
+   * repeatedly (e.g. an installer "Re-sync names" action) — idempotent, no side effects beyond
+   * updating `unit.name` for units this call actually matched.
+   *
+   * Throws if called in Cloud mode (`connectionMode: "cloud"` already has real names from its own
+   * live session — this method exists specifically for the Local-mode gap) or if the Cloud
+   * request itself fails (invalid credentials, network unreachable) — never silently no-ops.
+   */
+  async syncNamesFromCloud(creds: CasambiCredentials, transport: CasambiTransport = new HttpCasambiTransport({ apiKey: creds.apiKey })): Promise<CasambiNameSyncResult> {
+    if (this.mode !== "local") {
+      throw new Error("casambi: syncNamesFromCloud is only meaningful in Local mode — Cloud mode already has real names from its own session");
+    }
+    const session = await transport.createSession(creds);
+    const network = await transport.fetchNetwork(session);
+    let matched = 0;
+    for (const cloudUnit of network.units) {
+      const local = this.units.get(cloudUnit.id);
+      if (!local) continue;
+      const name = cloudUnit.name?.trim();
+      if (!name) continue;
+      this.units.set(cloudUnit.id, { ...local, name });
+      matched += 1;
+    }
+    return { matched, total: network.units.length, networkName: session.networkName ?? null };
   }
 
   onState(listener: StateListener): () => void {

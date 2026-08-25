@@ -29,6 +29,7 @@ import {
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport, buildReceiveCertificationReport, type LanForensicsInput } from "@supreme/protocols";
+import type { CasambiCredentials } from "@supreme/protocols";
 import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, queryLanForensics, type LanDiagnosticsSnapshot, type LanForensicsResponse } from "@supreme/lan";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
@@ -248,6 +249,39 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const driver = ctx.sil.getNativeDriver("casambi");
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
       reply.send(driver.getCasambiDiagnostics());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Local Gateway — one-time Cloud name sync. Local mode's UDP/REST protocol has no
+  // field for a fixture's real name anywhere (confirmed against every locally-reachable Lithernet
+  // interface); this is the one place a Local-mode Casambi instance is allowed to reach the
+  // Casambi Cloud API, and only for this — a REST-only session (no WebSocket, no live
+  // subscription) that fetches names and immediately discards the session. Reuses the SAME
+  // apiKey/email/password/networkId config fields the driver's Cloud mode already has (they're
+  // optional, not required, when connectionType=local) — no new config surface, no new credential
+  // to manage separately from what's already there. Command/discovery/live-state stay on Local
+  // UDP unconditionally; this route can never change what transport the driver actually runs on.
+  app.post<{ Params: { id: string } }>("/v1/drivers/:id/casambi/sync-names", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+      const { apiKey, email, password, networkId } = entry.config as Record<string, unknown>;
+      if (typeof apiKey !== "string" || !apiKey || typeof email !== "string" || !email || typeof password !== "string" || !password) {
+        throw new SupremeError(
+          "validation_failed",
+          "Casambi Cloud API key, email, and password must be set (in this driver's own config) before syncing names — the same fields Cloud mode uses.",
+        );
+      }
+      const creds: CasambiCredentials = { apiKey, email, password, ...(typeof networkId === "string" && networkId ? { networkId } : {}) };
+      const result = await driver.syncNamesFromCloud(creds);
+      reply.send(result);
     } catch (err) {
       sendError(reply, err);
     }

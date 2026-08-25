@@ -170,6 +170,36 @@
 - **Complexity:** varies per item (Low–High), see audit doc.
 - **Status:** Not started. Found during the Production Readiness Audit.
 
+### Casambi Local Gateway — per-device command fans out to every light on the network (needs a real packet capture to root-cause)
+- **Description:** A live user report: discovery over Local UDP correctly finds each device
+  separately (8 distinct devices, 8 distinct unit ids), but sending an on/off/brightness command
+  from the UI to any one device visibly triggers every light in the Casambi network, not just the
+  targeted one. Investigated the wire encoding directly against the actual
+  `Lithernet_UDP_Developer_Reference.pdf` (not just the code's own comments): confirmed
+  `CASAMBI_TARGET_TYPE.device = 1` and `encodeSetTargetLevel`'s field order
+  (`[Level, Duration_low, Duration_high, Target_Type, Target_ID]`, or `[Level, Target_Type,
+  Target_ID]` without fade) both match the documented spec exactly (page 287-288, verified via
+  `pdftotext`). Also confirmed each of the 8 bound devices genuinely carries a distinct numeric
+  unit id (discovery found exactly 8, and unit ids are Map keys — a collision would have produced
+  fewer). So the outgoing packet bytes, on paper, target one specific device — this is NOT a
+  reproducible code bug found by re-reading `local-command-mapper.ts`/`udp-codec.ts`/
+  `casambi-driver.ts`'s `command()` path.
+- **Reason:** two real possibilities remain, and only a live packet capture can distinguish them:
+  (1) a genuine SupremeOS bug that only manifests against real Evolution firmware behavior this
+  sandbox can't reproduce (no physical Lithernet gateway anywhere in this environment — the same
+  hardware-access gap `Casambi-Final-Hardware-Validation-Report.md` already discloses for Local
+  UDP generally), or (2) the 8 "devices" are physically wired to the same relay/dimmer circuit in
+  the actual installation (a commissioning/wiring fact, not a software bug) and Casambi's own
+  network is correctly moving them together regardless of what SupremeOS sends.
+- **Dependencies:** a `tcpdump -i any udp port <udpPort> -X -n` capture of ONE button press from
+  the affected installation (paste the raw ASCII/hex line — Casambi UDP is plaintext), plus
+  confirmation from the Casambi mobile app of whether the 8 units are independently addressable
+  fixtures or ganged onto one physical circuit.
+- **Complexity:** Unknown until the capture is in hand — could be zero (a wiring fact, not a bug)
+  or a real, narrow protocol-layer fix.
+- **Status:** Not started — root-cause investigation paused pending the packet capture above.
+  Found during a live Casambi Local Gateway debugging session.
+
 ### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
 - **Description:** `local-discovery.ts` (real, PR-2) deliberately does NOT map NotifyControlValues
   control types 2 (Color Temperature), 3 (Hue/Saturation), 4 (XY color), 5 (Color Source
@@ -952,6 +982,18 @@
 
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
+
+- **Driver config secret encryption-at-rest + Casambi Cloud name sync** — resolved
+  Production Readiness Audit Blocker H3: every driver's `secret: true` config field
+  (Casambi, Lutron, HEOS, etc.) is now AES-256-GCM encrypted at rest
+  (`packages/crypto`, `services/drivers/src/secret-store.ts`), transparent to
+  `DriverManager`, with an idempotent boot-time migration for pre-existing plaintext.
+  Built on top of that: `CasambiProtocolDriver.syncNamesFromCloud()` — a one-time,
+  REST-only (no WebSocket) Cloud fetch that gives Local-mode Casambi devices their
+  real fixture names, reusing the same `apiKey`/`email`/`password`/`networkId`
+  fields Cloud mode already has. Local UDP stays the only live transport
+  unconditionally. New route `POST /v1/drivers/:id/casambi/sync-names`, new
+  "Cloud name sync (optional)" UI section in the Local Gateway settings panel.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

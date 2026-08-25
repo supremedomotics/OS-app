@@ -555,4 +555,61 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       await driver.disconnect();
     });
   });
+
+  describe("syncNamesFromCloud() (§ Casambi Local Gateway — one-time Cloud name sync)", () => {
+    it("matches an already-discovered Local unit to its real Cloud name, by numeric id", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      // Unit 5 becomes known locally via its first NotifyControlValues packet (dimmer=200).
+      socket.receive("0.70.4.4b.5.1.c8\r\n");
+      const before = (await driver.discover()).find((d) => d.raw.unitId === 5)!;
+      expect(before.suggestedName).toBe("Casambi 5"); // honest placeholder, per local-discovery.ts
+
+      const cloudTransport = new FakeCasambiTransport({
+        units: [
+          { id: 5, name: "Living Room Downlight" },
+          { id: 99, name: "Never Discovered Locally" }, // present in the Cloud account, not yet locally
+        ],
+        groups: [],
+      });
+      const result = await driver.syncNamesFromCloud(creds, cloudTransport);
+      expect(result).toEqual({ matched: 1, total: 2, networkName: "Villa" });
+      expect(cloudTransport.sessions).toBe(1);
+      expect(cloudTransport.fetches).toBe(1);
+
+      const after = (await driver.discover()).find((d) => d.raw.unitId === 5)!;
+      expect(after.suggestedName).toBe("Living Room Downlight");
+      await driver.disconnect();
+    });
+
+    it("never opens a WebSocket wire — REST session + fetch only", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("0.70.4.4b.5.1.c8\r\n");
+      const cloudTransport = new FakeCasambiTransport({ units: [{ id: 5, name: "Downlight" }], groups: [] });
+      await driver.syncNamesFromCloud(creds, cloudTransport);
+      expect(cloudTransport.handlers).toBeNull(); // openWire() was never called
+      await driver.disconnect();
+    });
+
+    it("is a safe no-op for units the Cloud network reports with no name", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      socket.receive("0.70.4.4b.5.1.c8\r\n");
+      const cloudTransport = new FakeCasambiTransport({ units: [{ id: 5 }], groups: [] }); // no `name` field
+      const result = await driver.syncNamesFromCloud(creds, cloudTransport);
+      expect(result.matched).toBe(0);
+      const after = (await driver.discover()).find((d) => d.raw.unitId === 5)!;
+      expect(after.suggestedName).toBe("Casambi 5"); // untouched, never overwritten with an empty name
+      await driver.disconnect();
+    });
+
+    it("throws when called on a Cloud-mode driver — it already has real names from its own session", async () => {
+      const transport = new FakeCasambiTransport(NETWORK);
+      const driver = new CasambiProtocolDriver({ credentials: creds, transport });
+      await driver.connect();
+      await expect(driver.syncNamesFromCloud(creds)).rejects.toThrow(/only meaningful in Local mode/);
+      await driver.disconnect();
+    });
+  });
 });

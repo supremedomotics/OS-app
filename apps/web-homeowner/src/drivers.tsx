@@ -3,6 +3,7 @@ import { Button, StatusDot } from "@supreme/aureon-web";
 import { useLive, type DriverConnectionState } from "./live.js";
 import {
   type CasambiDiagnostics,
+  type CasambiNameSyncResult,
   type CasambiTestConnectionResult,
   type CasambiUdpPacketTrace,
   connectDriver,
@@ -22,6 +23,7 @@ import {
   type ReceiveCertification,
   setDriverConfig,
   setDriverEnabled,
+  syncCasambiNamesFromCloud,
   testCasambiLocalConnection,
   uninstallDriver,
   updateDriverByKey,
@@ -265,7 +267,12 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
               <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
             ))}
           {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "local" && (
-            <CasambiLocalGatewayPanel values={values} />
+            <CasambiLocalGatewayPanel
+              driverId={id}
+              schema={schema}
+              values={values}
+              onChange={(key, v) => setValues((cur) => ({ ...cur, [key]: v }))}
+            />
           )}
           {!driver.protocols.includes("casambi") &&
             schema.map((f) => (
@@ -539,10 +546,21 @@ function CasambiTestConnectionReport({ res }: { res: CasambiTestConnectionResult
  *    instant (a unit appears as its first notification arrives, since no REST device-listing
  *    endpoint exists to enumerate from), but it requires no manual device creation at all.
  */
-function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> }) {
-  const [busy, setBusy] = useState<"discover" | "test" | null>(null);
+function CasambiLocalGatewayPanel({
+  driverId,
+  schema,
+  values,
+  onChange,
+}: {
+  driverId: string;
+  schema: DriverConfigField[];
+  values: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const [busy, setBusy] = useState<"discover" | "test" | "sync" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [result, setResult] = useState<CasambiTestConnectionResult | null>(null);
+  const [syncResult, setSyncResult] = useState<CasambiNameSyncResult | null>(null);
 
   async function discover() {
     setBusy("discover");
@@ -587,6 +605,25 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
     }
   }
 
+  async function syncNames() {
+    setBusy("sync");
+    setNote(null);
+    setSyncResult(null);
+    try {
+      const res = await syncCasambiNamesFromCloud(driverId);
+      setSyncResult(res);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Name sync failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // The same apiKey/email/password/networkId fields Cloud mode requires — optional here, used
+  // ONLY for the one-time name sync below. Never touches Local UDP, never becomes a live
+  // connection.
+  const cloudSyncFields = schema.filter((f) => CASAMBI_CLOUD_ONLY_KEYS.has(f.key));
+
   return (
     <div className="drv-field" style={{ marginBottom: 14 }}>
       <span className="lbl">Lithernet Gateway</span>
@@ -600,6 +637,35 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
       </div>
       {note && <p className="muted">{note}</p>}
       {result && <CasambiTestConnectionReport res={result} />}
+      {cloudSyncFields.length > 0 && (
+        <div className="drv-config" style={{ marginTop: 14 }}>
+          <span className="lbl">Cloud name sync (optional)</span>
+          <p className="help">
+            The Lithernet Gateway's own UDP/REST protocol has no field for a fixture's real name —
+            checked against every locally-reachable interface (UDP, the full WebAPI, the web UI,
+            .ceg export, the Diagnostics console). Enter your Casambi Cloud account below to pull
+            real names once; nothing here changes how devices are discovered or controlled — that
+            stays on Local UDP, unconditionally.
+          </p>
+          {cloudSyncFields.map((f) => (
+            <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => onChange(f.key, v)} />
+          ))}
+          <p className="help">Click "Save configuration" below after entering these before syncing — the sync reads the saved credentials, not what's typed above.</p>
+          <div className="drv-actions" style={{ marginTop: 8 }}>
+            <button type="button" disabled={busy !== null} onClick={() => void syncNames()}>
+              {busy === "sync" ? "Syncing…" : "Sync names from Cloud"}
+            </button>
+          </div>
+          {syncResult && (
+            <p className="muted">
+              Matched {syncResult.matched} of {syncResult.total} Cloud fixture{syncResult.total === 1 ? "" : "s"} to
+              already-discovered devices{syncResult.networkName ? ` in "${syncResult.networkName}"` : ""}.
+              {syncResult.matched < syncResult.total &&
+                " A unit not yet discovered locally (no NotifyControlValues packet received yet) can't be named until it appears."}
+            </p>
+          )}
+        </div>
+      )}
       <CasambiDiscoveryExplainer />
     </div>
   );

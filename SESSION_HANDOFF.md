@@ -47,20 +47,52 @@ field** (not scoped to Casambi — fixes this for every driver: Lutron, HEOS, et
 **Full monorepo verification:** `pnpm turbo run build typecheck test` — 173/173 tasks
 green, 372/372 gateway tests passing (zero regressions).
 
-**Not yet built** (next session, if the user wants to proceed): the actual Casambi
-Cloud-name-sync feature itself (a `syncNamesFromCloud()` action on the driver, Local mode
-only, reusing the SAME `apiKey`/`email`/`password`/`networkId` schema fields the Cloud
-mode already has — no new config fields needed since they're already optional when
-`connectionType=local`). Scoped and ready to build; paused here to check in with the user
-before adding more scope, since the encryption prerequisite was the explicit ask.
+**Then built the actual Casambi Cloud name-sync feature** on top of the encryption layer
+above — Local UDP stays the only live transport; Cloud is reached only for this one-time,
+REST-only (no WebSocket) fetch:
+
+- `services/protocols/src/casambi/casambi-driver.ts` — `CasambiProtocolDriver.
+  syncNamesFromCloud(creds, transport?)`: opens a `createSession()`/`fetchNetwork()`-only
+  Cloud session (never `openWire()`), matches each Cloud unit to an already-discovered
+  LOCAL unit by numeric id, copies over `name` where present, discards the session. Throws
+  if called in Cloud mode. Idempotent; never overwrites a name with an empty one. New
+  `CasambiNameSyncResult` type (`matched`/`total`/`networkName`).
+- `services/gateway/src/routes/installer.ts` — `POST /v1/drivers/:id/casambi/sync-names`:
+  reads `apiKey`/`email`/`password`/`networkId` straight from the driver's own (decrypted)
+  config — the SAME fields Cloud mode already has, no new config surface — validates
+  they're set, calls the driver method, returns the result.
+- `apps/web-homeowner/src/api.ts` / `drivers.tsx` — `syncCasambiNamesFromCloud()`; a new
+  "Cloud name sync (optional)" section inside `CasambiLocalGatewayPanel` (Local mode only)
+  rendering the same 4 Cloud fields via the existing `ConfigField`, plus a "Sync names from
+  Cloud" button and a result summary. Explicit UI note that credentials must be saved
+  before syncing (the route reads the persisted config, not the in-browser draft).
+- Tests: `services/protocols/src/casambi/casambi-driver.test.ts` (+4 — real match/no-op/
+  no-WebSocket/throws-in-Cloud-mode assertions against the real driver), `services/
+  gateway/src/casambi-cloud-name-sync.e2e.test.ts` (new — route wiring: 404 for a
+  non-Casambi id, 404 with a clear message when no live driver is registered). **Honest
+  test-coverage gap, documented in that file's own header comment:** the route's SUCCESS
+  path (a genuinely live, connected `CasambiProtocolDriver` reached through `ctx.sil.
+  getNativeDriver()`) isn't exercised at the HTTP layer — `AppContext.create()`'s default
+  test wiring uses a bare `MockAdapter`, not the `ProviderRouter` real boot
+  (`bootstrap.ts`'s `createHubContext`) uses, and no existing test in this codebase
+  (including the pre-existing `/casambi/diagnostics`/`/casambi/transport-monitor` routes,
+  which read a live driver the identical way) stands up that harness either. The feature's
+  real logic is fully covered at the driver level instead.
+
+**Full monorepo verification (after both pieces):** `pnpm turbo run build typecheck test`
+— 173/173 tasks green, 993/993 protocols tests + 375/375 gateway tests passing (zero
+regressions; one unrelated upstream commit — a curtain-icon UI feature — was merged in
+along the way and re-verified clean).
 
 **Security note:** the user pasted real Casambi Cloud credentials directly into chat
-during this session. They were never written to any file or committed — flagged to the
-user, who was advised to rotate the password/API key as hygiene since the chat transcript
-itself is an exposure point independent of anything this session did.
+during this session. They were never written to any file or committed — caught and fixed
+one near-miss where a test fixture briefly used the real values before this was pushed
+anywhere. Flagged to the user, who was advised to rotate the password/API key as hygiene
+since the chat transcript itself is an exposure point independent of anything this session
+did.
 
-**Uncommitted as of this handoff** — awaiting the user's go-ahead to commit/push (this
-session did not commit or push without being asked, per this repo's standing rules).
+**Committed and pushed** to `native-linux` — both the encryption-at-rest work (`583adcc`,
+merged with one upstream commit) and this name-sync feature.
 
 ---
 
