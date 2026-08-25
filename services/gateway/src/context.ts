@@ -761,6 +761,7 @@ export class AppContext {
    */
   async completeSetup(input: {
     username: string;
+    email: string;
     password: string;
     displayName?: string;
     systemName: string;
@@ -770,10 +771,10 @@ export class AppContext {
     if (!this.setupRequired) {
       throw new SupremeError("conflict", "Supreme OS is already set up");
     }
-    // Accept a username or an email; store an email-shaped identifier for login.
-    const loginEmail = input.username.includes("@")
-      ? input.username
-      : `${input.username}@supreme.local`;
+    // § live-confirmed fix — a real, mandatory email is now required by the route
+    // above; no synthesized "@supreme.local" fallback, since password recovery needs a
+    // real address to send a reset to and a fabricated one silently defeats that.
+    const loginEmail = input.email;
     const { home } = await this.identity.commission({
       homeName: input.systemName || "Supreme Residence",
       email: loginEmail,

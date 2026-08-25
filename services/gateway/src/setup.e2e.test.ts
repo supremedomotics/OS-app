@@ -46,10 +46,11 @@ describe("Setup Wizard (first-run admin creation)", () => {
   });
 
   it("validates the wizard input", async () => {
-    const short = await json("/v1/setup", { username: "ab", password: "longenough1", systemName: "Home" });
+    const short = await json("/v1/setup", { username: "ab", email: "a@b.com", password: "longenough1", systemName: "Home" });
     expect(short.status).toBe(422); // validation_failed
     const mismatch = await json("/v1/setup", {
       username: "installer",
+      email: "installer@example.com",
       password: "longenough1",
       confirmPassword: "different1",
       systemName: "Home",
@@ -57,9 +58,21 @@ describe("Setup Wizard (first-run admin creation)", () => {
     expect(mismatch.status).toBe(422);
   });
 
+  // § live-confirmed fix — a synthesized "@supreme.local" fallback for a missing email
+  // used to silently lock the very first account out of its own password-recovery flow
+  // forever (forgot-password needs a real address to send a reset to). Email is now a
+  // mandatory, validated field, never fabricated.
+  it("rejects setup with no email, and with a malformed one", async () => {
+    const missing = await json("/v1/setup", { username: "installer", password: "longenough1", confirmPassword: "longenough1", systemName: "Home" });
+    expect(missing.status).toBe(422);
+    const malformed = await json("/v1/setup", { username: "installer", email: "not-an-email", password: "longenough1", confirmPassword: "longenough1", systemName: "Home" });
+    expect(malformed.status).toBe(422);
+  });
+
   it("creates the administrator, comes online, and lands logged in", async () => {
     const res = await json("/v1/setup", {
       username: "installer",
+      email: "installer@example.com",
       password: "supreme-admin-pass",
       confirmPassword: "supreme-admin-pass",
       systemName: "The Penthouse",
@@ -69,14 +82,14 @@ describe("Setup Wizard (first-run admin creation)", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.accessToken).toBeTruthy();
-    expect(body.loginEmail).toBe("installer@supreme.local");
+    expect(body.loginEmail).toBe("installer@example.com");
 
     // Setup is no longer required, and replaying it is refused.
     expect((await (await json("/v1/setup/status")).json()).setupRequired).toBe(false);
-    expect((await json("/v1/setup", { username: "x2", password: "yyyyyyyy", systemName: "Y" })).status).toBe(409);
+    expect((await json("/v1/setup", { username: "x2", email: "x2@example.com", password: "yyyyyyyy", systemName: "Y" })).status).toBe(409);
 
     // The new admin can authenticate normally.
-    const login = await json("/v1/auth/login", { email: "installer@supreme.local", password: "supreme-admin-pass" });
+    const login = await json("/v1/auth/login", { email: "installer@example.com", password: "supreme-admin-pass" });
     expect(login.status).toBe(200);
     const { accessToken } = await login.json();
     expect(accessToken).toBeTruthy();

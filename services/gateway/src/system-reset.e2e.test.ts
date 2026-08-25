@@ -138,7 +138,7 @@ describe("System Reset — failure safety, concurrency, repeat", () => {
     const setup = await fetch(`${baseUrl}/v1/setup`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "owner", password: "supreme-admin-pass", confirmPassword: "supreme-admin-pass", systemName: "Re-provisioned Home" }),
+      body: JSON.stringify({ username: "owner", email: "owner@example.com", password: "supreme-admin-pass", confirmPassword: "supreme-admin-pass", systemName: "Re-provisioned Home" }),
     });
     expect(setup.status).toBe(201);
   });
@@ -188,7 +188,7 @@ describe("System Reset — failure safety, concurrency, repeat", () => {
     const setup = await fetch(`${baseUrl}/v1/setup`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "owner2", password: "supreme-admin-pass-2", confirmPassword: "supreme-admin-pass-2", systemName: "Re-provisioned Home" }),
+      body: JSON.stringify({ username: "owner2", email: "owner2@example.com", password: "supreme-admin-pass-2", confirmPassword: "supreme-admin-pass-2", systemName: "Re-provisioned Home" }),
     });
     expect(setup.status).toBe(201);
     const setupBody = (await setup.json()) as { accessToken: string };

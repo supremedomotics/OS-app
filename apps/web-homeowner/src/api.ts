@@ -83,6 +83,7 @@ export async function fetchSetupStatus(): Promise<SetupStatus> {
 
 export interface SetupInput {
   username: string;
+  email: string;
   password: string;
   confirmPassword: string;
   systemName: string;
