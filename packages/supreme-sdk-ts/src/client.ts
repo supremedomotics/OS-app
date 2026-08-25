@@ -641,6 +641,12 @@ export class SupremeClient {
   systemReset(): Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }> {
     return this.request("POST", "/v1/system/reset", { confirm: "RESET SYSTEM" }) as Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }>;
   }
+  /** § live-confirmed fix — poll this WHILE `systemReset()`'s own request is still in
+   * flight to drive a real, honest progress bar (currentStep is one of RESET_STEPS —
+   * see services/gateway/src/routes/system.ts's own export — never a fabricated timer). */
+  systemResetStatus(): Promise<{ status: "idle" | "resetting" | "completed" | "failed"; lastError: string | null; failedStep: string | null; currentStep: string | null }> {
+    return this.request("GET", "/v1/system/reset-status") as Promise<{ status: "idle" | "resetting" | "completed" | "failed"; lastError: string | null; failedStep: string | null; currentStep: string | null }>;
+  }
   // ── Source-mode "Update now" (native-linux only) — triggers infra/native-linux/update.sh on
   // the host via a narrowly-scoped sudoers rule. A DIFFERENT concern from systemUpdate() above
   // (which only checks a signed OTA-artifact channel); unavailable (enabled:false) on the

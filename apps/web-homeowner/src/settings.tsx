@@ -6,6 +6,7 @@ import {
   applyAureonTheme,
   loadAureonTheme,
   saveAureonTheme,
+  ProgressBar,
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
@@ -1463,11 +1464,25 @@ function RestoreWizard({ document: doc, fmt, onClose, onDone }: {
  * returns the hub to first-run Setup. Two-step confirmation: a warning + counts, then a typed
  * "RESET SYSTEM" phrase, mirroring the RestoreWizard's preview→confirm→run shape above.
  */
+// § live-confirmed fix — mirrors services/gateway/src/routes/system.ts's exported
+// RESET_STEPS exactly (order and names) so the fraction/label shown here is real
+// progress the backend is actually reporting, never a guess or a padded fake timer.
+const RESET_STEP_LABELS: Record<string, string> = {
+  drivers: "Uninstalling drivers…",
+  devices_rooms: "Removing devices & rooms…",
+  scenes: "Removing scenes…",
+  automations: "Removing automations…",
+  pending_devices: "Clearing pending devices…",
+  users: "Resetting user accounts…",
+};
+const RESET_STEP_ORDER = Object.keys(RESET_STEP_LABELS);
+
 function ResetSystemSettings() {
   const [step, setStep] = useState<"idle" | "warn" | "confirm" | "running" | "done">("idle");
   const [info, setInfo] = useState<{ users: number; devices: number; rooms: number; installedDrivers: number } | null>(null);
   const [phrase, setPhrase] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
 
   async function begin() {
     setErr(null);
@@ -1482,12 +1497,23 @@ function ResetSystemSettings() {
   async function run() {
     setStep("running");
     setErr(null);
+    setCurrentStep(RESET_STEP_ORDER[0]!);
+    // Polls the SAME real state machine the backend uses to decide when it's actually
+    // done — never a fabricated countdown. Runs alongside the POST below, not instead
+    // of awaiting it: the poll only drives the progress bar's label/fraction, the POST's
+    // own resolution is still what decides success/failure.
+    const poll = setInterval(() => {
+      void client.systemResetStatus().then((s) => setCurrentStep(s.currentStep)).catch(() => {});
+    }, 400);
     try {
       await client.systemReset();
       setStep("done");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Reset failed — nothing further was changed.");
       setStep("confirm");
+    } finally {
+      clearInterval(poll);
+      setCurrentStep(null);
     }
   }
 
@@ -1535,6 +1561,13 @@ function ResetSystemSettings() {
               </button>
               <button disabled={step === "running"} onClick={() => { setStep("idle"); setPhrase(""); setErr(null); }}>Cancel</button>
             </div>
+            {step === "running" && (
+              <ProgressBar
+                style={{ marginTop: 12 }}
+                label={currentStep ? RESET_STEP_LABELS[currentStep] ?? currentStep : "Starting…"}
+                value={currentStep ? (RESET_STEP_ORDER.indexOf(currentStep) + 1) / RESET_STEP_ORDER.length : undefined}
+              />
+            )}
           </>
         )}
 

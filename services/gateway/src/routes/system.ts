@@ -12,10 +12,20 @@ import { sendError } from "../http-errors.js";
  * instance (module-scoped closure, not a new store — `registerSystemRoutes` runs
  * exactly once per `AppContext`, same lifetime as `ctx` itself). */
 type ResetStatus = "idle" | "resetting" | "completed" | "failed";
+/** § live-confirmed fix — ordered so the client can turn `currentStep` into a real
+ * N-of-6 progress fraction, not an indeterminate spinner. Must stay in the exact order
+ * the reset handler below actually executes these steps in. */
+export const RESET_STEPS = ["drivers", "devices_rooms", "scenes", "automations", "pending_devices", "users"] as const;
+
 interface ResetState {
   status: ResetStatus;
   lastError: string | null;
   failedStep: string | null;
+  /** § live-confirmed fix — the step actually in flight right now (one of RESET_STEPS),
+   * so a polling client can show honest, real progress instead of a fabricated timer.
+   * `null` whenever nothing is running (idle, completed, or failed with the step already
+   * recorded in `failedStep` instead). */
+  currentStep: string | null;
   updatedAt: string;
 }
 
@@ -41,7 +51,7 @@ interface ResetState {
  * happened while silently leaving partial damage.
  */
 export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const reset: ResetState = { status: "idle", lastError: null, failedStep: null, updatedAt: new Date().toISOString() };
+  const reset: ResetState = { status: "idle", lastError: null, failedStep: null, currentStep: null, updatedAt: new Date().toISOString() };
   const setReset = (patch: Partial<ResetState>) => Object.assign(reset, patch, { updatedAt: new Date().toISOString() });
   /** Lets the confirmation dialog show real counts instead of vague "everything" language. */
   app.get("/v1/system/reset-info", async (req, reply) => {
@@ -95,11 +105,19 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): voi
         throw new SupremeError("conflict", "a system reset is already in progress");
       }
 
-      setReset({ status: "resetting", lastError: null, failedStep: null });
+      setReset({ status: "resetting", lastError: null, failedStep: null, currentStep: RESET_STEPS[0] });
       const driversUninstalled: string[] = [];
       const driversFailed: { key: string; error: string }[] = [];
       let usersRemoved = 0;
-      let step = "drivers";
+      let step: string = RESET_STEPS[0];
+      // § live-confirmed fix — publishes the real, currently-executing step onto the
+      // shared `reset` state so GET /v1/system/reset-status (already polled for the
+      // idle/resetting/completed/failed status itself) can also drive a real N-of-6
+      // progress bar, not a fabricated timer.
+      const setStep = (s: (typeof RESET_STEPS)[number]) => {
+        step = s;
+        setReset({ currentStep: s });
+      };
       try {
         const drivers = await ctx.installer.drivers.registry();
         for (const d of drivers.filter((e) => e.installed && e.installedId)) {
@@ -115,7 +133,7 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): voi
           }
         }
 
-        step = "devices_rooms";
+        setStep("devices_rooms");
         // Anything left over (manually-created devices, demo seed data, and any device a
         // failed driver above didn't get to clean up itself).
         const remainingDevices = await ctx.home.listDevices();
@@ -126,22 +144,22 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): voi
         // stores (ISceneStore/IAutomationStore), never cascade-deleted by a device/room
         // disappearing, so a reset that only swept devices/rooms silently left every
         // scene and automation behind for the next "fresh setup" to inherit.
-        step = "scenes";
+        setStep("scenes");
         for (const scene of await ctx.scenes.list()) await ctx.scenes.remove(scene.id);
-        step = "automations";
+        setStep("automations");
         for (const automation of await ctx.automations.list()) await ctx.automations.remove(automation.id);
         // Pending (not-yet-approved) devices are also their own persistent store (Postgres-
         // backed only — a no-op in-memory/dev), independent of the Device Registry.
-        step = "pending_devices";
+        setStep("pending_devices");
         for (const pending of await ctx.installer.listPendingDevices()) {
           await ctx.installer.removePendingDevice(pending.id);
         }
 
-        step = "users";
+        setStep("users");
         usersRemoved = await ctx.identity.resetAllUsers();
         ctx.setupRequired = true;
       } catch (err) {
-        setReset({ status: "failed", lastError: err instanceof Error ? err.message : String(err), failedStep: step });
+        setReset({ status: "failed", lastError: err instanceof Error ? err.message : String(err), failedStep: step, currentStep: null });
         reply.code(500).send({
           ok: false,
           failedStep: step,
@@ -154,12 +172,12 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): voi
       }
 
       if (driversFailed.length) {
-        setReset({ status: "failed", lastError: `${driversFailed.length} driver(s) failed to uninstall`, failedStep: "drivers" });
+        setReset({ status: "failed", lastError: `${driversFailed.length} driver(s) failed to uninstall`, failedStep: "drivers", currentStep: null });
         reply.code(207).send({ ok: false, partial: true, driversUninstalled, driversFailed, usersRemoved });
         return;
       }
 
-      setReset({ status: "completed", lastError: null, failedStep: null });
+      setReset({ status: "completed", lastError: null, failedStep: null, currentStep: null });
       reply.send({ ok: true, driversUninstalled: driversUninstalled.length, usersRemoved });
     } catch (err) {
       // Confirmation/auth failures never touched `reset` at all — leave it exactly as it was.
@@ -168,7 +186,7 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): voi
       // Never leave the tracker stuck in "resetting" — a thrown/unexpected error above is
       // caught (and already re-classified into "failed") before this runs; this only
       // guards the rejection path (validation/auth) which never entered "resetting".
-      if (reset.status === "resetting") setReset({ status: "failed", lastError: "reset ended unexpectedly", failedStep: reset.failedStep ?? "unknown" });
+      if (reset.status === "resetting") setReset({ status: "failed", lastError: "reset ended unexpectedly", failedStep: reset.failedStep ?? "unknown", currentStep: null });
     }
   });
 }

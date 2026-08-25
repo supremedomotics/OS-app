@@ -141,6 +141,15 @@ describe("System Reset — failure safety, concurrency, repeat", () => {
       body: JSON.stringify({ username: "owner", email: "owner@example.com", password: "supreme-admin-pass", confirmPassword: "supreme-admin-pass", systemName: "Re-provisioned Home" }),
     });
     expect(setup.status).toBe(201);
+
+    // § live-confirmed fix — currentStep is cleared back to null once the reset reaches
+    // ANY terminal state (this test's own reset legitimately ends "failed" — a
+    // partial driver-uninstall failure, asserted above) — a stale in-flight step name
+    // left behind would make a later poll show fabricated "still working" progress
+    // forever, readable here by the freshly re-provisioned admin.
+    const { accessToken } = (await setup.json()) as { accessToken: string };
+    const finalStatus = (await (await fetch(`${baseUrl}/v1/system/reset-status`, { headers: { authorization: `Bearer ${accessToken}` } })).json()) as { status: string; currentStep: string | null };
+    expect(finalStatus.currentStep).toBeNull();
   });
 
   it("Reset 3 — concurrent reset requests: only one executes, the second gets a clear conflict", async () => {
