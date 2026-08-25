@@ -653,7 +653,7 @@ export interface KnxApprovalResult {
 }
 /** Commission + bind + validate in one action (§ Approval) — rolls back automatically
  * server-side on any failure; nothing here duplicates that logic. */
-export async function approveKnxDevice(input: { device: KnxUnifiedDevice; name: string; roomId?: string; roomNameHint?: string; plans: KnxBindingPlan[]; force?: boolean }): Promise<KnxApprovalResult> {
+export async function approveKnxDevice(input: { device: KnxUnifiedDevice; name: string; roomId?: string; roomNameHint?: string; plans: KnxBindingPlan[]; force?: boolean; shadingKind?: "updown" | "openclose" }): Promise<KnxApprovalResult> {
   const res = await authed("/v1/commissioning/knx/approve", { method: "POST", body: JSON.stringify(input) });
   if (!res.ok) throw new Error(await errorMessage(res, "Approval failed."));
   return (await res.json()) as KnxApprovalResult;
