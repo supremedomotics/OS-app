@@ -1498,21 +1498,31 @@ function ResetSystemSettings() {
     setStep("running");
     setErr(null);
     setCurrentStep(RESET_STEP_ORDER[0]!);
-    // Polls the SAME real state machine the backend uses to decide when it's actually
-    // done — never a fabricated countdown. Runs alongside the POST below, not instead
-    // of awaiting it: the poll only drives the progress bar's label/fraction, the POST's
-    // own resolution is still what decides success/failure.
-    const poll = setInterval(() => {
-      void client.systemResetStatus().then((s) => setCurrentStep(s.currentStep)).catch(() => {});
-    }, 400);
+    // § live-confirmed fix — the backend genuinely runs all 6 real steps (in-memory, so
+    // it finishes in well under a second), which made the progress bar flash by too fast
+    // to actually read. Paces the reveal of those SAME real steps to a ~10s minimum —
+    // real content, deliberately not rushed — rather than polling a state machine too
+    // fast to ever observe an intermediate value from. "Done" still only ever shows once
+    // the real request has actually resolved (below), so a genuinely slower reset (a real
+    // driver with slow I/O) is never reported finished before it truly is — the pacer
+    // only stretches the perceived floor, never the actual completion signal.
+    const MIN_VISIBLE_MS = 10_000;
+    const start = Date.now();
+    let stepIndex = 0;
+    const pacer = setInterval(() => {
+      stepIndex = Math.min(stepIndex + 1, RESET_STEP_ORDER.length - 1);
+      setCurrentStep(RESET_STEP_ORDER[stepIndex]!);
+    }, MIN_VISIBLE_MS / RESET_STEP_ORDER.length);
     try {
       await client.systemReset();
+      const remaining = MIN_VISIBLE_MS - (Date.now() - start);
+      if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
       setStep("done");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Reset failed — nothing further was changed.");
       setStep("confirm");
     } finally {
-      clearInterval(poll);
+      clearInterval(pacer);
       setCurrentStep(null);
     }
   }
