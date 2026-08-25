@@ -10,6 +10,7 @@ import {
   YamahaProtocolDriver,
 } from "@supreme/protocols";
 import { LocalDirectUdpTransport, type UdpTransport } from "@supreme/lan";
+import type { CasambiCredentials } from "@supreme/protocols";
 
 /**
  * Native driver factories — the manifest↔runtime bridge. Given a driver's PROTOCOL and its stored
@@ -38,6 +39,16 @@ export interface NativeDriverFactoryContext {
    * only in tests that construct a factory directly — falls back to `LocalDirectUdpTransport` so
    * a missing context never silently breaks a LAN-dependent driver. */
   udpTransportFactory?: () => UdpTransport;
+  /** § Casambi fleet-wide default account — the SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD/
+   * NETWORK_ID env vars (config.ts), present only when all three required fields are set at
+   * deployment time. Used as a FALLBACK by the `casambi` factory's Cloud branch when this
+   * driver instance's own manifest config leaves apiKey/email/password blank, so an installer
+   * never has to type them if the deployment already has a fleet default configured — the same
+   * env vars that already auto-connect Cloud mode with zero UI input via bootstrap.ts's
+   * separate `envDrivers` path, now also backing the manifest-driven install path. Never a
+   * literal credential in source — only ever read from the running deployment's own
+   * environment/secrets. */
+  casambiCloudDefaults?: { apiKey: string; email: string; password: string; networkId?: string };
 }
 export type NativeDriverFactory = (config: Record<string, unknown>, ctx: NativeDriverFactoryContext) => INativeProtocolDriver | null;
 
@@ -46,6 +57,24 @@ const int = (v: unknown, fallback: number): number => {
   const n = typeof v === "number" ? v : v !== undefined && v !== "" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : fallback;
 };
+
+/** § Casambi fleet-wide default account — shared by the `casambi` factory's Cloud branch below
+ * and `routes/installer.ts`'s `/casambi/sync-names` route (Local Gateway's one-time Cloud name
+ * sync), so the same driver-config-then-fleet-default precedence isn't duplicated in two places.
+ * `config` is a driver instance's own stored config; `defaults` is `casambiCloudDefaults` (present
+ * only when SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD are all set at deployment time). Returns null
+ * when neither source has all three required fields. */
+export function resolveCasambiCloudCredentials(
+  config: Record<string, unknown>,
+  defaults?: { apiKey: string; email: string; password: string; networkId?: string },
+): CasambiCredentials | null {
+  const apiKey = str(config.apiKey) ?? defaults?.apiKey;
+  const email = str(config.email) ?? defaults?.email;
+  const password = str(config.password) ?? defaults?.password;
+  if (!apiKey || !email || !password) return null;
+  const networkId = str(config.networkId) ?? defaults?.networkId;
+  return { apiKey, email, password, ...(networkId ? { networkId } : {}) };
+}
 
 export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   knx: (c) => {
@@ -92,13 +121,10 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
         trace: c.logging === true,
       });
     }
-    const apiKey = str(c.apiKey);
-    const email = str(c.email);
-    const password = str(c.password);
-    if (!apiKey || !email || !password) return null;
-    const networkId = str(c.networkId);
+    const creds = resolveCasambiCloudCredentials(c, ctx.casambiCloudDefaults);
+    if (!creds) return null;
     return new CasambiProtocolDriver({
-      credentials: { apiKey, email, password, ...(networkId ? { networkId } : {}) },
+      credentials: creds,
       onLog,
       trace: c.logging === true,
     });

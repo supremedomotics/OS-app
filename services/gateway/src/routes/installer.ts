@@ -29,8 +29,8 @@ import {
 import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain-model";
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport, buildReceiveCertificationReport, type LanForensicsInput } from "@supreme/protocols";
-import type { CasambiCredentials } from "@supreme/protocols";
 import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, queryLanForensics, type LanDiagnosticsSnapshot, type LanForensicsResponse } from "@supreme/lan";
+import { resolveCasambiCloudCredentials } from "../native-driver-factory.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -263,6 +263,15 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   // optional, not required, when connectionType=local) — no new config surface, no new credential
   // to manage separately from what's already there. Command/discovery/live-state stay on Local
   // UDP unconditionally; this route can never change what transport the driver actually runs on.
+  //
+  // Credential precedence: this driver instance's own saved config first (an installer explicitly
+  // set a different Casambi account for this job), falling back to the deployment-wide
+  // SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD/NETWORK_ID env vars (config.ts's existing `secret()`
+  // helper — same `_FILE` convention as every other deployment secret) — the SAME env vars that
+  // already auto-connect Cloud mode with zero installer input (bootstrap.ts). Set once at
+  // deployment time, this makes the sync work with no typing in the UI for every hub in the
+  // fleet, while never putting a real credential in source control — see SESSION_HANDOFF.md for
+  // why a hardcoded default was explicitly rejected in favor of this.
   app.post<{ Params: { id: string } }>("/v1/drivers/:id/casambi/sync-names", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
@@ -272,14 +281,23 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const driver = ctx.sil.getNativeDriver("casambi");
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
-      const { apiKey, email, password, networkId } = entry.config as Record<string, unknown>;
-      if (typeof apiKey !== "string" || !apiKey || typeof email !== "string" || !email || typeof password !== "string" || !password) {
+      const cfg = entry.config as Record<string, unknown>;
+      const fleetDefault =
+        ctx.config.casambiApiKey && ctx.config.casambiEmail && ctx.config.casambiPassword
+          ? {
+              apiKey: ctx.config.casambiApiKey,
+              email: ctx.config.casambiEmail,
+              password: ctx.config.casambiPassword,
+              ...(ctx.config.casambiNetworkId ? { networkId: ctx.config.casambiNetworkId } : {}),
+            }
+          : undefined;
+      const creds = resolveCasambiCloudCredentials(cfg, fleetDefault);
+      if (!creds) {
         throw new SupremeError(
           "validation_failed",
-          "Casambi Cloud API key, email, and password must be set (in this driver's own config) before syncing names — the same fields Cloud mode uses.",
+          "Casambi Cloud API key, email, and password are required to sync names — set them on this driver, or configure SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD as a deployment-wide default.",
         );
       }
-      const creds: CasambiCredentials = { apiKey, email, password, ...(typeof networkId === "string" && networkId ? { networkId } : {}) };
       const result = await driver.syncNamesFromCloud(creds);
       reply.send(result);
     } catch (err) {

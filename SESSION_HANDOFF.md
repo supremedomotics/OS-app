@@ -94,6 +94,50 @@ did.
 **Committed and pushed** to `native-linux` — both the encryption-at-rest work (`583adcc`,
 merged with one upstream commit) and this name-sync feature.
 
+**Follow-up in the same session: fleet-wide env-var default for Casambi Cloud
+credentials.** User asked whether `apiKey`/`email`/`password` are "default" for both Cloud
+and Local setups so the UI never has to ask — confirmed against the manifest schema that
+none of these fields have a hardcoded `default`, and that Cloud credentials are shared
+across mode switches only because there's a single config object per driver instance. User
+then explicitly asked to "make it default for both type of setup" with no typing required.
+Two ways to satisfy that were identified: hardcode a literal credential into source (an
+explicit **no** — permanent git-history exposure regardless of who asks, the same "never
+commit secrets" rule from this file applies) or reuse the deployment's existing
+`SUPREME_CASAMBI_API_KEY`/`EMAIL`/`PASSWORD`/`NETWORK_ID` env vars (`config.ts`) as a
+fallback wherever a driver's own config leaves these fields blank. Presented both to the
+user; they chose the env-var default.
+
+**Built the env-var fallback for both the Local Gateway's Cloud name-sync and any
+manifest-installed Cloud-mode Casambi driver:**
+
+- `services/gateway/src/native-driver-factory.ts` — new `NativeDriverFactoryContext.
+  casambiCloudDefaults` (populated only when all three required env vars are set), and a
+  new exported `resolveCasambiCloudCredentials(config, defaults)` pure helper: driver's own
+  config wins field-by-field, falling back to `defaults` only where blank; returns `null`
+  when neither source has all three required fields. The `casambi` factory's Cloud branch
+  now calls this helper instead of inlining the `??` fallback itself.
+  `installer-context.ts`'s `nativeDriverContext()` populates `casambiCloudDefaults` from
+  `GatewayConfig.casambiApiKey/Email/Password/NetworkId`.
+- `services/gateway/src/routes/installer.ts`'s `/casambi/sync-names` route now calls the
+  SAME `resolveCasambiCloudCredentials()` helper (previously had its own duplicated inline
+  `str(cfg.x) ?? str(ctx.config.x)` logic) — one credential-resolution path, not two.
+- `apps/web-homeowner/src/drivers.tsx` — updated the Cloud name-sync section's help text to
+  tell the installer that a fleet-wide env-var default means the sync button works even
+  with all 4 fields left blank.
+- Tests: `services/gateway/src/native-driver-factory.test.ts` (+2 — fleet default fills in
+  for blank config; still null when neither config nor default has credentials).
+
+**Full verification:** `pnpm --filter @supreme/gateway exec tsc --noEmit -p .` clean;
+`pnpm turbo run build typecheck test --filter=@supreme/gateway --filter=@supreme/protocols`
+— 40/40 tasks green, 377/377 gateway tests passing (21 in the two directly-touched test
+files, zero regressions elsewhere).
+
+**Security note (unchanged from above):** no real credential value from this conversation
+was ever written to any file — the env-var approach was chosen specifically to keep it
+that way permanently, not just for this session's test fixtures.
+
+**Committed and pushed** to `native-linux` (see commit following this entry).
+
 ---
 
 ## Session: Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e

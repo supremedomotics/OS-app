@@ -994,6 +994,14 @@
   fields Cloud mode already has. Local UDP stays the only live transport
   unconditionally. New route `POST /v1/drivers/:id/casambi/sync-names`, new
   "Cloud name sync (optional)" UI section in the Local Gateway settings panel.
+  Follow-up: a fleet-wide env-var default (`SUPREME_CASAMBI_API_KEY`/`EMAIL`/
+  `PASSWORD`/`NETWORK_ID`) so an installer never has to type these credentials when
+  the deployment already has one configured — `native-driver-factory.ts`'s new
+  `resolveCasambiCloudCredentials()` helper is shared by both the manifest-driven
+  Cloud driver factory and the `/casambi/sync-names` route, so there's one
+  credential-resolution path, not two. No credential is ever hardcoded in source —
+  a literal-default option was explicitly considered and rejected for permanent
+  git-history exposure.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

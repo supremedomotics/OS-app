@@ -643,14 +643,19 @@ function CasambiLocalGatewayPanel({
           <p className="help">
             The Lithernet Gateway's own UDP/REST protocol has no field for a fixture's real name —
             checked against every locally-reachable interface (UDP, the full WebAPI, the web UI,
-            .ceg export, the Diagnostics console). Enter your Casambi Cloud account below to pull
-            real names once; nothing here changes how devices are discovered or controlled — that
-            stays on Local UDP, unconditionally.
+            .ceg export, the Diagnostics console). Nothing here changes how devices are discovered
+            or controlled — that stays on Local UDP, unconditionally.
+          </p>
+          <p className="help">
+            If your deployment has a Casambi Cloud account configured as a fleet-wide default
+            (<code>SUPREME_CASAMBI_API_KEY</code>/<code>EMAIL</code>/<code>PASSWORD</code>), the button
+            below works immediately — these fields can stay blank. Only fill them in if this
+            installation needs a different Casambi account than the default.
           </p>
           {cloudSyncFields.map((f) => (
             <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => onChange(f.key, v)} />
           ))}
-          <p className="help">Click "Save configuration" below after entering these before syncing — the sync reads the saved credentials, not what's typed above.</p>
+          <p className="help">If you do fill these in, click "Save configuration" below first — the sync reads the saved credentials, not what's typed above.</p>
           <div className="drv-actions" style={{ marginTop: 8 }}>
             <button type="button" disabled={busy !== null} onClick={() => void syncNames()}>
               {busy === "sync" ? "Syncing…" : "Sync names from Cloud"}

@@ -92,6 +92,20 @@ describe("native-driver-factory — Casambi", () => {
     expect(buildNativeDriver("casambi", { connectionType: "cloud" })).toBeNull();
   });
 
+  it("falls back to ctx.casambiCloudDefaults when the driver's own config leaves credentials blank", () => {
+    const driver = buildNativeDriver(
+      "casambi",
+      { connectionType: "cloud" },
+      { casambiCloudDefaults: { apiKey: "fleet-key", email: "fleet@example.com", password: "fleet-pw" } },
+    );
+    expect(driver).toBeInstanceOf(CasambiProtocolDriver);
+    expect((driver as CasambiProtocolDriver).getHealth().connectionType).toBe("cloud");
+  });
+
+  it("still returns null when neither the config nor a fleet default has credentials", () => {
+    expect(buildNativeDriver("casambi", { connectionType: "cloud" }, {})).toBeNull();
+  });
+
   it("returns null for Local config missing gatewayIp/restPort/udpPort", () => {
     expect(buildNativeDriver("casambi", { connectionType: "local" })).toBeNull();
   });

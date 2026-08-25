@@ -1605,6 +1605,19 @@ export class InstallerServices {
         this.d.config.natsUrl && this.d.bus
           ? () => new NatsUdpTransportClient(this.d.bus!)
           : () => new LocalDirectUdpTransport(),
+      // § Casambi fleet-wide default account — present only when the deployment has all three
+      // required fields set (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); see the field's own doc
+      // comment on `NativeDriverFactoryContext`.
+      ...(this.d.config.casambiApiKey && this.d.config.casambiEmail && this.d.config.casambiPassword
+        ? {
+            casambiCloudDefaults: {
+              apiKey: this.d.config.casambiApiKey,
+              email: this.d.config.casambiEmail,
+              password: this.d.config.casambiPassword,
+              ...(this.d.config.casambiNetworkId ? { networkId: this.d.config.casambiNetworkId } : {}),
+            },
+          }
+        : {}),
     };
   }
 
