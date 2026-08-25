@@ -268,6 +268,10 @@
   .aureon-progress-track--indeterminate .aureon-progress-fill { animation: none; width: 100% !important; opacity: 0.5; }
 }
 
+/* ── Shading icon (animated curtain/blind position) ────────────────────────── */
+.aureon-shading-icon-panel { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) { .aureon-shading-icon-panel { transition: none; } }
+
 /* ── Segmented control ──────────────────────────────────────────────────────── */
 
 .aureon-seg { display: flex; gap: 8px; flex-wrap: wrap; }

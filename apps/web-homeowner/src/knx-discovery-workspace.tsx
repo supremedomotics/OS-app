@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ProgressBar } from "@supreme/aureon-web";
+import { ProgressBar, SegmentedControl, type ShadingKind } from "@supreme/aureon-web";
 import {
   approveKnxDevice,
   cleanupOrphanedKnxBindings,
@@ -166,7 +166,7 @@ export function KnxDiscoveryWorkspace() {
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [approved, setApproved] = useState<Record<string, KnxApprovalResult>>({});
   const [approving, setApproving] = useState<string | null>(null);
-  const [edits, setEdits] = useState<Record<string, { name: string; roomId: string; newRoomName?: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { name: string; roomId: string; newRoomName?: string; shadingKind?: ShadingKind }>>({});
 
   // Review workspace: search / filter / sort / bulk selection / reject (§ Device Review
   // Workspace — all purely client-side over the one queue the backend already returned).
@@ -463,7 +463,7 @@ export function KnxDiscoveryWorkspace() {
       // explicit new room name themselves, overriding whatever hint room-assignment found.
       const isNewRoom = edit.roomId === NEW_ROOM_SENTINEL;
       const roomNameHint = isNewRoom ? (edit.newRoomName?.trim() || undefined) : (item.room.room ?? undefined);
-      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: isNewRoom ? undefined : (edit.roomId || undefined), roomNameHint, plans: item.plans, force });
+      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: isNewRoom ? undefined : (edit.roomId || undefined), roomNameHint, plans: item.plans, force, shadingKind: edit.shadingKind });
       setApproved((cur) => ({ ...cur, [item.device.backendId]: res }));
     } catch (e) {
       setApproved((cur) => ({ ...cur, [item.device.backendId]: { device: { id: "", name: edit.name }, status: "error", reason: e instanceof Error ? e.message : "Approval failed." } }));
@@ -801,8 +801,8 @@ function DeviceCard({
 }: {
   item: KnxInstallerQueueItem;
   rooms: { id: string; name: string }[];
-  edit: { name: string; roomId: string; newRoomName?: string };
-  onEdit: (patch: Partial<{ name: string; roomId: string; newRoomName: string }>) => void;
+  edit: { name: string; roomId: string; newRoomName?: string; shadingKind?: ShadingKind };
+  onEdit: (patch: Partial<{ name: string; roomId: string; newRoomName: string; shadingKind: ShadingKind }>) => void;
   approval?: KnxApprovalResult;
   busy: boolean;
   onApprove: () => void;
@@ -852,6 +852,21 @@ function DeviceCard({
           />
         )}
       </label>
+
+      {item.device.capabilities.includes("position") && (
+        <label className="knx-device-room">
+          How does this move?
+          <SegmentedControl
+            aria-label="Shading movement"
+            value={edit.shadingKind ?? "updown"}
+            onChange={(v) => onEdit({ shadingKind: v })}
+            options={[
+              { value: "updown", label: "Up / Down" },
+              { value: "openclose", label: "Open / Close" },
+            ]}
+          />
+        </label>
+      )}
 
       <button type="button" className="link" onClick={() => setShowWhy((s) => !s)}>{showWhy ? "Hide explanation" : "Why was this device created?"}</button>
       {showWhy && (

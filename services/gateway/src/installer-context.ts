@@ -984,6 +984,11 @@ export class InstallerServices {
     /** Installer explicitly confirmed removal of an orphaned binding (§ live-confirmed
      * fix below) — never assumed, always a deliberate retry after seeing the conflict. */
     force?: boolean;
+    /** § live-confirmed fix — how a `position`-capable device physically moves (a roller
+     * blind's DPT/capability shape is byte-for-byte identical to a sliding curtain's —
+     * nothing about the wire data can tell them apart). Installer-set fact, asked once
+     * at approval time, never guessed; ignored for a device with no `position` plan. */
+    shadingKind?: "updown" | "openclose";
   }): Promise<KnxApprovalResult> {
     const bindablePlans = input.plans.filter((p): p is typeof p & { address: string } => p.bindable && p.address !== null);
     if (bindablePlans.length === 0) {
@@ -1026,6 +1031,13 @@ export class InstallerServices {
         } catch (err) {
           return { device: existingDevice, status: "error", reason: `refreshing existing device failed: ${(err as Error).message}` };
         }
+        // § live-confirmed fix — bindProtocol's own post-bind refresh only ever re-derives
+        // `color`'s config from the live driver (KnxProtocolDriver.getCapabilityConfig has
+        // no notion of "position" at all) — shadingKind is a pure installer fact no driver
+        // could ever report, so it's written explicitly here instead.
+        if (input.shadingKind && bound.includes("position")) {
+          await this.d.home.setCapabilityConfig(existingDeviceId, "position", { shadingKind: input.shadingKind });
+        }
         const validation = await this.validateKnxDevice(existingDeviceId);
         const refreshedDevice = await this.d.home.getDevice(existingDeviceId);
         return { device: refreshedDevice ?? existingDevice, ...validation };
@@ -1045,6 +1057,9 @@ export class InstallerServices {
       capabilities: bindablePlans.map((p) => p.capability),
       manufacturer: input.device.raw.metadata.manufacturer ?? undefined,
       model: input.device.raw.metadata.model ?? undefined,
+      ...(input.shadingKind && bindablePlans.some((p) => p.capability === "position")
+        ? { capabilityConfig: { position: { shadingKind: input.shadingKind } } }
+        : {}),
     });
 
     const bound: CapabilityKind[] = [];

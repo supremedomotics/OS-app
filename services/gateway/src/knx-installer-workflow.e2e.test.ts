@@ -636,6 +636,55 @@ describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import &
     });
     expect(res.status).toBe(422);
   });
+
+  it(
+    "persists the installer's shadingKind choice onto the position capability's own config — an honest, never-guessed fact no driver could report (§ live-confirmed fix)",
+    async () => {
+      const content = `<GroupAddress-Export>
+        <GroupAddress Name="Study - Curtain - Up Down" Address="6/1/1" DPTs="DPST-1-8" />
+        <GroupAddress Name="Study - Curtain - Position" Address="6/1/2" DPTs="DPST-5-1" />
+      </GroupAddress-Export>`;
+      const queueRes = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ gateway: { host: "127.0.0.1" }, content }),
+      });
+      const { queue } = (await queueRes.json()) as { queue: Array<{ device: unknown; plans: unknown }> };
+      expect(queue).toHaveLength(1);
+
+      const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+      const roomId = home.rooms[0]!.id;
+      const approveRes = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ device: queue[0]!.device, name: "Study Curtain", roomId, plans: queue[0]!.plans, shadingKind: "openclose" }),
+      });
+      expect(approveRes.status).toBe(201);
+      const approved = (await approveRes.json()) as { device: { id: string } };
+
+      const devices = (await (await fetch(`${baseUrl}/v1/rooms/${roomId}/devices`, { headers: auth() })).json()) as {
+        devices: { id: string; capabilities: { kind: string; config: Record<string, unknown> }[] }[];
+      };
+      const device = devices.devices.find((d) => d.id === approved.device.id)!;
+      const position = device.capabilities.find((c) => c.kind === "position");
+      expect(position?.config).toEqual({ shadingKind: "openclose" });
+
+      // Re-approving (a re-scan/re-discovery of the same fixture) refreshes it through the
+      // "existing device" branch — a DIFFERENT code path — and must persist just as honestly.
+      const reapprove = await fetch(`${baseUrl}/v1/commissioning/knx/approve`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ device: queue[0]!.device, name: "Study Curtain", plans: queue[0]!.plans, shadingKind: "updown" }),
+      });
+      expect(reapprove.status).toBe(201);
+      const devicesAfter = (await (await fetch(`${baseUrl}/v1/rooms/${roomId}/devices`, { headers: auth() })).json()) as {
+        devices: { id: string; capabilities: { kind: string; config: Record<string, unknown> }[] }[];
+      };
+      const refreshed = devicesAfter.devices.find((d) => d.id === approved.device.id)!;
+      expect(refreshed.capabilities.find((c) => c.kind === "position")?.config).toEqual({ shadingKind: "updown" });
+    },
+    10000,
+  );
 });
 
 /**

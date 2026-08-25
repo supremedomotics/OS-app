@@ -38,6 +38,7 @@ export { Grid, type GridProps } from "./components/Grid.js";
 export { Container, type ContainerProps } from "./components/Container.js";
 export { Stack, type StackProps, type StackGap } from "./components/Stack.js";
 export { ProgressBar, type ProgressBarProps } from "./components/ProgressBar.js";
+export { ShadingIcon, type ShadingIconProps, type ShadingKind } from "./components/ShadingIcon.js";
 export { CapabilityGate, type CapabilityGateProps } from "./components/CapabilityGate.js";
 export { CapabilityGrid, type CapabilityGridProps, type CapabilityGridItem } from "./components/CapabilityGrid.js";
 export { QuickActions, type QuickActionsProps, type QuickAction } from "./components/QuickActions.js";
