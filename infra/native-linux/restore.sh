@@ -39,7 +39,8 @@ main() {
   require_root
   confirm
 
-  local work
+  # Not `local` — the EXIT trap below fires after main() returns, by which point a
+  # local would already be out of scope, and set -u would reject it as unbound.
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
   log_step "Extracting archive"
