@@ -77,17 +77,6 @@ for svc in "${SUPREME_PY_SERVICES[@]}"; do
   check_service "$svc"
 done
 check_service "supreme-nats"
-if [ -r "${SUPREME_CONFIG_DIR}/install.conf" ]; then
-  # shellcheck source=/dev/null
-  source "${SUPREME_CONFIG_DIR}/install.conf"
-  if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then
-    check_service "$SUPREME_HA_SERVICE"
-  else
-    echo "  SKIPPED    ${SUPREME_HA_SERVICE} — Home Assistant was not installed (SUPREME_INSTALL_HA=0)"
-  fi
-else
-  not_evaluated "install.conf not found — has install.sh been run on this machine?"
-fi
 
 echo ""
 echo "--- Network reachability (loopback — matches this deployment's binding policy) ---"
@@ -97,9 +86,6 @@ check_tcp "NATS" 127.0.0.1 4222
 check_tcp "Mosquitto" 127.0.0.1 1883
 check_tcp "Gateway" 127.0.0.1 8080
 check_tcp "Caddy (HTTPS)" 127.0.0.1 443
-if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then
-  check_tcp "Home Assistant (must be loopback-only)" 127.0.0.1 8123
-fi
 
 echo ""
 echo "--- API endpoints ---"

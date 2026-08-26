@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-ALL_SERVICES=("${SUPREME_THIRDPARTY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "supreme-nats" "$SUPREME_HA_SERVICE")
+ALL_SERVICES=("${SUPREME_THIRDPARTY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "supreme-nats")
 
 usage() {
   echo "Usage: $0 <service> [journalctl args...]"

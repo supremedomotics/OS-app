@@ -210,18 +210,17 @@ cd services/ai-py && pytest -q              # Python sidecar tests (ruff + pytes
 - **CI/CD:** `.github/workflows/ci.yml` (TS build/typecheck/test, Flutter analyze/
   test/build, Python ruff+pytest per sidecar, Docker image build smoke), `cd.yml`
   (build/push images + signed OTA manifest), `clients.yml` (client builds),
-  `ha-regression.yml` (HA-upgrade compatibility matrix), `loadtest.yml` (load/soak/
-  chaos gate).
+  `loadtest.yml` (load/soak/chaos gate).
 
-Configuration: set `SUPREME_BACKEND=ha` + `SUPREME_HA_TOKEN` for the real backend,
-and `DATABASE_URL` to enable Postgres persistence (both wired in `hub-compose`).
+Configuration: set `SUPREME_BACKEND=native` (the only real backend) and
+`DATABASE_URL` to enable Postgres persistence (both wired in `hub-compose`).
 
 ## Environment variables
 
 Two canonical, heavily-commented `.env.example` files are the source of truth:
 
 - [`infra/hub-compose/.env.example`](infra/hub-compose/.env.example) — hub/home:
-  backend selection (`SUPREME_BACKEND=ha|mock`), HA auto-provisioning, token
+  backend selection (`SUPREME_BACKEND=native|mock`), token
   secrets, Postgres, per-driver enable flags/hosts (KNX/Modbus/MQTT/Matter/Zigbee/
   DALI/AVR/CoolMaster/SIP/Lutron/Tuya/media drivers), camera streaming, push
   relay, voice cloud reporting, remote-access relay, OTA, sealed secrets (`*_FILE`

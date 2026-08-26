@@ -34,9 +34,6 @@ render_config() {
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
   cp "${SUPREME_REPO_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
-  if [ "${SUPREME_INSTALL_HA}" = "1" ]; then
-    render_template "${SCRIPT_DIR}/systemd/supreme-homeassistant.service" /etc/systemd/system/supreme-homeassistant.service
-  fi
   if systemd_is_live; then systemctl daemon-reload; fi
 }
 
@@ -47,9 +44,6 @@ restart_services() {
   systemctl_restart supreme-nats
   systemctl_restart supreme-commissioning
   systemctl_restart supreme-lan
-  if [ "${SUPREME_INSTALL_HA}" = "1" ]; then
-    systemctl_restart supreme-homeassistant
-  fi
   systemctl_restart supreme-gateway
   if systemd_is_live; then systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
 }

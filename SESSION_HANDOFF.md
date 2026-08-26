@@ -4,6 +4,24 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Home Assistant fully removed
+
+SupremeOS no longer depends on Home Assistant in any form — not optional, fully removed.
+Deleted: `services/integration-layer/src/ha/*` (adapter, WS transport, provisioner,
+capability mapper) and their tests; the "Supreme Universal Bridge" driver manifest; the
+`supreme-homeassistant.service` systemd unit and all `install.sh`/`update.sh`/
+`health-check.sh`/`logs.sh` HA install/health logic; the `homeassistant` docker-compose
+service, its `ha-data` volume, and `docker-compose.ha-test.yml`; `.github/workflows/
+ha-regression.yml`; `docs/ha-integration.md`; the web-installer "Native Migration" tab.
+`SUPREME_BACKEND` now has exactly two values: `native` (default, real) and `mock` (tests).
+Any earlier note below mentioning `HomeAssistantProviderDriver`/`HaAdapter`/`depends_on:
+homeassistant` describes prior history, not current code — see
+`docs/architecture/Home-Assistant-Dependency-Audit.md` for the full before/after record.
+Left for the user to decide: legacy persisted `ownership="ha"`/`provider="homeassistant"`
+DB rows are not migrated (no such rows found in the audited schema, but a live DB with an
+old install could have some) — the `ProviderRouter` now fails such devices loudly
+(`backend_unavailable`) rather than fabricating state, per the codebase's own principle.
+
 ## Session: Runtime Data Path Verification — Casambi UDP receive-path evidence tooling
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:

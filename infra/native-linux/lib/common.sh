@@ -33,8 +33,6 @@ SUPREME_PY_SERVICES=(supreme-commissioning)
 # Third-party services this deployment configures but does not author the unit for
 # (shipped by their own Ubuntu/vendor packages): postgresql, redis-server, mosquitto, caddy.
 SUPREME_THIRDPARTY_SERVICES=(postgresql redis-server mosquitto caddy)
-# Present only when Home Assistant was installed (optional — see install.sh).
-SUPREME_HA_SERVICE=supreme-homeassistant
 
 # ── Logging ─────────────────────────────────────────────────────────────────────────────
 # Plain, greppable, timestamped — every script's stdout is safe to redirect to a log file

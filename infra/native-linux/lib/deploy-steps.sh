@@ -77,9 +77,6 @@ render_template() {
     -e "s|___SUPREME_GROUP___|${SUPREME_GROUP}|g" \
     -e "s|___SUPREME_DOMAIN___|${SUPREME_DOMAIN}|g" \
     -e "s|___SUPREME_BACKEND___|${SUPREME_BACKEND}|g" \
-    -e "s|___SUPREME_HA_TOKEN___|${SUPREME_HA_TOKEN}|g" \
-    -e "s|___SUPREME_HA_ADMIN_USER___|${SUPREME_HA_ADMIN_USER}|g" \
-    -e "s|___SUPREME_HA_ADMIN_PASSWORD___|${SUPREME_HA_ADMIN_PASSWORD}|g" \
     -e "s|___SUPREME_SYSTEM_NAME___|${SUPREME_SYSTEM_NAME}|g" \
     -e "s|___SUPREME_UNSPLASH_KEY___|${SUPREME_UNSPLASH_KEY}|g" \
     -e "s|___SUPREME_TZ___|${SUPREME_TZ}|g" \

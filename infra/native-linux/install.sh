@@ -73,7 +73,7 @@ prompt_yesno() {
 # § ADR-0023 Provider architecture: the only backends this installer may ever produce.
 # "mock" is valid input (unattended/CI installs may set it explicitly) but is never a
 # prompted default and never the production default — see collect_answers below.
-SUPREME_VALID_BACKENDS=(native ha mock)
+SUPREME_VALID_BACKENDS=(native mock)
 
 is_valid_backend() {
   local candidate="$1" valid
@@ -99,12 +99,7 @@ validate_answers() {
     die "Invalid timezone '${SUPREME_TZ}' — must match a /usr/share/zoneinfo entry (e.g. America/New_York, UTC). See: timedatectl list-timezones"
   fi
 
-  if [ "$SUPREME_INSTALL_HA" = "1" ]; then
-    [ -n "${SUPREME_HA_ADMIN_USER// }" ] || die "Home Assistant admin username must not be empty."
-    [ "${#SUPREME_HA_ADMIN_PASSWORD}" -ge 8 ] || die "Home Assistant admin password must be at least 8 characters."
-  fi
-
-  log_info "Answers validated: backend=${SUPREME_BACKEND}, domain=${SUPREME_DOMAIN}, tz=${SUPREME_TZ}, install_ha=${SUPREME_INSTALL_HA}."
+  log_info "Answers validated: backend=${SUPREME_BACKEND}, domain=${SUPREME_DOMAIN}, tz=${SUPREME_TZ}."
 }
 
 collect_answers() {
@@ -119,32 +114,9 @@ collect_answers() {
   prompt_default SUPREME_DOMAIN "Domain (leave 'localhost' for LAN-only, self-signed access)" "localhost"
   prompt_default SUPREME_TZ "Timezone" "$(cat /etc/timezone 2>/dev/null || echo UTC)"
 
-  # § ADR-0023 Provider architecture: Home Assistant is an OPTIONAL provider, never a
-  # required backend — this is the ONLY Home Assistant question on the "No" path.
-  # Answering "No" here must skip every HA-specific prompt entirely (username, password,
-  # a separate backend question) and silently configure the native-first production
-  # default. There is no standalone "Backend [mock]" prompt in the normal flow anymore.
-  prompt_yesno SUPREME_INSTALL_HA "Install headless Home Assistant Core?" 1
-
-  # Auto-derive the backend from the HA answer — never a standalone question. An
-  # already-set SUPREME_BACKEND (explicit environment override, e.g. an unattended/CI
-  # install that wants "mock") is respected rather than silently overwritten, but is
-  # validated below exactly like the derived value is.
-  if [ -z "${SUPREME_BACKEND:-}" ]; then
-    if [ "$SUPREME_INSTALL_HA" = "1" ]; then
-      SUPREME_BACKEND="ha"
-    else
-      SUPREME_BACKEND="native"
-    fi
-  fi
-
-  if [ "$SUPREME_INSTALL_HA" = "1" ]; then
-    prompt_default SUPREME_HA_ADMIN_USER "Home Assistant admin username" "admin"
-    prompt_default SUPREME_HA_ADMIN_PASSWORD "Home Assistant admin password" "$(generate_secret)"
-  else
-    SUPREME_HA_ADMIN_USER=""
-    SUPREME_HA_ADMIN_PASSWORD=""
-  fi
+  # SupremeOS is fully native and local-first — there is no external home-automation
+  # backend to configure. "native" is the only supported backend, always.
+  SUPREME_BACKEND="${SUPREME_BACKEND:-native}"
 
   # Never silently continue with an invalid backend, whether it came from the
   # derivation above, an environment override, or a hand-edited ANSWERS_FILE
@@ -156,7 +128,6 @@ collect_answers() {
   prompt_default SUPREME_SETUP_WIZARD "Show the Setup Wizard on first boot (1) or seed a demo owner (0)" "1"
   prompt_default SUPREME_LOG_LEVEL "Log level" "info"
   prompt_default SUPREME_HUB_VERSION "Hub version string" "0.4.0"
-  SUPREME_HA_TOKEN="${SUPREME_HA_TOKEN:-}"
   SUPREME_UNSPLASH_KEY="${SUPREME_UNSPLASH_KEY:-}"
 
   # Secrets: generated once, never prompted for, never logged. update.sh's config re-render
@@ -178,11 +149,7 @@ collect_answers() {
 SUPREME_SYSTEM_NAME="${SUPREME_SYSTEM_NAME}"
 SUPREME_DOMAIN="${SUPREME_DOMAIN}"
 SUPREME_TZ="${SUPREME_TZ}"
-SUPREME_INSTALL_HA="${SUPREME_INSTALL_HA}"
 SUPREME_BACKEND="${SUPREME_BACKEND}"
-SUPREME_HA_ADMIN_USER="${SUPREME_HA_ADMIN_USER}"
-SUPREME_HA_ADMIN_PASSWORD="${SUPREME_HA_ADMIN_PASSWORD}"
-SUPREME_HA_TOKEN="${SUPREME_HA_TOKEN}"
 SUPREME_SETUP_WIZARD="${SUPREME_SETUP_WIZARD}"
 SUPREME_LOG_LEVEL="${SUPREME_LOG_LEVEL}"
 SUPREME_HUB_VERSION="${SUPREME_HUB_VERSION}"
@@ -210,7 +177,7 @@ create_system_user() {
 create_directories() {
   log_step "Creating directory layout"
   mkdir -p "$SUPREME_APP_DIR" "$SUPREME_REPO_DIR" "$SUPREME_CONFIG_DIR" "$SUPREME_SECRETS_DIR" \
-    "$SUPREME_DATA_DIR"/{nats,matter,homeassistant,appletv} "$SUPREME_BACKUP_DIR" \
+    "$SUPREME_DATA_DIR"/{nats,matter,appletv} "$SUPREME_BACKUP_DIR" \
     "${SUPREME_APP_DIR}/venvs"
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR"
   chmod 0750 "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR"
@@ -306,34 +273,6 @@ install_commissioning_venv() {
   log_info "Commissioning venv ready at ${venv}."
 }
 
-install_homeassistant_venv() {
-  if [ "${SUPREME_INSTALL_HA}" != "1" ]; then
-    log_info "Home Assistant install skipped (SUPREME_INSTALL_HA=0 / SUPREME_BACKEND=${SUPREME_BACKEND})."
-    return
-  fi
-  log_step "Installing Home Assistant Core (this can take several minutes — large dependency tree)"
-  local venv="${SUPREME_APP_DIR}/venvs/homeassistant"
-  local ha_config="${SUPREME_DATA_DIR}/homeassistant"
-  sudo -u "$SUPREME_USER" python3 -m venv "$venv"
-  sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet --upgrade pip wheel
-  sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet homeassistant
-  mkdir -p "$ha_config"
-  chown "${SUPREME_USER}:${SUPREME_GROUP}" "$ha_config"
-  # Seed configuration.yaml BEFORE first start so it never briefly listens on all
-  # interfaces waiting for a human to edit the default file — matches the Docker
-  # deployment's hard requirement that HA is never reachable off-box.
-  if [ ! -f "${ha_config}/configuration.yaml" ]; then
-    cat > "${ha_config}/configuration.yaml" <<'EOF'
-# SupremeOS-managed. Headless, SIL-internal only — see supreme-homeassistant.service.
-default_config:
-http:
-  server_host: 127.0.0.1
-EOF
-    chown "${SUPREME_USER}:${SUPREME_GROUP}" "${ha_config}/configuration.yaml"
-  fi
-  log_info "Home Assistant Core venv ready at ${venv}. Config: ${ha_config}."
-}
-
 configure_postgres() {
   log_step "Configuring PostgreSQL"
   systemctl_enable_now postgresql
@@ -423,9 +362,6 @@ install_systemd_units() {
   # documented native-linux deployment target). Only the placeholder substitution (none
   # today — that file hardcodes /opt/supreme already) would ever apply here.
   cp "${SUPREME_REPO_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
-  if [ "${SUPREME_INSTALL_HA}" = "1" ]; then
-    render_template "${SCRIPT_DIR}/systemd/supreme-homeassistant.service" /etc/systemd/system/supreme-homeassistant.service
-  fi
   if systemd_is_live; then systemctl daemon-reload; fi
 }
 
@@ -433,9 +369,6 @@ start_services() {
   log_step "Enabling and starting SupremeOS services"
   systemctl_enable_now supreme-commissioning
   systemctl_enable_now supreme-lan
-  if [ "${SUPREME_INSTALL_HA}" = "1" ]; then
-    systemctl_enable_now supreme-homeassistant
-  fi
   systemctl_enable_now supreme-gateway
 }
 
@@ -506,7 +439,6 @@ main() {
   build_workspace
   verify_workspace
   install_commissioning_venv
-  install_homeassistant_venv
   configure_postgres
   configure_redis
   configure_mosquitto

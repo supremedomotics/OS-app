@@ -1,15 +1,13 @@
 # Supreme OS — Home Hub (blueprint §2.1, §14).
 #
 # The hub is the whole product: it runs control, automation, data, identity and
-# AI entirely on the box, with zero internet required. Supreme services run as
-# sidecar containers beside a HEADLESS, HIDDEN Home Assistant Core. Only the SIL
-# (inside the gateway for Phase 0) ever talks to HA — and HA is never published to
-# the host, so its UI/branding can't leak (§7, §12, §17).
+# AI entirely on the box, with zero internet required. Every device backend is a
+# native Supreme protocol driver — there is no external home-automation backend
+# in the stack (§7, §12, §17).
 #
 # Networks:
 #   supreme-edge   — client-facing; ONLY the gateway is attached here.
-#   supreme-core   — internal; HA, Postgres, Redis, NATS, MQTT. No host ports.
-# This segmentation enforces "HA admin bound to loopback" at the topology level.
+#   supreme-core   — internal; Postgres, Redis, NATS, MQTT. No host ports.
 
 name: supreme-hub
 
@@ -22,14 +20,7 @@ services:
     environment:
       SUPREME_HOST: 0.0.0.0
       SUPREME_PORT: "8080"
-      SUPREME_BACKEND: ${SUPREME_BACKEND:-ha}
-      SUPREME_HA_URL: ws://homeassistant:8123/api/websocket
-      # NO HA token needed: on first boot the gateway provisions HA headlessly (creates the
-      # hidden internal account, mints a long-lived token) and stores it in the secrets
-      # volume. Set SUPREME_HA_TOKEN only to pin an existing token.
-      SUPREME_HA_TOKEN: ${SUPREME_HA_TOKEN:-}
-      SUPREME_HA_ADMIN_USER: ${SUPREME_HA_ADMIN_USER:-admin}
-      SUPREME_HA_ADMIN_PASSWORD: ${SUPREME_HA_ADMIN_PASSWORD:-admin@supremeos}
+      SUPREME_BACKEND: ${SUPREME_BACKEND:-native}
       SUPREME_SECRETS_DIR: /data/secrets
       SUPREME_SYSTEM_NAME: ${SUPREME_SYSTEM_NAME:-Supreme Residence}
       # Optional Unsplash Access Key → real room photos by name (see .env.example).
@@ -117,14 +108,12 @@ services:
     # Not published to the host — the Caddy proxy terminates TLS and reverse-proxies
     # the Supreme API. Only the proxy is reachable from the LAN.
     volumes:
-      # Runtime secrets the hub generates (the provisioned HA token). Survives restarts.
+      # Runtime secrets the hub generates. Survives restarts.
       - supreme-secrets:/data/secrets
     networks:
       - supreme-edge
       - supreme-core
     depends_on:
-      homeassistant:
-        condition: service_started
       postgres:
         condition: service_healthy
       commissioning:
@@ -243,24 +232,6 @@ services:
       - installer-portal
       - streamer
 
-  # Headless Home Assistant Core — hidden backend. NO published ports; reachable
-  # only on the internal supreme-core network by the SIL. Supervisor not used.
-  homeassistant:
-    # Official HA CORE image (NOT HAOS — Supreme OS is a Docker Compose appliance). `stable`
-    # tracks the latest stable Core release; pin to a dated tag (e.g. 2026.6) before a
-    # production rollout and gate upgrades through the HA-regression CI (§17). Docker Hub
-    # coordinates are used so it's pullable via a registry mirror in restricted networks.
-    image: ${SUPREME_HA_IMAGE:-homeassistant/home-assistant:stable}
-    restart: unless-stopped
-    volumes:
-      - ./homeassistant:/config
-      - ha-data:/config/.storage
-    environment:
-      TZ: ${SUPREME_TZ:-UTC}
-    networks:
-      - supreme-core
-    # Intentionally NO `ports:` — HA must never be exposed to the host/LAN.
-
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -356,7 +327,6 @@ networks:
     driver: bridge
 
 volumes:
-  ha-data:
   pg-data:
   nats-data:
   mqtt-data:

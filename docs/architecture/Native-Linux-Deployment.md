@@ -3,6 +3,12 @@
 - Status: **Accepted** (Phase 1 — see "Known scope gaps" below for what is intentionally not yet
   covered)
 - Companion: `docs/architecture/adr/0024-native-linux-deployment.md`
+- **Update**: Home Assistant has been fully removed from SupremeOS (see
+  `docs/architecture/Home-Assistant-Dependency-Audit.md`). Every reference below to
+  `supreme-homeassistant.service`, `SUPREME_INSTALL_HA`, `install_homeassistant_venv`, or
+  a headless HA install is historical — `install.sh` no longer installs, configures, or
+  starts Home Assistant in any form; `SUPREME_BACKEND` is always `native` (or `mock` for
+  tests).
 
 ## Purpose
 
