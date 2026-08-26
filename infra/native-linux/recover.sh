@@ -50,7 +50,7 @@ detect_and_repair() {
     chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_DATA_DIR" 2>/dev/null && note_fixed "Ownership of ${SUPREME_DATA_DIR}"
   fi
   if [ -d "$SUPREME_SECRETS_DIR" ]; then
-    chmod 0700 "$SUPREME_SECRETS_DIR" 2>/dev/null
+    chmod 0750 "$SUPREME_SECRETS_DIR" 2>/dev/null
     chmod 0640 "${SUPREME_SECRETS_DIR}"/* 2>/dev/null
     chown -R "root:${SUPREME_GROUP}" "$SUPREME_SECRETS_DIR" 2>/dev/null && note_fixed "Permissions on ${SUPREME_SECRETS_DIR}"
   fi

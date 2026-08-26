@@ -60,7 +60,7 @@ echo ""
 echo "--- Directory / secrets permissions ---"
 if [ -d "$SUPREME_SECRETS_DIR" ]; then
   mode="$(stat -c '%a' "$SUPREME_SECRETS_DIR" 2>/dev/null)"
-  [ "$mode" = "700" ] && rc_pass "${SUPREME_SECRETS_DIR} is 0700" || rc_fail "${SUPREME_SECRETS_DIR} is 0${mode}, expected 0700"
+  [ "$mode" = "750" ] && rc_pass "${SUPREME_SECRETS_DIR} is 0750" || rc_fail "${SUPREME_SECRETS_DIR} is 0${mode}, expected 0750"
   for f in "${SUPREME_SECRETS_DIR}"/*; do
     [ -e "$f" ] || continue
     mode="$(stat -c '%a' "$f" 2>/dev/null)"

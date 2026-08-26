@@ -352,7 +352,13 @@ create_directories() {
     "${SUPREME_APP_DIR}/venvs" "$SUPREME_RELEASES_DIR"
   chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR"
   chmod 0750 "$SUPREME_APP_DIR" "$SUPREME_DATA_DIR" "$SUPREME_BACKUP_DIR" "$SUPREME_RELEASES_DIR"
-  chmod 0700 "$SUPREME_SECRETS_DIR"
+  # 0750, not 0700: files inside are individually 0640 (group-readable) because the
+  # unprivileged gateway process (User=supreme) must read some of them at runtime (e.g.
+  # driver_secret_encryption_key) — but a 0700 directory blocks that group entirely from
+  # traversing in, regardless of the files' own mode. Group gets no write access to the
+  # directory itself, so it still can't create/rename/delete secrets, only open ones root
+  # already marked readable.
+  chmod 0750 "$SUPREME_SECRETS_DIR"
   chown "root:${SUPREME_GROUP}" "$SUPREME_SECRETS_DIR"
 }
 
