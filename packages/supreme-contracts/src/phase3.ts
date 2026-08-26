@@ -8,7 +8,7 @@ import { z } from "zod";
 
 /**
  * Phase-3 contracts (§16): the visual Automation Builder DSL surface, energy
- * analytics, advanced audit, and the AI assistant. All Supreme — backend-agnostic.
+ * analytics, advanced audit, and the AI assistant — all Supreme-native.
  */
 
 // ── Automations ──────────────────────────────────────────────────────────────
@@ -18,7 +18,7 @@ export const CreateAutomationRequest = z.object({
   triggers: z.array(AutomationTrigger).min(1),
   conditions: z.array(AutomationCondition).default([]),
   actions: z.array(AutomationAction).min(1),
-  engine: z.enum(["ha", "supreme"]).default("supreme"),
+  engine: z.enum(["supreme"]).default("supreme"),
   enabled: z.boolean().default(true),
   tags: z.array(z.string()).default([]),
 });

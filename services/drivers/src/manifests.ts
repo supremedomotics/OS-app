@@ -399,24 +399,4 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       },
     ],
   }),
-  defineManifest({
-    // Internal key kept stable as an API identifier; the user-facing name is Supreme-branded only —
-    // the underlying compatibility bridge is never surfaced by name in the UI.
-    key: "supreme-home-assistant",
-    name: "Supreme Universal Bridge",
-    description: "Bring devices from an existing compatible smart-home gateway into Supreme.",
-    category: "other",
-    channel: "official",
-    publisher: PUBLISHER,
-    version: "1.0.0",
-    capabilities: ["onoff", "brightness", "color", "temperature", "position", "sensor"],
-    protocols: [],
-    compat: { hubMinVersion: "0.1.0", requiresSku: null },
-    backend: { type: "ha-integration", ref: "core" },
-    operations: [...PROTO_OPS],
-    configSchema: [
-      { key: "url", label: "Gateway URL", type: "text", required: true, placeholder: "http://gateway.local:8123", secret: false },
-      { key: "token", label: "Access token", type: "password", required: true, secret: true },
-    ],
-  }),
 ];

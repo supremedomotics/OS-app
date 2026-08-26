@@ -192,11 +192,8 @@ export class SupremeIntegrationLayer {
       throw new SupremeError("validation_failed", `capability ${command.capability} is read-only`);
     }
     if (!this.adapter.isConnected()) {
-      // HaAdapter (and any provider driver behind it) buffers; others surface a
-      // typed error the gateway maps to 503.
-      if (this.adapter.kind !== "ha") {
-        throw new SupremeError("backend_unavailable", "integration backend is not connected");
-      }
+      // Never fabricate connectivity — surface a typed error the gateway maps to 503.
+      throw new SupremeError("backend_unavailable", "integration backend is not connected");
     }
     await this.adapter.command(deviceId, command);
   }

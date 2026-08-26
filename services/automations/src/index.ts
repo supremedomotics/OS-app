@@ -14,7 +14,6 @@ export {
 } from "./engine.js";
 export { AutomationService, type CreateAutomationInput } from "./service.js";
 export { InMemoryAutomationStore, type IAutomationStore } from "./store.js";
-export { compileToHa, type HaAutomationConfig } from "./compiler.js";
 export {
   circadianAt,
   circadianColorCommand,

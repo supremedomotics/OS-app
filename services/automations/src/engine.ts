@@ -111,8 +111,6 @@ export class AutomationEngine {
   }
 
   setAutomations(list: Automation[]): void {
-    // Only the native engine executes; engine="ha" automations are compiled and
-    // run by HA, so the native engine ignores them.
     this.automations = list.filter((a) => a.enabled && a.engine === "supreme");
   }
 

@@ -874,14 +874,6 @@ const EVENT_NOTIFICATIONS: Record<
 };
 
 function buildSil(config: GatewayConfig): SupremeIntegrationLayer {
-  if (config.backend === "ha") {
-    // The HaAdapter needs a concrete HA WebSocket transport injected at the hub
-    // boot edge (infra/hub-compose), where the loopback HA URL + long-lived token
-    // are available. See createHubContext in bootstrap.ts.
-    throw new Error(
-      "SUPREME_BACKEND=ha requires the HA transport injected via bootstrap.createHubContext; " +
-        "use SUPREME_BACKEND=mock for the standalone slice",
-    );
-  }
+  void config;
   return new SupremeIntegrationLayer({ adapter: new MockAdapter() });
 }

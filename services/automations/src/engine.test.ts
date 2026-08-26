@@ -8,7 +8,6 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { AutomationEngine, type AutomationExecutors } from "./engine.js";
 import { AutomationService } from "./service.js";
-import { compileToHa } from "./compiler.js";
 
 function executors(overrides: Partial<AutomationExecutors> = {}) {
   return {
@@ -159,8 +158,8 @@ describe("AutomationEngine — time & interval triggers", () => {
   });
 });
 
-describe("engine selection + HA compile", () => {
-  it("native engine ignores engine='ha' automations", async () => {
+describe("engine selection", () => {
+  it("native engine only runs enabled engine='supreme' automations", async () => {
     const ex = executors();
     const engine = new AutomationEngine({ executors: ex });
     const svc = new AutomationService(engine);
@@ -168,50 +167,13 @@ describe("engine selection + HA compile", () => {
     const d = devId();
     await svc.create({
       homeId: homeId(),
-      name: "HA-compiled",
-      engine: "ha",
+      name: "Supreme-native",
+      engine: "supreme",
       triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
       actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
     });
     await svc.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
-    expect(ex.command).not.toHaveBeenCalled();
-  });
-
-  it("compiles a Supreme automation to an HA config shape", () => {
-    const d = devId();
-    const config = compileToHa({
-      id: newId("automation") as never,
-      homeId: homeId(),
-      name: "x",
-      enabled: true,
-      triggers: [{ type: "time", at: "07:00", days: [] }],
-      conditions: [],
-      actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "on" } }],
-      engine: "ha",
-      externalRef: null,
-      aiGenerated: false,
-      tags: [],
-    });
-    expect(config.trigger[0]).toMatchObject({ platform: "time", at: "07:00" });
-    expect(config.action[0]).toMatchObject({ service: "supreme.command" });
-  });
-
-  it("refuses to compile an intent action to HA — intents require the Supreme-native engine", () => {
-    const d = devId();
-    expect(() =>
-      compileToHa({
-        id: newId("automation") as never,
-        homeId: homeId(),
-        name: "x",
-        enabled: true,
-        triggers: [{ type: "time", at: "07:00", days: [] }],
-        conditions: [],
-        actions: [{ type: "intent", intentId: "toggleLight", target: { kind: "device", deviceId: d }, params: {} }],
-        engine: "ha",
-        externalRef: null,
-        aiGenerated: false,
-      }),
-    ).toThrow(/cannot compile to a Home Assistant automation/);
+    expect(ex.command).toHaveBeenCalledTimes(1);
   });
 });
 

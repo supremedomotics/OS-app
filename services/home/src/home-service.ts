@@ -25,7 +25,7 @@ export type DeviceChangeEvent = { type: "upsert"; device: Device } | { type: "de
 /**
  * Home service (§4 rooms + devices services, plus favorites). Owns the Supreme
  * topology and binds each device capability to a backend entity in the SIL entity
- * registry — the only place the HA mapping lives. Clients see pure Supreme data.
+ * registry. Clients see pure Supreme data.
  */
 export class HomeService {
   private readonly store: IHomeStore;
@@ -50,30 +50,10 @@ export class HomeService {
     for (const l of this.changeListeners) l(event);
   }
 
-  /** Restore every stored device's HA binding on boot (ADR-0023 § Driver Binding: a
-   * driver instance is per-process, so a persisted `provider="homeassistant"`
-   * lifecycle record from before this restart does NOT mean `HomeAssistantProviderDriver`
-   * actually has this device in its in-memory `manages()` set this boot — the exact
-   * same "protocol bindings must be replayed onto the driver on every boot" principle
-   * `InstallerServices`'s driver lifecycle already applies to native protocol
-   * bindings, extended here to Home Assistant). Re-binds through the real
-   * `bindNative()` path (never fabricates ONLINE) when a "homeassistant" driver is
-   * registered this boot; otherwise only restores the entity mapping, exactly like
-   * `addDevice()`'s own no-HA-configured fallback — never a special ownership side
-   * effect either way. */
+  /** Restore every stored device's entity mapping on boot. */
   async rebindRegistry(): Promise<void> {
     for (const { device, backendIds } of await this.store.listDevices()) {
       if (Object.keys(backendIds).length === 0) continue;
-      if (this.sil.migrationEnabled && this.sil.getNativeDriver("homeassistant")) {
-        const existing = this.sil.providers.get(device.id);
-        if (!existing || existing.provider === "homeassistant") {
-          for (const cap of device.capabilities) {
-            const backendId = backendIds[cap.kind];
-            if (backendId) await this.sil.bindNative({ deviceId: device.id, capability: cap.kind, address: backendId }, "homeassistant");
-          }
-          continue;
-        }
-      }
       this.mapEntities(device, backendIds);
     }
   }
@@ -124,31 +104,12 @@ export class HomeService {
 
   /**
    * Commission a device (ADR-0023 § Commissioning: Create Device → Assign Provider →
-   * Bind Driver). `backendIds` non-empty is the explicit installer decision to map
-   * this device onto Home Assistant. When this hub actually has a "homeassistant"
-   * provider driver registered, this binds each mapped capability through
-   * `bindNative(..., "homeassistant")` — the EXACT same Driver Binding Engine path
-   * every other provider uses, never a special ownership side effect. A device
-   * already bound to a real native driver is left untouched — `DriverBindingEngine`/
-   * `ProviderRegistry` already refuse to silently downgrade a bound device. When no
-   * "homeassistant" driver is registered on this hub at all (HA not configured — an
-   * explicitly supported topology per ADR-0023 § Native Backend), this only maps
-   * entities, exactly as it does on a bare (non-router) adapter — there is no
-   * provider to honestly bind against, so nothing pretends there is.
+   * Bind Driver). `backendIds` non-empty maps device capabilities onto backend
+   * entity ids in the SIL's entity registry.
    */
   async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
     await this.store.putDevice(device, backendIds);
-    if (this.sil.migrationEnabled && this.sil.getNativeDriver("homeassistant")) {
-      for (const cap of device.capabilities) {
-        const backendId = backendIds[cap.kind];
-        if (!backendId) continue;
-        const existing = this.sil.providers.get(device.id);
-        if (existing && existing.provider !== "homeassistant") continue; // already bound elsewhere — never downgrade
-        await this.sil.bindNative({ deviceId: device.id, capability: cap.kind, address: backendId }, "homeassistant");
-      }
-    } else {
-      this.mapEntities(device, backendIds);
-    }
+    this.mapEntities(device, backendIds);
     this.emitChanged({ type: "upsert", device });
   }
 

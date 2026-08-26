@@ -22,7 +22,7 @@ export interface CreateAutomationInput {
   triggers: AutomationTrigger[];
   conditions?: AutomationCondition[];
   actions: AutomationAction[];
-  engine?: "ha" | "supreme";
+  engine?: "supreme";
   enabled?: boolean;
   aiGenerated?: boolean;
   tags?: string[];

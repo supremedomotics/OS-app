@@ -1,16 +1,11 @@
 import {
   EntityRegistryMirror,
-  HaAdapter,
-  HaWsTransport,
-  HomeAssistantProviderDriver,
   MigrationPolicy,
   ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   ProviderRegistry,
   DriverBindingEngine,
-  provisionHaToken,
-  haHttpFromWsUrl,
   type INativeProtocolDriver,
   type IMigrationPolicyStore,
 } from "@supreme/integration-layer";
@@ -47,50 +42,12 @@ import { HttpProtocolScanner } from "@supreme/commissioning";
 import type { ProtocolKind } from "@supreme/domain-model";
 import { assertSecureConfig, type GatewayConfig } from "./config.js";
 import { AppContext, type AppDeps } from "./context.js";
-import { createSecretStore } from "./secrets.js";
 import { VoiceStatePublisher } from "./voice-publisher.js";
 
-const HA_TOKEN_SECRET = "ha_token";
-
 /**
- * Resolve the HA long-lived token without ever asking the installer for one (§7, §8):
- *   1. an explicitly supplied SUPREME_HA_TOKEN (env / *_FILE), else
- *   2. a token minted on a previous boot and kept in the secrets manager, else
- *   3. headless first-boot provisioning — create HA's hidden internal account and mint
- *      a token, then persist it. HA stays completely invisible throughout.
- * Throws only if HA is already onboarded by someone else and no token is available.
- */
-async function resolveHaToken(config: GatewayConfig): Promise<string> {
-  if (config.haToken) return config.haToken;
-  const secrets = createSecretStore(config.secretsDir || undefined);
-  const stored = secrets.get(HA_TOKEN_SECRET);
-  if (stored) return stored;
-
-  const provisioned = await provisionHaToken({
-    httpUrl: config.haHttpUrl || haHttpFromWsUrl(config.haUrl),
-    wsUrl: config.haUrl,
-    adminUsername: config.haAdminUser,
-    adminPassword: config.haAdminPassword,
-    systemName: config.systemName,
-    timeZone: config.timeZone,
-    latitude: config.latitude ?? undefined,
-    longitude: config.longitude ?? undefined,
-  });
-  if (!provisioned) {
-    throw new Error(
-      "Home Assistant is already initialized but no token is available — provide SUPREME_HA_TOKEN once, or reset HA to let Supreme OS provision it headlessly.",
-    );
-  }
-  secrets.set(HA_TOKEN_SECRET, provisioned.token);
-  return provisioned.token;
-}
-
-/**
- * Hub boot edge. This is where the concrete, HA-specific WebSocket transport is
- * assembled and injected into the SIL — the only place in the codebase that wires
- * the loopback HA URL + long-lived token (both held inside the SIL). It is also
- * where the Postgres-backed stores are connected and migrated. Everything above
- * receives a ready {@link AppContext} and never learns a backend or DB exists.
+ * Hub boot edge. This is where the Postgres-backed stores are connected and
+ * migrated. Everything above receives a ready {@link AppContext} and never
+ * learns a backend or DB exists.
  *
  * Defaults (no DATABASE_URL, SUPREME_BACKEND=mock) give the standalone slice used
  * in dev and tests: in-memory stores + the mock backend.
@@ -149,17 +106,10 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     );
   }
 
-  // ADR-0023 § Native Backend: the SIL is always backed by a ProviderRouter — there
-  // is no separate HA leg. Home Assistant, when configured, registers as ONE MORE
-  // driver (`HomeAssistantProviderDriver`) into the exact same drivers array as
-  // Casambi/KNX/Matter/MQTT/etc — no special casing anywhere above this point.
+  // ADR-0023 § Native Backend: the SIL is always backed by a ProviderRouter, whose
+  // engine hosts every native protocol driver directly — no external backend leg.
   const registry = new EntityRegistryMirror();
   const nativeDrivers: INativeProtocolDriver[] = [];
-  if (config.backend === "ha") {
-    const token = await resolveHaToken(config);
-    const transport = new HaWsTransport({ url: config.haUrl, token });
-    nativeDrivers.push(new HomeAssistantProviderDriver(new HaAdapter({ transport, registry }), registry));
-  }
   // config.backend === "mock" registers nothing here — MockAdapter exists only for
   // standalone/dev slices (see buildSil in context.ts), never wired into a real hub.
   // Real native protocol stacks the Supreme-native engine fronts (§3, §7). Loaded
@@ -290,7 +240,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   const migrationPolicy = new MigrationPolicy([], migrationStore);
   await migrationPolicy.hydrate();
   // The engine starts with NO drivers registered — every env-configured driver built
-  // above (native protocols AND Home Assistant alike) is instead handed to
+  // above is instead handed to
   // InstallerServices as `envDrivers` (below) and registered through the same Driver
   // Lifecycle pipeline manifest-configured drivers use (§ Driver Lifecycle: no
   // duplicate registration logic). This is the structural fix for the boot-order race

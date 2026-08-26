@@ -15,8 +15,7 @@ import { ProviderRegistry } from "./provider-registry.js";
 import type { SupremeNativeAdapter } from "./native-adapter.js";
 
 export interface ProviderRouterOptions {
-  /** The driver-hosting engine every provider (native protocols AND Home Assistant,
-   * via `HomeAssistantProviderDriver`) registers into identically. */
+  /** The driver-hosting engine every native protocol provider registers into. */
   engine: SupremeNativeAdapter;
   registry: ProviderRegistry;
   bindingEngine: DriverBindingEngine;

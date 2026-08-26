@@ -132,9 +132,9 @@ export const DriverManifest = z.object({
     requiresSku: z.string().nullable().default(null),
   }),
   backend: z.object({
-    /** Phase-1 reality: "ha-integration" wraps an HA integration; "native" later. */
-    type: z.enum(["ha-integration", "native"]),
-    /** Opaque backend hint consumed only by the SIL (e.g. HA domain). */
+    /** Every driver is a native protocol driver — the only supported backend kind. */
+    type: z.enum(["native"]),
+    /** Opaque backend hint consumed only by the SIL. */
     ref: z.string().nullable().default(null),
   }),
   /** Matter (and similar) ship disabled and are opt-in (§9). */

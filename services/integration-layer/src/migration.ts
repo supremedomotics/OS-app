@@ -1,17 +1,15 @@
 /**
- * Native-migration policy (blueprint §7, §16 Phase 4) — the "strangler fig".
+ * Native-engine domain registry (blueprint §7, §16 Phase 4).
  *
- * The SIL routes each backend domain (e.g. "light", "climate", "cover") to either
- * the Home Assistant adapter or the Supreme-native engine. Domains default to HA;
- * an operator flips a domain to native behind this flag, validates, and HA is
- * retired for that domain — with ZERO change above the SIL. When every domain is
- * native, the HA adapter can be removed entirely.
+ * Historical note: this tracked per-domain migration off Home Assistant onto the
+ * Supreme-native engine. HA has been fully removed from the runtime — "native" is
+ * now the only engine — so this is retained purely as a domain-status registry for
+ * the `/v1/migration` installer reporting surface, not an active routing decision.
  */
-export type EngineKind = "ha" | "native";
+export type EngineKind = "native";
 
 /**
- * Persistence seam (§4) so a domain migrated to native STAYS native across a hub
- * restart — otherwise a reboot would silently route a migrated domain back to HA.
+ * Persistence seam (§4) so a domain's registered status survives a hub restart.
  */
 export interface IMigrationPolicyStore {
   loadNativeDomains(): Promise<string[]>;
@@ -19,7 +17,7 @@ export interface IMigrationPolicyStore {
 }
 
 export class MigrationPolicy {
-  /** domain → engine. Absent = default ("ha"). */
+  /** domain → engine. Absent = default ("native"). */
   private readonly engines = new Map<string, EngineKind>();
   private readonly store?: IMigrationPolicyStore;
   private lastWrite: Promise<void> = Promise.resolve();
@@ -40,13 +38,13 @@ export class MigrationPolicy {
     await this.lastWrite;
   }
 
-  /** Note that a domain exists (so it appears in status even while on HA). */
+  /** Note that a domain exists (so it appears in status). */
   register(domain: string): void {
-    if (!this.engines.has(domain)) this.engines.set(domain, "ha");
+    if (!this.engines.has(domain)) this.engines.set(domain, "native");
   }
 
   engineFor(domain: string): EngineKind {
-    return this.engines.get(domain) ?? "ha";
+    return this.engines.get(domain) ?? "native";
   }
 
   isNative(domain: string): boolean {
@@ -65,7 +63,7 @@ export class MigrationPolicy {
       .sort((a, b) => a.domain.localeCompare(b.domain));
   }
 
-  /** True once every known domain is routed to native (HA can be retired). */
+  /** True once every known domain has a status entry (always true post-registration). */
   fullyMigrated(): boolean {
     const all = [...this.engines.values()];
     return all.length > 0 && all.every((e) => e === "native");

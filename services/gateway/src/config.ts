@@ -18,20 +18,11 @@ export interface GatewayConfig {
   host: string;
   port: number;
   tokenSecret: string;
-  /** "mock" runs the offline vertical slice; "ha" uses the real HA backend. */
-  backend: "mock" | "ha" | "native";
-  haUrl: string;
-  /** HA long-lived token. Optional: when empty and backend=ha, the hub provisions HA
-   * headlessly on first boot and stores the generated token in the secrets manager. */
-  haToken: string;
-  /** HA HTTP base (for onboarding); derived from haUrl when not set. */
-  haHttpUrl: string;
-  /** Hidden internal HA account the gateway provisions + uses. Never shown in any UI. */
-  haAdminUser: string;
-  haAdminPassword: string;
-  /** Directory for runtime-generated secrets (the provisioned HA token); empty = in-memory. */
+  /** "mock" runs the offline vertical slice; "native" runs the real Supreme-native backend. */
+  backend: "mock" | "native";
+  /** Directory for runtime-generated secrets; empty = in-memory. */
   secretsDir: string;
-  /** Developer Mode (§dev): when true, HA may be published on 8123 for debugging. Off by default. */
+  /** Developer Mode (§dev): unlocks extra diagnostics surfaces. Off by default. */
   devMode: boolean;
   /**
    * When true, the runtime Developer-Mode toggle is LOCKED (customer/OEM builds set this). Default
@@ -45,7 +36,7 @@ export interface GatewayConfig {
   setupWizard: boolean;
   /** Friendly system/home name used during onboarding + shown in the UI. */
   systemName: string;
-  /** IANA time zone + optional coordinates seeded into HA's core config. */
+  /** IANA time zone + optional coordinates for the home's location. */
   timeZone: string;
   latitude: number | null;
   longitude: number | null;
@@ -196,21 +187,15 @@ export interface GatewayConfig {
 export const DEV_TOKEN_SECRET = "dev-only-insecure-secret-change-me-change-me";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
-  // ADR-0023 § Native Backend: "native" (no Home Assistant leg at all) is the
-  // production default. "ha" additionally registers Home Assistant as one more
-  // provider driver. "mock" exists ONLY for tests/CI — never select it via a real
-  // deployment's env, since it's the one path that doesn't talk to a real backend.
-  const backend = env.SUPREME_BACKEND === "ha" ? "ha" : env.SUPREME_BACKEND === "mock" ? "mock" : "native";
+  // ADR-0023 § Native Backend: "native" is the production default and the only real
+  // backend — the SIL talks straight to native protocol drivers, no external hub.
+  // "mock" exists ONLY for tests/CI — never select it via a real deployment's env.
+  const backend = env.SUPREME_BACKEND === "mock" ? "mock" : "native";
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
     tokenSecret: secret(env, "SUPREME_TOKEN_SECRET") ?? DEV_TOKEN_SECRET,
     backend,
-    haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
-    haToken: secret(env, "SUPREME_HA_TOKEN") ?? "",
-    haHttpUrl: env.SUPREME_HA_HTTP_URL ?? "",
-    haAdminUser: env.SUPREME_HA_ADMIN_USER ?? "admin",
-    haAdminPassword: secret(env, "SUPREME_HA_ADMIN_PASSWORD") ?? "admin@supremeos",
     secretsDir: env.SUPREME_SECRETS_DIR ?? "",
     devMode: env.SUPREME_DEV_MODE === "1" || env.SUPREME_DEV_MODE === "true",
     devModeLocked: env.SUPREME_DEV_MODE_LOCKED === "1" || env.SUPREME_DEV_MODE_LOCKED === "true",
