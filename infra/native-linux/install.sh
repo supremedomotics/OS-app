@@ -381,6 +381,7 @@ persist_secrets() {
     echo -n "$SUPREME_TOKEN_SECRET" > "${SUPREME_SECRETS_DIR}/token-secret"
     echo -n "$POSTGRES_PASSWORD" > "${SUPREME_SECRETS_DIR}/postgres-password"
   )
+  ensure_driver_secret_encryption_key
   chown "root:${SUPREME_GROUP}" "${SUPREME_SECRETS_DIR}"/*
   chmod 0640 "${SUPREME_SECRETS_DIR}"/*
 }

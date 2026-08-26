@@ -16,6 +16,10 @@ load_secrets() {
   [ -r "${SUPREME_SECRETS_DIR}/postgres-password" ] || die "No DB password at ${SUPREME_SECRETS_DIR}/postgres-password — run install.sh first."
   SUPREME_TOKEN_SECRET="$(cat "${SUPREME_SECRETS_DIR}/token-secret")"
   POSTGRES_PASSWORD="$(cat "${SUPREME_SECRETS_DIR}/postgres-password")"
+  # § live-confirmed fix — an already-installed box running update.sh (never install.sh
+  # again) needs this minted too; see ensure_driver_secret_encryption_key's own doc
+  # comment for why this can't just wait for persist_secrets() to run again.
+  ensure_driver_secret_encryption_key
 }
 
 load_answers() {
