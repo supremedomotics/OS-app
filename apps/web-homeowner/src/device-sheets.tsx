@@ -42,6 +42,8 @@ export function DeviceSheet({ device, onClose, roomName, devMode = false, onRemo
         <VacuumSheet device={device} />
       ) : caps.includes("media") ? (
         <MediaSheet device={device} />
+      ) : caps.includes("sensor") ? (
+        <SensorSheet device={device} />
       ) : (
         <SwitchSheet device={device} />
       )}
@@ -184,6 +186,23 @@ function SwitchSheet({ device }: { device: Device }) {
       <button className="big-action" onClick={() => { const n = !on; setOn(n); void cmd(device.id, { capability: "onoff", action: n ? "on" : "off" } as CapabilityCommand); }}>
         {on ? "Turn off" : "Turn on"}
       </button>
+    </>
+  );
+}
+
+// ── Sensor ──────────────────────────────────────────────────────────────────────
+/** § Correctness Fix — `sensor` is read-only (READONLY_CAPABILITIES,
+ * `@supreme/domain-model`): there is no command a sensor-only device can honor, so
+ * this renders a plain readout with no button/toggle of any kind. Falling through to
+ * {@link SwitchSheet} here (the previous behavior) rendered a "Turn on/off" control
+ * that issued an `onoff` command no sensor-only device has a capability for — a
+ * fabricated control, never a real one (§ Never fabricate a capability). */
+function SensorSheet({ device }: { device: Device }) {
+  const s = (device.state as Record<string, { value?: number; unit?: string; measure?: string }>).sensor;
+  return (
+    <>
+      <Title name={device.name} status={s?.measure ? `${s.measure[0]!.toUpperCase()}${s.measure.slice(1)}` : "Sensor"} />
+      <div className="readout">{s?.value ?? "—"} {s?.unit ?? ""}</div>
     </>
   );
 }

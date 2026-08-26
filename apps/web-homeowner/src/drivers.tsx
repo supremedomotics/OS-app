@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, StatusDot } from "@supreme/aureon-web";
+import { useLive, type DriverConnectionState } from "./live.js";
 import {
   type CasambiDiagnostics,
+  type CasambiNameSyncResult,
   type CasambiTestConnectionResult,
   type CasambiUdpPacketTrace,
   connectDriver,
@@ -21,6 +23,7 @@ import {
   type ReceiveCertification,
   setDriverConfig,
   setDriverEnabled,
+  syncCasambiNamesFromCloud,
   testCasambiLocalConnection,
   uninstallDriver,
   updateDriverByKey,
@@ -75,11 +78,36 @@ export function statusLabel(d: DriverEntry, connected?: boolean | null): { text:
   return { text: "Active", cls: "ok" };
 }
 
+/** § Realtime State Architecture — command state ("connecting"/"disconnecting") is never
+ * shown as equivalent to the confirmed outcome; each has its own label/class so the UI
+ * can never claim "Connected" before the backend has actually said so. */
+const DRIVER_CONNECTION_LABEL: Record<DriverConnectionState, { text: string; cls: string }> = {
+  connecting: { text: "Connecting…", cls: "pending" },
+  connected: { text: "Connected", cls: "ok" },
+  disconnecting: { text: "Disconnecting…", cls: "pending" },
+  disconnected: { text: "Disconnected", cls: "err" },
+  error: { text: "Error", cls: "err" },
+};
+
+/** Merges the driver's install/enable/error facts with whatever the realtime layer
+ * currently knows about its LIVE connection state, preferring the live signal once one
+ * exists (§16 Initial State + Realtime State: initial snapshot until the first event,
+ * the event thereafter — never both fighting for the same badge). */
+export function liveStatusLabel(d: DriverEntry, live: DriverConnectionState | undefined, connected?: boolean | null): { text: string; cls: string } {
+  if (!d.installed) return { text: "Not installed", cls: "off" };
+  if (!d.enabled) return { text: "Disabled", cls: "off" };
+  if (live) return DRIVER_CONNECTION_LABEL[live];
+  return statusLabel(d, connected);
+}
+
 function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEntry; expanded: boolean; onToggle: () => void; onChanged: () => void }) {
   // Real connection state, not just install/enable — see `statusLabel`'s doc comment.
   // Only fetched for drivers where it's meaningful (installed + enabled); "Not
   // installed"/"Disabled" is already the honest, complete answer without a health call.
+  // This REST fetch is the INITIAL snapshot only (§16) — `useLive()`'s driverStates below
+  // is what keeps the badge current afterward, without a refresh or remount.
   const [connected, setConnected] = useState<boolean | null | undefined>(undefined);
+  const { driverStates } = useLive();
   useEffect(() => {
     if (!driver.installed || !driver.enabled || !driver.installedId) return;
     let cancelled = false;
@@ -90,7 +118,8 @@ function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEn
       cancelled = true;
     };
   }, [driver.installedId, driver.installed, driver.enabled]);
-  const s = statusLabel(driver, connected);
+  const live = driver.installedId ? driverStates[driver.installedId]?.state : undefined;
+  const s = liveStatusLabel(driver, live, connected);
   return (
     <div className={`drv-row${expanded ? " open" : ""}`}>
       <button className="drv-head" onClick={onToggle}>
@@ -113,6 +142,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const [schema, setSchema] = useState<DriverConfigField[]>(driver.configSchema);
   const [values, setValues] = useState<Record<string, unknown>>(driver.config ?? {});
   const [health, setHealth] = useState<DriverHealth | null>(null);
+  const { driverStates, applyDriverState } = useLive();
   const [logs, setLogs] = useState<{ ts: string; level: string; message: string }[]>([]);
 
   useEffect(() => {
@@ -195,8 +225,14 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           <>
             {driver.updateAvailable && <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>}
             {has("enable") && <button disabled={busy} onClick={() => run(() => setDriverEnabled(id, !driver.enabled), driver.enabled ? "Disabled" : "Enabled")}>{driver.enabled ? "Disable" : "Enable"}</button>}
-            {isProtocol && has("connect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, true), "Connect requested")}>Connect</button>}
-            {isProtocol && has("disconnect") && <button disabled={busy} onClick={() => run(() => connectDriver(id, false), "Disconnect requested")}>Disconnect</button>}
+            {/* § Realtime State Architecture — the button click sets an immediate optimistic
+                "connecting"/"disconnecting" (§10, instant feedback for the request itself),
+                but "Connected"/"Disconnected" only ever comes from the real driverState
+                event the backend publishes on confirmation (see liveStatusLabel/badge below
+                and installer-context.ts's connectDriver()/disconnectDriver()) — never from
+                this click handler alone. */}
+            {isProtocol && has("connect") && <button disabled={busy} onClick={() => { applyDriverState(id, "connecting"); void run(() => connectDriver(id, true), "Connect requested"); }}>Connect</button>}
+            {isProtocol && has("disconnect") && <button disabled={busy} onClick={() => { applyDriverState(id, "disconnecting"); void run(() => connectDriver(id, false), "Disconnect requested"); }}>Disconnect</button>}
             {has("uninstall") && <button className="danger" disabled={busy} onClick={() => run(() => uninstallDriver(id), "Uninstalled")}>Uninstall</button>}
           </>
         )}
@@ -208,20 +244,42 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           <h4>Configuration</h4>
           {driver.protocols.includes("knx") && (
             <KnxGatewayDiscoveryPanel
+              // § live-confirmed fix — `gw.individualAddress` is the GATEWAY's own KNX
+              // identity (what SEARCH_RESPONSE reports about the interface itself), never
+              // a free address for a client to claim. Auto-filling "Physical address"
+              // with it guarantees a collision the moment this hub tries to tunnel in —
+              // live-confirmed on a real interface: the tunnel connection still reports
+              // "connected", but the interface silently stops forwarding real bus
+              // telegrams to a client sharing its own address, indistinguishable from
+              // "nothing is on the bus" without a bus monitor to compare against. Host
+              // and port genuinely describe the selected gateway, so those still apply;
+              // the installer's own physical address (already typed, or left for them to
+              // pick from the interface's own tunnelling address pool in ETS) is untouched.
               onSelect={(gw) => setValues((cur) => ({
                 ...cur,
                 host: gw.address,
                 port: gw.port,
-                individualAddress: gw.individualAddress,
               }))}
             />
+          )}
+          {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "cloud" && (
+            <p className="help">
+              The Casambi Cloud account (API key, network admin email/password) is configured
+              once for this deployment and is never entered here — only which network this job's
+              fixtures live in (below, optional).
+            </p>
           )}
           {driver.protocols.includes("casambi") &&
             visibleCasambiConfigSchema(schema, values).map((f) => (
               <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
             ))}
           {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "local" && (
-            <CasambiLocalGatewayPanel values={values} />
+            <CasambiLocalGatewayPanel
+              driverId={id}
+              schema={schema}
+              values={values}
+              onChange={(key, v) => setValues((cur) => ({ ...cur, [key]: v }))}
+            />
           )}
           {!driver.protocols.includes("casambi") &&
             schema.map((f) => (
@@ -243,11 +301,39 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           Health), driver-level rather than per-device. */}
       {driver.installed && driver.protocols.includes("casambi") && <CasambiDiagnosticsPanel driverId={id} />}
 
+      {/* § Realtime State Architecture — the live connection-state badge, driven entirely
+          by driverState WS events (falls back to nothing until the first one arrives;
+          `health` below remains the separate, REST-only config/verdict snapshot). */}
+      {isProtocol && driverStates[id]?.state && (
+        <div className="drv-health">
+          <span className={`drv-badge ${DRIVER_CONNECTION_LABEL[driverStates[id]!.state].cls}`}>
+            {DRIVER_CONNECTION_LABEL[driverStates[id]!.state].text}
+          </span>
+          {driverStates[id]?.error && <span className="err"> · {driverStates[id]!.error}</span>}
+        </div>
+      )}
+
       {/* Health */}
       {health && (
         <div className="drv-health">
           <span className={`drv-badge ${health.verdict === "healthy" ? "ok" : health.verdict === "error" ? "err" : "off"}`}>{String(health.verdict)}</span>
-          {health.configComplete === false && <span className="muted"> · needs configuration ({(health.missing as string[] | undefined)?.join(", ")})</span>}
+          {health.configComplete === false && (() => {
+            const missing = (health.missing as string[] | undefined) ?? [];
+            // § Casambi fleet-wide env-var default — apiKey/email/password never render as fields
+            // here (see CASAMBI_BACKEND_ONLY_KEYS), so telling an installer "apiKey is required"
+            // points at a control that doesn't exist. Missing here means the deployment itself has
+            // no SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD set — an admin-facing fact, not something
+            // fixable from this screen.
+            const casambiCredsMissing = driver.protocols.includes("casambi") && missing.some((m) => CASAMBI_BACKEND_ONLY_KEYS.has(m));
+            const shown = missing.filter((m) => !CASAMBI_BACKEND_ONLY_KEYS.has(m));
+            return (
+              <span className="muted">
+                {" · needs configuration"}
+                {shown.length > 0 && ` (${shown.join(", ")})`}
+                {casambiCredsMissing && " — this deployment has no Casambi Cloud account configured (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); contact your system administrator"}
+              </span>
+            );
+          })()}
           {health.connected === true && <span className="muted"> · connected</span>}
           {typeof health.connectError === "string" && <span className="err"> · {health.connectError as string}</span>}
         </div>
@@ -386,6 +472,14 @@ function ConfigField({ field, value, onChange }: { field: DriverConfigField; val
 
 // ── Casambi Driver Refactor — Foundation: Driver Setup Wizard + Local Gateway settings ──────
 const CASAMBI_CLOUD_ONLY_KEYS = new Set(["apiKey", "email", "password", "networkId"]);
+// § Casambi fleet-wide env-var default — the Casambi Cloud ACCOUNT (API key, network admin
+// email/password) is a deployment-wide credential (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD, set
+// once by whoever provisions the hub), never something an installer or homeowner types in — so
+// these three never render as form fields, in either Cloud mode or Local Gateway's optional
+// Cloud name-sync panel. `networkId` stays visible/editable: unlike the account credentials, it
+// identifies which Casambi NETWORK this specific job's fixtures live in, which genuinely does
+// vary per installation and has no deployment-wide default.
+const CASAMBI_BACKEND_ONLY_KEYS = new Set(["apiKey", "email", "password"]);
 const CASAMBI_LOCAL_ONLY_KEYS = new Set([
   "gatewayIp",
   "restPort",
@@ -404,9 +498,10 @@ const CASAMBI_LOCAL_ONLY_KEYS = new Set([
  * shows EXACTLY the pre-refactor Casambi fields, unchanged; picking Local Gateway shows the new
  * fields instead. Never both at once, never neither.
  */
-function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<string, unknown>): DriverConfigField[] {
+export function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<string, unknown>): DriverConfigField[] {
   const connectionType = String(values.connectionType ?? "cloud");
   return schema.filter((f) => {
+    if (CASAMBI_BACKEND_ONLY_KEYS.has(f.key)) return false;
     if (CASAMBI_CLOUD_ONLY_KEYS.has(f.key)) return connectionType !== "local";
     if (CASAMBI_LOCAL_ONLY_KEYS.has(f.key)) return connectionType === "local";
     return true;
@@ -483,10 +578,21 @@ function CasambiTestConnectionReport({ res }: { res: CasambiTestConnectionResult
  *    instant (a unit appears as its first notification arrives, since no REST device-listing
  *    endpoint exists to enumerate from), but it requires no manual device creation at all.
  */
-function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> }) {
-  const [busy, setBusy] = useState<"discover" | "test" | null>(null);
+function CasambiLocalGatewayPanel({
+  driverId,
+  schema,
+  values,
+  onChange,
+}: {
+  driverId: string;
+  schema: DriverConfigField[];
+  values: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const [busy, setBusy] = useState<"discover" | "test" | "sync" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [result, setResult] = useState<CasambiTestConnectionResult | null>(null);
+  const [syncResult, setSyncResult] = useState<CasambiNameSyncResult | null>(null);
 
   async function discover() {
     setBusy("discover");
@@ -531,6 +637,26 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
     }
   }
 
+  async function syncNames() {
+    setBusy("sync");
+    setNote(null);
+    setSyncResult(null);
+    try {
+      const res = await syncCasambiNamesFromCloud(driverId);
+      setSyncResult(res);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Name sync failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Only networkId is ever shown here — apiKey/email/password are the deployment-wide Casambi
+  // Cloud account (§ Casambi fleet-wide env-var default) and never render as a field, in Cloud
+  // mode or here. Used ONLY for the one-time name sync below; never touches Local UDP, never
+  // becomes a live connection.
+  const cloudSyncFields = schema.filter((f) => f.key === "networkId");
+
   return (
     <div className="drv-field" style={{ marginBottom: 14 }}>
       <span className="lbl">Lithernet Gateway</span>
@@ -544,6 +670,39 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
       </div>
       {note && <p className="muted">{note}</p>}
       {result && <CasambiTestConnectionReport res={result} />}
+      {cloudSyncFields.length > 0 && (
+        <div className="drv-config" style={{ marginTop: 14 }}>
+          <span className="lbl">Cloud name sync (optional)</span>
+          <p className="help">
+            The Lithernet Gateway's own UDP/REST protocol has no field for a fixture's real name —
+            checked against every locally-reachable interface (UDP, the full WebAPI, the web UI,
+            .ceg export, the Diagnostics console). Nothing here changes how devices are discovered
+            or controlled — that stays on Local UDP, unconditionally.
+          </p>
+          <p className="help">
+            Uses this deployment's Casambi Cloud account — configured once, centrally, never
+            entered here. Just pick which network this job's fixtures live in (optional; only
+            needed if the account manages more than one), then click "Sync names from Cloud."
+          </p>
+          {cloudSyncFields.map((f) => (
+            <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => onChange(f.key, v)} />
+          ))}
+          <p className="help">If you set a network id, click "Save configuration" below first — the sync reads the saved value, not what's typed above.</p>
+          <div className="drv-actions" style={{ marginTop: 8 }}>
+            <button type="button" disabled={busy !== null} onClick={() => void syncNames()}>
+              {busy === "sync" ? "Syncing…" : "Sync names from Cloud"}
+            </button>
+          </div>
+          {syncResult && (
+            <p className="muted">
+              Matched {syncResult.matched} of {syncResult.total} Cloud fixture{syncResult.total === 1 ? "" : "s"} to
+              already-discovered devices{syncResult.networkName ? ` in "${syncResult.networkName}"` : ""}.
+              {syncResult.matched < syncResult.total &&
+                " A unit not yet discovered locally (no NotifyControlValues packet received yet) can't be named until it appears."}
+            </p>
+          )}
+        </div>
+      )}
       <CasambiDiscoveryExplainer />
     </div>
   );

@@ -55,6 +55,17 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   }
 }
 
+// Carries the real HTTP status so callers (e.g. KNX job polling) can tell a definitive
+// "this resource genuinely doesn't exist" (404) apart from a transient failure (network
+// blip, 5xx) that shouldn't be treated the same way — see knx-discovery-workspace.tsx's
+// poll() for why this distinction matters.
+export class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
 export interface SetupStatus {
   setupRequired: boolean;
   systemName: string;
@@ -72,6 +83,7 @@ export async function fetchSetupStatus(): Promise<SetupStatus> {
 
 export interface SetupInput {
   username: string;
+  email: string;
   password: string;
   confirmPassword: string;
   systemName: string;
@@ -283,7 +295,7 @@ export interface KnxImportResult {
   created: { name: string; room: string | null; capabilities: string[] }[];
 }
 async function postKnxImport(body: Record<string, string>): Promise<KnxImportResult> {
-  const res = await authed("/v1/commissioning/import/knx", { method: "POST", body: JSON.stringify(body) });
+  const res = await authed("/v1/commissioning/import/knx", { method: "POST", body: JSON.stringify(body), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
   if (!res.ok) throw new Error(await errorMessage(res, "Import failed"));
   return (await res.json()) as KnxImportResult;
 }
@@ -475,6 +487,20 @@ export async function discoverCasambiLocalGateway(): Promise<CasambiNotImplement
   return (await res.json()) as CasambiNotImplementedResult & { gateways: unknown[] };
 }
 
+/** § Casambi Local Gateway — one-time Cloud name sync (Local UDP stays the only live transport;
+ * this is a REST-only, no-WebSocket fetch of real fixture names from the account's own Cloud
+ * credentials, reused from the same apiKey/email/password/networkId fields Cloud mode has). */
+export interface CasambiNameSyncResult {
+  matched: number;
+  total: number;
+  networkName: string | null;
+}
+export async function syncCasambiNamesFromCloud(driverId: string): Promise<CasambiNameSyncResult> {
+  const res = await authed(`/v1/drivers/${driverId}/casambi/sync-names`, { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Name sync failed."));
+  return (await res.json()) as CasambiNameSyncResult;
+}
+
 // ── Supreme KNX Unified Device Intelligence — Discovery Queue (authenticated) ─────
 // Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
 // invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines
@@ -535,9 +561,104 @@ export interface KnxDiscoverySummary {
  * -> Room Assignment -> Duplicate Detection -> Binding Engine) — the same backend used
  * by Driver Settings, reused as-is; this is only the client entry point for it. */
 export async function knxDiscoveryQueue(ets?: { content?: string; knxproj?: string; password?: string }): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
-  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify(ets ?? {}) });
+  const res = await authed("/v1/commissioning/knx/queue", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
   if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
   return (await res.json()) as { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary };
+}
+
+// ── Non-blocking counterpart (§ Pass 11.2) — same inputs, returns a jobId immediately
+// instead of awaiting the whole parse/synthesize/classify pipeline on this request.
+// This is the path the production "Discover devices" button uses; `knxDiscoveryQueue`
+// above is kept only for internal/test callers (see knx-installer-workflow.e2e.test.ts).
+export type KnxImportJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type KnxImportJobStage = "queued" | "parse_and_synthesize" | "complete";
+export interface KnxImportJob {
+  jobId: string;
+  status: KnxImportJobStatus;
+  stage: KnxImportJobStage;
+  progress: number;
+  startedAt: string;
+  completedAt: string | null;
+  error: string | null;
+  result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
+}
+// § Chunked KNX upload (§ live-confirmed fix) — a real installer network can sustain
+// only a few KB/s for a large POST body (confirmed via a live packet capture: regular
+// retransmissions roughly every 300ms), which makes a single giant multipart upload
+// unreliable no matter how generous the timeout — one lost segment anywhere in a 10MB
+// body costs the ENTIRE request. Splitting the file into small chunks this function
+// sends (and retries) independently means a bad connection costs one slow chunk, not
+// the whole transfer — and gives real progress instead of an opaque "uploading…" for
+// however many minutes it takes. 256KB keeps a single chunk's worst-case retry cost
+// low even at a genuinely bad few-KB/s rate, without so many chunks that per-request
+// overhead (auth header, TLS reuse) dominates.
+export const KNX_UPLOAD_CHUNK_BYTES = 256 * 1024;
+const KNX_UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
+const KNX_UPLOAD_CHUNK_MAX_RETRIES = 6;
+
+async function uploadKnxprojChunked(file: File, password: string | undefined, onProgress?: (sentChunks: number, totalChunks: number) => void): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
+  const totalChunks = Math.max(1, Math.ceil(file.size / KNX_UPLOAD_CHUNK_BYTES));
+  const initRes = await authed("/v1/commissioning/knx/upload/init", { method: "POST", body: JSON.stringify({ totalChunks }) });
+  if (!initRes.ok) throw new Error(await errorMessage(initRes, "Could not start the upload."));
+  const { uploadId } = (await initRes.json()) as { uploadId: string };
+
+  for (let index = 0; index < totalChunks; index++) {
+    const chunk = file.slice(index * KNX_UPLOAD_CHUNK_BYTES, (index + 1) * KNX_UPLOAD_CHUNK_BYTES);
+    let lastError: unknown;
+    let sent = false;
+    for (let attempt = 0; attempt < KNX_UPLOAD_CHUNK_MAX_RETRIES && !sent; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 15_000)));
+      try {
+        const res = await authed(`/v1/commissioning/knx/upload/${uploadId}/chunk/${index}`, {
+          method: "POST",
+          body: chunk,
+          timeoutMs: KNX_UPLOAD_CHUNK_TIMEOUT_MS,
+          headers: { "content-type": "application/octet-stream" },
+        });
+        if (!res.ok) throw new Error(await errorMessage(res, `Chunk ${index + 1} of ${totalChunks} failed.`));
+        sent = true;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (!sent) throw lastError instanceof Error ? lastError : new Error(`Chunk ${index + 1} of ${totalChunks} failed after ${KNX_UPLOAD_CHUNK_MAX_RETRIES} attempts.`);
+    onProgress?.(index + 1, totalChunks);
+  }
+
+  const completeRes = await authed(`/v1/commissioning/knx/upload/${uploadId}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ password }),
+    timeoutMs: KNX_UPLOAD_CHUNK_TIMEOUT_MS,
+  });
+  if (!completeRes.ok) throw new Error(await errorMessage(completeRes, "Could not finalize the upload."));
+  return (await completeRes.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
+}
+
+/**
+ * `knxprojFile` (a real `.knxproj` upload) now travels as a series of small chunked
+ * requests (see {@link uploadKnxprojChunked}) — never one giant single-shot body,
+ * which live testing proved unreliable on a genuinely slow/lossy connection regardless
+ * of timeout. `content` (pasted CSV/XML text) stays small plain JSON — no reason to
+ * change it; it was never the thing that was actually failing.
+ */
+export async function knxDiscoveryQueueJobStart(
+  ets?: { content?: string; knxprojFile?: File; password?: string },
+  onUploadProgress?: (sentChunks: number, totalChunks: number) => void,
+): Promise<{ jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage }> {
+  if (ets?.knxprojFile) return uploadKnxprojChunked(ets.knxprojFile, ets.password, onUploadProgress);
+  const res = await authed("/v1/commissioning/knx/queue/job", { method: "POST", body: JSON.stringify(ets ?? {}), timeoutMs: ETS_IMPORT_TIMEOUT_MS });
+  if (!res.ok) throw new Error(await errorMessage(res, "Discovery failed."));
+  return (await res.json()) as { jobId: string; status: KnxImportJobStatus; stage: KnxImportJobStage };
+}
+export async function knxDiscoveryQueueJobStatus(jobId: string): Promise<KnxImportJob> {
+  const res = await authed(`/v1/commissioning/knx/queue/job/${encodeURIComponent(jobId)}`, { method: "GET" });
+  if (!res.ok) throw new HttpError(res.status, await errorMessage(res, "Could not check import job status."));
+  return (await res.json()) as KnxImportJob;
+}
+export async function knxDiscoveryQueueJobCancel(jobId: string): Promise<{ jobId: string; status: "cancelled" }> {
+  const res = await authed(`/v1/commissioning/knx/queue/job/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not cancel import job."));
+  return (await res.json()) as { jobId: string; status: "cancelled" };
 }
 export interface KnxApprovalResult {
   device: { id: string; name: string };
@@ -546,10 +667,20 @@ export interface KnxApprovalResult {
 }
 /** Commission + bind + validate in one action (§ Approval) — rolls back automatically
  * server-side on any failure; nothing here duplicates that logic. */
-export async function approveKnxDevice(input: { device: KnxUnifiedDevice; name: string; roomId?: string; roomNameHint?: string; plans: KnxBindingPlan[] }): Promise<KnxApprovalResult> {
+export async function approveKnxDevice(input: { device: KnxUnifiedDevice; name: string; roomId?: string; roomNameHint?: string; plans: KnxBindingPlan[]; force?: boolean; shadingKind?: "updown" | "openclose" }): Promise<KnxApprovalResult> {
   const res = await authed("/v1/commissioning/knx/approve", { method: "POST", body: JSON.stringify(input) });
   if (!res.ok) throw new Error(await errorMessage(res, "Approval failed."));
   return (await res.json()) as KnxApprovalResult;
+}
+
+/** § live-confirmed fix — bulk cleanup for bindings orphaned before a device delete
+ * cleaned up after itself (every device deleted before that fix left its bus binding
+ * behind forever). Removes every binding whose device no longer exists in one action,
+ * instead of hitting the same "stale binding" conflict on every re-approval one at a time. */
+export async function cleanupOrphanedKnxBindings(): Promise<{ removedBindings: number; removedDevices: number }> {
+  const res = await authed("/v1/commissioning/bindings/cleanup-orphaned", { method: "POST", body: JSON.stringify({}) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Cleanup failed."));
+  return (await res.json()) as { removedBindings: number; removedDevices: number };
 }
 
 // ── Licensing (authenticated) ────────────────────────────────────────────────────
@@ -601,15 +732,52 @@ export async function devIssueLicense(sku: string): Promise<unknown> {
 }
 
 // ── Automations (authenticated) ─────────────────────────────────────────────────
-async function authed(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      authorization: `Bearer ${client.accessToken ?? ""}`,
-      ...(init?.body ? { "content-type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+// Default per-request budget — same reasoning as SupremeClient's own (§ resilience):
+// a hung backend call must never leave a page stuck on "Loading…" forever with no
+// error. ETS import routes carry a large multipart file (or base64 JSON) body over a
+// real network upload, so they get a longer budget rather than being cut off
+// mid-transfer on a slow LAN.
+//
+// § Live-confirmed (real hub, journalctl-traced) — a real ~10MB .knxproj upload was
+// still actively transferring, not stalled, when this timeout's own AbortController
+// fired at 90s and killed the connection mid-stream (server saw "Premature close"
+// exactly at that mark, after zero progress for the preceding ~109s of otherwise-
+// instant handler stages). 90s assumed a fast LAN; a real installer network (WiFi at
+// distance, VPN, a modest hub uplink) can genuinely need much longer to move several
+// megabytes — the async job pipeline this feeds is already bounded far more generously
+// (the import worker's own 5-minute cap, see installer-context.ts), so the upload leg
+// was the tightest, least justified limit in the whole pipeline. 10 minutes covers a
+// realistically slow real-world link for a realistically large real ETS project
+// without silently masking a genuine hang (the job-processing bounds below this are
+// unchanged and still fail fast on an actually-stuck import).
+const DEFAULT_TIMEOUT_MS = 20_000;
+const ETS_IMPORT_TIMEOUT_MS = 600_000;
+
+async function authed(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init ?? {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${baseUrl}${path}`, {
+      ...rest,
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${client.accessToken ?? ""}`,
+        // FormData bodies (native file uploads) must NOT get a manual content-type —
+        // the browser sets `multipart/form-data; boundary=...` itself, and overriding
+        // it here would break the boundary and corrupt the upload.
+        ...(rest.body && !(rest.body instanceof FormData) ? { "content-type": "application/json" } : {}),
+        ...rest.headers,
+      },
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new HttpError(0, `Request timed out after ${timeoutMs / 1000}s. Check your connection and try again.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

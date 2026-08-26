@@ -138,6 +138,24 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
     });
   });
 
+  it("getCapabilityConfig reports colorModes from the binding's own DPT (§ live-confirmed fix — this is the driver actually bound in production, not just the discovery-time driver)", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+
+    const cct = "device-knx-cct" as DeviceId;
+    await driver.bind({ deviceId: cct, capability: "color", address: "5/1/5", config: { dpt: "DPT7.600" } });
+    expect(driver.getCapabilityConfig(cct, "color")).toEqual({ colorModes: { rgb: false, cct: true } });
+
+    const rgb = "device-knx-rgb2" as DeviceId;
+    await driver.bind({ deviceId: rgb, capability: "color", address: "1/5/0", config: { dpt: "DPT232.600" } });
+    expect(driver.getCapabilityConfig(rgb, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
+
+    // Never fabricated for a capability this device isn't bound for, or a device with no binding at all.
+    expect(driver.getCapabilityConfig(cct, "brightness")).toBeNull();
+    expect(driver.getCapabilityConfig("nope" as DeviceId, "color")).toBeNull();
+  });
+
   it("rejects a command for an unbound device", async () => {
     const bus = new FakeKnxBus();
     const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });

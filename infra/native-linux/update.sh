@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
 # SupremeOS native-linux — update.sh
 #
-# Pulls the latest workspace code from wherever this script is being run from, rebuilds it,
-# regenerates config from the current templates/answers, and restarts only the SupremeOS-
-# owned services (never Postgres/Redis/Mosquitto, which don't need restarting for an
-# application code update, and never touches infra/hub-compose/'s Docker deployment).
+# § Transactional updates: backup -> install -> migration -> verification -> switch active
+# version -> cleanup. Any stage failing after the backup triggers automatic rollback —
+# previous binaries (via the release symlink), previous config, and previous database are
+# all restored, and the controller ends the run on the SAME version it started on, running.
+# The transactional backup is deleted only after the update is confirmed healthy — never
+# before, and never left behind indefinitely on success either.
 #
 # Usage:
-#   sudo ./update.sh              # rebuild, verify, restart
-#   sudo ./update.sh --no-verify  # skip typecheck/test (equivalent to SUPREME_SKIP_TESTS=1)
+#   sudo ./update.sh                                   update from this script's own tree
+#   sudo ./update.sh --offline /path/to/release.tar.zst update fully offline from a local
+#                                                        release package (no network needed)
+#   sudo ./update.sh --no-verify                        source mode only: skip typecheck/test
+#                                                        (SUPREME_SKIP_TESTS=1) — release mode
+#                                                        never ran them anyway
 
 set -euo pipefail
+# § Bug fix (live deployment) — without errtrace, the `trap ... ERR` set in main() below
+# does not fire for a failure inside a called function (e.g. stage_and_switch_release's
+# own `:?` guard) — a failure there was observed to fall straight back to the shell prompt
+# instead of triggering rollback_update, defeating this script's own documented
+# transactional-update guarantee. `set -E` makes the ERR trap inherited by functions too.
+set -E
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -18,9 +30,17 @@ source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/deploy-steps.sh
 source "${SCRIPT_DIR}/lib/deploy-steps.sh"
 
-if [ "${1:-}" = "--no-verify" ]; then
-  SUPREME_SKIP_TESTS=1
-fi
+SUPREME_OFFLINE=0
+OFFLINE_PACKAGE=""
+NO_VERIFY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --offline) SUPREME_OFFLINE=1; OFFLINE_PACKAGE="${2:?Usage: update.sh --offline <path-to-release-package.tar.zst>}"; shift 2 ;;
+    --no-verify) NO_VERIFY=1; shift ;;
+    *) die "Unknown argument: $1" ;;
+  esac
+done
+[ "$NO_VERIFY" = "1" ] && SUPREME_SKIP_TESTS=1
 
 render_config() {
   log_step "Re-rendering configuration from current templates"
@@ -28,12 +48,24 @@ render_config() {
   chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/gateway.env"
   chmod 0640 "${SUPREME_CONFIG_DIR}/gateway.env"
   render_template "${SCRIPT_DIR}/config/nats.conf.template" "${SUPREME_CONFIG_DIR}/nats.conf"
+  # § Bug fix (Phase 2 runtime investigation) — see install.sh's configure_nats() for the
+  # full evidence; same fix applied here since update.sh re-renders this file independently.
+  chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/nats.conf"
+  chmod 0640 "${SUPREME_CONFIG_DIR}/nats.conf"
   render_template "${SCRIPT_DIR}/config/Caddyfile.template" /etc/caddy/Caddyfile
+  chown root:root /etc/caddy/Caddyfile
+  chmod 0644 /etc/caddy/Caddyfile
   caddy validate --config /etc/caddy/Caddyfile || die "Regenerated Caddyfile failed validation — see caddy's own error above. Old config left in place is NOT guaranteed; check /etc/caddy/Caddyfile before relying on it."
   render_template "${SCRIPT_DIR}/systemd/supreme-gateway.service" /etc/systemd/system/supreme-gateway.service
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
   render_template "${SCRIPT_DIR}/systemd/supreme-nats.service" /etc/systemd/system/supreme-nats.service
-  cp "${SUPREME_REPO_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
+  # § Re-provisioned on every update (not just fresh installs) so a host installed before this
+  # feature existed picks up the sudoers rule the next time it updates — never requires a manual
+  # step on an existing box.
+  configure_update_sudoers
+  # § Bug fix (Phase 2 runtime investigation) — supreme-lan.service is now a real template
+  # (see its own header comment); render it like every sibling unit, never `cp` it raw.
+  render_template "${SUPREME_RELEASE_DIR}/infra/systemd/supreme-lan.service" /etc/systemd/system/supreme-lan.service
   if systemd_is_live; then systemctl daemon-reload; fi
 }
 
@@ -41,23 +73,17 @@ restart_services() {
   log_step "Restarting SupremeOS-owned services"
   # Order matches dependency direction: the bus/broker before the services that talk to
   # it, the Gateway last (it's the one thing every client actually connects to).
-  systemctl_restart supreme-nats
+  # § NATS deployment contract — a bare systemctl_restart would only prove "systemd
+  # accepted the restart command", not "nats-server is the pinned version, at the
+  # canonical executable, actually listening". nats_ensure_ready() (lib/common.sh) is the
+  # ONE authoritative validate/repair/start/readiness mechanism, reused here so an update
+  # can never accidentally leave NATS broken (self-heals it if it was) — see requirement:
+  # "update.sh must not accidentally break NATS".
+  nats_ensure_ready
   systemctl_restart supreme-commissioning
   systemctl_restart supreme-lan
   systemctl_restart supreme-gateway
   if systemd_is_live; then systemctl reload caddy 2>/dev/null || systemctl restart caddy; fi
-}
-
-main() {
-  require_root
-  load_answers
-  sync_repo
-  build_workspace
-  verify_workspace
-  render_config
-  restart_services
-  wait_for_health
-  log_step "Update complete"
 }
 
 wait_for_health() {
@@ -74,7 +100,137 @@ wait_for_health() {
     fi
     sleep 2
   done
-  log_warn "Gateway did not report healthy within 120s after update. Run: sudo ./health-check.sh and sudo ./logs.sh supreme-gateway"
+  log_warn "Gateway did not report healthy within 120s after update."
+}
+
+# § Automatic rollback (requirement 3/4): restores the previous binaries (atomic symlink
+# switch back), previous database/config/data (via restore.sh --force against the backup
+# taken at the START of this run, before anything changed), then restarts services and
+# reports the post-rollback state. Never partial — either the whole rollback completes or
+# this dies loudly with exactly what's left inconsistent, never a silent half-recovery.
+rollback_update() {
+  local prev_version="$1" backup_archive="$2"
+  log_error "Update failed — rolling back to the previous known-good version."
+
+  if [ -n "$prev_version" ]; then
+    switch_active_release "$prev_version"
+  else
+    log_warn "No previous version recorded — cannot switch code back (this may have been the first-ever update on this machine)."
+  fi
+
+  if [ -n "$backup_archive" ] && [ -r "$backup_archive" ]; then
+    log_step "Restoring database/config/data from the pre-update backup"
+    "${SCRIPT_DIR}/restore.sh" --force "$backup_archive" \
+      || log_error "restore.sh reported errors during rollback — the controller may be in a degraded state. Run ./health-check.sh and inspect manually."
+  else
+    log_warn "No pre-update backup archive available — code was rolled back (if a previous version existed) but database/config were NOT restored."
+  fi
+
+  render_config
+  restart_services
+  wait_for_health
+
+  log_step "Rollback complete — the controller should now be back on ${prev_version:-its previous state}."
+  if run_runtime_verification; then
+    log_info "Post-rollback runtime verification: all checks passed."
+  else
+    log_error "Post-rollback runtime verification still reports failures (${RUNTIME_CHECK_FAILED}) — this needs manual attention. See: ./health-check.sh, ./recover.sh"
+  fi
+}
+
+main() {
+  require_root
+
+  # § Concurrency guard (non-negotiable — the UI's "Update now" trigger and an admin's own `sudo
+  # ./update.sh` over SSH must never both run at once, regardless of which one started first or
+  # how each was invoked). A non-blocking flock on a well-known path is the one guard both paths
+  # share unconditionally — the UI trigger launches this exact script via systemd-run, so it goes
+  # through this same main() and the same lock, no separate locking logic to keep in sync.
+  exec 9>"${SUPREME_UPDATE_LOCK_FILE:-/run/supremeos-update.lock}"
+  flock -n 9 || die "Another update is already running (lock: ${SUPREME_UPDATE_LOCK_FILE:-/run/supremeos-update.lock}) — refusing to run concurrently."
+
+  load_answers
+
+  local src_root
+  if [ "$SUPREME_OFFLINE" = "1" ]; then
+    log_step "Offline update from ${OFFLINE_PACKAGE}"
+    src_root="$(extract_release_tarball "$OFFLINE_PACKAGE")"
+    SUPREME_RELEASE_TARBALL="$OFFLINE_PACKAGE"
+    SUPREME_INSTALL_MODE="release"
+  else
+    src_root="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  fi
+  detect_install_mode "$src_root"
+  # § Bug fix (live deployment) — stage_and_switch_release requires SUPREME_RELEASE_VERSION
+  # (and its siblings) to already be set, but update.sh never called the one function that
+  # sets it (install.sh does, at the equivalent point — see reconstruct_runtime_context's
+  # own doc comment: "called unconditionally on every install run"). Source-mode updates
+  # hit this every time; release-mode updates happened to survive it only because
+  # install_release_artifact() (called below) also calls load_release_manifest_metadata
+  # itself — but reconstruct_runtime_context is the correct, single place for this,
+  # regardless of mode, exactly as install.sh already does it.
+  reconstruct_runtime_context "$src_root"
+
+  local prev_version
+  prev_version="$(current_release_version)"
+  log_info "Currently active version: ${prev_version:-none (first update on this machine)}."
+
+  # § Automatic backup (requirement 4) — no manual interaction, always runs, before
+  # anything about this update touches a running system.
+  log_step "Taking a pre-update backup"
+  "${SCRIPT_DIR}/backup.sh" --no-prune
+  local backup_archive
+  backup_archive="$(find "$SUPREME_BACKUP_DIR" -maxdepth 1 -name 'supremeos-backup-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
+  [ -n "$backup_archive" ] || die "backup.sh did not produce an archive — refusing to proceed with an update that has no rollback point."
+  log_info "Pre-update backup: ${backup_archive}"
+
+  # From here on, ANY failure triggers rollback — trap it rather than scattering the same
+  # rollback call after every step (and to catch a failure in a step that isn't wrapped in
+  # its own `|| die`, e.g. an unexpected error under `set -e`).
+  local rolled_back=0
+  trap 'if [ "$rolled_back" != "1" ]; then rolled_back=1; rollback_update "$prev_version" "$backup_archive"; exit 1; fi' ERR
+
+  if [ "$SUPREME_INSTALL_MODE" = "release" ]; then
+    install_release_artifact "$src_root"
+  else
+    sync_repo
+    build_workspace
+    verify_workspace
+  fi
+
+  # Switch: the atomic moment new code goes live. Migrations run automatically when the
+  # Gateway boots against the (unchanged, additive-only) database — see
+  # services/persistence/src/migrate.ts, invoked from the restarted service below.
+  stage_and_switch_release
+
+  render_config
+  restart_services
+  wait_for_health
+
+  log_step "Verifying runtime after update — staged, ordered startup verification"
+  if ! run_staged_verification "${SUPREME_RELEASE_MIGRATION_COUNT:-}" "${SUPREME_RELEASE_REQUIRED_DISK_MB:-0}" "${SUPREME_RELEASE_REQUIRED_RAM_MB:-0}" "${SUPREME_RELEASE_REQUIRED_CPU_ARCH:-}"; then
+    # § Transactional database rollback (requirement 3): a DATABASE-stage failure means
+    # migrations either failed outright or left the schema in a state this release can't
+    # run against — never leave that partially-migrated. Trigger the same rollback path
+    # as an unexpected error, deliberately (not via the ERR trap, since this is a checked
+    # failure, not an exception) — then exit non-zero.
+    release_state_record_failure "$SUPREME_RELEASE_VERSION" "$prev_version"
+    rolled_back=1
+    rollback_update "$prev_version" "$backup_archive"
+    exit 1
+  fi
+
+  trap - ERR
+  release_state_record_health "healthy"
+  log_info "Runtime verification: all stages passed."
+
+  # § Cleanup — delete the transactional backup ONLY after confirmed success (requirement
+  # 4's literal ordering), then prune old release directories beyond the retain count.
+  rm -f "$backup_archive"
+  log_info "Pre-update backup removed (update confirmed healthy): ${backup_archive}"
+  prune_old_releases
+
+  log_step "Update complete — now running $(current_release_version)."
 }
 
 main "$@"

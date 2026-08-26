@@ -28,6 +28,13 @@ main() {
   local ts work archive
   ts="$(date -u +"%Y%m%dT%H%M%SZ")"
   work="$(mktemp -d)"
+  # § Bug fix — `work` is local to main(); the EXIT trap fires once the whole SCRIPT
+  # exits, which is after main() has already returned and `work` has gone out of scope.
+  # Under `set -u` that made the trap itself die with "work: unbound variable" on every
+  # run, right after a successful backup — `${work:-}` (the same not-set-yet guard this
+  # codebase already uses throughout, e.g. lib/common.sh) makes the trap a safe no-op if
+  # `work` is ever unset when it fires, instead of promoting cleanup into a failure.
+  trap 'if [ -n "${work:-}" ]; then rm -rf "$work"; fi' EXIT
   archive="${SUPREME_BACKUP_DIR}/supremeos-backup-${ts}.tar.gz"
   mkdir -p "$SUPREME_BACKUP_DIR"
 

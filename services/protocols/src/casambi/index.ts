@@ -9,6 +9,7 @@ export {
   type CasambiDriverOptions,
   type CasambiCommonDriverOptions,
   type CasambiHealth,
+  type CasambiNameSyncResult,
 } from "./casambi-driver.js";
 export {
   HttpCasambiTransport,

@@ -175,6 +175,90 @@ describe("engine selection", () => {
     await svc.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
     expect(ex.command).toHaveBeenCalledTimes(1);
   });
+
+  it("§ Native Backend Implementation — rejects creating a new engine='ha' automation instead of silently accepting-but-never-running it", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const d = devId();
+    await expect(
+      svc.create({
+        homeId: homeId(),
+        name: "HA-compiled",
+        // @ts-expect-error — "ha" is intentionally not a valid CreateAutomationInput.engine
+        // value; this exercises assertSupportedEngine()'s runtime guard for callers that
+        // bypass the type system (e.g. a raw JSON request body).
+        engine: "ha",
+        triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+        actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+      }),
+    ).rejects.toThrow(/engine "ha" automations are not executable/);
+  });
+
+  it("rejects re-pointing an existing automation at engine='ha' via update", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const d = devId();
+    const created = await svc.create({
+      homeId: homeId(),
+      name: "Native automation",
+      triggers: [{ type: "interval", everyMinutes: 5 }],
+      actions: [{ type: "notify", level: "info", title: "tick", body: "", userId: null }],
+    });
+    // @ts-expect-error — see the create() test above.
+    await expect(svc.update(created.id, { engine: "ha" })).rejects.toThrow(/engine "ha" automations are not executable/);
+  });
+
+  it("native engine never executes a legacy, already-persisted engine='ha' row (a pre-fix row loaded from storage)", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const d = devId();
+    // Bypasses the service layer's create()/update() guard on purpose — simulates a
+    // row that predates HA's removal and is still sitting in a real database.
+    engine.setAutomations([
+      {
+        id: newId("automation") as never,
+        homeId: homeId(),
+        name: "Legacy HA automation",
+        enabled: true,
+        // @ts-expect-error — see the create() test above.
+        engine: "ha",
+        triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+        conditions: [],
+        actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+        externalRef: null,
+        aiGenerated: false,
+        tags: [],
+      },
+    ]);
+    await engine.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
+    expect(ex.command).not.toHaveBeenCalled();
+  });
+
+  it("health() reports a legacy engine='ha' automation as broken — never silently 'healthy'/'waiting'", () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const d = devId();
+    const legacy = {
+      id: newId("automation") as never,
+      homeId: homeId(),
+      name: "Legacy HA automation",
+      enabled: true,
+      engine: "ha" as never,
+      triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" as const }],
+      conditions: [],
+      actions: [{ type: "device_command" as const, deviceId: d, command: { capability: "onoff" as const, action: "toggle" as const } }],
+      externalRef: null,
+      aiGenerated: false,
+      tags: [],
+    };
+    const health = engine.health(legacy);
+    expect(health.status).toBe("broken");
+    expect(health.reason).toMatch(/Home Assistant/);
+  });
 });
 
 describe("intent actions (§ Universal Intent & Capability Engine, Phase 2)", () => {

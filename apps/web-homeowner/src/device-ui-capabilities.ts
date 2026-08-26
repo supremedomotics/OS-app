@@ -1,5 +1,5 @@
 import type { CapabilityKind, Device } from "@supreme/domain-model";
-import { colorModes, type ColorLike } from "./colormode.js";
+import { colorModesTriState, type ColorLike } from "./colormode.js";
 
 /**
  * Single source of truth for "which controls may this device's/room's UI show" (§ ADR 0017 —
@@ -44,11 +44,18 @@ export function hasCapability(capabilities: readonly { kind: string }[], kind: C
  * 0017 — populated by drivers that have adopted Capability Normalization, e.g. Casambi's
  * `colorConfigFromUnit()`, from the driver's real protocol model at discovery time, never from a
  * state snapshot). Only when a device's `color` capability carries no such config (a driver that
- * hasn't adopted structural reporting yet) does this fall back to `colorModes(colorState)`'s
+ * hasn't adopted structural reporting yet) does this fall back to `colorModesTriState(colorState)`'s
  * documented state-nullability inference — keeping every existing driver working unmodified
- * (§ Backward Compatibility). Either way, a device that HAS `color` but nothing resolved yet
- * still shows BOTH RGB and CCT (the safe default) — state/config only ever ADD information here,
- * never remove a capability-backed control.
+ * (§ Backward Compatibility).
+ *
+ * § Pass 24 (P1 — RGB intermittently visible on CCT-only KNX lights, live-confirmed) — a device
+ * that HAS `color` but whose mode is genuinely `"unknown"` (no structural config resolved yet AND
+ * no state seen yet — e.g. a freshly-bound KNX device before `SupremeKnxDriver.getCapabilityConfig`
+ * has a DPT to report, or before the first feedback telegram lands) no longer defaults to showing
+ * BOTH controls. `"unknown"` never renders as an available control (see `colormode.ts`'s tri-state
+ * doc comment for why the old "assume both" default was live-confirmed wrong). `colorModeConfirmed`
+ * keeps its existing narrower meaning — "the driver's own structural config resolved this" — a
+ * state-inferred `"supported"`/`"unsupported"` still leaves it `false`.
  */
 export function getDeviceUiCapabilities(
   capabilities: readonly CapabilityLike[],
@@ -57,13 +64,18 @@ export function getDeviceUiCapabilities(
   const colorCap = capabilities.find((c) => c.kind === "color");
   const hasColor = Boolean(colorCap);
   const structuralModes = colorCap?.config?.colorModes as { rgb: boolean; cct: boolean } | undefined;
-  const modes = !hasColor ? { rgb: false, cct: false } : structuralModes ?? colorModes(colorState);
+  const bool2tri = (v: boolean): "supported" | "unsupported" => (v ? "supported" : "unsupported");
+  const modes = !hasColor
+    ? { rgb: "unsupported" as const, cct: "unsupported" as const }
+    : structuralModes
+      ? { rgb: bool2tri(structuralModes.rgb), cct: bool2tri(structuralModes.cct) }
+      : colorModesTriState(colorState);
   return {
     colorModeConfirmed: hasColor && Boolean(structuralModes),
     showPower: hasCapability(capabilities, "onoff") || hasCapability(capabilities, "brightness") || hasColor,
     showBrightness: hasCapability(capabilities, "brightness") || hasColor,
-    showRGB: modes.rgb,
-    showCCT: modes.cct,
+    showRGB: modes.rgb === "supported",
+    showCCT: modes.cct === "supported",
     showPosition: hasCapability(capabilities, "position"),
     showClimate: hasCapability(capabilities, "temperature"),
     showFan: hasCapability(capabilities, "fan"),

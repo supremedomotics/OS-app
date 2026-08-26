@@ -30,6 +30,7 @@ import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport, buildReceiveCertificationReport, type LanForensicsInput } from "@supreme/protocols";
 import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, queryLanForensics, type LanDiagnosticsSnapshot, type LanForensicsResponse } from "@supreme/lan";
+import { resolveCasambiCloudCredentials } from "../native-driver-factory.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -248,6 +249,57 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const driver = ctx.sil.getNativeDriver("casambi");
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
       reply.send(driver.getCasambiDiagnostics());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Local Gateway — one-time Cloud name sync. Local mode's UDP/REST protocol has no
+  // field for a fixture's real name anywhere (confirmed against every locally-reachable Lithernet
+  // interface); this is the one place a Local-mode Casambi instance is allowed to reach the
+  // Casambi Cloud API, and only for this — a REST-only session (no WebSocket, no live
+  // subscription) that fetches names and immediately discards the session. Reuses the SAME
+  // apiKey/email/password/networkId config fields the driver's Cloud mode already has (they're
+  // optional, not required, when connectionType=local) — no new config surface, no new credential
+  // to manage separately from what's already there. Command/discovery/live-state stay on Local
+  // UDP unconditionally; this route can never change what transport the driver actually runs on.
+  //
+  // Credential precedence: this driver instance's own saved config first (an installer explicitly
+  // set a different Casambi account for this job), falling back to the deployment-wide
+  // SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD/NETWORK_ID env vars (config.ts's existing `secret()`
+  // helper — same `_FILE` convention as every other deployment secret) — the SAME env vars that
+  // already auto-connect Cloud mode with zero installer input (bootstrap.ts). Set once at
+  // deployment time, this makes the sync work with no typing in the UI for every hub in the
+  // fleet, while never putting a real credential in source control — see SESSION_HANDOFF.md for
+  // why a hardcoded default was explicitly rejected in favor of this.
+  app.post<{ Params: { id: string } }>("/v1/drivers/:id/casambi/sync-names", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+      const cfg = entry.config as Record<string, unknown>;
+      const fleetDefault =
+        ctx.config.casambiApiKey && ctx.config.casambiEmail && ctx.config.casambiPassword
+          ? {
+              apiKey: ctx.config.casambiApiKey,
+              email: ctx.config.casambiEmail,
+              password: ctx.config.casambiPassword,
+              ...(ctx.config.casambiNetworkId ? { networkId: ctx.config.casambiNetworkId } : {}),
+            }
+          : undefined;
+      const creds = resolveCasambiCloudCredentials(cfg, fleetDefault);
+      if (!creds) {
+        throw new SupremeError(
+          "validation_failed",
+          "Casambi Cloud API key, email, and password are required to sync names — set them on this driver, or configure SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD as a deployment-wide default.",
+        );
+      }
+      const result = await driver.syncNamesFromCloud(creds);
+      reply.send(result);
     } catch (err) {
       sendError(reply, err);
     }
@@ -717,13 +769,206 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // Non-blocking counterpart (§ Pass 11.1): same inputs, but returns a jobId immediately
+  // instead of awaiting the parse/synthesize/classify pipeline inline on the request
+  // thread — poll GET .../job/:jobId for status/result. See `startKnxImportJob` doc.
+  // ponytail: diagnostic-only lifecycle tracing (KNX_TRACE), scoped to this one route via
+  // Fastify's per-route hook options — never fires for any other route in the app, so it
+  // cannot regress unrelated tests. Each hook logs only request metadata (id/method/url/
+  // headers), never the body. Purpose: `handler_entered` above only proves the LAST stage
+  // (the handler itself) was reached — it cannot tell us whether a slow Fastify lifecycle
+  // stage (onRequest/preParsing/preValidation/preHandler, all of which run BEFORE the
+  // handler function is even invoked) is where a stuck request is actually stalling. On
+  // the next live hang, whichever KNX_TRACE line is the LAST one logged for that request's
+  // reqId identifies the exact stage Fastify itself is stuck in — remove once resolved.
+  const knxTraceHook = (stage: string) => async (req: import("fastify").FastifyRequest) => {
+    req.log.info(
+      {
+        stage: `KNX_TRACE ${stage}`,
+        reqId: req.id,
+        method: req.method,
+        url: req.url,
+        contentType: req.headers["content-type"],
+        contentLength: req.headers["content-length"],
+        transferEncoding: req.headers["transfer-encoding"],
+        remoteAddress: req.ip,
+      },
+      "knx queue/job lifecycle trace",
+    );
+  };
+
+  app.post(
+    "/v1/commissioning/knx/queue/job",
+    {
+      bodyLimit: ETS_IMPORT_BODY_LIMIT,
+      onRequest: knxTraceHook("onRequest"),
+      preParsing: knxTraceHook("preParsing"),
+      preValidation: knxTraceHook("preValidation"),
+      preHandler: knxTraceHook("preHandler"),
+    },
+    async (req, reply) => {
+    // ponytail: diagnostic timing only, to pin down the 111s-hang report against real
+    // production data — remove once the live bottleneck is confirmed and fixed for good.
+    const t0 = Date.now();
+    // § Live investigation — a real stuck request (93s) produced ZERO "knx queue/job
+    // timing" log lines, not even "authenticate". That leaves two very different
+    // possibilities indistinguishable without this line: (a) Fastify itself is still
+    // blocked receiving/parsing the large JSON body and hasn't invoked this handler at
+    // all yet, or (b) the handler started immediately and authenticate() itself is what
+    // hangs. This fires the instant the handler function body starts executing, before
+    // ANY other work — if THIS is also missing from the log on the next stuck attempt,
+    // the bottleneck is conclusively before/outside this route's own code (Fastify body
+    // parsing, or something upstream of it), not inside authenticate()/enforce().
+    req.log.info({ elapsedMs: 0, stage: "handler_entered", contentLength: req.headers["content-length"] }, "knx queue/job timing");
+    try {
+      const user = await authenticate(ctx, req);
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "authenticate" }, "knx queue/job timing");
+      await enforce(ctx, user, "device", null, "create");
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "enforce" }, "knx queue/job timing");
+
+      // § Native file upload (fixes a real browser-extension-vs-giant-base64-JSON
+      // interference bug: the same request succeeded via curl/Node but hung in the
+      // user's normal Chrome profile, and succeeded instantly in Incognito — pointing at
+      // an extension mangling the huge JSON `fetch()` body). The `.knxproj` FILE now
+      // travels as a real `multipart/form-data` part instead of a base64 JSON field,
+      // which also removes the client-side base64-encode step entirely. The `content`
+      // (pasted text) and `ets` (structured array) paths are untouched — still plain JSON.
+      let etsSource: { kind: "text"; content: string } | { kind: "knxproj"; base64: string; password?: string } | undefined;
+      let ets: { id: string; name: string; room?: string | null; description?: string | null }[] | undefined;
+      let gateway: { host: string; port?: number } | undefined;
+
+      if (req.isMultipart()) {
+        let password: string | undefined;
+        try {
+          for await (const part of req.parts()) {
+            if (part.type === "file" && part.fieldname === "knxproj") {
+              const buffer = await part.toBuffer();
+              etsSource = { kind: "knxproj", base64: buffer.toString("base64"), password };
+            } else if (part.type === "field" && part.fieldname === "password" && typeof part.value === "string") {
+              password = part.value;
+              if (etsSource?.kind === "knxproj") etsSource.password = password;
+            }
+          }
+        } catch (err) {
+          // @fastify/multipart's own oversized-file error carries statusCode 413 but isn't
+          // a SupremeError, so sendError() would otherwise flatten it to a generic 500 —
+          // the client needs a real 4xx to tell "your file is too big" from "we broke".
+          if ((err as { code?: string }).code === "FST_REQ_FILE_TOO_LARGE") {
+            throw new SupremeError("validation_failed", "the .knxproj file exceeds the 64MB upload limit");
+          }
+          throw err;
+        }
+      } else {
+        const body = req.body as {
+          ets?: unknown;
+          gateway?: { host?: unknown; port?: unknown };
+          content?: unknown;
+          knxproj?: unknown;
+          password?: unknown;
+        } | undefined;
+        ets = Array.isArray(body?.ets) ? (body!.ets as { id: string; name: string; room?: string | null; description?: string | null }[]) : undefined;
+        gateway = typeof body?.gateway?.host === "string"
+          ? { host: body.gateway.host, port: typeof body.gateway.port === "number" ? body.gateway.port : undefined }
+          : undefined;
+        etsSource = typeof body?.knxproj === "string" && body.knxproj.length > 0
+          ? { kind: "knxproj" as const, base64: body.knxproj, password: typeof body.password === "string" ? body.password : undefined }
+          : typeof body?.content === "string" && body.content.length > 0
+            ? { kind: "text" as const, content: body.content }
+            : undefined;
+      }
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "body_destructured", base64Bytes: etsSource?.kind === "knxproj" ? etsSource.base64.length : undefined }, "knx queue/job timing");
+      const job = i().startKnxImportJob({ ets, gateway, etsSource }, req.log);
+      req.log.info({ elapsedMs: Date.now() - t0, stage: "startKnxImportJob_returned", jobId: job.jobId }, "knx queue/job timing");
+      reply.code(202).send({ jobId: job.jobId, status: job.status, stage: job.stage });
+    } catch (err) {
+      sendError(reply, err);
+    }
+    },
+  );
+
+  app.get("/v1/commissioning/knx/queue/job/:jobId", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "view");
+      const { jobId } = req.params as { jobId: string };
+      const job = i().getKnxImportJob(jobId);
+      if (!job) throw new SupremeError("not_found", "no import job with that id (never started, or this gateway restarted since)");
+      reply.send(job);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Chunked KNX upload (§ live-confirmed fix — see InstallerServices
+  // .startKnxChunkedUpload's own doc comment) — an alternative to the single-shot
+  // multipart upload above for a large `.knxproj` over a real, measured-slow/lossy
+  // connection: the browser splits the file client-side and sends each piece as its
+  // own small request, retrying only the failed piece rather than the whole transfer.
+  app.post("/v1/commissioning/knx/upload/init", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const body = req.body as { totalChunks?: unknown } | undefined;
+      const totalChunks = typeof body?.totalChunks === "number" ? body.totalChunks : NaN;
+      if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+        throw new SupremeError("validation_failed", "provide a positive integer `totalChunks`");
+      }
+      const started = i().startKnxChunkedUpload(totalChunks);
+      reply.code(201).send(started);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/knx/upload/:uploadId/chunk/:index", { bodyLimit: 4 * 1024 * 1024 }, async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { uploadId, index } = req.params as { uploadId: string; index: string };
+      const i10 = Number(index);
+      if (!Number.isInteger(i10) || i10 < 0) throw new SupremeError("validation_failed", "chunk index must be a non-negative integer");
+      if (!Buffer.isBuffer(req.body)) throw new SupremeError("validation_failed", "chunk body must be raw binary (application/octet-stream)");
+      i().receiveKnxUploadChunk(uploadId, i10, req.body);
+      reply.code(204).send();
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/knx/upload/:uploadId/complete", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { uploadId } = req.params as { uploadId: string };
+      const body = req.body as { password?: unknown } | undefined;
+      const password = typeof body?.password === "string" ? body.password : undefined;
+      const job = i().completeKnxChunkedUpload(uploadId, password, req.log);
+      reply.code(202).send({ jobId: job.jobId, status: job.status, stage: job.stage });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/commissioning/knx/queue/job/:jobId/cancel", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      const { jobId } = req.params as { jobId: string };
+      const cancelled = i().cancelKnxImportJob(jobId);
+      if (!cancelled) throw new SupremeError("conflict", "job is already finished (or does not exist) — nothing to cancel");
+      reply.send({ jobId, status: "cancelled" });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Single-action approval: commission + bind every plan-supplied capability + validate,
   // rolling back automatically on any binding/validation failure (§ Rollback Flow).
   app.post("/v1/commissioning/knx/approve", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "device", null, "create");
-      const body = req.body as { device?: UnifiedKnxDevice; name?: string; roomId?: string; roomNameHint?: string; plans?: BindingPlanItem[] };
+      const body = req.body as { device?: UnifiedKnxDevice; name?: string; roomId?: string; roomNameHint?: string; plans?: BindingPlanItem[]; force?: boolean; shadingKind?: string };
       if (!body.device || typeof body.name !== "string" || !Array.isArray(body.plans)) {
         throw new SupremeError("validation_failed", "provide `device`, `name`, and `plans` from a prior queue response — `roomId` is optional, the Room Assignment Engine finds-or-creates a room when omitted");
       }
@@ -733,6 +978,8 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         roomId: typeof body.roomId === "string" && body.roomId.length > 0 ? (body.roomId as RoomId) : undefined,
         roomNameHint: typeof body.roomNameHint === "string" ? body.roomNameHint : undefined,
         plans: body.plans,
+        force: body.force === true,
+        ...(body.shadingKind === "updown" || body.shadingKind === "openclose" ? { shadingKind: body.shadingKind } : {}),
       });
       reply.code(201).send(result);
     } catch (err) {
@@ -809,6 +1056,20 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "view");
       const body: ProtocolBindingList = { bindings: await i().listProtocolBindings() };
       reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § live-confirmed fix — bulk cleanup for bindings orphaned before removeProtocolBindings
+  // existed (every device deleted before that fix left its bindings behind). Same
+  // installer:delete permission as a device delete, since this is destructive cleanup of
+  // real binding state, not a read.
+  app.post("/v1/commissioning/bindings/cleanup-orphaned", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "delete");
+      reply.send(await i().cleanupOrphanedProtocolBindings());
     } catch (err) {
       sendError(reply, err);
     }

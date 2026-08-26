@@ -39,14 +39,16 @@ main() {
   require_root
   confirm
 
-  local work
+  # Not `local` — the EXIT trap below fires after main() returns, by which point a
+  # local would already be out of scope, and set -u would reject it as unbound.
   work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
   log_step "Extracting archive"
   tar -xzf "$ARCHIVE" -C "$work"
   [ -f "${work}/MANIFEST.txt" ] && cat "${work}/MANIFEST.txt"
 
   log_step "Stopping SupremeOS-owned services"
-  for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}"; do
+  for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "${SUPREME_HA_SERVICE}" supreme-nats mosquitto; do
     systemctl stop "$svc" 2>/dev/null || true
   done
 
@@ -66,27 +68,38 @@ main() {
     log_warn "No supreme.pgdump in this archive — skipping database restore."
   fi
 
+  # § Zero-window atomic swap, not rm-then-cp: a delete-then-recreate here would leave a
+  # window (the full duration of the cp) where secrets/config or data are entirely absent
+  # if the copy is interrupted (disk full, power loss). Build the new content into a sibling
+  # directory first, then swap via `mv` (atomic on the same filesystem) — the exact pattern
+  # stage_release_version() in lib/common.sh already uses for the same reason.
   if [ -d "${work}/config" ]; then
     log_step "Restoring configuration (including secrets)"
-    rm -rf "${SUPREME_CONFIG_DIR:?}"/*
-    cp -a "${work}/config/." "$SUPREME_CONFIG_DIR/"
-    chown -R "root:${SUPREME_GROUP}" "$SUPREME_CONFIG_DIR"
-    chmod 0700 "$SUPREME_SECRETS_DIR"
-    chmod 0640 "${SUPREME_SECRETS_DIR}"/* 2>/dev/null || true
+    local config_building="${SUPREME_CONFIG_DIR}.restoring-new" config_previous="${SUPREME_CONFIG_DIR}.restoring-previous"
+    rm -rf "$config_building" "$config_previous"
+    cp -a "${work}/config" "$config_building"
+    chown -R "root:${SUPREME_GROUP}" "$config_building"
+    chmod 0700 "${config_building}/secrets" 2>/dev/null || true
+    chmod 0640 "${config_building}/secrets"/* 2>/dev/null || true
+    mv "$SUPREME_CONFIG_DIR" "$config_previous"
+    mv "$config_building" "$SUPREME_CONFIG_DIR"
+    rm -rf "$config_previous"
   fi
 
   if [ -d "${work}/data" ]; then
     log_step "Restoring data directory"
-    rm -rf "${SUPREME_DATA_DIR:?}"/*
-    cp -a "${work}/data/." "$SUPREME_DATA_DIR/"
-    chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_DATA_DIR"
+    local data_building="${SUPREME_DATA_DIR}.restoring-new" data_previous="${SUPREME_DATA_DIR}.restoring-previous"
+    rm -rf "$data_building" "$data_previous"
+    cp -a "${work}/data" "$data_building"
+    chown -R "${SUPREME_USER}:${SUPREME_GROUP}" "$data_building"
+    mv "$SUPREME_DATA_DIR" "$data_previous"
+    mv "$data_building" "$SUPREME_DATA_DIR"
+    rm -rf "$data_previous"
   fi
-
-  rm -rf "$work"
 
   log_step "Restarting services"
   systemctl daemon-reload
-  for svc in supreme-nats "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
+  for svc in supreme-nats mosquitto "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_HA_SERVICE}"; do
     systemctl restart "$svc" 2>/dev/null || log_warn "Could not restart $svc — check: journalctl -u $svc"
   done
   systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true

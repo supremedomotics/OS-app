@@ -181,6 +181,14 @@ export interface GatewayConfig {
   /** Stricter rate limit for /v1/auth/* (per IP, per minute). */
   authRateMax: number;
   logLevel: string;
+  /** § Native-linux source-mode "Update now" (Settings > Software update). Absolute path to
+   * infra/native-linux/update.sh on THIS host; empty = feature disabled (the Docker/hub-compose
+   * deployment never sets this — it has no equivalent privileged host script to trigger). Only
+   * install.sh/update.sh's own rendered gateway.env sets this, never user-supplied. */
+  updateScriptPath: string;
+  /** Absolute path update.sh's own systemd-run invocation is told to append its output to; the
+   * gateway tails this file for phase/progress. Empty = feature disabled (paired with the above). */
+  updateLogPath: string;
 }
 
 /** The insecure development default — refused in production (fail-closed). */
@@ -281,6 +289,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),
     authRateMax: Number(env.SUPREME_AUTH_RATE_MAX ?? 50),
     logLevel: env.SUPREME_LOG_LEVEL ?? "info",
+    updateScriptPath: env.SUPREME_UPDATE_SCRIPT ?? "",
+    updateLogPath: env.SUPREME_UPDATE_LOG ?? "",
   };
 }
 
@@ -294,6 +304,11 @@ export function assertSecureConfig(config: GatewayConfig): void {
   if (config.tokenSecret === DEV_TOKEN_SECRET) problems.push("SUPREME_TOKEN_SECRET is the insecure dev default");
   if (config.tokenSecret.length < 32) problems.push("SUPREME_TOKEN_SECRET must be >= 32 chars");
   if (config.corsOrigins.length === 0) problems.push("SUPREME_CORS_ORIGINS must be set in production");
+  // § Native Backend Implementation — the offline mock vertical slice must never run a
+  // real production hub (§ Never fabricate data or capabilities): a mock-backed device
+  // silently "succeeds" against in-memory state that was never real. Use the default
+  // ("native") or "ha" instead.
+  if (config.backend === "mock") problems.push('SUPREME_BACKEND=mock is not permitted in production — use "native" (the default) or "ha"');
   if (problems.length > 0) {
     throw new Error(`refusing to boot (production hardening): ${problems.join("; ")}`);
   }

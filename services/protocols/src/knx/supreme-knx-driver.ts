@@ -17,6 +17,7 @@ import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
 import { KnxIotProvider } from "./knx-iot-provider.js";
 import { parseFunctionalBlocks } from "./functional-block-parser.js";
 import { mapUnifiedDevices, type KnxIotDiscoverySignal, type UnifiedKnxDevice, type UnifiedDeviceMapperInput } from "./unified-device-mapper.js";
+import { colorModesFromDpt } from "./capability-mapper.js";
 import { OfflineCommandQueue, type DrainResult } from "./offline-command-queue.js";
 import type { IKnxProvider, ProviderDiagnostics } from "./provider.js";
 import { removeDeviceBindings, removeDeviceStates } from "../binding-cleanup.js";
@@ -50,6 +51,12 @@ interface KnxDeviceBinding {
   capability: CapabilityKind;
   writeGa: string;
   statusGa: string;
+  /** § Shared/central relationships (fifth pass) — additional feedback GAs beyond
+   * `statusGa` (e.g. a central "All Lights OFF" GA feeding a device that also has its
+   * own local status object). Observed the same way as `statusGa` — same capability,
+   * same `record()` — never a second event system, just more subscriptions on the
+   * SAME provider fan-out `KnxUltimateProvider` already supports. */
+  extraStatusGas: string[];
   dpt: string;
   config: Record<string, unknown>;
 }
@@ -149,6 +156,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       capability: binding.capability,
       writeGa: binding.address,
       statusGa: typeof cfg.statusAddress === "string" ? cfg.statusAddress : binding.address,
+      extraStatusGas: Array.isArray(cfg.extraStatusAddresses) ? cfg.extraStatusAddresses.filter((g): g is string => typeof g === "string") : [],
       dpt: typeof cfg.dpt === "string" ? cfg.dpt : defaultDpt(binding.capability as CapabilityState["kind"]),
       config: cfg,
     };
@@ -159,6 +167,31 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  /** § PASS 17 bug fix — a `color` capability's REAL DPT (now correctly preserved
+   * through binding-engine.ts's `planBindings()`, see that file's own PASS 17 comment)
+   * already tells us at commissioning time whether a fixture is genuinely RGB(W)-
+   * capable (DPT232.600/251.600) or Kelvin-only tunable-white (DPT7.600) — there is no
+   * need to wait for a live state telegram to arrive before the UI can gate the RGB
+   * wheel correctly (the previous behavior: `colormode.ts`'s state-nullability fallback
+   * shows BOTH controls until real feedback disambiguates them, which is honest but
+   * needlessly slow, and was actively wrong while the DPT bug this pass also fixed was
+   * still mis-decoding feedback). Reports the same `ColorCapabilityConfig.colorModes`
+   * shape the frontend's `device-ui-capabilities.ts` already prefers over the state
+   * fallback (§ ADR 0017). `null` for every other capability/unmanaged device — never
+   * fabricated, mirrors `AvrDriver.getCapabilityConfig`'s own contract. */
+  getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
+    if (capability !== "color") return null;
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
+    if (!b) return null;
+    // § P0-C (Pass 28) — `colorModesFromDpt` is the single shared evidence function (also
+    // used by `planBindings` at discovery/review time, before this driver's binding even
+    // exists) recognizing DPT7/9 (Kelvin, tunable-white) vs DPT232/233/251 (RGB/RGBW).
+    // An unrecognized/unknown DPT for this capability honestly reports nothing rather
+    // than guess — the frontend's existing state-nullability fallback still applies.
+    const modes = colorModesFromDpt(b.dpt);
+    return modes ? { colorModes: modes } : null;
   }
 
   /** § Driver Lifecycle Completion — releases everything THIS device holds without
@@ -173,9 +206,9 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     this.devices.delete(deviceId);
     removeDeviceStates(this.states, deviceId);
     this.offlineQueue.evict((subject) => subject === deviceId);
-    const releasedGas = new Set(removed.map((b) => b.statusGa));
+    const releasedGas = new Set(removed.flatMap((b) => [b.statusGa, ...b.extraStatusGas]));
     for (const ga of releasedGas) {
-      if (this.bindings.some((b) => b.statusGa === ga)) continue;
+      if (this.bindings.some((b) => b.statusGa === ga || b.extraStatusGas.includes(ga))) continue;
       this.ultimate.unsubscribe(ga);
     }
   }
@@ -258,6 +291,19 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     schemaId?: UnifiedDeviceMapperInput["schemaId"],
     schemaOptions?: UnifiedDeviceMapperInput["schemaOptions"],
   ): Promise<UnifiedKnxDevice[]> {
+    const knxIotSignals = await this.collectKnxIotSignals();
+    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides, schemaId, schemaOptions });
+    this.recordUnifiedResult(result);
+    return result;
+  }
+
+  /** The live half of {@link discoverUnified} — the only part that touches the network
+   * (§ Pass 11.3): collecting each KNX-IoT device's link-format + functional blocks.
+   * Public so a caller that runs the PURE half ({@link mapUnifiedDevices}, plus the
+   * confidence/room/duplicate/binding engines) in a worker thread can still gather these
+   * live signals on the main thread and pass them across as plain data — the driver's
+   * live provider/router handles can't cross a worker boundary. */
+  async collectKnxIotSignals(): Promise<KnxIotDiscoverySignal[]> {
     const iotDiscovered = await this.iot.discover();
     const knxIotSignals: KnxIotDiscoverySignal[] = [];
     for (const d of iotDiscovered) {
@@ -276,12 +322,17 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       }
       knxIotSignals.push({ host, linkFormat, functionalBlocks });
     }
+    return knxIotSignals;
+  }
 
-    const result = mapUnifiedDevices({ knxIot: knxIotSignals, ets, userOverrides, schemaId, schemaOptions });
+  /** Records the Unified Device Pipeline's own diagnostics counters. Called by
+   * {@link discoverUnified}; also callable directly by a caller that ran
+   * {@link mapUnifiedDevices} elsewhere (e.g. in a worker thread — § Pass 11.3) so
+   * diagnostics stay identical either way instead of silently going stale. */
+  recordUnifiedResult(result: UnifiedKnxDevice[]): void {
     this.lastMetadataSync = new Date().toISOString();
     this.lastUnifiedDeviceCount = result.length;
     this.lastUnifiedCapabilityCount = result.reduce((n, d) => n + d.capabilities.length, 0);
-    return result;
   }
 
   /** State Synchronization (§ Phase 7): issues a real `bus.group_read` for every bound
@@ -295,11 +346,13 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   async syncAll(): Promise<{ requested: number; failed: number }> {
     let failed = 0;
     for (const b of this.bindings) {
-      try {
-        await this.router.execute({ kind: "bus.group_read", groupAddress: b.statusGa, dpt: b.dpt });
-      } catch {
-        failed++; // a provider without a real group-read implementation, or a transient
-        // failure — never lets one binding's failure stop the rest from syncing.
+      for (const ga of [b.statusGa, ...b.extraStatusGas]) {
+        try {
+          await this.router.execute({ kind: "bus.group_read", groupAddress: ga, dpt: b.dpt });
+        } catch {
+          failed++; // a provider without a real group-read implementation, or a transient
+          // failure — never lets one binding's failure stop the rest from syncing.
+        }
       }
     }
     this.lastSyncAt = new Date().toISOString();
@@ -330,6 +383,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     queuedCommandCount: number;
     lastQueueDrainAt: string | null;
     lastQueueDrainResult: DrainResult | null;
+    /** § PASS 20 diagnostic (KNX feedback pipeline investigation, Part D) — the most
+     * recent capability state this driver actually recorded from real feedback (a
+     * decoded status-GA telegram that changed state), regardless of which device/
+     * capability it was for. `null` until the first one ever arrives. Bounded to one
+     * entry — this is "did feedback reach record() at all, and for what," not a log. */
+    lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null;
   } {
     return {
       protocol: this.protocol,
@@ -349,14 +408,80 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       queuedCommandCount: this.offlineQueue.size(),
       lastQueueDrainAt: this.lastQueueDrainAt,
       lastQueueDrainResult: this.lastQueueDrainResult,
+      lastRecordedState: this.lastRecordedState,
     };
   }
 
   private observe(b: KnxDeviceBinding): void {
-    this.ultimate.subscribe(b.statusGa, b.dpt, (value) => {
-      const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config);
-      if (state) this.record(b, state);
-    });
+    for (const ga of [b.statusGa, ...b.extraStatusGas]) {
+      this.ultimate.subscribe(ga, b.dpt, (value) => {
+        // § Live Feedback Diagnostic Pass — record BEFORE decode/record() so this
+        // reflects "a subscribed telegram for THIS device's GA reached the driver's own
+        // handler," independent of whether stateFromValue() then accepted it.
+        this.lastMatchedFeedback = { deviceId: b.deviceId, capability: b.capability, destination: ga, dpt: b.dpt, value, ts: new Date().toISOString() };
+        const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config);
+        if (state) this.record(b, state);
+      });
+    }
+  }
+
+  /** § PASS 20 diagnostic (Part D) — backing field for `diagnostics().lastRecordedState`. */
+  private lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null = null;
+
+  /** § Live Feedback Diagnostic Pass — the most recent feedback telegram that reached a
+   * SUBSCRIBED handler for a bound device's status GA, enriched with the deviceId a
+   * provider-level snapshot can't know. `null` until the first one ever arrives. */
+  private lastMatchedFeedback: { deviceId: string; capability: string; destination: string; dpt: string; value: unknown; ts: string } | null = null;
+
+  /** § Live Feedback Diagnostic Pass — safe passthrough so a caller can check whether an
+   * arbitrary GA currently has a live subscription, without reaching into the provider. */
+  isSubscribedToGa(groupAddress: string): boolean {
+    return this.ultimate.isSubscribed?.(groupAddress) ?? false;
+  }
+
+  /** § Live Feedback Diagnostic Pass — the real, RESOLVED runtime binding (write GA,
+   * status GA, DPT) for one device+capability, distinct from the design-time
+   * `ProtocolBinding` type model. `null` when this device/capability isn't bound. */
+  getRuntimeBinding(deviceId: DeviceId, capability: CapabilityKind): { writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string } | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === capability);
+    if (!b) return null;
+    return { writeGa: b.writeGa, statusGa: b.statusGa, extraStatusGas: b.extraStatusGas, dpt: b.dpt };
+  }
+
+  /** § Decisive KNX Feedback Diagnostic — alias consumed by `AppContext.getFeedbackDiagnostics`
+   * (context.ts): every runtime binding this device has, across all its capabilities
+   * (a device can have more than one, e.g. onoff + brightness). Empty array, never
+   * fabricated, for a device with no KNX bindings. */
+  getBindingInfo(deviceId: DeviceId): { capability: CapabilityKind; writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string }[] {
+    return this.bindings
+      .filter((b) => b.deviceId === deviceId)
+      .map((b) => ({ capability: b.capability, writeGa: b.writeGa, statusGa: b.statusGa, extraStatusGas: b.extraStatusGas, dpt: b.dpt }));
+  }
+
+  /** § Live Feedback Diagnostic Pass — one composed snapshot of the ENTIRE KNX feedback
+   * pipeline for one device, from bus telegram through to the last state this driver
+   * itself recorded. Gateway-level hops (backend fan-out/persistence/WSS broadcast) are
+   * NOT this driver's business — the gateway composes those onto this snapshot itself
+   * (see `context.ts`'s `getKnxFeedbackDiagnostics`). `null` when this device isn't
+   * bound to any KNX capability. */
+  knxFeedbackDiagnostics(deviceId: DeviceId): {
+    connected: boolean;
+    provider: ProviderDiagnostics;
+    isSubscribed: boolean;
+    binding: { writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string } | null;
+    lastMatchedFeedback: { deviceId: string; capability: string; destination: string; dpt: string; value: unknown; ts: string } | null;
+    lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null;
+  } | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return {
+      connected: this.connected,
+      provider: this.ultimate.diagnostics(),
+      isSubscribed: this.isSubscribedToGa(b.statusGa),
+      binding: this.getRuntimeBinding(deviceId, b.capability),
+      lastMatchedFeedback: this.lastMatchedFeedback?.deviceId === deviceId ? this.lastMatchedFeedback : null,
+      lastRecordedState: this.lastRecordedState?.deviceId === deviceId ? this.lastRecordedState : null,
+    };
   }
 
   private record(b: KnxDeviceBinding, state: CapabilityState): void {
@@ -364,6 +489,10 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     const prev = this.states.get(k);
     if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
     this.states.set(k, state);
-    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, ts: new Date().toISOString() });
+    const ts = new Date().toISOString();
+    // § PASS 20 diagnostic (Part D) — record BEFORE fan-out, so this reflects state
+    // that genuinely reached this point even if a listener throws downstream.
+    this.lastRecordedState = { deviceId: b.deviceId, capability: b.capability, kind: state.kind, ts };
+    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, ts });
   }
 }

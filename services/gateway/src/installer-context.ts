@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { Worker } from "node:worker_threads";
 import {
   newId,
   type CapabilityKind,
@@ -9,7 +11,7 @@ import {
   type Room,
   type RoomId,
 } from "@supreme/domain-model";
-import { SupremeError } from "@supreme/contracts";
+import { SupremeError, type ErrorCode } from "@supreme/contracts";
 import { generateSigningKeyPair, type KeyPairPem } from "@supreme/crypto";
 import type {
   IProtocolBindingStore,
@@ -25,12 +27,16 @@ import {
   InMemoryCatalog,
   isConfigComplete,
   seedFirstPartyCatalog,
+  withSecretEncryption,
+  migrateDriverSecretsToEncrypted,
   type IInstalledDriverStore,
+  type DriverSecretCrypto,
+  type ConfigFallbacks,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
-import type { IEventBus } from "@supreme/messaging";
+import { subjects, type IEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient, LocalDirectUdpTransport } from "@supreme/lan";
-import { buildNativeDriver, hasNativeFactory, type NativeDriverFactoryContext } from "./native-driver-factory.js";
+import { buildNativeDriver, hasNativeFactory, resolveCasambiCloudCredentials, type NativeDriverFactoryContext } from "./native-driver-factory.js";
 import {
   knxSearch,
   SupremeKnxDriver,
@@ -140,6 +146,44 @@ function extractMediaZones(raw: Record<string, unknown> | undefined): { id: stri
   );
 }
 
+/**
+ * KNX Import Job (§ Pass 11.1 — non-blocking ETS import). `knxInstallerQueue` is fully
+ * stateless (pure parse → synthesize → classify, nothing persisted), so there is no
+ * "active workspace" it could corrupt — the only thing this job model needs to manage is
+ * NOT blocking the Fastify event loop while that (real, ~1s on a small project, and
+ * proportionally longer on a large one) computation runs. Ponytail: no new queue/DB
+ * infra — an in-memory Map plus `setImmediate` is enough to get the heavy work off the
+ * request thread; upgrade to a durable store only if imports need to survive a gateway
+ * restart, which nothing here requires today.
+ */
+export type KnxImportJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+/** Coarse, real stages — `knxInstallerQueue` itself isn't instrumented internally (that
+ * would mean touching the parser/grouping/classification pipeline, out of scope for this
+ * pass), so PARSE_AND_SYNTHESIZE covers everything from XML parse through binding-plan
+ * generation as one honest stage rather than fabricating sub-stage timestamps we can't
+ * actually observe. */
+export type KnxImportJobStage = "queued" | "parse_and_synthesize" | "complete";
+
+/** What `worker/knx-import-worker.mjs` posts back (§ Pass 11.3). Declared here because
+ * the worker is deliberately plain `.mjs` (see its own doc comment for why) — this is the
+ * one place its contract is typed, and the main thread validates nothing beyond `ok`
+ * because both sides ship together in the same package. */
+type KnxImportWorkerResult =
+  | { ok: true; discoveryMs: number; items: Omit<KnxInstallerQueueItem, "section">[] }
+  | { ok: false; code: ErrorCode | null; message: string };
+
+export interface KnxImportJob {
+  jobId: string;
+  status: KnxImportJobStatus;
+  stage: KnxImportJobStage;
+  progress: number; // 0-100
+  startedAt: string;
+  completedAt: string | null;
+  error: string | null;
+  result: { queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary } | null;
+}
+
 /** Discover Devices workspace sections (§ Phase 5) — every discovered device lands in
  * exactly one, purely as a function of what the Confidence/Duplicate/Binding engines
  * already decided. Never a manual installer classification. */
@@ -237,6 +281,20 @@ export interface DriverLifecycleStatus {
   updatedAt: string;
 }
 
+/** § Realtime State Hardening — maps the install/bind pipeline's internal stage
+ * vocabulary onto the small, user-facing connection-state vocabulary the frontend
+ * actually renders (see DriverConnectionState, supreme-contracts/events.ts). Kept
+ * deliberately partial: "validating"/"restoring_bindings"/"rebinding_devices"/
+ * "recalculating_providers"/"publishing" are all still "connecting" from the outside —
+ * "registering" already covers that transition, so those sub-steps don't each re-publish
+ * an identical-looking event. */
+const LIFECYCLE_STAGE_TO_CONNECTION_STATE: Partial<Record<DriverLifecycleStage, "connecting" | "disconnecting" | "ready_or_error" | "error">> = {
+  registering: "connecting",
+  stopping: "disconnecting",
+  ready: "ready_or_error",
+  failed: "error",
+};
+
 export interface DriverDiagnosticsEntry {
   key: string;
   name: string;
@@ -247,6 +305,21 @@ export interface DriverDiagnosticsEntry {
   lastError: string | null;
 }
 
+/**
+ * Builds the {@link SupremeKnxDriver} instance {@link InstallerServices.knxInstallerQueue}
+ * uses for DISCOVERY ONLY (§ reuse pattern for future protocol commissioning tests). The
+ * production default (used when {@link InstallerDeps.knxDiscoveryDriverFactory} is
+ * omitted) constructs a real driver with its real {@link KnxIotProvider} — genuine CoAP
+ * multicast discovery, unchanged. An E2E test can inject a factory that still builds a
+ * real `SupremeKnxDriver` (so `discoverUnified()`, ETS merging, functional-block parsing,
+ * grouping, and capability mapping all stay real) but swaps in a deterministic
+ * `IKnxProvider` for the ONE thing a test environment can't do safely: physical network
+ * discovery. Every other protocol's installer E2E tests can follow this exact same shape
+ * — a factory field on {@link InstallerDeps}/`AppDeps`, defaulting to the real
+ * production constructor — without inventing a new pattern per protocol.
+ */
+export type KnxDiscoveryDriverFactory = (config: { host: string; port?: number }) => SupremeKnxDriver;
+
 export interface InstallerDeps {
   config: GatewayConfig;
   sil: SupremeIntegrationLayer;
@@ -255,6 +328,10 @@ export interface InstallerDeps {
   identity: IdentityService;
   homeId: HomeId;
   driverStore?: IInstalledDriverStore;
+  /** § Production Readiness Audit — encryption-at-rest for driver config secret fields.
+   * Absent in dev/tests (no `driverStore` either, so nothing is actually persisted); production
+   * always supplies one (`bootstrap.ts`, keyed from the secrets manager). */
+  driverSecretCrypto?: DriverSecretCrypto;
   db?: SqlDb;
   scanners?: IProtocolScanner[];
   protocolBindingStore?: IProtocolBindingStore;
@@ -274,6 +351,18 @@ export interface InstallerDeps {
    * which `UdpTransport` a LAN-dependent native driver (Casambi today) gets — see
    * `nativeDriverContext()`. Never used for anything protocol-specific here. */
   bus?: IEventBus;
+  /** Injectable seam for {@link knxDiscoveryDriver} (§ reuse pattern for future protocol
+   * commissioning tests). Omitted in production — falls back to the real
+   * `new SupremeKnxDriver(config)` constructor, real {@link KnxIotProvider}, real CoAP
+   * multicast discovery. Tests inject a factory that builds a real `SupremeKnxDriver` with
+   * a fake `IKnxProvider` instead, so the discovery pipeline (`discoverUnified()`, ETS
+   * merge, grouping, capability mapping) stays real and only physical discovery is
+   * deterministic. */
+  knxDiscoveryDriverFactory?: KnxDiscoveryDriverFactory;
+  /** Test seam for the KNX import worker's bounded completion wait (§ 111s-hang fix) —
+   * production always uses the 5-minute default; tests inject a small value to verify
+   * a hung worker fails the job instead of waiting forever. */
+  knxWorkerTimeoutMs?: number;
 }
 
 /**
@@ -286,6 +375,12 @@ export interface InstallerDeps {
 export class InstallerServices {
   readonly drivers: DriverManager;
   readonly commissioning: CommissioningService;
+  /** § Production Readiness Audit — raw (undecorated) driver store + schema lookup, kept only so
+   * {@link init} can run the one-time legacy-secret migration directly against the RAW store
+   * (needs to tell real plaintext apart from ciphertext, which the encrypting decorator would
+   * otherwise hide). `undefined` when there's no crypto configured (dev/tests) — migration is a
+   * no-op then, matching the underlying store's own already-inert plaintext behavior. */
+  private readonly driverSecretMigration?: { rawStore: IInstalledDriverStore; crypto: DriverSecretCrypto; schemaFor: (key: string) => Promise<import("@supreme/domain-model").DriverConfigField[]> };
   /** KNX import Learning Engine — remembers installer renames across re-imports (§ Learning Engine). */
   private readonly knxLearning: ConfigKnxLearningStore;
 
@@ -298,6 +393,20 @@ export class InstallerServices {
   readonly licenseService: LicenseService;
   /** Runtime Developer-Mode override (UI toggle), OR-ed with the SUPREME_DEV_MODE env flag. */
   private devModeOverride = false;
+  /** § Pass 11.1 non-blocking KNX import — jobId → job. In-memory only (see
+   * {@link KnxImportJob} doc): the queue computation itself persists nothing, so losing
+   * this map on a gateway restart loses nothing an installer can't recreate by re-scanning. */
+  private readonly knxImportJobs = new Map<string, KnxImportJob>();
+  /** § Pass 11.3 — jobId → the worker thread currently running THAT job's heavy import,
+   * so cancellation terminates exactly one thread. Entries exist only while a job is
+   * genuinely in flight; both settle paths delete their own. */
+  private readonly knxImportWorkers = new Map<string, Worker>();
+  /** § Chunked KNX upload (§ live-confirmed fix — see startKnxChunkedUpload's own doc
+   * comment) — uploadId → chunks received so far. In-memory only, same durability
+   * contract as knxImportJobs above: an abandoned upload (browser closed mid-transfer,
+   * gateway restart) loses nothing an installer can't recreate by re-selecting the file. */
+  private readonly knxChunkedUploads = new Map<string, { chunks: (Buffer | undefined)[]; totalChunks: number; createdAt: number }>();
+  private static readonly CHUNKED_UPLOAD_TTL_MS = 30 * 60 * 1000;
 
   constructor(deps: InstallerDeps) {
     this.d = deps;
@@ -313,11 +422,25 @@ export class InstallerServices {
     if (deps.config.driverStorePublicKey) {
       trustedKeys.set(deps.config.driverStoreKeyId, deps.config.driverStorePublicKey);
     }
+
+    // § Production Readiness Audit — encryption-at-rest for driver config secret fields.
+    // `schemaFor` reads the SAME catalog `DriverManager` itself will query, so "which fields are
+    // secret" is decided in exactly one place regardless of whether it's asked by the encrypting
+    // decorator or by DriverManager's own (separate) schema lookup.
+    const schemaFor = async (key: string) => (await catalog.find(key))?.bundle.manifest.configSchema ?? [];
+    const rawDriverStore = deps.driverStore;
+    const driverStore = rawDriverStore && deps.driverSecretCrypto
+      ? withSecretEncryption(rawDriverStore, deps.driverSecretCrypto, schemaFor)
+      : rawDriverStore;
+    this.driverSecretMigration = rawDriverStore && deps.driverSecretCrypto
+      ? { rawStore: rawDriverStore, crypto: deps.driverSecretCrypto, schemaFor }
+      : undefined;
+
     this.drivers = new DriverManager({
       homeId: deps.homeId,
       catalog,
       trustedKeys,
-      store: deps.driverStore,
+      store: driverStore,
       licensedSkus: () => this.licensedSkus(),
     });
 
@@ -347,6 +470,13 @@ export class InstallerServices {
    *  sources feed the same ordered sequence, per protocol, so a binding can never be
    *  replayed before the driver it needs exists. */
   async init(): Promise<void> {
+    if (this.driverSecretMigration) {
+      const { rawStore, crypto, schemaFor } = this.driverSecretMigration;
+      const result = await migrateDriverSecretsToEncrypted(rawStore, crypto, schemaFor);
+      if (result.migrated.length > 0) {
+        console.info("[driver-secret migration] plaintext -> encrypted-at-rest", { migrated: result.migrated });
+      }
+    }
     await this.loadLicense();
     await this.initializeNativeDrivers("boot");
   }
@@ -412,6 +542,22 @@ export class InstallerServices {
       binding.protocol,
     );
     await this.d.protocolBindingStore?.put(binding);
+    // § PASS 22 (Part K, hardened Pass 22B Part G) — record real ownership: the driver
+    // instance that actually commissioned this device, so a later uninstall can find and
+    // clean up its own devices instead of silently leaving them behind (see
+    // setDriverOwner's own doc comment for why this was previously always null in
+    // production). The DriverManager registry lookup alone is NOT sufficient: every
+    // real-hub protocol (KNX/AVR/CoolMaster/…) is normally wired through env-var
+    // configuration straight into `envDrivers` (bootstrap.ts) — a completely separate
+    // path from the catalog/installed-store DriverManager tracks — so `registry().find(e
+    // => e.installed)` matches nothing for them and ownership silently stayed null on
+    // every production hub. A catalog-installed entry (Extension Center flow) still wins
+    // when present; an env-configured driver for the same protocol is the fallback,
+    // identified the SAME `env:${protocol}` key runDriverLifecycle already uses.
+    const ownerEntry = (await this.drivers.registry()).find((e) => e.protocols.includes(binding.protocol) && e.installed);
+    const ownerId = (ownerEntry?.installedId as DriverId | null | undefined)
+      ?? (this.d.envDrivers?.has(binding.protocol) ? (`env:${binding.protocol}` as DriverId) : null);
+    if (ownerId) await this.d.home.setDriverOwner(binding.deviceId, ownerId);
     // If the driver has a real AudioCapabilityConfig (inputs/sound modes/zones/
     // advancedControls) for this device now that it's bound, persist it onto the
     // device's capability config so the UI has real, capability-driven data to render
@@ -423,6 +569,47 @@ export class InstallerServices {
 
   listProtocolBindings(): Promise<StoredProtocolBinding[]> {
     return this.d.protocolBindingStore?.list() ?? Promise.resolve([]);
+  }
+
+  /** § live-confirmed fix — `HomeService.removeDevice`/`removeDevices` (the ONLY code
+   * `DELETE /v1/devices/:id` and the bulk-delete route call) only clean up the SIL's own
+   * registry/driver-lifecycle state via `sil.unmapDevice()` — they have no knowledge of
+   * `protocolBindingStore`, which is entirely gateway/installer-layer state. Deleting a
+   * device through either normal delete route therefore left its protocol binding(s)
+   * behind forever, orphaned — live-confirmed as the actual cause of "found an existing
+   * bus binding... but its device record no longer exists" on a real hub tonight. Called
+   * from the delete routes alongside (never instead of) `home.removeDevice(s)`, not a
+   * replacement for it. Safe to call for a device with no bindings at all (no-op). */
+  async removeProtocolBindings(deviceId: DeviceId): Promise<void> {
+    if (!this.d.protocolBindingStore) return;
+    const stale = (await this.d.protocolBindingStore.list()).filter((b) => b.deviceId === deviceId);
+    for (const b of stale) await this.d.protocolBindingStore.remove(b.deviceId, b.capability);
+  }
+
+  /** § live-confirmed fix — a bulk companion to {@link removeProtocolBindings} for
+   * bindings that were ALREADY orphaned before that fix existed (every device deleted
+   * before tonight left its bindings behind). Scans the whole store for bindings whose
+   * deviceId has no matching device record, releases each orphaned deviceId from the
+   * live driver via `sil.unmapDevice()` (never leave it silently observing bus addresses
+   * until the next restart), then removes the binding entries. Never touches a binding
+   * whose device genuinely still exists. */
+  async cleanupOrphanedProtocolBindings(): Promise<{ removedBindings: number; removedDevices: number }> {
+    if (!this.d.protocolBindingStore) return { removedBindings: 0, removedDevices: 0 };
+    const all = await this.d.protocolBindingStore.list();
+    const orphanedDeviceIds = new Set<DeviceId>();
+    for (const b of all) {
+      if (orphanedDeviceIds.has(b.deviceId)) continue;
+      if (!(await this.d.home.getDevice(b.deviceId))) orphanedDeviceIds.add(b.deviceId);
+    }
+    let removedBindings = 0;
+    for (const deviceId of orphanedDeviceIds) {
+      await this.d.sil.unmapDevice(deviceId);
+      for (const b of all.filter((x) => x.deviceId === deviceId)) {
+        await this.d.protocolBindingStore.remove(b.deviceId, b.capability);
+        removedBindings++;
+      }
+    }
+    return { removedBindings, removedDevices: orphanedDeviceIds.size };
   }
 
   /**
@@ -487,7 +674,11 @@ export class InstallerServices {
    * see the KNX IoT Compatibility Report + each phase's Migration Notes for why the
    * production driver hasn't been cut over yet). */
   private async knxDiscoveryDriver(override?: { host: string; port?: number }): Promise<SupremeKnxDriver | null> {
-    if (override) return new SupremeKnxDriver(override);
+    // § reuse pattern (see KnxDiscoveryDriverFactory's own doc comment) — production
+    // omits `knxDiscoveryDriverFactory`, so this is exactly `new SupremeKnxDriver(config)`,
+    // unchanged from before this seam existed.
+    const buildDriver = this.d.knxDiscoveryDriverFactory ?? ((config) => new SupremeKnxDriver(config));
+    if (override) return buildDriver(override);
     // The manifest key is "supreme-knx" (§ manifests.ts) — match by protocol, the same
     // field NATIVE_DRIVER_FACTORIES is keyed by, not the catalog key (§ don't re-derive
     // a mapping that already exists elsewhere under a different name).
@@ -495,7 +686,7 @@ export class InstallerServices {
     const host = entry?.config.host;
     if (typeof host !== "string" || host.length === 0) return null;
     const port = Number(entry?.config.port);
-    return new SupremeKnxDriver({ host, port: Number.isFinite(port) ? port : undefined });
+    return buildDriver({ host, port: Number.isFinite(port) ? port : undefined });
   }
 
   /** The installer's selected Group Address Schema (§ Configurable Group Address Schema
@@ -559,25 +750,27 @@ export class InstallerServices {
      * (real metadata, not guessed) and is still subject to the same "explicit signal
      * beats inference" merge priority every other signal source already follows. */
     etsSource?: { kind: "text"; content: string } | { kind: "knxproj"; base64: string; password?: string };
-  } = {}): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+  } = {},
+  /** Internal (§ Pass 11.3): receives the worker running the heavy import, so
+   * {@link cancelKnxImportJob} can terminate THAT job's thread and only that one. Never
+   * set by a route — the synchronous `/queue` endpoint has no cancellation surface. */
+  onWorker?: (worker: Worker) => void,
+  log?: { info: (obj: Record<string, unknown>, msg: string) => void },
+  ): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
     const driver = await this.knxDiscoveryDriver(opts.gateway);
     if (!driver) throw new SupremeError("not_found", "the KNX driver is not configured on this hub yet");
     const schemaId = opts.schemaId ?? (await this.knxConfiguredSchemaId());
 
-    let ets = opts.ets;
-    if (opts.etsSource) {
-      const source = opts.etsSource.kind === "knxproj"
-        ? await this.knxProjectSource(opts.etsSource.base64, opts.etsSource.password)
-        : { kind: "text" as const, content: opts.etsSource.content };
-      const model = parseKnxSource(source);
-      const etsSignals = knxSignalsFromModel(model);
-      if (etsSignals.length === 0) throw new SupremeError("validation_failed", "no group addresses were found in this project — check that you exported the correct file, or that the ETS project isn't empty.");
-      ets = [...(ets ?? []), ...etsSignals];
-    }
+    // § Pass 11.3 — an ETS FILE import is the only genuinely CPU-heavy input (unzip + XML
+    // parse + synthesis + per-device engines: measured ~690 ms for a real 4.1 MB project,
+    // during which every other API request was starved). That work runs in a real worker
+    // thread; a plain `ets` signal array (a handful of addresses from live discovery or a
+    // test) stays inline, where the thread's own startup would cost more than the work.
+    if (opts.etsSource) return this.knxInstallerQueueThreaded(opts, driver, schemaId, onWorker, log);
 
     const startedAt = Date.now();
     const [devices, existing] = await Promise.all([
-      driver.discoverUnified(ets, opts.userOverrides, schemaId),
+      driver.discoverUnified(opts.ets, opts.userOverrides, schemaId),
       this.knxExistingState(),
     ]);
     const discoveryMs = Date.now() - startedAt;
@@ -594,6 +787,202 @@ export class InstallerServices {
   }
 
   /**
+   * The ETS-file half of {@link knxInstallerQueue}, run in a real worker thread (§ Pass
+   * 11.3). The boundary is exactly the CPU-bound, pure section of the pipeline — unzip,
+   * XML parse, signal extraction, `mapUnifiedDevices`, and the per-device confidence/
+   * room/duplicate/binding engines. Everything needing a LIVE handle stays here on the
+   * main thread and crosses as plain data: the driver's KNX-IoT signals
+   * (`collectKnxIotSignals`, the only networked stage) and the existing-installation
+   * state read from the real stores. Nothing durable is written on either side, so a
+   * terminated or crashed worker can never leave half-imported state behind.
+   */
+  private async knxInstallerQueueThreaded(
+    opts: NonNullable<Parameters<InstallerServices["knxInstallerQueue"]>[0]>,
+    driver: SupremeKnxDriver,
+    schemaId: string | undefined,
+    onWorker?: (worker: Worker) => void,
+    log?: { info: (obj: Record<string, unknown>, msg: string) => void },
+  ): Promise<{ queue: KnxInstallerQueueItem[]; summary: KnxDiscoverySummary }> {
+    const t0 = Date.now();
+    const [knxIot, existing] = await Promise.all([driver.collectKnxIotSignals(), this.knxExistingState()]);
+    log?.info({ elapsedMs: Date.now() - t0, stage: "collectKnxIotSignals_and_existingState" }, "knx worker timing");
+    const worker = new Worker(new URL("../worker/knx-import-worker.mjs", import.meta.url), {
+      workerData: { etsSource: opts.etsSource, ets: opts.ets, userOverrides: opts.userOverrides, schemaId, knxIot, existing },
+    });
+    log?.info({ elapsedMs: Date.now() - t0, stage: "worker_constructed" }, "knx worker timing");
+    onWorker?.(worker);
+
+    const outcome = await new Promise<KnxImportWorkerResult>((resolve, reject) => {
+      let settled = false;
+      const done = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+      // ponytail: bounded wait — the promise previously had no timeout at all, so a
+      // genuinely hung worker (infinite loop, pathological input) left the job "running"
+      // forever with no way to ever surface a failure. 5 minutes is generous for even a
+      // large real .knxproj (measured baseline: ~690ms for 4.1MB) but finite.
+      const timeoutMs = this.d.knxWorkerTimeoutMs ?? 5 * 60_000;
+      const timer = setTimeout(() => done(() => {
+        void worker.terminate();
+        reject(new SupremeError("internal", `the ETS import worker did not finish within ${timeoutMs}ms and was terminated`));
+      }), timeoutMs);
+      worker.once("message", (msg: KnxImportWorkerResult) => done(() => { clearTimeout(timer); resolve(msg); }));
+      worker.once("error", (err) => done(() => { clearTimeout(timer); reject(new SupremeError("internal", `the ETS import failed: ${err.message}`)); }));
+      // A worker that exits without ever posting a result (OOM, a hard crash, an explicit
+      // terminate) must FAIL the job — never leave it stuck in "running" forever.
+      worker.once("exit", (code) => done(() => { clearTimeout(timer); reject(new SupremeError("internal", `the ETS import worker exited unexpectedly (code ${code})`)); }));
+    }).finally(() => { log?.info({ elapsedMs: Date.now() - t0, stage: "worker_settled" }, "knx worker timing"); void worker.terminate(); });
+
+    if (!outcome.ok) throw new SupremeError(outcome.code ?? "internal", outcome.message);
+
+    driver.recordUnifiedResult(outcome.items.map((i) => i.device));
+    const queue = outcome.items.map((i) => ({ ...i, section: knxQueueSection(i.duplicate.decision, i.confidence, i.plans) }));
+    return { queue, summary: summarizeKnxQueue(queue, outcome.discoveryMs, schemaId) };
+  }
+
+  /**
+   * Non-blocking counterpart of {@link knxInstallerQueue} (§ Pass 11.1, corrected in Pass
+   * 11.3): creates a job in "queued" state and returns its id IMMEDIATELY.
+   *
+   * `setImmediate` alone only got the work off the REQUEST — not off the event loop, which
+   * is a different thing this comment previously conflated. Measured on a real 4.1 MB
+   * .knxproj: with `setImmediate` only, `GET /v1/home` from an external client went from a
+   * 2 ms warm average to a 372 ms average / 682 ms max for the whole import, and even the
+   * HTTP 202 itself couldn't flush until the CPU work finished. The heavy stages now run in
+   * a real worker thread ({@link knxInstallerQueueThreaded}), so `setImmediate` here is
+   * only what keeps the "queued" → "running" transition off the request's own tick.
+   *
+   * Cancellation is therefore no longer best-effort for a running job: it terminates that
+   * job's worker thread (and only that one). Nothing this pipeline touches is durable
+   * either way, so there is never partial state to roll back.
+   */
+  startKnxImportJob(
+    opts: Parameters<InstallerServices["knxInstallerQueue"]>[0] = {},
+    // ponytail: diagnostic-only logger for the 111s-hang investigation, plain pino-shaped
+    // to reuse the fastify request logger without inventing a new logging mechanism.
+    log?: { info: (obj: Record<string, unknown>, msg: string) => void },
+  ): KnxImportJob {
+    const jobT0 = Date.now();
+    const job: KnxImportJob = {
+      jobId: `knximp_${randomUUID()}`,
+      status: "queued",
+      stage: "queued",
+      progress: 0,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      error: null,
+      result: null,
+    };
+    this.knxImportJobs.set(job.jobId, job);
+
+    setImmediate(() => {
+      const current = this.knxImportJobs.get(job.jobId);
+      if (!current || current.status === "cancelled") return;
+      current.status = "running";
+      current.stage = "parse_and_synthesize";
+      current.progress = 10;
+      log?.info({ elapsedMs: Date.now() - jobT0, stage: "setImmediate_fired", jobId: job.jobId }, "knx import job timing");
+      this.knxInstallerQueue(opts, (worker) => this.knxImportWorkers.set(job.jobId, worker), log).then(
+        (result) => {
+          log?.info({ elapsedMs: Date.now() - jobT0, stage: "knxInstallerQueue_resolved", jobId: job.jobId }, "knx import job timing");
+          this.knxImportWorkers.delete(job.jobId);
+          const j = this.knxImportJobs.get(job.jobId);
+          if (!j || j.status === "cancelled") return; // preserve cancellation — never overwrite it with a late result
+          j.status = "completed";
+          j.stage = "complete";
+          j.progress = 100;
+          j.completedAt = new Date().toISOString();
+          j.result = result;
+        },
+        (err) => {
+          this.knxImportWorkers.delete(job.jobId);
+          const j = this.knxImportJobs.get(job.jobId);
+          if (!j || j.status === "cancelled") return;
+          j.status = "failed";
+          j.completedAt = new Date().toISOString();
+          // Real error, not a generic string (§ Part J) — SupremeError messages are
+          // already installer-facing text; anything else falls back to its own message.
+          j.error = err instanceof SupremeError ? err.message : err instanceof Error ? err.message : "the import failed for an unknown reason";
+        },
+      );
+    });
+
+    return job;
+  }
+
+  /** Current status/result of a job started by {@link startKnxImportJob}, or `null` if
+   * unknown (never started, or evicted — nothing evicts them today; add a TTL sweep only
+   * if job volume ever makes the in-memory map a real memory concern). */
+  getKnxImportJob(jobId: string): KnxImportJob | null {
+    return this.knxImportJobs.get(jobId) ?? null;
+  }
+
+  /**
+   * § Chunked KNX upload — live-confirmed fix. A real installer network can sustain
+   * only a few KB/s for a large POST body (confirmed via packet capture: regular
+   * retransmissions every ~300ms), which makes a single giant multipart upload
+   * unreliable regardless of how generous the timeout is — one lost segment anywhere
+   * in a 10MB body costs the ENTIRE request. Splitting the file into small chunks the
+   * browser sends (and retries) independently means a bad connection costs one slow
+   * chunk, not the whole transfer, and gives the installer real progress instead of an
+   * opaque "uploading…" for however many minutes it takes.
+   *
+   * Deliberately NOT a resumable-across-reload protocol (no persisted chunk state, no
+   * client-side resume-from-last-chunk logic) — that's real added complexity for a
+   * problem this doesn't have: the browser tab stays open and drives the whole
+   * sequence itself, retrying failed chunks in place. If a page reload/crash mid-
+   * upload becomes a real complaint, that's the point to add resumability, not before.
+   */
+  startKnxChunkedUpload(totalChunks: number): { uploadId: string } {
+    if (totalChunks < 1) throw new SupremeError("validation_failed", "a chunked upload needs at least one chunk");
+    const now = Date.now();
+    for (const [id, u] of this.knxChunkedUploads) {
+      if (now - u.createdAt > InstallerServices.CHUNKED_UPLOAD_TTL_MS) this.knxChunkedUploads.delete(id);
+    }
+    const uploadId = `knxup_${randomUUID()}`;
+    this.knxChunkedUploads.set(uploadId, { chunks: new Array(totalChunks), totalChunks, createdAt: now });
+    return { uploadId };
+  }
+
+  /** One chunk of an in-progress {@link startKnxChunkedUpload}. `index` is 0-based and
+   * must be within the range declared at init — never fabricated/extended here. */
+  receiveKnxUploadChunk(uploadId: string, index: number, data: Buffer): void {
+    const upload = this.knxChunkedUploads.get(uploadId);
+    if (!upload) throw new SupremeError("not_found", "no upload in progress with that id — it may have expired; start a new upload");
+    if (index < 0 || index >= upload.totalChunks) throw new SupremeError("validation_failed", `chunk index ${index} is out of range for a ${upload.totalChunks}-chunk upload`);
+    upload.chunks[index] = data;
+  }
+
+  /** Assembles every received chunk (in order — never fabricated for a missing one,
+   * see the explicit check below) and hands the reassembled `.knxproj` bytes to the
+   * SAME {@link startKnxImportJob} pipeline a direct multipart upload already uses —
+   * this is purely a different way for the bytes to ARRIVE, not a second import path. */
+  completeKnxChunkedUpload(uploadId: string, password: string | undefined, log?: { info: (obj: Record<string, unknown>, msg: string) => void }): KnxImportJob {
+    const upload = this.knxChunkedUploads.get(uploadId);
+    if (!upload) throw new SupremeError("not_found", "no upload in progress with that id — it may have expired; start a new upload");
+    const missing = upload.chunks.findIndex((c) => c === undefined);
+    if (missing !== -1) throw new SupremeError("validation_failed", `chunk ${missing} of ${upload.totalChunks} was never received — cannot assemble an incomplete upload`);
+    this.knxChunkedUploads.delete(uploadId);
+    const base64 = Buffer.concat(upload.chunks as Buffer[]).toString("base64");
+    return this.startKnxImportJob({ etsSource: { kind: "knxproj", base64, password } }, log);
+  }
+
+  /** Real cancellation (§ Part L, upgraded in Pass 11.3): a job still "queued" never runs
+   * its heavy work at all; a job already "running" in a worker thread has THAT thread
+   * terminated — only that job's, never the gateway process — and its result is discarded
+   * even if it lands first. Nothing this pipeline touches is durable, so a half-finished
+   * import can never become approved state. Returns `false` for an already-terminal job
+   * (completed/failed/cancelled) — cancellation only applies to work still in flight. */
+  cancelKnxImportJob(jobId: string): boolean {
+    const job = this.knxImportJobs.get(jobId);
+    if (!job || job.status === "completed" || job.status === "failed" || job.status === "cancelled") return false;
+    job.status = "cancelled";
+    job.completedAt = new Date().toISOString();
+    const worker = this.knxImportWorkers.get(jobId);
+    this.knxImportWorkers.delete(jobId);
+    void worker?.terminate();
+    return true;
+  }
+
+  /**
    * Approval (§ Phase 5): commission the device and bind every plan-supplied capability
    * to ITS OWN group address (unlike {@link commissionDevice}'s single shared address —
    * a real KNX circuit's write and status objects are genuinely different addresses per
@@ -602,6 +991,21 @@ export class InstallerServices {
    * convenience wrapper). On any binding failure, rolls back everything already bound
    * and the device itself — no half-registered device is ever left behind.
    */
+  /** § P0-C follow-up (capability persistence lifecycle) — every one of `bindablePlans`'
+   * write addresses is already owned by an existing device, AND all of them agree on the
+   * SAME device, this IS that device being re-discovered (a real ETS re-import/re-scan
+   * naturally produces a fresh `UnifiedKnxDevice` for a fixture that's already approved —
+   * `checkDuplicate`'s "merge"/"update" decisions already detect exactly this case, see
+   * duplicate-detection.ts). Returns `null` for every other case (a genuinely new device,
+   * or an ambiguous partial/cross-device address overlap) — never a guess. */
+  private async findSoleExistingKnxOwner(bindablePlans: { address: string }[]): Promise<DeviceId | null> {
+    const existing = await this.listProtocolBindings();
+    const owners = bindablePlans.map((p) => existing.find((b) => b.protocol === "knx" && b.address === p.address)?.deviceId ?? null);
+    if (owners.some((o) => o === null)) return null; // at least one address is genuinely new — not a pure re-discovery
+    const distinct = new Set(owners);
+    return distinct.size === 1 ? owners[0]! : null; // more than one owner = ambiguous, never guessed
+  }
+
   async approveKnxDevice(input: {
     device: UnifiedKnxDevice;
     name: string;
@@ -612,10 +1016,67 @@ export class InstallerServices {
      * used to find-or-create a room only when `roomId` is not supplied. */
     roomNameHint?: string | null;
     plans: BindingPlanItem[];
+    /** Installer explicitly confirmed removal of an orphaned binding (§ live-confirmed
+     * fix below) — never assumed, always a deliberate retry after seeing the conflict. */
+    force?: boolean;
+    /** § live-confirmed fix — how a `position`-capable device physically moves (a roller
+     * blind's DPT/capability shape is byte-for-byte identical to a sliding curtain's —
+     * nothing about the wire data can tell them apart). Installer-set fact, asked once
+     * at approval time, never guessed; ignored for a device with no `position` plan. */
+    shadingKind?: "updown" | "openclose";
   }): Promise<KnxApprovalResult> {
     const bindablePlans = input.plans.filter((p): p is typeof p & { address: string } => p.bindable && p.address !== null);
     if (bindablePlans.length === 0) {
       throw new SupremeError("validation_failed", "this device has no bindable communication object yet — needs installer review, not approval");
+    }
+
+    // § P0-C follow-up — re-discovering an already-approved fixture (every bindable
+    // address here already belongs to ONE existing device) must refresh THAT device's
+    // bindings/capability config in place — never silently commission a second device
+    // sharing the same bus addresses, and never leave its capability model stale just
+    // because it happened to be approved before this DPT evidence existed. Reuses
+    // `bindProtocol` unchanged (it already recomputes + persists `getCapabilityConfig`
+    // fresh on every call — see P0-C's own investigation) — no new persistence path.
+    const existingDeviceId = await this.findSoleExistingKnxOwner(bindablePlans);
+    if (existingDeviceId) {
+      const existingDevice = await this.d.home.getDevice(existingDeviceId);
+      if (!existingDevice) {
+        // An orphaned binding (its device was deleted — e.g. an earlier approval attempt
+        // that failed/rolled back — without cleaning up the binding store) — a real
+        // data-integrity gap, never silently papered over as "new" on a bare retry.
+        if (!input.force) {
+          throw new SupremeError("conflict", "found an existing bus binding for this device's group addresses, but its device record no longer exists — remove the stale binding before re-approving");
+        }
+        // § live-confirmed fix — installer explicitly confirmed the removal (`force`):
+        // release the orphaned deviceId from the live driver too, not just the store,
+        // so it stops silently observing these group addresses on this hub tonight —
+        // never wait for the next restart's binding-replay to notice. Then fall through
+        // to the same fresh-commission path below, exactly as if this were a new device.
+        for (const plan of bindablePlans) {
+          await this.d.protocolBindingStore?.remove(existingDeviceId, plan.capability);
+        }
+        await this.d.sil.unmapDevice(existingDeviceId);
+      } else {
+        const bound: CapabilityKind[] = [];
+        try {
+          for (const plan of bindablePlans) {
+            await this.bindProtocol({ deviceId: existingDeviceId, capability: plan.capability, protocol: "knx", address: plan.address, config: plan.config });
+            bound.push(plan.capability);
+          }
+        } catch (err) {
+          return { device: existingDevice, status: "error", reason: `refreshing existing device failed: ${(err as Error).message}` };
+        }
+        // § live-confirmed fix — bindProtocol's own post-bind refresh only ever re-derives
+        // `color`'s config from the live driver (KnxProtocolDriver.getCapabilityConfig has
+        // no notion of "position" at all) — shadingKind is a pure installer fact no driver
+        // could ever report, so it's written explicitly here instead.
+        if (input.shadingKind && bound.includes("position")) {
+          await this.d.home.setCapabilityConfig(existingDeviceId, "position", { shadingKind: input.shadingKind });
+        }
+        const validation = await this.validateKnxDevice(existingDeviceId);
+        const refreshedDevice = await this.d.home.getDevice(existingDeviceId);
+        return { device: refreshedDevice ?? existingDevice, ...validation };
+      }
     }
 
     // § Universal Commissioning Architecture — converges on the SAME commissionDevice()
@@ -631,6 +1092,9 @@ export class InstallerServices {
       capabilities: bindablePlans.map((p) => p.capability),
       manufacturer: input.device.raw.metadata.manufacturer ?? undefined,
       model: input.device.raw.metadata.model ?? undefined,
+      ...(input.shadingKind && bindablePlans.some((p) => p.capability === "position")
+        ? { capabilityConfig: { position: { shadingKind: input.shadingKind } } }
+        : {}),
     });
 
     const bound: CapabilityKind[] = [];
@@ -647,8 +1111,15 @@ export class InstallerServices {
     const validation = await this.validateKnxDevice(device.id);
     if (validation.status === "error") {
       await this.rollbackKnxDevice(device.id, bound);
+      return { device, ...validation };
     }
-    return { device, ...validation };
+    // § P0-C follow-up — `device` above is the commission-time snapshot, captured BEFORE
+    // the bind loop ran; each `bindProtocol` call may have since written a real
+    // driver-reported capability config (e.g. KNX's `colorModes`) on top of the empty
+    // `{}` every capability starts with. Re-fetch so the response the installer/frontend
+    // actually sees reflects what just got persisted, not a stale pre-binding snapshot.
+    const commissioned = await this.d.home.getDevice(device.id);
+    return { device: commissioned ?? device, ...validation };
   }
 
   /**
@@ -1046,7 +1517,9 @@ export class InstallerServices {
 
   /** Validate + persist a driver's config, returning the masked result. */
   async setDriverConfig(id: DriverId, input: Record<string, unknown>) {
-    const updated = await this.drivers.setConfig(id, input);
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    const fallbacks = entry ? this.fallbacksFor(entry.protocols) : {};
+    const updated = await this.drivers.setConfig(id, input, fallbacks);
     this.appendLog(updated.key, "info", "Configuration updated");
     await this.reregisterDriver(updated.key); // apply the new config to the running native stack
     return this.getDriverConfig(id);
@@ -1076,6 +1549,29 @@ export class InstallerServices {
       lastError: null, boundCount: 0, ownedCount: 0, bindingCount: 0, reconnects: 0, updatedAt: "",
     };
     this.lifecycleStatus.set(protocol, { ...prev, ...patch, updatedAt: new Date().toISOString() });
+    // § Realtime State Hardening — this is THE single funnel every native driver's boot,
+    // install, config-change, AND reconnect pass already goes through (runDriverLifecycle
+    // below), so hooking publication here — once, generically — surfaces driver
+    // initialization/startup-failure/reconnect-attempt/automatic-reconnect-success for
+    // every current and future driver, with no per-driver code. Not every stage maps to a
+    // user-facing connection-state change (the intermediate binding/publishing sub-steps
+    // are all still "connecting" from the outside) — only the ones that do are listed.
+    if (patch.stage && patch.stage in LIFECYCLE_STAGE_TO_CONNECTION_STATE) {
+      const mapped = LIFECYCLE_STAGE_TO_CONNECTION_STATE[patch.stage]!;
+      const merged = this.lifecycleStatus.get(protocol)!;
+      const state = mapped === "ready_or_error" ? (merged.healthy ? "connected" : "error") : mapped;
+      void this.publishDriverStateForProtocol(protocol, state, merged.lastError);
+    }
+  }
+
+  /** § Realtime State Hardening — resolves protocol → the installedId the frontend keys
+   * off (DriverEntry.installedId), then publishes through the same generic channel
+   * connectDriver()/disconnectDriver() already use. A protocol with no matching installed
+   * entry (e.g. mid-uninstall) is a silent no-op — there's no driverId left to address. */
+  private async publishDriverStateForProtocol(protocol: string, state: "connecting" | "connected" | "disconnecting" | "disconnected" | "error", error?: string | null): Promise<void> {
+    const entry = (await this.drivers.registry()).find((e) => e.protocols.includes(protocol));
+    if (!entry?.installedId) return;
+    await this.publishDriverState(entry.installedId, state, error);
   }
 
   /** Boot only: register every env-configured native driver (bootstrap.ts) through
@@ -1112,7 +1608,37 @@ export class InstallerServices {
         this.d.config.natsUrl && this.d.bus
           ? () => new NatsUdpTransportClient(this.d.bus!)
           : () => new LocalDirectUdpTransport(),
+      // § Casambi fleet-wide default account — present only when the deployment has all three
+      // required fields set (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); see the field's own doc
+      // comment on `NativeDriverFactoryContext`.
+      ...this.casambiContextDefaults(),
     };
+  }
+
+  private casambiContextDefaults(): Pick<NativeDriverFactoryContext, "casambiCloudDefaults"> {
+    const defaults = this.casambiCloudDefaults();
+    return defaults ? { casambiCloudDefaults: defaults } : {};
+  }
+
+  /** § Casambi fleet-wide default account — the single place this is read from
+   * `GatewayConfig`/env vars, shared by `nativeDriverContext()` (runtime construction) and
+   * `fallbacksFor()` (config validation/completeness, so the Driver Manager UI and boot
+   * reconciliation never require typing these fields when a fleet default already covers them).
+   * `undefined` unless all three required fields are set. */
+  private casambiCloudDefaults(): { apiKey: string; email: string; password: string; networkId?: string } | undefined {
+    const { casambiApiKey, casambiEmail, casambiPassword, casambiNetworkId } = this.d.config;
+    if (!casambiApiKey || !casambiEmail || !casambiPassword) return undefined;
+    return { apiKey: casambiApiKey, email: casambiEmail, password: casambiPassword, ...(casambiNetworkId ? { networkId: casambiNetworkId } : {}) };
+  }
+
+  /** {@link ConfigFallbacks} for a driver's config validation/completeness check, keyed off which
+   * protocols it implements. Casambi Cloud's `apiKey`/`email`/`password`/`networkId` are the only
+   * fields with a fleet-wide fallback today; every other driver gets `{}` (no change in
+   * behavior). */
+  private fallbacksFor(protocols: string[]): ConfigFallbacks {
+    if (!protocols.includes("casambi")) return {};
+    const defaults = this.casambiCloudDefaults();
+    return defaults ? { apiKey: defaults.apiKey, email: defaults.email, password: defaults.password, networkId: defaults.networkId } : {};
   }
 
   /**
@@ -1126,7 +1652,7 @@ export class InstallerServices {
     const desired = new Map<string, { config: Record<string, unknown>; key: string }>();
     for (const d of reg) {
       if (!d.installed || !d.enabled) continue;
-      if (!isConfigComplete(d.configSchema, d.config).complete) continue;
+      if (!isConfigComplete(d.configSchema, d.config, this.fallbacksFor(d.protocols)).complete) continue;
       for (const p of d.protocols) if (hasNativeFactory(p)) desired.set(p, { config: d.config, key: d.key });
     }
     for (const [protocol, { config, key }] of desired) {
@@ -1151,7 +1677,7 @@ export class InstallerServices {
     if (!entry) return;
     for (const protocol of entry.protocols) {
       if (!hasNativeFactory(protocol)) continue;
-      const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config).complete;
+      const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols)).complete;
       const driver = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key)) : null;
       if (runnable) this.desiredProtocols.set(protocol, { key, config: entry.config });
       else this.desiredProtocols.delete(protocol);
@@ -1173,6 +1699,10 @@ export class InstallerServices {
     trigger: DriverLifecycleTrigger,
   ): Promise<void> {
     if (!driver) {
+      // § Realtime State Hardening — resolved BEFORE teardown mutates anything, since
+      // the registry entry (and therefore its installedId) may no longer be findable by
+      // protocol once unregister/uninstall has run.
+      const entry = (await this.drivers.registry()).find((e) => e.protocols.includes(protocol));
       // § Driver Lifecycle Completion — Stop → Unbind → Destroy, made observable
       // (previously the driver just vanished from `lifecycleStatus` with no visible
       // transitional state). `unregisterNativeProtocol` is idempotent (a no-op if
@@ -1184,6 +1714,7 @@ export class InstallerServices {
       for (const deviceId of owned) await this.d.sil.providers.remove(deviceId);
       this.appendLog(key, "info", `Native ${protocol} driver stopped (${trigger})${owned.length ? ` — ${owned.length} device(s) released to unassigned` : ""}`);
       this.lifecycleStatus.delete(protocol);
+      if (entry?.installedId) void this.publishDriverState(entry.installedId, "disconnected");
       return;
     }
 
@@ -1300,7 +1831,7 @@ export class InstallerServices {
   async driverHealth(id: DriverId) {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
-    const { complete, missing } = isConfigComplete(entry.configSchema, entry.config);
+    const { complete, missing } = isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols));
     const protoStatus = this.d.sil.nativeProtocolStatus();
     const status = entry.protocols.map((p) => protoStatus.find((s) => s.protocol === p)).find(Boolean);
     const connected = status ? status.connected : null;
@@ -1329,15 +1860,30 @@ export class InstallerServices {
   async connectDriver(id: DriverId): Promise<{ connected: boolean }> {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
+    // § Realtime State Architecture — published the instant the request is accepted, so
+    // the UI shows "Connecting…" from a real backend event, not local-only optimism it
+    // has to guess is still valid. Generic across every driver id — no per-driver code.
+    void this.publishDriverState(id, "connecting");
     let connected = false;
-    for (const p of entry.protocols) {
-      if (await this.d.sil.connectNativeProtocol(p)) {
-        connected = true;
-        const prev = this.lifecycleStatus.get(p);
-        if (prev) this.setStage(p, { stage: "ready", healthy: true, lastError: null, reconnects: prev.reconnects + 1 });
+    try {
+      for (const p of entry.protocols) {
+        if (await this.d.sil.connectNativeProtocol(p)) {
+          connected = true;
+          // § Realtime State Hardening — unconditional, not `if (prev)`: a driver
+          // connected without ever passing through the full boot/config-change pipeline
+          // (e.g. no config fields required, or connected before its first full pass)
+          // still needs a "ready" lifecycleStatus entry, or reconcileDriverConnectivity()
+          // — which only watches drivers already confirmed "ready" — can never see it.
+          const prev = this.lifecycleStatus.get(p);
+          this.setStage(p, { key: entry.key, stage: "ready", healthy: true, lastError: null, reconnects: (prev?.reconnects ?? 0) + (prev ? 1 : 0) });
+        }
       }
+    } catch (err) {
+      void this.publishDriverState(id, "error", err instanceof Error ? err.message : String(err));
+      throw err;
     }
     this.appendLog(entry.key, connected ? "info" : "warn", connected ? "Connected" : "No native driver to connect (managed by backend)");
+    void this.publishDriverState(id, connected ? "connected" : "error", connected ? null : "No native driver to connect (managed by backend)");
     return { connected };
   }
 
@@ -1345,10 +1891,40 @@ export class InstallerServices {
   async disconnectDriver(id: DriverId): Promise<{ disconnected: boolean }> {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
     if (!entry) throw new SupremeError("not_found", "driver not installed");
+    void this.publishDriverState(id, "disconnecting");
     let disconnected = false;
-    for (const p of entry.protocols) if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+    try {
+      for (const p of entry.protocols) if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+    } catch (err) {
+      void this.publishDriverState(id, "error", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
     this.appendLog(entry.key, "info", disconnected ? "Disconnected" : "No native driver to disconnect");
+    void this.publishDriverState(id, "disconnected");
     return { disconnected };
+  }
+
+  /** § Realtime State Architecture — the single publish point every driver connect/
+   * disconnect AND the lifecycle pipeline (setStage()) flow through (this generic,
+   * driver-id-parameterized method, not a per-protocol special case). Fans out over the
+   * same event bus device-state and notifications already use (in-process today,
+   * cross-process under NATS) — see context.ts's onDriverState()/publishDriverState()
+   * and stream.ts's WSS delivery. */
+  private readonly lastPublishedDriverState = new Map<string, string>();
+  private async publishDriverState(driverId: string, state: "connecting" | "connected" | "disconnecting" | "disconnected" | "error", error?: string | null): Promise<void> {
+    if (!this.d.bus) return;
+    // § Realtime State Hardening — coalesce identical back-to-back publishes. Two
+    // independent paths can legitimately observe the SAME transition (e.g. connectDriver()'s
+    // own explicit "connected" publish and setStage()'s generic ready→connected hook,
+    // when a driver reconnects after already having reached "ready" once at boot) — this
+    // is the single low-level publish point, so it's the one place that can de-duplicate
+    // for every caller at once, never a per-caller guard duplicated across call sites.
+    const fingerprint = `${state}:${error ?? ""}`;
+    if (this.lastPublishedDriverState.get(driverId) === fingerprint) return;
+    this.lastPublishedDriverState.set(driverId, fingerprint);
+    await this.d.bus.publish(subjects.driverState(this.d.homeId), {
+      driverId, state, error: error ?? null, ts: new Date().toISOString(),
+    });
   }
 
   /** Toggle the runtime Developer-Mode override and re-resolve the license. */
@@ -1778,6 +2354,46 @@ export class InstallerServices {
       nextDueAt,
       lastRestoreAt: lastRestore?.at ?? null,
     };
+  }
+
+  /** § Realtime State Hardening — Runner hook (main.ts's existing 60s tick loop, same
+   * cadence every other reconciliation runner here already uses — no new timer). Detects
+   * a native driver's connection state drifting AUTONOMOUSLY (connection lost, network
+   * failure, or an automatic recovery) — i.e. a change `setStage()` never saw because
+   * nothing user-initiated (Connect/Disconnect) or pipeline-driven (install/config-change)
+   * caused it. Reuses the existing `nativeProtocolStatus()` getter (no new backend
+   * mechanism); only drivers already confirmed "ready" are watched — mid-installation
+   * churn is setStage()'s job, not this reconciliation's. */
+  async reconcileDriverConnectivity(): Promise<void> {
+    for (const status of this.d.sil.nativeProtocolStatus()) {
+      const prev = this.lifecycleStatus.get(status.protocol);
+      if (!prev || prev.stage !== "ready") continue;
+      // § Bug avoided — `status.error` is only ever populated at CONNECT time (a boot/
+      // connect-attempt failure record); it does NOT reflect an established connection
+      // dropping later. The live signal for "is this driver actually connected right
+      // now" is `status.connected` (native-adapter.ts's protocolStatus(), which calls
+      // the driver's own isConnected() fresh on every call) — using `!status.error`
+      // here would never detect an autonomous drop at all.
+      const nowHealthy = status.connected;
+      if (nowHealthy === prev.healthy) continue; // no autonomous drift — nothing to reconcile
+      const errorMessage = nowHealthy ? null : (status.error ?? "connection lost");
+      this.setStage(status.protocol, { healthy: nowHealthy, lastError: errorMessage });
+      // setStage()'s own stage-transition hook doesn't fire here (stage stays "ready") —
+      // publish explicitly; this IS the autonomous connection-lost/auto-reconnected event.
+      // § Bug fix — publishDriverStateForProtocol()'s registry lookup is genuinely async
+      // (a real store query, not a synchronous dispatch like the event bus itself) —
+      // fire-and-forgetting it here let the actual publish land AFTER this function had
+      // already returned to its caller (the tick loop, or a test asserting immediately
+      // afterward). This function is already fully async with nothing time-sensitive
+      // after it, so there's no reason not to await it properly.
+      await this.publishDriverStateForProtocol(status.protocol, nowHealthy ? "connected" : "error", errorMessage);
+      this.appendLog(
+        prev.key, nowHealthy ? "info" : "warn",
+        nowHealthy
+          ? `Native ${status.protocol} driver reconnected automatically`
+          : `Native ${status.protocol} driver connection lost: ${errorMessage}`,
+      );
+    }
   }
 
   /** Runner hook: create a scheduled backup if the schedule is enabled and one is due. */

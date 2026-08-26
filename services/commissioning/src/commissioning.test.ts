@@ -106,6 +106,41 @@ describe("CommissioningService", () => {
     expect(rescan.map((f) => f.backendId)).not.toContain("light.studio");
   });
 
+  it("survives an AVR rediscovery: a user-renamed device is neither re-surfaced by discover() nor overwritten by a fresh friendlyName (§ Pass 12.2)", async () => {
+    // Same exclusion mechanism as the generic test above, exercised end-to-end for the
+    // AVR case specifically: an AVR scanner whose suggestedName is UPnP-friendlyName-
+    // derived (per avr-driver.ts's discover()) reports a DIFFERENT friendlyName on the
+    // second scan (e.g. the installer renamed it in the Denon app) — Device.name must
+    // stay whatever the homeowner set, never re-derived from a later scan.
+    let avrFriendlyName = "Denon AVR-X3800H";
+    const avrScanner: IProtocolScanner = {
+      protocol: "avr" as never,
+      async scan() {
+        return [{ backendId: "avr.192.168.1.60", suggestedName: avrFriendlyName, capabilities: ["onoff", "media"], raw: {} }];
+      },
+    };
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home, [avrScanner]);
+    expect((await svc.discover()).map((f) => f.backendId)).toContain("avr.192.168.1.60");
+
+    const device = await svc.commission({
+      backendId: "avr.192.168.1.60",
+      name: "Denon AVR-X3800H",
+      roomId: roomId as never,
+      capabilities: ["onoff", "media"],
+    });
+    const renamed = await home.updateDevice(device.id, { name: "Living Room Receiver" });
+    expect(renamed.name).toBe("Living Room Receiver");
+
+    // Rediscovery reports a different friendlyName for the same physical unit.
+    avrFriendlyName = "Denon AVR-X3800H (2)";
+    const rescan = await svc.discover();
+    expect(rescan.map((f) => f.backendId)).not.toContain("avr.192.168.1.60");
+
+    const stillRenamed = await home.listDevicesInRoom(roomId as never);
+    expect(stillRenamed.find((d) => d.id === device.id)?.name).toBe("Living Room Receiver");
+  });
+
   it("filters discovery by protocol", async () => {
     const { sil, home } = await setup();
     const svc = new CommissioningService(sil, home, [knxScanner]);

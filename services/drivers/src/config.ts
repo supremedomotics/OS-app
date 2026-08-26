@@ -34,10 +34,22 @@ function isFieldRequired(
   return String(value ?? "") === equals;
 }
 
+/**
+ * Fleet-wide fallback values (e.g. Casambi's `SUPREME_CASAMBI_API_KEY`/`EMAIL`/`PASSWORD` env-var
+ * default, § Casambi Driver Refactor — env-var fleet default) that satisfy a required field WITHOUT
+ * being written into the persisted config. This keeps a deployment-wide secret out of every
+ * individual driver instance's stored config (and out of the encrypted-secrets store) — it's read
+ * fresh from the environment every time a value is actually needed, so rotating it takes effect
+ * everywhere at once. A field present here counts as "satisfied" for required/requiredIf purposes
+ * only when the input/existing config leaves it genuinely blank.
+ */
+export type ConfigFallbacks = Record<string, unknown>;
+
 export function validateDriverConfig(
   schema: DriverConfigField[],
   input: Record<string, unknown>,
   existing: Record<string, unknown> = {},
+  fallbacks: ConfigFallbacks = {},
 ): ConfigValidation {
   const errors: string[] = [];
   const out: Record<string, unknown> = {};
@@ -45,18 +57,19 @@ export function validateDriverConfig(
   for (const f of schema) {
     let v = input[f.key];
     const required = isFieldRequired(f, schema, input, existing);
+    const hasFallback = fallbacks[f.key] !== undefined && fallbacks[f.key] !== "";
 
     // Secret preservation: a field left as the mask (or omitted) keeps the previously stored value.
     if (f.secret && (v === undefined || v === "" || v === SECRET_MASK)) {
       if (existing[f.key] !== undefined) out[f.key] = existing[f.key];
-      else if (required) errors.push(`${f.label} is required`);
+      else if (required && !hasFallback) errors.push(`${f.label} is required`);
       continue;
     }
 
     if (v === undefined || v === "") {
       if (f.default !== undefined) v = f.default;
       else {
-        if (required) errors.push(`${f.label} is required`);
+        if (required && !hasFallback) errors.push(`${f.label} is required`);
         continue;
       }
     }
@@ -104,9 +117,18 @@ export function defaultDriverConfig(schema: DriverConfigField[]): Record<string,
  * Honors `requiredIf` the same way {@link validateDriverConfig} does, so a mode-conditional
  * field (e.g. Casambi's Local-only `gatewayIp`) is never flagged missing while a different mode
  * is selected. */
-export function isConfigComplete(schema: DriverConfigField[], config: Record<string, unknown>): { complete: boolean; missing: string[] } {
+export function isConfigComplete(
+  schema: DriverConfigField[],
+  config: Record<string, unknown>,
+  fallbacks: ConfigFallbacks = {},
+): { complete: boolean; missing: string[] } {
   const missing = schema
-    .filter((f) => isFieldRequired(f, schema, config, {}) && (config[f.key] === undefined || config[f.key] === ""))
+    .filter(
+      (f) =>
+        isFieldRequired(f, schema, config, {}) &&
+        (config[f.key] === undefined || config[f.key] === "") &&
+        (fallbacks[f.key] === undefined || fallbacks[f.key] === ""),
+    )
     .map((f) => f.key);
   return { complete: missing.length === 0, missing };
 }

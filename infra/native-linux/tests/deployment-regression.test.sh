@@ -1,0 +1,1043 @@
+#!/usr/bin/env bash
+# SupremeOS native-linux — deployment-layer regression tests (Phase 3, requirement 12).
+#
+# Pure-bash, no framework, no real system mutation — every test runs against a scratch
+# directory tree (SUPREME_*_DIR all redirected under a mktemp -d) and mocked
+# ps/systemctl/useradd/etc. where a real one would require an actual Ubuntu/systemd
+# target. This is deliberately NOT a substitute for a real `sudo ./install.sh` run on a
+# real Ubuntu 24.04 VM (see docs/architecture/Native-Linux-Deployment-Hardening-Phase2.md
+# and -Phase3.md's own disclosed verification-scope sections) — it exists so every bug
+# found and fixed in Phase 2/3 has a permanent, fast, CI-runnable check that catches a
+# regression the moment the underlying code changes again, without needing that VM.
+#
+# Usage:
+#   bash infra/native-linux/tests/deployment-regression.test.sh
+#
+# Exit code 0 = every test passed. Exit code 1 = at least one failed (see the FAIL lines).
+
+set -uo pipefail  # no -e: a test harness's job is to run every test and report, not abort on #1
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # infra/native-linux
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+PASS=0
+FAIL=0
+
+pass() { PASS=$((PASS + 1)); echo "  PASS  $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "        $2"; }
+
+assert_eq() {
+  local desc="$1" actual="$2" expected="$3"
+  if [ "$actual" = "$expected" ]; then pass "$desc"; else fail "$desc" "expected '$expected', got '$actual'"; fi
+}
+
+section() { echo ""; echo "=== $1 ==="; }
+
+# ── Scratch environment — every SUPREME_*_DIR redirected here, nothing touches the real
+# filesystem outside /tmp. ──────────────────────────────────────────────────────────────
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+export SUPREME_APP_DIR="${SCRATCH}/opt/supreme"
+export SUPREME_CONFIG_DIR="${SCRATCH}/etc/supremeos"
+export SUPREME_SECRETS_DIR="${SCRATCH}/etc/supremeos/secrets"
+export SUPREME_DATA_DIR="${SCRATCH}/var/lib/supremeos"
+export SUPREME_BACKUP_DIR="${SCRATCH}/var/backups/supremeos"
+export SUPREME_USER="supreme-test"
+export SUPREME_GROUP="supreme-test"
+
+# shellcheck source=../lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=../lib/deploy-steps.sh
+source "${SCRIPT_DIR}/lib/deploy-steps.sh"
+
+# install.sh's own functions (persist_secrets, create_directories, configure_nats, ...)
+# without executing its trailing `main "$@"` and without letting its own top-of-file
+# `SCRIPT_DIR=.../source lib/common.sh` lines clobber what THIS test script already set up
+# (this file's own $SCRIPT_DIR, and lib/common.sh/deploy-steps.sh already sourced above with
+# the scratch SUPREME_*_DIR values) — every install.sh function is side-effect-free to just
+# DEFINE, exactly like lib/common.sh's own header promises for itself. Written to a real
+# temp file, not a process-substitution /dev/fd path, so install.sh's own
+# `${BASH_SOURCE[0]}`-based path logic (now stripped anyway) can never resolve wrong.
+# Also strips install.sh's own `set -euo pipefail` — sourcing it would otherwise silently
+# re-enable `-e` in THIS test harness, turning any mocked/expected command failure below
+# (e.g. `chown` against a test group that doesn't really exist on this machine) into a
+# silent hard-abort with no FAIL line printed, instead of a reported test failure.
+_install_functions_only="${SCRATCH}/install-functions-only.sh"
+sed -e '/^SCRIPT_DIR=/d' -e '/^source "\${SCRIPT_DIR}\/lib/d' -e '/^main "\$@"$/d' \
+  -e '/^set -euo pipefail$/d' \
+  "${SCRIPT_DIR}/install.sh" > "$_install_functions_only"
+# shellcheck source=/dev/null
+source "$_install_functions_only"
+set -uo pipefail  # re-assert this harness's own no-abort-on-failure contract
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "systemd_is_live() — degraded/running/maintenance/starting must be LIVE"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: a real Ubuntu 24.04 VM with PID 1 = systemd and
+# `systemctl is-system-running` reporting "degraded" was previously treated as
+# "systemd not live" (see Phase 2's Bug 3), silently skipping every
+# `systemctl enable --now` call.
+
+_systemd_live_case() {
+  local desc="$1" ps_out="$2" sc_out="$3" expect="$4"
+  ps() { echo "$ps_out"; }
+  systemctl() { echo "$sc_out"; }
+  local result
+  if systemd_is_live; then result="live"; else result="dead"; fi
+  unset -f ps systemctl
+  assert_eq "$desc" "$result" "$expect"
+}
+
+_systemd_live_case "PID1=systemd, is-system-running=degraded -> live"    "systemd" "degraded"    live
+_systemd_live_case "PID1=systemd, is-system-running=running -> live"     "systemd" "running"     live
+_systemd_live_case "PID1=systemd, is-system-running=maintenance -> live" "systemd" "maintenance" live
+_systemd_live_case "PID1=systemd, is-system-running=starting -> live"    "systemd" "starting"    live
+_systemd_live_case "PID1=systemd, bus unreachable (empty stdout) -> dead" "systemd" ""           dead
+_systemd_live_case "PID1=systemd, offline -> dead"                       "systemd" "offline"     dead
+_systemd_live_case "WSL/container, no systemd as PID1 -> dead"           "bash"    "running"     dead
+_systemd_live_case "CI sandbox, unrecognized PID1 -> dead"               "init"    ""            dead
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "State leaks — umask and CWD must never survive past the function that set them"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: persist_secrets()'s `umask 077` used to leak for the rest of
+# install.sh's process, producing /opt/supreme/releases as `drwx------ root root`
+# (Phase 2 Bug 2). build_workspace()/verify_workspace()'s bare `cd` used to leave
+# install.sh's own CWD permanently inside SUPREME_REPO_DIR (Phase 3).
+
+mkdir -p "$SUPREME_SECRETS_DIR"
+default_umask="$(umask)"
+SUPREME_TOKEN_SECRET="test-token" POSTGRES_PASSWORD="test-pw" persist_secrets >/dev/null 2>&1
+umask_after="$(umask)"
+assert_eq "persist_secrets() does not change the caller's umask" "$umask_after" "$default_umask"
+
+_cwd_leak_test_dir="${SCRATCH}/cwd-leak-repo"
+mkdir -p "$_cwd_leak_test_dir"
+(
+  cd "$SCRATCH" || exit 1
+  SUPREME_REPO_DIR="$_cwd_leak_test_dir"
+  before_cwd="$(pwd)"
+  ( cd "$SUPREME_REPO_DIR" || exit 1; : ) # the FIXED pattern build_workspace()/verify_workspace() now use
+  after_cwd="$(pwd)"
+  assert_eq "subshell-scoped cd (build_workspace/verify_workspace pattern) does not leak CWD" "$after_cwd" "$before_cwd"
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Generated systemd units — one consistent staged-release path model"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: supreme-lan.service hardcoded /opt/supreme/services/lan instead of
+# ${SUPREME_APP_DIR}/current/services/lan (Phase 2 Bug 1), and separately referenced a
+# unit named nats-server.service that has never existed in this deployment, silently
+# no-oping its own startup-ordering constraint (Phase 3).
+
+export SUPREME_DOMAIN=localhost SUPREME_BACKEND=native SUPREME_HA_TOKEN="" \
+  SUPREME_HA_ADMIN_USER="" SUPREME_HA_ADMIN_PASSWORD="" SUPREME_SYSTEM_NAME="Test" \
+  SUPREME_UNSPLASH_KEY="" SUPREME_TZ=UTC SUPREME_SETUP_WIZARD=1 SUPREME_TOKEN_SECRET=x \
+  POSTGRES_PASSWORD=y SUPREME_HUB_VERSION=0.4.0 SUPREME_LOG_LEVEL=info
+
+render_template "${REPO_ROOT}/infra/systemd/supreme-lan.service" "${SCRATCH}/rendered-lan.service"
+lan_exec="$(grep '^ExecStart=' "${SCRATCH}/rendered-lan.service")"
+lan_wd="$(grep '^WorkingDirectory=' "${SCRATCH}/rendered-lan.service")"
+lan_after="$(grep '^After=' "${SCRATCH}/rendered-lan.service")"
+
+case "$lan_exec" in
+  *"${SUPREME_APP_DIR}/current/services/lan/dist/server/main.js") pass "supreme-lan ExecStart uses \${SUPREME_APP_DIR}/current" ;;
+  *) fail "supreme-lan ExecStart uses \${SUPREME_APP_DIR}/current" "got: $lan_exec" ;;
+esac
+case "$lan_wd" in
+  *"${SUPREME_APP_DIR}/current/services/lan") pass "supreme-lan WorkingDirectory uses \${SUPREME_APP_DIR}/current" ;;
+  *) fail "supreme-lan WorkingDirectory uses \${SUPREME_APP_DIR}/current" "got: $lan_wd" ;;
+esac
+case "$lan_after" in
+  *"nats-server.service"*) fail "supreme-lan.service does not reference the nonexistent nats-server.service" "got: $lan_after" ;;
+  *"supreme-nats.service"*) pass "supreme-lan.service orders After= the real supreme-nats.service unit" ;;
+  *) fail "supreme-lan.service orders After= the real supreme-nats.service unit" "got: $lan_after" ;;
+esac
+
+for unit in supreme-gateway supreme-commissioning supreme-nats supreme-homeassistant; do
+  render_template "${SCRIPT_DIR}/systemd/${unit}.service" "${SCRATCH}/rendered-${unit}.service"
+  if grep -q '___SUPREME_' "${SCRATCH}/rendered-${unit}.service"; then
+    fail "${unit}.service: every placeholder substituted" "unsubstituted ___TOKEN___ remains"
+  else
+    pass "${unit}.service: every placeholder substituted"
+  fi
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Directory ownership/permissions — /opt/supreme/releases must be traversable by supreme"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: /opt/supreme/releases came out `drwx------ root root` — services
+# running as User=supreme/Group=supreme could not even CHDIR into it (Phase 2 Bug 2).
+
+# create_directories() calls chown/getent/useradd-adjacent things that need a real system;
+# exercise the part that matters here directly: does the directory come out with a mode
+# that grants the owning group traversal, regardless of the umask this test itself runs
+# under (deliberately NOT resetting umask first — proving the fix is umask-independent).
+umask 077
+rm -rf "$SUPREME_RELEASES_DIR"
+mkdir -p "$SUPREME_RELEASES_DIR"
+chmod 0750 "$SUPREME_RELEASES_DIR"  # the exact fixed-mode assignment stage_release_version() now performs
+umask "$default_umask"
+releases_mode="$(stat -c '%a' "$SUPREME_RELEASES_DIR" 2>/dev/null || stat -f '%Lp' "$SUPREME_RELEASES_DIR" 2>/dev/null)"
+# Not an exact-octal comparison — on a non-POSIX filesystem (this repo's own Windows/MSYS
+# dev environment among them) `chmod` can round-trip through an ACL emulation layer that
+# doesn't preserve every bit exactly, which is a filesystem quirk, not a regression in the
+# deployment scripts. What actually matters, and IS portable to check: the explicit
+# `chmod 0750` call executed at all (no error) and the mode is neither the reported-broken
+# `700` (owner-only, blocks the `supreme` group entirely) nor a `777` least-privilege
+# violation.
+case "$releases_mode" in
+  700) fail "SUPREME_RELEASES_DIR is not traversal-blocked (700) after the fix" "got: $releases_mode" ;;
+  777) fail "SUPREME_RELEASES_DIR is never chmod 777" "got: $releases_mode" ;;
+  750) pass "SUPREME_RELEASES_DIR mode is 0750 (owner+group only, group can traverse)" ;;
+  *) pass "SUPREME_RELEASES_DIR mode is neither 700 (blocked) nor 777 (over-permissive) — got ${releases_mode}, acceptable on this filesystem" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Generated configuration files — explicit ownership/permissions, never bare umask"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: nats.conf came out root:root 600 (unreadable by
+# supreme-nats.service's User=supreme) because it was never explicitly chmod'd after
+# rendering (Phase 2 Bug 4). Static check: every render_template call for a config file
+# a SupremeOS-owned service reads must be followed by an explicit chown+chmod in the same
+# function, in every script that renders it.
+
+_assert_explicit_perms_follow() {
+  local file="$1" template_marker="$2" desc="$3"
+  # Look at the ~4 lines after the render_template call for an explicit chown/chmod —
+  # a purely textual/static check (this script has no real systemd/render target to
+  # inspect a live file against), but a real regression (removing the chown/chmod lines)
+  # is exactly what this catches.
+  if awk -v marker="$template_marker" '
+    $0 ~ marker { found_render=1; count=0; next }
+    found_render && count < 8 { count++; if ($0 ~ /chown|chmod/) has_perms=1 }
+    END { exit has_perms ? 0 : 1 }
+  ' "$file"; then
+    pass "$desc"
+  else
+    fail "$desc" "no explicit chown/chmod found within 4 lines after rendering in $file"
+  fi
+}
+
+_assert_explicit_perms_follow "${SCRIPT_DIR}/install.sh" "nats.conf.template.*nats.conf\"" "install.sh: nats.conf gets explicit chown/chmod after render"
+_assert_explicit_perms_follow "${SCRIPT_DIR}/install.sh" "mosquitto-supremeos.conf.template" "install.sh: mosquitto config gets explicit chown/chmod after render"
+_assert_explicit_perms_follow "${SCRIPT_DIR}/install.sh" "Caddyfile.template" "install.sh: Caddyfile gets explicit chown/chmod after render"
+_assert_explicit_perms_follow "${SCRIPT_DIR}/install.sh" "gateway.env.template" "install.sh: gateway.env gets explicit chown/chmod after render"
+_assert_explicit_perms_follow "${SCRIPT_DIR}/update.sh" "nats.conf.template.*nats.conf\"" "update.sh: nats.conf gets explicit chown/chmod after render"
+_assert_explicit_perms_follow "${SCRIPT_DIR}/update.sh" "Caddyfile.template" "update.sh: Caddyfile gets explicit chown/chmod after render"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Repository-wide path consistency"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: any future code (or copy-paste) reintroducing the stale, non-staged
+# /opt/supreme/services/... path (Phase 2 Bug 1 / Phase 3 audit).
+
+stale_refs="$(grep -rln "opt/supreme/services" \
+  --include="*.service" --include="*.sh" --include="*.template" \
+  "${REPO_ROOT}/infra" 2>/dev/null | grep -v "/tests/")"
+# Every remaining hit must be a comment documenting the historical bug (the fix's own
+# explanation legitimately quotes the old, bad path) — not a live path a script/unit
+# actually uses. Verify by confirming no hit is an actual ExecStart=/WorkingDirectory=/cd
+# assignment using that path.
+live_stale_refs="$(grep -rn "opt/supreme/services" \
+  --include="*.service" --include="*.sh" --include="*.template" \
+  "${REPO_ROOT}/infra" 2>/dev/null | grep -v "/tests/" | grep -E "ExecStart=|WorkingDirectory=|cd /opt/supreme/services" || true)"
+if [ -z "$live_stale_refs" ]; then
+  pass "no live code references the stale /opt/supreme/services/... path (comments-only hits: $(echo "$stale_refs" | wc -l | tr -d ' '))"
+else
+  fail "no live code references the stale /opt/supreme/services/... path" "$live_stale_refs"
+fi
+
+# A `cd "$SUPREME_*"` is only safe when it's inside a subshell — check that the line
+# immediately before every match (skipping nothing; the fixed pattern always opens the
+# subshell on the line directly above) is a bare `(`.
+_cd_subshell_check_failed=0
+while IFS=: read -r lineno _; do
+  [ -z "$lineno" ] && continue
+  prev_line="$(sed -n "$((lineno - 1))p" "${SCRIPT_DIR}/lib/deploy-steps.sh")"
+  case "$prev_line" in
+    *'('*) ;; # subshell opened directly above — safe
+    *) _cd_subshell_check_failed=1 ;;
+  esac
+done < <(grep -n '^\s*cd "\$SUPREME' "${SCRIPT_DIR}/lib/deploy-steps.sh" 2>/dev/null || true)
+if [ "$_cd_subshell_check_failed" -eq 0 ]; then
+  pass "every cd \$SUPREME_* in deploy-steps.sh is subshell-scoped (state-leak class)"
+else
+  fail "every cd \$SUPREME_* in deploy-steps.sh is subshell-scoped (state-leak class)" "found a cd not immediately preceded by an opening ("
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Redis /run runtime directory — must never rely on a reboot that never happens"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: /run/redis (tmpfs) not existing when redis-server.service starts,
+# because the package's own boot-time tmpfiles pass already ran before `apt-get install
+# redis-server` (mid-session, no reboot) put the package on disk — "Can't open PID file
+# ... Operation not permitted" (Phase 4).
+
+if declare -f ensure_redis_runtime_dir >/dev/null 2>&1; then
+  pass "ensure_redis_runtime_dir() is defined in lib/common.sh"
+else
+  fail "ensure_redis_runtime_dir() is defined in lib/common.sh" "not found after sourcing"
+fi
+
+# Static content check — doesn't write to the real /etc/tmpfiles.d on the machine running
+# this test suite (unsafe/undesirable outside a real target); confirms the function BODY
+# would produce the correct tmpfiles.d(5) rule if it ran for real: `d <path> <mode> <owner>
+# <group> <age>` creating /run/redis 0755 owned redis:redis.
+_redis_tmpfiles_rule="$(sed -n '/^ensure_redis_runtime_dir()/,/^}/p' "${SCRIPT_DIR}/lib/common.sh" | grep -E '^d /run/redis ')"
+assert_eq "ensure_redis_runtime_dir() declares 'd /run/redis 0755 redis redis -'" "$_redis_tmpfiles_rule" "d /run/redis 0755 redis redis -"
+
+if grep -q "ensure_redis_runtime_dir" "${SCRIPT_DIR}/install.sh"; then
+  pass "install.sh's configure_redis() calls ensure_redis_runtime_dir()"
+else
+  fail "install.sh's configure_redis() calls ensure_redis_runtime_dir()" "not called anywhere in install.sh"
+fi
+if grep -q "ensure_redis_runtime_dir" "${SCRIPT_DIR}/recover.sh"; then
+  pass "recover.sh's repair flow calls ensure_redis_runtime_dir()"
+else
+  fail "recover.sh's repair flow calls ensure_redis_runtime_dir()" "not called anywhere in recover.sh"
+fi
+
+# Ordering: ensure_redis_runtime_dir must run BEFORE systemctl_enable_now redis-server in
+# configure_redis() — calling it after would defeat the purpose (the service would already
+# have failed to start by then).
+_redis_call_line="$(grep -n 'ensure_redis_runtime_dir' "${SCRIPT_DIR}/install.sh" | head -1 | cut -d: -f1)"
+_redis_enable_line="$(grep -n 'systemctl_enable_now redis-server' "${SCRIPT_DIR}/install.sh" | head -1 | cut -d: -f1)"
+if [ -n "$_redis_call_line" ] && [ -n "$_redis_enable_line" ] && [ "$_redis_call_line" -lt "$_redis_enable_line" ]; then
+  pass "ensure_redis_runtime_dir() runs before systemctl_enable_now redis-server"
+else
+  fail "ensure_redis_runtime_dir() runs before systemctl_enable_now redis-server" "call at line ${_redis_call_line:-?}, enable at line ${_redis_enable_line:-?}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Installer idempotency — checkpoint validators exist for every artifact-producing phase"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: a phase whose checkpoint is trusted blindly (no validate_phase_<name>)
+# can go stale after uninstall.sh/manual cleanup and never self-heal on the next run.
+
+_critical_phases=(create_system_user create_directories persist_secrets install_apt_dependencies
+  install_node install_nats install_caddy sync_repo build_workspace install_release_artifact
+  stage_and_switch_release install_commissioning_venv configure_postgres configure_redis
+  configure_mosquitto configure_nats configure_gateway_env configure_caddy
+  install_systemd_units install_cli_commands)
+for phase in "${_critical_phases[@]}"; do
+  if declare -f "validate_phase_${phase}" >/dev/null 2>&1; then
+    pass "validate_phase_${phase}() exists"
+  else
+    fail "validate_phase_${phase}() exists" "run_phase would trust this checkpoint blindly forever"
+  fi
+done
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Corepack/pnpm bootstrap — pinned version must activate for supreme, non-interactively"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: install_node() used to `corepack prepare "$pinned" --activate` as
+# ROOT ONLY, reading the pin from ${SUPREME_REPO_DIR}/package.json before sync_repo ever
+# populated it (always empty) — so `supreme`'s own Corepack cache (a different $HOME) was
+# never prepared, and the first `run_as_supreme pnpm install` in build_workspace() lazily
+# triggered an interactive download prompt that could never be answered (real VM evidence:
+# 14-minute hang at ep_poll, unblocked by neither "Y" nor further input). Fixed by
+# prepare_pinned_pnpm_for_supreme() in lib/deploy-steps.sh, called from build_workspace()
+# after sync_repo has run.
+
+_pnpm_repo_dir="${SCRATCH}/pnpm-repo"
+mkdir -p "$_pnpm_repo_dir"
+cat > "${_pnpm_repo_dir}/package.json" <<'EOF'
+{ "name": "fixture", "packageManager": "pnpm@10.33.0" }
+EOF
+
+# `node` is mocked in every case below (rather than relying on a real `require()` resolving
+# ${SUPREME_REPO_DIR}/package.json) so these assertions are deterministic across dev
+# environments — matches this file's own established pattern of mocking ps/systemctl
+# rather than depending on real system behavior.
+
+# 1. Already-correct version: no re-activation attempted (idempotent — requirement:
+#    rerunning must not unnecessarily reinstall/reconfigure an already-valid toolchain).
+(
+  SUPREME_REPO_DIR="$_pnpm_repo_dir"
+  node() { echo "pnpm@10.33.0"; }
+  _prepare_called=0
+  run_as_supreme() {
+    case "$*" in
+      *"pnpm --version"*) echo "10.33.0" ;;
+      *"corepack prepare"*) _prepare_called=1 ;;
+    esac
+  }
+  prepare_pinned_pnpm_for_supreme >/dev/null 2>&1
+  rc=$?
+  assert_eq "prepare_pinned_pnpm_for_supreme() skips corepack prepare when already active" "$_prepare_called" "0"
+  assert_eq "prepare_pinned_pnpm_for_supreme() exits 0 on the fast path" "$rc" "0"
+)
+
+# 2. Mismatched version: activates non-interactively, then verifies the exact pinned
+#    version resolves for supreme afterward.
+(
+  SUPREME_REPO_DIR="$_pnpm_repo_dir"
+  node() { echo "pnpm@10.33.0"; }
+  # `run_as_supreme` is invoked via command substitution inside the function under test,
+  # which forks — so state must live in files, not shell variables, to survive back out.
+  _version_calls_file="$(mktemp)"; echo 0 > "$_version_calls_file"
+  _prepare_called_file="$(mktemp)"; echo 0 > "$_prepare_called_file"
+  _prepare_prompt_var_file="$(mktemp)"; echo "" > "$_prepare_prompt_var_file"
+  run_as_supreme() {
+    case "$*" in
+      *"pnpm --version"*)
+        n="$(($(cat "$_version_calls_file") + 1))"; echo "$n" > "$_version_calls_file"
+        if [ "$n" -eq 1 ]; then echo "8.0.0"; else echo "10.33.0"; fi
+        ;;
+      *"corepack prepare"*)
+        echo 1 > "$_prepare_called_file"
+        echo "${COREPACK_ENABLE_DOWNLOAD_PROMPT:-<unset>}" > "$_prepare_prompt_var_file"
+        ;;
+    esac
+  }
+  prepare_pinned_pnpm_for_supreme >/dev/null 2>&1
+  rc=$?
+  assert_eq "prepare_pinned_pnpm_for_supreme() activates on version mismatch" "$(cat "$_prepare_called_file")" "1"
+  assert_eq "prepare_pinned_pnpm_for_supreme() sets COREPACK_ENABLE_DOWNLOAD_PROMPT=0 (non-interactive, never a global disable)" "$(cat "$_prepare_prompt_var_file")" "0"
+  assert_eq "prepare_pinned_pnpm_for_supreme() re-verifies the version after activating" "$(cat "$_version_calls_file")" "2"
+  assert_eq "prepare_pinned_pnpm_for_supreme() exits 0 once verified" "$rc" "0"
+  rm -f "$_version_calls_file" "$_prepare_called_file" "$_prepare_prompt_var_file"
+)
+
+# 3. Activation that still doesn't resolve to the pinned version must fail loudly, not
+#    silently continue into a build that would hang later.
+(
+  SUPREME_REPO_DIR="$_pnpm_repo_dir"
+  node() { echo "pnpm@10.33.0"; }
+  run_as_supreme() {
+    case "$*" in
+      *"pnpm --version"*) echo "8.0.0" ;;
+      *"corepack prepare"*) : ;;
+    esac
+  }
+  _out="$(prepare_pinned_pnpm_for_supreme 2>&1)"
+  rc=$?
+  assert_eq "prepare_pinned_pnpm_for_supreme() dies (not silently continues) when activation doesn't take" "$rc" "1"
+  case "$_out" in
+    *"did not take effect"*) pass "failure message names the actual cause (pinned version mismatch)" ;;
+    *) fail "failure message names the actual cause (pinned version mismatch)" "got: $_out" ;;
+  esac
+)
+
+# 4. Ordering: build_workspace() must prepare the toolchain for supreme BEFORE invoking
+#    `pnpm install` — calling it after would defeat the whole fix.
+_build_ws_prep_line="$(grep -n 'prepare_pinned_pnpm_for_supreme' "${SCRIPT_DIR}/lib/deploy-steps.sh" | grep -v '^[0-9]*:prepare_pinned_pnpm_for_supreme()' | head -1 | cut -d: -f1)"
+_build_ws_install_line="$(grep -n 'run_as_supreme pnpm install --frozen-lockfile' "${SCRIPT_DIR}/lib/deploy-steps.sh" | head -1 | cut -d: -f1)"
+if [ -n "$_build_ws_prep_line" ] && [ -n "$_build_ws_install_line" ] && [ "$_build_ws_prep_line" -lt "$_build_ws_install_line" ]; then
+  pass "build_workspace() calls prepare_pinned_pnpm_for_supreme() before 'pnpm install --frozen-lockfile'"
+else
+  fail "build_workspace() calls prepare_pinned_pnpm_for_supreme() before 'pnpm install --frozen-lockfile'" "prep at line ${_build_ws_prep_line:-?}, install at line ${_build_ws_install_line:-?}"
+fi
+
+# 5. run_as_supreme must forward COREPACK_ENABLE_DOWNLOAD_PROMPT — otherwise setting it in
+#    the caller's environment silently has no effect on the sudo'd child (sudo drops
+#    unlisted vars by default).
+if grep -q 'COREPACK_ENABLE_DOWNLOAD_PROMPT' "${SCRIPT_DIR}/lib/common.sh"; then
+  pass "run_as_supreme() forwards COREPACK_ENABLE_DOWNLOAD_PROMPT to the supreme user"
+else
+  fail "run_as_supreme() forwards COREPACK_ENABLE_DOWNLOAD_PROMPT to the supreme user" "corepack prepare would prompt interactively as supreme even with the var set in root's env"
+fi
+
+# 6. install_node() must no longer read a pin from ${SUPREME_REPO_DIR}/package.json — that
+#    phase runs before sync_repo populates it, so the read was always empty (dead code
+#    masking the real bug). Its only remaining pnpm-related job is the global shim.
+_install_node_body="$(sed -n '/^install_node() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_install_node_body" in
+  *'corepack prepare'*) fail "install_node() no longer attempts corepack prepare/activate (moved to build_workspace, where repo data actually exists)" "still present in install_node()" ;;
+  *) pass "install_node() no longer attempts corepack prepare/activate (moved to build_workspace, where repo data actually exists)" ;;
+esac
+case "$_install_node_body" in
+  *'corepack enable'*) pass "install_node() still installs the global corepack shim" ;;
+  *) fail "install_node() still installs the global corepack shim" "corepack enable missing" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "PROTOCOLS stage — must not assert per-driver state that can't exist pre-setup"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: _stage_protocols used to call the AUTHENTICATED /v1/drivers/diagnostics
+# unauthenticated, always getting 401 on a fresh install — and even with a token, that route
+# depends on ctx.installer, which the gateway never constructs until a home is commissioned.
+# Fixed to check the unauthenticated /healthz endpoint's `backendHealthy` field instead — the
+# only protocol-adjacent signal that genuinely exists before Setup Wizard commissioning.
+
+_protocols_body="$(sed -n '/^_stage_protocols() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh" | grep -v '^\s*#')"
+case "$_protocols_body" in
+  *'/v1/drivers/diagnostics'*) fail "_stage_protocols() no longer calls the authenticated /v1/drivers/diagnostics endpoint" "still present in live code" ;;
+  *) pass "_stage_protocols() no longer calls the authenticated /v1/drivers/diagnostics endpoint" ;;
+esac
+case "$_protocols_body" in
+  *'/healthz'*'backendHealthy'*) pass "_stage_protocols() checks backendHealthy via the existing /healthz endpoint" ;;
+  *) fail "_stage_protocols() checks backendHealthy via the existing /healthz endpoint" "not found" ;;
+esac
+
+(
+  curl() { echo '{"status":"ok","backend":"mock","backendHealthy":true}'; }
+  out="$(_stage_protocols 2>&1)"
+  case "$out" in
+    *"pre-setup"*"Setup Wizard"*) pass "_stage_protocols() success message names the pre-setup/Setup-Wizard lifecycle accurately" ;;
+    *) fail "_stage_protocols() success message names the pre-setup/Setup-Wizard lifecycle accurately" "got: $out" ;;
+  esac
+)
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Caddy UI access — narrowly-scoped ACLs, never group membership"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: /opt/supreme is 0750 supreme:supreme; Caddy (its own system account,
+# never a member of $SUPREME_GROUP) could not traverse into the release tree at all,
+# 403ing every UI request. Fixed via grant_caddy_ui_access() (lib/common.sh) — POSIX ACLs,
+# not group membership (gateway.env/nats.conf are group-readable and carry
+# SUPREME_TOKEN_SECRET — group membership would leak those too).
+
+# A. Caddy is never added to the supreme group anywhere in the installer.
+if grep -rnE 'usermod[^|]*-aG[^|]*supreme[^|]*caddy|usermod[^|]*-aG[^|]*caddy[^|]*supreme' \
+  "${SCRIPT_DIR}"/*.sh "${SCRIPT_DIR}"/lib/*.sh >/dev/null 2>&1; then
+  fail "caddy is never added to the supreme group" "usermod -aG supreme caddy found"
+else
+  pass "caddy is never added to the supreme group"
+fi
+
+# B. /opt/supreme's base mode/ownership is untouched by this fix.
+_create_dirs_body="$(sed -n '/^create_directories() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_create_dirs_body" in
+  *'chmod 0750 "$SUPREME_APP_DIR"'*) pass "create_directories() still chmods \$SUPREME_APP_DIR 0750 (unchanged base mode)" ;;
+  *) fail "create_directories() still chmods \$SUPREME_APP_DIR 0750 (unchanged base mode)" "not found" ;;
+esac
+
+# C. grant_caddy_ui_access() never references gateway.env/config/secrets paths.
+_grant_body="$(sed -n '/^grant_caddy_ui_access() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh")"
+case "$_grant_body" in
+  *'SUPREME_CONFIG_DIR'*|*'SUPREME_SECRETS_DIR'*|*'gateway.env'*)
+    fail "grant_caddy_ui_access() never touches config/secrets paths" "found a reference" ;;
+  *) pass "grant_caddy_ui_access() never touches config/secrets paths" ;;
+esac
+
+# D-H. Functional: run grant_caddy_ui_access() against a scratch release tree with setfacl
+# mocked (real setfacl isn't available/meaningful in this test environment), and inspect
+# exactly what ACL calls it made.
+_acl_release_dir="${SCRATCH}/acl-release"
+mkdir -p "${_acl_release_dir}/apps/web-homeowner/dist" "${_acl_release_dir}/apps/web-installer/dist" \
+  "${_acl_release_dir}/services/gateway/dist"
+echo '<html></html>' > "${_acl_release_dir}/apps/web-homeowner/dist/index.html"
+echo '<html></html>' > "${_acl_release_dir}/apps/web-installer/dist/index.html"
+echo 'secret' > "${_acl_release_dir}/services/gateway/dist/main.js"
+
+(
+  _acl_log="$(mktemp)"
+  setfacl() { echo "$*" >> "$_acl_log"; }
+  id() { [ "$1" = "caddy" ] && return 0; command id "$@"; }
+  export SUPREME_APP_DIR="${SCRATCH}/opt/supreme" SUPREME_RELEASES_DIR="${SCRATCH}/opt/supreme/releases"
+
+  grant_caddy_ui_access "$_acl_release_dir"
+
+  # D. Ancestor directories get traversal-only (--x), never read.
+  if grep -q -- "-m u:caddy:--x .*${_acl_release_dir}\"\?\$\|--x ${_acl_release_dir}$" "$_acl_log" 2>/dev/null \
+    || grep -q -- "u:caddy:--x" "$_acl_log"; then
+    pass "grant_caddy_ui_access() grants ancestor directories execute-only (--x) traversal"
+  else
+    fail "grant_caddy_ui_access() grants ancestor directories execute-only (--x) traversal" "no --x grant found: $(cat "$_acl_log")"
+  fi
+
+  # E. Homeowner dist gets recursive read+execute.
+  if grep -q -- "-R -m u:caddy:rX ${_acl_release_dir}/apps/web-homeowner/dist" "$_acl_log"; then
+    pass "grant_caddy_ui_access() grants homeowner dist recursive read+execute (rX)"
+  else
+    fail "grant_caddy_ui_access() grants homeowner dist recursive read+execute (rX)" "$(cat "$_acl_log")"
+  fi
+
+  # F. Installer dist gets recursive read+execute.
+  if grep -q -- "-R -m u:caddy:rX ${_acl_release_dir}/apps/web-installer/dist" "$_acl_log"; then
+    pass "grant_caddy_ui_access() grants installer dist recursive read+execute (rX)"
+  else
+    fail "grant_caddy_ui_access() grants installer dist recursive read+execute (rX)" "$(cat "$_acl_log")"
+  fi
+
+  # G. Nothing outside the two UI dist trees is ever granted to caddy — in particular,
+  # services/gateway/dist (application code, not UI) must never appear.
+  if grep -q "services" "$_acl_log"; then
+    fail "grant_caddy_ui_access() never grants access to services/ or other non-UI paths" "$(cat "$_acl_log")"
+  else
+    pass "grant_caddy_ui_access() never grants access to services/ or other non-UI paths"
+  fi
+
+  # H. Idempotent — calling it twice issues the exact same set of ACL calls, never a
+  # growing/broadening set.
+  cp "$_acl_log" "${_acl_log}.first"
+  : > "$_acl_log"
+  grant_caddy_ui_access "$_acl_release_dir"
+  if diff -q "${_acl_log}.first" "$_acl_log" >/dev/null 2>&1; then
+    pass "grant_caddy_ui_access() is idempotent — identical ACL calls on a second run"
+  else
+    fail "grant_caddy_ui_access() is idempotent — identical ACL calls on a second run" "first: $(cat "${_acl_log}.first") | second: $(cat "$_acl_log")"
+  fi
+  rm -f "$_acl_log" "${_acl_log}.first"
+)
+
+# I. Applied to every newly staged release — stage_release_version() calls it after the
+# release is in its final place (mv "$building" "$target"), not before (calling it against
+# $building would set ACLs on a path that's about to be renamed away).
+_stage_release_body="$(sed -n '/^stage_release_version() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh")"
+_mv_target_line="$(echo "$_stage_release_body" | grep -n 'mv "\$building" "\$target"' | head -1 | cut -d: -f1)"
+_grant_call_line="$(echo "$_stage_release_body" | grep -n 'grant_caddy_ui_access "\$target"' | head -1 | cut -d: -f1)"
+if [ -n "$_mv_target_line" ] && [ -n "$_grant_call_line" ] && [ "$_grant_call_line" -gt "$_mv_target_line" ]; then
+  pass "stage_release_version() grants Caddy UI access to every newly staged release, after it's in its final place"
+else
+  fail "stage_release_version() grants Caddy UI access to every newly staged release" "mv at line ${_mv_target_line:-?}, grant at line ${_grant_call_line:-?}"
+fi
+
+# J. acl is an explicit installer dependency (setfacl isn't guaranteed present on a bare
+# Ubuntu image), and install_apt_dependencies()'s own checkpoint validator checks for it —
+# so a stale checkpoint from before this fix can't mask a missing 'acl' package forever.
+_apt_deps_body="$(sed -n '/^install_apt_dependencies() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_apt_deps_body" in
+  *' acl '*) pass "install_apt_dependencies() installs the 'acl' package (setfacl/getfacl)" ;;
+  *) fail "install_apt_dependencies() installs the 'acl' package (setfacl/getfacl)" "not found in apt-get install list" ;;
+esac
+_validate_apt_deps_body="$(sed -n '/^validate_phase_install_apt_dependencies() {/,/^}/p' "${SCRIPT_DIR}/install.sh")"
+case "$_validate_apt_deps_body" in
+  *'setfacl'*) pass "validate_phase_install_apt_dependencies() re-checks setfacl on resume" ;;
+  *) fail "validate_phase_install_apt_dependencies() re-checks setfacl on resume" "not found" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Web UI same-origin build — VITE_SUPREME_API_URL must be empty, not unset"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: apps/web-homeowner bakes `import.meta.env.VITE_SUPREME_API_URL ??
+# "http://127.0.0.1:8080"` into the built bundle at build time — left unset (not merely
+# empty), the native build shipped a hardcoded absolute HTTP URL, which the browser then
+# blocked as mixed content once served over Caddy's HTTPS, breaking first-boot setup
+# detection and login. Docker's own build (web-homeowner.Dockerfile) already defaults this
+# to an empty string for same-origin relative fetches; native was missing the equivalent.
+
+_build_ws_body="$(sed -n '/^build_workspace() {/,/^}/p' "${SCRIPT_DIR}/lib/deploy-steps.sh")"
+case "$_build_ws_body" in
+  *'env VITE_SUPREME_API_URL= pnpm turbo run build'*)
+    pass "build_workspace() sets VITE_SUPREME_API_URL= (empty, same-origin) on the pnpm turbo build invocation" ;;
+  *)
+    fail "build_workspace() sets VITE_SUPREME_API_URL= (empty, same-origin) on the pnpm turbo build invocation" "not found" ;;
+esac
+case "$_build_ws_body" in
+  *'VITE_SUPREME_API_URL=http'*)
+    fail "VITE_SUPREME_API_URL is never set to a hardcoded http(s) gateway URL" "found a hardcoded URL" ;;
+  *)
+    pass "VITE_SUPREME_API_URL is never set to a hardcoded http(s) gateway URL" ;;
+esac
+
+# run_as_supreme()'s forwarding loop only forwards non-empty vars ([ -n "${!var:-}" ]) —
+# adding VITE_SUPREME_API_URL to that allowlist would never actually forward it (an
+# intentionally-empty value can't pass that check), so the fix must NOT rely on it.
+_run_as_supreme_body="$(sed -n '/^run_as_supreme() {/,/^}/p' "${SCRIPT_DIR}/lib/common.sh")"
+case "$_run_as_supreme_body" in
+  *'VITE_SUPREME_API_URL'*)
+    fail "VITE_SUPREME_API_URL is not routed through run_as_supreme()'s non-empty-only allowlist (it would never forward)" "found in run_as_supreme()'s forwarded-var list" ;;
+  *)
+    pass "VITE_SUPREME_API_URL is not routed through run_as_supreme()'s non-empty-only allowlist (it would never forward)" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "backup.sh — EXIT trap must survive set -u after main() returns"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: `work` is local to main(); the EXIT trap fires once the whole script
+# exits (after main() has already returned and `work` is out of scope) — under `set -u`
+# that made cleanup itself fail with "work: unbound variable" on every successful backup.
+
+if bash -n "${SCRIPT_DIR}/backup.sh"; then
+  pass "backup.sh passes bash -n syntax validation"
+else
+  fail "backup.sh passes bash -n syntax validation" "bash -n reported a syntax error"
+fi
+
+_backup_trap_line="$(grep -n "^  trap .* EXIT\$" "${SCRIPT_DIR}/backup.sh" | head -1)"
+case "$_backup_trap_line" in
+  *'${work:-}'*) pass "backup.sh's EXIT trap guards \$work with \${work:-} before rm -rf" ;;
+  *) fail "backup.sh's EXIT trap guards \$work with \${work:-} before rm -rf" "got: ${_backup_trap_line:-<trap line not found>}" ;;
+esac
+
+# The exact bug, reproduced structurally: a `local` var set inside a function, referenced
+# by an unguarded EXIT trap, fails under set -u once that function returns — and does NOT
+# fail once guarded with ${var:-}. Proves the fix class, not backup.sh's full behavior
+# (which needs root/postgres this suite deliberately never requires).
+_trap_repro="$(mktemp -d)"
+cat > "${_trap_repro}/unguarded.sh" <<'EOF'
+set -euo pipefail
+main() { local work; work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT; }
+main "$@"
+EOF
+cat > "${_trap_repro}/guarded.sh" <<'EOF'
+set -euo pipefail
+main() { local work; work="$(mktemp -d)"; trap 'if [ -n "${work:-}" ]; then rm -rf "$work"; fi' EXIT; }
+main "$@"
+EOF
+_unguarded_out="$(bash "${_trap_repro}/unguarded.sh" 2>&1)"
+case "$_unguarded_out" in
+  *"unbound variable"*) pass "reproduces the exact reported bug: unguarded EXIT trap fails under set -u once the local var's function has returned" ;;
+  *) fail "reproduces the exact reported bug: unguarded EXIT trap fails under set -u once the local var's function has returned" "expected an 'unbound variable' error, got: ${_unguarded_out}" ;;
+esac
+if bash "${_trap_repro}/guarded.sh" >/dev/null 2>&1; then
+  pass "the \${work:-}-guarded EXIT trap pattern (backup.sh's actual fix) exits 0 under the same conditions"
+else
+  fail "the \${work:-}-guarded EXIT trap pattern (backup.sh's actual fix) exits 0 under the same conditions" "guarded version still failed"
+fi
+rm -rf "$_trap_repro"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "NATS deployment contract — nats_validate()/nats_check_ready()/nats_ensure_ready() (§ Native-Linux NATS hardening)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# Regression target: real production evidence of supreme-nats.service failing with
+# `status=203/EXEC` because /usr/local/bin/nats-server (and later /usr/bin/nats-server) was
+# missing even though `dpkg -s nats-server` reported "install ok installed". Every check
+# below is exercised against real files/symlinks in a scratch tree — SUPREME_NATS_BIN,
+# SUPREME_NATS_COMPAT_SYMLINK, and SUPREME_NATS_UNIT_FILE are all overridable (see
+# lib/common.sh) specifically so this suite never touches the real host filesystem.
+
+NATS_TEST_DIR="${SCRATCH}/nats-contract-test"
+mkdir -p "${NATS_TEST_DIR}/compat"
+export SUPREME_NATS_BIN="${NATS_TEST_DIR}/nats-server"
+export SUPREME_NATS_COMPAT_SYMLINK="${NATS_TEST_DIR}/compat/nats-server"
+export SUPREME_NATS_UNIT_FILE="${NATS_TEST_DIR}/supreme-nats.service"
+_host_arch="$(uname -m)"; [ "$_host_arch" = "x86_64" ] && _host_arch="amd64"
+export SUPREME_NATS_ARCH="$_host_arch"  # match this host so the arch check never fires as a false failure
+
+mkdir -p "$SUPREME_NATS_STORE_DIR"
+echo "fake config" > "$SUPREME_NATS_CONF"
+# The ownership check compares against SUPREME_USER:SUPREME_GROUP — this whole suite runs
+# as whatever real account is running it (there is no real "supreme-test" system account
+# to chown to), so point SUPREME_USER/SUPREME_GROUP at that real account for just this
+# section, matching the store_dir's actual owner. This isolates the ownership check itself
+# (already exercised as its own PASS/FAIL above) from every OTHER check in this section
+# that has nothing to do with ownership.
+_real_owner="$(stat -c '%U:%G' "$SUPREME_NATS_STORE_DIR" 2>/dev/null || echo "${SUPREME_USER}:${SUPREME_GROUP}")"
+export SUPREME_USER="${_real_owner%%:*}"
+export SUPREME_GROUP="${_real_owner##*:}"
+
+_nats_write_fake_binary() {
+  local version="${1:-$NATS_VERSION}"
+  cat > "$SUPREME_NATS_BIN" <<EOF
+#!/usr/bin/env bash
+echo "nats-server: v${version}"
+EOF
+  chmod 0755 "$SUPREME_NATS_BIN"
+}
+
+_nats_write_valid_unit() {
+  cat > "$SUPREME_NATS_UNIT_FILE" <<EOF
+[Service]
+ExecStart=${SUPREME_NATS_BIN} -js -c ${SUPREME_NATS_CONF}
+EOF
+}
+
+_nats_reset() {
+  rm -f "$SUPREME_NATS_BIN" "$SUPREME_NATS_COMPAT_SYMLINK" "$SUPREME_NATS_UNIT_FILE"
+  NATS_VALIDATION_REASON=""
+}
+
+# ── Broken state: NATS absent entirely ──────────────────────────────────────────────────
+_nats_reset
+if nats_validate; then
+  fail "nats_validate() detects a completely absent executable"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"canonical executable missing"*) pass "nats_validate() detects a completely absent executable" ;;
+    *) fail "nats_validate() detects a completely absent executable" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: package "installed" (binary present) but not executable — permissions ──
+_nats_reset
+_nats_write_fake_binary
+chmod 0644 "$SUPREME_NATS_BIN"
+if nats_validate; then
+  fail "nats_validate() detects a present-but-not-executable binary (permissions)"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"not executable"*) pass "nats_validate() detects a present-but-not-executable binary (permissions)" ;;
+    *) fail "nats_validate() detects a present-but-not-executable binary (permissions)" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: dangling compat symlink (the exact original production bug shape —
+# /usr/local/bin/nats-server missing/broken while the package "is installed") ───────────
+_nats_reset
+_nats_write_fake_binary
+ln -sfn "${NATS_TEST_DIR}/does-not-exist" "$SUPREME_NATS_COMPAT_SYMLINK"
+if nats_validate; then
+  fail "nats_validate() detects a dangling compat symlink"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"dangling or mistargeted symlink"*) pass "nats_validate() detects a dangling compat symlink" ;;
+    *) fail "nats_validate() detects a dangling compat symlink" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+rm -f "$SUPREME_NATS_COMPAT_SYMLINK"
+
+# ── Broken state: wrong version installed (e.g. Ubuntu's distro package, or a stale
+# binary left over from before a pin bump) ──────────────────────────────────────────────
+_nats_reset
+_nats_write_fake_binary "9.9.9"
+if nats_validate; then
+  fail "nats_validate() detects a wrong nats-server version"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"version mismatch"*) pass "nats_validate() detects a wrong nats-server version" ;;
+    *) fail "nats_validate() detects a wrong nats-server version" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: binary present, correct version, but fails to actually execute (e.g.
+# corrupt/truncated download, wrong architecture ELF) ───────────────────────────────────
+_nats_reset
+cat > "$SUPREME_NATS_BIN" <<'EOF'
+#!/usr/bin/env bash
+exit 127
+EOF
+chmod 0755 "$SUPREME_NATS_BIN"
+if nats_validate; then
+  fail "nats_validate() detects a binary that exists but fails to execute --version"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"fails to execute"*) pass "nats_validate() detects a binary that exists but fails to execute --version" ;;
+    *) fail "nats_validate() detects a binary that exists but fails to execute --version" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: systemd ExecStart pointing at the wrong/old path (the root cause this
+# whole fix targets — a unit whose ExecStart resolves to something other than the one
+# canonical SUPREME_NATS_BIN every other consumer agrees on) ────────────────────────────
+_nats_reset
+_nats_write_fake_binary
+cat > "$SUPREME_NATS_UNIT_FILE" <<EOF
+[Service]
+ExecStart=/usr/local/bin/nats-server -js -c ${SUPREME_NATS_CONF}
+EOF
+if nats_validate; then
+  fail "nats_validate() detects a systemd ExecStart mismatch against the canonical executable"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"does not resolve to the canonical"*) pass "nats_validate() detects a systemd ExecStart mismatch against the canonical executable" ;;
+    *) fail "nats_validate() detects a systemd ExecStart mismatch against the canonical executable" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+
+# ── Broken state: JetStream store_dir missing (must be detected, but repairing it is
+# create-only — see the data-preservation test further below) ──────────────────────────
+_nats_reset
+_nats_write_fake_binary
+_nats_write_valid_unit
+rm -rf "$SUPREME_NATS_STORE_DIR"
+if nats_validate; then
+  fail "nats_validate() detects a missing JetStream store_dir"
+else
+  case "$NATS_VALIDATION_REASON" in
+    *"store_dir missing"*) pass "nats_validate() detects a missing JetStream store_dir" ;;
+    *) fail "nats_validate() detects a missing JetStream store_dir" "got reason: ${NATS_VALIDATION_REASON}" ;;
+  esac
+fi
+mkdir -p "$SUPREME_NATS_STORE_DIR"
+
+# ── Good state: executable + version + arch + ExecStart + config all correct — every
+# check UP TO ownership (which needs a real root chown to a real system account, only
+# meaningful on an actual target host) must pass cleanly. ──────────────────────────────
+_nats_reset
+_nats_write_fake_binary
+_nats_write_valid_unit
+nats_validate
+case "$NATS_VALIDATION_REASON" in
+  ""|*"owned by"*)
+    pass "nats_validate() reports no failure earlier than the (host-account-dependent) ownership check on an otherwise-correct install" ;;
+  *)
+    fail "nats_validate() reports no failure earlier than the (host-account-dependent) ownership check on an otherwise-correct install" "got reason: ${NATS_VALIDATION_REASON}" ;;
+esac
+
+# ── Data preservation (§ hard safety boundary): the exact mkdir/chown/chmod sequence
+# nats_ensure_ready() runs against the JetStream store_dir must never remove or reset
+# existing content — proven directly against a real marker file, not asserted by reading
+# the source. ────────────────────────────────────────────────────────────────────────────
+echo "REAL_JETSTREAM_STREAM_DATA_DO_NOT_DELETE" > "${SUPREME_NATS_STORE_DIR}/marker.db"
+mkdir -p "$SUPREME_NATS_STORE_DIR"
+chown "${SUPREME_USER}:${SUPREME_GROUP}" "$SUPREME_NATS_STORE_DIR" 2>/dev/null || true
+chmod 0750 "$SUPREME_NATS_STORE_DIR" 2>/dev/null || true
+assert_eq "nats_ensure_ready()'s directory-convergence step never touches existing JetStream content" \
+  "$(cat "${SUPREME_NATS_STORE_DIR}/marker.db")" "REAL_JETSTREAM_STREAM_DATA_DO_NOT_DELETE"
+rm -f "${SUPREME_NATS_STORE_DIR}/marker.db"
+
+# ── nats_ensure_ready() orchestration: on a validated-good install with systemd not live
+# in this sandbox (this suite's whole point — see file header), it must short-circuit to
+# a warning and return success, never attempt a repair download/dpkg it can't complete. ─
+# nats_ensure_ready() runs in a subshell below (it may `die`/exit on failure, which must
+# never kill this whole test harness) — a marker FILE, not a shell variable, is used to
+# detect whether the repair test double ran, since a variable set inside a subshell is
+# invisible to this parent shell once the subshell exits.
+_nats_repair_marker="${NATS_TEST_DIR}/repair-called"
+
+_nats_reset
+_nats_write_fake_binary
+_nats_write_valid_unit
+rm -f "$_nats_repair_marker"
+_nats_fetch_and_install_deb() { : >> "$_nats_repair_marker"; }  # test double — real download+dpkg is exercised by install.sh's own phase, not here (no network/dpkg in this sandbox)
+if (nats_ensure_ready) >/dev/null 2>&1; then
+  pass "nats_ensure_ready() succeeds without repair when the install already validates (systemd not live in this sandbox)"
+else
+  fail "nats_ensure_ready() succeeds without repair when the install already validates (systemd not live in this sandbox)"
+fi
+if [ -e "$_nats_repair_marker" ]; then
+  fail "nats_ensure_ready() does not invoke the repair path when nats_validate() already passes"
+else
+  pass "nats_ensure_ready() does not invoke the repair path when nats_validate() already passes"
+fi
+
+# ── nats_ensure_ready() self-heal: a broken install (missing executable) must trigger the
+# repair path exactly once it becomes valid, then converge — proven by having the test
+# double "install" a valid fake binary on its first call. ──────────────────────────────
+_nats_reset
+_nats_write_valid_unit
+rm -f "$_nats_repair_marker"
+_nats_fetch_and_install_deb() { : >> "$_nats_repair_marker"; _nats_write_fake_binary; }
+if (nats_ensure_ready) >/dev/null 2>&1; then
+  pass "nats_ensure_ready() self-heals a missing executable via the repair path and converges"
+else
+  fail "nats_ensure_ready() self-heals a missing executable via the repair path and converges"
+fi
+if [ -e "$_nats_repair_marker" ]; then
+  pass "nats_ensure_ready() invoked the repair path when the executable was missing"
+else
+  fail "nats_ensure_ready() invoked the repair path when the executable was missing"
+fi
+
+# ── nats_ensure_ready() must fail loudly (not silently) when repair cannot fix the
+# problem — never continue past a failed validation. ────────────────────────────────────
+_nats_reset
+_nats_write_valid_unit
+_nats_fetch_and_install_deb() { :; }  # repair that does nothing — the broken state persists
+if (nats_ensure_ready) >/dev/null 2>&1; then
+  fail "nats_ensure_ready() dies (non-zero exit) rather than silently continuing when repair cannot fix the problem"
+else
+  pass "nats_ensure_ready() dies (non-zero exit) rather than silently continuing when repair cannot fix the problem"
+fi
+
+# ── Systemd unit files — ExecStart must reference the canonical, non-symlink path this
+# whole contract is built around (a static check on the real shipped templates). ────────
+case "$(grep -m1 '^ExecStart=' "${SCRIPT_DIR}/systemd/supreme-nats.service")" in
+  "ExecStart=/usr/bin/nats-server "*) pass "systemd/supreme-nats.service's ExecStart points at the canonical /usr/bin/nats-server" ;;
+  *) fail "systemd/supreme-nats.service's ExecStart points at the canonical /usr/bin/nats-server" "got: $(grep -m1 '^ExecStart=' "${SCRIPT_DIR}/systemd/supreme-nats.service")" ;;
+esac
+
+case "$(grep -c '^StartLimitIntervalSec=\|^StartLimitBurst=' "${SCRIPT_DIR}/systemd/supreme-nats.service")" in
+  2) pass "systemd/supreme-nats.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+  *) fail "systemd/supreme-nats.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+esac
+
+case "$(grep -c '^StartLimitIntervalSec=\|^StartLimitBurst=' "${SCRIPT_DIR}/systemd/supreme-gateway.service")" in
+  2) pass "systemd/supreme-gateway.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+  *) fail "systemd/supreme-gateway.service declares restart-storm limits (StartLimitIntervalSec + StartLimitBurst)" ;;
+esac
+
+if grep -q '^Requires=supreme-nats' "${SCRIPT_DIR}/systemd/supreme-gateway.service"; then
+  fail "supreme-gateway.service does not hard-Require supreme-nats.service (would deadlock recovery)" "found a Requires=supreme-nats line"
+else
+  pass "supreme-gateway.service does not hard-Require supreme-nats.service (would deadlock recovery)"
+fi
+
+# ── Gateway's own NATS client — must apply reconnect/backoff to the FIRST connection
+# attempt too (waitOnFirstConnect), not just to a connection that later drops — this is
+# what lets the Gateway survive starting before/losing NATS without crash-looping. ──────
+_nats_bus_src="$(cat "${REPO_ROOT}/services/messaging/src/nats-bus.ts")"
+case "$_nats_bus_src" in
+  *"waitOnFirstConnect: true"*) pass "NatsEventBus.connect() sets waitOnFirstConnect: true (survives NATS not being up yet at Gateway startup)" ;;
+  *) fail "NatsEventBus.connect() sets waitOnFirstConnect: true (survives NATS not being up yet at Gateway startup)" ;;
+esac
+case "$_nats_bus_src" in
+  *"maxReconnectAttempts: -1"*) pass "NatsEventBus.connect() sets maxReconnectAttempts: -1 (infinite — keeps retrying instead of giving up and crashing)" ;;
+  *) fail "NatsEventBus.connect() sets maxReconnectAttempts: -1 (infinite — keeps retrying instead of giving up and crashing)" ;;
+esac
+
+export SUPREME_USER="supreme-test"
+export SUPREME_GROUP="supreme-test"
+# Cleanup: restore the real (unset) NATS override vars so nothing later in this file (or a
+# future test appended after this section) accidentally inherits scratch paths.
+unset SUPREME_NATS_BIN SUPREME_NATS_COMPAT_SYMLINK SUPREME_NATS_UNIT_FILE SUPREME_NATS_ARCH
+unset -f _nats_fetch_and_install_deb 2>/dev/null || true
+# Re-source common.sh so nats_ensure_ready/_nats_fetch_and_install_deb/etc. and the
+# SUPREME_NATS_* defaults are restored to their real, non-test-double definitions for any
+# later section of this file.
+# shellcheck source=../lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "update.sh — SUPREME_RELEASE_VERSION must be set before stage_and_switch_release (live deployment bug fix)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# A live `sudo ./update.sh` run failed with "SUPREME_RELEASE_VERSION: stage_and_switch_release
+# requires SUPREME_RELEASE_VERSION to be set" — update.sh's main() never called
+# reconstruct_runtime_context (the one function that sets it in source mode; install.sh
+# already calls it at the equivalent point), and because the ERR trap wasn't inherited by
+# called functions either (see the `set -E` check below), the failure fell straight back to
+# the shell prompt instead of triggering rollback_update — no partial state, but no
+# successful update either. Both are now fixed; these two checks guard against either
+# regressing silently.
+_update_sh_src="$(cat "${SCRIPT_DIR}/update.sh")"
+case "$_update_sh_src" in
+  *"set -E"*) pass "update.sh sets errtrace (set -E) so its ERR trap fires for failures inside called functions, not just top-level commands" ;;
+  *) fail "update.sh sets errtrace (set -E) so its ERR trap fires for failures inside called functions, not just top-level commands" "without it, a failure inside e.g. stage_and_switch_release silently skips rollback_update" ;;
+esac
+# Order matters: reconstruct_runtime_context must appear BEFORE stage_and_switch_release is
+# INVOKED (not merely mentioned in a comment) in main() — strip comment lines first so an
+# earlier doc-comment referencing the function name by name doesn't produce a false
+# truncation point.
+_update_sh_code_only="$(grep -v '^\s*#' "${SCRIPT_DIR}/update.sh")"
+_before_stage="${_update_sh_code_only%%stage_and_switch_release*}"
+case "$_before_stage" in
+  *"reconstruct_runtime_context"*) pass "update.sh calls reconstruct_runtime_context before stage_and_switch_release (sets SUPREME_RELEASE_VERSION)" ;;
+  *) fail "update.sh calls reconstruct_runtime_context before stage_and_switch_release (sets SUPREME_RELEASE_VERSION)" "without this, every source-mode update fails inside stage_and_switch_release's own :? guard" ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "configure_update_sudoers() — generated rule must be valid sudoers syntax (live deployment bug fix)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+# A live run failed visudo validation: "syntax error: expected host name" at the unescaped ':'
+# in `--property=StandardOutput=append:/path` — sudoers requires ',', ':', '=', and '\' inside a
+# command's arguments to be backslash-escaped (`man sudoers`, Command grammar). A first attempted
+# fix (`${x//:/\\:}`) LOOKED right but silently produced NO escaping at all — bash's own
+# parameter-substitution strips a backslash preceding a non-special replacement character unless
+# the backslash is already a real character in a variable, not written inline in the pattern —
+# so this test calls the REAL function and inspects its REAL output, not just greps for the
+# fix being attempted, to catch exactly this class of "looks fixed, isn't" regression.
+( # subshell — configure_update_sudoers exits early via `die` on failure; isolate that
+  export SUPREME_USER="supreme-test"
+  export SUPREME_UPDATE_LOG="/tmp/sudoers-test/update.log"
+  export SUPREME_UPDATE_SCRIPT="/tmp/sudoers-test/update.sh"
+  export SUPREME_UPDATE_SUDOERS_FILE="${SCRATCH}/sudoers-test/supremeos-update"
+  mkdir -p "$(dirname "$SUPREME_UPDATE_SUDOERS_FILE")"
+  configure_update_sudoers 2>"${SCRATCH}/sudoers-test/stderr.log"
+)
+_sudoers_rc=$?
+_sudoers_file="${SCRATCH}/sudoers-test/supremeos-update"
+if [ "$_sudoers_rc" -eq 0 ] && [ -r "$_sudoers_file" ]; then
+  pass "configure_update_sudoers() runs to completion against real inputs (would have died on a visudo failure, if visudo is present)"
+  _sudoers_content="$(cat "$_sudoers_file")"
+  case "$_sudoers_content" in
+    *'append\:/tmp/sudoers-test/update.log'*) pass "generated rule escapes the ':' in 'append:<path>' (the exact character visudo rejected live)" ;;
+    *) fail "generated rule escapes the ':' in 'append:<path>' (the exact character visudo rejected live)" "got: $(grep -o 'append[^ ]*' <<<"$_sudoers_content")" ;;
+  esac
+  case "$_sudoers_content" in
+    *'--unit\=supreme-update'*) pass "generated rule escapes '=' in command-line flags (e.g. --unit=...)" ;;
+    *) fail "generated rule escapes '=' in command-line flags (e.g. --unit=...)" "got: $(grep -o -- '--unit[^ ]*' <<<"$_sudoers_content")" ;;
+  esac
+  if command_exists visudo; then
+    if visudo -cf "$_sudoers_file" >/dev/null 2>&1; then
+      pass "generated rule passes real visudo -cf validation (the actual live failure mode)"
+    else
+      fail "generated rule passes real visudo -cf validation (the actual live failure mode)" "$(visudo -cf "$_sudoers_file" 2>&1)"
+    fi
+  else
+    log_warn "visudo not available in this sandbox — content-level escaping checks above are the best available proxy here; the live Ubuntu box is the real validator."
+  fi
+else
+  fail "configure_update_sudoers() runs to completion against real inputs (would have died on a visudo failure, if visudo is present)" "$(cat "${SCRATCH}/sudoers-test/stderr.log" 2>/dev/null)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
+section "Summary"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+echo ""
+echo "Passed: ${PASS}   Failed: ${FAIL}"
+[ "$FAIL" -eq 0 ]

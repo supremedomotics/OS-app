@@ -25,3 +25,38 @@ describe("config secrets + fail-closed", () => {
     expect(() => assertSecureConfig(loadConfig({ NODE_ENV: "production" }))).toThrow(/refusing to boot/);
   });
 });
+
+describe("§ Native Backend Implementation — SUPREME_BACKEND resolution", () => {
+  it("defaults to native when SUPREME_BACKEND is unset", () => {
+    expect(loadConfig({}).backend).toBe("native");
+  });
+
+  it("honors an explicit mock/ha opt-in", () => {
+    expect(loadConfig({ SUPREME_BACKEND: "mock" }).backend).toBe("mock");
+    expect(loadConfig({ SUPREME_BACKEND: "ha" }).backend).toBe("ha");
+  });
+
+  it("treats any unrecognized value as native, never as a silent mock fallback", () => {
+    expect(loadConfig({ SUPREME_BACKEND: "bogus" }).backend).toBe("native");
+  });
+
+  it("refuses to boot in production with SUPREME_BACKEND=mock", () => {
+    const config = loadConfig({
+      NODE_ENV: "production",
+      SUPREME_BACKEND: "mock",
+      SUPREME_TOKEN_SECRET: "x".repeat(40),
+      SUPREME_CORS_ORIGINS: "https://example.test",
+    });
+    expect(() => assertSecureConfig(config)).toThrow(/SUPREME_BACKEND=mock is not permitted in production/);
+  });
+
+  it("boots in production with the native default (no HA required)", () => {
+    const config = loadConfig({
+      NODE_ENV: "production",
+      SUPREME_TOKEN_SECRET: "x".repeat(40),
+      SUPREME_CORS_ORIGINS: "https://example.test",
+    });
+    expect(config.backend).toBe("native");
+    expect(() => assertSecureConfig(config)).not.toThrow();
+  });
+});

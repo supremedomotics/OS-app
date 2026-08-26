@@ -160,6 +160,14 @@ export interface IBackendAdapter {
    * driver reports one (null if none/unsupported). */
   getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null>;
 
+  /** § Pass 12.6, Part E — optional: fetch a device's real AVR input list (reportedName/
+   * customName/displayName per stable technical id) from its owning driver. */
+  getAvrInputs?(deviceId: DeviceId): Promise<{ technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null>;
+
+  /** § Pass 12.6, Part E — optional: set/clear one AVR input's custom label on the owning
+   * driver. `false` when unsupported or the technicalId is unknown to that device. */
+  setAvrInputCustomName?(deviceId: DeviceId, technicalId: string, name: string | null): Promise<boolean>;
+
   /** Optional: fetch a device's real connection/traffic diagnostics from its owning
    * driver (null if none/unsupported — e.g. this device isn't bound to a native driver
    * that tracks this). */

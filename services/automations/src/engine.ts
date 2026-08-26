@@ -222,6 +222,18 @@ export class AutomationEngine {
    */
   health(automation: Automation): { status: "disabled" | "waiting" | "healthy" | "warning" | "broken"; reason: string } {
     if (!automation.enabled) return { status: "disabled", reason: "Automation is turned off." };
+    // § Native Backend Implementation — Home Assistant has been fully removed, so the
+    // "engine" schema no longer even accepts "ha" for new/updated rows. A legacy
+    // persisted row from before that removal could still carry it on disk, though (the
+    // schema change doesn't retroactively rewrite the database) — this must never look
+    // silently "healthy"/"waiting" while it in fact never runs; see setAutomations()
+    // below. Compared as a plain string since the type itself no longer includes "ha".
+    if ((automation.engine as string) === "ha") {
+      return {
+        status: "broken",
+        reason: "This automation targets Home Assistant execution, which is not supported on this hub — it will never run. Recreate it using the native engine.",
+      };
+    }
     // Dry-runs are synthetic (§ Phase 1 — never a real side effect) and share the same history
     // ring buffer as real runs purely so the debugger can show them inline; Health must reflect
     // only REAL executions, or a passing dry-run could mask (or a "would fail" dry-run could

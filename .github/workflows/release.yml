@@ -1,0 +1,214 @@
+name: Release — native-linux artifact
+
+# § CI/Production verification split (infra/native-linux). Every stage here runs ONCE, in
+# CI, on a version tag — the resulting artifact is what install.sh's production mode
+# installs, unmodified, no recompilation, no re-test, on the customer's controller. This
+# is the ONLY place `pnpm turbo run build typecheck test` plus integration/performance
+# verification runs for a release; the native installer must never repeat it (that's the
+# whole point of this pipeline — see infra/native-linux/lib/deploy-steps.sh).
+#
+# Pipeline: build -> typecheck -> test -> integration -> performance -> package -> sign ->
+# publish. Each stage gates the next (a `needs:` chain) so a failure anywhere stops the
+# release before an unverified artifact could ever be packaged, let alone signed/published.
+
+on:
+  push:
+    tags: ["release-*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.0.0) — only for a manual dry run; a real release always comes from a release-*.*.* tag."
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            **/dist/**
+            !**/node_modules/**
+          retention-days: 1
+
+  typecheck:
+    name: Typecheck
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build typecheck
+
+  test:
+    name: Test (unit + component)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build test
+
+  # A NAMED stage for the gateway's *.e2e.test.ts suite — the same tests `test` above
+  # already runs (vitest picks up every *.test.ts file in a package, e2e or not), isolated
+  # here purely for reporting granularity: a release's own CI summary should distinguish
+  # "a unit test broke" from "a real cross-service e2e flow broke" at a glance. No test
+  # file changed, no new test framework — a filename-pattern filter on the existing suite.
+  integration:
+    name: Integration (gateway e2e)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build
+      - run: pnpm --filter @supreme/gateway test -- e2e
+
+  # Same reasoning as `integration` — an isolated, idle CI runner (not immediately after a
+  # cold workspace build competing for the same CPU, unlike the installer environment the
+  # native-linux audit diagnosed) is exactly the environment these wall-clock-budget tests
+  # were written to run in. Running them alone here, on dedicated CI capacity, is the
+  # legitimate fix — not raising their thresholds.
+  performance:
+    name: Performance (timing-sensitive suites)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build
+      - run: pnpm turbo run test -- performance
+
+  package:
+    name: Package release artifact
+    needs: [typecheck, test, integration, performance]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile --prod=false
+      - run: pnpm turbo run build
+      # Prune dev dependencies AFTER build (build needs them; a native install of the
+      # artifact never runs pnpm install at all, so whatever ships here is everything the
+      # running services get) — mirrors infra/hub-compose's own Dockerfiles, which prune
+      # the same way for the same reason.
+      - run: pnpm install --prod --frozen-lockfile
+      - run: mkdir -p dist-release && ./infra/native-linux/package-release.sh dist-release
+      - id: meta
+        run: |
+          TARBALL="$(ls dist-release/*.tar.zst)"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifact
+          path: dist-release/*
+
+  # Whether a signing key is configured — same job-output gating pattern cd.yml already
+  # uses for OTA_SIGNING_KEY (the `secrets` context isn't allowed in a job-level `if:`).
+  # § Mandatory Release Signing — Ed25519 preferred (RELEASE_ED25519_PRIVATE_KEY, a PEM
+  # private key), OpenPGP supported as the alternative (RELEASE_GPG_PRIVATE_KEY). At
+  # least one is REQUIRED to publish — install.sh's production mode refuses an unsigned
+  # release outright, so a release this workflow can't sign must never reach Publish.
+  sign-gate:
+    needs: package
+    runs-on: ubuntu-latest
+    outputs:
+      sign_ed25519: ${{ steps.check.outputs.sign_ed25519 }}
+      sign_gpg: ${{ steps.check.outputs.sign_gpg }}
+      signed: ${{ steps.check.outputs.signed }}
+    steps:
+      - id: check
+        run: |
+          ed25519="${{ secrets.RELEASE_ED25519_PRIVATE_KEY != '' }}"
+          gpg="${{ secrets.RELEASE_GPG_PRIVATE_KEY != '' }}"
+          echo "sign_ed25519=${ed25519}" >> "$GITHUB_OUTPUT"
+          echo "sign_gpg=${gpg}" >> "$GITHUB_OUTPUT"
+          if [ "$ed25519" = "true" ] || [ "$gpg" = "true" ]; then echo "signed=true" >> "$GITHUB_OUTPUT"; else echo "signed=false" >> "$GITHUB_OUTPUT"; fi
+
+  sign:
+    name: Sign
+    needs: sign-gate
+    if: ${{ needs.sign-gate.outputs.signed == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: release-artifact, path: dist-release }
+      - name: Ed25519 sign (preferred)
+        if: ${{ needs.sign-gate.outputs.sign_ed25519 == 'true' }}
+        env:
+          RELEASE_ED25519_PRIVATE_KEY: ${{ secrets.RELEASE_ED25519_PRIVATE_KEY }}
+        run: |
+          echo "$RELEASE_ED25519_PRIVATE_KEY" > /tmp/release-ed25519.key
+          TARBALL="$(ls dist-release/*.tar.zst)"
+          openssl pkeyutl -sign -rawin -inkey /tmp/release-ed25519.key -in "$TARBALL" -out "${TARBALL}.ed25519.sig"
+          rm -f /tmp/release-ed25519.key
+      - name: OpenPGP sign (alternative)
+        if: ${{ needs.sign-gate.outputs.sign_gpg == 'true' }}
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$RELEASE_GPG_PRIVATE_KEY" | gpg --batch --import
+          TARBALL="$(ls dist-release/*.tar.zst)"
+          gpg --batch --yes --detach-sign --armor -o "${TARBALL}.sig" "$TARBALL"
+      - uses: actions/upload-artifact@v4
+        with: { name: release-signature, path: "dist-release/*.sig" }
+
+  publish:
+    name: Publish release
+    needs: [package, sign-gate, sign]
+    # A signature is required to publish — `always()` so this job still runs (and fails
+    # loudly) when `sign` was skipped for lacking a key, rather than the whole workflow
+    # silently going green without ever publishing anything.
+    if: ${{ always() && needs.package.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a signature before publishing
+        if: ${{ needs.sign-gate.outputs.signed != 'true' }}
+        run: |
+          echo "::error::Neither RELEASE_ED25519_PRIVATE_KEY nor RELEASE_GPG_PRIVATE_KEY is configured — refusing to publish an unsigned release artifact (§ Mandatory Release Signing)."
+          exit 1
+      - uses: actions/download-artifact@v4
+        with: { name: release-artifact, path: dist-release }
+      - uses: actions/download-artifact@v4
+        with: { name: release-signature, path: dist-release }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "SupremeOS ${{ needs.package.outputs.version }}"
+          files: dist-release/*
+          generate_release_notes: true

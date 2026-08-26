@@ -98,7 +98,13 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       { key: "apiKey", label: "API key", type: "password", requiredIf: { key: "connectionType", equals: "cloud" }, secret: true, help: "WebSocket-enabled key from Casambi Support." },
       { key: "email", label: "Network admin email", type: "text", requiredIf: { key: "connectionType", equals: "cloud" }, secret: false },
       { key: "password", label: "Network admin password", type: "password", requiredIf: { key: "connectionType", equals: "cloud" }, secret: true },
-      { key: "networkId", label: "Network id (optional)", type: "text", help: "Pin a single network for a faster session handshake.", secret: false },
+      {
+        key: "networkId",
+        label: "Network id (optional)",
+        type: "text",
+        help: "Casambi's own internal network ID — NOT the display name you gave the network in the Casambi app (a name like \"Showroom\" here causes a 404, since the driver posts it straight into the session URL path). Leave blank unless this account manages more than one network and you need to pin a specific one; blank authenticates against whichever network the account has access to.",
+        secret: false,
+      },
       // Local Gateway settings — shown only when Connection type is Local Gateway; validated ONLY
       // in Local mode (requiredIf). Field order matches the installer's commissioning flow
       // (Gateway IP → REST port → gateway login → UDP port → Net ID → Data format → name).

@@ -34,8 +34,9 @@ describe("HapBridge", () => {
     const transport = new FakeTransport();
     const bridge = new HapBridge({ transport, onCommand: () => {} });
     const acc = bridge.addDevice({ id: "lamp", name: "Reading Lamp", capabilities: ["onoff", "brightness", "color"] });
+    expect(acc).not.toBeNull();
     // onoff→Switch, brightness/color→Lightbulb: Lightbulb merges On+Brightness+Hue+Saturation+ColorTemperature.
-    const lightbulb = acc.services.find((s) => s.type === "Lightbulb");
+    const lightbulb = acc!.services.find((s) => s.type === "Lightbulb");
     expect(lightbulb?.characteristics).toEqual(expect.arrayContaining(["On", "Brightness", "Hue", "Saturation", "ColorTemperature"]));
     expect(transport.published).toHaveLength(1);
     expect(bridge.accessoryCount()).toBe(1);
@@ -85,5 +86,29 @@ describe("HapBridge", () => {
     expect(transport.started).toBe(true);
     await bridge.stop();
     expect(transport.started).toBe(false);
+  });
+
+  it("§ Correctness Fix — never publishes an accessory with no mapped HAP service", () => {
+    const transport = new FakeTransport();
+    const logs: { msg: string; meta?: Record<string, unknown> }[] = [];
+    const bridge = new HapBridge({ transport, onCommand: () => {}, log: (msg, meta) => logs.push({ msg, meta }) });
+
+    // `media` and `vacuum` have no HAP service mapping at all (hap-mapping.ts's own
+    // disclosed gap) — a device with only one of these must never be published as an
+    // accessory with zero services (§ Never publish an empty accessory).
+    const mediaOnly = bridge.addDevice({ id: "speaker", name: "Speaker", capabilities: ["media"] });
+    expect(mediaOnly).toBeNull();
+    const vacuumOnly = bridge.addDevice({ id: "roomba", name: "Roomba", capabilities: ["vacuum"] });
+    expect(vacuumOnly).toBeNull();
+
+    expect(transport.published).toHaveLength(0);
+    expect(bridge.accessoryCount()).toBe(0);
+    expect(logs.some((l) => l.meta?.deviceId === "speaker")).toBe(true);
+    expect(logs.some((l) => l.meta?.deviceId === "roomba")).toBe(true);
+
+    // A device that also has a real, mapped capability alongside media still publishes.
+    const speakerWithPower = bridge.addDevice({ id: "speaker2", name: "Speaker", capabilities: ["media", "onoff"] });
+    expect(speakerWithPower).not.toBeNull();
+    expect(transport.published).toHaveLength(1);
   });
 });

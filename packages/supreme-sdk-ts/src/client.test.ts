@@ -103,6 +103,133 @@ describe("SupremeClient — automatic refresh-and-retry on 401", () => {
 });
 
 /**
+ * Regression coverage for the "session revoked" false-positive logout bug (Pass 12.7): a
+ * transient failure while refreshing (network error, 5xx on the refresh endpoint itself,
+ * unparsable response) must NOT be treated the same as a genuine server rejection of the
+ * refresh/session. Only an actual SupremeError with code "unauthorized" — i.e. the server
+ * really did respond and really did say the token/session is invalid — should clear tokens
+ * and fire onSessionExpired(). Everything else should leave the session intact so a later
+ * request can retry once the transient issue clears.
+ */
+describe("SupremeClient — discriminates genuine revocation from transient refresh failure", () => {
+  it("does NOT clear tokens or call onSessionExpired on a network-level failure during refresh", async () => {
+    let expired = false;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/auth/refresh") throw new TypeError("network request failed");
+      return jsonResponse(401, { code: "unauthorized", message: "token expired" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: "stale", refreshToken: "refresh1" });
+    const client = new SupremeClient({
+      baseUrl: "http://hub.local",
+      tokenStore,
+      fetchImpl,
+      onSessionExpired: () => { expired = true; },
+    });
+
+    await expect(client.command("dev1" as DeviceId, { capability: "onoff", action: "on" })).rejects.toThrow();
+    expect(expired).toBe(false);
+    // Tokens preserved — a later request can retry the refresh once the network recovers.
+    expect(tokenStore.get()).toEqual({ accessToken: "stale", refreshToken: "refresh1" });
+  });
+
+  it("does NOT clear tokens or call onSessionExpired on a 5xx from the refresh endpoint itself", async () => {
+    let expired = false;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/auth/refresh") return jsonResponse(500, { code: "internal", message: "db unavailable" });
+      return jsonResponse(401, { code: "unauthorized", message: "token expired" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: "stale", refreshToken: "refresh1" });
+    const client = new SupremeClient({
+      baseUrl: "http://hub.local",
+      tokenStore,
+      fetchImpl,
+      onSessionExpired: () => { expired = true; },
+    });
+
+    await expect(client.command("dev1" as DeviceId, { capability: "onoff", action: "on" })).rejects.toThrow();
+    expect(expired).toBe(false);
+    expect(tokenStore.get()).toEqual({ accessToken: "stale", refreshToken: "refresh1" });
+  });
+
+  it("handles a malformed/unparsable refresh response safely without crashing or false-positive logout", async () => {
+    let expired = false;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      // 200 status but a body that doesn't match TokenPair's schema — refresh() should reject
+      // (zod parse throws), which is neither a SupremeError("unauthorized", ...) nor a crash.
+      if (path === "/v1/auth/refresh") return jsonResponse(200, { unexpected: "shape" });
+      return jsonResponse(401, { code: "unauthorized", message: "token expired" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: "stale", refreshToken: "refresh1" });
+    const client = new SupremeClient({
+      baseUrl: "http://hub.local",
+      tokenStore,
+      fetchImpl,
+      onSessionExpired: () => { expired = true; },
+    });
+
+    await expect(client.command("dev1" as DeviceId, { capability: "onoff", action: "on" })).rejects.toThrow();
+    expect(expired).toBe(false);
+    expect(tokenStore.get()).toEqual({ accessToken: "stale", refreshToken: "refresh1" });
+  });
+
+  it("DOES clear tokens and call onSessionExpired only for a genuine unauthorized rejection (core regression test)", async () => {
+    let expired = false;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/auth/refresh") return jsonResponse(401, { code: "unauthorized", message: "session has been revoked" });
+      return jsonResponse(401, { code: "unauthorized", message: "token expired" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: "stale", refreshToken: "revoked-refresh" });
+    const client = new SupremeClient({
+      baseUrl: "http://hub.local",
+      tokenStore,
+      fetchImpl,
+      onSessionExpired: () => { expired = true; },
+    });
+
+    await expect(client.command("dev1" as DeviceId, { capability: "onoff", action: "on" })).rejects.toThrow();
+    expect(expired).toBe(true);
+    expect(client.accessToken).toBeNull();
+    expect(tokenStore.get()).toBeNull();
+  });
+
+  it("does not loop indefinitely — refresh-then-retry happens at most once per request", async () => {
+    let commandAttempts = 0;
+    let refreshCalls = 0;
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/auth/refresh") {
+        refreshCalls += 1;
+        return jsonResponse(200, { accessToken: "fresh", refreshToken: "refresh2", expiresIn: 900, tokenType: "Bearer" });
+      }
+      commandAttempts += 1;
+      // Keeps 401ing even with the "fresh" token — a real server never would, but this proves
+      // the retry doesn't loop: it must fail after exactly one retry, not recurse forever.
+      return jsonResponse(401, { code: "unauthorized", message: "still expired" });
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: "stale", refreshToken: "refresh1" });
+    const client = new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    await expect(client.command("dev1" as DeviceId, { capability: "onoff", action: "on" })).rejects.toThrow();
+    expect(commandAttempts).toBe(2); // original attempt + exactly one retry
+    expect(refreshCalls).toBe(1);
+  });
+});
+
+/**
  * BUG-003: reactive (on-401) refresh alone means every request in flight the instant the access
  * token expires 401s together — a dashboard mount fires a dozen-plus GETs, so that was the "15-18
  * failed requests before the session recovers" symptom. The SDK now also refreshes proactively,
@@ -167,5 +294,30 @@ describe("SupremeClient — proactive refresh ahead of token expiry", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(refreshCalls).toBe(1);
+  });
+});
+
+describe("SupremeClient — request timeout (§ resilience)", () => {
+  it("converts a hung/aborted request into a backend_unavailable SupremeError instead of hanging forever", async () => {
+    const fetchImpl = (async () => {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }) as typeof fetch;
+
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 900), refreshToken: "refresh1" });
+    const client = new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    await expect(client.home()).rejects.toMatchObject({ name: "SupremeError", code: "backend_unavailable" });
+  });
+
+  it("still surfaces an ordinary network failure as backend_unavailable, not a fake unauthorized", async () => {
+    const fetchImpl = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
+    const tokenStore = new MemoryTokenStore();
+    tokenStore.set({ accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 900), refreshToken: "refresh1" });
+    const client = new SupremeClient({ baseUrl: "http://hub.local", tokenStore, fetchImpl });
+
+    await expect(client.home()).rejects.toMatchObject({ name: "SupremeError", code: "backend_unavailable" });
   });
 });

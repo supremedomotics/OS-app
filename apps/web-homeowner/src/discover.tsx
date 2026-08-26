@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RoomId } from "@supreme/domain-model";
+import { ProgressBar, SegmentedControl, type ShadingKind } from "@supreme/aureon-web";
 import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } from "./api.js";
 
 /**
@@ -225,6 +226,13 @@ export function DiscoverDevices() {
           </button>
           {selectedIds.size === 0 && <p className="muted">Select at least one extension above to scan.</p>}
           {error && <p className="err">{error}</p>}
+          {phase === "scanning" && (
+            // § live-confirmed fix — a single batched client.discover() call across every
+            // selected driver, no per-driver completion signal arrives until the whole
+            // scan resolves, so an honest indeterminate sweep is the real state here —
+            // never a fabricated per-driver fraction the client can't actually observe.
+            <ProgressBar style={{ marginTop: 12, maxWidth: 360, marginInline: "auto" }} label="Scanning selected extensions…" />
+          )}
         </div>
       )}
 
@@ -406,6 +414,12 @@ function FoundDevice({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [placedIn, setPlacedIn] = useState("");
+  // § live-confirmed fix — how this device physically moves is a real fact only the
+  // installer knows (a roller blind's `position` capability looks byte-for-byte
+  // identical to a sliding curtain's — the same DPT/wire shape, same 0..100 command),
+  // asked once at add time regardless of which protocol/driver found it.
+  const isCover = (device.capabilities as string[]).includes("position");
+  const [shadingKind, setShadingKind] = useState<ShadingKind>("updown");
   // `rooms` loads asynchronously and can go from empty to populated after this card has already
   // mounted — the useState() initializers above only run once, so without this sync the <select>
   // visually falls back to showing the first room (a bare browser default for a value that no
@@ -454,8 +468,16 @@ function FoundDevice({
         capabilities: device.capabilities as never,
         // § ADR 0017/0018 Capability Normalization — carry the driver's own structural
         // capability config through manual pairing too, so it produces the identical
-        // persisted device the auto-commit fast path would have.
-        ...(device.capabilityConfig ? { capabilityConfig: device.capabilityConfig } : {}),
+        // persisted device the auto-commit fast path would have. `shadingKind` merges
+        // onto `position` the SAME way — installer-known fact, never guessed.
+        ...(device.capabilityConfig || isCover
+          ? {
+              capabilityConfig: {
+                ...device.capabilityConfig,
+                ...(isCover ? { position: { ...device.capabilityConfig?.position, shadingKind } } : {}),
+              },
+            }
+          : {}),
         ...(device.protocol ? { protocol: device.protocol } : {}),
         ...(device.network ? { network: device.network } : {}),
       });
@@ -542,6 +564,21 @@ function FoundDevice({
                     </datalist>
                   </label>
                 </>
+              )}
+
+              {isCover && (
+                <label className="drv-field">
+                  <span className="lbl">How does this move?</span>
+                  <SegmentedControl
+                    aria-label="Shading movement"
+                    value={shadingKind}
+                    onChange={setShadingKind}
+                    options={[
+                      { value: "updown", label: "Up / Down" },
+                      { value: "openclose", label: "Open / Close" },
+                    ]}
+                  />
+                </label>
               )}
 
               <div className="drv-actions">
@@ -871,6 +908,7 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [shadingKind, setShadingKind] = useState<ShadingKind>("updown");
   // Same async-rooms-load race as FoundDevice above: without this, opening this form before the
   // room list has finished loading leaves mode="new"/roomId="" stuck forever even once rooms
   // arrive, while the <select> visually (but not in state) shows the first room selected.
@@ -934,6 +972,7 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
         protocol,
         address: address.trim(),
         ...(config ? { config } : {}),
+        ...(capabilities.includes("position") ? { capabilityConfig: { position: { shadingKind } } } : {}),
       });
       setDone(true);
       setStep(null);
@@ -995,6 +1034,21 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
             {MANUAL_CONFIG_HINT[protocol] && (
               <label className="drv-field"><span className="lbl">Config (optional)</span>
                 <input value={configText} onChange={(e) => setConfigText(e.target.value)} placeholder={`e.g. ${MANUAL_CONFIG_HINT[protocol]}`} />
+              </label>
+            )}
+
+            {capabilities.includes("position") && (
+              <label className="drv-field">
+                <span className="lbl">How does this move?</span>
+                <SegmentedControl
+                  aria-label="Shading movement"
+                  value={shadingKind}
+                  onChange={setShadingKind}
+                  options={[
+                    { value: "updown", label: "Up / Down" },
+                    { value: "openclose", label: "Open / Close" },
+                  ]}
+                />
               </label>
             )}
 

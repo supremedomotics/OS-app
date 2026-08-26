@@ -1,12 +1,41 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ProgressBar, SegmentedControl, type ShadingKind } from "@supreme/aureon-web";
 import {
   approveKnxDevice,
+  cleanupOrphanedKnxBindings,
   client,
+  HttpError,
   knxDiscoveryQueue,
+  knxDiscoveryQueueJobCancel,
+  knxDiscoveryQueueJobStart,
+  knxDiscoveryQueueJobStatus,
+  KNX_UPLOAD_CHUNK_BYTES,
   type KnxApprovalResult,
+  type KnxImportJobStatus,
   type KnxInstallerQueueItem,
   type KnxQueueSection,
 } from "./api.js";
+
+// § Pass 11.2 — persists the in-flight job's id so a page refresh/navigation can
+// re-poll it instead of losing track of (or, worse, re-starting) a running import.
+// Same localStorage-for-client-side-continuity idiom this app already uses elsewhere
+// (homes.ts active-home id, screens.tsx scene order, settings.tsx a11y prefs).
+const KNX_JOB_KEY = "supreme.knxImportJobId";
+// § live-confirmed fix — the installer had no way to tell, after a page reload, which
+// project file the currently-shown scan results came from (the file input itself is
+// naturally empty again after a reload — this is a SEPARATE, persisted record of the
+// name, same lifecycle as KNX_JOB_KEY: set when a scan starts, cleared together with it).
+const KNX_FILENAME_KEY = "supreme.knxImportFileName";
+const JOB_POLL_MS = 1200;
+// § Room-selector fix — a sentinel roomId value meaning "installer typed a brand-new room
+// name," distinct from "" (Automatic — accept whatever room-assignment already inferred,
+// see room-assignment.ts). Neither the existing room list nor the auto-detected hint always
+// has the right answer (e.g. a KNX actuator's ETS-recorded mounting location, now correctly
+// excluded from being trusted as a room name for technical/utility spaces — see room-
+// assignment.ts's TECHNICAL_ROOM_NAMES — still leaves nothing for circuit_intelligence to
+// find on a device whose own name doesn't carry a room prefix), so installers need an
+// explicit way to just type the room they want.
+const NEW_ROOM_SENTINEL = "__new_room__";
 
 /**
  * KNX Discovery Summary + Device Review Workspace (§ Discovery Workflow, § Final
@@ -42,6 +71,75 @@ const SORT_LABEL: Record<SortKey, string> = {
   device_type: "Device type",
 };
 
+// § Pass 27 P0-A — a resumed job id from localStorage must never disable the Scan
+// button before its status is actually confirmed. Import jobs live ONLY in the
+// gateway's in-memory map (nothing evicts them, but a gateway restart wipes them, and
+// `finishScan` deliberately leaves a COMPLETED job's id in place — see Pass 16 fix
+// below), so a leftover id from any earlier session/tab/reused Incognito window is
+// common, not exceptional. Pure so the branch is unit-testable without mounting.
+export function resumeAction(status: KnxImportJobStatus | "gone"): "scanning" | "done" | "reset" {
+  if (status === "queued" || status === "running") return "scanning";
+  if (status === "completed") return "done";
+  return "reset"; // failed, cancelled, or gone (404/unreachable) — never block a fresh scan on this
+}
+
+// § Pass 11.2 — real, coarse stages only (see KnxImportJobStage in installer-context.ts);
+// no fabricated fine-grained progress bar over a pipeline that isn't actually instrumented
+// stage-by-stage internally.
+/** Pure gate for the Scan/Discover button and the file input — extracted so the
+ * condition is unit-testable without mounting the component (no React Testing Library
+ * in this app's test setup — see other *.test.ts files in this directory).
+ *
+ * § Formerly also gated on a `readingFile` flag covering the async-read + CPU-bound
+ * base64-encode window `onFile()` used to run in for a `.knxproj` upload. That entire
+ * window is now structurally gone: the file travels to the backend as a real
+ * `multipart/form-data` upload (see `knxDiscoveryQueueJobStart` in api.ts), so
+ * `onFile()` just stores the `File` object — no async read, no encode loop, nothing
+ * to race the button click against. */
+export function canStartKnxScan(phase: "idle" | "scanning" | "done" | "error"): boolean {
+  return phase !== "scanning";
+}
+
+/** § UX fix — an ETS project file and a pasted group-address export were previously shown as
+ * two always-visible inputs at once, even though they're mutually exclusive alternatives (the
+ * code already enforced this: selecting a file cleared the pasted text and vice versa) — just
+ * not communicated visually, which read as "you can use both." Installers must now pick ONE
+ * source explicitly; only that source's input renders. A bare live gateway/KNX-IoT scan (no
+ * ETS source at all) remains available regardless — the mode picker only governs which ETS
+ * INPUT is shown, not whether scanning requires one. Pure function so the choice logic is
+ * unit-testable without mounting the component. */
+export type EtsSourceMode = "project" | "pasted" | null;
+
+function jobStatusLabel(status: KnxImportJobStatus | null): string {
+  switch (status) {
+    case "queued": return "Queued…";
+    case "running": return "Parsing & synthesizing devices…";
+    default: return "Starting…";
+  }
+}
+
+// § P0-C (Pass 28) — the generic "color" capability name doesn't distinguish a Kelvin-
+// only tunable-white fixture from an RGB(W) one, which is exactly what a real ETS
+// project's DPT tells you (DPT7/9 = Kelvin, DPT232/233/251 = RGB(W)) — the binding
+// engine already computes this (`colorModesFromDpt`, § services/protocols/src/knx/
+// binding-engine.ts) and sends it down on the "color" plan's `config.colorModes`. This
+// reads ONLY that server-computed evidence — never re-derives from a device/GA name —
+// so the review card can show "CCT"/"RGB" instead of the ambiguous "color" the moment
+// the DPT evidence exists, without waiting for approval + live state feedback. Falls
+// back to the plain capability name when no plan resolved colorModes (DPT genuinely
+// unknown/absent) — an honest "we don't know which yet," never a guess.
+export function capabilityDisplayLabels(capabilities: string[], plans: { capability: string; config: Record<string, unknown> }[]): string[] {
+  return capabilities.map((cap) => {
+    if (cap !== "color") return cap;
+    const modes = plans.find((p) => p.capability === "color")?.config.colorModes as { rgb: boolean; cct: boolean } | undefined;
+    if (!modes) return "color";
+    if (modes.rgb && modes.cct) return "rgb+cct";
+    if (modes.cct) return "cct";
+    if (modes.rgb) return "rgb";
+    return "color";
+  });
+}
+
 function itemFilters(item: KnxInstallerQueueItem, rejected: boolean): Filter[] {
   const f: Filter[] = [item.section];
   if (item.device.capabilities.length === 0 || item.device.raw.deviceKind === "unknown") f.push("unsupported");
@@ -54,10 +152,21 @@ export function KnxDiscoveryWorkspace() {
   const [phase, setPhase] = useState<"idle" | "scanning" | "done" | "error">("idle");
   const [result, setResult] = useState<Awaited<ReturnType<typeof knxDiscoveryQueue>> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // § Pass 11.2 async job tracking — jobId/jobStatus drive the "Scanning…" progress
+  // display; the actual pipeline runs in the gateway, not on this request, so the
+  // browser stays fully usable while it's in flight.
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<KnxImportJobStatus | null>(null);
+  // Non-null only while the chunked upload itself is still in flight (no jobId yet) —
+  // distinct from "queued"/"running", which only exist once the gateway has actually
+  // received the whole file and created the job. Real chunk counts, not a guess — see
+  // scan()'s own comment and api.ts's uploadKnxprojChunked.
+  const [uploadProgress, setUploadProgress] = useState<{ sent: number; total: number } | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [approved, setApproved] = useState<Record<string, KnxApprovalResult>>({});
   const [approving, setApproving] = useState<string | null>(null);
-  const [edits, setEdits] = useState<Record<string, { name: string; roomId: string }>>({});
+  const [edits, setEdits] = useState<Record<string, { name: string; roomId: string; newRoomName?: string; shadingKind?: ShadingKind }>>({});
 
   // Review workspace: search / filter / sort / bulk selection / reject (§ Device Review
   // Workspace — all purely client-side over the one queue the backend already returned).
@@ -74,72 +183,287 @@ export function KnxDiscoveryWorkspace() {
   // commissioning logic lives in this file — `content`/`knxproj` are handed to the
   // backend as-is, which parses (never commissions) and merges them into the same queue.
   const [etsText, setEtsText] = useState("");
-  const [etsProject, setEtsProject] = useState<string | null>(null);
+  // The selected `.knxproj` File object itself — travels to the backend as a real
+  // multipart file upload (§ fixes a real production bug: a browser extension in the
+  // user's normal Chrome profile interfered with the previous ~13-18MB base64 JSON
+  // body; native file upload sidesteps that, and also removes the need to ever read/
+  // encode the file client-side at all).
+  const [etsFile, setEtsFile] = useState<File | null>(null);
+  const [etsFileName, setEtsFileName] = useState<string | null>(null);
+  // § live-confirmed fix — import jobs (and their queue results) live ONLY in the
+  // gateway's in-memory map; a hub restart between scanning and coming back to this
+  // page silently wipes them. `lostScanNotice` distinguishes THAT specific case (a
+  // saved jobId that no longer resolves at all) from an ordinary failed/cancelled scan,
+  // so the installer sees an honest reason instead of just landing back at a blank idle
+  // screen wondering where their results went.
+  const [lostScanNotice, setLostScanNotice] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const [etsPassword, setEtsPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
+  // § UX fix — which ETS source input is shown; null = not chosen yet, so neither the file
+  // picker nor the paste box renders until the installer explicitly picks one.
+  const [sourceMode, setSourceMode] = useState<EtsSourceMode>(null);
 
   useEffect(() => {
     void client.home().then((h) => setRooms(h.rooms.map((r) => ({ id: r.id, name: r.name }))));
   }, []);
 
-  async function onFile(file: File) {
-    setNeedsPassword(false);
-    setEtsPassword("");
-    if (file.name.toLowerCase().endsWith(".knxproj")) {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]!);
-      setEtsProject(btoa(bin));
-      setEtsText("");
-    } else {
-      setEtsText(await file.text());
-      setEtsProject(null);
+  // § Pass 11.2 refresh/navigation recovery, hardened in Pass 27 (P0-A) — a job started
+  // before this component mounted (previous page load) keeps running on the gateway
+  // regardless (a background worker thread tied to the job map, not the original
+  // request's lifecycle), so re-adopting a saved jobId and resuming polling is correct
+  // when that job is real. But blindly trusting ANY id found in localStorage and
+  // immediately flipping `phase` to "scanning" — before ever confirming the job still
+  // exists — disables the Scan button (canStartKnxScan gates on phase !== "scanning")
+  // for however long the first poll takes. Jobs are in-memory only on the gateway
+  // (nothing evicts a completed one, but a gateway restart wipes them, and a
+  // completed job's id is deliberately left in place — see finishScan's Pass 16 fix
+  // below), so a stale id from an earlier session/tab/reused Incognito window is
+  // common. The fix: resolve the real status once, eagerly, BEFORE touching `phase`
+  // at all — a dead/stale job never disables the button, so the very first click
+  // after page load is never silently swallowed.
+  useEffect(() => {
+    // Restore the last-uploaded project's filename regardless of what the job resolves
+    // to below — even a dead job's filename is worth showing until a new scan replaces it.
+    const savedFileName = localStorage.getItem(KNX_FILENAME_KEY);
+    if (savedFileName) setEtsFileName(savedFileName);
+
+    const saved = localStorage.getItem(KNX_JOB_KEY);
+    if (!saved) return;
+    let cancelled = false;
+    void (async () => {
+      let status: KnxImportJobStatus | "gone" = "gone";
+      let job: Awaited<ReturnType<typeof knxDiscoveryQueueJobStatus>> | null = null;
+      try {
+        job = await knxDiscoveryQueueJobStatus(saved);
+        status = job.status;
+      } catch {
+        status = "gone"; // 404 (genuinely gone) or a transient error — either way, never block on it
+      }
+      if (cancelled) return;
+      switch (resumeAction(status)) {
+        case "scanning":
+          setPhase("scanning");
+          setJobId(saved); // hands off to the polling effect below
+          break;
+        case "done":
+          if (job!.result) finishScan(job!.result);
+          else localStorage.removeItem(KNX_JOB_KEY); // "completed" with no result shouldn't happen, but never resume garbage
+          break;
+        case "reset":
+          // A saved job id that no longer resolves at all (vs. one that resolved to a
+          // real failed/cancelled status) means the hub's in-memory job map was wiped —
+          // almost always a restart — since the map itself never evicts entries otherwise.
+          if (status === "gone") setLostScanNotice(true);
+          localStorage.removeItem(KNX_JOB_KEY); // stale/dead — leave phase at "idle", button stays enabled
+          break;
+      }
+    })();
+    return () => { cancelled = true; if (pollRef.current) clearTimeout(pollRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only recovery, intentionally
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const activeJobId = jobId;
+    let cancelled = false;
+    // A transient poll failure (a network blip, a tab briefly backgrounded, or — since
+    // KNX_JOB_KEY is one shared localStorage slot across every tab of this browser — a
+    // sibling tab's own reload racing this one) must NOT be treated the same as "the job
+    // genuinely no longer exists." Only a real 404 from the job-status endpoint means
+    // that; anything else gets a bounded number of retries before giving up, so switching
+    // tabs/briefly losing network doesn't make a perfectly-healthy background import look
+    // like it "vanished."
+    let consecutiveFailures = 0;
+    const MAX_TRANSIENT_FAILURES = 5;
+    async function poll() {
+      try {
+        const job = await knxDiscoveryQueueJobStatus(activeJobId);
+        if (cancelled) return;
+        consecutiveFailures = 0;
+        setJobStatus(job.status);
+        if (job.status === "completed" && job.result) {
+          finishScan(job.result);
+        } else if (job.status === "failed") {
+          setError(job.error ?? "The import failed for an unknown reason.");
+          setPhase("error");
+          clearJob();
+        } else if (job.status === "cancelled") {
+          setPhase("idle");
+          clearJob();
+        } else {
+          pollRef.current = setTimeout(() => void poll(), JOB_POLL_MS);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        const definitelyGone = e instanceof HttpError && e.status === 404;
+        consecutiveFailures += 1;
+        if (definitelyGone || consecutiveFailures >= MAX_TRANSIENT_FAILURES) {
+          // Either the gateway confirmed this job id is unknown (genuinely gone — jobs
+          // are in-memory only, § job durability), or enough consecutive attempts failed
+          // that this is no longer plausibly transient — surface that honestly.
+          setError(e instanceof Error ? e.message : "Lost track of the import job.");
+          setPhase("error");
+          clearJob();
+        } else {
+          // Transient — keep the job tracked and retry rather than wiping the shared
+          // localStorage key out from under every tab watching this import.
+          pollRef.current = setTimeout(() => void poll(), JOB_POLL_MS);
+        }
+      }
+    }
+    void poll();
+    return () => { cancelled = true; if (pollRef.current) clearTimeout(pollRef.current); };
+  }, [jobId]);
+
+  function clearJob() {
+    localStorage.removeItem(KNX_JOB_KEY);
+    localStorage.removeItem(KNX_FILENAME_KEY);
+    setJobId(null);
+    setJobStatus(null);
+    setEtsFileName(null);
+  }
+
+  // § PASS 16 bug fix (scan result persistence) — this used to call clearJob() right here,
+  // deleting the ONE piece of state (the job id in localStorage) that lets the mount-time
+  // recovery effect above re-fetch a completed job's result. Since the backend keeps a
+  // completed job's full result in memory indefinitely (nothing evicts it — see
+  // getKnxImportJob's own doc comment in installer-context.ts), the fix is simply to stop
+  // deleting our own reference to it: leave the job id in place so a later remount/refresh
+  // still finds `saved`, calls knxDiscoveryQueueJobStatus(saved), sees status "completed"
+  // with a `result`, and lands right back here — same review queue, nothing re-scanned.
+  // The job reference is now cleared only by explicit user action (clearScanResults(),
+  // "Clear results" below) or by starting a new scan, never automatically on success.
+  function finishScan(out: Awaited<ReturnType<typeof knxDiscoveryQueue>>) {
+    setResult(out);
+    const initial: Record<string, { name: string; roomId: string }> = {};
+    for (const item of out.queue) {
+      const matchedRoom = rooms.find((r) => r.name.toLowerCase() === (item.room.room ?? "").toLowerCase());
+      initial[item.device.backendId] = { name: item.device.suggestedName, roomId: matchedRoom?.id ?? "" };
+    }
+    setEdits(initial);
+    setPhase("done");
+  }
+
+  // § live-confirmed fix — a bulk escape hatch for every "stale binding" conflict at
+  // once, rather than hitting it one device at a time on re-approval. Safe to run any
+  // time: only touches bindings whose device no longer exists, never a live one.
+  async function cleanupOrphanedBindings() {
+    setCleanupBusy(true);
+    setCleanupResult(null);
+    try {
+      const res = await cleanupOrphanedKnxBindings();
+      setCleanupResult(
+        res.removedDevices === 0
+          ? "No orphaned bindings found."
+          : `Removed ${res.removedBindings} orphaned binding(s) from ${res.removedDevices} device(s) that no longer exist. Re-approving should work now.`,
+      );
+    } catch (e) {
+      setCleanupResult(e instanceof Error ? e.message : "Cleanup failed.");
+    } finally {
+      setCleanupBusy(false);
     }
   }
 
+  // Deliberate, user-driven cleanup (§ job lifecycle) — the installer is done with this
+  // review queue (everything they wanted approved/rejected) and wants a clean slate. Only
+  // now does the completed job's reference actually get dropped.
+  function clearScanResults() {
+    clearJob();
+    setResult(null);
+    setEdits({});
+    setApproved({});
+    setSelected(new Set());
+    setRejected(new Set());
+    setPhase("idle");
+  }
+
+  async function cancelScan() {
+    if (!jobId) return;
+    try { await knxDiscoveryQueueJobCancel(jobId); } catch { /* best-effort — see cancellation doc */ }
+    setPhase("idle");
+    clearJob();
+  }
+
+  function onFile(file: File) {
+    setNeedsPassword(false);
+    setEtsPassword("");
+    setEtsFileName(file.name);
+    setSourceMode("project");
+    if (file.name.toLowerCase().endsWith(".knxproj")) {
+      setEtsFile(file);
+      setEtsText("");
+    } else {
+      setEtsFile(null);
+      void file.text().then((text) => setEtsText(text));
+    }
+  }
+
+  function removeEtsFile() {
+    setEtsFile(null);
+    setEtsFileName(null);
+    setEtsPassword("");
+    setNeedsPassword(false);
+    setSourceMode(null);
+  }
+
+  function clearPastedGa() {
+    setEtsText("");
+    setSourceMode(null);
+  }
+
+  // § Pass 11.2/11.3 — starts the NON-blocking job route and returns immediately; the
+  // actual parse/synthesize/classify pipeline runs on the gateway in a real WORKER THREAD
+  // (see startKnxImportJob → knxInstallerQueueThreaded in installer-context.ts), so the
+  // hub keeps serving every other client while it runs — not just this browser tab, which
+  // was never the part at risk. Progress is surfaced by the jobId effect above, which polls
+  // GET .../job/:jobId until it lands on completed/failed/cancelled.
   async function scan() {
     setPhase("scanning");
     setError(null);
     setApproved({});
     setSelected(new Set());
     setRejected(new Set());
+    setLostScanNotice(false);
+    if (etsFile) localStorage.setItem(KNX_FILENAME_KEY, etsFile.name);
+    // § live-confirmed fix — a real `.knxproj` upload over a slow/lossy connection can
+    // take minutes even chunked (see api.ts's uploadKnxprojChunked), and the button's
+    // default "Starting…" label would otherwise sit there with zero feedback the whole
+    // time, indistinguishable from a genuine hang. `uploadProgress` covers exactly that
+    // window (upload in flight, no jobId yet) with REAL chunk counts, not a guess.
+    if (etsFile) setUploadProgress({ sent: 0, total: Math.max(1, Math.ceil(etsFile.size / KNX_UPLOAD_CHUNK_BYTES)) });
     try {
-      const ets = etsProject
-        ? { knxproj: etsProject, password: etsPassword || undefined }
+      const ets = etsFile
+        ? { knxprojFile: etsFile, password: etsPassword || undefined }
         : etsText.trim()
           ? { content: etsText }
           : undefined;
-      const out = await knxDiscoveryQueue(ets);
-      setResult(out);
-      // Pre-fill each device's editable name/room from the backend's own recommendation —
-      // the installer only overrides what they disagree with (§ Editing). Leaving roomId
-      // "" (Automatic) is a real, valid choice now, not a blocked state: the Room
-      // Assignment Engine finds-or-creates a room from the Confidence Engine's own room
-      // hint at approval time (§ Automatic Room Creation) — the installer never has to
-      // pre-create a room before approving.
-      const initial: Record<string, { name: string; roomId: string }> = {};
-      for (const item of out.queue) {
-        const matchedRoom = rooms.find((r) => r.name.toLowerCase() === (item.room.room ?? "").toLowerCase());
-        initial[item.device.backendId] = { name: item.device.suggestedName, roomId: matchedRoom?.id ?? "" };
-      }
-      setEdits(initial);
-      setPhase("done");
+      const started = await knxDiscoveryQueueJobStart(ets, (sent, total) => setUploadProgress({ sent, total }));
+      localStorage.setItem(KNX_JOB_KEY, started.jobId);
+      setJobId(started.jobId);
+      setJobStatus(started.status);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Discovery failed.";
-      if (etsProject && /password/i.test(message)) setNeedsPassword(true);
+      if (etsFile && /password/i.test(message)) setNeedsPassword(true);
       setError(message);
       setPhase("error");
+    } finally {
+      setUploadProgress(null);
     }
   }
 
-  async function approve(item: KnxInstallerQueueItem) {
+  async function approve(item: KnxInstallerQueueItem, force = false) {
     const edit = edits[item.device.backendId] ?? { name: item.device.suggestedName, roomId: "" };
     setApproving(item.device.backendId);
     try {
       // roomId "" means Automatic — the Room Assignment Engine finds-or-creates a room
       // from the queue's own room hint (§ Automatic Room Creation), so there is nothing
-      // to block approval on here anymore.
-      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: edit.roomId || undefined, roomNameHint: item.room.room ?? undefined, plans: item.plans });
+      // to block approval on here anymore. NEW_ROOM_SENTINEL means the installer typed an
+      // explicit new room name themselves, overriding whatever hint room-assignment found.
+      const isNewRoom = edit.roomId === NEW_ROOM_SENTINEL;
+      const roomNameHint = isNewRoom ? (edit.newRoomName?.trim() || undefined) : (item.room.room ?? undefined);
+      const res = await approveKnxDevice({ device: item.device, name: edit.name, roomId: isNewRoom ? undefined : (edit.roomId || undefined), roomNameHint, plans: item.plans, force, shadingKind: edit.shadingKind });
       setApproved((cur) => ({ ...cur, [item.device.backendId]: res }));
     } catch (e) {
       setApproved((cur) => ({ ...cur, [item.device.backendId]: { device: { id: "", name: edit.name }, status: "error", reason: e instanceof Error ? e.message : "Approval failed." } }));
@@ -221,41 +545,144 @@ export function KnxDiscoveryWorkspace() {
         the same Unified Device Intelligence pipeline either way: grouping, capability detection,
         room assignment, duplicate detection, and binding plans, using the schema selected above.
       </p>
-      <label className="drv-field" style={{ marginTop: 4 }}>
-        <span className="lbl">ETS project (optional)</span>
-        <input
-          type="file"
-          accept=".knxproj,.csv,.xml,text/xml,text/csv"
-          disabled={phase === "scanning"}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }}
-        />
-        <span className="help">
-          Upload a .knxproj, or paste a group-address export (CSV/XML) below. Imported devices go
-          through this same review workspace — approve them exactly like a live-discovered device.
-        </span>
-      </label>
-      <textarea
-        value={etsText}
-        onChange={(e) => { setEtsText(e.target.value); setEtsProject(null); }}
-        placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
-        rows={4}
-        style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
-      />
-      {needsPassword && etsProject && (
+      {sourceMode === null && (
+        <div className="drv-field" style={{ marginTop: 4 }}>
+          <span className="help">
+            Optionally add an ETS source to merge into the same discovery pipeline — pick one:
+          </span>
+          <div className="drv-actions" style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <button type="button" disabled={!canStartKnxScan(phase)} onClick={() => setSourceMode("project")}>
+              Upload ETS project (.knxproj)
+            </button>
+            <button type="button" disabled={!canStartKnxScan(phase)} onClick={() => setSourceMode("pasted")}>
+              Paste group-address export
+            </button>
+          </div>
+        </div>
+      )}
+      {sourceMode === "project" && (
+        <label className="drv-field" style={{ marginTop: 4 }}>
+          <span className="lbl">ETS project</span>
+          <input
+            type="file"
+            accept=".knxproj,.esf,.csv,.xml,text/xml,text/csv"
+            disabled={!canStartKnxScan(phase)}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
+          />
+          <span className="help">
+            Upload a .knxproj. Imported devices go through this same review workspace — approve
+            them exactly like a live-discovered device.
+          </span>
+          {etsFileName && (
+            <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <span
+                className="muted"
+                title={etsFileName}
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
+              >
+                Selected: {etsFileName}
+              </span>
+              <button type="button" className="danger" disabled={phase === "scanning"} onClick={removeEtsFile} style={{ flexShrink: 0 }}>
+                Remove
+              </button>
+            </div>
+          )}
+          {!etsFileName && (
+            <button type="button" disabled={phase === "scanning"} onClick={() => setSourceMode(null)} style={{ marginTop: 4, alignSelf: "flex-start" }}>
+              ‹ Choose a different source
+            </button>
+          )}
+        </label>
+      )}
+      {sourceMode === "pasted" && (
+        <div className="drv-field" style={{ marginTop: 4 }}>
+          <span className="lbl">Group-address export (CSV/XML)</span>
+          <textarea
+            value={etsText}
+            onChange={(e) => { setEtsText(e.target.value); setEtsFile(null); }}
+            placeholder='e.g. <GroupAddress Name="Living Room - Ceiling - Switch" Address="1/1/1" DPTs="DPST-1-1" />'
+            rows={4}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: 12, marginTop: 8 }}
+          />
+          <div style={{ marginTop: 4, display: "flex", gap: 8 }}>
+            {etsText ? (
+              <button type="button" className="danger" disabled={phase === "scanning"} onClick={clearPastedGa}>
+                Clear pasted group addresses
+              </button>
+            ) : (
+              <button type="button" disabled={phase === "scanning"} onClick={() => setSourceMode(null)}>
+                ‹ Choose a different source
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {needsPassword && etsFile && (
         <label className="drv-field" style={{ marginTop: 8 }}>
           <span className="lbl">Project password</span>
           <input type="password" value={etsPassword} onChange={(e) => setEtsPassword(e.target.value)} placeholder="ETS project password" />
         </label>
       )}
       <div className="drv-actions" style={{ marginTop: 8 }}>
-        <button className="primary" disabled={phase === "scanning"} onClick={() => void scan()}>
-          {phase === "scanning" ? "Scanning…" : result ? "Scan again" : "Discover devices"}
+        <button className="primary" disabled={!canStartKnxScan(phase)} onClick={() => void scan()}>
+          {phase === "scanning"
+            ? uploadProgress
+              ? `Uploading project file… (${uploadProgress.sent}/${uploadProgress.total})`
+              : jobStatusLabel(jobStatus)
+            : result
+              ? "Scan again"
+              : "Discover devices"}
+        </button>
+        {phase === "scanning" && jobId && (
+          <button className="danger" onClick={() => void cancelScan()} style={{ marginLeft: 8 }}>
+            Cancel
+          </button>
+        )}
+        {phase === "done" && result && (
+          <button onClick={clearScanResults} style={{ marginLeft: 8 }} title="Dismiss this scan's review queue — approved devices are unaffected, already saved.">
+            Clear results
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={cleanupBusy}
+          onClick={() => void cleanupOrphanedBindings()}
+          style={{ marginLeft: 8 }}
+          title='Removes bus bindings left behind by devices deleted before their bindings were cleaned up — fixes "found an existing bus binding... but its device record no longer exists" without retrying each device one at a time.'
+        >
+          {cleanupBusy ? "Cleaning up…" : "Clean up orphaned bindings"}
         </button>
       </div>
+      {cleanupResult && <p className="muted" style={{ marginTop: 4 }}>{cleanupResult}</p>}
+      {phase === "scanning" && (
+        <>
+          <ProgressBar
+            style={{ marginTop: 8 }}
+            label={uploadProgress ? `Uploading project file… (${uploadProgress.sent}/${uploadProgress.total} chunks)` : jobStatusLabel(jobStatus)}
+            value={uploadProgress ? uploadProgress.sent / uploadProgress.total : undefined}
+          />
+          <p className="muted" style={{ marginTop: 4 }}>
+            {uploadProgress
+              ? "A large project on a slow connection can take several minutes; this page will update once the upload finishes."
+              : "Running in the background — the import doesn't block the rest of the app; leave this page and come back, or refresh, and this will pick the same job back up."}
+          </p>
+        </>
+      )}
       {phase === "error" && <p className="err">{error}</p>}
+      {lostScanNotice && (
+        <p className="muted" style={{ marginTop: 4 }}>
+          Your previous scan result is gone — the hub restarted since then (import jobs
+          aren't kept across a restart). Scan again to rebuild the review queue.
+        </p>
+      )}
 
       {result && (
         <>
+          {etsFileName && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              Project file: <strong title={etsFileName}>{etsFileName}</strong>
+            </p>
+          )}
           <DiscoverySummary summary={result.summary} />
 
           <div className="knx-toolbar">
@@ -326,6 +753,7 @@ export function KnxDiscoveryWorkspace() {
                 approval={approved[item.device.backendId]}
                 busy={approving === item.device.backendId}
                 onApprove={() => approve(item)}
+                onForceApprove={() => approve(item, true)}
                 selected={selected.has(item.device.backendId)}
                 onToggleSelect={() => setSelected((cur) => { const next = new Set(cur); if (next.has(item.device.backendId)) next.delete(item.device.backendId); else next.add(item.device.backendId); return next; })}
                 rejected={rejected.has(item.device.backendId)}
@@ -369,15 +797,16 @@ function DiscoverySummary({ summary }: { summary: NonNullable<Awaited<ReturnType
 }
 
 function DeviceCard({
-  item, rooms, edit, onEdit, approval, busy, onApprove, selected, onToggleSelect, rejected, onReject, onUnreject, schemaUsed,
+  item, rooms, edit, onEdit, approval, busy, onApprove, onForceApprove, selected, onToggleSelect, rejected, onReject, onUnreject, schemaUsed,
 }: {
   item: KnxInstallerQueueItem;
   rooms: { id: string; name: string }[];
-  edit: { name: string; roomId: string };
-  onEdit: (patch: Partial<{ name: string; roomId: string }>) => void;
+  edit: { name: string; roomId: string; newRoomName?: string; shadingKind?: ShadingKind };
+  onEdit: (patch: Partial<{ name: string; roomId: string; newRoomName: string; shadingKind: ShadingKind }>) => void;
   approval?: KnxApprovalResult;
   busy: boolean;
   onApprove: () => void;
+  onForceApprove: () => void;
   selected: boolean;
   onToggleSelect: () => void;
   rejected: boolean;
@@ -398,15 +827,46 @@ function DeviceCard({
         <span className={`drv-badge ${item.confidence.overall >= 85 ? "ok" : item.confidence.overall >= 70 ? "" : "err"}`}>{item.confidence.overall}% confidence</span>
       </div>
       <div className="knx-device-meta">
-        {item.device.raw.classification.category} → {item.device.raw.classification.type} · {item.device.capabilities.join(", ") || "no capability detected"} · {item.device.raw.communicationObjects.length} communication object{item.device.raw.communicationObjects.length === 1 ? "" : "s"} · {item.duplicate.decision}
+        {item.device.raw.classification.category} → {item.device.raw.classification.type} · {capabilityDisplayLabels(item.device.capabilities, item.plans).join(", ") || "no capability detected"} · {item.device.raw.communicationObjects.length} communication object{item.device.raw.communicationObjects.length === 1 ? "" : "s"} · {item.duplicate.decision}
       </div>
       <label className="knx-device-room">
         Room
-        <select value={edit.roomId} onChange={(e) => onEdit({ roomId: e.target.value })} disabled={!!approval || rejected}>
+        <select
+          value={edit.roomId}
+          onChange={(e) => onEdit({ roomId: e.target.value, ...(e.target.value === NEW_ROOM_SENTINEL ? { newRoomName: edit.newRoomName ?? item.room.room ?? "" } : {}) })}
+          disabled={!!approval || rejected}
+        >
           <option value="">Automatic{item.room.room ? ` (${item.room.room})` : " (Unassigned)"}</option>
           {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          <option value={NEW_ROOM_SENTINEL}>+ Add new room…</option>
         </select>
+        {edit.roomId === NEW_ROOM_SENTINEL && (
+          <input
+            type="text"
+            className="knx-device-new-room"
+            placeholder="New room name"
+            value={edit.newRoomName ?? ""}
+            onChange={(e) => onEdit({ newRoomName: e.target.value })}
+            disabled={!!approval || rejected}
+            style={{ marginTop: 4 }}
+          />
+        )}
       </label>
+
+      {item.device.capabilities.includes("position") && (
+        <label className="knx-device-room">
+          How does this move?
+          <SegmentedControl
+            aria-label="Shading movement"
+            value={edit.shadingKind ?? "updown"}
+            onChange={(v) => onEdit({ shadingKind: v })}
+            options={[
+              { value: "updown", label: "Up / Down" },
+              { value: "openclose", label: "Open / Close" },
+            ]}
+          />
+        </label>
+      )}
 
       <button type="button" className="link" onClick={() => setShowWhy((s) => !s)}>{showWhy ? "Hide explanation" : "Why was this device created?"}</button>
       {showWhy && (
@@ -438,10 +898,17 @@ function DeviceCard({
             <button type="button" onClick={onReject}>Reject</button>
           </>
         ) : (
-          <span className={`drv-badge ${approval.status === "ready" ? "ok" : approval.status === "warning" ? "" : "err"}`}>
-            {approval.status === "ready" ? "Commissioned" : approval.status === "warning" ? "Commissioned (unverified)" : "Failed"}
-            {approval.reason ? ` — ${approval.reason}` : ""}
-          </span>
+          <>
+            <span className={`drv-badge ${approval.status === "ready" ? "ok" : approval.status === "warning" ? "" : "err"}`}>
+              {approval.status === "ready" ? "Commissioned" : approval.status === "warning" ? "Commissioned (unverified)" : "Failed"}
+              {approval.reason ? ` — ${approval.reason}` : ""}
+            </span>
+            {approval.status === "error" && approval.reason?.includes("stale binding") && (
+              <button type="button" disabled={busy} onClick={onForceApprove} title="Removes the orphaned binding for these exact group addresses, then commissions this device fresh.">
+                {busy ? "Removing stale binding…" : "Remove stale binding & retry"}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

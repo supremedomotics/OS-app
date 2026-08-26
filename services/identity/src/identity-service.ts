@@ -296,7 +296,25 @@ export class IdentityService {
       throw new SupremeError("unauthorized", "refresh token reuse detected; session revoked");
     }
     const nextJti = newId("session") as string;
-    await this.sessions.setCurrentJti(claims.sid, nextJti);
+    // Compare-and-swap: only rotate if currentJti is still exactly claims.jti (what we just read
+    // above). Two concurrent refresh() calls for the same session (two tabs, a double-mount) can
+    // both pass the `session.currentJti !== claims.jti` check above before either writes — without
+    // a CAS here, the loser's write would silently clobber the winner's, and the loser's stale
+    // nextJti would then look like reuse on a LATER refresh and spuriously revoke the session.
+    const rotated = await this.sessions.setCurrentJti(claims.sid, claims.jti, nextJti);
+    if (!rotated) {
+      // We already confirmed (above) that session.currentJti === claims.jti at read time, so the
+      // only way the swap can fail now is a concurrent refresh() winning the race in between —
+      // this is NOT reuse (that's already caught by the check above on the *next* attempt with a
+      // stale jti). Treat it as benign: hand back valid tokens bound to whatever is current now,
+      // rather than revoking a session that's still perfectly legitimate.
+      const latest = await this.sessions.get(claims.sid);
+      if (!latest || latest.revoked) {
+        throw new SupremeError("unauthorized", "session has been revoked");
+      }
+      await this.sessions.touch(claims.sid, new Date().toISOString());
+      return this.issueTokens(user, claims.sid, latest.currentJti);
+    }
     await this.sessions.touch(claims.sid, new Date().toISOString());
     return this.issueTokens(user, claims.sid, nextJti);
   }
@@ -715,6 +733,21 @@ export class IdentityService {
       throw new SupremeError("conflict", "the master (owner) account cannot be deleted");
     }
     await this.store.deleteUser(id);
+  }
+
+  /** § PASS 22 (Part B, System Reset) — deletes EVERY user including the master account,
+   * bypassing {@link deleteUser}'s master-guard. Only for a full system reset (which then
+   * flips `ctx.setupRequired` back to true so the Setup Wizard re-provisions a master). */
+  async resetAllUsers(): Promise<number> {
+    const users = await this.store.listUsers();
+    for (const u of users) await this.store.deleteUser(u.id);
+    // § PASS 22B — also clear the identity-store's own commissioned-home record, a
+    // SEPARATE row from HomeService's home (see AppContext.completeSetup's doc comment).
+    // Leaving it behind made `commission()` reject every post-reset re-provisioning
+    // attempt with "home is already commissioned", even though every user/device/room
+    // had genuinely been wiped.
+    await this.store.deleteHome();
+    return users.length;
   }
 
   /** Self-service account deletion — re-authenticate with the current password, then delete. */

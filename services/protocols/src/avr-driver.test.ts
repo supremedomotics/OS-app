@@ -170,9 +170,17 @@ describe("AvrProtocolDriver (in-process AVR over TCP)", () => {
     await driver.connect();
     await driver.bind({ deviceId: dev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
     await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
-    // Wait for the link to actually finish connecting (the init query round-trip) before
-    // issuing commands — command() now correctly rejects a write to a still-connecting link.
-    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+    // § Regression fix — waiting only for "PW?" to appear in `received` proves the FIRST
+    // of the 9 paced init-sync tokens (PW?, ZM?, MV?, MU?, SI?, ...) was sent; it proves
+    // nothing about MV? (3rd in the queue) having been answered yet, since InitHandshake
+    // sends one token at a time and only advances once a reply arrives (av-sdk/init-
+    // handshake.ts). Under any real latency this leaves a window where a test's own
+    // nextEvent() listener attaches BEFORE the init-sync's own MV50->51% event has fired,
+    // races it against the real command's echo, and can resolve on the STALE init value
+    // instead — reproduced directly (12/40 runs) by injecting a realistic ~15ms per-token
+    // response delay into the fake receiver. `fullySynced` (see driver-diagnostics.ts) is
+    // only set true once the WHOLE handshake drains, which is the only safe barrier.
+    await vi.waitFor(() => expect(driver.getDiagnostics(dev)?.fullySynced).toBe(true));
   });
   afterAll(async () => {
     await driver.disconnect();
@@ -294,9 +302,11 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
     await driver.bind({ deviceId: mainDev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
     await driver.bind({ deviceId: zone2Dev, capability: "onoff", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
     await driver.bind({ deviceId: zone2Dev, capability: "media", address: `127.0.0.1:${avr.port}`, config: { zone: "zone2" } });
-    // Wait for the link to actually finish connecting before issuing commands — command()
-    // now correctly rejects a write to a still-connecting link.
-    await vi.waitFor(() => expect(avr.received).toContain("PW?"));
+    // § Regression fix — see the identical fix + comment in the main describe block above:
+    // waiting for "PW?" alone does not prove the full paced init-sync handshake (including
+    // MV?/Z2?/Z2MU? — this zone2 link's Zone 2 volume tests read exactly the state that
+    // race can corrupt) has drained yet.
+    await vi.waitFor(() => expect(driver.getDiagnostics(mainDev)?.fullySynced).toBe(true));
   });
   afterAll(async () => {
     await driver.disconnect();
@@ -683,6 +693,33 @@ describe("AvrProtocolDriver — discovery", () => {
     expect(found[0]?.raw.hiddenInputs).toBeUndefined();
     await new Promise<void>((r) => http.server.close(() => r()));
   });
+
+  // § Pass 12.2 — friendlyName mapped to suggestedName, mirroring yamaha-driver.ts's
+  // existing pattern for the same parseUpnpDescription() call.
+  it("uses the UPnP friendlyName as suggestedName when the description reports one", async () => {
+    const upnpXml = `<root><device>
+      <friendlyName>Living Room Denon AVR-X3800H</friendlyName>
+      <manufacturer>Denon</manufacturer>
+    </device></root>`;
+    const driver = new AvrProtocolDriver({
+      ssdp: async () => [{ address: "192.168.1.60", location: "http://192.168.1.60:60006/desc.xml" }],
+      fetchImpl: (async () => ({ ok: true, text: async () => upnpXml })) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found[0]?.suggestedName).toBe("Living Room Denon AVR-X3800H");
+    // IP stays available as technical/connection metadata, just not the primary name.
+    expect(found[0]?.raw.ip).toBe("192.168.1.60");
+  });
+
+  it("falls back to the IP-based name when the UPnP description has no friendlyName", async () => {
+    const upnpXml = `<root><device><manufacturer>Denon</manufacturer></device></root>`;
+    const driver = new AvrProtocolDriver({
+      ssdp: async () => [{ address: "192.168.1.61", location: "http://192.168.1.61:60006/desc.xml" }],
+      fetchImpl: (async () => ({ ok: true, text: async () => upnpXml })) as unknown as typeof fetch,
+    });
+    const found = await driver.discover();
+    expect(found[0]?.suggestedName).toBe("AVR 192.168.1.61");
+  });
 });
 
 describe("AvrProtocolDriver — HTTP AppCommand input enrichment (§ Universal AVR SDK)", () => {
@@ -759,6 +796,97 @@ describe("AvrProtocolDriver — HTTP AppCommand input enrichment (§ Universal A
     expect(config.source).toBe("device_reported");
     expect(config.inputs.find((i) => i.id === "DVD")?.label).toBe("Blu-ray Player");
     expect(config.inputs.some((i) => i.id === "GAME")).toBe(false);
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  // § Pass 12.5, Part B/C — SupremeOS-side custom input names override even the AVR's own
+  // reported/renamed label, keyed by the same stable wire `SI` token.
+  it("custom input names (binding.config.customInputNames) override the AVR-reported renamed label", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-custom-input" as DeviceId;
+    await driver.connect();
+    await driver.bind({
+      deviceId: dev,
+      capability: "media",
+      address: `127.0.0.1:${avr.port}`,
+      config: {
+        renamedInputs: { "SAT/CBL": "DIRECTV" },
+        customInputNames: { "SAT/CBL": "PlayStation 5 - Bedroom" },
+      },
+    });
+    const config = driver.getCapabilityConfig(dev, "media") as { inputs: { id: string; label: string }[] };
+    expect(config.inputs.find((i) => i.id === "SAT/CBL")?.label).toBe("PlayStation 5 - Bedroom");
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  // § Pass 12.6, Part E/F/L — setAvrInputCustomName()/getAvrInputs(): the driver-level halves
+  // of the new input-customization API, live-updating the in-memory overlay `bind()` seeds.
+  it("setAvrInputCustomName sets/clears a custom label and getAvrInputs reports all four layers", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-set-input" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+
+    expect(driver.setAvrInputCustomName(dev, "SAT/CBL", "Apple TV")).toBe(true);
+    let entry = driver.getAvrInputs(dev)?.find((i) => i.technicalId === "SAT/CBL");
+    expect(entry).toEqual({ technicalId: "SAT/CBL", reportedName: "Satellite/Cable", customName: "Apple TV", displayName: "Apple TV" });
+
+    // Clearing (name: null) falls back to reportedName, never leaves a stale override.
+    expect(driver.setAvrInputCustomName(dev, "SAT/CBL", null)).toBe(true);
+    entry = driver.getAvrInputs(dev)?.find((i) => i.technicalId === "SAT/CBL");
+    expect(entry?.customName).toBeNull();
+    expect(entry?.displayName).toBe(entry?.reportedName);
+
+    // A technical id that isn't a real wire token is rejected — a display name must never
+    // be able to invent a technical identity.
+    expect(driver.setAvrInputCustomName(dev, "NOT_A_REAL_INPUT", "hack")).toBe(false);
+    // An unmanaged device is rejected too, not silently accepted.
+    expect(driver.setAvrInputCustomName("no-such-device" as DeviceId, "SAT/CBL", "x")).toBe(false);
+    expect(driver.getAvrInputs("no-such-device" as DeviceId)).toBeNull();
+
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  // § Pass 12.6, Part E — re-binding the same device+capability (as the input-customization
+  // API's persistence path does on every rename) must replace, not duplicate, the driver's
+  // internal binding entry — proven indirectly via getCapabilityConfig staying single-valued
+  // and reflecting the latest bind's config after N re-binds.
+  it("re-binding the same device+capability does not duplicate internal driver state", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-rebind" as DeviceId;
+    await driver.connect();
+    for (let i = 0; i < 3; i++) {
+      await driver.bind({
+        deviceId: dev,
+        capability: "media",
+        address: `127.0.0.1:${avr.port}`,
+        config: { customInputNames: { "SAT/CBL": `Name ${i}` } },
+      });
+    }
+    const config = driver.getCapabilityConfig(dev, "media") as { inputs: { id: string; label: string }[] };
+    // Only the latest bind's config should be in effect — a duplicate stale entry would risk
+    // `.find()` returning the FIRST (oldest) match instead.
+    expect(config.inputs.find((i) => i.id === "SAT/CBL")?.label).toBe("Name 2");
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("technical input id stays stable and default label is used when no custom/renamed name is set — no crash for an unrecognized entry", async () => {
+    const avr = await startFakeAvr();
+    const driver = new AvrProtocolDriver({ httpPort: 1, fetchImpl: globalThis.fetch });
+    const dev = "device-avr-default-input" as DeviceId;
+    await driver.connect();
+    await driver.bind({ deviceId: dev, capability: "media", address: `127.0.0.1:${avr.port}` });
+    const config = driver.getCapabilityConfig(dev, "media") as { inputs: { id: string; label: string }[] };
+    // TUNER has no spec-derived override label (see DENON_INPUT_LABELS) — falls back to the raw token.
+    expect(config.inputs.find((i) => i.id === "TUNER")?.label).toBe("TUNER");
+    expect(config.inputs.map((i) => i.id)).toContain("SAT/CBL");
     await driver.disconnect();
     await new Promise<void>((r) => avr.server.close(() => r()));
   });

@@ -172,7 +172,7 @@ function toBool(v: KnxValue): boolean {
 }
 
 /** Parse "DPT232.600" / "232.600" / "232" → { major, minor }. */
-function dptParts(dpt: string | undefined): { major: number; minor: number | null } {
+export function dptParts(dpt: string | undefined): { major: number; minor: number | null } {
   const m = dpt ? /(\d+)(?:\.(\d+))?/.exec(dpt) : null;
   if (!m) return { major: 232, minor: null }; // default: full-colour RGB
   return { major: Number(m[1]), minor: m[2] ? Number(m[2]) : null };

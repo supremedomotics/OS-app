@@ -81,6 +81,7 @@ async function main(): Promise<void> {
     guard("intelligence", ctx.sie.tick());
     guard("occupancy", ctx.occupancy.tickNow());
     guard("backup", ctx.installer.runScheduledBackupIfDue(Date.now()));
+    guard("driverConnectivity", ctx.installer.reconcileDriverConnectivity());
     guard("expiry", ctx.sweepExpiredAccess());
   }, 60_000);
   tick.unref();

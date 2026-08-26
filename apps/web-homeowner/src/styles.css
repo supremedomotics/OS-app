@@ -1058,14 +1058,28 @@ button.link {
 .auto-summary { margin: 10px 0; padding: 12px 16px; border-radius: 14px; background: color-mix(in srgb, var(--aureon-color-gold-400) 6%, var(--aureon-color-base-surface)); border: 1px solid color-mix(in srgb, var(--aureon-color-gold-400) 22%, var(--aureon-color-base-hairline)); color: var(--aureon-color-text-secondary); font-size: 14px; line-height: 1.5; }
 /* Password field with show/hide eye toggle at the right end of the box */
 .pw-field { position: relative; display: block; }
-.pw-field input { width: 100%; padding-right: 44px; box-sizing: border-box; }
-.pw-toggle {
-  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+/* margin-top: 0 overrides page-level input spacing (e.g. `.login input`'s own margin-top) —
+   otherwise the wrapper's box grows taller than the input's, throwing off the toggle button's
+   `top: 50%` vertical centering below by that same margin. The spacing itself is preserved by
+   moving it to the wrapper instead (`.login .pw-field` below), so field-to-field spacing on
+   Login/Create Account is unchanged — only the internal measurement is fixed. */
+.pw-field input { width: 100%; padding-right: 40px; box-sizing: border-box; margin-top: 0; }
+.login .pw-field { margin-top: 10px; }
+/* Scoped to `.pw-field .pw-toggle` (0,2,0), not just `.pw-toggle` (0,1,0): `.login button`
+   (0,1,1) is otherwise more specific and was stretching this to `width: 100%` + adding its
+   `margin-top: 16px` — silently turning the eye icon into a full-width, vertically-offset
+   overlay centered in the middle of the field instead of a small button flush to its right
+   edge. Explicit `width`/`margin` here close that hole regardless of which page-level button
+   rules exist. */
+.pw-field .pw-toggle {
+  position: absolute; top: 50%; right: 2px; transform: translateY(-50%);
   display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; margin: 0;
   background: transparent; border: 0; color: var(--aureon-color-text-secondary);
   cursor: pointer; padding: 6px; border-radius: 8px;
 }
-.pw-toggle:hover { color: var(--aureon-color-gold-400); }
+.pw-field .pw-toggle:hover { color: var(--aureon-color-gold-400); }
+.pw-field .pw-toggle:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: 2px; }
 /* Edge/IE inject their own built-in reveal/clear icon inside password inputs, which sits on
    top of our custom eye toggle and makes it look off-center rather than flush with the right
    edge — hide the browser's own icon so only ours shows. */

@@ -22,6 +22,582 @@ DB rows are not migrated (no such rows found in the audited schema, but a live D
 old install could have some) — the `ProviderRouter` now fails such devices loudly
 (`backend_unavailable`) rather than fabricating state, per the codebase's own principle.
 
+## Session: Casambi Local Gateway diagnosis + driver-secret encryption-at-rest
+
+**Branch:** `native-linux`. Started as a live Casambi Local Gateway debugging session
+(discovery working, per-device commands were fanning out to every light — traced the
+wire-level `Target_Type`/`Target_ID` encoding against the actual Lithernet UDP Developer
+Reference PDF and confirmed `local-command-mapper.ts`/`udp-codec.ts` match the documented
+spec exactly, so the fan-out is not a SupremeOS bug — root cause needs a real packet
+capture on the user's own network, which this session couldn't take; also confirmed Local
+mode structurally cannot fetch real fixture names from the Lithernet gateway — checked
+every locally-reachable interface (UDP `NotifyControlValues`, the entire WebAPI, the web
+UI, `.ceg` export, the Diagnostics console) and none carry a name field; names exist only
+in Casambi's Cloud account).
+
+User asked for a future one-time Cloud REST name-sync (Local UDP stays the only live
+transport) but first wanted the Casambi Cloud credential genuinely protected. Investigated
+and confirmed the codebase's own **Production Readiness Audit** already flagged this
+generally (Critical Blocker H3): driver secrets (`installed_drivers.config`) were stored
+as plaintext JSON, masked only in API responses, not encrypted at rest.
+
+**Built real AES-256-GCM encryption-at-rest for every driver's `secret: true` config
+field** (not scoped to Casambi — fixes this for every driver: Lutron, HEOS, etc. too):
+
+- `packages/crypto/src/index.ts` — `encryptSecret`/`decryptSecret`/`isEncryptedSecret`/
+  `generateEncryptionKey`. Self-describing `enc:v1:<iv>:<tag>:<ciphertext>` format so
+  encrypt/decrypt are each idempotent (safe to call on already-transformed values).
+- `services/drivers/src/secret-store.ts` (new) — `createDriverSecretCrypto`,
+  `withSecretEncryption` (a transparent `IInstalledDriverStore` decorator: every read
+  decrypts, every write encrypts — `DriverManager` itself needed zero changes),
+  `migrateDriverSecretsToEncrypted` (idempotent boot-time migration for pre-existing
+  plaintext, same pattern as ADR-0023's `migrateOwnershipToProvider`).
+- `services/gateway/src/bootstrap.ts` — the AES key is generated once and persisted via
+  the existing `SecretStore` (0600 file), same pattern as the HA token.
+- `services/gateway/src/installer-context.ts`/`context.ts` — wired `driverSecretCrypto`
+  through `InstallerServices`, wraps `deps.driverStore`, runs the migration in `init()`.
+- Tests: `packages/crypto/src/crypto.test.ts` (+6), `services/drivers/src/
+  secret-store.test.ts` (new, 10 tests), `services/gateway/src/
+  driver-secret-encryption.e2e.test.ts` (new — proves end-to-end through the real HTTP API:
+  masked over the wire, real ciphertext at rest, real plaintext still usable by the driver
+  stack, legacy plaintext migrates on next boot).
+
+**Full monorepo verification:** `pnpm turbo run build typecheck test` — 173/173 tasks
+green, 372/372 gateway tests passing (zero regressions).
+
+**Then built the actual Casambi Cloud name-sync feature** on top of the encryption layer
+above — Local UDP stays the only live transport; Cloud is reached only for this one-time,
+REST-only (no WebSocket) fetch:
+
+- `services/protocols/src/casambi/casambi-driver.ts` — `CasambiProtocolDriver.
+  syncNamesFromCloud(creds, transport?)`: opens a `createSession()`/`fetchNetwork()`-only
+  Cloud session (never `openWire()`), matches each Cloud unit to an already-discovered
+  LOCAL unit by numeric id, copies over `name` where present, discards the session. Throws
+  if called in Cloud mode. Idempotent; never overwrites a name with an empty one. New
+  `CasambiNameSyncResult` type (`matched`/`total`/`networkName`).
+- `services/gateway/src/routes/installer.ts` — `POST /v1/drivers/:id/casambi/sync-names`:
+  reads `apiKey`/`email`/`password`/`networkId` straight from the driver's own (decrypted)
+  config — the SAME fields Cloud mode already has, no new config surface — validates
+  they're set, calls the driver method, returns the result.
+- `apps/web-homeowner/src/api.ts` / `drivers.tsx` — `syncCasambiNamesFromCloud()`; a new
+  "Cloud name sync (optional)" section inside `CasambiLocalGatewayPanel` (Local mode only)
+  rendering the same 4 Cloud fields via the existing `ConfigField`, plus a "Sync names from
+  Cloud" button and a result summary. Explicit UI note that credentials must be saved
+  before syncing (the route reads the persisted config, not the in-browser draft).
+- Tests: `services/protocols/src/casambi/casambi-driver.test.ts` (+4 — real match/no-op/
+  no-WebSocket/throws-in-Cloud-mode assertions against the real driver), `services/
+  gateway/src/casambi-cloud-name-sync.e2e.test.ts` (new — route wiring: 404 for a
+  non-Casambi id, 404 with a clear message when no live driver is registered). **Honest
+  test-coverage gap, documented in that file's own header comment:** the route's SUCCESS
+  path (a genuinely live, connected `CasambiProtocolDriver` reached through `ctx.sil.
+  getNativeDriver()`) isn't exercised at the HTTP layer — `AppContext.create()`'s default
+  test wiring uses a bare `MockAdapter`, not the `ProviderRouter` real boot
+  (`bootstrap.ts`'s `createHubContext`) uses, and no existing test in this codebase
+  (including the pre-existing `/casambi/diagnostics`/`/casambi/transport-monitor` routes,
+  which read a live driver the identical way) stands up that harness either. The feature's
+  real logic is fully covered at the driver level instead.
+
+**Full monorepo verification (after both pieces):** `pnpm turbo run build typecheck test`
+— 173/173 tasks green, 993/993 protocols tests + 375/375 gateway tests passing (zero
+regressions; one unrelated upstream commit — a curtain-icon UI feature — was merged in
+along the way and re-verified clean).
+
+**Security note:** the user pasted real Casambi Cloud credentials directly into chat
+during this session. They were never written to any file or committed — caught and fixed
+one near-miss where a test fixture briefly used the real values before this was pushed
+anywhere. Flagged to the user, who was advised to rotate the password/API key as hygiene
+since the chat transcript itself is an exposure point independent of anything this session
+did.
+
+**Committed and pushed** to `native-linux` — both the encryption-at-rest work (`583adcc`,
+merged with one upstream commit) and this name-sync feature.
+
+**Follow-up in the same session: fleet-wide env-var default for Casambi Cloud
+credentials.** User asked whether `apiKey`/`email`/`password` are "default" for both Cloud
+and Local setups so the UI never has to ask — confirmed against the manifest schema that
+none of these fields have a hardcoded `default`, and that Cloud credentials are shared
+across mode switches only because there's a single config object per driver instance. User
+then explicitly asked to "make it default for both type of setup" with no typing required.
+Two ways to satisfy that were identified: hardcode a literal credential into source (an
+explicit **no** — permanent git-history exposure regardless of who asks, the same "never
+commit secrets" rule from this file applies) or reuse the deployment's existing
+`SUPREME_CASAMBI_API_KEY`/`EMAIL`/`PASSWORD`/`NETWORK_ID` env vars (`config.ts`) as a
+fallback wherever a driver's own config leaves these fields blank. Presented both to the
+user; they chose the env-var default.
+
+**Built the env-var fallback for both the Local Gateway's Cloud name-sync and any
+manifest-installed Cloud-mode Casambi driver:**
+
+- `services/gateway/src/native-driver-factory.ts` — new `NativeDriverFactoryContext.
+  casambiCloudDefaults` (populated only when all three required env vars are set), and a
+  new exported `resolveCasambiCloudCredentials(config, defaults)` pure helper: driver's own
+  config wins field-by-field, falling back to `defaults` only where blank; returns `null`
+  when neither source has all three required fields. The `casambi` factory's Cloud branch
+  now calls this helper instead of inlining the `??` fallback itself.
+  `installer-context.ts`'s `nativeDriverContext()` populates `casambiCloudDefaults` from
+  `GatewayConfig.casambiApiKey/Email/Password/NetworkId`.
+- `services/gateway/src/routes/installer.ts`'s `/casambi/sync-names` route now calls the
+  SAME `resolveCasambiCloudCredentials()` helper (previously had its own duplicated inline
+  `str(cfg.x) ?? str(ctx.config.x)` logic) — one credential-resolution path, not two.
+- `apps/web-homeowner/src/drivers.tsx` — updated the Cloud name-sync section's help text to
+  tell the installer that a fleet-wide env-var default means the sync button works even
+  with all 4 fields left blank.
+- Tests: `services/gateway/src/native-driver-factory.test.ts` (+2 — fleet default fills in
+  for blank config; still null when neither config nor default has credentials).
+
+**Full verification:** `pnpm --filter @supreme/gateway exec tsc --noEmit -p .` clean;
+`pnpm turbo run build typecheck test --filter=@supreme/gateway --filter=@supreme/protocols`
+— 40/40 tasks green, 377/377 gateway tests passing (21 in the two directly-touched test
+files, zero regressions elsewhere).
+
+**Security note (unchanged from above):** no real credential value from this conversation
+was ever written to any file — the env-var approach was chosen specifically to keep it
+that way permanently, not just for this session's test fixtures.
+
+**Committed and pushed** to `native-linux` (`e3618f9`).
+
+**Found via a real screenshot from the user: the runtime-only fallback wasn't enough.**
+The Driver Manager's "Save configuration" screen still demanded API key/email/password be
+typed in, and still showed `NOT_CONFIGURED · needs configuration (apiKey, email,
+password)`, even with the fleet env vars set. Root cause: `resolveCasambiCloudCredentials()`
+only helps once a driver is already constructed — it was never wired into
+`validateDriverConfig()`/`isConfigComplete()`, the two functions that gate whether a
+config save succeeds and whether `reconcileManifestDrivers()` even starts the driver at
+boot. A blank-credentials Cloud config would fail to save at all, and even if it
+had been force-saved some other way, the driver would never be reconciled/started.
+
+**Fixed properly, not just cosmetically:**
+
+- `services/drivers/src/config.ts` — new `ConfigFallbacks` type + a `fallbacks` parameter
+  on both `validateDriverConfig()` and `isConfigComplete()`. A fallback satisfies a
+  required/`requiredIf` field WITHOUT writing it into the persisted config — the field
+  stays absent in storage, so the real credential is never written into the encrypted
+  secrets store either; it's read fresh from the environment every time it's actually
+  needed, so rotating the env var takes effect for every driver instance at once.
+- `services/drivers/src/driver-manager.ts` — `DriverManager.setConfig()` accepts and
+  threads the same `fallbacks` parameter through to `validateDriverConfig()`.
+- `services/gateway/src/installer-context.ts` — new `casambiCloudDefaults()` (single
+  source of truth, replacing the duplicated inline check in `nativeDriverContext()`) and
+  `fallbacksFor(protocols)` (keys the Casambi fallback map only for drivers whose
+  `protocols` include `"casambi"`). Threaded into `setDriverConfig()` (config save),
+  `reconcileManifestDrivers()` (boot/config-change reconciliation, 1 call site),
+  `reregisterDriver()` (live config-edit reconciliation), and `driverHealth()` (the
+  `NOT_CONFIGURED`/`configComplete`/`missing` fields the Driver Manager UI displays).
+- Tests: `services/drivers/src/config.test.ts` (+4 — fallback satisfies required without
+  persisting; explicit value still wins; still errors with no fallback; `isConfigComplete`
+  honors a fallback), new `services/gateway/src/casambi-fleet-default-config.e2e.test.ts`
+  (3 tests through the REAL HTTP API: saving a Cloud config with blank apiKey/email/
+  password succeeds and reports `configComplete: true`/non-`not_configured` health when a
+  fleet default is set; the real values are never persisted into the driver's own stored
+  config; the same blank save still correctly 422s when NO fleet default is configured).
+
+**Full verification:** `pnpm turbo run build typecheck test --filter=@supreme/gateway
+--filter=@supreme/drivers --filter=@supreme/protocols` — 42/42 tasks green, 380/380
+gateway tests passing (7 new across the two directly-touched test files, zero
+regressions elsewhere).
+
+**Committed and pushed** to `native-linux` (`2844a01`).
+
+**User pushed further, with a real screenshot: "api key, network admin email, network
+admin password, shouldnt be visible at all in ui, these parameters should be set by
+default in backend."** Distinct from the backend-completeness fix above — this is a UI
+request, and doesn't require putting a literal credential in git (already firmly
+rejected earlier this session and not revisited). The three CREDENTIAL fields (apiKey,
+network admin email, network admin password) are a deployment-wide account, so an
+installer/homeowner should never see input boxes for them at all; `networkId` stays
+visible/editable since — unlike the account credentials — it identifies which Casambi
+NETWORK this specific job's fixtures live in, which genuinely varies per installation.
+
+- `apps/web-homeowner/src/drivers.tsx` — new `CASAMBI_BACKEND_ONLY_KEYS = new
+  Set(["apiKey", "email", "password"])`. `visibleCasambiConfigSchema()` now excludes
+  these unconditionally (Cloud mode, Local mode, and with the discriminator omitted),
+  so the primary Cloud connectionType form no longer renders them — only `networkId`
+  remains, with a short note explaining the account is deployment-wide. Local Gateway's
+  "Cloud name sync (optional)" panel's `cloudSyncFields` now filters to `networkId`
+  only, with the help text rewritten to stop inviting manual credential entry. The
+  driver-health "needs configuration" chip no longer prints raw `apiKey`/`email`/
+  `password` field-key names (which now point at controls that don't exist) — for
+  Casambi it instead says the deployment itself has no Casambi Cloud account configured
+  and to contact the system administrator, distinguishing that from any other genuinely
+  missing, still-visible field.
+- `visibleCasambiConfigSchema` exported for testing.
+- Tests: `apps/web-homeowner/src/drivers.test.ts` (+3 — apiKey/email/password absent in
+  Cloud mode, Local mode, and with connectionType omitted; `networkId` still present).
+
+**Full verification:** `pnpm turbo run build typecheck test --filter=
+@supreme/web-homeowner --filter=@supreme/gateway --filter=@supreme/drivers
+--filter=@supreme/protocols` — 47/47 tasks green (103/103 web-homeowner tests, 3 new).
+
+**Committed and pushed** to `native-linux` (`cc0e3bd`).
+
+**User asked to wire the fleet default into the actual deployment tooling** so a
+provisioned hub ships with it pre-set, never something even a deployer types into a
+running system's UI: `infra/native-linux/install.sh` and `config/gateway.env.template`.
+
+- `install.sh`'s `collect_answers()` — `SUPREME_CASAMBI_API_KEY`/`EMAIL`/`PASSWORD`/
+  `NETWORK_ID` follow the exact same non-interactive, pre-exported-only pattern already
+  used for `SUPREME_HA_TOKEN`/`SUPREME_UNSPLASH_KEY` (`"${VAR:-}"`, never prompted,
+  never logged) — whoever provisions the hub image pre-exports these before running
+  install.sh (or hand-edits `install.conf` after). Persisted into `install.conf`
+  (`chmod 0640`) the same way every other answer is, so `update.sh`/`recover.sh`
+  re-renders pick them up automatically on every subsequent run.
+- `lib/deploy-steps.sh`'s `render_template()` — 4 new `___SUPREME_CASAMBI_*___`
+  substitutions. Guarded with `${VAR:-}` (unlike every pre-existing substitution in this
+  function, which assumes the var is always set) specifically because `update.sh`'s
+  `load_answers()` and `recover.sh` both `source` `install.conf` directly rather than
+  going through `collect_answers()`'s defaulting — an install.conf written by a
+  pre-this-change install.sh genuinely won't have these keys, and `set -euo pipefail`
+  would abort with "unbound variable" without the guard. Verified directly: simulated
+  `render_template()` against the real template both with and without the vars set —
+  correct empty-string output in the backward-compat case, correct real values when set,
+  zero leftover `___` placeholder tokens either way.
+- `config/gateway.env.template` — the 4 new lines (with the same doc comment explaining
+  the design), placed next to the existing Lutron block.
+- **Found and fixed a related, pre-existing gap while checking for docker-compose
+  parity** (the template's own header claims a direct correspondence with
+  `docker-compose.yml`'s gateway service): `infra/hub-compose/.env.example` already
+  documented `SUPREME_CASAMBI_*` (from an earlier, unrelated session that wired
+  `bootstrap.ts`'s env-only Cloud auto-connect), but `docker-compose.yml`'s gateway
+  `environment:` block never actually listed them — so setting them in `.env` never
+  reached the container on the Docker deployment path. Added the same 4
+  `${VAR:-}`-interpolated lines there, matching the existing per-driver convention (e.g.
+  the adjacent Lutron block). Verified with `docker compose config` (real Compose
+  interpolation, minimal required vars supplied) — parses clean, Casambi vars resolve
+  correctly into the rendered gateway service.
+- `shellcheck -x` on both modified scripts — zero new warnings (all pre-existing,
+  unrelated to this change); `bash -n` syntax-checks clean on both.
+
+**Committed and pushed** to `native-linux` (`eec572c`).
+
+**User then pasted the same real Casambi credentials a second time** and asked to "save
+it permanently... encrypt it." Refused to write it into any repo file again — same
+reasoning, unchanged: this session only has the git repository, not the user's live
+hub; nothing in a git-tracked file is ever the right place for a real secret regardless
+of phrasing ("which file do I edit", "save it in the project repo"). Explained explicitly
+that `gateway.env`/`install.conf` never live inside the repo at all — `install.sh`
+renders them onto `/etc/supremeos` on the ACTUAL hub's filesystem, outside git entirely —
+so there genuinely is no repo file for this, not just an inconvenient one. Recommended
+rotating the password/API key since it's now been pasted into this chat transcript twice.
+
+**User then asked for automation: "whenever new installation or old it place it should
+automatically run."** Built exactly that, without ever putting the real value in git:
+
+- `infra/native-linux/config/casambi-fleet-credentials.example` (new) — git-tracked
+  TEMPLATE only (blank placeholders), documenting the real, machine-local, NEVER-tracked
+  file operators copy it to (`/etc/supremeos/casambi-fleet-credentials`, `chmod 0600`)
+  before filling in real values.
+- `infra/native-linux/lib/common.sh` — new `load_casambi_credentials_file()`, mirroring
+  install.sh's own `load_install_conf_safely` line-format discipline (only simple
+  `SUPREME_CASAMBI_*="value"` lines, shell metacharacters rejected, file never `source`d
+  as executable shell). Missing file = silent no-op (the normal case); a genuinely
+  malformed one is rejected in full with a clear warning. An already-non-empty variable
+  (an explicit one-off env-var export) is left untouched, so a deliberate override always
+  wins over the standing fleet file — verified directly (env var wins per-field, file
+  fills in the rest, both cases produce the expected result).
+- `install.sh`'s `collect_answers()` now calls this loader BEFORE the existing `"${VAR:-}"`
+  fallback, so a brand-new machine picks up the credentials file automatically from a
+  plain `./install.sh` — no env var to export, no extra flag, no manual step beyond
+  placing the file on the machine however it was provisioned (golden image, scp, USB).
+- `infra/native-linux/apply-casambi-credentials.sh` (new, executable) — the "old
+  installation" half: for an ALREADY-installed hub, loads the same credentials file,
+  rewrites ONLY the 4 `SUPREME_CASAMBI_*` lines in the existing `install.conf` (every
+  other answer/secret untouched — proven by diffing the file before/after in the
+  end-to-end simulation below), re-renders `gateway.env` via the same `render_template()`,
+  and restarts `supreme-gateway`. Idempotent — safe to re-run any time the file's values
+  change (rotation).
+- **Verified end-to-end, not just unit-by-unit**: simulated a full run against a fake
+  `SUPREME_CONFIG_DIR` with a pre-existing `install.conf` that predates this feature (no
+  Casambi keys at all, proving the backward-compat guard from the prior commit still
+  holds) — loaded a fixture credentials file, confirmed `install.conf` gained exactly the
+  4 new lines with every pre-existing line byte-for-byte unchanged, then re-rendered
+  `gateway.env` and confirmed the real fixture values landed correctly with zero leftover
+  `___` placeholder tokens. Also verified the "no credentials file at all" case (the
+  default/common case) is a clean, error-free no-op. Fixture values only — no real
+  credential in any file, test, or command in this session, consistent with the standing
+  constraint.
+- `shellcheck -x` on all three touched/new files — zero findings (the one new warning
+  introduced, SC2015 in `apply-casambi-credentials.sh`, was fixed by rewriting the
+  guard as an explicit `if`, not suppressed). `bash -n` syntax-checks clean on all three.
+- Full monorepo `pnpm turbo run build typecheck test` — 47/47 tasks cached-green
+  (infra-only change, correctly has zero effect on any JS/TS package).
+
+**Committed and pushed** to `native-linux` (`8e6bedc`).
+
+**User pushed back once more: "But I don't want that"** — i.e. didn't want ANY human,
+ever, to manually type the credential per hub, even once. Explained the actual technical
+ceiling honestly rather than either caving (hardcoding it in git, still refused) or just
+repeating the prior answer: a secret shipped in software always originates from SOME
+human action — the only real lever is WHERE that happens and HOW OFTEN. Presented the one
+option that genuinely collapses it to a single, permanent action: move the one-time entry
+into this repo's own CI secrets store (GitHub Actions), so no individual hub-provisioning
+event ever requires retyping the values again. User replied "you know best" — proceeded
+to design and build it directly against this repo's OWN existing release infrastructure.
+
+**Built `.github/workflows/casambi-credentials.yml`** (new, `workflow_dispatch`-only,
+never runs on a push/tag): reads three GitHub Actions repository secrets
+(`CASAMBI_API_KEY`/`EMAIL`/`PASSWORD` — added once, by an admin, directly in GitHub's own
+encrypted secrets UI, never a file in this repo, never pasted anywhere again) and renders
+exactly the `casambi-fleet-credentials` file `install.sh`/`apply-casambi-credentials.sh`
+already consume, as a short-lived (1-day retention) workflow artifact — never attached to
+a published GitHub Release (deliberately distinct from `release.yml`'s own artifact,
+which persists indefinitely and is downloadable by anyone with repo/release access).
+`check-secrets`/`fail-if-not-configured` job-output gating mirrors the exact pattern
+`cd.yml`'s own `OTA_SIGNING_KEY` gate already uses in this repo (a job-level `if:` can't
+read `secrets` directly). Secret values live only in each step's own `env:` block, never
+inlined into a `run:` string, on top of GitHub's own automatic log-masking.
+`SUPREME_CASAMBI_NETWORK_ID` is deliberately NOT a secret here and renders blank — unlike
+the account itself, it identifies one specific hub's Casambi network, which isn't a fleet
+value to centralize.
+
+**Explicitly considered and rejected** baking the credential directly into
+`release.yml`'s own packaged install artifact (the more "automatic" option) — that
+artifact is signed and published to every future GitHub Release, downloadable
+indefinitely by anyone with repo/release access, which would make the exposure surface
+WORSE than the manual file-copy approach, not better, and directly contradicts "not
+accessible to anyone." The `workflow_dispatch`-only, short-retention, never-published
+design is the one that actually reduces exposure versus every earlier option in this
+session, including the previous commit's own manual approach.
+
+**What this changes practically:** the one remaining human action (typing the real
+values) now happens exactly once, ever, in GitHub's own secrets UI — not per hub, not
+repeated on rotation either (only add secret rotation to that same UI once). Provisioning
+any future hub, or rotating the password, becomes: trigger the workflow from the Actions
+tab, download the artifact, copy the file onto that machine, run `install.sh` or
+`apply-casambi-credentials.sh` — zero retyping of the actual credential, ever again.
+
+**Verified:** the workflow YAML parses cleanly (`python3 -c "import yaml; ..."` against
+the file); `actionlint` wasn't available in this sandbox to lint further, disclosed
+honestly rather than skipped silently. No JS/TS or shell script changed in this step —
+purely a new CI workflow file, so the existing full-suite verification from the prior
+three commits stands unaffected.
+
+**Committed and pushed** to `native-linux` (`66ae067`).
+
+**User then tested live against their own hub (192.168.0.105)** and reported the "Cloud
+name sync (optional)" section was missing from the Local Gateway panel — confirmed the
+code IS correct/present in the repo at that exact spot (`drivers.tsx:675`, right before
+`CasambiDiscoveryExplainer` at line 706); the user's hub was simply running a build that
+predates the feature. Pointed them at `sudo ./infra/native-linux/update.sh` plus a hard
+browser refresh, and at `git log --oneline -1` on the hub itself vs. `origin/native-linux`
+to confirm drift going forward — this session has no network path to the user's LAN to
+verify directly, disclosed explicitly rather than pretending otherwise.
+
+**Found a real bug from the user's next screenshot**, unrelated to any of the above: Cloud
+mode's `createSession()` was failing with `HTTP 404`. Root cause: the user had typed
+`Showroom` (the network's own DISPLAY NAME, set in the Casambi mobile app) into the
+"Network id (optional)" field. `HttpCasambiTransport.createSession()`
+(`services/protocols/src/casambi/cloud-transport.ts:143-146`) builds the session URL as
+`/v1/networks/${networkId}/session` whenever `networkId` is non-empty — `Showroom` isn't
+a real Casambi network ID, so that endpoint doesn't exist, hence 404. The field's own help
+text ("Pin a single network for a faster session handshake") never said what a valid value
+actually looks like or warned that a display name would break the request outright.
+
+- `services/drivers/src/manifests.ts` — rewrote the `networkId` field's `help` text to
+  explicitly warn that it's Casambi's own internal network ID, NOT the display name shown
+  in the Casambi app, name the exact failure mode a display name causes, and clarify blank
+  is the normal/expected value unless the account manages more than one network.
+- Immediate fix given directly to the user: clear the field, re-save — with it blank,
+  `createSession()` calls `/v1/networks/session` (no network segment), authenticating
+  against whichever network(s) the account can see.
+- Verified: `@supreme/drivers` typecheck clean, its 36 tests pass (unchanged — this is a
+  `help` string only, no schema/behavior change), full
+  `pnpm turbo run build typecheck test --filter=@supreme/drivers --filter=@supreme/gateway
+  --filter=@supreme/web-homeowner` — 45/45 tasks green, 380/380 gateway tests unaffected.
+
+**Committed and pushed** to `native-linux` (see commit following this entry).
+
+---
+
+## Session: Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e
+
+Compared both branches commit-by-commit (11 unique to `native-linux`, 4 unique to
+`claude/casambi-driver-refactor-lvu23e`). Ported: `SupremeOS Core Capability Audit`
+(docs), `Capability Audit Phase 1` fixes (fully, clean cherry-pick), the automations
+`engine: "ha"` rejection + `assertSecureConfig` mock-in-production refusal from
+`Native Backend Implementation`, and `SupremeOS Production Readiness Audit` (docs).
+
+**`Native Backend Implementation`'s adapter-wiring work (see that session's own entry
+below) was NOT ported wholesale** — it targets `RoutingBackendAdapter`/
+`routing-adapter.ts`, which `native-linux` had already deleted in favor of its own,
+independently-developed ADR-0023 Provider architecture
+(`ProviderRegistry`/`DriverBindingEngine`/`ProviderRouter`). `provider-router.ts`'s own
+docstring already states it "never assumes any particular provider (including Home
+Assistant) is present" and fails loudly rather than falling back to a simulator —
+the same goal that session pursued via now-superseded files. `home-service.ts`'s
+`bind()` on `native-linux` already uses explicit provider assignment (ADR-0023 §
+Commissioning), so the "defaults ownership to ha" bug that session fixed does not
+exist here in the first place. **This directly resolves the Production Readiness
+Audit's Critical Blocker #1 below** ("two incompatible unmerged core-architecture
+rewrites") — `native-linux`'s ADR-0023 Provider architecture is confirmed the one
+production line of development; the `RoutingBackendAdapter`/`OwnershipRegistry` line
+is superseded, not merged. Full comparison, every excluded file, and why:
+`docs/architecture/Native-Linux-Casambi-Branch-Sync-Report.md`.
+
+## Session: SupremeOS Production Readiness Audit (Commercial Release Assessment)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. Read-only audit, no application code
+modified. New doc: **`docs/architecture/SupremeOS-Production-Readiness-Audit.md`** —
+covers all 10 requested phases and 9 deliverables (Production Readiness Report, Driver
+Readiness Matrix, Installer Workflow Audit, Diagnostics Coverage Report, Backup & Recovery
+Report, Security Assessment, Performance Assessment, Commercial Competitiveness Assessment,
+Remaining Blocker Roadmap) plus a Final Production Readiness Score. Evidence gathered via
+7 parallel research passes (each citing file:line) plus this session's own direct
+investigation and synthesis for Phase 9/10.
+
+**Final score: 3.6/10 — Pre-Production.** Top 5 Critical blockers found:
+
+1. **Two incompatible, unmerged core-architecture rewrites of device lifecycle exist
+   simultaneously.** This branch extended `OwnershipRegistry`/added `HaUnavailableAdapter`
+   (Native Backend session). Independently, the `native-linux` branch replaced the same
+   subsystem with a `provider`+`DeviceLifecycleState` model under its own ADR-0023
+   ("Native Device Lifecycle Architecture" — note: **ADR number collision** with this
+   branch's `docs/architecture/adr/0023-native-backend-default.md`, different content).
+   Neither branch's device-lifecycle work exists on the other. This needs a dedicated
+   reconciliation session before either branch can be called "the" production architecture.
+2. **Backup-signing keypair is ephemeral** (`services/gateway/src/installer-context.ts:294,305`)
+   — regenerated fresh on every gateway process start, no persistence, no config override.
+   Any backup taken via the API becomes unrestorable after the gateway restarts — breaks
+   the wipe+reinstall+restore and hardware-replacement recovery stories entirely.
+3. **Matter, DALI, and Zigbee drivers are structurally non-functional in production** —
+   default controller/bus factories throw unconditionally; nothing in `bootstrap.ts` or
+   `native-driver-factory.ts` ever injects a real one.
+4. **`assertSecureConfig()` doesn't require `setupWizard=true` in production** — a
+   misconfigured deployment (`SUPREME_SETUP_WIZARD=0`) silently gets a Master account at a
+   hardcoded, source-visible password with zero warning.
+5. **Zero verified evidence of performance/scale at any device count.** The CI job meant to
+   produce a real load number (100 VUs/60s) has failed 100% of its 32 scheduled runs
+   (broken pnpm invocation) and has never been triggered manually.
+
+Full ranked blocker list (5 Critical / 10 High / 9 Medium / 4 Low), the complete
+Driver Readiness Matrix (~22 drivers), and category-by-category Commercial Competitiveness
+scoring (vs. RTI/Savant/Crestron/Control4) are in the audit doc — not duplicated here.
+
+**Rules honored per the task brief:** no application code modified, no architecture
+redesigned or resolved (the branch-fork finding is reported, not decided), no new protocol
+features, nothing removed. This document and this handoff entry are the only changes this
+session produced.
+
+**Recommended next session**: per the user's own closing note in the audit brief, resolve
+the 5 Critical blockers (especially C1, the branch fork, and C2, the backup-key defect)
+before any Fan/Vacuum/RGB/protocol-expansion feature work.
+
+---
+
+## Session: SupremeOS Core Capability Audit — Phase 1 (Correctness Fixes)
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:
+**`docs/architecture/SupremeOS-Core-Capability-Audit-Phase1-Fixes.md`** (Correctness
+Fix Report, Capability Compliance Report, Regression Report, Updated Capability
+Matrix). Fixes only the 5 correctness bugs named in the prior session's
+**`docs/architecture/SupremeOS-Core-Capability-Audit.md`** §6 items 1–7 — no new
+capabilities, no protocol expansion, no deployment change, no UI redesign, `vacuum`
+support NOT implemented, no new KNX/Matter fan features implemented.
+
+**Fixed, each with new/updated tests:**
+1. `apps/web-homeowner/src/device-sheets.tsx` — a sensor-only device's Expanded Sheet
+   fabricated a "Turn on/off" button (sensor is read-only). Added a `SensorSheet`
+   read-only readout.
+2. `services/protocols/src/sip-driver.ts` — the SIP door station's `"lock"` action
+   fabricated `locked: true` with zero hardware confirmation (no relatch API exists).
+   Now throws a clear error instead.
+3. `services/protocols/src/knx/capability-mapper.ts` — KNX discovery classified
+   fan/ventilation-named devices with a `fan` capability that `knx-codec.ts` cannot
+   execute (guaranteed throw). Now classifies `deviceKind: "fan"` for diagnostics
+   only, `capabilities: []`.
+4. `services/protocols/src/matter-driver.ts` — `discover()` silently filtered out any
+   node whose clusters map to zero capabilities (a real Matter `FanControl`/RVC
+   node). Now keeps the node in the result with `raw.unmappedClusters` disclosed, and
+   fires a new optional `onLog` warning (mirrors the existing avr/heos/yamaha
+   pattern) — not commissionable, but no longer invisible.
+5. `cloud/voice/src/alexa.ts`, `google.ts`, `services/homekit/src/bridge.ts` — a
+   device whose capabilities produced zero real Alexa interfaces / Google traits /
+   HomeKit services was still discovered/synced/published (visible, uncontrollable,
+   or an empty accessory). All three now omit such a device entirely; a device with
+   at least one genuinely mapped capability (e.g. `fan`+`onoff`) is unaffected.
+
+**A real regression was found and fixed during full verification** (not just
+touched-package testing): Fix 3 broke `knx-installer-workflow.e2e.test.ts`'s two
+"KNX Automatic Room Creation" tests — their fixture device was incidentally named
+"Vent Fan Switch" (testing room assignment, not fan control), which now correctly
+gets zero bindable capabilities and fails KNX approval. Renamed the fixture to
+"Attic Utility Switch" (classifies as `onoff`) — not a flaw in Fix 3.
+
+**Verification:** full monorepo `pnpm turbo run build typecheck test` —
+**173/173 tasks successful** (one unrelated `heos-driver.test.ts` `ECONNRESET` flake,
+confirmed non-reproducing, matching this repo's already-known flaky-test class).
+
+**Disclosed, not silently skipped:** Fix 1 (Sensor Expanded Sheet) has no automated
+UI test in this repo and was not verified live via Playwright this session — verified
+by typecheck and code review only. A follow-up session should open the app against a
+sensor-only device and confirm the Expanded Sheet renders a read-only readout with no
+command firing.
+
+## Session: Native Backend Implementation — Home Assistant becomes optional
+
+**Branch:** `claude/casambi-driver-refactor-lvu23e`. New docs:
+**`docs/architecture/Native-Backend-Implementation.md`**,
+**`docs/architecture/adr/0023-native-backend-default.md`**. No protocol, deployment, or
+UI file modified — confirmed via a scoped `git diff`.
+
+**The ask:** replace the production use of `MockAdapter` with a true Native Backend;
+make Home Assistant a genuinely optional compatibility adapter; classify every
+`IBackendAdapter` method; fix commissioning ownership defaults, `Device.status`
+reconciliation, and `engine: "ha"` automations.
+
+**Key finding before writing any code:** the brief's stated "current architecture"
+(`RoutingBackendAdapter → {Home Assistant, Mock Adapter}`) didn't match the code.
+`SupremeNativeAdapter` already existed, was already a complete `IBackendAdapter`, and
+was **already** wired unconditionally as the router's `native` slot — it already *is*
+the Native Backend. The real gaps were narrower: the router's `ha` slot silently got
+`MockAdapter` whenever `SUPREME_BACKEND !== "ha"` (the type didn't even have a
+`"native"` value), and `HomeService.bind()` defaulted every device's ownership to
+`"ha"` unconditionally — the exact "nothing else claimed it" heuristic
+`OwnershipRegistry`'s own docstring forbids. See the architecture doc's §0 for the
+full account.
+
+**Changes, in order:**
+- `services/gateway/src/config.ts` — `backend: "native" | "mock" | "ha"`, defaulting
+  to `"native"`; `assertSecureConfig()` now refuses `SUPREME_BACKEND=mock` in production.
+- `services/integration-layer/src/ha-unavailable-adapter.ts` (new) — the honest "HA
+  compatibility plugin not installed" placeholder, replacing `MockAdapter`'s old
+  implicit role in the router's `ha` slot.
+- `services/gateway/src/bootstrap.ts` — three-way `haSide` selection (`ha`/`mock`/
+  `HaUnavailableAdapter`).
+- `services/integration-layer/src/sil.ts` — new `haCompatBackendKind` accessor and
+  `primeState()` (centralizes in-process engine state priming, previously
+  bootstrap.ts-only and broken for every test that builds its own `AppContext`).
+- `services/home/src/home-service.ts` — `bind()`'s default ownership is now `"ha"`
+  only when the hub's HA-compatibility slot has a working backend behind it (real or
+  mock-standing-in-for-tests); `"native"` otherwise. New `setDeviceStatus()`.
+- `services/gateway/src/{context,installer-context,main}.ts` — centralized state
+  priming in `AppContext.create()`; `InstallerServices.reconcileDeviceStatuses()`
+  (per-device `getDiagnostics().connectionStatus`, falling back to protocol-level
+  connect status; never touches a device with no honest signal), called on every
+  driver lifecycle transition and once a minute from the tick loop.
+- `services/automations/src/service.ts` + `engine.ts` — `create()`/`update()` reject
+  new `engine: "ha"` automations; `health()` reports a legacy one as `"broken"`.
+- `packages/domain-model/src/automations-dsl.ts` — doc comment updated to match.
+
+**Tests added:** `ha-unavailable-adapter.test.ts`, two new cases in
+`routing-adapter.test.ts`, four new cases in `config.test.ts`,
+`native-backend-boot.e2e.test.ts` (the first test in this repo to exercise the real
+`bootstrap.createHubContext` production path — every other gateway e2e test builds
+its own `AppContext` directly), `device-status-reconciliation.e2e.test.ts`, and four
+new cases in `services/automations/src/engine.test.ts`.
+
+**Verification:** full monorepo `pnpm turbo run build typecheck test` — **173/173
+tasks successful** (one unrelated `heos-driver.test.ts` `ECONNRESET` flake on the
+first run, confirmed non-reproducing on an isolated rerun, matching this repo's
+already-known flaky-test class — not a regression from this work). Gateway package
+alone: 74/74 test files, 306/306 tests.
+
+**Disclosed, deliberate scope boundaries (not bugs):** `engine: "ha"` automations are
+rejected, not executed — no live push-to-HA/`externalRef` lifecycle exists
+(`compileToHa()` is a pure compiler nothing calls), and building one was out of this
+milestone's scope and unverifiable without a live HA instance in this sandbox.
+`Device.status` for HA-owned, unassigned, or native-owned-but-never-bound devices is
+left untouched — no honest per-device connectivity signal exists for them.
+
 ## Session: Runtime Data Path Verification — Casambi UDP receive-path evidence tooling
 
 **Branch:** `claude/casambi-driver-refactor-lvu23e`. New doc:

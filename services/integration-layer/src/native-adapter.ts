@@ -313,6 +313,22 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     return null;
   }
 
+  /** § Pass 12.6, Part E — fetch the owning driver's real AVR input list (reportedName/
+   * customName/displayName per stable technical id), if it exposes one. */
+  async getAvrInputs(deviceId: DeviceId): Promise<{ technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.getAvrInputs) return owner.getAvrInputs(deviceId);
+    return null;
+  }
+
+  /** § Pass 12.6, Part E — set/clear one AVR input's custom label on the owning driver.
+   * `false` when the owning driver doesn't support this or rejected the technicalId. */
+  async setAvrInputCustomName(deviceId: DeviceId, technicalId: string, name: string | null): Promise<boolean> {
+    const owner = this.ownerByDevice.get(deviceId);
+    if (owner?.setAvrInputCustomName) return owner.setAvrInputCustomName(deviceId, technicalId, name);
+    return false;
+  }
+
   /** Fetch the owning driver's real connection/traffic diagnostics for this device. */
   async getDiagnostics(deviceId: DeviceId): Promise<DriverDiagnosticsSnapshot | null> {
     const owner = this.ownerByDevice.get(deviceId);

@@ -72,6 +72,88 @@ describe("login + token lifecycle", () => {
     await expect(s.refresh(rotated2.refreshToken)).rejects.toThrow(/revoked/);
   });
 
+  it("handles a lost CAS race on the same not-yet-rotated token without spurious revocation", async () => {
+    // Regression test for the TOCTOU race in refresh()'s read-then-write of currentJti: when two
+    // requests present the SAME still-current refresh token and one wins the CAS rotation
+    // between the other's read and its own write, the loser must still succeed gracefully
+    // (bound to whatever is now current) instead of the write being silently clobbered and a
+    // spurious reuse-detection revocation firing on a later refresh.
+    //
+    // In-memory single-threaded timing can't reliably force this exact interleaving through
+    // Promise.all alone, so the race is simulated directly at the ISessionStore seam: wrap
+    // InMemorySessionStore.setCurrentJti so the first CAS attempt observes a race loss (as if a
+    // sibling request's rotation landed first) while the underlying session is otherwise healthy.
+    const { InMemorySessionStore } = await import("./store.js");
+    const realStore = new InMemorySessionStore();
+    let forcedLossUsed = false;
+    const racyStore: import("./store.js").ISessionStore = {
+      create: realStore.create.bind(realStore),
+      get: realStore.get.bind(realStore),
+      revoke: realStore.revoke.bind(realStore),
+      listByUser: realStore.listByUser.bind(realStore),
+      touch: realStore.touch.bind(realStore),
+      setCurrentJti: async (id, expectedJti, nextJti) => {
+        if (!forcedLossUsed) {
+          forcedLossUsed = true;
+          return false; // simulate: a concurrent sibling won this exact CAS first
+        }
+        return realStore.setCurrentJti(id, expectedJti, nextJti);
+      },
+    };
+
+    const s = new IdentityService({ tokenSecret: SECRET, sessionStore: racyStore });
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+    });
+    const login = await s.login("owner@example.com", "correct horse battery staple");
+    if (login.status !== "ok") throw new Error("expected tokens");
+
+    // This refresh loses the simulated race but must still succeed, not throw/revoke.
+    const result = await s.refresh(login.refreshToken);
+    expect(result.accessToken).toBeTruthy();
+    expect(forcedLossUsed).toBe(true);
+
+    // The session must still be alive and usable afterward — no spurious revocation.
+    const user = await s.authenticate(result.accessToken);
+    expect(user.email).toBe("owner@example.com");
+  });
+
+  it("InMemorySessionStore.setCurrentJti is a compare-and-swap: only the first matching writer wins", async () => {
+    const { InMemorySessionStore } = await import("./store.js");
+    const store = new InMemorySessionStore();
+    await store.create({ id: "s1", userId: "u1" as never, currentJti: "jti0", revoked: false, createdAt: new Date().toISOString() });
+
+    // Two "concurrent" callers both read currentJti="jti0" and race to rotate it.
+    const winner = await store.setCurrentJti("s1", "jti0", "jti1");
+    const loser = await store.setCurrentJti("s1", "jti0", "jti2"); // stale expectedJti now — loses
+    expect(winner).toBe(true);
+    expect(loser).toBe(false);
+
+    const session = await store.get("s1");
+    expect(session?.currentJti).toBe("jti1"); // winner's write stuck; loser did not clobber it
+  });
+
+  it("still revokes on genuine reuse of a token from a real prior rotation (not a race)", async () => {
+    // Security regression check: the CAS fix must not weaken the actual reuse-detection
+    // property. A refresh token presented well after a successful, sequential prior rotation
+    // (not simultaneously with anything) is real reuse and must still revoke the session.
+    const s = svc();
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+    });
+    const login = await s.login("owner@example.com", "correct horse battery staple");
+    if (login.status !== "ok") throw new Error("expected tokens");
+
+    await s.refresh(login.refreshToken); // sequential rotation, no race
+    await expect(s.refresh(login.refreshToken)).rejects.toThrow(/reuse detected/);
+  });
+
   it("enrolls TOTP MFA and requires it on subsequent logins", async () => {
     const s = svc();
     const { master } = await s.commission({

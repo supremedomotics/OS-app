@@ -22,7 +22,7 @@ import {
 } from "@supreme/permissions";
 import type { DeviceId, Grant, Home, HomeId, Notification, UserId } from "@supreme/domain-model";
 import { newId } from "@supreme/domain-model";
-import type { IInstalledDriverStore } from "@supreme/drivers";
+import type { IInstalledDriverStore, DriverSecretCrypto } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
 import {
@@ -64,7 +64,7 @@ import { SecurityService, type ISecurityStore } from "@supreme/security";
 import { StreamGateway, NullStreamGateway, type ICameraStreamGateway } from "@supreme/cameras";
 import { CameraService } from "./camera-service.js";
 import type { GatewayConfig } from "./config.js";
-import { InstallerServices } from "./installer-context.js";
+import { InstallerServices, type KnxDiscoveryDriverFactory } from "./installer-context.js";
 import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protocols";
 import type { VoiceStatePublisher } from "./voice-publisher.js";
 import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit";
@@ -120,6 +120,10 @@ export interface AppDeps {
   grantStore?: IGrantStore;
   notificationStore?: INotificationStore;
   driverStore?: IInstalledDriverStore;
+  /** § Production Readiness Audit — encryption-at-rest for driver config secret fields
+   * (`installed_drivers.config`). Set by bootstrap.ts, keyed from the secrets manager; absent in
+   * dev/tests where there's no persisted driver store to protect either. */
+  driverSecretCrypto?: DriverSecretCrypto;
   automationStore?: IAutomationStore;
   /** Universal Keypad Framework (§ Universal Keypad Framework) persistence — mappings + feedback subscriptions. */
   keypadMappingStore?: IKeypadMappingStore;
@@ -142,6 +146,11 @@ export interface AppDeps {
   /** Env-configured native driver instances (bootstrap.ts), fed into the unified
    * Driver Lifecycle pipeline alongside manifest-configured ones (§ Driver Lifecycle). */
   envDrivers?: Map<string, INativeProtocolDriver>;
+  /** Test-only seam for the KNX installer discovery pipeline (§ InstallerDeps.
+   * knxDiscoveryDriverFactory's own doc comment) — omitted in production. */
+  knxDiscoveryDriverFactory?: KnxDiscoveryDriverFactory;
+  /** Test-only seam (§ InstallerDeps.knxWorkerTimeoutMs) — omitted in production. */
+  knxWorkerTimeoutMs?: number;
 }
 
 /**
@@ -152,7 +161,27 @@ export interface AppDeps {
  * URL is configured) by the bootstrap layer.
  */
 export type StateSubscriber = (event: BackendStateEvent) => void;
+
+/** § Decisive KNX Feedback Diagnostic — one bounded snapshot of a device state event
+ * at a given hop. Never protocol-specific (any driver's events populate these — KNX
+ * is simply the one this pass is investigating), so this adds zero KNX-specific
+ * branching to the gateway's core state-fan-out path. */
+export interface FeedbackHopSnapshot {
+  timestamp: string;
+  deviceId: DeviceId;
+  state: string;
+  value: unknown;
+}
 export type NotificationSubscriber = (n: Notification) => void;
+/** § Realtime State Architecture — a driver connection-state transition, distinct from a
+ * device's capability state (StateSubscriber). See DriverStateFrame (supreme-contracts). */
+export interface DriverStateEvent {
+  driverId: string;
+  state: "disconnected" | "connecting" | "connected" | "disconnecting" | "error";
+  error?: string | null;
+  ts: string;
+}
+export type DriverStateSubscriber = (event: DriverStateEvent) => void;
 
 export class AppContext {
   readonly identity: IdentityService;
@@ -192,6 +221,17 @@ export class AppContext {
   private capabilityIndex!: CapabilityIndex;
   analytics: AnalyticsService | null = null;
   audit: AuditService | null = null;
+  /** § Decisive KNX Feedback Diagnostic — bounded (one entry per device, never an
+   * unbounded log), in-memory snapshots of the three hops downstream of the driver
+   * that no per-protocol provider/driver can see on its own: the raw event this
+   * gateway received from the SIL, the same event once `home.applyState()` has
+   * actually persisted it, and the same event once it has actually been published to
+   * the bus that drives WSS fan-out. Populated for EVERY device (cheap: an object
+   * assignment per state event, no protocol branching), read only by the diagnostic
+   * endpoint for a specific deviceId — never continuously logged to disk. */
+  private readonly lastBackendState = new Map<DeviceId, FeedbackHopSnapshot>();
+  private readonly lastPersistedState = new Map<DeviceId, FeedbackHopSnapshot>();
+  private readonly lastWebSocketBroadcast = new Map<DeviceId, FeedbackHopSnapshot>();
   readonly ai: AssistantService;
   readonly security: SecurityService;
   /** Camera registry + RTSP→HLS/WebRTC stream resolution (§11.1). */
@@ -243,6 +283,7 @@ export class AppContext {
   private readonly deps: AppDeps;
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
+  private readonly driverStateSubs = new Set<DriverStateSubscriber>();
   /** Last value seen per event-sensor (deviceId:measure) for rising-edge detection. */
   private readonly lastEventValue = new Map<string, number>();
 
@@ -455,6 +496,19 @@ export class AppContext {
     await this.bus.subscribe<Notification>("supreme.home.*.notification", (n) => {
       for (const sub of this.notifySubs) sub(n);
     });
+    await this.bus.subscribe<DriverStateEvent>("supreme.home.*.driver.state", (event) => {
+      for (const sub of this.driverStateSubs) sub(event);
+    });
+  }
+
+  /** Publish a driver connection-state transition (§ Realtime State Architecture) — the
+   * bus fan-out drives WSS delivery identically to device state/notifications (in-process
+   * today, cross-process under NATS). Called from the generic connect/disconnect handlers
+   * and the driver lifecycle pipeline (installer-context.ts), never per-driver-type code. */
+  async publishDriverState(driverId: string, state: DriverStateEvent["state"], error?: string | null): Promise<void> {
+    await this.bus.publish(subjects.driverState(this.homeId), {
+      driverId, state, error: error ?? null, ts: new Date().toISOString(),
+    } satisfies DriverStateEvent);
   }
 
   /**
@@ -529,6 +583,7 @@ export class AppContext {
       identity: this.identity,
       homeId: home.id as HomeId,
       driverStore: deps.driverStore,
+      driverSecretCrypto: deps.driverSecretCrypto,
       db: deps.db,
       scanners: deps.scanners,
       protocolBindingStore: deps.protocolBindingStore,
@@ -537,6 +592,8 @@ export class AppContext {
       configStore: this.homeConfig,
       envDrivers: deps.envDrivers,
       bus: this.bus,
+      knxDiscoveryDriverFactory: deps.knxDiscoveryDriverFactory,
+      knxWorkerTimeoutMs: deps.knxWorkerTimeoutMs,
     });
     await this.installer.init();
 
@@ -684,8 +741,9 @@ export class AppContext {
     }
 
     // Local HomeKit (Apple Home / Siri) bridge — opt-in, runs entirely on the hub. Present only when
-    // a HAP transport is injected; we publish every device as an accessory and route HomeKit writes
-    // back through the SIL (identity/RBAC enforced as for any command).
+    // a HAP transport is injected; we offer every device as an accessory (HapBridge itself skips
+    // publishing one with no mapped HAP service at all — § Never publish an empty accessory) and
+    // route HomeKit writes back through the SIL (identity/RBAC enforced as for any command).
     if (deps.homekitTransport) {
       const bridge = new HapBridge({
         transport: deps.homekitTransport,
@@ -708,6 +766,7 @@ export class AppContext {
    */
   async completeSetup(input: {
     username: string;
+    email: string;
     password: string;
     displayName?: string;
     systemName: string;
@@ -717,10 +776,10 @@ export class AppContext {
     if (!this.setupRequired) {
       throw new SupremeError("conflict", "Supreme OS is already set up");
     }
-    // Accept a username or an email; store an email-shaped identifier for login.
-    const loginEmail = input.username.includes("@")
-      ? input.username
-      : `${input.username}@supreme.local`;
+    // § live-confirmed fix — a real, mandatory email is now required by the route
+    // above; no synthesized "@supreme.local" fallback, since password recovery needs a
+    // real address to send a reset to and a fabricated one silently defeats that.
+    const loginEmail = input.email;
     const { home } = await this.identity.commission({
       homeName: input.systemName || "Supreme Residence",
       email: loginEmail,
@@ -741,10 +800,24 @@ export class AppContext {
 
   /** Handle a normalized backend state delta: cache, fan-out, automations, analytics. */
   private async onBackendState(event: BackendStateEvent): Promise<void> {
+    // § Decisive KNX Feedback Diagnostic, hop 1 — the raw event this gateway received
+    // from the SIL, BEFORE persistence/broadcast. If this never updates for a device
+    // on a physical keypad press, the break is upstream (driver → native adapter →
+    // SIL), not in this gateway at all.
+    this.recordFeedbackHop(this.lastBackendState, event);
     await this.home.applyState(event.deviceId, event.state);
+    // § Decisive KNX Feedback Diagnostic, hop 2 — recorded only once `applyState()`
+    // above has actually returned, so a nonzero snapshot here is proof the state
+    // reached HomeService's store, not just that this method was called.
+    this.recordFeedbackHop(this.lastPersistedState, event);
     // Publish to the bus; the bus subscription (subscribeBus) drives WSS fan-out —
     // in-process today, cross-process under NATS.
     await this.bus.publish(subjects.deviceState(this.homeId), event);
+    // § Decisive KNX Feedback Diagnostic, hop 3 — recorded only once the bus publish
+    // above has actually returned. The bus is what drives WSS delivery (see
+    // `subscribeBus()`), so this is the closest honest proxy for "reached WSS" this
+    // gateway can report without instrumenting every individual socket write.
+    this.recordFeedbackHop(this.lastWebSocketBroadcast, event);
     // § AVR Diagnostic Mode — append the `[Gateway]` stage to whichever driver started this
     // event's correlation-ID trace (see `BackendStateEvent.traceId`). `undefined` for every
     // event from every driver that doesn't opt in, so this is a no-op for the entire fleet
@@ -776,6 +849,41 @@ export class AppContext {
         event.state,
       );
     }
+  }
+
+  /** § Decisive KNX Feedback Diagnostic — records one bounded (single-entry-per-device)
+   * snapshot; never appends, never grows unbounded. */
+  private recordFeedbackHop(map: Map<DeviceId, FeedbackHopSnapshot>, event: BackendStateEvent): void {
+    map.set(event.deviceId, {
+      timestamp: new Date().toISOString(),
+      deviceId: event.deviceId,
+      state: event.state.kind,
+      value: event.state,
+    });
+  }
+
+  /** § Decisive KNX Feedback Diagnostic — the full cross-hop snapshot for one device: this
+   * gateway's own three hops (above) plus, when the device is KNX-managed, that driver's
+   * own provider/binding-level diagnostics (§ Pass 20/23 and the KNX Ultimate Provider's
+   * "Live Feedback Diagnostic Pass" counters). `knx: null` for a non-KNX device — never
+   * fabricated. This is the single call a human tester hits after a physical keypad press
+   * to see, in one response, exactly which of the 7 hops (bus → provider → driver →
+   * gateway-backend → gateway-persisted → gateway-broadcast → frontend) actually moved. */
+  getFeedbackDiagnostics(deviceId: DeviceId): {
+    lastBackendState: FeedbackHopSnapshot | null;
+    lastPersistedState: FeedbackHopSnapshot | null;
+    lastWebSocketBroadcast: FeedbackHopSnapshot | null;
+    // `SupremeIntegrationLayer.getKnxFeedbackDiagnostics` (§ Live Feedback Diagnostic
+    // Pass) is the SIL-level passthrough to `SupremeKnxDriver.knxFeedbackDiagnostics` —
+    // reused here rather than re-deriving provider/binding diagnostics a second time.
+    knx: unknown | null;
+  } {
+    return {
+      lastBackendState: this.lastBackendState.get(deviceId) ?? null,
+      lastPersistedState: this.lastPersistedState.get(deviceId) ?? null,
+      lastWebSocketBroadcast: this.lastWebSocketBroadcast.get(deviceId) ?? null,
+      knx: this.sil.getKnxFeedbackDiagnostics(deviceId),
+    };
   }
 
   /**
@@ -820,6 +928,10 @@ export class AppContext {
   onNotification(sub: NotificationSubscriber): () => void {
     this.notifySubs.add(sub);
     return () => this.notifySubs.delete(sub);
+  }
+  onDriverState(sub: DriverStateSubscriber): () => void {
+    this.driverStateSubs.add(sub);
+    return () => this.driverStateSubs.delete(sub);
   }
 
   roomOf(deviceId: DeviceId): Promise<string | null> {

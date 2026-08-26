@@ -52,6 +52,21 @@ describe("HomeService", () => {
     expect(updated?.state.brightness).toEqual({ kind: "brightness", on: true, level: 50 });
   });
 
+  it("§ PASS 22 (Part K) — setDriverOwner records real ownership, idempotently, never regressing to a different driver", async () => {
+    const { home } = await setup();
+    const rooms = await home.listRooms();
+    const living = rooms.find((r) => r.name === "Living Room")!;
+    const device = (await home.listDevicesInRoom(living.id))[0]!;
+    expect(device.driverId).toBeNull(); // seed devices start unowned, same as production commissioning did before this fix
+
+    await home.setDriverOwner(device.id, "drv_knx" as never);
+    expect((await home.getDevice(device.id))?.driverId).toBe("drv_knx");
+
+    // Calling again with the SAME owner is a safe no-op (no duplicate change events).
+    await home.setDriverOwner(device.id, "drv_knx" as never);
+    expect((await home.getDevice(device.id))?.driverId).toBe("drv_knx");
+  });
+
   it("moves any device to any room and renames it, keeping its binding", async () => {
     const { sil, home } = await setup();
     const rooms = await home.listRooms();
