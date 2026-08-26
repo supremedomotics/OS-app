@@ -184,22 +184,28 @@ load_casambi_credentials_file() {
   log_info "Loaded Casambi fleet credentials from ${file} (values are never logged)."
 }
 
-# Confirms Ubuntu 24.04 specifically rather than merely "some Linux" — the package names,
-# repo URLs, and systemd unit assumptions below are verified against 24.04's real apt
-# repos and are not guaranteed to resolve identically on another release.
+# Confirms Ubuntu >= 24.04 rather than merely "some Linux" — the package names, repo URLs,
+# and systemd unit assumptions below are verified against 24.04's real apt repos. A newer
+# Ubuntu release (24.10, 26.04, ...) carries the same or a newer apt/systemd baseline, so
+# it's accepted without SUPREME_FORCE_OS; only an OLDER release or a non-Ubuntu distro is
+# genuinely unverified and still requires the override.
 require_ubuntu_24_04() {
   if [ ! -r /etc/os-release ]; then
-    die "Cannot read /etc/os-release — unable to confirm this is Ubuntu 24.04 LTS."
+    die "Cannot read /etc/os-release — unable to confirm this is Ubuntu 24.04 LTS or newer."
   fi
   # shellcheck source=/dev/null
   . /etc/os-release
-  if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "24.04" ]; then
-    log_warn "This installer targets Ubuntu 24.04 LTS specifically. Detected: ${PRETTY_NAME:-unknown}."
-    if [ "${SUPREME_FORCE_OS:-0}" != "1" ]; then
-      die "Refusing to continue on an unverified OS. Set SUPREME_FORCE_OS=1 to override at your own risk."
-    fi
-    log_warn "SUPREME_FORCE_OS=1 set — continuing on an unverified OS anyway."
+  local major="${VERSION_ID%%.*}" minor="${VERSION_ID#*.}"
+  minor="${minor%%.*}"
+  if [ "${ID:-}" = "ubuntu" ] && [ "${major:-0}" -ge 24 ] 2>/dev/null && \
+     { [ "${major}" -gt 24 ] || [ "${minor:-0}" -ge 4 ] 2>/dev/null; }; then
+    return 0
   fi
+  log_warn "This installer targets Ubuntu 24.04 LTS or newer. Detected: ${PRETTY_NAME:-unknown}."
+  if [ "${SUPREME_FORCE_OS:-0}" != "1" ]; then
+    die "Refusing to continue on an unverified OS. Set SUPREME_FORCE_OS=1 to override at your own risk."
+  fi
+  log_warn "SUPREME_FORCE_OS=1 set — continuing on an unverified OS anyway."
 }
 
 # True (0) only when systemd is genuinely running as PID 1 and reachable over D-Bus — false
