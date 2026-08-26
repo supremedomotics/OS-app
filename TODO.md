@@ -1035,7 +1035,17 @@
   restarts `supreme-gateway`) — covering both "new installation" and "old"
   per the user's own framing. Verified end-to-end with fixture values against a
   simulated pre-existing `install.conf`, proving both the backward-compat guard
-  and the line-preserving rewrite.
+  and the line-preserving rewrite. Final iteration (user: "I don't want that" —
+  i.e. no human should ever retype it, even once per hub): new
+  `.github/workflows/casambi-credentials.yml` (`workflow_dispatch`-only) reads
+  three GitHub Actions repository secrets and renders the credentials file as a
+  short-lived (1-day), never-published workflow artifact — the one remaining
+  human action (typing the real values) now happens exactly once, ever, in
+  GitHub's own encrypted secrets UI, never per hub and never in this repo.
+  Deliberately does NOT bake the credential into `release.yml`'s own published
+  install artifact — that would persist indefinitely and be downloadable by
+  anyone with repo/release access, which is a worse exposure surface, not a
+  better one, and was explicitly rejected for that reason.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and
