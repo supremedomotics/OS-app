@@ -3,6 +3,7 @@ import { Button, StatusDot } from "@supreme/aureon-web";
 import { useLive, type DriverConnectionState } from "./live.js";
 import {
   type CasambiDiagnostics,
+  type CasambiNameSyncResult,
   type CasambiTestConnectionResult,
   type CasambiUdpPacketTrace,
   connectDriver,
@@ -22,6 +23,7 @@ import {
   type ReceiveCertification,
   setDriverConfig,
   setDriverEnabled,
+  syncCasambiNamesFromCloud,
   testCasambiLocalConnection,
   uninstallDriver,
   updateDriverByKey,
@@ -260,12 +262,24 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
               }))}
             />
           )}
+          {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "cloud" && (
+            <p className="help">
+              The Casambi Cloud account (API key, network admin email/password) is configured
+              once for this deployment and is never entered here — only which network this job's
+              fixtures live in (below, optional).
+            </p>
+          )}
           {driver.protocols.includes("casambi") &&
             visibleCasambiConfigSchema(schema, values).map((f) => (
               <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
             ))}
           {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "local" && (
-            <CasambiLocalGatewayPanel values={values} />
+            <CasambiLocalGatewayPanel
+              driverId={id}
+              schema={schema}
+              values={values}
+              onChange={(key, v) => setValues((cur) => ({ ...cur, [key]: v }))}
+            />
           )}
           {!driver.protocols.includes("casambi") &&
             schema.map((f) => (
@@ -303,7 +317,23 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
       {health && (
         <div className="drv-health">
           <span className={`drv-badge ${health.verdict === "healthy" ? "ok" : health.verdict === "error" ? "err" : "off"}`}>{String(health.verdict)}</span>
-          {health.configComplete === false && <span className="muted"> · needs configuration ({(health.missing as string[] | undefined)?.join(", ")})</span>}
+          {health.configComplete === false && (() => {
+            const missing = (health.missing as string[] | undefined) ?? [];
+            // § Casambi fleet-wide env-var default — apiKey/email/password never render as fields
+            // here (see CASAMBI_BACKEND_ONLY_KEYS), so telling an installer "apiKey is required"
+            // points at a control that doesn't exist. Missing here means the deployment itself has
+            // no SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD set — an admin-facing fact, not something
+            // fixable from this screen.
+            const casambiCredsMissing = driver.protocols.includes("casambi") && missing.some((m) => CASAMBI_BACKEND_ONLY_KEYS.has(m));
+            const shown = missing.filter((m) => !CASAMBI_BACKEND_ONLY_KEYS.has(m));
+            return (
+              <span className="muted">
+                {" · needs configuration"}
+                {shown.length > 0 && ` (${shown.join(", ")})`}
+                {casambiCredsMissing && " — this deployment has no Casambi Cloud account configured (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); contact your system administrator"}
+              </span>
+            );
+          })()}
           {health.connected === true && <span className="muted"> · connected</span>}
           {typeof health.connectError === "string" && <span className="err"> · {health.connectError as string}</span>}
         </div>
@@ -442,6 +472,14 @@ function ConfigField({ field, value, onChange }: { field: DriverConfigField; val
 
 // ── Casambi Driver Refactor — Foundation: Driver Setup Wizard + Local Gateway settings ──────
 const CASAMBI_CLOUD_ONLY_KEYS = new Set(["apiKey", "email", "password", "networkId"]);
+// § Casambi fleet-wide env-var default — the Casambi Cloud ACCOUNT (API key, network admin
+// email/password) is a deployment-wide credential (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD, set
+// once by whoever provisions the hub), never something an installer or homeowner types in — so
+// these three never render as form fields, in either Cloud mode or Local Gateway's optional
+// Cloud name-sync panel. `networkId` stays visible/editable: unlike the account credentials, it
+// identifies which Casambi NETWORK this specific job's fixtures live in, which genuinely does
+// vary per installation and has no deployment-wide default.
+const CASAMBI_BACKEND_ONLY_KEYS = new Set(["apiKey", "email", "password"]);
 const CASAMBI_LOCAL_ONLY_KEYS = new Set([
   "gatewayIp",
   "restPort",
@@ -460,9 +498,10 @@ const CASAMBI_LOCAL_ONLY_KEYS = new Set([
  * shows EXACTLY the pre-refactor Casambi fields, unchanged; picking Local Gateway shows the new
  * fields instead. Never both at once, never neither.
  */
-function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<string, unknown>): DriverConfigField[] {
+export function visibleCasambiConfigSchema(schema: DriverConfigField[], values: Record<string, unknown>): DriverConfigField[] {
   const connectionType = String(values.connectionType ?? "cloud");
   return schema.filter((f) => {
+    if (CASAMBI_BACKEND_ONLY_KEYS.has(f.key)) return false;
     if (CASAMBI_CLOUD_ONLY_KEYS.has(f.key)) return connectionType !== "local";
     if (CASAMBI_LOCAL_ONLY_KEYS.has(f.key)) return connectionType === "local";
     return true;
@@ -539,10 +578,21 @@ function CasambiTestConnectionReport({ res }: { res: CasambiTestConnectionResult
  *    instant (a unit appears as its first notification arrives, since no REST device-listing
  *    endpoint exists to enumerate from), but it requires no manual device creation at all.
  */
-function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> }) {
-  const [busy, setBusy] = useState<"discover" | "test" | null>(null);
+function CasambiLocalGatewayPanel({
+  driverId,
+  schema,
+  values,
+  onChange,
+}: {
+  driverId: string;
+  schema: DriverConfigField[];
+  values: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const [busy, setBusy] = useState<"discover" | "test" | "sync" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [result, setResult] = useState<CasambiTestConnectionResult | null>(null);
+  const [syncResult, setSyncResult] = useState<CasambiNameSyncResult | null>(null);
 
   async function discover() {
     setBusy("discover");
@@ -587,6 +637,26 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
     }
   }
 
+  async function syncNames() {
+    setBusy("sync");
+    setNote(null);
+    setSyncResult(null);
+    try {
+      const res = await syncCasambiNamesFromCloud(driverId);
+      setSyncResult(res);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Name sync failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Only networkId is ever shown here — apiKey/email/password are the deployment-wide Casambi
+  // Cloud account (§ Casambi fleet-wide env-var default) and never render as a field, in Cloud
+  // mode or here. Used ONLY for the one-time name sync below; never touches Local UDP, never
+  // becomes a live connection.
+  const cloudSyncFields = schema.filter((f) => f.key === "networkId");
+
   return (
     <div className="drv-field" style={{ marginBottom: 14 }}>
       <span className="lbl">Lithernet Gateway</span>
@@ -600,6 +670,39 @@ function CasambiLocalGatewayPanel({ values }: { values: Record<string, unknown> 
       </div>
       {note && <p className="muted">{note}</p>}
       {result && <CasambiTestConnectionReport res={result} />}
+      {cloudSyncFields.length > 0 && (
+        <div className="drv-config" style={{ marginTop: 14 }}>
+          <span className="lbl">Cloud name sync (optional)</span>
+          <p className="help">
+            The Lithernet Gateway's own UDP/REST protocol has no field for a fixture's real name —
+            checked against every locally-reachable interface (UDP, the full WebAPI, the web UI,
+            .ceg export, the Diagnostics console). Nothing here changes how devices are discovered
+            or controlled — that stays on Local UDP, unconditionally.
+          </p>
+          <p className="help">
+            Uses this deployment's Casambi Cloud account — configured once, centrally, never
+            entered here. Just pick which network this job's fixtures live in (optional; only
+            needed if the account manages more than one), then click "Sync names from Cloud."
+          </p>
+          {cloudSyncFields.map((f) => (
+            <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => onChange(f.key, v)} />
+          ))}
+          <p className="help">If you set a network id, click "Save configuration" below first — the sync reads the saved value, not what's typed above.</p>
+          <div className="drv-actions" style={{ marginTop: 8 }}>
+            <button type="button" disabled={busy !== null} onClick={() => void syncNames()}>
+              {busy === "sync" ? "Syncing…" : "Sync names from Cloud"}
+            </button>
+          </div>
+          {syncResult && (
+            <p className="muted">
+              Matched {syncResult.matched} of {syncResult.total} Cloud fixture{syncResult.total === 1 ? "" : "s"} to
+              already-discovered devices{syncResult.networkName ? ` in "${syncResult.networkName}"` : ""}.
+              {syncResult.matched < syncResult.total &&
+                " A unit not yet discovered locally (no NotifyControlValues packet received yet) can't be named until it appears."}
+            </p>
+          )}
+        </div>
+      )}
       <CasambiDiscoveryExplainer />
     </div>
   );

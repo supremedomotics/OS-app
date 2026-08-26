@@ -22,7 +22,7 @@ import {
 } from "@supreme/permissions";
 import type { DeviceId, Grant, Home, HomeId, Notification, UserId } from "@supreme/domain-model";
 import { newId } from "@supreme/domain-model";
-import type { IInstalledDriverStore } from "@supreme/drivers";
+import type { IInstalledDriverStore, DriverSecretCrypto } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
 import {
@@ -120,6 +120,10 @@ export interface AppDeps {
   grantStore?: IGrantStore;
   notificationStore?: INotificationStore;
   driverStore?: IInstalledDriverStore;
+  /** § Production Readiness Audit — encryption-at-rest for driver config secret fields
+   * (`installed_drivers.config`). Set by bootstrap.ts, keyed from the secrets manager; absent in
+   * dev/tests where there's no persisted driver store to protect either. */
+  driverSecretCrypto?: DriverSecretCrypto;
   automationStore?: IAutomationStore;
   /** Universal Keypad Framework (§ Universal Keypad Framework) persistence — mappings + feedback subscriptions. */
   keypadMappingStore?: IKeypadMappingStore;
@@ -579,6 +583,7 @@ export class AppContext {
       identity: this.identity,
       homeId: home.id as HomeId,
       driverStore: deps.driverStore,
+      driverSecretCrypto: deps.driverSecretCrypto,
       db: deps.db,
       scanners: deps.scanners,
       protocolBindingStore: deps.protocolBindingStore,

@@ -143,8 +143,14 @@
     `connect()` throws in production for all four.
   - H2: Driver plugins run fully in-process with no isolation boundary — a compromised
     driver has full gateway privileges.
-  - H3: Driver/integration secrets stored as plaintext JSON in Postgres
-    (`installed_drivers.config`, `home_config`).
+  - ~~H3: Driver/integration secrets stored as plaintext JSON in Postgres
+    (`installed_drivers.config`, `home_config`).~~ **RESOLVED** — AES-256-GCM
+    encryption-at-rest for every `secret: true` driver-config field, transparent to
+    `DriverManager` and every caller above it (`services/drivers/src/secret-store.ts`,
+    `packages/crypto/src/index.ts`). Idempotent boot-time migration re-encrypts any
+    already-stored legacy plaintext. `home_config` was separately confirmed (during this
+    fix) to hold no secret values today — only backup schedule/restore metadata — so it
+    needed no change. See `services/gateway/src/driver-secret-encryption.e2e.test.ts`.
   - H4: No scheduled/automatic health monitoring — `health-check.sh` is manual-invocation
     only, no systemd timer/cron.
   - H5: `update.sh` rollback cannot survive `SIGKILL`/lost SSH session (bash `ERR` trap is
@@ -163,6 +169,36 @@
 - **Dependencies:** varies per item, see audit doc.
 - **Complexity:** varies per item (Low–High), see audit doc.
 - **Status:** Not started. Found during the Production Readiness Audit.
+
+### Casambi Local Gateway — per-device command fans out to every light on the network (needs a real packet capture to root-cause)
+- **Description:** A live user report: discovery over Local UDP correctly finds each device
+  separately (8 distinct devices, 8 distinct unit ids), but sending an on/off/brightness command
+  from the UI to any one device visibly triggers every light in the Casambi network, not just the
+  targeted one. Investigated the wire encoding directly against the actual
+  `Lithernet_UDP_Developer_Reference.pdf` (not just the code's own comments): confirmed
+  `CASAMBI_TARGET_TYPE.device = 1` and `encodeSetTargetLevel`'s field order
+  (`[Level, Duration_low, Duration_high, Target_Type, Target_ID]`, or `[Level, Target_Type,
+  Target_ID]` without fade) both match the documented spec exactly (page 287-288, verified via
+  `pdftotext`). Also confirmed each of the 8 bound devices genuinely carries a distinct numeric
+  unit id (discovery found exactly 8, and unit ids are Map keys — a collision would have produced
+  fewer). So the outgoing packet bytes, on paper, target one specific device — this is NOT a
+  reproducible code bug found by re-reading `local-command-mapper.ts`/`udp-codec.ts`/
+  `casambi-driver.ts`'s `command()` path.
+- **Reason:** two real possibilities remain, and only a live packet capture can distinguish them:
+  (1) a genuine SupremeOS bug that only manifests against real Evolution firmware behavior this
+  sandbox can't reproduce (no physical Lithernet gateway anywhere in this environment — the same
+  hardware-access gap `Casambi-Final-Hardware-Validation-Report.md` already discloses for Local
+  UDP generally), or (2) the 8 "devices" are physically wired to the same relay/dimmer circuit in
+  the actual installation (a commissioning/wiring fact, not a software bug) and Casambi's own
+  network is correctly moving them together regardless of what SupremeOS sends.
+- **Dependencies:** a `tcpdump -i any udp port <udpPort> -X -n` capture of ONE button press from
+  the affected installation (paste the raw ASCII/hex line — Casambi UDP is plaintext), plus
+  confirmation from the Casambi mobile app of whether the 8 units are independently addressable
+  fixtures or ganged onto one physical circuit.
+- **Complexity:** Unknown until the capture is in hand — could be zero (a wiring fact, not a bug)
+  or a real, narrow protocol-layer fix.
+- **Status:** Not started — root-cause investigation paused pending the packet capture above.
+  Found during a live Casambi Local Gateway debugging session.
 
 ### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
 - **Description:** `local-discovery.ts` (real, PR-2) deliberately does NOT map NotifyControlValues
@@ -946,6 +982,81 @@
 
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
+
+- **Casambi Cloud "Network id" field caused a live 404 when set to the network's
+  display name instead of its real Casambi-internal ID** — found via a real user
+  screenshot (`HTTP 404` on `casambi: session request failed`). Root cause:
+  `HttpCasambiTransport.createSession()` (`services/protocols/src/casambi/
+  cloud-transport.ts`) builds `/v1/networks/${networkId}/session` whenever
+  `networkId` is non-empty; a display name like `"Showroom"` isn't a valid
+  network ID, so that endpoint doesn't exist. Fixed the field's own `help` text
+  in `services/drivers/src/manifests.ts` to explicitly name this exact failure
+  mode and clarify blank is the normal value. No schema/behavior change — help
+  text only; `@supreme/drivers`' 36 tests unaffected.
+
+- **Driver config secret encryption-at-rest + Casambi Cloud name sync** — resolved
+  Production Readiness Audit Blocker H3: every driver's `secret: true` config field
+  (Casambi, Lutron, HEOS, etc.) is now AES-256-GCM encrypted at rest
+  (`packages/crypto`, `services/drivers/src/secret-store.ts`), transparent to
+  `DriverManager`, with an idempotent boot-time migration for pre-existing plaintext.
+  Built on top of that: `CasambiProtocolDriver.syncNamesFromCloud()` — a one-time,
+  REST-only (no WebSocket) Cloud fetch that gives Local-mode Casambi devices their
+  real fixture names, reusing the same `apiKey`/`email`/`password`/`networkId`
+  fields Cloud mode already has. Local UDP stays the only live transport
+  unconditionally. New route `POST /v1/drivers/:id/casambi/sync-names`, new
+  "Cloud name sync (optional)" UI section in the Local Gateway settings panel.
+  Follow-up: a fleet-wide env-var default (`SUPREME_CASAMBI_API_KEY`/`EMAIL`/
+  `PASSWORD`/`NETWORK_ID`) so an installer never has to type these credentials when
+  the deployment already has one configured — `native-driver-factory.ts`'s new
+  `resolveCasambiCloudCredentials()` helper is shared by both the manifest-driven
+  Cloud driver factory and the `/casambi/sync-names` route, so there's one
+  credential-resolution path, not two. No credential is ever hardcoded in source —
+  a literal-default option was explicitly considered and rejected for permanent
+  git-history exposure. Follow-up fix (found via a real screenshot showing the
+  Driver Manager UI still demanding these fields): the runtime-only fallback didn't
+  reach config SAVE/completeness at all — `validateDriverConfig()`/`isConfigComplete()`
+  (`services/drivers/src/config.ts`) now take an optional `ConfigFallbacks` parameter
+  that satisfies a required field without ever persisting it, threaded through
+  `DriverManager.setConfig()` and every `installer-context.ts` call site (config save,
+  boot/config-change reconciliation, live config-edit reconciliation, driver health) via
+  a new `fallbacksFor(protocols)` helper. An installer with the fleet env vars set can
+  now genuinely save a Cloud-mode Casambi driver with all four fields left blank.
+  Final UI follow-up: apiKey/network admin email/password never render as form
+  fields at all now (`CASAMBI_BACKEND_ONLY_KEYS` in `drivers.tsx`) — Cloud mode,
+  Local mode, or with connectionType unset — since they're a deployment-wide
+  account, not per-installation data; `networkId` stays visible/editable since it
+  genuinely does vary per job. The health chip's "needs configuration" text no
+  longer names these fields (which would point at controls that don't exist);
+  for Casambi it explains the deployment has no Casambi Cloud account configured
+  instead. Wired into deployment tooling too: `infra/native-linux/install.sh` +
+  `config/gateway.env.template` (non-interactive pre-exported-only pattern, same
+  as `SUPREME_HA_TOKEN`/`SUPREME_UNSPLASH_KEY`) so a provisioned hub can ship
+  with the fleet default already set, never typed anywhere. Also fixed a
+  related, independently-discovered gap: `infra/hub-compose/docker-compose.yml`'s
+  gateway service never actually passed `SUPREME_CASAMBI_*` through to the
+  container despite `.env.example` documenting them — added the missing
+  `environment:` lines. Final automation follow-up: a new git-tracked
+  `config/casambi-fleet-credentials.example` documents a real, machine-local,
+  NEVER-tracked credentials file; `lib/common.sh`'s new
+  `load_casambi_credentials_file()` safely loads it (explicit env-var export
+  still wins per-field if both are set); `install.sh` picks it up automatically
+  on a brand-new machine with zero extra steps; new executable
+  `apply-casambi-credentials.sh` applies/rotates it on an ALREADY-installed hub
+  (rewrites only the 4 Casambi keys in `install.conf`, re-renders `gateway.env`,
+  restarts `supreme-gateway`) — covering both "new installation" and "old"
+  per the user's own framing. Verified end-to-end with fixture values against a
+  simulated pre-existing `install.conf`, proving both the backward-compat guard
+  and the line-preserving rewrite. Final iteration (user: "I don't want that" —
+  i.e. no human should ever retype it, even once per hub): new
+  `.github/workflows/casambi-credentials.yml` (`workflow_dispatch`-only) reads
+  three GitHub Actions repository secrets and renders the credentials file as a
+  short-lived (1-day), never-published workflow artifact — the one remaining
+  human action (typing the real values) now happens exactly once, ever, in
+  GitHub's own encrypted secrets UI, never per hub and never in this repo.
+  Deliberately does NOT bake the credential into `release.yml`'s own published
+  install artifact — that would persist indefinitely and be downloadable by
+  anyone with repo/release access, which is a worse exposure surface, not a
+  better one, and was explicitly rejected for that reason.
 
 - **Repository sync — native-linux ⟵ claude/casambi-driver-refactor-lvu23e** — compared
   both branches commit-by-commit; ported the Core Capability Audit + Phase 1 fixes and

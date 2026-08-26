@@ -134,6 +134,56 @@ require_root() {
   fi
 }
 
+# ── Casambi fleet-wide env-var default ─────────────────────────────────────────────────
+# The default path both install.sh (new machines) and apply-casambi-credentials.sh
+# (already-installed hubs) check for an OPTIONAL, machine-local, NEVER-git-tracked file
+# carrying this deployment's Casambi Cloud fleet account — see
+# config/casambi-fleet-credentials.example for the format and full explanation.
+SUPREME_CASAMBI_CREDENTIALS_FILE="${SUPREME_CASAMBI_CREDENTIALS_FILE:-${SUPREME_CONFIG_DIR}/casambi-fleet-credentials}"
+
+# Safely loads that file into SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD/NETWORK_ID — same
+# line-format discipline install.conf itself is held to (see install.sh's
+# load_install_conf_safely, the direct precedent this mirrors): only simple
+# SUPREME_CASAMBI_*="value" lines are accepted, no shell metacharacters, the file is
+# never `source`d as executable shell. A missing file is the normal, expected case
+# (nothing provisioned yet) — silent no-op, not an error. A malformed file is rejected in
+# full, with a clear warning naming the offending line, rather than guessing which lines
+# are safe to trust. An already-non-empty variable (an explicit one-off env var export)
+# is left untouched — a deliberate override always wins over the standing fleet file,
+# never silently clobbered by it.
+load_casambi_credentials_file() {
+  local file="$1"
+  [ -r "$file" ] || return 0
+  local line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+      SUPREME_CASAMBI_*=\"*\")
+        key="${line%%=*}"
+        value="${line#*=}"
+        value="${value#\"}"
+        value="${value%\"}"
+        if [ -n "${!key:-}" ]; then
+          continue
+        fi
+        case "$value" in
+          *'$'*|*'`'*|*';'*|*'&'*|*'|'*|*'\n'*)
+            log_warn "${file}: field '${key}' contains disallowed characters — dropping this field."
+            continue
+            ;;
+        esac
+        printf -v "$key" '%s' "$value"
+        ;;
+      *)
+        log_warn "${file}: unrecognized line (not a simple SUPREME_CASAMBI_*=\"value\" assignment) — ignoring this file entirely: ${line}"
+        return 0
+        ;;
+    esac
+  done < "$file"
+  log_info "Loaded Casambi fleet credentials from ${file} (values are never logged)."
+}
+
 # Confirms Ubuntu 24.04 specifically rather than merely "some Linux" — the package names,
 # repo URLs, and systemd unit assumptions below are verified against 24.04's real apt
 # repos and are not guaranteed to resolve identically on another release.

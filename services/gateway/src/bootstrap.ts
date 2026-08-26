@@ -42,6 +42,8 @@ import {
   createAppleTvConnect,
 } from "@supreme/protocols";
 import { createPersistence, migrateOwnershipToProvider } from "@supreme/persistence";
+import { createDriverSecretCrypto } from "@supreme/drivers";
+import { generateEncryptionKey } from "@supreme/crypto";
 import { createEventBus, createPresenceStore } from "@supreme/messaging";
 import { HttpProtocolScanner } from "@supreme/commissioning";
 import type { ProtocolKind } from "@supreme/domain-model";
@@ -51,6 +53,23 @@ import { createSecretStore } from "./secrets.js";
 import { VoiceStatePublisher } from "./voice-publisher.js";
 
 const HA_TOKEN_SECRET = "ha_token";
+const DRIVER_SECRET_ENCRYPTION_KEY = "driver_secret_encryption_key";
+
+/**
+ * Resolve the AES-256-GCM key that encrypts driver config secret fields at rest (§ Production
+ * Readiness Audit — driver/integration secrets stored as plaintext JSON at rest). Same
+ * generate-once-and-persist pattern as {@link resolveHaToken}: a key minted on first boot lives in
+ * the secrets manager (a 0600 file / Docker volume) forever after, so restarts never lose it and
+ * never regenerate a different one that would strand already-encrypted data.
+ */
+function resolveDriverSecretEncryptionKey(config: GatewayConfig): string {
+  const secrets = createSecretStore(config.secretsDir || undefined);
+  const stored = secrets.get(DRIVER_SECRET_ENCRYPTION_KEY);
+  if (stored) return stored;
+  const generated = generateEncryptionKey();
+  secrets.set(DRIVER_SECRET_ENCRYPTION_KEY, generated);
+  return generated;
+}
 
 /**
  * Resolve the HA long-lived token without ever asking the installer for one (§7, §8):
@@ -113,6 +132,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.grantStore = stores.grants;
     deps.notificationStore = stores.notifications;
     deps.driverStore = stores.drivers;
+    deps.driverSecretCrypto = createDriverSecretCrypto(resolveDriverSecretEncryptionKey(config));
     deps.automationStore = stores.automations;
     deps.securityStore = stores.security;
     deps.protocolBindingStore = stores.protocolBindings;

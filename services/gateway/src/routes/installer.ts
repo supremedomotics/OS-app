@@ -30,6 +30,7 @@ import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport, buildReceiveCertificationReport, type LanForensicsInput } from "@supreme/protocols";
 import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, queryLanForensics, type LanDiagnosticsSnapshot, type LanForensicsResponse } from "@supreme/lan";
+import { resolveCasambiCloudCredentials } from "../native-driver-factory.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -248,6 +249,57 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const driver = ctx.sil.getNativeDriver("casambi");
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
       reply.send(driver.getCasambiDiagnostics());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Local Gateway — one-time Cloud name sync. Local mode's UDP/REST protocol has no
+  // field for a fixture's real name anywhere (confirmed against every locally-reachable Lithernet
+  // interface); this is the one place a Local-mode Casambi instance is allowed to reach the
+  // Casambi Cloud API, and only for this — a REST-only session (no WebSocket, no live
+  // subscription) that fetches names and immediately discards the session. Reuses the SAME
+  // apiKey/email/password/networkId config fields the driver's Cloud mode already has (they're
+  // optional, not required, when connectionType=local) — no new config surface, no new credential
+  // to manage separately from what's already there. Command/discovery/live-state stay on Local
+  // UDP unconditionally; this route can never change what transport the driver actually runs on.
+  //
+  // Credential precedence: this driver instance's own saved config first (an installer explicitly
+  // set a different Casambi account for this job), falling back to the deployment-wide
+  // SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD/NETWORK_ID env vars (config.ts's existing `secret()`
+  // helper — same `_FILE` convention as every other deployment secret) — the SAME env vars that
+  // already auto-connect Cloud mode with zero installer input (bootstrap.ts). Set once at
+  // deployment time, this makes the sync work with no typing in the UI for every hub in the
+  // fleet, while never putting a real credential in source control — see SESSION_HANDOFF.md for
+  // why a hardcoded default was explicitly rejected in favor of this.
+  app.post<{ Params: { id: string } }>("/v1/drivers/:id/casambi/sync-names", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+      const cfg = entry.config as Record<string, unknown>;
+      const fleetDefault =
+        ctx.config.casambiApiKey && ctx.config.casambiEmail && ctx.config.casambiPassword
+          ? {
+              apiKey: ctx.config.casambiApiKey,
+              email: ctx.config.casambiEmail,
+              password: ctx.config.casambiPassword,
+              ...(ctx.config.casambiNetworkId ? { networkId: ctx.config.casambiNetworkId } : {}),
+            }
+          : undefined;
+      const creds = resolveCasambiCloudCredentials(cfg, fleetDefault);
+      if (!creds) {
+        throw new SupremeError(
+          "validation_failed",
+          "Casambi Cloud API key, email, and password are required to sync names — set them on this driver, or configure SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD as a deployment-wide default.",
+        );
+      }
+      const result = await driver.syncNamesFromCloud(creds);
+      reply.send(result);
     } catch (err) {
       sendError(reply, err);
     }
