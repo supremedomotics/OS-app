@@ -353,6 +353,39 @@ honestly rather than skipped silently. No JS/TS or shell script changed in this 
 purely a new CI workflow file, so the existing full-suite verification from the prior
 three commits stands unaffected.
 
+**Committed and pushed** to `native-linux` (`66ae067`).
+
+**User then tested live against their own hub (192.168.0.105)** and reported the "Cloud
+name sync (optional)" section was missing from the Local Gateway panel — confirmed the
+code IS correct/present in the repo at that exact spot (`drivers.tsx:675`, right before
+`CasambiDiscoveryExplainer` at line 706); the user's hub was simply running a build that
+predates the feature. Pointed them at `sudo ./infra/native-linux/update.sh` plus a hard
+browser refresh, and at `git log --oneline -1` on the hub itself vs. `origin/native-linux`
+to confirm drift going forward — this session has no network path to the user's LAN to
+verify directly, disclosed explicitly rather than pretending otherwise.
+
+**Found a real bug from the user's next screenshot**, unrelated to any of the above: Cloud
+mode's `createSession()` was failing with `HTTP 404`. Root cause: the user had typed
+`Showroom` (the network's own DISPLAY NAME, set in the Casambi mobile app) into the
+"Network id (optional)" field. `HttpCasambiTransport.createSession()`
+(`services/protocols/src/casambi/cloud-transport.ts:143-146`) builds the session URL as
+`/v1/networks/${networkId}/session` whenever `networkId` is non-empty — `Showroom` isn't
+a real Casambi network ID, so that endpoint doesn't exist, hence 404. The field's own help
+text ("Pin a single network for a faster session handshake") never said what a valid value
+actually looks like or warned that a display name would break the request outright.
+
+- `services/drivers/src/manifests.ts` — rewrote the `networkId` field's `help` text to
+  explicitly warn that it's Casambi's own internal network ID, NOT the display name shown
+  in the Casambi app, name the exact failure mode a display name causes, and clarify blank
+  is the normal/expected value unless the account manages more than one network.
+- Immediate fix given directly to the user: clear the field, re-save — with it blank,
+  `createSession()` calls `/v1/networks/session` (no network segment), authenticating
+  against whichever network(s) the account can see.
+- Verified: `@supreme/drivers` typecheck clean, its 36 tests pass (unchanged — this is a
+  `help` string only, no schema/behavior change), full
+  `pnpm turbo run build typecheck test --filter=@supreme/drivers --filter=@supreme/gateway
+  --filter=@supreme/web-homeowner` — 45/45 tasks green, 380/380 gateway tests unaffected.
+
 **Committed and pushed** to `native-linux` (see commit following this entry).
 
 ---

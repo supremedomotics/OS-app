@@ -983,6 +983,17 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Casambi Cloud "Network id" field caused a live 404 when set to the network's
+  display name instead of its real Casambi-internal ID** — found via a real user
+  screenshot (`HTTP 404` on `casambi: session request failed`). Root cause:
+  `HttpCasambiTransport.createSession()` (`services/protocols/src/casambi/
+  cloud-transport.ts`) builds `/v1/networks/${networkId}/session` whenever
+  `networkId` is non-empty; a display name like `"Showroom"` isn't a valid
+  network ID, so that endpoint doesn't exist. Fixed the field's own `help` text
+  in `services/drivers/src/manifests.ts` to explicitly name this exact failure
+  mode and clarify blank is the normal value. No schema/behavior change — help
+  text only; `@supreme/drivers`' 36 tests unaffected.
+
 - **Driver config secret encryption-at-rest + Casambi Cloud name sync** — resolved
   Production Readiness Audit Blocker H3: every driver's `secret: true` config field
   (Casambi, Lutron, HEOS, etc.) is now AES-256-GCM encrypted at rest
