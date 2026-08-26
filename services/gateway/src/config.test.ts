@@ -31,9 +31,8 @@ describe("§ Native Backend Implementation — SUPREME_BACKEND resolution", () =
     expect(loadConfig({}).backend).toBe("native");
   });
 
-  it("honors an explicit mock/ha opt-in", () => {
+  it("honors an explicit mock opt-in", () => {
     expect(loadConfig({ SUPREME_BACKEND: "mock" }).backend).toBe("mock");
-    expect(loadConfig({ SUPREME_BACKEND: "ha" }).backend).toBe("ha");
   });
 
   it("treats any unrecognized value as native, never as a silent mock fallback", () => {
