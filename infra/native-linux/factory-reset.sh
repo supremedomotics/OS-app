@@ -64,6 +64,31 @@ main() {
     sudo -u postgres dropdb --if-exists supreme 2>/dev/null || log_warn "Could not drop the 'supreme' database — continuing."
   fi
 
+  # § live-confirmed fix — Redis holds shared presence/ephemeral state (SUPREME_REDIS_URL,
+  # see config.ts) whose actual data file lives under Redis's own /var/lib/redis, entirely
+  # OUTSIDE SUPREME_DATA_DIR — nothing else in this script ever touches it, so a factory
+  # reset left stale presence/session entries behind even though every other store was
+  # genuinely wiped. FLUSHALL only if redis-server is actually installed/running; a hub
+  # that never enabled Redis (redisUrl empty → in-process fallback) has nothing to flush.
+  if command_exists redis-cli && systemctl is-active --quiet redis-server 2>/dev/null; then
+    log_step "Flushing Redis (shared presence/ephemeral state)"
+    redis-cli FLUSHALL >/dev/null 2>&1 || log_warn "Could not flush Redis — continuing."
+  fi
+
+  # § live-confirmed fix — Mosquitto's own package-provided mosquitto.conf sets
+  # `persistence_location /var/lib/mosquitto/` (see config/mosquitto-supremeos.conf
+  # .template's own doc comment for why this deployment deliberately never overrides
+  # it) — real retained MQTT messages/subscriptions from live smart-home telemetry live
+  # there, entirely outside SUPREME_DATA_DIR, and nothing else in this script touches it.
+  # Stop-wipe-restart rather than deleting the open file live: Mosquitto would otherwise
+  # keep the deleted inode open and simply recreate the same content on its next restart.
+  if systemctl list-unit-files mosquitto.service >/dev/null 2>&1 && [ -d /var/lib/mosquitto ]; then
+    log_step "Wiping Mosquitto's persisted retained messages/state"
+    systemctl stop mosquitto 2>/dev/null || true
+    rm -rf /var/lib/mosquitto/*
+    systemctl start mosquitto 2>/dev/null || log_warn "Could not restart mosquitto — start it manually."
+  fi
+
   # § Preserve backups: move the backup directory content aside, wipe everything else,
   # restore it. Simpler and more robust than teaching every subsequent wipe step to skip
   # one specific directory.
