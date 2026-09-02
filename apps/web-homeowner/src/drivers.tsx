@@ -264,9 +264,9 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           )}
           {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "cloud" && (
             <p className="help">
-              The Casambi Cloud account (API key, network admin email/password) is configured
-              once for this deployment and is never entered here — only which network this job's
-              fixtures live in (below, optional).
+              The Casambi API key is configured once for this deployment and is never entered
+              here. The network admin email/password below vary per project — enter the account
+              for this job's Casambi network.
             </p>
           )}
           {driver.protocols.includes("casambi") &&
@@ -319,18 +319,19 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           <span className={`drv-badge ${health.verdict === "healthy" ? "ok" : health.verdict === "error" ? "err" : "off"}`}>{String(health.verdict)}</span>
           {health.configComplete === false && (() => {
             const missing = (health.missing as string[] | undefined) ?? [];
-            // § Casambi fleet-wide env-var default — apiKey/email/password never render as fields
-            // here (see CASAMBI_BACKEND_ONLY_KEYS), so telling an installer "apiKey is required"
-            // points at a control that doesn't exist. Missing here means the deployment itself has
-            // no SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD set — an admin-facing fact, not something
-            // fixable from this screen.
+            // § Casambi fleet-wide env-var default — apiKey never renders as a field here (see
+            // CASAMBI_BACKEND_ONLY_KEYS), so telling an installer "apiKey is required" points at a
+            // control that doesn't exist. Missing apiKey means the deployment itself has no
+            // SUPREME_CASAMBI_API_KEY set — an admin-facing fact, not something fixable from this
+            // screen. email/password ARE editable fields now (they vary per project), so a missing
+            // one is surfaced normally in `shown` instead of being suppressed.
             const casambiCredsMissing = driver.protocols.includes("casambi") && missing.some((m) => CASAMBI_BACKEND_ONLY_KEYS.has(m));
             const shown = missing.filter((m) => !CASAMBI_BACKEND_ONLY_KEYS.has(m));
             return (
               <span className="muted">
                 {" · needs configuration"}
                 {shown.length > 0 && ` (${shown.join(", ")})`}
-                {casambiCredsMissing && " — this deployment has no Casambi Cloud account configured (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); contact your system administrator"}
+                {casambiCredsMissing && " — this deployment has no Casambi API key configured (SUPREME_CASAMBI_API_KEY); contact your system administrator"}
               </span>
             );
           })()}
@@ -472,14 +473,13 @@ function ConfigField({ field, value, onChange }: { field: DriverConfigField; val
 
 // ── Casambi Driver Refactor — Foundation: Driver Setup Wizard + Local Gateway settings ──────
 const CASAMBI_CLOUD_ONLY_KEYS = new Set(["apiKey", "email", "password", "networkId"]);
-// § Casambi fleet-wide env-var default — the Casambi Cloud ACCOUNT (API key, network admin
-// email/password) is a deployment-wide credential (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD, set
-// once by whoever provisions the hub), never something an installer or homeowner types in — so
-// these three never render as form fields, in either Cloud mode or Local Gateway's optional
-// Cloud name-sync panel. `networkId` stays visible/editable: unlike the account credentials, it
-// identifies which Casambi NETWORK this specific job's fixtures live in, which genuinely does
-// vary per installation and has no deployment-wide default.
-const CASAMBI_BACKEND_ONLY_KEYS = new Set(["apiKey", "email", "password"]);
+// § Casambi fleet-wide env-var default — only the API key (SUPREME_CASAMBI_API_KEY) is a fixed,
+// deployment-wide credential (set once by whoever provisions the hub) and never rendered as a
+// field. Network admin email/password genuinely vary per project/installation (each job may use
+// a different Casambi account), so they render as editable fields instead — same as `networkId` —
+// and are saved onto this driver instance's own config, taking precedence over any deployment-wide
+// SUPREME_CASAMBI_EMAIL/PASSWORD default (see resolveCasambiCloudCredentials on the gateway).
+const CASAMBI_BACKEND_ONLY_KEYS = new Set(["apiKey"]);
 const CASAMBI_LOCAL_ONLY_KEYS = new Set([
   "gatewayIp",
   "restPort",
@@ -651,11 +651,12 @@ function CasambiLocalGatewayPanel({
     }
   }
 
-  // Only networkId is ever shown here — apiKey/email/password are the deployment-wide Casambi
-  // Cloud account (§ Casambi fleet-wide env-var default) and never render as a field, in Cloud
-  // mode or here. Used ONLY for the one-time name sync below; never touches Local UDP, never
-  // becomes a live connection.
-  const cloudSyncFields = schema.filter((f) => f.key === "networkId");
+  // apiKey is the only deployment-wide Casambi credential (§ Casambi fleet-wide env-var default)
+  // and never renders as a field, in Cloud mode or here. email/password/networkId vary per
+  // project, so they ARE shown and saved onto this driver instance's own config — taking
+  // precedence over any deployment-wide SUPREME_CASAMBI_EMAIL/PASSWORD default. Used ONLY for the
+  // one-time name sync below; never touches Local UDP, never becomes a live connection.
+  const cloudSyncFields = schema.filter((f) => f.key === "email" || f.key === "password" || f.key === "networkId");
 
   return (
     <div className="drv-field" style={{ marginBottom: 14 }}>
@@ -680,14 +681,14 @@ function CasambiLocalGatewayPanel({
             or controlled — that stays on Local UDP, unconditionally.
           </p>
           <p className="help">
-            Uses this deployment's Casambi Cloud account — configured once, centrally, never
-            entered here. Just pick which network this job's fixtures live in (optional; only
-            needed if the account manages more than one), then click "Sync names from Cloud."
+            The Casambi API key is configured once for this deployment. Enter this job's network
+            admin email/password below (and optionally which network its fixtures live in, if the
+            account manages more than one), then click "Sync names from Cloud."
           </p>
           {cloudSyncFields.map((f) => (
             <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => onChange(f.key, v)} />
           ))}
-          <p className="help">If you set a network id, click "Save configuration" below first — the sync reads the saved value, not what's typed above.</p>
+          <p className="help">Click "Save configuration" below first — the sync reads the saved email/password/network id, not what's typed above.</p>
           <div className="drv-actions" style={{ marginTop: 8 }}>
             <button type="button" disabled={busy !== null} onClick={() => void syncNames()}>
               {busy === "sync" ? "Syncing…" : "Sync names from Cloud"}

@@ -90,12 +90,12 @@ describe("liveStatusLabel", () => {
   });
 });
 
-// § Casambi fleet-wide env-var default — the Casambi Cloud ACCOUNT (apiKey/email/password) is a
-// deployment-wide credential set once via SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD, never something
-// an installer or homeowner types in, so these three must never appear as renderable fields —
-// in Cloud mode, in Local mode, or with the discriminator omitted entirely. `networkId` is not a
-// secret (it identifies which per-job Casambi network to use) and stays visible.
-describe("visibleCasambiConfigSchema (§ Casambi fleet-wide env-var default — credentials never rendered)", () => {
+// § Casambi fleet-wide env-var default — only the API key is a deployment-wide credential (set
+// once via SUPREME_CASAMBI_API_KEY) that never appears as a renderable field, in Cloud mode, in
+// Local mode, or with the discriminator omitted entirely. email/password genuinely vary per
+// project (each job may use a different Casambi account) and DO render as editable fields in
+// Cloud mode — same as `networkId`, which is not a secret at all.
+describe("visibleCasambiConfigSchema (§ Casambi fleet-wide env-var default — only apiKey never rendered)", () => {
   const field = (key: string, extra: Partial<DriverConfigField> = {}): DriverConfigField => ({
     key,
     label: key,
@@ -114,15 +114,15 @@ describe("visibleCasambiConfigSchema (§ Casambi fleet-wide env-var default — 
     field("gatewayUsername"),
   ];
 
-  it("never shows apiKey/email/password in Cloud mode", () => {
+  it("never shows apiKey, but shows email/password/networkId, in Cloud mode", () => {
     const keys = visibleCasambiConfigSchema(schema, { connectionType: "cloud" }).map((f) => f.key);
     expect(keys).not.toContain("apiKey");
-    expect(keys).not.toContain("email");
-    expect(keys).not.toContain("password");
+    expect(keys).toContain("email"); // varies per project — genuinely editable
+    expect(keys).toContain("password");
     expect(keys).toContain("networkId"); // not a secret — genuinely per-job
   });
 
-  it("never shows apiKey/email/password in Local mode either", () => {
+  it("never shows apiKey/email/password in Local mode (those are Cloud-only fields)", () => {
     const keys = visibleCasambiConfigSchema(schema, { connectionType: "local" }).map((f) => f.key);
     expect(keys).not.toContain("apiKey");
     expect(keys).not.toContain("email");
@@ -130,10 +130,10 @@ describe("visibleCasambiConfigSchema (§ Casambi fleet-wide env-var default — 
     expect(keys).toContain("gatewayIp");
   });
 
-  it("never shows them with connectionType omitted (defaults to cloud)", () => {
+  it("never shows apiKey with connectionType omitted (defaults to cloud)", () => {
     const keys = visibleCasambiConfigSchema(schema, {}).map((f) => f.key);
     expect(keys).not.toContain("apiKey");
-    expect(keys).not.toContain("email");
-    expect(keys).not.toContain("password");
+    expect(keys).toContain("email");
+    expect(keys).toContain("password");
   });
 });
