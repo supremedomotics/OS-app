@@ -337,14 +337,15 @@ describe("Postgres-backed persistence (PGlite)", () => {
     // Migrate "light" to native through a policy backed by the store.
     const policy = new MigrationPolicy([], stores.migrationPolicy);
     policy.setEngine("light", "native");
-    policy.setEngine("climate", "ha");
     await policy.flush();
 
     // A fresh policy (simulating a reboot) hydrates and keeps light on native.
+    // "climate" was never explicitly registered, but "native" is the only engine
+    // now that HA is gone — an unregistered domain still reports native by default.
     const afterReboot = new MigrationPolicy([], stores.migrationPolicy);
     await afterReboot.hydrate();
     expect(afterReboot.isNative("light")).toBe(true);
-    expect(afterReboot.isNative("climate")).toBe(false);
+    expect(afterReboot.isNative("climate")).toBe(true);
   });
 
   it("persists notifications with read receipts", async () => {

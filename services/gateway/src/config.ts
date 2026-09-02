@@ -307,8 +307,8 @@ export function assertSecureConfig(config: GatewayConfig): void {
   // § Native Backend Implementation — the offline mock vertical slice must never run a
   // real production hub (§ Never fabricate data or capabilities): a mock-backed device
   // silently "succeeds" against in-memory state that was never real. Use the default
-  // ("native") or "ha" instead.
-  if (config.backend === "mock") problems.push('SUPREME_BACKEND=mock is not permitted in production — use "native" (the default) or "ha"');
+  // ("native") instead.
+  if (config.backend === "mock") problems.push('SUPREME_BACKEND=mock is not permitted in production — use "native" (the default)');
   if (problems.length > 0) {
     throw new Error(`refusing to boot (production hardening): ${problems.join("; ")}`);
   }
