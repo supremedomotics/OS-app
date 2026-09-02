@@ -40,15 +40,15 @@ export interface NativeDriverFactoryContext {
    * a missing context never silently breaks a LAN-dependent driver. */
   udpTransportFactory?: () => UdpTransport;
   /** § Casambi fleet-wide default account — the SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD/
-   * NETWORK_ID env vars (config.ts), present only when all three required fields are set at
-   * deployment time. Used as a FALLBACK by the `casambi` factory's Cloud branch when this
-   * driver instance's own manifest config leaves apiKey/email/password blank, so an installer
-   * never has to type them if the deployment already has a fleet default configured — the same
-   * env vars that already auto-connect Cloud mode with zero UI input via bootstrap.ts's
-   * separate `envDrivers` path, now also backing the manifest-driven install path. Never a
-   * literal credential in source — only ever read from the running deployment's own
-   * environment/secrets. */
-  casambiCloudDefaults?: { apiKey: string; email: string; password: string; networkId?: string };
+   * NETWORK_ID env vars (config.ts). Each field is independently optional: only `apiKey` is
+   * genuinely deployment-wide today (the embedded default — casambi-embedded-key.ts, or an
+   * explicit env override); email/password are per-project fields entered on each driver
+   * instance and only appear here if a deployment ALSO happens to set the env-var default. Used
+   * as a FALLBACK by the `casambi` factory's Cloud branch and `resolveCasambiCloudCredentials`
+   * when this driver instance's own manifest config leaves a field blank — `apiKey` alone is
+   * enough for a deployment to never require typing it. Never a literal credential in source —
+   * only ever read from the running deployment's own environment/secrets. */
+  casambiCloudDefaults?: { apiKey?: string; email?: string; password?: string; networkId?: string };
 }
 export type NativeDriverFactory = (config: Record<string, unknown>, ctx: NativeDriverFactoryContext) => INativeProtocolDriver | null;
 
@@ -59,14 +59,16 @@ const int = (v: unknown, fallback: number): number => {
 };
 
 /** § Casambi fleet-wide default account — shared by the `casambi` factory's Cloud branch below
- * and `routes/installer.ts`'s `/casambi/sync-names` route (Local Gateway's one-time Cloud name
- * sync), so the same driver-config-then-fleet-default precedence isn't duplicated in two places.
- * `config` is a driver instance's own stored config; `defaults` is `casambiCloudDefaults` (present
- * only when SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD are all set at deployment time). Returns null
- * when neither source has all three required fields. */
+ * and `routes/installer.ts`'s Local Gateway Cloud actions (name sync + device discovery), so the
+ * same driver-config-then-fleet-default precedence isn't duplicated in multiple places. `config`
+ * is a driver instance's own stored config; `defaults` is `casambiCloudDefaults`, each field
+ * independently optional (typically just `apiKey` — the one genuinely deployment-wide default;
+ * see that field's own doc comment). Resolved per-field: a driver's own config wins, falling back
+ * to `defaults` field-by-field — never all-or-nothing. Returns null only when apiKey/email/
+ * password aren't ALL resolved from either source combined. */
 export function resolveCasambiCloudCredentials(
   config: Record<string, unknown>,
-  defaults?: { apiKey: string; email: string; password: string; networkId?: string },
+  defaults?: { apiKey?: string; email?: string; password?: string; networkId?: string },
 ): CasambiCredentials | null {
   const apiKey = str(config.apiKey) ?? defaults?.apiKey;
   const email = str(config.email) ?? defaults?.email;

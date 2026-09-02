@@ -274,13 +274,19 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   // why a hardcoded default was explicitly rejected in favor of this.
   // § Shared by both Casambi Local Gateway Cloud actions (name sync + device discovery) — same
   // driver-instance-config-then-fleet-default credential precedence, so it isn't duplicated.
+  // § live-confirmed fix — this used to require ALL of apiKey/email/password to be fleet-wide
+  // before offering ANY fallback. Now that email/password are per-project (only ever entered on
+  // the driver instance, never fleet-wide) and apiKey is the one genuinely deployment-wide
+  // default (the embedded key), that gate meant apiKey never got offered as a fallback either —
+  // "API key is required" even with a real embedded key, live-confirmed. Each field is now
+  // independently optional in the fallback object.
   function resolveCreds(entryConfig: Record<string, unknown>) {
     const fleetDefault =
-      ctx.config.casambiApiKey && ctx.config.casambiEmail && ctx.config.casambiPassword
+      ctx.config.casambiApiKey || ctx.config.casambiEmail || ctx.config.casambiPassword
         ? {
-            apiKey: ctx.config.casambiApiKey,
-            email: ctx.config.casambiEmail,
-            password: ctx.config.casambiPassword,
+            ...(ctx.config.casambiApiKey ? { apiKey: ctx.config.casambiApiKey } : {}),
+            ...(ctx.config.casambiEmail ? { email: ctx.config.casambiEmail } : {}),
+            ...(ctx.config.casambiPassword ? { password: ctx.config.casambiPassword } : {}),
             ...(ctx.config.casambiNetworkId ? { networkId: ctx.config.casambiNetworkId } : {}),
           }
         : undefined;

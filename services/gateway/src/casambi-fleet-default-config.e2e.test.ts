@@ -99,6 +99,47 @@ describe("Casambi fleet-wide env-var default (§ config save + health, not just 
     expect(stored.config.password).toBeUndefined();
   });
 
+  it("§ live-confirmed fix — an apiKey-only fleet default (email/password per-driver, the real production shape) still reports configComplete", async () => {
+    // Reproduces the actual production bug: only SUPREME_CASAMBI_API_KEY is deployment-wide (the
+    // embedded default) — email/password are per-project fields an installer types on the driver
+    // instance itself, never fleet-wide. The old all-or-nothing gate meant even THIS apiKey never
+    // got offered as a fallback, so health reported "no Casambi API key configured" despite one
+    // genuinely being set.
+    const apiKeyOnlyCtx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent", SUPREME_CASAMBI_API_KEY: "fixture-apikey-only-not-a-real-secret" }));
+    const apiKeyOnlyApp = await buildServer(apiKeyOnlyCtx);
+    await apiKeyOnlyApp.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const addr = apiKeyOnlyApp.server.address();
+      const url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+      const login = (await (
+        await fetch(`${url}/v1/auth/login`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+        })
+      ).json()) as { accessToken: string };
+      const a = { "content-type": "application/json", authorization: `Bearer ${login.accessToken}` };
+      const issued = (await (await fetch(`${url}/v1/license/dev-issue`, { method: "POST", headers: a, body: JSON.stringify({ sku: "pro", seats: 10 }) })).json()) as { token: License };
+      await fetch(`${url}/v1/license/activate`, { method: "POST", headers: a, body: JSON.stringify({ token: issued.token }) });
+
+      const install = (await (await fetch(`${url}/v1/drivers/install`, { method: "POST", headers: a, body: JSON.stringify({ key: "supreme-casambi" }) })).json()) as { driver: { id: string } };
+      const id = install.driver.id;
+      // Installer types this job's own email/password — apiKey is left blank, expecting the fleet default.
+      const saveResp = await fetch(`${url}/v1/drivers/${id}/config`, {
+        method: "PUT",
+        headers: a,
+        body: JSON.stringify({ config: { connectionType: "cloud", email: "job@example.com", password: "fixture-job-password-not-real" } }),
+      });
+      expect(saveResp.status).toBe(200);
+
+      const health = (await (await fetch(`${url}/v1/drivers/${id}/health`, { headers: a })).json()) as { configComplete: boolean; missing: string[] };
+      expect(health.configComplete).toBe(true);
+      expect(health.missing).toEqual([]);
+    } finally {
+      await apiKeyOnlyApp.close();
+    }
+  });
+
   it("still rejects a Cloud-mode save with blank credentials when no fleet default is configured", async () => {
     const bareCtx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }));
     const bareApp = await buildServer(bareCtx);

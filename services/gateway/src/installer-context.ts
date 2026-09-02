@@ -1624,11 +1624,27 @@ export class InstallerServices {
    * `GatewayConfig`/env vars, shared by `nativeDriverContext()` (runtime construction) and
    * `fallbacksFor()` (config validation/completeness, so the Driver Manager UI and boot
    * reconciliation never require typing these fields when a fleet default already covers them).
-   * `undefined` unless all three required fields are set. */
-  private casambiCloudDefaults(): { apiKey: string; email: string; password: string; networkId?: string } | undefined {
+   *
+   * § live-confirmed fix — this used to require ALL THREE (apiKey/email/password) before
+   * returning ANY fallback, which made sense back when they were all fleet-wide-or-nothing. Now
+   * that email/password are per-project fields entered on each driver instance (never
+   * fleet-wide) and only apiKey is genuinely deployment-wide (the embedded default —
+   * casambi-embedded-key.ts), that all-or-nothing gate meant the apiKey fallback never fired
+   * either: config.casambiApiKey was set, but casambiEmail/casambiPassword were legitimately
+   * empty, so the AND short-circuited to undefined and every driver reported apiKey as missing
+   * even though the deployment genuinely had one. Each field is now independently optional in
+   * the returned object — `resolveCasambiCloudCredentials` already does its own per-field
+   * `config.x ?? defaults?.x` resolution, so a partial default (apiKey only) was always safe to
+   * return; this was purely an overly-strict gate on RETURNING one. */
+  private casambiCloudDefaults(): { apiKey?: string; email?: string; password?: string; networkId?: string } | undefined {
     const { casambiApiKey, casambiEmail, casambiPassword, casambiNetworkId } = this.d.config;
-    if (!casambiApiKey || !casambiEmail || !casambiPassword) return undefined;
-    return { apiKey: casambiApiKey, email: casambiEmail, password: casambiPassword, ...(casambiNetworkId ? { networkId: casambiNetworkId } : {}) };
+    if (!casambiApiKey && !casambiEmail && !casambiPassword) return undefined;
+    return {
+      ...(casambiApiKey ? { apiKey: casambiApiKey } : {}),
+      ...(casambiEmail ? { email: casambiEmail } : {}),
+      ...(casambiPassword ? { password: casambiPassword } : {}),
+      ...(casambiNetworkId ? { networkId: casambiNetworkId } : {}),
+    };
   }
 
   /** {@link ConfigFallbacks} for a driver's config validation/completeness check, keyed off which
@@ -1637,8 +1653,7 @@ export class InstallerServices {
    * behavior). */
   private fallbacksFor(protocols: string[]): ConfigFallbacks {
     if (!protocols.includes("casambi")) return {};
-    const defaults = this.casambiCloudDefaults();
-    return defaults ? { apiKey: defaults.apiKey, email: defaults.email, password: defaults.password, networkId: defaults.networkId } : {};
+    return this.casambiCloudDefaults() ?? {};
   }
 
   /**
