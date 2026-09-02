@@ -271,7 +271,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     // § Standalone per-hub Casambi API key — env/`_FILE` always wins when a deployment sets it
     // explicitly; otherwise falls back to the ciphertext-in-source default (see
     // casambi-embedded-key.ts) so a fresh install needs zero manual credential step.
-    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") ?? resolveEmbeddedCasambiApiKey() ?? "",
+    // § live-confirmed fix — gateway.env ALWAYS sets SUPREME_CASAMBI_API_KEY (rendered from the
+    // template's placeholder), so an installer who never typed one gets an empty STRING here, not
+    // an absent env var. `??` only falls back on null/undefined, never on "", so the embedded
+    // default was silently skipped every time — `||` treats an empty string the same as unset,
+    // which is correct: a real API key is never legitimately "".
+    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") || resolveEmbeddedCasambiApiKey() || "",
     casambiEmail: env.SUPREME_CASAMBI_EMAIL ?? "",
     casambiPassword: secret(env, "SUPREME_CASAMBI_PASSWORD") ?? "",
     casambiNetworkId: env.SUPREME_CASAMBI_NETWORK_ID ?? "",

@@ -59,3 +59,18 @@ describe("§ Native Backend Implementation — SUPREME_BACKEND resolution", () =
     expect(() => assertSecureConfig(config)).not.toThrow();
   });
 });
+
+describe("§ live-confirmed fix — Casambi API key falls back to the embedded default on an empty env var", () => {
+  it("an explicit, non-empty SUPREME_CASAMBI_API_KEY always overrides the embedded default", () => {
+    expect(loadConfig({ SUPREME_CASAMBI_API_KEY: "explicit-deployment-key" }).casambiApiKey).toBe("explicit-deployment-key");
+  });
+
+  it("SUPREME_CASAMBI_API_KEY='' (gateway.env's rendered, never-typed-in placeholder) falls back to the embedded default, not to an empty string", () => {
+    // gateway.env ALWAYS sets this var (rendered from the template's own placeholder), so an
+    // installer who never typed a key gets an empty STRING, not an absent env var — `??` alone
+    // would wrongly treat that as "explicitly set to empty" and skip the embedded default. This
+    // only proves the fallback triggers, not what it resolves to (that depends on whether a real
+    // key is embedded — see casambi-embedded-key.test.ts for that).
+    expect(loadConfig({ SUPREME_CASAMBI_API_KEY: "" }).casambiApiKey).toBe(loadConfig({}).casambiApiKey);
+  });
+});
