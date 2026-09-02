@@ -26,7 +26,6 @@ see [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md), [`SESSION_HANDOFF.md`](SESSION_H
   — living scorecard of what's built vs. what's left for real-world deployment
 - **Security review:** [`docs/security-review.md`](docs/security-review.md)
 - **Driver authoring:** [`docs/drivers.md`](docs/drivers.md)
-- **HA integration internals:** [`docs/ha-integration.md`](docs/ha-integration.md)
 - **Provisioning & identity:** [`docs/provisioning-and-identity.md`](docs/provisioning-and-identity.md)
 - **UX benchmark references:** [`docs/reference/`](docs/reference/) · **UI screenshots:** [`docs/screenshots/`](docs/screenshots/)
 

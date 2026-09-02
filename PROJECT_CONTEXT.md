@@ -77,7 +77,7 @@ cloud/           identity, authn, authz, hub-registry, tunnel-broker, fleet, dea
 drivers/sdk      driver authoring SDK — manifest schema, bundle signing/verification
 tools/           codegen (Aureon Flutter tokens), loadtest (chaos/soak harness), ota (release signer)
 infra/           cloud-compose, cloud-iac, hub-compose (Docker Compose stack), observability
-docs/            architecture/ (blueprints + ADRs), drivers.md, ha-integration.md,
+docs/            architecture/ (blueprints + ADRs), drivers.md,
                  provisioning-and-identity.md, production-readiness.md, coolmaster/, reference/
 ```
 
