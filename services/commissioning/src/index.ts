@@ -72,6 +72,12 @@ export interface DiscoveredView {
    * discover() genuinely fetches this from the unit's UPnP description XML. Absent (never
    * guessed) for sources that report no such field, like AVR's Telnet-only discover(). */
   manufacturer?: string;
+  /** § Casambi Local Gateway — Cloud device discovery: true when this device is known only from
+   * the Cloud API and has NOT yet had its identity/existence confirmed by a real local signal
+   * (e.g. Casambi Local mode's first UDP packet) — see CasambiProtocolDriver.discoverFromCloud's
+   * own doc comment. Absent/false for every discovery source that doesn't make this distinction;
+   * never fabricated as confirmed just because it isn't present. */
+  awaitingLocalSignal?: boolean;
 }
 
 /**
@@ -261,6 +267,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const locationHint = extractLocationHint(d.raw);
   const zones = extractZones(d.raw);
   const manufacturer = extractManufacturer(d.raw);
+  const awaitingLocalSignal = d.raw?.awaitingLocalSignal === true;
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -275,6 +282,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     ...(zones ? { zones } : {}),
     ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
     ...(manufacturer ? { manufacturer } : {}),
+    ...(awaitingLocalSignal ? { awaitingLocalSignal } : {}),
   };
 }
 

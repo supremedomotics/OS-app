@@ -10,6 +10,7 @@ export {
   type CasambiCommonDriverOptions,
   type CasambiHealth,
   type CasambiNameSyncResult,
+  type CasambiCloudDiscoverResult,
 } from "./casambi-driver.js";
 export {
   HttpCasambiTransport,

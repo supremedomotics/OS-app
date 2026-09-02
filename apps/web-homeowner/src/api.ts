@@ -501,6 +501,21 @@ export async function syncCasambiNamesFromCloud(driverId: string): Promise<Casam
   return (await res.json()) as CasambiNameSyncResult;
 }
 
+/** § Casambi Local Gateway — Cloud device discovery: pre-populates the device list with real
+ * names before local UDP has heard from a fixture. `discovered` are new; `total` is the Cloud
+ * network's full unit count. Command/feedback for any resulting device still goes exclusively
+ * through Local UDP once bound — see CasambiProtocolDriver.discoverFromCloud's own doc comment. */
+export interface CasambiCloudDiscoverResult {
+  discovered: number;
+  total: number;
+  networkName: string | null;
+}
+export async function discoverCasambiDevicesFromCloud(driverId: string): Promise<CasambiCloudDiscoverResult> {
+  const res = await authed(`/v1/drivers/${driverId}/casambi/discover-from-cloud`, { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Cloud device discovery failed."));
+  return (await res.json()) as CasambiCloudDiscoverResult;
+}
+
 // ── Supreme KNX Unified Device Intelligence — Discovery Queue (authenticated) ─────
 // Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
 // invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines

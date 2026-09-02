@@ -112,6 +112,10 @@ export const DiscoveredDeviceView = z.object({
   /** A real, wire-reported brand string (§ Discover Devices enrichment) — e.g. fetched from
    * a unit's UPnP description XML. Absent for sources that report no such field. */
   manufacturer: z.string().optional(),
+  /** § Casambi Local Gateway — Cloud device discovery: true when this device is known only from
+   * the Cloud API and hasn't yet had its identity confirmed by a real local signal (e.g. Casambi
+   * Local mode's first UDP packet). Absent/false for every other discovery source. */
+  awaitingLocalSignal: z.boolean().optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 

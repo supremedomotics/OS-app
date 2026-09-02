@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, StatusDot } from "@supreme/aureon-web";
 import { useLive, type DriverConnectionState } from "./live.js";
 import {
+  type CasambiCloudDiscoverResult,
   type CasambiDiagnostics,
   type CasambiNameSyncResult,
   type CasambiTestConnectionResult,
   type CasambiUdpPacketTrace,
   connectDriver,
+  discoverCasambiDevicesFromCloud,
   discoverCasambiLocalGateway,
   discoverKnxGateways,
   type DriverConfigField,
@@ -589,10 +591,11 @@ function CasambiLocalGatewayPanel({
   values: Record<string, unknown>;
   onChange: (key: string, value: unknown) => void;
 }) {
-  const [busy, setBusy] = useState<"discover" | "test" | "sync" | null>(null);
+  const [busy, setBusy] = useState<"discover" | "test" | "sync" | "clouddiscover" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [result, setResult] = useState<CasambiTestConnectionResult | null>(null);
   const [syncResult, setSyncResult] = useState<CasambiNameSyncResult | null>(null);
+  const [cloudDiscoverResult, setCloudDiscoverResult] = useState<CasambiCloudDiscoverResult | null>(null);
 
   async function discover() {
     setBusy("discover");
@@ -651,6 +654,20 @@ function CasambiLocalGatewayPanel({
     }
   }
 
+  async function discoverDevicesFromCloud() {
+    setBusy("clouddiscover");
+    setNote(null);
+    setCloudDiscoverResult(null);
+    try {
+      const res = await discoverCasambiDevicesFromCloud(driverId);
+      setCloudDiscoverResult(res);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Cloud device discovery failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   // apiKey is the only deployment-wide Casambi credential (§ Casambi fleet-wide env-var default)
   // and never renders as a field, in Cloud mode or here. email/password/networkId vary per
   // project, so they ARE shown and saved onto this driver instance's own config — taking
@@ -673,27 +690,45 @@ function CasambiLocalGatewayPanel({
       {result && <CasambiTestConnectionReport res={result} />}
       {cloudSyncFields.length > 0 && (
         <div className="drv-config" style={{ marginTop: 14 }}>
-          <span className="lbl">Cloud name sync (optional)</span>
+          <span className="lbl">Cloud account actions (optional)</span>
           <p className="help">
             The Lithernet Gateway's own UDP/REST protocol has no field for a fixture's real name —
             checked against every locally-reachable interface (UDP, the full WebAPI, the web UI,
-            .ceg export, the Diagnostics console). Nothing here changes how devices are discovered
-            or controlled — that stays on Local UDP, unconditionally.
+            .ceg export, the Diagnostics console). Command, feedback, and live state always stay
+            on Local UDP, unconditionally — nothing below ever changes that.
           </p>
           <p className="help">
             The Casambi API key is configured once for this deployment. Enter this job's network
             admin email/password below (and optionally which network its fixtures live in, if the
-            account manages more than one), then click "Sync names from Cloud."
+            account manages more than one), then click "Save configuration," then either action.
           </p>
           {cloudSyncFields.map((f) => (
             <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => onChange(f.key, v)} />
           ))}
-          <p className="help">Click "Save configuration" below first — the sync reads the saved email/password/network id, not what's typed above.</p>
+          <p className="help">Click "Save configuration" below first — both actions read the saved email/password/network id, not what's typed above.</p>
           <div className="drv-actions" style={{ marginTop: 8 }}>
+            <button type="button" disabled={busy !== null} onClick={() => void discoverDevicesFromCloud()}>
+              {busy === "clouddiscover" ? "Discovering…" : "Discover devices from Cloud"}
+            </button>
             <button type="button" disabled={busy !== null} onClick={() => void syncNames()}>
               {busy === "sync" ? "Syncing…" : "Sync names from Cloud"}
             </button>
           </div>
+          <p className="help">
+            "Discover devices" pre-fills the fixture list with real names from your Casambi account,
+            before local UDP has heard from them — each still shows "Awaiting local signal" until
+            it actually sends its first packet on this LAN (a physical action, e.g. toggling it).
+            "Sync names" only renames fixtures already discovered locally; use Discover first for a
+            large job so you don't have to trigger every fixture by hand just to see it in the list.
+          </p>
+          {cloudDiscoverResult && (
+            <p className="muted">
+              Discovered {cloudDiscoverResult.discovered} new fixture{cloudDiscoverResult.discovered === 1 ? "" : "s"} of{" "}
+              {cloudDiscoverResult.total} in the Cloud account{cloudDiscoverResult.networkName ? ` "${cloudDiscoverResult.networkName}"` : ""}.
+              {cloudDiscoverResult.discovered < cloudDiscoverResult.total &&
+                " The rest were already known locally."}
+            </p>
+          )}
           {syncResult && (
             <p className="muted">
               Matched {syncResult.matched} of {syncResult.total} Cloud fixture{syncResult.total === 1 ? "" : "s"} to

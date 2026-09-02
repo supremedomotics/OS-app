@@ -272,6 +272,21 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
   // deployment time, this makes the sync work with no typing in the UI for every hub in the
   // fleet, while never putting a real credential in source control — see SESSION_HANDOFF.md for
   // why a hardcoded default was explicitly rejected in favor of this.
+  // § Shared by both Casambi Local Gateway Cloud actions (name sync + device discovery) — same
+  // driver-instance-config-then-fleet-default credential precedence, so it isn't duplicated.
+  function resolveCreds(entryConfig: Record<string, unknown>) {
+    const fleetDefault =
+      ctx.config.casambiApiKey && ctx.config.casambiEmail && ctx.config.casambiPassword
+        ? {
+            apiKey: ctx.config.casambiApiKey,
+            email: ctx.config.casambiEmail,
+            password: ctx.config.casambiPassword,
+            ...(ctx.config.casambiNetworkId ? { networkId: ctx.config.casambiNetworkId } : {}),
+          }
+        : undefined;
+    return resolveCasambiCloudCredentials(entryConfig, fleetDefault);
+  }
+
   app.post<{ Params: { id: string } }>("/v1/drivers/:id/casambi/sync-names", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
@@ -281,17 +296,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       const driver = ctx.sil.getNativeDriver("casambi");
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
-      const cfg = entry.config as Record<string, unknown>;
-      const fleetDefault =
-        ctx.config.casambiApiKey && ctx.config.casambiEmail && ctx.config.casambiPassword
-          ? {
-              apiKey: ctx.config.casambiApiKey,
-              email: ctx.config.casambiEmail,
-              password: ctx.config.casambiPassword,
-              ...(ctx.config.casambiNetworkId ? { networkId: ctx.config.casambiNetworkId } : {}),
-            }
-          : undefined;
-      const creds = resolveCasambiCloudCredentials(cfg, fleetDefault);
+      const creds = resolveCreds(entry.config as Record<string, unknown>);
       if (!creds) {
         throw new SupremeError(
           "validation_failed",
@@ -299,6 +304,34 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         );
       }
       const result = await driver.syncNamesFromCloud(creds);
+      reply.send(result);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Local Gateway — Cloud device discovery: pre-populates the device list with real
+  // names from the Cloud account, honestly marked "awaiting local signal" until each unit's
+  // first genuine local UDP packet confirms it (see CasambiProtocolDriver.discoverFromCloud's own
+  // doc comment). Command/feedback for these devices, once bound, still goes exclusively through
+  // Local UDP — never through this Cloud session, which is discarded immediately after the fetch.
+  app.post<{ Params: { id: string } }>("/v1/drivers/:id/casambi/discover-from-cloud", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+      const creds = resolveCreds(entry.config as Record<string, unknown>);
+      if (!creds) {
+        throw new SupremeError(
+          "validation_failed",
+          "Casambi Cloud API key, email, and password are required to discover devices — set them on this driver, or configure SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD as a deployment-wide default.",
+        );
+      }
+      const result = await driver.discoverFromCloud(creds);
       reply.send(result);
     } catch (err) {
       sendError(reply, err);
@@ -797,12 +830,58 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     );
   };
 
+  // § P0.32 — the metadata-only preParsing hook above proved this route's request STREAM
+  // itself is where a live stall happens (preParsing fires, preValidation never does) —
+  // it cannot say whether the raw bytes ever fully arrive, or arrive but the parser never
+  // finishes. Fastify's `preParsing` hook is the one official place that can see (and,
+  // via `done(null, newStream)`, transparently re-wrap) the actual raw request stream
+  // BEFORE any parser touches it — this is a passthrough Transform that counts
+  // bytes/chunks and logs stream lifecycle events, changing nothing about the data itself.
+  const knxStreamTraceHook = async (
+    req: import("fastify").FastifyRequest,
+    _reply: import("fastify").FastifyReply,
+    payload: NodeJS.ReadableStream,
+  ): Promise<NodeJS.ReadableStream> => {
+    const { Transform } = await import("node:stream");
+    const expected = Number(req.headers["content-length"]) || null;
+    let bytesReceived = 0;
+    let chunks = 0;
+    let firstChunkAt: number | null = null;
+    const startedAt = Date.now();
+    req.log.info({ stage: "KNX_TRACE preParsing", reqId: req.id, contentLength: expected }, "knx queue/job stream trace");
+    const counter = new Transform({
+      transform(chunk, _enc, cb) {
+        if (firstChunkAt === null) firstChunkAt = Date.now();
+        chunks += 1;
+        bytesReceived += chunk.length;
+        cb(null, chunk);
+      },
+    });
+    counter.on("end", () => {
+      req.log.info(
+        { stage: "KNX_TRACE body_end", reqId: req.id, bytesReceived, expected, chunks, durationMs: Date.now() - startedAt, firstChunkDelayMs: firstChunkAt ? firstChunkAt - startedAt : null },
+        "knx queue/job stream trace",
+      );
+    });
+    counter.on("close", () => {
+      req.log.info({ stage: "KNX_TRACE body_close", reqId: req.id, bytesReceived, expected, chunks }, "knx queue/job stream trace");
+    });
+    counter.on("error", (err) => {
+      req.log.info({ stage: "KNX_TRACE body_error", reqId: req.id, bytesReceived, expected, chunks, error: err.message }, "knx queue/job stream trace");
+    });
+    payload.on("aborted", () => {
+      req.log.info({ stage: "KNX_TRACE body_aborted", reqId: req.id, bytesReceived, expected, chunks, durationMs: Date.now() - startedAt }, "knx queue/job stream trace");
+    });
+    payload.pipe(counter);
+    return counter;
+  };
+
   app.post(
     "/v1/commissioning/knx/queue/job",
     {
       bodyLimit: ETS_IMPORT_BODY_LIMIT,
       onRequest: knxTraceHook("onRequest"),
-      preParsing: knxTraceHook("preParsing"),
+      preParsing: knxStreamTraceHook,
       preValidation: knxTraceHook("preValidation"),
       preHandler: knxTraceHook("preHandler"),
     },

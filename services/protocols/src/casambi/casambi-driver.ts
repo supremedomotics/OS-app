@@ -124,6 +124,15 @@ export interface CasambiNameSyncResult {
   networkName: string | null;
 }
 
+/** Result of {@link CasambiProtocolDriver.discoverFromCloud} — how many previously-unknown Cloud
+ * units were added as pending (`awaitingLocalSignal`) devices, out of how many the Cloud network
+ * reports in total. `discovered < total` is expected when some units were already known locally. */
+export interface CasambiCloudDiscoverResult {
+  discovered: number;
+  total: number;
+  networkName: string | null;
+}
+
 /** Live health snapshot for monitoring/telemetry (no secrets). */
 export interface CasambiHealth {
   connectionType: CasambiConnectionMode;
@@ -156,6 +165,14 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private readonly units = new Map<number, CasambiUnit>();
   /** Group id → group (for auto room mapping from group names). */
   private readonly groups = new Map<number, CasambiGroup>();
+  /** § Casambi Local Gateway — Cloud device discovery. Unit ids added to `units` by
+   * {@link discoverFromCloud} that have NOT yet had a real local UDP signal applied — i.e. known
+   * to exist (real id/name/controls from the Cloud account) but never actually heard from on this
+   * LAN. `applyUnit` (the one path every genuine local signal flows through) clears an id from
+   * this set the moment a real packet arrives, so it always reflects live truth, never a stale
+   * guess. `discover()` reports this honestly via `raw.awaitingLocalSignal` — never fabricated as
+   * "online" or given fake state before the hardware has actually said anything. */
+  private readonly cloudOnlyUnitIds = new Set<number>();
 
   private session: CasambiSession | null = null;
   private wire: CasambiWire | null = null;
@@ -289,7 +306,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       // Late discovery before the first fetch — pull the model on demand.
       await this.loadNetwork();
     }
-    return buildDiscoveredDevices(this.units, this.groups);
+    return buildDiscoveredDevices(this.units, this.groups, this.cloudOnlyUnitIds);
   }
 
   /**
@@ -327,6 +344,51 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       matched += 1;
     }
     return { matched, total: network.units.length, networkName: session.networkName ?? null };
+  }
+
+  /**
+   * § Casambi Local Gateway — Cloud device discovery. Local UDP discovery is progressive and
+   * requires physical action (a unit only appears once it sends its first `NotifyControlValues`
+   * packet — e.g. someone toggles it), which makes commissioning a large fixture list slow and
+   * error-prone. This opens the SAME kind of REST-only session `syncNamesFromCloud` does (no
+   * WebSocket, no `openWire`, discarded immediately after the fetch) and adds a `units` entry for
+   * every Cloud-reported fixture NOT already known locally, using the Cloud API's own `controls`
+   * array (already sufficient for `capabilitiesFromUnit` — no local signal needed to know a unit
+   * is a dimmer/CCT/RGB fixture, only to know it's genuinely present and reachable on this LAN).
+   *
+   * Never overwrites a unit already known from a real local signal (checked via `this.units.has`)
+   * — Cloud data can lag or omit fields a live signal already reported correctly, so live-known
+   * state always wins. Newly-added units are tracked in `cloudOnlyUnitIds` and reported via
+   * `discover()`'s `raw.awaitingLocalSignal: true` — visible immediately with a real name, but
+   * never claimed as commanded, live, or bound until an actual local UDP packet confirms it (see
+   * `applyUnit`, the one place that clears an id from that set). Command/feedback for these
+   * devices, once bound, still goes exclusively through Local UDP — this method only seeds
+   * metadata, never becomes an ongoing dependency on the Cloud connection.
+   *
+   * Throws under the same conditions as `syncNamesFromCloud` (Cloud mode already discovers from
+   * its own live session; a failed Cloud request is never a silent no-op).
+   */
+  async discoverFromCloud(
+    creds: CasambiCredentials,
+    transport: CasambiTransport = new HttpCasambiTransport({ apiKey: creds.apiKey }),
+  ): Promise<CasambiCloudDiscoverResult> {
+    if (this.mode !== "local") {
+      throw new Error("casambi: discoverFromCloud is only meaningful in Local mode — Cloud mode already discovers units from its own live session");
+    }
+    const session = await transport.createSession(creds);
+    const network = await transport.fetchNetwork(session);
+    // Local UDP carries no group information at all, so this is the only source Local mode ever
+    // has for room auto-mapping (buildDiscoveredDevices' `raw.room`) — seeded here as a side
+    // effect of the same fetch, never a separate ongoing Cloud dependency.
+    for (const group of network.groups) this.groups.set(group.id, group);
+    let discovered = 0;
+    for (const cloudUnit of network.units) {
+      if (this.units.has(cloudUnit.id)) continue; // already known — never overwrite live/local data
+      this.units.set(cloudUnit.id, cloudUnit);
+      this.cloudOnlyUnitIds.add(cloudUnit.id);
+      discovered += 1;
+    }
+    return { discovered, total: network.units.length, networkName: session.networkName ?? null };
   }
 
   onState(listener: StateListener): () => void {
@@ -605,6 +667,9 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   /** Merge a unit into the cache (keeping previously-known fields) and emit any state changes. */
   private applyUnit(unit: CasambiUnit): void {
+    // A real signal for this unit just arrived — it's no longer merely Cloud-known, it's been
+    // genuinely confirmed on this LAN. See cloudOnlyUnitIds' own doc comment.
+    this.cloudOnlyUnitIds.delete(unit.id);
     const prevUnit = this.units.get(unit.id);
     const merged = this.mergeUnit(unit);
     if (typeof merged.activeSceneId === "number" && merged.activeSceneId !== prevUnit?.activeSceneId) {

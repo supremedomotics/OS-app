@@ -30,6 +30,9 @@ type Discovered = {
    * never guessed, for sources that don't report one. */
   manufacturer?: string;
   bindConfig?: Record<string, unknown>;
+  /** § Casambi Local Gateway — Cloud device discovery: known only from the Cloud API, not yet
+   * confirmed by a real local signal (e.g. Casambi Local mode's first UDP packet). */
+  awaitingLocalSignal?: boolean;
 };
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 type DriverStatus = "pending" | "scanning" | "complete" | "failed" | "not_selected";
@@ -513,7 +516,13 @@ function FoundDevice({
             {driver ? <span className="tag ok">Extension: {driver.name}{driver.installed ? "" : " (auto-install)"}</span> : <span className="tag">No matching extension</span>}
           </span>
         </span>
-        <span className="drv-badge ok">Found</span>
+        {device.awaitingLocalSignal ? (
+          <span className="drv-badge warning" title="Known from the Casambi Cloud account; hasn't sent a packet on this LAN yet — trigger it once (e.g. toggle the fixture) to confirm it.">
+            Awaiting local signal
+          </span>
+        ) : (
+          <span className="drv-badge ok">Found</span>
+        )}
       </button>
       {open && (
         <div className="drv-detail">

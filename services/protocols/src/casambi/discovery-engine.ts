@@ -39,6 +39,11 @@ export async function stopLocalDiscovery(udp: Pick<CasambiUdpEngine, "send">, ne
 export function buildDiscoveredDevices(
   units: ReadonlyMap<number, CasambiUnit>,
   groups: ReadonlyMap<number, CasambiGroup>,
+  /** § Casambi Local Gateway — Cloud device discovery: unit ids known only from the Cloud API,
+   * never yet confirmed by a real local UDP signal (see casambi-driver.ts's `cloudOnlyUnitIds`).
+   * Reported honestly via `raw.awaitingLocalSignal`, never silently treated as live. Optional —
+   * Cloud-mode discovery and existing callers with no such distinction simply omit it. */
+  cloudOnlyUnitIds?: ReadonlySet<number>,
 ): DiscoveredDevice[] {
   const out: DiscoveredDevice[] = [];
   for (const unit of units.values()) {
@@ -61,6 +66,7 @@ export function buildDiscoveredDevices(
         groupId: unit.groupId ?? 0,
         room: group?.name ?? null,
         type: unit.type ?? null,
+        awaitingLocalSignal: cloudOnlyUnitIds?.has(unit.id) ?? false,
       },
     });
   }
