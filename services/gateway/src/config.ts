@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { resolveEmbeddedCasambiApiKey } from "./casambi-embedded-key.js";
 
 /**
  * Gateway configuration. All values come from the hub environment; sensible
@@ -267,7 +268,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     lutronUsername: env.SUPREME_LUTRON_USERNAME ?? "lutron",
     lutronPassword: secret(env, "SUPREME_LUTRON_PASSWORD") ?? "integration",
     tuyaEnabled: env.SUPREME_TUYA_ENABLED === "1" || env.SUPREME_TUYA_ENABLED === "true",
-    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") ?? "",
+    // § Standalone per-hub Casambi API key — env/`_FILE` always wins when a deployment sets it
+    // explicitly; otherwise falls back to the ciphertext-in-source default (see
+    // casambi-embedded-key.ts) so a fresh install needs zero manual credential step.
+    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") ?? resolveEmbeddedCasambiApiKey() ?? "",
     casambiEmail: env.SUPREME_CASAMBI_EMAIL ?? "",
     casambiPassword: secret(env, "SUPREME_CASAMBI_PASSWORD") ?? "",
     casambiNetworkId: env.SUPREME_CASAMBI_NETWORK_ID ?? "",
