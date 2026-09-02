@@ -53,7 +53,7 @@ main() {
   confirm
 
   log_step "Stopping SupremeOS-owned services"
-  for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "$SUPREME_HA_SERVICE" supreme-nats; do
+  for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" supreme-nats; do
     systemctl stop "$svc" 2>/dev/null || true
     systemctl disable "$svc" 2>/dev/null || true
   done

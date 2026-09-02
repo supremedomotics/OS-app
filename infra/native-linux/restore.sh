@@ -48,7 +48,7 @@ main() {
   [ -f "${work}/MANIFEST.txt" ] && cat "${work}/MANIFEST.txt"
 
   log_step "Stopping SupremeOS-owned services"
-  for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "${SUPREME_HA_SERVICE}" supreme-nats mosquitto; do
+  for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" supreme-nats mosquitto; do
     systemctl stop "$svc" 2>/dev/null || true
   done
 
@@ -99,7 +99,7 @@ main() {
 
   log_step "Restarting services"
   systemctl daemon-reload
-  for svc in supreme-nats mosquitto "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_HA_SERVICE}"; do
+  for svc in supreme-nats mosquitto "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
     systemctl restart "$svc" 2>/dev/null || log_warn "Could not restart $svc — check: journalctl -u $svc"
   done
   systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true

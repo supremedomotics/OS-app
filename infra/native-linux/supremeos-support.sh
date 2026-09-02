@@ -73,7 +73,7 @@ else
 fi
 
 SVC="${WORK}/service-status.txt"
-for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}" supreme-nats "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "$SUPREME_HA_SERVICE"; do
+for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}" supreme-nats "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
   collect "$SVC" "systemctl status ${svc}" systemctl status "$svc" --no-pager -l
 done
 

@@ -156,9 +156,6 @@ detect_and_repair() {
     for svc in "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
       systemctl_restart "$svc" 2>/dev/null || note_issue "Could not restart ${svc} — see: journalctl -u ${svc} -n 50"
     done
-    if [ "${SUPREME_INSTALL_HA:-0}" = "1" ]; then
-      systemctl_restart "$SUPREME_HA_SERVICE" 2>/dev/null || note_issue "Could not restart ${SUPREME_HA_SERVICE}"
-    fi
     note_fixed "Services restarted"
   else
     log_warn "systemd is not live in this environment — cannot restart real services here."
