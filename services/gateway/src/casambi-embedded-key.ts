@@ -20,7 +20,7 @@ import { decryptSecret, isEncryptedSecret } from "@supreme/crypto";
 const EMBEDDED_APP_KEY = "p3V5HQ4IcPn+zJEY192klcshO8fzFaXfVjNPKJ3AuQM=";
 
 /** Fill via `node tools/encrypt-casambi-key.mjs "<real key>"` — see that script's own header. */
-const ENCRYPTED_CASAMBI_API_KEY = "";
+const ENCRYPTED_CASAMBI_API_KEY = "enc:v1:bHoU6xqajk03/Aso:rF8PTGKOfEjT0ep86DvhyQ==:EDyfhVFbBbl33EOYgEz28hSsr8NBlTdtsJrJBuB3YM/3b1FlYwagzpJwm5I36sykD1zeqnKzfIfG19twkpUa9Q==";
 
 export function resolveEmbeddedCasambiApiKey(): string | undefined {
   if (!isEncryptedSecret(ENCRYPTED_CASAMBI_API_KEY)) return undefined;
