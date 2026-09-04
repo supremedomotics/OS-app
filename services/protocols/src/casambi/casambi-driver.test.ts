@@ -688,6 +688,24 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       await driver.disconnect();
     });
 
+    it("§ live-confirmed fix — fetchNetwork alone carries no controls (real Casambi API shape: GET /v1/networks/{id} is structural-only, controls only come from GET /v1/networks/{id}/state); discoverFromCloud must merge in state's controls or every unit stays capability-less", async () => {
+      const { driver } = makeLocalDriver();
+      await driver.connect();
+      const structuralOnlyNetwork: CasambiNetwork = {
+        units: [{ id: 45, name: "Ceiling", type: "Luminaire", groupId: 1 }], // no `controls` at all
+        groups: [],
+      };
+      const stateUnits: CasambiUnit[] = [
+        { id: 45, controls: [{ type: "Dimmer", value: 0 }, { type: "CCT", value: 4000, min: 2700, max: 6000 }] },
+      ];
+      const cloudTransport = new FakeCasambiTransport(structuralOnlyNetwork, stateUnits);
+      await driver.discoverFromCloud(creds, cloudTransport);
+
+      const after = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
+      expect(after.capabilities).toEqual(["brightness", "color"]);
+      await driver.disconnect();
+    });
+
     it("never opens a WebSocket wire — REST session + fetch only", async () => {
       const { driver } = makeLocalDriver();
       await driver.connect();

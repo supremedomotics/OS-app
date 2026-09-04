@@ -381,8 +381,18 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // has for room auto-mapping (buildDiscoveredDevices' `raw.room`) — seeded here as a side
     // effect of the same fetch, never a separate ongoing Cloud dependency.
     for (const group of network.groups) this.groups.set(group.id, group);
+    // § live-confirmed fix — `GET /v1/networks/{id}` (fetchNetwork) only returns structural
+    // fields (name/id/fixtureId/type) per Casambi's own docs; the `controls` array (Dimmer/CCT/
+    // Color, i.e. the thing that actually determines "dimmable" vs "tunable white") only comes
+    // from `GET /v1/networks/{id}/state` (fetchState) — the same call Cloud mode's own seedState()
+    // already makes at connect. Without this, every unit discovered from Cloud in Local mode was
+    // structurally correct but permanently capability-less beyond whatever Local UDP happened to
+    // report on its own. Merge state's controls onto each cloud unit before recording it.
+    const stateById = new Map((await transport.fetchState(session)).map((u) => [u.id, u]));
     let discovered = 0;
-    for (const cloudUnit of network.units) {
+    for (let cloudUnit of network.units) {
+      const state = stateById.get(cloudUnit.id);
+      if (state?.controls) cloudUnit = { ...cloudUnit, controls: state.controls };
       const existing = this.units.get(cloudUnit.id);
       if (!existing) {
         this.units.set(cloudUnit.id, cloudUnit);
