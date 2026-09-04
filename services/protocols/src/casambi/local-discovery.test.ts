@@ -57,6 +57,15 @@ describe("updateUnitFromControlValues", () => {
     expect(unit.dimLevel).toBe(1);
   });
 
+  it("maps color temperature (type 10) into a `colortemperature` control, surfacing the fixture as tunable white", () => {
+    const unit = updateUnitFromControlValues(5, [cv(1, 128), cv(10, 0x80)]);
+    expect(unit.controls).toEqual([{ type: "dimmer", value: 128 / 255 }, { type: "colortemperature", value: 0x80 }]);
+    expect(capabilitiesFromUnit(unit)).toEqual(["brightness", "color"]);
+    // The reported byte is normalized-to-fixture-range (§ manual p.223), not literal Kelvin —
+    // never fabricate a Kelvin reading from it.
+    expect(statesFromUnit(unit).find((s) => s.capability === "color")?.state).toMatchObject({ kelvin: null });
+  });
+
   it("a dimmable+sensor mix produces the same states via statesFromUnit as a Cloud unit would", () => {
     const unit = updateUnitFromControlValues(5, [cv(1, 128)]);
     const states = statesFromUnit(unit);
