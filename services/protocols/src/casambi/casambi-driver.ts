@@ -383,10 +383,25 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     for (const group of network.groups) this.groups.set(group.id, group);
     let discovered = 0;
     for (const cloudUnit of network.units) {
-      if (this.units.has(cloudUnit.id)) continue; // already known — never overwrite live/local data
-      this.units.set(cloudUnit.id, cloudUnit);
-      this.cloudOnlyUnitIds.add(cloudUnit.id);
-      discovered += 1;
+      const existing = this.units.get(cloudUnit.id);
+      if (!existing) {
+        this.units.set(cloudUnit.id, cloudUnit);
+        this.cloudOnlyUnitIds.add(cloudUnit.id);
+        discovered += 1;
+        continue;
+      }
+      // § live-confirmed fix — a unit Local UDP already saw (even just one dimmer packet, before
+      // its own colorTemperature/CCT NotifyControlValues arrived) was being left permanently
+      // "dimmable" forever: `discoverFromCloud` used to skip it outright, so the Cloud REST
+      // account's own `controls` (which DOES carry the full CCT/RGB set immediately) never
+      // reached it. Never clobber real local state (dimLevel/on/existing control values) —
+      // only add control TYPES local hasn't reported yet, so capability detection (`cct` etc.)
+      // is correct right away without discarding live feedback already recorded.
+      const knownTypes = new Set((existing.controls ?? []).map((c) => c.type));
+      const missing = (cloudUnit.controls ?? []).filter((c) => !knownTypes.has(c.type));
+      if (missing.length > 0) {
+        this.units.set(cloudUnit.id, { ...existing, controls: [...(existing.controls ?? []), ...missing] });
+      }
     }
     return { discovered, total: network.units.length, networkName: session.networkName ?? null };
   }

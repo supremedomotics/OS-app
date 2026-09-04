@@ -657,6 +657,22 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       await driver.disconnect();
     });
 
+    it("§ live-confirmed fix — adds the Cloud-known CCT control onto a unit local UDP already saw as dimmer-only, instead of leaving it permanently misclassified as plain dimmable", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      // Local UDP hears unit 45 first — only its dimmer channel (type 1) has reported so far,
+      // the CCT NotifyControlValues packet (type 10) hasn't arrived yet.
+      socket.receive("0.70.4.4b.2d.1.c8\r\n");
+      const cloudTransport = new FakeCasambiTransport(NETWORK); // unit 45 = Dimmer + CCT, unit 46 = new
+      const result = await driver.discoverFromCloud(creds, cloudTransport);
+      expect(result.discovered).toBe(1); // only unit 46 is newly discovered — 45 was already known
+
+      const after = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
+      expect(after.capabilities).toContain("color"); // CCT capability now present, not just brightness
+      expect(after.raw.awaitingLocalSignal).toBe(false); // still genuinely local-known, never marked pending
+      await driver.disconnect();
+    });
+
     it("never opens a WebSocket wire — REST session + fetch only", async () => {
       const { driver } = makeLocalDriver();
       await driver.connect();
