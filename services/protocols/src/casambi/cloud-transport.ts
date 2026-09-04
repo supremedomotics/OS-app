@@ -20,7 +20,10 @@ export interface CasambiCredentials {
   email: string;
   /** Network admin password. */
   password: string;
-  /** Optional network entity id — when set, the faster per-network session endpoint is used. */
+  /** Optional network entity id — when set, passed as the `networkId` QUERY parameter on session
+   * creation (per Casambi's own REST API docs: developer.casambi.com/#rest-api — "it is also
+   * possible to give a network entity ID as a URL parameter to limit the request to that
+   * network") to narrow the session to that one network, rather than a path segment. */
   networkId?: string;
 }
 
@@ -141,10 +144,14 @@ export class HttpCasambiTransport implements CasambiTransport {
   }
 
   async createSession(creds: CasambiCredentials): Promise<CasambiSession> {
-    const path = creds.networkId
-      ? `/v1/networks/${encodeURIComponent(creds.networkId)}/session`
-      : "/v1/networks/session";
-    const res = await this.fetchImpl(`${this.restBase}${path}`, {
+    // § live-confirmed fix — Casambi's own docs (developer.casambi.com/#rest-api) put the
+    // optional network id on this ONE endpoint as a `networkId` QUERY parameter, never a path
+    // segment — every other network-scoped endpoint (fetchNetwork, state) genuinely does use a
+    // path segment, which is what led this one astray. The wrong path (`/v1/networks/{id}/session`)
+    // 404s outright since no such route exists; live-confirmed on a real account with valid
+    // credentials.
+    const query = creds.networkId ? `?networkId=${encodeURIComponent(creds.networkId)}` : "";
+    const res = await this.fetchImpl(`${this.restBase}/v1/networks/session${query}`, {
       method: "POST",
       headers: { "content-type": "application/json", "X-Casambi-Key": this.apiKey },
       body: JSON.stringify({ email: creds.email, password: creds.password }),
@@ -254,7 +261,9 @@ async function decodeMessage(data: unknown): Promise<CasambiEvent | null> {
 }
 
 function parseSession(body: Record<string, unknown>, networkId?: string): CasambiSession {
-  // Per-network endpoint returns a flat object; /networks/session returns a map keyed by network id.
+  // Per Casambi's own docs, /v1/networks/session (with or without a ?networkId= filter) always
+  // returns a map keyed by network id — this flat-object branch is defensive for an
+  // undocumented/legacy shape, never the expected one; harmless to keep either way.
   if (typeof body.sessionId === "string") {
     const id = typeof body.id === "string" ? body.id : networkId ?? String(body.id ?? "");
     return { sessionId: body.sessionId, networkId: id, networkName: strOrUndef(body.name) };
