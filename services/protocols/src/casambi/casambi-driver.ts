@@ -704,7 +704,19 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // Events are complete for the state they carry; merge so static fields (name/type/fixture/group)
     // survive partial event payloads.
     const merged: CasambiUnit = { ...prev, ...unit };
-    if (!unit.controls && prev?.controls) merged.controls = prev.controls;
+    // § live-confirmed fix — a partial local update (e.g. only a dimmer-level packet, before the
+    // fixture's own colorTemperature packet has arrived) used to fully REPLACE `controls` with
+    // its own short list, silently dropping a CCT/color control `discoverFromCloud` had already
+    // merged in — a unit could go back to "dimmable only" after every plain brightness change.
+    // Union by control type instead: keep every previously-known type, let this update's own
+    // entries (a real, fresher read) win for the types it actually reports.
+    if (unit.controls) {
+      const byType = new Map((prev?.controls ?? []).map((c) => [c.type, c]));
+      for (const c of unit.controls) byType.set(c.type, c);
+      merged.controls = [...byType.values()];
+    } else if (prev?.controls) {
+      merged.controls = prev.controls;
+    }
     this.units.set(unit.id, merged);
     return merged;
   }
