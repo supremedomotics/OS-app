@@ -26,6 +26,8 @@ export interface IIdentityStore {
    * devices/rooms/users alone never touches it. */
   deleteHome(): Promise<void>;
   findUserByEmail(email: string): Promise<User | null>;
+  /** § Real username login — see User.username's own doc comment. */
+  findUserByUsername(username: string): Promise<User | null>;
   getUser(id: UserId): Promise<User | null>;
   listUsers(): Promise<User[]>;
   putUser(user: User): Promise<void>;
@@ -227,6 +229,13 @@ export class InMemoryIdentityStore implements IIdentityStore {
     const needle = email.toLowerCase();
     for (const u of this.users.values()) {
       if (u.email.toLowerCase() === needle) return u;
+    }
+    return null;
+  }
+  async findUserByUsername(username: string): Promise<User | null> {
+    const needle = username.toLowerCase();
+    for (const u of this.users.values()) {
+      if (u.username?.toLowerCase() === needle) return u;
     }
     return null;
   }

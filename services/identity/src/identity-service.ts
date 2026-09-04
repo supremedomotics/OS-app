@@ -116,6 +116,9 @@ export class IdentityService {
     email: string;
     password: string;
     displayName: string;
+    /** § Real username login — the Setup Wizard's own "username" field, now persisted as a real
+     * login alias instead of being folded into displayName and discarded. */
+    username?: string | null;
   }): Promise<{ home: Home; master: User }> {
     if (await this.store.getHome()) {
       throw new SupremeError("conflict", "home is already commissioned");
@@ -129,6 +132,7 @@ export class IdentityService {
       id: userId,
       homeId,
       email: input.email,
+      username: input.username ?? null,
       phone: null,
       displayName: input.displayName,
       userType: "master",
@@ -164,16 +168,21 @@ export class IdentityService {
     displayName: string;
     userType: UserType;
     expiresAt?: string | null;
+    username?: string | null;
   }): Promise<User> {
     const home = await this.requireHome();
     this.enforcePasswordPolicy(input.password);
     if (await this.store.findUserByEmail(input.email)) {
       throw new SupremeError("conflict", "a user with that email already exists");
     }
+    if (input.username && (await this.store.findUserByUsername(input.username))) {
+      throw new SupremeError("conflict", "a user with that username already exists");
+    }
     const user: User = {
       id: newId("user") as UserId,
       homeId: home.id,
       email: input.email,
+      username: input.username ?? null,
       phone: null,
       displayName: input.displayName,
       userType: input.userType,
@@ -192,10 +201,14 @@ export class IdentityService {
     return user;
   }
 
-  async login(email: string, password: string, context: LoginContext = {}): Promise<LoginResponse> {
+  /** § Real username login — `identifier` may be an email OR a username (see User.username's own
+   * doc comment). Tried as an email first (the common case, and the one every existing account
+   * has); only tried as a username when the email lookup misses, so a username that happens to
+   * collide with someone else's email can never shadow that email login. */
+  async login(identifier: string, password: string, context: LoginContext = {}): Promise<LoginResponse> {
     // Brute-force lockout (§ Authentication): after too many consecutive failures the identifier is
     // locked for a cooldown, whether or not the account exists (also blunts enumeration).
-    const key = email.trim().toLowerCase();
+    const key = identifier.trim().toLowerCase();
     const nowMs = Date.now();
     const lock = this.loginFailures.get(key);
     if (lock && lock.lockedUntil > nowMs) {
@@ -203,7 +216,7 @@ export class IdentityService {
       throw new SupremeError("forbidden", `too many failed attempts — try again in ${mins} minute${mins === 1 ? "" : "s"}`);
     }
 
-    const user = await this.store.findUserByEmail(email);
+    const user = (await this.store.findUserByEmail(identifier)) ?? (await this.store.findUserByUsername(identifier));
     const cred = user ? await this.store.getCredential(user.id) : null;
 
     // Always run a verification to keep timing uniform whether or not the user exists.

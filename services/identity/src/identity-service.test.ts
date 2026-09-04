@@ -47,6 +47,47 @@ describe("login + token lifecycle", () => {
     expect(pair.accessToken).toBeTruthy();
   });
 
+  it("§ live-confirmed fix — logs in with the account's username, not just its email", async () => {
+    const s = svc();
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+      username: "murs",
+    });
+    const byUsername = await s.login("murs", "correct horse battery staple");
+    expect(byUsername.status).toBe("ok");
+    const byEmail = await s.login("owner@example.com", "correct horse battery staple");
+    expect(byEmail.status).toBe("ok");
+  });
+
+  it("username lookup is case-insensitive, mirroring email lookup", async () => {
+    const s = svc();
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+      username: "MursAdmin",
+    });
+    const res = await s.login("mursadmin", "correct horse battery staple");
+    expect(res.status).toBe("ok");
+  });
+
+  it("an account with no username set still logs in by email only (no regression for existing accounts)", async () => {
+    const s = svc();
+    await s.commission({
+      homeName: "Penthouse",
+      email: "owner@example.com",
+      password: "correct horse battery staple",
+      displayName: "Owner",
+    });
+    const res = await s.login("owner@example.com", "correct horse battery staple");
+    expect(res.status).toBe("ok");
+    await expect(s.login("owner", "correct horse battery staple")).rejects.toThrow(/invalid email or password/);
+  });
+
   it("rotates refresh tokens and detects reuse of a rotated token", async () => {
     const s = svc();
     await s.commission({

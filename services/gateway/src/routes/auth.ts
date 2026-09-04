@@ -47,10 +47,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.post("/v1/auth/login", authLimit, async (req, reply) => {
     try {
       const body = LoginRequest.parse(req.body);
-      // Accept a username or an email; accounts created from a bare username log in as
-      // `<username>@supreme.local` (mirrors the Setup Wizard), so normalize the same way.
-      const identifier = body.email.includes("@") ? body.email : `${body.email.trim()}@supreme.local`;
-      reply.send(await ctx.identity.login(identifier, body.password, loginContext(req)));
+      // § Real username login — identity.login() itself tries email first, then username (see
+      // its own doc comment); this route no longer needs to guess which one `body.email` is or
+      // synthesize a fake address for it.
+      reply.send(await ctx.identity.login(body.email, body.password, loginContext(req)));
     } catch (err) {
       sendError(reply, err);
     }

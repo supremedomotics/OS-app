@@ -542,6 +542,9 @@ export class AppContext {
         email: "owner@supreme.local",
         password: "supreme-owner-demo-pass",
         displayName: "Home Owner",
+        // § Real username login — lets dev/test log in with the bare "owner" alias genuinely,
+        // via the real username field, not the removed <username>@supreme.local address-guessing.
+        username: "owner",
       });
       home = commissioned.home;
       await seedDemoHome(ctx.home, home);
@@ -562,6 +565,8 @@ export class AppContext {
         password: "supreme@72",
         displayName: "Supreme Developer",
         userType: "master",
+        // § Real username login — same reasoning as the demo owner above.
+        username: "supreme",
       });
     } catch {
       // Already exists (or home not commissioned) — fine; this is best-effort dev convenience.
@@ -780,11 +785,15 @@ export class AppContext {
     // above; no synthesized "@supreme.local" fallback, since password recovery needs a
     // real address to send a reset to and a fabricated one silently defeats that.
     const loginEmail = input.email;
+    // § Real username login — persisted as its own field now (see identity.commission's own doc
+    // comment), not just folded into displayName and discarded. Still used as the displayName
+    // fallback too when no separate displayName was given, unchanged from before.
     const { home } = await this.identity.commission({
       homeName: input.systemName || "Supreme Residence",
       email: loginEmail,
       password: input.password,
       displayName: input.displayName?.trim() || input.username,
+      username: input.username || null,
     });
     // identity.commission() persists the home via the IDENTITY store; HomeService (which
     // /v1/home, /v1/rooms, /v1/devices all read from) has its own store and never learns

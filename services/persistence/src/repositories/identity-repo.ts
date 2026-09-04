@@ -14,6 +14,7 @@ interface UserRow {
   id: string;
   home_id: string;
   email: string;
+  username: string | null;
   phone: string | null;
   display_name: string;
   user_type: string;
@@ -45,6 +46,7 @@ export function rowToUser(r: UserRow): User {
     id: r.id as UserId,
     homeId: r.home_id as HomeId,
     email: r.email,
+    username: r.username,
     phone: r.phone,
     displayName: r.display_name,
     userType: r.user_type as User["userType"],
@@ -83,6 +85,13 @@ export class IdentityRepo implements IIdentityStore {
     );
     return rows[0] ? rowToUser(rows[0]) : null;
   }
+  async findUserByUsername(username: string): Promise<User | null> {
+    const { rows } = await this.db.query<UserRow>(
+      "SELECT * FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1",
+      [username],
+    );
+    return rows[0] ? rowToUser(rows[0]) : null;
+  }
   async getUser(id: UserId): Promise<User | null> {
     const { rows } = await this.db.query<UserRow>("SELECT * FROM users WHERE id=$1", [id]);
     return rows[0] ? rowToUser(rows[0]) : null;
@@ -93,14 +102,15 @@ export class IdentityRepo implements IIdentityStore {
   }
   async putUser(user: User): Promise<void> {
     await this.db.query(
-      `INSERT INTO users (id, home_id, email, phone, display_name, user_type, status, email_verified, created_at, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO users (id, home_id, email, username, phone, display_name, user_type, status, email_verified, created_at, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT (id) DO UPDATE SET
-         email=$3, phone=$4, display_name=$5, user_type=$6, status=$7, email_verified=$8, expires_at=$10`,
+         email=$3, username=$4, phone=$5, display_name=$6, user_type=$7, status=$8, email_verified=$9, expires_at=$11`,
       [
         user.id,
         user.homeId,
         user.email,
+        user.username,
         user.phone,
         user.displayName,
         user.userType,
