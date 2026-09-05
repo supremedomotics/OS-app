@@ -70,26 +70,29 @@ describe("localCommandToUdpPacket", () => {
   });
 
   describe("position (§ live-confirmed against a real Casambi curtain motor)", () => {
-    // Element index 1 is the POSITION SLIDER, and a slider element's value is the position itself
-    // on a 0-255 scale — live-confirmed: writing value 1 parked the curtain at 0.4% (1/255).
+    // Element index 1 is the POSITION SLIDER, and a slider element's value is the position itself.
+    // Written on a 0-254 scale because 255 is Casambi's reserved "no change" sentinel; the motor's
+    // own NOTIFICATIONS use the full 0-255 range (0x88 = 136 = the app's 53.3%).
     const args = (action: "open" | "close" | "set", position?: number) =>
       localCommandToUdpPacket(0, 5, { capability: "position", action, ...(position === undefined ? {} : { position }) }, null)!.args;
 
-    it("open drives the slider to full travel (255), not a flag value", () => {
-      expect(args("open")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 255]);
+    it("open drives the slider to full travel as 254 — never 255, which Casambi reserves as \"no change\"", () => {
+      // Live-confirmed: open sent as 255 was silently discarded and the curtain never moved.
+      expect(args("open")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 254]);
     });
 
     it("close drives the slider to zero", () => {
       expect(args("close")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]);
     });
 
-    it("set scales a 0-100 position onto the same 0-255 slider element", () => {
-      expect(args("set", 50)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 128]); // round(.5*255)
-      expect(args("set", 53.3)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 136]); // the app's own 53.3% → 136
+    it("set scales a 0-100 position onto the same slider element", () => {
+      expect(args("set", 50)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 127]); // round(.5*254)
+      // 30% is the value live-confirmed working on real hardware (settled at 31.4%).
+      expect(args("set", 30)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 76]);
     });
 
     it("clamps an out-of-range position rather than emitting a byte that would wrap", () => {
-      expect(args("set", 140)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 255]);
+      expect(args("set", 140)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 254]);
       expect(args("set", -20)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]);
     });
 

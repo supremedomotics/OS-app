@@ -89,7 +89,14 @@ export function localCommandToUdpPacket(
         : null;
       // "stop" has no documented element — never fabricated, surfaces as "unsupported command".
       if (pct === null) return null;
-      const value = Math.round((Math.min(100, Math.max(0, pct)) / 100) * 255);
+      // Scaled to 0-254, NOT 0-255: 255 is Casambi's reserved "no change" sentinel across value
+      // fields (§ System Manual 6.38 — "Level = 255 → Ignore level", "value 255 means 'no
+      // change'"), the same convention `encodeSetColorHueSat` already follows with its 0-254
+      // saturation and its `level ?? 255` opt-out. Live-confirmed both ways on real hardware: a
+      // 30% command (77) tracked correctly and settled at 31.4%, while "open" sent as 255 was
+      // silently discarded and the curtain never moved. 254 is full travel — the motor runs to
+      // its own limit switch regardless.
+      const value = Math.round((Math.min(100, Math.max(0, pct)) / 100) * 254);
       return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 1, value }], fadeMs ?? 0);
     }
     default:

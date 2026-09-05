@@ -169,14 +169,19 @@ Control-type matching is **case-insensitive**. A unit with no controls at all st
 | `brightness` on / off | `{ Dimmer: { value: 1\|0 } }` | `0x20`, level `255`/`0` |
 | `color` kelvin | `{ ColorTemperature:{value:K}, Colorsource:{source:"TW"} }` | `0x48` SetColorTemperature, Tc = real Kelvin |
 | `color` hue/sat | `{ RGB:{hue:0..1,sat:0..1}, Colorsource:{source:"RGB"} }` | `0x3D` SetColorHueSat, hue 16-bit, sat 0–254 |
-| `position` open | `{ Slider: { value: 100 } }` | `0x3F` SetTargetElements `[index 1, value 255]` |
+| `position` open | `{ Slider: { value: 100 } }` | `0x3F` SetTargetElements `[index 1, value 254]` |
 | `position` close | `{ Slider: { value: 0 } }` | `0x3F` SetTargetElements `[index 1, value 0]` |
-| `position` set % | `{ Slider: { value: pct } }` | `0x3F` `[index 1, round(pct/100*255)]` |
+| `position` set % | `{ Slider: { value: pct } }` | `0x3F` `[index 1, round(pct/100*254)]` |
 | `position` stop | ❌ null | ❌ null (no documented element) |
 
-Element **index 1 is the position slider**, and a slider element's value *is* the position on a
-0–255 scale — open and close are simply the two ends of its travel, not separate controls. This is
-live-confirmed: writing value `1` parked a real curtain at 0.4% (= 1/255).
+Element **index 1 is the position slider**, and a slider element's value *is* the position — open
+and close are simply the two ends of its travel, not separate controls.
+
+Writes are scaled to **0–254**, never 0–255: **255 is Casambi's reserved "no change" sentinel**
+("Level = 255 → Ignore level"; *"value 255 means 'no change'"*), the same convention
+`encodeSetColorHueSat` already follows. Live-confirmed both ways — a 30% command (`77`) tracked and
+settled at 31.4%, while open sent as `255` was silently discarded and the curtain never moved.
+Notifications, by contrast, use the full 0–255 range (`0x88` = 136 = the app's 53.3%).
 
 An unmapped command throws `casambi: unsupported command for <capability>` — it is never silently
 dropped and never fabricated.
@@ -378,6 +383,7 @@ These were all found against real hardware and are the reason several behaviours
 | `0x3E` vs `0x3F` ambiguity | System Manual 6.38 §5.12.2.2.18 states `0x3F` in both heading and body, confirming the encoder was already correct. |
 | Curtain parked at 0.4% whatever was commanded | Open/close were written as an on/off "press" (`value 1`). Element 1 is the *slider*, so the gateway applied 1 as a position — 1/255 = 0.39%. A slider element's value is the position itself. |
 | Curtain position always read as 100% | Cloud advertises `"Slider"` (min 0 / max 100) and Local builds `"slider"` (min 0 / max 255); controls were deduped by **case-sensitive** type, so both survived and state normalised against whichever came first. Now keyed by lowercased type. |
+| Curtain "open" did nothing while 30% worked | Open was scaled to `255`, which Casambi reserves as "no change" — the gateway discarded it. Position writes are now scaled to 0–254. |
 
 ---
 

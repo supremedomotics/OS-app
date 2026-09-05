@@ -320,9 +320,10 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await driver.connect();
     socket.sent.length = 0;
     await driver.command(dev, { capability: "position", action: "open" });
-    // 0x3F SetTargetElements: TargetType 1, TargetID 6, duration 0, then [Index=1, Value=0xFF]
-    // - element 1 is the position slider, and "open" is simply its full-travel value.
-    expect(socket.sent).toEqual(["0.72.7.3f.1.6.0.0.1.ff\r\n"]);
+    // 0x3F SetTargetElements: TargetType 1, TargetID 6, duration 0, then [Index=1, Value=0xFE]
+    // - element 1 is the position slider; "open" is full travel, capped at 254 because
+    // 255 is Casambi's reserved "no change" value and was live-confirmed to be discarded.
+    expect(socket.sent).toEqual(["0.72.7.3f.1.6.0.0.1.fe\r\n"]);
     await driver.disconnect();
   });
 
