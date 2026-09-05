@@ -300,7 +300,9 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     socket.sent.length = 0;
 
     await driver.command(dev, { capability: "onoff", action: "on" });
-    expect(socket.sent).toEqual(["0.72.4.20.ff.1.5\r\n"]);
+    // § live-confirmed fix — full-length 0x20 (explicit 0 Duration) so Target_Type/Target_ID land
+    // where the gateway actually reads them; the old short form broadcast to the whole network.
+    expect(socket.sent).toEqual(["0.72.6.20.ff.0.0.1.5\r\n"]);
     await driver.disconnect();
   });
 

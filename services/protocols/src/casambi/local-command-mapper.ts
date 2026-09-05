@@ -28,15 +28,25 @@ export function localCommandToUdpPacket(
   fadeMs?: number,
 ): CasambiPacket | null {
   switch (command.capability) {
+    // § live-confirmed fix — `fadeMs ?? 0`, never a bare `fadeMs`, on every 0x20 call below.
+    // 0x20's Duration field is *optional* per the doc (omit it and the packet length drops from
+    // 6 to 4), but a real Lithernet gateway parses the opcode positionally against the full
+    // layout the doc's own worked example uses (`0.72.6.20.ff.10.0.0.0`). Sent short, it reads
+    // our Target_Type/Target_ID bytes as Duration_low/Duration_high and finds no target at all —
+    // and an absent target is Target_Type 0 / Target_ID 0, i.e. BROADCAST. Live-confirmed on real
+    // hardware: `c.72.4.20.ff.1.18` (level, short form) lit every fixture in the network, while
+    // `0x48` colour commands — whose Duration is mandatory, so always full-length — targeted the
+    // exact same unit correctly. Sending an explicit 0 fade keeps the behaviour identical
+    // (instant) and puts the target bytes where the gateway actually looks for them.
     case "onoff": {
       const on = command.action === "on" ? true : command.action === "off" ? false : !(prev?.kind === "onoff" && prev.on);
-      return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, on ? 255 : 0, fadeMs);
+      return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, on ? 255 : 0, fadeMs ?? 0);
     }
     case "brightness": {
-      if (command.action === "off") return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, 0, fadeMs);
-      if (command.action === "on") return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, 255, fadeMs);
+      if (command.action === "off") return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, 0, fadeMs ?? 0);
+      if (command.action === "on") return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, 255, fadeMs ?? 0);
       const level = typeof command.level === "number" ? command.level : 100;
-      return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, Math.round((level / 100) * 255), fadeMs);
+      return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, Math.round((level / 100) * 255), fadeMs ?? 0);
     }
     case "color": {
       // 0x48's Tc field is real Kelvin in the 0x400-0x4000 range (1024K-16384K, p.310), which

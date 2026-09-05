@@ -3,9 +3,28 @@ import { localCommandToUdpPacket } from "./local-command-mapper.js";
 import { CASAMBI_TARGET_TYPE, encodeCasambiPacket } from "./local-transport/udp-codec.js";
 
 describe("localCommandToUdpPacket", () => {
-  it("onoff 'on' targets the device with level 255", () => {
+  it("onoff 'on' targets the device with level 255, always emitting the explicit Duration bytes", () => {
     const packet = localCommandToUdpPacket(0, 5, { capability: "onoff", action: "on" }, null);
-    expect(packet).toEqual({ netId: 0, direction: "toCasambi", opcode: 0x20, args: [255, CASAMBI_TARGET_TYPE.device, 5] });
+    // § live-confirmed fix — Duration (0,0) is ALWAYS sent even though 0x20 documents it as
+    // optional: a real Lithernet gateway parses this opcode positionally against the doc's own
+    // full-length example, so the short form makes it read Target_Type/Target_ID as the duration
+    // and fall back to Target_Type 0 / Target_ID 0 — broadcast, lighting the whole network.
+    expect(packet).toEqual({ netId: 0, direction: "toCasambi", opcode: 0x20, args: [255, 0, 0, CASAMBI_TARGET_TYPE.device, 5] });
+  });
+
+  it("§ live-confirmed fix — every level command carries Target_Type/Target_ID in the last two bytes, never truncated into the Duration slot", () => {
+    const cmds = [
+      { capability: "onoff", action: "on" },
+      { capability: "onoff", action: "off" },
+      { capability: "brightness", action: "on" },
+      { capability: "brightness", action: "off" },
+      { capability: "brightness", action: "set", level: 50 },
+    ] as const;
+    for (const cmd of cmds) {
+      const args = localCommandToUdpPacket(0, 5, cmd, null)!.args;
+      expect(args).toHaveLength(5); // Level, Dur_low, Dur_high, Target_Type, Target_ID
+      expect(args.slice(-2)).toEqual([CASAMBI_TARGET_TYPE.device, 5]);
+    }
   });
 
   it("onoff 'off' targets the device with level 0", () => {
@@ -54,8 +73,9 @@ describe("localCommandToUdpPacket", () => {
     expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "open" }, null)).toBeNull();
   });
 
-  it("produces byte-exact wire text via the shared frame codec", () => {
+  it("produces byte-exact wire text via the shared frame codec — the doc's own full-length 0x20 shape", () => {
     const packet = localCommandToUdpPacket(0, 5, { capability: "onoff", action: "on" }, null)!;
-    expect(encodeCasambiPacket(packet, "hex-dot")).toBe("0.72.4.20.ff.1.5\r\n");
+    // Length 6 (opcode + 5 args), matching the manual's worked example `0.72.6.20.ff.10.0.0.0`.
+    expect(encodeCasambiPacket(packet, "hex-dot")).toBe("0.72.6.20.ff.0.0.1.5\r\n");
   });
 });
