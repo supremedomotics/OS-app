@@ -67,7 +67,7 @@ describe("LocalCommandEngine", () => {
   it("throws for an unsupported capability (position) rather than fabricating a mapping", async () => {
     const udp = fakeUdp();
     const engine = new LocalCommandEngine(udp, 0);
-    // open/close ARE mapped now (custom elements 1/0); a specific position still is not.
-    await expect(engine.send(5, { capability: "position", action: "set", position: 50 }, null)).rejects.toThrow(/unsupported command/);
+    // open/close/set all map onto the position slider element now; "stop" has no element at all.
+    await expect(engine.send(5, { capability: "position", action: "stop" }, null)).rejects.toThrow(/unsupported command/);
   });
 });

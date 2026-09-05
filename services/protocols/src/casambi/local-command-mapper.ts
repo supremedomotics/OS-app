@@ -75,13 +75,22 @@ export function localCommandToUdpPacket(
       // so element 0 is Close and element 1 is Open, written back with 0x3F SetTargetElements
       // ([Index, Value] pairs, § System Manual 6.38 §5.12.2.2.18 — which also resolves the older
       // reference's 0x3E/0x3F contradiction in favour of 0x3F, see encodeSetTargetElements).
-      if (command.action === "open") return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 1, value: 1 }], fadeMs ?? 0);
-      if (command.action === "close") return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 0, value: 1 }], fadeMs ?? 0);
-      // "set" (a specific position) and "stop" stay deliberately unmapped. The motor reports its
-      // position as a SHORT-form slider (`0f.<lo>.<hi>`), which carries no element index, and the
-      // Casambi app writes it over BLE — so the gateway never observes an index we could copy.
-      // Guessing one would be fabricating a wire address; it needs a real on-site probe first.
-      return null;
+      // …but writing value 1 to index 1 parked the curtain at 0.4% on real hardware, and
+      // 1/255 = 0.39%. So index 1 is the POSITION SLIDER, and a slider element's value IS the
+      // position, not a press: § System Manual 6.38 "Set Target Element — Value of the custom
+      // element selected via Index; the FB-DPT selects the element type: 'Percent'/'uint16' →
+      // slider element". Open/close are therefore just the ends of that slider's travel — one
+      // mechanism, not three — and the 0-255 scale matches the type-15 notification's own
+      // (`0f.88.00` = 136 = the Casambi app's 53.3%).
+      const pct =
+        command.action === "open" ? 100
+        : command.action === "close" ? 0
+        : command.action === "set" && typeof command.position === "number" ? command.position
+        : null;
+      // "stop" has no documented element — never fabricated, surfaces as "unsupported command".
+      if (pct === null) return null;
+      const value = Math.round((Math.min(100, Math.max(0, pct)) / 100) * 255);
+      return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 1, value }], fadeMs ?? 0);
     }
     default:
       return null;

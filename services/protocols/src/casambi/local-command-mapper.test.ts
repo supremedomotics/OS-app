@@ -70,25 +70,34 @@ describe("localCommandToUdpPacket", () => {
   });
 
   describe("position (§ live-confirmed against a real Casambi curtain motor)", () => {
-    // Captured from the gateway console while driving the motor from the Casambi app:
-    //   close → 4b.2d.90.00.01.01 (on/off element INDEX 0), open → 4b.2d.90.01.01.01 (INDEX 1).
-    it("open writes custom element 1 via 0x3F SetTargetElements", () => {
-      const p = localCommandToUdpPacket(0, 5, { capability: "position", action: "open" }, null)!;
-      expect(p.opcode).toBe(0x3f);
-      expect(p.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 1]); // …[Index=1, Value=1]
+    // Element index 1 is the POSITION SLIDER, and a slider element's value is the position itself
+    // on a 0-255 scale — live-confirmed: writing value 1 parked the curtain at 0.4% (1/255).
+    const args = (action: "open" | "close" | "set", position?: number) =>
+      localCommandToUdpPacket(0, 5, { capability: "position", action, ...(position === undefined ? {} : { position }) }, null)!.args;
+
+    it("open drives the slider to full travel (255), not a flag value", () => {
+      expect(args("open")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 255]);
     });
 
-    it("close writes custom element 0", () => {
-      const p = localCommandToUdpPacket(0, 5, { capability: "position", action: "close" }, null)!;
-      expect(p.opcode).toBe(0x3f);
-      expect(p.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 0, 1]); // …[Index=0, Value=1]
+    it("close drives the slider to zero", () => {
+      expect(args("close")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]);
     });
 
-    it("setting a specific position stays unmapped — the slider's element index is not observable", () => {
-      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "set", position: 50 }, null)).toBeNull();
+    it("set scales a 0-100 position onto the same 0-255 slider element", () => {
+      expect(args("set", 50)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 128]); // round(.5*255)
+      expect(args("set", 53.3)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 136]); // the app's own 53.3% → 136
     });
 
-    it("stop stays unmapped — no documented element for it", () => {
+    it("clamps an out-of-range position rather than emitting a byte that would wrap", () => {
+      expect(args("set", 140)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 255]);
+      expect(args("set", -20)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]);
+    });
+
+    it("uses opcode 0x3F SetTargetElements", () => {
+      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "open" }, null)!.opcode).toBe(0x3f);
+    });
+
+    it("stop stays unmapped — no documented element for it, never fabricated", () => {
       expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "stop" }, null)).toBeNull();
     });
   });

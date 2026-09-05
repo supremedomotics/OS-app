@@ -1,6 +1,6 @@
 # SupremeOS Casambi Driver — Complete Technical Reference
 
-> Status: current as of commit `38287d0` (native-linux).
+> Status: branch `native-linux`. Run `git log -1 --oneline -- services/protocols/src/casambi` for the exact revision this describes.
 > Scope: the native Casambi protocol driver in `services/protocols/src/casambi/`, its two
 > connection modes, every command/state mapping, the gateway REST surface, setup/configuration,
 > and the honest list of what is *not* supported and why.
@@ -169,10 +169,14 @@ Control-type matching is **case-insensitive**. A unit with no controls at all st
 | `brightness` on / off | `{ Dimmer: { value: 1\|0 } }` | `0x20`, level `255`/`0` |
 | `color` kelvin | `{ ColorTemperature:{value:K}, Colorsource:{source:"TW"} }` | `0x48` SetColorTemperature, Tc = real Kelvin |
 | `color` hue/sat | `{ RGB:{hue:0..1,sat:0..1}, Colorsource:{source:"RGB"} }` | `0x3D` SetColorHueSat, hue 16-bit, sat 0–254 |
-| `position` open | `{ Slider: { value: 100 } }` | `0x3F` SetTargetElements `[index 1, value 1]` |
-| `position` close | `{ Slider: { value: 0 } }` | `0x3F` SetTargetElements `[index 0, value 1]` |
-| `position` set % | `{ Slider: { value: pct } }` | ❌ **unmapped** (see §10.3) |
-| `position` stop | ❌ null | ❌ null |
+| `position` open | `{ Slider: { value: 100 } }` | `0x3F` SetTargetElements `[index 1, value 255]` |
+| `position` close | `{ Slider: { value: 0 } }` | `0x3F` SetTargetElements `[index 1, value 0]` |
+| `position` set % | `{ Slider: { value: pct } }` | `0x3F` `[index 1, round(pct/100*255)]` |
+| `position` stop | ❌ null | ❌ null (no documented element) |
+
+Element **index 1 is the position slider**, and a slider element's value *is* the position on a
+0–255 scale — open and close are simply the two ends of its travel, not separate controls. This is
+live-confirmed: writing value `1` parked a real curtain at 0.4% (= 1/255).
 
 An unmapped command throws `casambi: unsupported command for <capability>` — it is never silently
 dropped and never fabricated.
@@ -336,13 +340,13 @@ fabricating a protocol the vendor never defined.
 Verified against every locally reachable interface (UDP, the full WebAPI, the web UI, `.ceg` export,
 the Diagnostics console). Names and group names exist only in the Casambi Cloud account.
 
-### 10.3 Curtain position: open/close yes, "set to X%" no
-Open/Close are implemented against **live-confirmed** custom on/off elements (index 1 = Open,
-index 0 = Close, written with `0x3F`), and position **status** is read from the type-15 slider
-(0–255, live-confirmed: `0x88` = 136 = 53.3%). Setting a *specific* position is deliberately
-unmapped: the motor reports its slider in **short form**, which carries no element index, and the
-Casambi app writes it over BLE, so the gateway never observes an index to copy. Guessing one would
-be fabricating a wire address.
+### 10.3 Curtain position: fully supported; "stop" is not
+Open, close and set-to-X% all drive custom element **index 1** (the position slider) with `0x3F`,
+value scaled to 0–255. Position **status** is read from the type-15 slider notification on the same
+scale (live-confirmed: `0x88` = 136 = 53.3%).
+
+`stop` remains unmapped — no documented element corresponds to it, and inventing one would be
+fabricating a wire address.
 
 ### 10.4 Not fetchable from Casambi at all
 | Feature | Status |
@@ -372,6 +376,8 @@ These were all found against real hardware and are the reason several behaviours
 | Fixtures stuck as "dimmable" | Three separate causes: `discoverFromCloud` skipped already-known units; `mergeUnit` replaced the whole controls array on partial updates; and `fetchNetwork` alone never returns `controls` (needs `/state` + a WebSocket burst). |
 | Groups and room hints always empty in Local mode | The merge for already-known units copied only `controls`, never `groupId` — and local UDP never sets it, so every unit had `groupId === undefined`. |
 | `0x3E` vs `0x3F` ambiguity | System Manual 6.38 §5.12.2.2.18 states `0x3F` in both heading and body, confirming the encoder was already correct. |
+| Curtain parked at 0.4% whatever was commanded | Open/close were written as an on/off "press" (`value 1`). Element 1 is the *slider*, so the gateway applied 1 as a position — 1/255 = 0.39%. A slider element's value is the position itself. |
+| Curtain position always read as 100% | Cloud advertises `"Slider"` (min 0 / max 100) and Local builds `"slider"` (min 0 / max 255); controls were deduped by **case-sensitive** type, so both survived and state normalised against whichever came first. Now keyed by lowercased type. |
 
 ---
 

@@ -433,8 +433,11 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       // reached it. Never clobber real local state (dimLevel/on/existing control values) —
       // only add control TYPES local hasn't reported yet, so capability detection (`cct` etc.)
       // is correct right away without discarding live feedback already recorded.
-      const knownTypes = new Set((existing.controls ?? []).map((c) => c.type));
-      const missing = (cloudUnit.controls ?? []).filter((c) => !knownTypes.has(c.type));
+      // Lowercased for the same reason as mergeUnit's own key — Cloud's "Slider"/"Dimmer" and
+      // Local's "slider"/"dimmer" are the same control, and letting both through leaves the unit
+      // carrying two entries with contradictory min/max.
+      const knownTypes = new Set((existing.controls ?? []).map((c) => (c.type ?? "").toLowerCase()));
+      const missing = (cloudUnit.controls ?? []).filter((c) => !knownTypes.has((c.type ?? "").toLowerCase()));
       // § live-confirmed fix — merge the STRUCTURAL fields too, not just controls. Local UDP
       // reports none of these (`updateUnitFromControlValues` only ever sets id/dimLevel/on/
       // sensors/controls), and local discovery sees every unit before this runs, so a merge that
@@ -784,8 +787,14 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // Union by control type instead: keep every previously-known type, let this update's own
     // entries (a real, fresher read) win for the types it actually reports.
     if (unit.controls) {
-      const byType = new Map((prev?.controls ?? []).map((c) => [c.type, c]));
-      for (const c of unit.controls) byType.set(c.type, c);
+      // § live-confirmed fix — key by LOWERCASED type. Cloud advertises "Slider"/"Dimmer"/"CCT"
+      // while Local UDP builds "slider"/"dimmer"/"colortemperature", so a case-sensitive key let
+      // both survive as separate controls with contradictory metadata. For a curtain that was
+      // actively wrong: Cloud's Slider carries min 0/max 100 and Local's carries min 0/max 255,
+      // and `statesFromUnit` takes whichever it finds first — so a real local reading of 136
+      // normalised against max 100 clamped every position to "100%".
+      const byType = new Map((prev?.controls ?? []).map((c) => [(c.type ?? "").toLowerCase(), c]));
+      for (const c of unit.controls) byType.set((c.type ?? "").toLowerCase(), c);
       merged.controls = [...byType.values()];
     } else if (prev?.controls) {
       merged.controls = prev.controls;

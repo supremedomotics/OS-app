@@ -320,8 +320,9 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await driver.connect();
     socket.sent.length = 0;
     await driver.command(dev, { capability: "position", action: "open" });
-    // 0x3F SetTargetElements: TargetType 1, TargetID 6, duration 0, then [Index=1, Value=1].
-    expect(socket.sent).toEqual(["0.72.7.3f.1.6.0.0.1.1\r\n"]);
+    // 0x3F SetTargetElements: TargetType 1, TargetID 6, duration 0, then [Index=1, Value=0xFF]
+    // - element 1 is the position slider, and "open" is simply its full-travel value.
+    expect(socket.sent).toEqual(["0.72.7.3f.1.6.0.0.1.ff\r\n"]);
     await driver.disconnect();
   });
 
@@ -330,8 +331,8 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     const dev = "local-dev-6" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
     await driver.connect();
-    // Setting a specific position needs the slider's element index, which the gateway never reports.
-    await expect(driver.command(dev, { capability: "position", action: "set", position: 50 })).rejects.toThrow(/unsupported command/);
+    // open/close/set all drive the slider element; "stop" has no documented element at all.
+    await expect(driver.command(dev, { capability: "position", action: "stop" })).rejects.toThrow(/unsupported command/);
     await driver.disconnect();
   });
 
@@ -685,6 +686,24 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       const after = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
       expect(after.capabilities).toContain("color"); // CCT capability now present, not just brightness
       expect(after.raw.awaitingLocalSignal).toBe(false); // still genuinely local-known, never marked pending
+      await driver.disconnect();
+    });
+
+    it("§ live-confirmed fix — Cloud's \"Slider\" and Local's \"slider\" are one control, so a curtain's position isn't normalised against the wrong max", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      // Cloud describes unit 46's slider with min 0 / max 100; Local UDP reports the real 0-255
+      // scale. Keyed case-sensitively both survived, and statesFromUnit took whichever came first
+      // — so a genuine 136 (53.3%) normalised against max 100 clamped to "100%".
+      await driver.discoverFromCloud(creds, new FakeCasambiTransport(NETWORK), 0);
+      socket.receive("0.70.5.4b.2e.f.88.0\r\n"); // unit 0x2e = 46, type 15 slider, 0x0088 = 136
+
+      const unit = (await driver.discover()).find((d) => d.raw.unitId === 46)!;
+      expect(unit.capabilities).toEqual(["position"]);
+      const dev46 = "local-dev-46" as DeviceId;
+      await driver.bind({ deviceId: dev46, capability: "position", address: "casambi:46" });
+      socket.receive("0.70.5.4b.2e.f.88.0\r\n"); // re-report now that it's bound, to publish state
+      expect(driver.getState(dev46, "position")).toEqual({ kind: "position", position: 53, moving: false });
       await driver.disconnect();
     });
 
