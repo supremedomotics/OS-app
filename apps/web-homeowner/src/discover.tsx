@@ -167,7 +167,8 @@ export function DiscoverDevices() {
   // own, not commissionable as one), so it is fetched separately from its own endpoint and
   // rendered as its own kind of card rather than being forced into the protocol-agnostic
   // discovery contract every other driver flows through.
-  const [casambiGroups, setCasambiGroups] = useState<CasambiGroupView[]>([]);
+  const [casambiGroups, setCasambiGroups] = useState<CasambiGroupView[] | null>(null);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
 
   const loadRooms = () =>
     client
@@ -208,7 +209,8 @@ export function DiscoverDevices() {
     // results from a differently-selected previous scan on screen while the new one runs.
     setFound([]);
     setDriverResults([]);
-    setCasambiGroups([]);
+    setCasambiGroups(null);
+    setGroupsError(null);
     setSourceFilter("all");
     try {
       const res = await client.discover(undefined, Array.from(selectedIds));
@@ -222,16 +224,19 @@ export function DiscoverDevices() {
     }
   }
 
-  /** Best-effort and non-blocking: a Casambi driver that isn't running (or a deployment with no
-   * Casambi at all) simply contributes no group cards — never an error over a scan that otherwise
-   * succeeded, and never a fabricated empty-state claiming there are no groups. */
+  /** Non-blocking: a failure here never fails a scan that otherwise succeeded. But it is NOT
+   * silent — an empty or failed group fetch is reported with its real reason (see the section's
+   * own empty state), because "no groups" and "groups couldn't be loaded" are different facts and
+   * showing nothing at all reads as "this feature doesn't exist." */
   async function loadCasambiGroups() {
     const id = casambiDriverId(registry, selectedIds);
     if (!id) return;
+    setGroupsError(null);
     try {
       setCasambiGroups(await listCasambiGroups(id));
-    } catch {
+    } catch (e) {
       setCasambiGroups([]);
+      setGroupsError(e instanceof Error ? e.message : "Could not load Casambi groups.");
     }
   }
 
@@ -279,10 +284,11 @@ export function DiscoverDevices() {
             <SourceFilterChips counts={sourceCounts} total={found.length} active={sourceFilter} onSelect={setSourceFilter} />
             <button onClick={scan}>Rescan</button>
           </div>
-          {casambiGroups.length > 0 && (
+          {casambiGroups !== null && casambiDriverId(registry, selectedIds) && (
             <CasambiGroupSection
               driverId={casambiDriverId(registry, selectedIds) ?? ""}
               groups={casambiGroups}
+              loadError={groupsError}
               onPaired={(backendIds) => {
                 // Paired members are no longer "new finds" — drop them from the device list the
                 // same way pairing one device does, so the two views can never disagree.
@@ -333,10 +339,14 @@ function casambiDriverId(registry: DriverEntry[], selectedIds: Set<string>): str
 function CasambiGroupSection({
   driverId,
   groups,
+  loadError,
   onPaired,
 }: {
   driverId: string;
   groups: CasambiGroupView[];
+  /** A real failure from the groups endpoint (e.g. the driver isn't running), surfaced instead of
+   * being swallowed — "couldn't load" and "there are none" are different facts. */
+  loadError: string | null;
   onPaired: (backendIds: string[]) => void;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
@@ -366,6 +376,18 @@ function CasambiGroupSection({
         or creating it.
       </p>
       {err && <p className="err">{err}</p>}
+      {loadError && <p className="err">{loadError}</p>}
+      {!loadError && groups.length === 0 && (
+        // § Capability gating — an empty list is explained, never rendered as silence. Group
+        // names live only in the Casambi Cloud account (Local UDP carries none), and the driver
+        // holds them in memory, so a gateway restart — including every update — clears them
+        // until the next Cloud sync. That is the real and only reason this is usually empty.
+        <p className="muted">
+          No Casambi groups loaded yet. Group names come from your Casambi Cloud account — run
+          "Discover devices from Cloud" in Extension Center → Supreme Casambi, then rescan here.
+          (The gateway holds them in memory, so they clear on every restart or update.)
+        </p>
+      )}
       {done && (
         <p className="muted">
           Paired {done.paired} fixture{done.paired === 1 ? "" : "s"} from "{done.groupName}"
