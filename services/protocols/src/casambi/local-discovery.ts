@@ -83,6 +83,21 @@ export function updateUnitFromControlValues(
       case 10: // colorTemperature — 1 byte, normalized 0x00 (warmest) - 0xFF (coolest) (p.223)
         setControl("colortemperature", cv.valueBytes[0] ?? 0);
         break;
+      case 15: {
+        // § live-confirmed — Slider (custom element), 2 bytes little-endian (§ System Manual 6.38
+        // p.203, type "15 / 143"). Captured from a real Casambi curtain motor: its app-reported
+        // 53.3% position arrived as `0f.88.00` = 136, and 136/255 = 53.3%, so the range is 0-255
+        // in a 2-byte field — NOT a full 16-bit scale (that would have read `6c.88`). min/max are
+        // set explicitly because `statesFromUnit` defaults an absent max to 100, which would clamp
+        // every position above 39% to "100%".
+        const low = cv.valueBytes[0] ?? 0;
+        const high = cv.valueBytes[1] ?? 0;
+        const idx = controls.findIndex((c) => c.type === "slider");
+        const slider = { type: "slider", value: (high << 8) | low, min: 0, max: 255 };
+        if (idx >= 0) controls[idx] = slider;
+        else controls.push(slider);
+        break;
+      }
       default:
         // Unsupported/reserved/color types — honestly ignored per the doc's own "Client
         // requirements: ... ignore unknown or unsupported content" (p.276).

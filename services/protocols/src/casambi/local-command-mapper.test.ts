@@ -69,8 +69,28 @@ describe("localCommandToUdpPacket", () => {
     expect(localCommandToUdpPacket(0, 5, { capability: "color" }, null)).toBeNull();
   });
 
-  it("position is deliberately unmapped — no documented shade/cover opcode exists", () => {
-    expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "open" }, null)).toBeNull();
+  describe("position (§ live-confirmed against a real Casambi curtain motor)", () => {
+    // Captured from the gateway console while driving the motor from the Casambi app:
+    //   close → 4b.2d.90.00.01.01 (on/off element INDEX 0), open → 4b.2d.90.01.01.01 (INDEX 1).
+    it("open writes custom element 1 via 0x3F SetTargetElements", () => {
+      const p = localCommandToUdpPacket(0, 5, { capability: "position", action: "open" }, null)!;
+      expect(p.opcode).toBe(0x3f);
+      expect(p.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 1]); // …[Index=1, Value=1]
+    });
+
+    it("close writes custom element 0", () => {
+      const p = localCommandToUdpPacket(0, 5, { capability: "position", action: "close" }, null)!;
+      expect(p.opcode).toBe(0x3f);
+      expect(p.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 0, 1]); // …[Index=0, Value=1]
+    });
+
+    it("setting a specific position stays unmapped — the slider's element index is not observable", () => {
+      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "set", position: 50 }, null)).toBeNull();
+    });
+
+    it("stop stays unmapped — no documented element for it", () => {
+      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "stop" }, null)).toBeNull();
+    });
   });
 
   it("produces byte-exact wire text via the shared frame codec — the doc's own full-length 0x20 shape", () => {

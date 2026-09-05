@@ -3,6 +3,7 @@ import {
   CASAMBI_TARGET_TYPE,
   encodeSetColorHueSat,
   encodeSetColorTemperature,
+  encodeSetTargetElements,
   encodeSetTargetLevel,
   type CasambiPacket,
 } from "./local-transport/udp-codec.js";
@@ -15,9 +16,9 @@ import {
  * Cloud's shape is a JSON control-value object, Local's is a byte-oriented wire packet — forcing
  * either transport through the other's intermediate representation would buy no real reuse.
  *
- * `position` is deliberately unmapped: no opcode in `Lithernet_UDP_Developer_Reference.pdf`
- * documents a shade/cover position control (0x31 SetTargetVerticalRatio is the direct/indirect
- * light-mix ratio of a luminaire, not a physical blind/shade position) — returning `null` here
+ * `position` open/close ARE mapped (§ live-confirmed against a real curtain motor — see the case
+ * itself); setting a specific position is still deliberately unmapped, because the element index
+ * needed to write the slider is not observable from anything the gateway reports. Returning `null`
  * surfaces as the driver's existing "unsupported command" error rather than a fabricated mapping.
  */
 export function localCommandToUdpPacket(
@@ -64,6 +65,22 @@ export function localCommandToUdpPacket(
         const level = typeof command.level === "number" ? Math.round((command.level / 100) * 254) : undefined;
         return encodeSetColorHueSat(netId, CASAMBI_TARGET_TYPE.device, unitId, { hue: hue16, sat: sat254, level });
       }
+      return null;
+    }
+    case "position": {
+      // § live-confirmed — a real Casambi curtain motor exposes its Open/Close buttons as custom
+      // on/off ELEMENTS, captured from the gateway console while driving it from the Casambi app:
+      //   close pressed → `4b.2d.90.00.01.01`  (long-form type 0x90 = on/off toggle, INDEX 0)
+      //   open  pressed → `4b.2d.90.01.01.01`  (…INDEX 1)
+      // so element 0 is Close and element 1 is Open, written back with 0x3F SetTargetElements
+      // ([Index, Value] pairs, § System Manual 6.38 §5.12.2.2.18 — which also resolves the older
+      // reference's 0x3E/0x3F contradiction in favour of 0x3F, see encodeSetTargetElements).
+      if (command.action === "open") return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 1, value: 1 }], fadeMs ?? 0);
+      if (command.action === "close") return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 0, value: 1 }], fadeMs ?? 0);
+      // "set" (a specific position) and "stop" stay deliberately unmapped. The motor reports its
+      // position as a SHORT-form slider (`0f.<lo>.<hi>`), which carries no element index, and the
+      // Casambi app writes it over BLE — so the gateway never observes an index we could copy.
+      // Guessing one would be fabricating a wire address; it needs a real on-site probe first.
       return null;
     }
     default:

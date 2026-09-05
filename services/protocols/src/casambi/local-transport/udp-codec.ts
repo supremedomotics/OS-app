@@ -330,15 +330,14 @@ export function encodeSetTargetDimmers(
 /**
  * 0x3F - SetTargetElements (p.305). Up to 8 (index, value) pairs.
  *
- * DOCUMENTATION INCONSISTENCY (flagged, not silently resolved): the source PDF's own section
- * heading reads "5.10.2.2.18. 0x3F - SetTargetElements" but its "Telegram parameters" body
- * states "Opcode: 0x3E (decimal 62)" — the same opcode as `encodeSetTargetDimmers` immediately
- * above it. Both commands otherwise share an identical wire shape (TargetType.TargetID.
- * Duration_low.Duration_high.[Index.Value]...), so this may be a copy-paste error in the doc
- * rather than a real second command. We follow the section title (0x3F) here since "Elements"
- * (custom elements, index 0-7) and "Dimmers" (dimmer channels, index 0-3) are described as
- * distinct concepts with different index ranges, and the gateway must have some way to
- * distinguish them on the wire. This is a judgment call, not a verified fact — see TODO.md.
+ * RESOLVED: this was previously a flagged judgment call — the older reference's section heading
+ * said 0x3F while its own "Telegram parameters" body said "Opcode: 0x3E", the same opcode as
+ * `encodeSetTargetDimmers` above. We chose 0x3F on the reasoning that Elements (custom, index
+ * 0-7) and Dimmers (channels, index 0-3) are distinct concepts the gateway must be able to tell
+ * apart. System Manual 6.38 §5.12.2.2.18 now states "Opcode: 0x3F (decimal 63)" in BOTH the
+ * heading and the body, confirming the old body text was a copy-paste error and that this
+ * encoder was right all along. Layout is likewise confirmed: TargetType.TargetID.Duration_low.
+ * Duration_high.[Index(0-7).Value]…
  */
 export function encodeSetTargetElements(
   netId: number,

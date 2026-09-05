@@ -313,12 +313,25 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not connected/);
   });
 
-  it("command() refuses an unsupported capability (position) rather than fabricating a mapping", async () => {
+  it("command() sends a real element packet for a curtain open/close (§ live-confirmed)", async () => {
+    const { socket, driver } = makeLocalDriver();
+    const dev = "local-dev-6" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
+    await driver.connect();
+    socket.sent.length = 0;
+    await driver.command(dev, { capability: "position", action: "open" });
+    // 0x3F SetTargetElements: TargetType 1, TargetID 6, duration 0, then [Index=1, Value=1].
+    expect(socket.sent).toEqual(["0.72.7.3f.1.6.0.0.1.1\r\n"]);
+    await driver.disconnect();
+  });
+
+  it("command() still refuses a position action with no observable wire mapping, never fabricating one", async () => {
     const { driver } = makeLocalDriver();
     const dev = "local-dev-6" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
     await driver.connect();
-    await expect(driver.command(dev, { capability: "position", action: "open" })).rejects.toThrow(/unsupported command/);
+    // Setting a specific position needs the slider's element index, which the gateway never reports.
+    await expect(driver.command(dev, { capability: "position", action: "set", position: 50 })).rejects.toThrow(/unsupported command/);
     await driver.disconnect();
   });
 

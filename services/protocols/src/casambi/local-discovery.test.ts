@@ -9,6 +9,33 @@ const cv = (type: number, ...valueBytes: number[]): CasambiControlValue => ({
   valueBytes,
 });
 
+describe("updateUnitFromControlValues — slider / curtain position (§ live-confirmed)", () => {
+  // Real bytes from a Casambi curtain motor's gateway trace: `4b.2d.0f.88.00` — type 15 (slider,
+  // short form, 2-byte little-endian) reading 0x0088 = 136 while the Casambi app showed 53.3%.
+  it("decodes a type-15 slider as a position capability at the live-confirmed 0-255 scale", () => {
+    const unit = updateUnitFromControlValues(45, [cv(15, 0x88, 0x00)]);
+    expect(capabilitiesFromUnit(unit)).toEqual(["position"]);
+    const state = statesFromUnit(unit).find((s) => s.capability === "position")!.state;
+    expect(state).toEqual({ kind: "position", position: 53, moving: false }); // 136/255 = 53.3%
+  });
+
+  it("reads the full travel range, so a fully-open motor is not clamped at 39%", () => {
+    // Without an explicit max the shared mapper assumes 100, which would report 0xFF as "100%"
+    // only by accident and 0x88 as "100%" wrongly — this pins the real 0-255 range.
+    const open = updateUnitFromControlValues(45, [cv(15, 0xff, 0x00)]);
+    expect(statesFromUnit(open).find((s) => s.capability === "position")!.state).toMatchObject({ position: 100 });
+    const shut = updateUnitFromControlValues(45, [cv(15, 0x00, 0x00)]);
+    expect(statesFromUnit(shut).find((s) => s.capability === "position")!.state).toMatchObject({ position: 0 });
+  });
+
+  it("a later slider report replaces the previous one rather than accumulating controls", () => {
+    const first = updateUnitFromControlValues(45, [cv(15, 0x01, 0x00)]);
+    const second = updateUnitFromControlValues(45, [cv(15, 0x88, 0x00)], first);
+    expect((second.controls ?? []).filter((c) => c.type === "slider")).toHaveLength(1);
+    expect(statesFromUnit(second).find((s) => s.capability === "position")!.state).toMatchObject({ position: 53 });
+  });
+});
+
 describe("updateUnitFromControlValues", () => {
   it("maps a dimmer channel (type 1) into the shared entity-mapper's dimLevel/controls shape", () => {
     const unit = updateUnitFromControlValues(5, [cv(1, 128)]);
