@@ -51,6 +51,9 @@ export class LocalCommandEngine implements CasambiCommandEngine {
   async send(unitId: number, command: CapabilityCommand, prev: CapabilityState | null): Promise<void> {
     const packet = localCommandToUdpPacket(this.netId, unitId, command, prev);
     if (!packet) throw new Error(`casambi: unsupported command for ${command.capability}`);
-    await this.udp.send(packet);
+    // Some commands are genuinely a SEQUENCE, not one datagram — a curtain's Open/Close are
+    // momentary on/off elements that need a press AND a release, exactly as the Casambi app
+    // itself sends them (live-confirmed). Sent in order on the same socket.
+    for (const p of Array.isArray(packet) ? packet : [packet]) await this.udp.send(p);
   }
 }

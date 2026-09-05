@@ -27,7 +27,7 @@ export function localCommandToUdpPacket(
   command: CapabilityCommand,
   prev: CapabilityState | null,
   fadeMs?: number,
-): CasambiPacket | null {
+): CasambiPacket | CasambiPacket[] | null {
   switch (command.capability) {
     // § live-confirmed fix — `fadeMs ?? 0`, never a bare `fadeMs`, on every 0x20 call below.
     // 0x20's Duration field is *optional* per the doc (omit it and the packet length drops from
@@ -68,36 +68,31 @@ export function localCommandToUdpPacket(
       return null;
     }
     case "position": {
-      // § live-confirmed — a real Casambi curtain motor exposes its Open/Close buttons as custom
-      // on/off ELEMENTS, captured from the gateway console while driving it from the Casambi app:
-      //   close pressed → `4b.2d.90.00.01.01`  (long-form type 0x90 = on/off toggle, INDEX 0)
-      //   open  pressed → `4b.2d.90.01.01.01`  (…INDEX 1)
-      // so element 0 is Close and element 1 is Open, written back with 0x3F SetTargetElements
-      // ([Index, Value] pairs, § System Manual 6.38 §5.12.2.2.18 — which also resolves the older
-      // reference's 0x3E/0x3F contradiction in favour of 0x3F, see encodeSetTargetElements).
-      // …but writing value 1 to index 1 parked the curtain at 0.4% on real hardware, and
-      // 1/255 = 0.39%. So index 1 is the POSITION SLIDER, and a slider element's value IS the
-      // position, not a press: § System Manual 6.38 "Set Target Element — Value of the custom
-      // element selected via Index; the FB-DPT selects the element type: 'Percent'/'uint16' →
-      // slider element". Open/close are therefore just the ends of that slider's travel — one
-      // mechanism, not three — and the 0-255 scale matches the type-15 notification's own
-      // (`0f.88.00` = 136 = the Casambi app's 53.3%).
-      const pct =
-        command.action === "open" ? 100
-        : command.action === "close" ? 0
-        : command.action === "set" && typeof command.position === "number" ? command.position
-        : null;
-      // "stop" has no documented element — never fabricated, surfaces as "unsupported command".
-      if (pct === null) return null;
-      // Scaled to 0-254, NOT 0-255: 255 is Casambi's reserved "no change" sentinel across value
-      // fields (§ System Manual 6.38 — "Level = 255 → Ignore level", "value 255 means 'no
-      // change'"), the same convention `encodeSetColorHueSat` already follows with its 0-254
-      // saturation and its `level ?? 255` opt-out. Live-confirmed both ways on real hardware: a
-      // 30% command (77) tracked correctly and settled at 31.4%, while "open" sent as 255 was
-      // silently discarded and the curtain never moved. 254 is full travel — the motor runs to
-      // its own limit switch regardless.
-      const value = Math.round((Math.min(100, Math.max(0, pct)) / 100) * 254);
-      return encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index: 1, value }], fadeMs ?? 0);
+      // § live-confirmed — a real Casambi curtain motor exposes its Open/Close as custom on/off
+      // ELEMENTS, captured from the gateway console while driving it from the Casambi app:
+      //   close pressed  → `4b.2d.90.00.01.01`   (long-form type 0x90 = on/off, INDEX 0, value 1)
+      //   close released → `4b.2d.90.00.00`      (…INDEX 0, LEN 0)
+      //   open  pressed  → `4b.2d.90.01.01.01`   (…INDEX 1)
+      // so element 0 is Close and element 1 is Open, written with 0x3F SetTargetElements
+      // ([Index, Value] pairs, § System Manual 6.38 §5.12.2.2.18).
+      //
+      // Two things this got wrong before, both live-confirmed on the wire:
+      //  1. The value is a BOOLEAN 1/0, not a position. Writing 0xFF (open) and 0x80 (50%) to an
+      //     on/off element is out of range, so the gateway forwarded them and the motor simply
+      //     ignored them — "open" and the slider did nothing at all.
+      //  2. They are MOMENTARY buttons. The app always sends press THEN release, and a press on
+      //     its own only jogs the motor — a lone `value 1` parked the curtain at 0.4%. So each
+      //     command is a two-packet sequence, which `LocalCommandEngine` sends in order.
+      const index = command.action === "open" ? 1 : command.action === "close" ? 0 : null;
+      // "set" (a specific position) and "stop" stay unmapped. The position slider is reported in
+      // SHORT form (`0f.<lo>.<hi>`), which carries no element index, and the Casambi app writes
+      // it over BLE — so the gateway never observes an index we could copy. Guessing one has
+      // already cost two deploy cycles here; it needs a real probe, not another inference.
+      if (index === null) return null;
+      return [
+        encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index, value: 1 }], fadeMs ?? 0),
+        encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index, value: 0 }], fadeMs ?? 0),
+      ];
     }
     default:
       return null;

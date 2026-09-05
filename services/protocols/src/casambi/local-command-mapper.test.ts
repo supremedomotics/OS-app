@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { localCommandToUdpPacket } from "./local-command-mapper.js";
-import { CASAMBI_TARGET_TYPE, encodeCasambiPacket } from "./local-transport/udp-codec.js";
+import { CASAMBI_TARGET_TYPE, encodeCasambiPacket, type CasambiPacket } from "./local-transport/udp-codec.js";
 
 describe("localCommandToUdpPacket", () => {
   it("onoff 'on' targets the device with level 255, always emitting the explicit Duration bytes", () => {
@@ -70,37 +70,32 @@ describe("localCommandToUdpPacket", () => {
   });
 
   describe("position (§ live-confirmed against a real Casambi curtain motor)", () => {
-    // Element index 1 is the POSITION SLIDER, and a slider element's value is the position itself.
-    // Written on a 0-254 scale because 255 is Casambi's reserved "no change" sentinel; the motor's
-    // own NOTIFICATIONS use the full 0-255 range (0x88 = 136 = the app's 53.3%).
-    const args = (action: "open" | "close" | "set", position?: number) =>
-      localCommandToUdpPacket(0, 5, { capability: "position", action, ...(position === undefined ? {} : { position }) }, null)!.args;
+    // Open/Close are MOMENTARY on/off elements (index 1 / 0). The app sends press then release,
+    // and a lone press only jogs the motor (live-confirmed: it parked the curtain at 0.4%).
+    const seq = (action: "open" | "close") =>
+      localCommandToUdpPacket(0, 5, { capability: "position", action }, null) as CasambiPacket[];
 
-    it("open drives the slider to full travel as 254 — never 255, which Casambi reserves as \"no change\"", () => {
-      // Live-confirmed: open sent as 255 was silently discarded and the curtain never moved.
-      expect(args("open")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 254]);
+    it("open presses element 1 and then releases it", () => {
+      const packets = seq("open");
+      expect(packets.map((p) => p.opcode)).toEqual([0x3f, 0x3f]);
+      expect(packets[0]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 1]); // press
+      expect(packets[1]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]); // release
     });
 
-    it("close drives the slider to zero", () => {
-      expect(args("close")).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]);
+    it("close presses element 0 and then releases it", () => {
+      const packets = seq("close");
+      expect(packets[0]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 0, 1]);
+      expect(packets[1]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 0, 0]);
     });
 
-    it("set scales a 0-100 position onto the same slider element", () => {
-      expect(args("set", 50)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 127]); // round(.5*254)
-      // 30% is the value live-confirmed working on real hardware (settled at 31.4%).
-      expect(args("set", 30)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 76]);
+    it("never writes a position value to an on/off element — 0xFF/0x80 are out of range and the motor ignores them", () => {
+      for (const action of ["open", "close"] as const) {
+        for (const p of seq(action)) expect([0, 1]).toContain(p.args[p.args.length - 1]);
+      }
     });
 
-    it("clamps an out-of-range position rather than emitting a byte that would wrap", () => {
-      expect(args("set", 140)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 254]);
-      expect(args("set", -20)).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]);
-    });
-
-    it("uses opcode 0x3F SetTargetElements", () => {
-      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "open" }, null)!.opcode).toBe(0x3f);
-    });
-
-    it("stop stays unmapped — no documented element for it, never fabricated", () => {
+    it("set and stop stay unmapped — the slider element index is not observable on the wire", () => {
+      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "set", position: 50 }, null)).toBeNull();
       expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "stop" }, null)).toBeNull();
     });
   });
