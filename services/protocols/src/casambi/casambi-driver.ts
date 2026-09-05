@@ -24,7 +24,13 @@ import {
 } from "./cloud-transport.js";
 import { createConnection, type CasambiConnectionMode } from "./connection-manager.js";
 import type { CasambiLocalGatewayConfig, CasambiLocalTransport } from "./local-transport/index.js";
-import { buildDiscoveredDevices, startLocalDiscovery, stopLocalDiscovery } from "./discovery-engine.js";
+import {
+  buildDiscoveredDevices,
+  buildDiscoveredGroups,
+  startLocalDiscovery,
+  stopLocalDiscovery,
+  type CasambiDiscoveredGroup,
+} from "./discovery-engine.js";
 import { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";
 import { CloudCommandEngine, LocalCommandEngine, type CasambiCommandEngine } from "./command-engine.js";
 import {
@@ -307,6 +313,14 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       await this.loadNetwork();
     }
     return buildDiscoveredDevices(this.units, this.groups, this.cloudOnlyUnitIds);
+  }
+
+  /** § Casambi Group → Supreme Room — the group-level companion to {@link discover}. Group names
+   * come from the Cloud account (Local UDP carries none), so in Local mode this is populated by
+   * {@link discoverFromCloud}/{@link syncNamesFromCloud}, exactly like unit names are. */
+  async discoverGroups(): Promise<CasambiDiscoveredGroup[]> {
+    if (this.session && this.units.size === 0) await this.loadNetwork();
+    return buildDiscoveredGroups(this.units, this.groups);
   }
 
   /**

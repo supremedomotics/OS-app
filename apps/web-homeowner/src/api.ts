@@ -516,6 +516,39 @@ export async function discoverCasambiDevicesFromCloud(driverId: string): Promise
   return (await res.json()) as CasambiCloudDiscoverResult;
 }
 
+/** § Casambi Group → Supreme Room — a Casambi group is how the installer already expressed room
+ * membership in the Casambi app. `unpairedCount` is what pairing would actually commission now
+ * (already-owned members are excluded by the same rule discovery uses), never the raw member count. */
+export interface CasambiGroupView {
+  groupId: number;
+  name: string;
+  unitIds: number[];
+  memberCount: number;
+  unpairedCount: number;
+}
+export async function listCasambiGroups(driverId: string): Promise<CasambiGroupView[]> {
+  const res = await authed(`/v1/drivers/${driverId}/casambi/groups`);
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not load Casambi groups."));
+  return ((await res.json()) as { groups: CasambiGroupView[] }).groups;
+}
+
+/** Result of pairing one group: every still-unpaired member commissioned into the Supreme room
+ * matching the group's name (created if it didn't exist). `failures` is per-device and honest —
+ * one member failing never aborts the rest. */
+export interface CasambiGroupPairResult {
+  groupName: string;
+  roomName: string | null;
+  paired: number;
+  alreadyPaired: number;
+  devices: { backendId: string; name: string }[];
+  failures: { backendId: string; error: string }[];
+}
+export async function pairCasambiGroup(driverId: string, groupId: number): Promise<CasambiGroupPairResult> {
+  const res = await authed(`/v1/drivers/${driverId}/casambi/groups/${groupId}/pair`, { method: "POST", body: "{}" });
+  if (!res.ok) throw new Error(await errorMessage(res, "Pairing the group failed."));
+  return (await res.json()) as CasambiGroupPairResult;
+}
+
 // ── Supreme KNX Unified Device Intelligence — Discovery Queue (authenticated) ─────
 // Real backend shapes (services/gateway/src/installer-context.ts) — no new fields
 // invented here, only what the Confidence/Duplicate/Binding/Room-Assignment engines

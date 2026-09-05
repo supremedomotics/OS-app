@@ -36,6 +36,45 @@ export async function startLocalDiscovery(udp: Pick<CasambiUdpEngine, "send">, n
 export async function stopLocalDiscovery(udp: Pick<CasambiUdpEngine, "send">, netId: number): Promise<void> {
   await udp.send(encodeNotifyControlValuesUnsubscribe(netId, 0, 250));
 }
+/** A Casambi group as an installer-facing, pairable unit of work (§ Casambi Group → Supreme Room).
+ * Not a `DiscoveredDevice`: a group has no capabilities and isn't commissionable as one device —
+ * it's a named set of units whose name is the real room signal the Casambi app already carries. */
+export interface CasambiDiscoveredGroup {
+  groupId: number;
+  name: string;
+  /** Ids of the units we actually know about in this group — never the Cloud's full membership
+   * list, so the count an installer sees matches what pairing would really commission. */
+  unitIds: number[];
+}
+
+/**
+ * Group-level view of the same cached model {@link buildDiscoveredDevices} shapes per unit.
+ * Membership is derived from each unit's own `groupId` (the same signal room mapping already
+ * uses) rather than the group's `units` array, so a group can never advertise members this
+ * driver has never actually seen. Groups with no known members, or no name, are omitted —
+ * an unnamed group carries no room signal and is nothing an installer could act on.
+ */
+export function buildDiscoveredGroups(
+  units: ReadonlyMap<number, CasambiUnit>,
+  groups: ReadonlyMap<number, CasambiGroup>,
+): CasambiDiscoveredGroup[] {
+  const membersByGroup = new Map<number, number[]>();
+  for (const unit of units.values()) {
+    if (!unit.groupId) continue; // 0/undefined = ungrouped, not a room signal
+    if (capabilitiesFromUnit(unit).length === 0) continue; // matches buildDiscoveredDevices' own filter
+    const members = membersByGroup.get(unit.groupId);
+    if (members) members.push(unit.id);
+    else membersByGroup.set(unit.groupId, [unit.id]);
+  }
+  const out: CasambiDiscoveredGroup[] = [];
+  for (const [groupId, unitIds] of membersByGroup) {
+    const name = groups.get(groupId)?.name?.trim();
+    if (!name) continue;
+    out.push({ groupId, name, unitIds: unitIds.sort((a, b) => a - b) });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function buildDiscoveredDevices(
   units: ReadonlyMap<number, CasambiUnit>,
   groups: ReadonlyMap<number, CasambiGroup>,

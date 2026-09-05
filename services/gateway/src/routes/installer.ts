@@ -344,6 +344,97 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // § Casambi Group → Supreme Room. A Casambi group is how the installer already expressed room
+  // membership in the Casambi app, so it is the one real location signal this protocol carries.
+  // Listing is read-only and purely local (the cached unit/group model) — group NAMES arrive with
+  // the same Cloud sync unit names do, since Local UDP carries neither.
+  app.get<{ Params: { id: string } }>("/v1/drivers/:id/casambi/groups", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+      const groups = await driver.discoverGroups();
+      // Which members are still unpaired is what an installer actually needs to decide whether
+      // pairing this group would do anything — computed from the SAME already-owned exclusion
+      // `discoverWithStatus` applies, never guessed.
+      const { discovered } = await i().discoverWithStatus(["casambi"]);
+      const pairable = new Set(discovered.map((d) => d.backendId));
+      reply.send({
+        groups: groups.map((g) => ({
+          groupId: g.groupId,
+          name: g.name,
+          unitIds: g.unitIds,
+          memberCount: g.unitIds.length,
+          unpairedCount: g.unitIds.filter((u) => pairable.has(`casambi:${u}`)).length,
+        })),
+      });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § Casambi Group → Supreme Room — pair every still-unpaired member of one Casambi group in a
+  // single step, each commissioned with `roomNameHint = <group name>` so the SAME shared
+  // `resolveOrCreateRoom()` every other protocol uses matches an existing Supreme room of that
+  // name or creates it. No new room logic here: the group name IS the hint, nothing more.
+  app.post<{ Params: { id: string; groupId: string } }>("/v1/drivers/:id/casambi/groups/:groupId/pair", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
+      if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
+      const driver = ctx.sil.getNativeDriver("casambi");
+      if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
+
+      const groupId = Number(req.params.groupId);
+      const group = (await driver.discoverGroups()).find((g) => g.groupId === groupId);
+      if (!group) throw new SupremeError("not_found", `casambi group ${req.params.groupId} not found — run "Discover devices from Cloud" first, since Local UDP carries no group names`);
+
+      // Already-commissioned units are excluded by discoverWithStatus itself, so re-pairing a
+      // group is safely idempotent: it only ever picks up members not yet in Supreme.
+      const { discovered } = await i().discoverWithStatus(["casambi"]);
+      const members = new Set(group.unitIds.map((u) => `casambi:${u}`));
+      const targets = discovered.filter((d) => members.has(d.backendId));
+
+      const paired: { backendId: string; name: string }[] = [];
+      const failures: { backendId: string; error: string }[] = [];
+      let roomId: RoomId | null = null;
+      for (const d of targets) {
+        try {
+          const device = await i().commissionDevice({
+            backendId: d.backendId,
+            name: d.suggestedName,
+            roomNameHint: group.name,
+            capabilities: d.capabilities as CapabilityKind[],
+            ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
+            ...(d.protocol ? { protocol: d.protocol } : {}),
+            ...(d.network ? { network: d.network } : {}),
+          });
+          roomId = device.roomId as RoomId;
+          paired.push({ backendId: d.backendId, name: device.name });
+        } catch (err) {
+          // One bad member never aborts the rest — the installer gets a real per-device reason.
+          failures.push({ backendId: d.backendId, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      const room = roomId ? (await ctx.home.listRooms()).find((r) => r.id === roomId) : undefined;
+      reply.send({
+        groupName: group.name,
+        roomName: room?.name ?? null,
+        paired: paired.length,
+        alreadyPaired: group.unitIds.length - targets.length,
+        devices: paired,
+        failures,
+      });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // § LAN Transport Phase 2 — Transport Monitor: the developer-grade, layered view (Transport /
   // Casambi Adapter / Driver from the driver itself; a service-wide "NATS"/`supreme-lan` layer
   // attached here, since only the Gateway route holds the event bus `queryLanHealth` needs). This
