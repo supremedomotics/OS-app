@@ -43,6 +43,10 @@ type Discovered = {
    * confirmed by a real local signal (e.g. Casambi Local mode's first UDP packet). */
   awaitingLocalSignal?: boolean;
 };
+/** Source-filter value for the Groups chip. Deliberately not a real source name — groups are a
+ * different kind of result, and a driver could legitimately be called "Groups". */
+const GROUPS_FILTER = "__groups__";
+
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 type DriverStatus = "pending" | "scanning" | "complete" | "failed" | "not_selected";
 type DriverResult = { protocol: string; driverName: string; status: "complete" | "failed"; count: number; error?: string };
@@ -245,6 +249,11 @@ export function DiscoverDevices() {
   const sourceCounts = new Map<string, number>();
   for (const d of found) sourceCounts.set(d.driverName ?? d.protocol ?? d.source, (sourceCounts.get(d.driverName ?? d.protocol ?? d.source) ?? 0) + 1);
   const visible = sourceFilter === "all" ? found : found.filter((d) => (d.driverName ?? d.protocol ?? d.source) === sourceFilter);
+  // § Casambi Group → Supreme Room — the Groups chip is a filter over the RESULT KIND, not over
+  // discovery sources: picking it shows only group cards, and picking any device source hides
+  // them, so "only groups" and "only this driver's fixtures" both mean exactly what they say.
+  const showGroups = sourceFilter === "all" || sourceFilter === GROUPS_FILTER;
+  const showDevices = sourceFilter !== GROUPS_FILTER;
 
   return (
     <div className="page">
@@ -281,10 +290,10 @@ export function DiscoverDevices() {
       {phase === "results" && (
         <>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", margin: "6px 0 12px", flexWrap: "wrap", gap: 8 }}>
-            <SourceFilterChips counts={sourceCounts} total={found.length} active={sourceFilter} onSelect={setSourceFilter} />
+            <SourceFilterChips counts={sourceCounts} total={found.length} groupCount={casambiGroups?.length ?? 0} active={sourceFilter} onSelect={setSourceFilter} />
             <button onClick={scan}>Rescan</button>
           </div>
-          {casambiGroups !== null && casambiDriverId(registry, selectedIds) && (
+          {showGroups && casambiGroups !== null && casambiDriverId(registry, selectedIds) && (
             <CasambiGroupSection
               driverId={casambiDriverId(registry, selectedIds) ?? ""}
               groups={casambiGroups}
@@ -298,7 +307,10 @@ export function DiscoverDevices() {
               }}
             />
           )}
-          {found.length === 0 && <p className="muted">No new devices found. Ensure devices are powered and on the network, then rescan.</p>}
+          {showDevices && found.length === 0 && (
+            <p className="muted">No new devices found. Ensure devices are powered and on the network, then rescan.</p>
+          )}
+          {showDevices && (
           <div className="grid">
             {visible.map((d) => (
               <FoundDevice
@@ -311,6 +323,7 @@ export function DiscoverDevices() {
               />
             ))}
           </div>
+          )}
         </>
       )}
     </div>
@@ -533,12 +546,31 @@ function DriverStatusList({
 
 /** Post-scan Source Filter — separate concept from the pre-scan Driver Selector above: this
  * only changes which already-found devices are displayed, never which drivers execute. */
-function SourceFilterChips({ counts, total, active, onSelect }: { counts: Map<string, number>; total: number; active: string; onSelect: (s: string) => void }) {
-  if (total === 0) return <span className="muted">0 devices found</span>;
+function SourceFilterChips({
+  counts,
+  total,
+  groupCount,
+  active,
+  onSelect,
+}: {
+  counts: Map<string, number>;
+  total: number;
+  /** § Casambi Group → Supreme Room — groups are a different KIND of result, not another
+   * discovery source, so they get their own chip rather than being counted among the sources. */
+  groupCount: number;
+  active: string;
+  onSelect: (s: string) => void;
+}) {
+  if (total === 0 && groupCount === 0) return <span className="muted">0 devices found</span>;
   const sources = Array.from(counts.keys()).sort();
   return (
     <div className="disc-source-filter">
       <button className={`tag proto${active === "all" ? " on" : ""}`} onClick={() => onSelect("all")}>All · {total}</button>
+      {groupCount > 0 && (
+        <button className={`tag proto${active === GROUPS_FILTER ? " on" : ""}`} onClick={() => onSelect(GROUPS_FILTER)}>
+          Groups · {groupCount}
+        </button>
+      )}
       {sources.map((s) => (
         <button key={s} className={`tag proto${active === s ? " on" : ""}`} onClick={() => onSelect(s)}>{s} · {counts.get(s)}</button>
       ))}
