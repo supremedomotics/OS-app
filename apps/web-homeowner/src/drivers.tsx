@@ -3,8 +3,6 @@ import { Button, StatusDot } from "@supreme/aureon-web";
 import { useLive, type DriverConnectionState } from "./live.js";
 import {
   type CasambiCloudDiscoverResult,
-  type CasambiGroupPairResult,
-  type CasambiGroupView,
   type CasambiDiagnostics,
   type CasambiNameSyncResult,
   type CasambiTestConnectionResult,
@@ -13,8 +11,6 @@ import {
   discoverCasambiDevicesFromCloud,
   discoverCasambiLocalGateway,
   discoverKnxGateways,
-  listCasambiGroups,
-  pairCasambiGroup,
   type DriverConfigField,
   type DriverEntry,
   type DriverHealth,
@@ -279,12 +275,6 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
             visibleCasambiConfigSchema(schema, values).map((f) => (
               <ConfigField key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((cur) => ({ ...cur, [f.key]: v }))} />
             ))}
-          {/* § Casambi Group → Supreme Room — rendered for BOTH connection modes, unlike the
-              Local-gateway panel below: Cloud mode has groups from connect, Local mode gets them
-              with the one-time Cloud sync. */}
-          {driver.protocols.includes("casambi") && driver.installed && id && (
-            <CasambiGroupRoomsPanel driverId={id} mode={String(values.connectionType ?? "cloud") === "local" ? "local" : "cloud"} />
-          )}
           {driver.protocols.includes("casambi") && String(values.connectionType ?? "cloud") === "local" && (
             <CasambiLocalGatewayPanel
               driverId={id}
@@ -750,114 +740,6 @@ function CasambiLocalGatewayPanel({
         </div>
       )}
       <CasambiDiscoveryExplainer />
-    </div>
-  );
-}
-
-/**
- * § Casambi Group → Supreme Room. Deliberately OUTSIDE `CasambiLocalGatewayPanel`, which renders
- * only for `connectionType === "local"`: groups work in BOTH modes, and differently enough that
- * the difference is worth saying out loud rather than hiding.
- *  - Cloud: `loadNetwork()` populates groups at connect, so they're available immediately.
- *  - Local: Local UDP carries no group (or fixture) names at all, so they arrive only with the
- *    one-time Cloud sync — hence the extra sentence for that mode, never a silent empty list.
- */
-function CasambiGroupRoomsPanel({ driverId, mode }: { driverId: string; mode: "cloud" | "local" }) {
-  const [busy, setBusy] = useState<"groups" | `pair:${number}` | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [groups, setGroups] = useState<CasambiGroupView[] | null>(null);
-  const [groupPairResult, setGroupPairResult] = useState<CasambiGroupPairResult | null>(null);
-
-  async function loadGroups() {
-    setBusy("groups");
-    setNote(null);
-    try {
-      setGroups(await listCasambiGroups(driverId));
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : "Could not load Casambi groups.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function pairGroup(groupId: number) {
-    setBusy(`pair:${groupId}`);
-    setNote(null);
-    setGroupPairResult(null);
-    try {
-      setGroupPairResult(await pairCasambiGroup(driverId, groupId));
-      // Refresh so each row's unpaired count reflects what just happened, never a stale number.
-      setGroups(await listCasambiGroups(driverId));
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : "Pairing the group failed.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  return (
-    <div className="drv-config" style={{ marginTop: 14 }}>
-      <span className="lbl">Rooms from Casambi groups</span>
-      <p className="help">
-        A Casambi group is how this job's rooms were already laid out in the Casambi app, so it's
-        the one real location signal this protocol carries. Pairing a group commissions each of its
-        still-unpaired fixtures into the Supreme room of the same name — matching an existing room,
-        or creating it.
-      </p>
-      {mode === "local" && (
-        <p className="help">
-          Local UDP carries no group names, so run "Discover devices from Cloud" above first —
-          otherwise this list is empty even when the fixtures themselves are already discovered.
-        </p>
-      )}
-      <div className="drv-actions" style={{ marginTop: 8 }}>
-        <button type="button" disabled={busy !== null} onClick={() => void loadGroups()}>
-          {busy === "groups" ? "Loading…" : groups ? "Refresh groups" : "Load groups"}
-        </button>
-      </div>
-      {note && <p className="muted">{note}</p>}
-      {groups && groups.length === 0 && (
-        <p className="muted">
-          No named Casambi groups found
-          {mode === "local" ? " — run \"Discover devices from Cloud\" above first." : "."} Fixtures
-          with no group assigned still pair individually from Discover Devices.
-        </p>
-      )}
-      {groups && groups.length > 0 && (
-        <ul className="drv-group-list">
-          {groups.map((g) => (
-            <li key={g.groupId} className="drv-group-row">
-              <span className="drv-group-meta">
-                <span className="drv-group-name">{g.name}</span>
-                <span className="muted">
-                  {g.unpairedCount} of {g.memberCount} fixture{g.memberCount === 1 ? "" : "s"} not yet paired
-                </span>
-              </span>
-              <button
-                type="button"
-                disabled={busy !== null || g.unpairedCount === 0}
-                onClick={() => void pairGroup(g.groupId)}
-              >
-                {busy === `pair:${g.groupId}`
-                  ? "Pairing…"
-                  : g.unpairedCount === 0
-                    ? "All paired"
-                    : `Pair ${g.unpairedCount} into "${g.name}"`}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {groupPairResult && (
-        <p className="muted">
-          Paired {groupPairResult.paired} fixture{groupPairResult.paired === 1 ? "" : "s"} from "
-          {groupPairResult.groupName}"
-          {groupPairResult.roomName ? ` into room "${groupPairResult.roomName}"` : ""}.
-          {groupPairResult.alreadyPaired > 0 && ` ${groupPairResult.alreadyPaired} were already paired.`}
-          {groupPairResult.failures.length > 0 &&
-            ` ${groupPairResult.failures.length} failed: ${groupPairResult.failures[0]!.error}`}
-        </p>
-      )}
     </div>
   );
 }

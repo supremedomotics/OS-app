@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { RoomId } from "@supreme/domain-model";
-import { ProgressBar, SegmentedControl, type ShadingKind } from "@supreme/aureon-web";
-import { client, fetchDriverRegistry, installDriverByKey, type DriverEntry } from "./api.js";
+import { Icon, ProgressBar, SegmentedControl, type ShadingKind } from "@supreme/aureon-web";
+import {
+  type CasambiGroupPairResult,
+  type CasambiGroupView,
+  client,
+  fetchDriverRegistry,
+  installDriverByKey,
+  listCasambiGroups,
+  pairCasambiGroup,
+  type DriverEntry,
+} from "./api.js";
 
 /**
  * Discover Devices (§ Automatic Device Discovery + § Unified Onboarding). One click scans every
@@ -154,6 +163,11 @@ export function DiscoverDevices() {
   // execute on the next scan. Selection state, not a result filter: it never touches `found`.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  // § Casambi Group → Supreme Room. A group is NOT a DiscoveredDevice (no capabilities of its
+  // own, not commissionable as one), so it is fetched separately from its own endpoint and
+  // rendered as its own kind of card rather than being forced into the protocol-agnostic
+  // discovery contract every other driver flows through.
+  const [casambiGroups, setCasambiGroups] = useState<CasambiGroupView[]>([]);
 
   const loadRooms = () =>
     client
@@ -194,15 +208,30 @@ export function DiscoverDevices() {
     // results from a differently-selected previous scan on screen while the new one runs.
     setFound([]);
     setDriverResults([]);
+    setCasambiGroups([]);
     setSourceFilter("all");
     try {
       const res = await client.discover(undefined, Array.from(selectedIds));
       setFound(res.discovered as Discovered[]);
       setDriverResults((res.driverResults ?? []) as DriverResult[]);
       setPhase("results");
+      void loadCasambiGroups();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scan failed.");
       setPhase("idle");
+    }
+  }
+
+  /** Best-effort and non-blocking: a Casambi driver that isn't running (or a deployment with no
+   * Casambi at all) simply contributes no group cards — never an error over a scan that otherwise
+   * succeeded, and never a fabricated empty-state claiming there are no groups. */
+  async function loadCasambiGroups() {
+    const id = casambiDriverId(registry, selectedIds);
+    if (!id) return;
+    try {
+      setCasambiGroups(await listCasambiGroups(id));
+    } catch {
+      setCasambiGroups([]);
     }
   }
 
@@ -250,6 +279,19 @@ export function DiscoverDevices() {
             <SourceFilterChips counts={sourceCounts} total={found.length} active={sourceFilter} onSelect={setSourceFilter} />
             <button onClick={scan}>Rescan</button>
           </div>
+          {casambiGroups.length > 0 && (
+            <CasambiGroupSection
+              driverId={casambiDriverId(registry, selectedIds) ?? ""}
+              groups={casambiGroups}
+              onPaired={(backendIds) => {
+                // Paired members are no longer "new finds" — drop them from the device list the
+                // same way pairing one device does, so the two views can never disagree.
+                setFound((f) => f.filter((x) => !backendIds.includes(x.backendId)));
+                void loadCasambiGroups();
+                void loadRooms();
+              }}
+            />
+          )}
           {found.length === 0 && <p className="muted">No new devices found. Ensure devices are powered and on the network, then rescan.</p>}
           <div className="grid">
             {visible.map((d) => (
@@ -265,6 +307,108 @@ export function DiscoverDevices() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** The installed Casambi driver's id, but only when it was actually part of this scan — a group
+ * section for a driver the installer deselected would be claiming a result the scan never ran. */
+function casambiDriverId(registry: DriverEntry[], selectedIds: Set<string>): string | null {
+  const entry = discoverableDrivers(registry).find(
+    (d) => d.protocols?.includes("casambi") && d.installedId && selectedIds.has(d.installedId),
+  );
+  return entry?.installedId ?? null;
+}
+
+/**
+ * § Casambi Group → Supreme Room — group cards in the discovery results.
+ *
+ * A Casambi group is how this job's rooms were already laid out in the Casambi app, so it's the
+ * one real location signal this protocol carries. Pairing a group commissions each of its
+ * still-unpaired fixtures with the group's name as the room hint, so the SAME shared
+ * `resolveOrCreateRoom()` every protocol uses matches an existing Supreme room of that name or
+ * creates it. Rendered as its own card kind, never as a `FoundDevice`: a group has no
+ * capabilities and isn't commissionable as a single device.
+ */
+function CasambiGroupSection({
+  driverId,
+  groups,
+  onPaired,
+}: {
+  driverId: string;
+  groups: CasambiGroupView[];
+  onPaired: (backendIds: string[]) => void;
+}) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<CasambiGroupPairResult | null>(null);
+
+  async function pair(groupId: number) {
+    setBusy(groupId);
+    setErr(null);
+    setDone(null);
+    try {
+      const res = await pairCasambiGroup(driverId, groupId);
+      setDone(res);
+      onPaired(res.devices.map((d) => d.backendId));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Pairing the group failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="disc-groups">
+      <h2 className="section-title">Groups from Casambi</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Pairing a group adds its fixtures to the room of the same name — matching an existing room,
+        or creating it.
+      </p>
+      {err && <p className="err">{err}</p>}
+      {done && (
+        <p className="muted">
+          Paired {done.paired} fixture{done.paired === 1 ? "" : "s"} from "{done.groupName}"
+          {done.roomName ? ` into room "${done.roomName}"` : ""}.
+          {done.alreadyPaired > 0 && ` ${done.alreadyPaired} were already paired.`}
+          {done.failures.length > 0 && ` ${done.failures.length} failed: ${done.failures[0]!.error}`}
+        </p>
+      )}
+      <div className="grid">
+        {groups.map((g) => (
+          <div className="ext-card disc-card open" key={g.groupId}>
+            <div className="ext-head" style={{ cursor: "default" }}>
+              <span className="ext-ic"><Icon name="rooms" /></span>
+              <span className="ext-meta">
+                <span className="ext-name">{g.name}</span>
+                <span className="ext-sub">
+                  Casambi group · {g.memberCount} fixture{g.memberCount === 1 ? "" : "s"}
+                  {g.unpairedCount > 0 ? ` · ${g.unpairedCount} not yet paired` : ""}
+                </span>
+                <span className="ext-tags">
+                  <span className="tag ok">Room: {g.name}</span>
+                </span>
+              </span>
+              <span className={`drv-badge ${g.unpairedCount > 0 ? "ok" : "off"}`}>
+                {g.unpairedCount > 0 ? "Group" : "All paired"}
+              </span>
+            </div>
+            <div className="drv-detail">
+              <button
+                className="primary"
+                disabled={busy !== null || g.unpairedCount === 0}
+                onClick={() => void pair(g.groupId)}
+              >
+                {busy === g.groupId
+                  ? "Pairing…"
+                  : g.unpairedCount === 0
+                    ? "All paired"
+                    : `Add ${g.unpairedCount} to "${g.name}"`}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
