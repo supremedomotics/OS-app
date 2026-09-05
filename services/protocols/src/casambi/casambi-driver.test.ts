@@ -618,7 +618,7 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       const { driver } = makeLocalDriver();
       await driver.connect();
       const cloudTransport = new FakeCasambiTransport(NETWORK); // units 45 (Dimmer+CCT) and 46 (Slider)
-      const result = await driver.discoverFromCloud(creds, cloudTransport);
+      const result = await driver.discoverFromCloud(creds, cloudTransport, 0);
       expect(result).toEqual({ discovered: 2, total: 2, networkName: "Villa" });
 
       const discovered = await driver.discover();
@@ -634,7 +634,7 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       // Unit 5 becomes known locally via its first NotifyControlValues packet (dimmer=200).
       socket.receive("0.70.4.4b.5.1.c8\r\n");
       const cloudTransport = new FakeCasambiTransport({ units: [{ id: 5, name: "Should not overwrite", controls: [{ type: "Dimmer", value: 0 }] }], groups: [] });
-      const result = await driver.discoverFromCloud(creds, cloudTransport);
+      const result = await driver.discoverFromCloud(creds, cloudTransport, 0);
       expect(result.discovered).toBe(0); // already known — skipped, never overwritten
 
       const after = (await driver.discover()).find((d) => d.raw.unitId === 5)!;
@@ -647,7 +647,7 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       const { socket, driver } = makeLocalDriver();
       await driver.connect();
       const cloudTransport = new FakeCasambiTransport(NETWORK);
-      await driver.discoverFromCloud(creds, cloudTransport);
+      await driver.discoverFromCloud(creds, cloudTransport, 0);
       expect((await driver.discover()).find((d) => d.raw.unitId === 45)!.raw.awaitingLocalSignal).toBe(true);
 
       // Unit 45's first real local packet arrives — dimmer=200.
@@ -664,7 +664,7 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       // the CCT NotifyControlValues packet (type 10) hasn't arrived yet.
       socket.receive("0.70.4.4b.2d.1.c8\r\n");
       const cloudTransport = new FakeCasambiTransport(NETWORK); // unit 45 = Dimmer + CCT, unit 46 = new
-      const result = await driver.discoverFromCloud(creds, cloudTransport);
+      const result = await driver.discoverFromCloud(creds, cloudTransport, 0);
       expect(result.discovered).toBe(1); // only unit 46 is newly discovered — 45 was already known
 
       const after = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
@@ -677,7 +677,7 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       const { socket, driver } = makeLocalDriver();
       await driver.connect();
       const cloudTransport = new FakeCasambiTransport(NETWORK); // unit 45 = Dimmer + CCT per Cloud
-      await driver.discoverFromCloud(creds, cloudTransport);
+      await driver.discoverFromCloud(creds, cloudTransport, 0);
       expect((await driver.discover()).find((d) => d.raw.unitId === 45)!.capabilities).toContain("color");
 
       // A real local packet arrives reporting ONLY the dimmer channel (no CCT byte in this frame).
@@ -699,19 +699,47 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
         { id: 45, controls: [{ type: "Dimmer", value: 0 }, { type: "CCT", value: 4000, min: 2700, max: 6000 }] },
       ];
       const cloudTransport = new FakeCasambiTransport(structuralOnlyNetwork, stateUnits);
-      await driver.discoverFromCloud(creds, cloudTransport);
+      await driver.discoverFromCloud(creds, cloudTransport, 0);
 
       const after = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
       expect(after.capabilities).toEqual(["brightness", "color"]);
       await driver.disconnect();
     });
 
-    it("never opens a WebSocket wire — REST session + fetch only", async () => {
+    it("skips the WebSocket enrichment burst entirely when wireBurstMs is 0 — REST session + fetch only", async () => {
       const { driver } = makeLocalDriver();
       await driver.connect();
       const cloudTransport = new FakeCasambiTransport(NETWORK);
-      await driver.discoverFromCloud(creds, cloudTransport);
+      await driver.discoverFromCloud(creds, cloudTransport, 0);
       expect(cloudTransport.handlers).toBeNull(); // openWire() was never called
+      await driver.disconnect();
+    });
+
+    it("§ live-confirmed fix — opens a short Cloud wire burst and merges a unitChanged event's richer controls (real case: both REST endpoints under-report a fixture's CCT control, but the live WebSocket correctly reports it, same as Cloud mode's own connect flow)", async () => {
+      const { driver } = makeLocalDriver();
+      await driver.connect();
+      const structuralOnlyNetwork: CasambiNetwork = {
+        units: [{ id: 45, name: "Ceiling", type: "Luminaire", groupId: 1 }], // no controls from fetchNetwork
+        groups: [],
+      };
+      // fetchState ALSO under-reports it (dimmer only) — matching the real, live-confirmed case.
+      const stateUnits: CasambiUnit[] = [{ id: 45, controls: [{ type: "Dimmer", value: 0 }] }];
+      const cloudTransport = new FakeCasambiTransport(structuralOnlyNetwork, stateUnits);
+
+      const discoverPromise = driver.discoverFromCloud(creds, cloudTransport, 20);
+      // Wait for the wire to actually open before emitting — openWire() is awaited inside
+      // discoverFromCloud, so this happens almost immediately, well before the 20ms burst ends.
+      await vi.waitFor(() => expect(cloudTransport.handlers).not.toBeNull());
+      cloudTransport.emit({
+        method: "unitChanged",
+        id: 45,
+        dimLevel: 0,
+        controls: [{ type: "Dimmer", value: 0 }, { type: "CCT", value: 4000, min: 2700, max: 6000 }],
+      });
+      await discoverPromise;
+
+      const after = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
+      expect(after.capabilities).toEqual(["brightness", "color"]);
       await driver.disconnect();
     });
 

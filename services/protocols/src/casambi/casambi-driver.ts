@@ -371,6 +371,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   async discoverFromCloud(
     creds: CasambiCredentials,
     transport: CasambiTransport = new HttpCasambiTransport({ apiKey: creds.apiKey }),
+    wireBurstMs = 1500,
   ): Promise<CasambiCloudDiscoverResult> {
     if (this.mode !== "local") {
       throw new Error("casambi: discoverFromCloud is only meaningful in Local mode — Cloud mode already discovers units from its own live session");
@@ -389,6 +390,17 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // structurally correct but permanently capability-less beyond whatever Local UDP happened to
     // report on its own. Merge state's controls onto each cloud unit before recording it.
     const stateById = new Map((await transport.fetchState(session)).map((u) => [u.id, u]));
+    // § live-confirmed fix — even `/state` can under-report a fixture's real control set (live-
+    // confirmed on a real Lithernet/DALI-bridged CCT fixture: both REST endpoints reported only
+    // "Dimmer", never "CCT", for the exact same unit Cloud mode's own live WebSocket correctly
+    // reports "CCT" for). Cloud mode gets the fuller picture "for free" because its wire stays
+    // open forever and receives each unit's own unitChanged burst; Local mode's one-time Cloud-
+    // discovery step opens that SAME wire just long enough to catch it, then closes — never a
+    // standing dependency, matching the "never opens a WebSocket wire" contract everywhere else
+    // in this file (that guarantee is about Local mode's ONGOING operation, which stays UDP-only
+    // unconditionally; this is a one-time enrichment pass, exactly like fetchNetwork/fetchState
+    // above). Best-effort: any failure here still leaves the REST-derived data intact.
+    await this.enrichFromCloudWireBurst(session, transport, wireBurstMs);
     let discovered = 0;
     for (let cloudUnit of network.units) {
       const state = stateById.get(cloudUnit.id);
@@ -414,6 +426,31 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       }
     }
     return { discovered, total: network.units.length, networkName: session.networkName ?? null };
+  }
+
+  /** Opens a short-lived Cloud WebSocket wire — the same one Cloud mode keeps open forever — just
+   * long enough to catch each unit's initial `unitChanged` burst, merges any richer control data
+   * it reports via the normal {@link applyUnit} path, then closes. Best-effort: a connection
+   * failure here is swallowed, leaving whatever REST already provided intact. See
+   * {@link discoverFromCloud}'s own doc comment for why this is the one exception to Local mode
+   * never opening a wire. */
+  private async enrichFromCloudWireBurst(session: CasambiSession, transport: CasambiTransport, burstMs: number): Promise<void> {
+    if (burstMs <= 0) return;
+    try {
+      const wire = await transport.openWire({
+        onEvent: (event) => {
+          const signal = normalizeCloudEvent(event);
+          if (signal?.kind === "unit") this.applyUnit(signal.unit);
+        },
+        onClose: () => {},
+        onError: () => {},
+      });
+      wire.open(session, WIRE_ID);
+      await new Promise((resolve) => setTimeout(resolve, burstMs));
+      wire.close();
+    } catch {
+      // Best-effort enrichment only — REST-derived controls still apply.
+    }
   }
 
   onState(listener: StateListener): () => void {
