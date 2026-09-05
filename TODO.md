@@ -170,7 +170,7 @@
 - **Complexity:** varies per item (Low–High), see audit doc.
 - **Status:** Not started. Found during the Production Readiness Audit.
 
-### Casambi Local Gateway — per-device command fans out to every light on the network (needs a real packet capture to root-cause)
+### ~~Casambi Local Gateway — per-device command fans out to every light on the network~~ — RESOLVED (0x20 short form = broadcast)
 - **Description:** A live user report: discovery over Local UDP correctly finds each device
   separately (8 distinct devices, 8 distinct unit ids), but sending an on/off/brightness command
   from the UI to any one device visibly triggers every light in the Casambi network, not just the
@@ -197,8 +197,49 @@
   fixtures or ganged onto one physical circuit.
 - **Complexity:** Unknown until the capture is in hand — could be zero (a wiring fact, not a bug)
   or a real, narrow protocol-layer fix.
-- **Status:** Not started — root-cause investigation paused pending the packet capture above.
-  Found during a live Casambi Local Gateway debugging session.
+- **Resolution (live-confirmed on real hardware):** it WAS a SupremeOS bug, and neither of the two
+  hypotheses above. `0x20`'s `Duration` field is documented as optional, and `LocalCommandEngine`
+  never passed a fade — so we emitted the SHORT form (`c.72.4.20.ff.1.18`, length 4). A real
+  Lithernet gateway parses `0x20` **positionally** against the full layout its own worked example
+  uses, so it read our `Target_Type`(1)/`Target_ID`(0x18) bytes as `Duration_low`/`Duration_high`,
+  found no target at all, and fell back to `Target_Type 0 / Target_ID 0` — **broadcast**. Colour
+  (`0x48`) was unaffected because its Duration is mandatory, which is exactly why CCT targeted one
+  fixture correctly while level did not — the asymmetry that cracked it. Level commands now always
+  send an explicit `0` fade (`fadeMs ?? 0`); behaviour is identical (instant) and the target bytes
+  land where the gateway actually reads them. Fixed in `local-command-mapper.ts`.
+
+### Casambi Local Gateway — curtain motor open/close still not moving the fixture
+- **Description:** A curtain motor (unit 45) is correctly discovered as `position`, and position
+  **feedback now works** (type-15 slider decoded on the live-confirmed 0-255 scale — `0x50` = 80 =
+  the Casambi app's 31.4%). Commands still do not move it. Three attempts, each disproved on the
+  wire by a gateway-console capture from the user's own hardware:
+    1. `0x3F` element write `[index 1, value 1]` (press Open) → motor jogged to **0.4%** only.
+    2. Reinterpreted element 1 as the position slider, writing the position scaled 0-255
+       (`0xFF` open / `0x80` for 50%) → gateway forwarded the packets (`Casambi Output` present)
+       but the motor **ignored them entirely** — an on/off element only accepts 0 or 1, so those
+       values are out of range.
+    3. Press **and** release, matching what the Casambi app itself sends
+       (`90.<idx>.01.01` then `90.<idx>.00`) → still not working (user-reported; no capture of
+       this attempt taken yet).
+- **Established facts (all from real captures, do not re-derive):**
+    - Our outbound packets are well-formed and the gateway forwards them:
+      `Network Input: c.72.7.3f.1.2d.0.0.1.ff` → `Casambi Output: 07.3f.01.2d.00.00.01.ff`.
+    - Element **0 = Close**, element **1 = Open**, both long-form on/off (`0x90`) in notifications.
+    - The position slider is reported **short form** (`0f.<lo>.<hi>`, type 15, 0-255) and therefore
+      carries **no element index** — and the Casambi app writes it over BLE, so the gateway never
+      observes an index we could copy. This is why `position: set` remains unmapped.
+- **Next steps, in order:**
+    1. Capture the gateway console for attempt 3 (press+release) triggered from SupremeOS — we have
+       no wire evidence for it yet, only the user's report.
+    2. Determine whether the buttons are **hold-to-move** rather than press-to-toggle: time how long
+       the button is held in the Casambi app and whether the motor stops on release. If so, the
+       release must be delayed by the travel time, not sent immediately.
+    3. Only then consider probing for the slider's write index (elements 2-7) to enable
+       `position: set` — and probe it, never infer it. Two inferences have already been wrong.
+- **Complexity:** Low-medium once a capture of attempt 3 exists; the codec, targeting and framing
+  are all already proven correct.
+- **Status:** Paused at the user's request. Cloud mode's `position` path (maps to the Casambi
+  `Slider` control) is untested against this fixture and may simply work — worth trying first.
 
 ### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
 - **Description:** `local-discovery.ts` (real, PR-2) deliberately does NOT map NotifyControlValues
