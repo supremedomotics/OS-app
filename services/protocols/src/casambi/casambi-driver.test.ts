@@ -708,6 +708,35 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       await driver.disconnect();
     });
 
+    it("§ live-confirmed fix — merges the Cloud's groupId onto a locally-known unit, so groups and the room hint aren't silently empty in Local mode", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      // Local UDP sees unit 45 first — it reports NO groupId (the local protocol has no such
+      // field at all), which is the normal case for every unit in Local mode.
+      socket.receive("0.70.4.4b.2d.1.c8\r\n");
+      const cloudTransport = new FakeCasambiTransport(NETWORK); // unit 45 is in group 1, "Living Room"
+      await driver.discoverFromCloud(creds, cloudTransport, 0);
+
+      // Unit 45 is only in the group because groupId was merged onto the already-known unit;
+      // 46 was previously unknown, so it arrives whole and would have been there either way.
+      expect(await driver.discoverGroups()).toEqual([{ groupId: 1, name: "Living Room", unitIds: [45, 46] }]);
+      const device = (await driver.discover()).find((d) => d.raw.unitId === 45)!;
+      expect(device.raw.room).toBe("Living Room"); // the room hint commissioning actually uses
+      await driver.disconnect();
+    });
+
+    it("never overwrites a real local value with the Cloud's older copy when filling structural gaps", async () => {
+      const { driver } = makeLocalDriver();
+      await driver.connect();
+      const local: CasambiNetwork = { units: [{ id: 45, groupId: 7, type: "LocalType" }], groups: [] };
+      await driver.discoverFromCloud(creds, new FakeCasambiTransport(local), 0); // seeds unit 45
+      // A later Cloud pass puts unit 45 in group 1 instead — the already-known value wins, so 45
+      // stays in (unnamed, therefore omitted) group 7 and only unit 46 lands in "Living Room".
+      await driver.discoverFromCloud(creds, new FakeCasambiTransport(NETWORK), 0);
+      expect(await driver.discoverGroups()).toEqual([{ groupId: 1, name: "Living Room", unitIds: [46] }]);
+      await driver.disconnect();
+    });
+
     it("skips the WebSocket enrichment burst entirely when wireBurstMs is 0 — REST session + fetch only", async () => {
       const { driver } = makeLocalDriver();
       await driver.connect();

@@ -435,9 +435,21 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       // is correct right away without discarding live feedback already recorded.
       const knownTypes = new Set((existing.controls ?? []).map((c) => c.type));
       const missing = (cloudUnit.controls ?? []).filter((c) => !knownTypes.has(c.type));
-      if (missing.length > 0) {
-        this.units.set(cloudUnit.id, { ...existing, controls: [...(existing.controls ?? []), ...missing] });
-      }
+      // § live-confirmed fix — merge the STRUCTURAL fields too, not just controls. Local UDP
+      // reports none of these (`updateUnitFromControlValues` only ever sets id/dimLevel/on/
+      // sensors/controls), and local discovery sees every unit before this runs, so a merge that
+      // copied only `controls` left `groupId` undefined on literally every unit — which silently
+      // emptied BOTH `buildDiscoveredGroups` (group membership is derived from `unit.groupId`)
+      // and `buildDiscoveredDevices`' own `raw.room` hint. Only ever fills a gap: a real local
+      // value, if one ever appears, is never overwritten by the Cloud's older copy.
+      this.units.set(cloudUnit.id, {
+        ...existing,
+        ...(existing.groupId === undefined && cloudUnit.groupId !== undefined ? { groupId: cloudUnit.groupId } : {}),
+        ...(existing.fixtureId === undefined && cloudUnit.fixtureId !== undefined ? { fixtureId: cloudUnit.fixtureId } : {}),
+        ...(existing.type === undefined && cloudUnit.type !== undefined ? { type: cloudUnit.type } : {}),
+        ...(existing.address === undefined && cloudUnit.address !== undefined ? { address: cloudUnit.address } : {}),
+        ...(missing.length > 0 ? { controls: [...(existing.controls ?? []), ...missing] } : {}),
+      });
     }
     return { discovered, total: network.units.length, networkName: session.networkName ?? null };
   }
