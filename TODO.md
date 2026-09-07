@@ -208,57 +208,27 @@
   send an explicit `0` fade (`fadeMs ?? 0`); behaviour is identical (instant) and the target bytes
   land where the gateway actually reads them. Fixed in `local-command-mapper.ts`.
 
-### Casambi Local Gateway — curtain motor open/close still not moving the fixture
-- **Description:** A curtain motor (unit 45) is correctly discovered as `position`, and position
-  **feedback now works** (type-15 slider decoded on the live-confirmed 0-255 scale — `0x50` = 80 =
-  the Casambi app's 31.4%). Commands still do not move it. Three attempts, each disproved on the
-  wire by a gateway-console capture from the user's own hardware:
-    1. `0x3F` element write `[index 1, value 1]` (press Open) → motor jogged to **0.4%** only.
-    2. Reinterpreted element 1 as the position slider, writing the position scaled 0-255
-       (`0xFF` open / `0x80` for 50%) → gateway forwarded the packets (`Casambi Output` present)
-       but the motor **ignored them entirely** — an on/off element only accepts 0 or 1, so those
-       values are out of range.
-    3. Press **and** release, matching what the Casambi app itself sends
-       (`90.<idx>.01.01` then `90.<idx>.00`) → still not working (user-reported; no capture of
-       this attempt taken yet).
-- **Established facts (all from real captures, do not re-derive):**
-    - Our outbound packets are well-formed and the gateway forwards them:
-      `Network Input: c.72.7.3f.1.2d.0.0.1.ff` → `Casambi Output: 07.3f.01.2d.00.00.01.ff`.
-    - Element **0 = Close**, element **1 = Open**, both long-form on/off (`0x90`) in notifications.
-    - The position slider is reported **short form** (`0f.<lo>.<hi>`, type 15, 0-255) and therefore
-      carries **no element index** — and the Casambi app writes it over BLE, so the gateway never
-      observes an index we could copy. This is why `position: set` remains unmapped.
-- **New facts from System Manual 6.38 (found after this was paused):**
-    - A device has **exactly 8 custom elements, index 0-7, in ONE shared namespace** (§5.12.2.2.18).
-      Elements 0 and 1 are the observed Close/Open pair, so the position slider must be one of
-      **2-7** — a 6-value search space, not an unbounded one.
-    - Element control types are distinct: **16 = On/off toggle, 17 = Button, 18 = PushButton**
-      (p.203). Our motor reports type **16** (long form `0x90`) for Open/Close — a *toggle*, which
-      the doc does not describe as momentary. The press+release model may itself be wrong.
-    - Type **15 = Slider (custom element)** and the doc states indexed sliders are reported in
-      **long form `0x8F : INDEX : LEN : VALUE`**. Our motor reports it short form (no index), which
-      is why the index is not observable here — but `parseNotifyControlValues` already captures
-      `index` for long form, so a device that does report it needs no parser work.
-    - Writing an unsupported element is a documented and live-confirmed **no-op**, which makes an
-      empirical index sweep safe on live hardware.
-- **Probe tool (new):** `tools/casambi-element-probe/casambi-element-probe.mjs` — send-only UDP
-  prober for 0x3F. Its frame output is byte-identical to a real driver capture
-  (`c.72.7.3f.1.2d.0.0.1.ff`). Send-only on purpose: the gateway shares one port for send and
-  receive, which the running driver already binds.
-- **Next steps, in order:**
-    1. **Hold test** — `--hold 1 3000` and `--hold 1 8000`. If travel distance scales with the hold
-       time, the buttons are hold-to-move and attempts 1 and 3 both failed for the same reason: a
-       ~0ms hold. The fix is then a real hold duration, which cannot be guessed — it becomes an
-       installer-entered `device.metadata` travel time, or a closed loop that releases when the
-       (already working) type-15 position feedback stops changing.
-    2. **Index sweep** — `--sweep`. Whichever of elements 2-7 drives the curtain to ~50% is the
-       slider index; that unblocks `position: set` with no inference.
-    3. Only after both: plumb the discovered index through to `localCommandToUdpPacket`, which
-       today has no access to the unit's controls.
-- **Complexity:** Low-medium once the two probes above have run; the codec, targeting and framing
-  are all already proven correct.
-- **Status:** Active — blocked on the two hardware probes above. Cloud mode's `position` path (maps to the Casambi
-  `Slider` control) is untested against this fixture and may simply work — worth trying first.
+### Casambi Local Gateway — curtain motor position/open/close — RESOLVED
+- **Root cause:** we were driving the wrong control. A Casambi curtain motor's position is the
+  ordinary **LEVEL channel** (`0x20 SetTargetLevel`), exactly like a dimmable luminaire — not a
+  custom element. Live-confirmed on real hardware: `c.72.6.20.bf.0.0.1.2d` (level 191) drove the
+  curtain to **75%**.
+- **Fix:** `local-command-mapper.ts`'s `position` case now emits `0x20` — `open` = 255,
+  `close` = 0, `set` = `round(pct / 100 * 255)`, clamped to 0-100, always with the explicit
+  Duration bytes. The two disproved element-based attempts (`0x3F` press-only, then a scaled
+  position written to an on/off element) are gone, along with the packet-sequence plumbing in
+  `command-engine.ts` that only the press+release model needed.
+- **Why the earlier attempts failed:** elements 0/1 on this motor are its Close/Open *buttons* — a
+  secondary control surface. Writing them jogged the motor (0.4%) rather than commanding travel,
+  and writing a scaled position to an on/off element was silently ignored as out of range.
+- **Still open:** `position: stop` remains deliberately unmapped — no opcode is confirmed to halt
+  travel mid-way, and `0x20` only ever commands an absolute target. It surfaces the driver's real
+  "unsupported command" error rather than a fabricated mapping.
+- **Untested:** Cloud mode's `position` path (maps to the Casambi `Slider` control) has still never
+  been exercised against this fixture.
+- **Probe tool kept:** `tools/casambi-element-probe/casambi-element-probe.mjs` — send-only 0x3F
+  element prober. No longer needed for this bug, but it is the tool for any future custom-element
+  question (a device has 8 elements, index 0-7, one shared namespace, §5.12.2.2.18).
 
 ### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
 - **Description:** `local-discovery.ts` (real, PR-2) deliberately does NOT map NotifyControlValues
