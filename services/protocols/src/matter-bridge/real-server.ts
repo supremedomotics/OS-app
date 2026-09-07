@@ -3,7 +3,7 @@ import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
 import { OnOffServer } from "@matter/main/behaviors/on-off";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
-import type { MatterBridgeServer } from "./server.js";
+import type { MatterBridgeServer, MatterBridgeCommissioningState, MatterBridgeFabricInfo } from "./server.js";
 
 /**
  * The real `@matter/main` implementation of {@link MatterBridgeServer} (§3, §26 — no manual
@@ -166,5 +166,46 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
   onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
+  }
+
+  /**
+   * § Phase 4 — reads `@matter/main`'s OWN live commissioning/fabric state directly off the
+   * root endpoint (`node.state.commissioning`), never a SupremeOS-maintained copy. Verified
+   * against `CommissioningServer`'s real (internal, `@matter/node`) source: `passcode`/
+   * `discriminator` are schema-marked non-volatile (`quality: "N"`) — the SDK persists them to
+   * `storagePath` itself and only generates a fresh value when none exists yet, which is
+   * exactly the "generate once, reuse forever" behavior §2 requires. This function does not
+   * generate or cache anything of its own.
+   */
+  getCommissioningState(): MatterBridgeCommissioningState {
+    if (!this.node) throw new Error("matter-bridge: server not started");
+    const commissioning = this.node.state.commissioning;
+    const fabrics: MatterBridgeFabricInfo[] = Object.values(commissioning.fabrics).map((f) => ({
+      fabricIndex: f.fabricIndex,
+      label: f.label || null,
+      rootVendorId: f.rootVendorId ?? null,
+    }));
+    return {
+      commissioned: commissioning.commissioned,
+      fabrics,
+      pairing: {
+        manualPairingCode: commissioning.pairingCodes.manualPairingCode,
+        qrPairingCode: commissioning.pairingCodes.qrPairingCode,
+        discriminator: commissioning.discriminator,
+      },
+    };
+  }
+
+  /** § Phase 4 §7 — delegates entirely to `ServerNode.erase()` (verified against its real
+   * source: closes sessions, goes offline, then wipes the node's own storage) — SupremeOS
+   * never reaches into the storage directory itself. Leaves this instance unusable
+   * afterward, same as `stop()` — a caller wanting a fresh node calls `start()` again, which
+   * will generate a NEW node identity/fabric/passcode since the old storage is gone. */
+  async factoryReset(): Promise<void> {
+    if (!this.node) throw new Error("matter-bridge: server not started");
+    await this.node.erase();
+    this.node = undefined;
+    this.aggregator = undefined;
+    this.endpoints.clear();
   }
 }
