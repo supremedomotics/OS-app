@@ -58,6 +58,35 @@ export interface DriverRegistryEntry {
   /** How many instances of this catalog key are installed. 0 = not installed, 1 = the ordinary
    * case, >1 = a multi-network/multi-gateway install. */
   instanceCount: number;
+  /** § Multi-network Casambi, Stage 3 — this instance's 0-based position in REAL install order
+   * (`listInstances`' own deterministic ordering, the same ordering `installer-context.ts`'s
+   * `runtimeProtocolFor` uses to decide which instance keeps the bare, unscoped protocol string).
+   * `null` for the not-installed placeholder row. Exists so a consumer that needs a stable,
+   * unambiguous per-instance ordinal (a fallback label, a display badge) never has to derive one
+   * from this array's own position — `registry()`'s final sort is by NAME then LABEL for display,
+   * not install order, so array position here would silently be the wrong thing to use. */
+  instanceIndex: number | null;
+  /** § Multi-network Casambi, Stage 3 — `label` when explicitly set, otherwise a deterministic
+   * fallback ("Network 2", "Gateway 1", …) synthesized from `instanceIndex` whenever
+   * `instanceCount > 1` — never fabricated, never null-but-ambiguous, once a key genuinely holds
+   * more than one instance. `null` exactly when `label` is null AND there is nothing to
+   * disambiguate (0 or 1 instance), matching every existing single-instance install's display
+   * unchanged. Every consumer (Driver Manager row, Discover Devices instance badge) should render
+   * THIS, never raw `label`, so a pre-existing unlabeled instance never sits next to a labeled
+   * sibling with no way to tell them apart. See `casambiInstanceNoun` for the "Network"/"Gateway"
+   * word choice. */
+  displayLabel: string | null;
+}
+
+/** § Multi-network Casambi, Stage 3 — the noun a fallback instance label uses. Casambi is the
+ * only key with a real multi-instance UI today, and its two connection modes have genuinely
+ * different real-world nouns (a Cloud "network", a Local "gateway") — reading `connectionType`
+ * off the instance's OWN config, never guessed. Any other key that someday supports multiple
+ * instances gets the honest, generic "Instance" rather than a fabricated domain word this
+ * function has no way to know. */
+export function casambiInstanceNoun(key: string, config: Record<string, unknown>): string {
+  if (key !== "supreme-casambi") return "Instance";
+  return config.connectionType === "local" ? "Gateway" : "Network";
 }
 import { verifyBundle } from "@supreme/driver-sdk";
 import { defaultDriverConfig, validateDriverConfig, type ConfigFallbacks } from "./config.js";
@@ -126,7 +155,7 @@ export class DriverManager {
         const m = b.bundle.manifest;
         const instances = byKey.get(m.key) ?? [];
         const rows = instances.length > 0 ? instances : [undefined];
-        return rows.map((inst) => ({
+        return rows.map((inst, instanceIndex) => ({
           key: m.key,
           name: m.name,
           description: m.description,
@@ -154,6 +183,9 @@ export class DriverManager {
           config: inst?.config ?? {},
           label: inst?.label ?? null,
           instanceCount: instances.length,
+          instanceIndex: inst ? instanceIndex : null,
+          displayLabel:
+            inst?.label ?? (inst && instances.length > 1 ? `${casambiInstanceNoun(m.key, inst.config)} ${instanceIndex + 1}` : null),
         } satisfies DriverRegistryEntry));
       })
       .sort((a, b) => a.name.localeCompare(b.name) || (a.label ?? "").localeCompare(b.label ?? ""));

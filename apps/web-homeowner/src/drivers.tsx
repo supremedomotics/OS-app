@@ -141,10 +141,12 @@ function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEn
         <div className="drv-title">
           <span className="nm">
             {driver.name}
-            {/* The instance label is what distinguishes one Casambi network / Lithernet gateway
-                from another in a multi-instance install; single-instance rows have none and are
-                unchanged. */}
-            {driver.label && <span className="drv-instance"> · {driver.label}</span>}
+            {/* § Multi-network Casambi, Stage 3 — `displayLabel`, not raw `label`: it already
+                falls back to a deterministic "Network 1"/"Gateway 1" for an instance created
+                before this feature existed, so a legacy unlabeled row is never left sitting
+                unmarked next to a labeled sibling. Single-instance rows still render nothing —
+                `displayLabel` is null exactly when there's nothing to disambiguate. */}
+            {driver.displayLabel && <span className="drv-instance"> · {driver.displayLabel}</span>}
           </span>
           <span className="meta">{driver.category} · v{driver.version}{driver.requiresSku ? ` · ${driver.requiresSku}` : ""}</span>
         </div>

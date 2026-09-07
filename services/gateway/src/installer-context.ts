@@ -2114,11 +2114,13 @@ export class InstallerServices {
    * installed drivers that expose a `protocol` are discovery-relevant (the KNX Group
    * Address Schema field, for example, has none).
    */
-  async discoverableDrivers(): Promise<{ installedId: string; key: string; name: string; protocols: string[]; instanceCount: number }[]> {
+  async discoverableDrivers(): Promise<
+    { installedId: string; key: string; name: string; protocols: string[]; instanceCount: number; displayLabel: string | null }[]
+  > {
     const reg = await this.drivers.registry();
     return reg
       .filter((d) => d.installed && d.installedId && d.protocols.length > 0)
-      .map((d) => ({ installedId: d.installedId!, key: d.key, name: d.name, protocols: d.protocols, instanceCount: d.instanceCount }));
+      .map((d) => ({ installedId: d.installedId!, key: d.key, name: d.name, protocols: d.protocols, instanceCount: d.instanceCount, displayLabel: d.displayLabel }));
   }
 
   /**
@@ -2131,8 +2133,22 @@ export class InstallerServices {
    * (§ Driver Failure Isolation) so one bad connection never discards the rest.
    */
   async discoverWithStatus(driverIds?: string[]): Promise<{
-    discovered: (Awaited<ReturnType<CommissioningService["discover"]>>[number] & { driverName: string | null })[];
-    driverResults: { protocol: string; driverName: string; status: "complete" | "failed"; count: number; error?: string }[];
+    discovered: (Awaited<ReturnType<CommissioningService["discover"]>>[number] & {
+      driverName: string | null;
+      /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) that discovered
+       * this device, not just its protocol family. Needed because `protocol` is runtime-scoped
+       * ("casambi#<id>") for any instance but a key's first, and matching that scoped string
+       * against a driver row's bare manifest `protocols` array (design intent: "mqtt"/"knx"/
+       * "modbus", never an instance suffix) would never find one — this sidesteps that string
+       * matching entirely by carrying the real identity directly. The client's extension-match
+       * and auto-install logic should key off THIS, not `protocol`. */
+      driverId: string | null;
+      /** § Multi-network Casambi, Stage 3 — this instance's real `displayLabel` ("Network 1",
+       * "Gateway 2", or the deterministic legacy fallback — never derived from array position).
+       * `null` for a single-instance driver, matching its unchanged, unlabeled presentation. */
+      instanceLabel: string | null;
+    })[];
+    driverResults: { protocol: string; driverName: string; driverId: string | null; instanceLabel: string | null; status: "complete" | "failed"; count: number; error?: string }[];
   }> {
     const drivers = await this.discoverableDrivers();
     // § Multi-network Casambi — keyed by RUNTIME protocol, not the bare manifest one: two
@@ -2141,11 +2157,15 @@ export class InstallerServices {
     // devices), and a scoped instance’s discovered devices — which report their OWN runtime
     // protocol — never matched the bare-keyed map at all.
     const nameByProtocol = new Map<string, string>();
+    const driverIdByProtocol = new Map<string, string>();
+    const instanceLabelByProtocol = new Map<string, string | null>();
     for (const d of drivers) {
       for (const p of d.protocols) {
         const fast = this.runtimeProtocolIfSingleInstance(d, p);
         const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(d, p);
         nameByProtocol.set(runtimeProtocol, d.name);
+        driverIdByProtocol.set(runtimeProtocol, d.installedId);
+        instanceLabelByProtocol.set(runtimeProtocol, d.displayLabel);
       }
     }
 
@@ -2158,8 +2178,18 @@ export class InstallerServices {
       : undefined;
     const { discovered, driverResults } = await this.commissioning.discoverWithStatus(protocols);
     return {
-      discovered: discovered.map((d) => ({ ...d, driverName: (d.protocol && nameByProtocol.get(d.protocol)) ?? null })),
-      driverResults: driverResults.map((r) => ({ ...r, driverName: nameByProtocol.get(r.protocol) ?? r.protocol })),
+      discovered: discovered.map((d) => ({
+        ...d,
+        driverName: (d.protocol && nameByProtocol.get(d.protocol)) ?? null,
+        driverId: (d.protocol && driverIdByProtocol.get(d.protocol)) ?? null,
+        instanceLabel: (d.protocol && instanceLabelByProtocol.get(d.protocol)) ?? null,
+      })),
+      driverResults: driverResults.map((r) => ({
+        ...r,
+        driverName: nameByProtocol.get(r.protocol) ?? r.protocol,
+        driverId: driverIdByProtocol.get(r.protocol) ?? null,
+        instanceLabel: instanceLabelByProtocol.get(r.protocol) ?? null,
+      })),
     };
   }
 

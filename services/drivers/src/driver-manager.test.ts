@@ -2,7 +2,7 @@ import { generateSigningKeyPair } from "@supreme/crypto";
 import { newId, type DriverId, type HomeId } from "@supreme/domain-model";
 import { beforeEach, describe, expect, it } from "vitest";
 import { InMemoryCatalog, seedFirstPartyCatalog } from "./catalog.js";
-import { DriverManager, isNewerSemver } from "./driver-manager.js";
+import { DriverManager, isNewerSemver, casambiInstanceNoun } from "./driver-manager.js";
 
 const homeId = newId("home") as HomeId;
 
@@ -231,6 +231,81 @@ describe("DriverManager", () => {
       // sorts before `second`.
       expect(refreshedFirst!.id).toBe(first.id);
       expect(refreshedSecond!.id).toBe(second.id);
+    });
+
+    // § Multi-network Casambi, Stage 3 — legacy unlabeled instances and single-instance installs.
+    describe("displayLabel / instanceIndex", () => {
+      it("single-instance install: displayLabel and instanceIndex both stay exactly as before — null/0, nothing shown", async () => {
+        const m = manager({ licensed: ["pro"] });
+        const inst = await m.install("supreme-casambi");
+        const row = (await m.registry()).find((r) => r.installedId === inst.id)!;
+        expect(row.label).toBeNull();
+        expect(row.displayLabel).toBeNull(); // nothing to disambiguate — matches the pre-Stage-3 UI exactly
+        expect(row.instanceIndex).toBe(0);
+        expect(row.instanceCount).toBe(1);
+      });
+
+      it("a not-installed catalog row has null instanceIndex, never 0 — it isn't a real instance", async () => {
+        const m = manager({ licensed: ["pro"] });
+        const row = (await m.registry()).find((r) => r.key === "supreme-casambi")!;
+        expect(row.installed).toBe(false);
+        expect(row.instanceIndex).toBeNull();
+        expect(row.displayLabel).toBeNull();
+      });
+
+      it("a legacy PRIMARY instance with no label gets a deterministic fallback the moment a sibling exists — 'Network 1', not blank", async () => {
+        const m = manager({ licensed: ["pro"] });
+        // Simulates an install that predates this wizard: no label was ever set.
+        const legacy = await m.install("supreme-casambi");
+        await m.setConfig(legacy.id, { connectionType: "cloud", apiKey: "k", email: "a@example.com", password: "pw" });
+        await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "Network 2" });
+
+        const rows = await m.registry();
+        const legacyRow = rows.find((r) => r.installedId === legacy.id)!;
+        expect(legacyRow.label).toBeNull(); // the raw field is genuinely still null — no rename API
+        expect(legacyRow.displayLabel).toBe("Network 1"); // but presentation is never ambiguous
+        expect(legacyRow.instanceIndex).toBe(0);
+      });
+
+      it("the fallback noun follows the instance's OWN connectionType — Network for cloud, Gateway for local", async () => {
+        const m = manager({ licensed: ["pro"] });
+        const cloudLegacy = await m.install("supreme-casambi");
+        await m.setConfig(cloudLegacy.id, { connectionType: "cloud", apiKey: "k", email: "a@example.com", password: "pw" });
+        await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "Network 2" });
+        expect((await m.registry()).find((r) => r.installedId === cloudLegacy.id)!.displayLabel).toBe("Network 1");
+
+        const m2 = manager({ licensed: ["pro"] });
+        const localLegacy = await m2.install("supreme-casambi");
+        await m2.setConfig(localLegacy.id, {
+          connectionType: "local",
+          gatewayIp: "192.168.1.50",
+          restPort: 80,
+          gatewayUsername: "admin",
+          gatewayPassword: "pw",
+          udpPort: 5100,
+        });
+        await m2.install("supreme-casambi", undefined, { asNewInstance: true, label: "Gateway 2" });
+        expect((await m2.registry()).find((r) => r.installedId === localLegacy.id)!.displayLabel).toBe("Gateway 1");
+      });
+
+      it("fallback numbering follows REAL install order, not the registry's own name/label display sort", async () => {
+        const m = manager({ licensed: ["pro"] });
+        // Label the SECOND-installed instance with a name that would sort alphabetically BEFORE
+        // an unlabeled first instance, to prove the fallback can't be derived from array position.
+        const first = await m.install("supreme-casambi");
+        const second = await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "AAA — sorts first alphabetically" });
+        const rows = await m.registry();
+        expect(rows.find((r) => r.installedId === first.id)!.instanceIndex).toBe(0);
+        expect(rows.find((r) => r.installedId === second.id)!.instanceIndex).toBe(1);
+        expect(rows.find((r) => r.installedId === first.id)!.displayLabel).toBe("Network 1");
+      });
+
+      it("casambiInstanceNoun: Network for cloud/unset, Gateway for local, Instance for any other key", () => {
+        expect(casambiInstanceNoun("supreme-casambi", { connectionType: "cloud" })).toBe("Network");
+        expect(casambiInstanceNoun("supreme-casambi", {})).toBe("Network"); // manifest default is cloud
+        expect(casambiInstanceNoun("supreme-casambi", { connectionType: "local" })).toBe("Gateway");
+        expect(casambiInstanceNoun("supreme-knx", {})).toBe("Instance");
+      });
     });
   });
 });

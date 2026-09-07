@@ -72,6 +72,15 @@ export type NetworkInfo = z.infer<typeof NetworkInfo>;
 export const DriverDiscoveryResult = z.object({
   protocol: z.string(),
   driverName: z.string(),
+  /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) this result is FOR.
+   * A client matching a driver row to its scan result by `protocol` alone would collide once
+   * `protocol` is runtime-scoped ("casambi#<id>") for any instance but a key's first, since a
+   * driver row's own `protocols` field is always the bare manifest list — this carries the real
+   * identity directly, the same fix `DiscoveredDeviceView.driverId` makes for found devices. */
+  driverId: z.string().nullable().optional(),
+  /** § Multi-network Casambi, Stage 3 — this instance's real display label ("Network 1",
+   * "Gateway 2", or the deterministic legacy fallback). Null for a single-instance driver. */
+  instanceLabel: z.string().nullable().optional(),
   status: z.enum(["complete", "failed"]),
   count: z.number(),
   error: z.string().optional(),
@@ -106,6 +115,17 @@ export const DiscoveredDeviceView = z.object({
    * engine/provider name ("KNX Ultimate", "KNX IoT Provider" stay invisible). Null when
    * the device came from a source with no installed-driver mapping. */
   driverName: z.string().nullable().optional(),
+  /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) that discovered this
+   * device. `protocol` alone is not enough to resolve back to a driver row once it's
+   * runtime-scoped ("casambi#<id>") for any instance but a key's first — this carries the real
+   * identity directly, so a client never has to string-match `protocol` against a driver's bare
+   * manifest `protocols` array to find which extension owns a discovered device. */
+  driverId: z.string().nullable().optional(),
+  /** § Multi-network Casambi, Stage 3 — this device's originating instance, as an installer-
+   * facing label ("Network 1", "Gateway 2", or the deterministic legacy fallback) — never the
+   * raw runtime protocol string, and never derived from array position. Null for a
+   * single-instance driver, matching its unchanged, unlabeled presentation. */
+  instanceLabel: z.string().nullable().optional(),
   /** Driver-normalized per-capability config (§ ADR 0017/0018 — Capability Normalization
    * Pipeline), e.g. `{ color: { colorModes: { rgb, cct } } }` — known from the driver's own
    * protocol model at discovery time, never a guess. Pass straight through as

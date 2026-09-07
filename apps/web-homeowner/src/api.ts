@@ -169,6 +169,16 @@ export interface DriverEntry {
   label?: string | null;
   /** Installed instances of this catalog key: 0 not installed, 1 ordinary, >1 multi-network. */
   instanceCount?: number;
+  /** § Multi-network Casambi, Stage 3 — this instance's 0-based real install-order position;
+   * null for the not-installed placeholder row. Never derive an instance's number from this
+   * array's own position — the registry's display order is sorted by name/label, not install
+   * order (see `driver-manager.ts`'s own doc comment on `instanceIndex`). */
+  instanceIndex?: number | null;
+  /** § Multi-network Casambi, Stage 3 — `label` when set, otherwise a deterministic fallback
+   * ("Network 2", "Gateway 1", …) whenever `instanceCount > 1`. Render THIS everywhere a
+   * driver's instance identity is shown — never raw `label` — so a pre-existing unlabeled
+   * instance is never left indistinguishable from a labeled sibling. */
+  displayLabel?: string | null;
 }
 
 export async function fetchDriverRegistry(): Promise<DriverEntry[]> {
