@@ -95,3 +95,77 @@ export function registerMatterRoutes(app: FastifyInstance, ctx: AppContext): voi
     }
   });
 }
+
+/**
+ * Matter BRIDGE routes (§ Matter Bridge Phase 6) — separate from the Matter CONTROLLER routes
+ * above (`registerMatterRoutes`): the Bridge exposes SupremeOS devices outward to Matter
+ * ecosystems, the Controller pairs SupremeOS to third-party Matter devices. Same installer-
+ * only authorization pattern (`enforce(ctx, user, "integration", ...)`) as every other Driver
+ * Store admin action in this codebase. Pairing code/QR are deliberately on their OWN endpoint
+ * (`GET /v1/matter-bridge/pairing`) rather than folded into `/status`, so a future, more
+ * permissive consumer of `/status` (e.g. a homeowner-facing summary) can never accidentally
+ * receive the sensitive payload (§ Phase 4 §10 security review).
+ */
+export function registerMatterBridgeRoutes(app: FastifyInstance, ctx: AppContext): void {
+  app.get("/v1/matter-bridge/status", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send(await ctx.matterBridgeStatus());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // SENSITIVE — the manual pairing code + QR payload. Never logged wholesale by this route;
+  // never merged into /status. Same installer-only gate as everything else here.
+  app.get("/v1/matter-bridge/pairing", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      const pairing = ctx.matterBridgePairing();
+      if (!pairing) throw new SupremeError("conflict", "Matter Bridge is not running");
+      reply.send(pairing);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/matter-bridge/enable", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      await ctx.enableMatterBridge();
+      await ctx.audit?.record({ homeId: ctx.homeId, actorUserId: user.id, action: "matter_bridge.enable", resourceType: "system", resourceId: "matter-bridge" });
+      reply.send(await ctx.matterBridgeStatus());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/matter-bridge/disable", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      await ctx.disableMatterBridge();
+      await ctx.audit?.record({ homeId: ctx.homeId, actorUserId: user.id, action: "matter_bridge.disable", resourceType: "system", resourceId: "matter-bridge" });
+      reply.send(await ctx.matterBridgeStatus());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // DESTRUCTIVE (§ Phase 4 §7) — wipes Matter node identity/fabrics/credentials via
+  // @matter/main's own ServerNode.erase(). Never called by enable/disable/restart.
+  app.post("/v1/matter-bridge/factory-reset", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      await ctx.matterBridgeFactoryReset();
+      await ctx.audit?.record({ homeId: ctx.homeId, actorUserId: user.id, action: "matter_bridge.factory_reset", resourceType: "system", resourceId: "matter-bridge" });
+      reply.send(await ctx.matterBridgeStatus());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+}

@@ -208,6 +208,20 @@ export interface DriverStateEvent {
 }
 export type DriverStateSubscriber = (event: DriverStateEvent) => void;
 
+/** § Matter Bridge Phase 6 — homeConfig key for the UI-toggleable enable flag (overrides
+ * `matterBridgeEnabled`'s env-var default once set). */
+const MATTER_BRIDGE_ENABLED_KEY = "matter_bridge_enabled";
+
+/** § Matter Bridge Phase 6 — the installer-facing status shape (`GET /v1/matter-bridge/status`).
+ * Deliberately excludes `pairing` (see `MatterBridgeCommissioningState`) — that is its own,
+ * separately-authorized endpoint per Phase 4's security review. */
+export interface MatterBridgeStatus {
+  enabled: boolean;
+  running: boolean;
+  commissioned: boolean;
+  fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[];
+}
+
 export class AppContext {
   readonly identity: IdentityService;
   readonly policy = new PolicyEngine();
@@ -789,46 +803,16 @@ export class AppContext {
       this.homekit = bridge;
     }
 
-    // § Matter Bridge Phase 3 — native runtime wiring. Opt-in (ships disabled), no separate
+    // § Matter Bridge Phase 3/6 — native runtime wiring. Opt-in (ships disabled), no separate
     // process/service: instantiated directly inside THIS gateway process, exactly like the
     // HomeKit bridge above — no parallel Matter startup mechanism, no Driver Manager rewrite.
-    // Production always uses the REAL @matter/main-backed RealMatterBridgeServer; only tests
-    // pass `deps.matterBridgeServer` to avoid opening real sockets (§ instruction #4).
-    if (this.config.matterBridgeEnabled) {
-      if (!this.config.matterStoragePath) {
-        // Fail loud at boot rather than picking an arbitrary default path — the operator
-        // must set the one existing Matter storage variable, never a second config surface.
-        throw new Error(
-          "matter-bridge: SUPREME_MATTER_BRIDGE_ENABLED is set but SUPREME_MATTER_STORAGE_PATH " +
-            "is empty — the Bridge has nowhere durable to persist endpoint identity or fabric state.",
-        );
-      }
-      // Bridge and the (separate, pre-existing) Matter Controller never share a storage root
-      // — see real-server.ts's RealMatterBridgeServerOptions.storagePath doc.
-      const storagePath = join(this.config.matterStoragePath, "bridge");
-      const server = deps.matterBridgeServer ?? new RealMatterBridgeServer({ storagePath, nodeId: "supremeos-matter-bridge" });
-      const registry = new MatterEndpointRegistry(new FileMatterEndpointStore(join(storagePath, "endpoint-registry.json")));
-      const capabilities: MatterBridgeCapabilityPort = {
-        command: (deviceId, command) => this.sil.command(deviceId, command),
-        getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
-        onState: (listener) => this.sil.subscribe((e) => listener({ deviceId: e.deviceId, capability: e.capability, state: e.state })),
-      };
-      const matterBridgeDriver = new MatterBridgeDriver({
-        server,
-        registry,
-        capabilities,
-        onLog: (level, message) => (level === "error" ? console.error(message) : level === "warn" ? console.warn(message) : console.log(message)),
-      });
-      await matterBridgeDriver.start();
-      // Auto-expose every device with a real `onoff` capability — the minimum-configuration
-      // behavior the brief asked for (§3: "avoid unnecessary configuration"), mirroring the
-      // HomeKit bridge's own "offer every device as an accessory" policy directly above.
-      for (const device of await this.home.listDevices()) {
-        if (device.capabilities.some((c) => c.kind === "onoff")) {
-          await matterBridgeDriver.exposeLight(device.id, device.name);
-        }
-      }
-      this.matterBridge = { driver: matterBridgeDriver };
+    // Initial enabled state prefers the persisted, UI-toggleable flag over the env var — the
+    // env var is only the FIRST-BOOT default, exactly like every other homeConfig-backed
+    // setting in this class (energy tariff, etc.).
+    const persistedEnabled = await this.homeConfig.get(this.homeId, MATTER_BRIDGE_ENABLED_KEY);
+    const initialEnabled = typeof persistedEnabled === "boolean" ? persistedEnabled : this.config.matterBridgeEnabled;
+    if (initialEnabled) {
+      await this.enableMatterBridge({ persist: false }); // already the persisted/default value
     }
 
     this.ready = true;
@@ -1034,6 +1018,88 @@ export class AppContext {
     await this.sil.stop();
     await this.bus.close();
     await this.presence.close();
+  }
+
+  /** § Matter Bridge Phase 6 — live enable, no restart required. Idempotent: a no-op if
+   * already running. `persist: false` is used only for the boot-time initial-state call
+   * (§init, above), which is re-applying an already-persisted/default value, not a new user
+   * action — every other caller (the gateway route) persists. */
+  async enableMatterBridge(opts: { persist?: boolean } = {}): Promise<void> {
+    if (this.matterBridge) return;
+    if (!this.config.matterStoragePath) {
+      // Fail loud rather than picking an arbitrary default path — the operator must set the
+      // one existing Matter storage variable, never a second config surface.
+      throw new SupremeError(
+        "validation_failed",
+        "matter-bridge: cannot enable — SUPREME_MATTER_STORAGE_PATH is empty, so the Bridge " +
+          "has nowhere durable to persist endpoint identity or fabric state.",
+      );
+    }
+    // Bridge and the (separate, pre-existing) Matter Controller never share a storage root —
+    // see real-server.ts's RealMatterBridgeServerOptions.storagePath doc.
+    const storagePath = join(this.config.matterStoragePath, "bridge");
+    const server = this.deps.matterBridgeServer ?? new RealMatterBridgeServer({ storagePath, nodeId: "supremeos-matter-bridge" });
+    const registry = new MatterEndpointRegistry(new FileMatterEndpointStore(join(storagePath, "endpoint-registry.json")));
+    const capabilities: MatterBridgeCapabilityPort = {
+      command: (deviceId, command) => this.sil.command(deviceId, command),
+      getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
+      onState: (listener) => this.sil.subscribe((e) => listener({ deviceId: e.deviceId, capability: e.capability, state: e.state })),
+    };
+    const driver = new MatterBridgeDriver({
+      server,
+      registry,
+      capabilities,
+      onLog: (level, message) => (level === "error" ? console.error(message) : level === "warn" ? console.warn(message) : console.log(message)),
+    });
+    await driver.start();
+    // Auto-expose every device with a real `onoff` capability — the minimum-configuration
+    // behavior (§3: "avoid unnecessary configuration"), mirroring the HomeKit bridge's own
+    // "offer every device as an accessory" policy.
+    for (const device of await this.home.listDevices()) {
+      if (device.capabilities.some((c) => c.kind === "onoff")) {
+        await driver.exposeLight(device.id, device.name);
+      }
+    }
+    this.matterBridge = { driver };
+    if (opts.persist !== false) await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, true);
+  }
+
+  /** § Matter Bridge Phase 6 — live disable, no restart required. Idempotent. A clean
+   * `stop()` only — never `factoryReset()` (§ Phase 4 §7: disable/restart must never imply
+   * a factory reset; that stays its own, separately-authorized, explicit action). */
+  async disableMatterBridge(): Promise<void> {
+    if (!this.matterBridge) return;
+    await this.matterBridge.driver.stop();
+    this.matterBridge = null;
+    await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, false);
+  }
+
+  /** § Matter Bridge Phase 6 — the real, live commissioning/fabric status (never fabricated
+   * placeholder data) for the installer UI's status card. `enabled` reflects the persisted
+   * flag even if `running` happens to be false (e.g. a startup error) — the UI should be able
+   * to tell "off" apart from "on but broken". */
+  async matterBridgeStatus(): Promise<MatterBridgeStatus> {
+    const persistedEnabled = await this.homeConfig.get(this.homeId, MATTER_BRIDGE_ENABLED_KEY);
+    const enabled = typeof persistedEnabled === "boolean" ? persistedEnabled : this.config.matterBridgeEnabled;
+    if (!this.matterBridge) return { enabled, running: false, commissioned: false, fabrics: [] };
+    const commissioning = this.matterBridge.driver.getCommissioningState();
+    return { enabled, running: true, commissioned: commissioning.commissioned, fabrics: commissioning.fabrics };
+  }
+
+  /** § Matter Bridge Phase 6 — the sensitive pairing payload (§ Phase 4 §10: never through an
+   * unauthenticated/general route — the caller (routes/matter-bridge.ts) enforces the same
+   * installer-only policy as every other Driver Store admin action before calling this).
+   * `null` when the Bridge isn't running (nothing real to report). */
+  matterBridgePairing(): { manualPairingCode: string; qrPairingCode: string; discriminator: number } | null {
+    if (!this.matterBridge) return null;
+    return this.matterBridge.driver.getCommissioningState().pairing;
+  }
+
+  /** § Matter Bridge Phase 6 — DELIBERATE, DESTRUCTIVE. See `MatterBridgeServer.
+   * factoryReset`'s doc. Throws if the Bridge isn't currently running (nothing to reset). */
+  async matterBridgeFactoryReset(): Promise<void> {
+    if (!this.matterBridge) throw new SupremeError("conflict", "Matter Bridge is not running — nothing to factory-reset");
+    await this.matterBridge.driver.factoryReset();
   }
 }
 
