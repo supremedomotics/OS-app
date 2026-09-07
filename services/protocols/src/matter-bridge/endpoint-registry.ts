@@ -50,15 +50,61 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
     this.cache = this.load();
   }
 
+  /** § Phase 2 Recovery — a missing file is the normal "nothing bridged yet" case (empty
+   * map). A file that EXISTS but fails to parse, or whose contents fail integrity checks
+   * (duplicate endpoint numbers, duplicate device ids, a non-positive-integer endpoint
+   * number), is NEVER treated as "start clean" — that would silently reissue identities a
+   * real ecosystem may still hold cached. It throws a clear, actionable error instead so the
+   * operator fixes or restores the file rather than the bridge quietly renumbering everyone. */
   private load(): Map<DeviceId, MatterEndpointMapping> {
     if (!existsSync(this.filePath)) return new Map();
-    const raw = JSON.parse(readFileSync(this.filePath, "utf8")) as MatterEndpointMapping[];
-    return new Map(raw.map((m) => [m.deviceId, m]));
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(this.filePath, "utf8"));
+    } catch (err) {
+      throw new Error(
+        `matter-bridge: endpoint registry at ${this.filePath} is corrupt (invalid JSON) — ` +
+          `refusing to start clean, as that would risk reissuing endpoint identity. Restore ` +
+          `from backup or delete the file only if you accept every bridged device will be ` +
+          `re-added at a NEW endpoint number. Cause: ${(err as Error).message}`,
+      );
+    }
+    if (!Array.isArray(raw)) {
+      throw new Error(`matter-bridge: endpoint registry at ${this.filePath} is not a JSON array`);
+    }
+    const map = new Map<DeviceId, MatterEndpointMapping>();
+    const usedNumbers = new Set<number>();
+    for (const m of raw as MatterEndpointMapping[]) {
+      if (typeof m.deviceId !== "string" || !m.deviceId) {
+        throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has an entry with an invalid deviceId`);
+      }
+      if (!Number.isInteger(m.endpointNumber) || m.endpointNumber < 1) {
+        throw new Error(
+          `matter-bridge: endpoint registry at ${this.filePath} has an invalid endpoint number ` +
+            `(${String(m.endpointNumber)}) for device ${m.deviceId} — must be a positive integer`,
+        );
+      }
+      if (map.has(m.deviceId)) {
+        throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has a duplicate deviceId (${m.deviceId})`);
+      }
+      if (usedNumbers.has(m.endpointNumber)) {
+        throw new Error(
+          `matter-bridge: endpoint registry at ${this.filePath} maps two devices to the same ` +
+            `endpoint number (${m.endpointNumber}) — two ecosystem-visible identities would collide`,
+        );
+      }
+      usedNumbers.add(m.endpointNumber);
+      map.set(m.deviceId, m);
+    }
+    return map;
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    writeFileSync(this.filePath, JSON.stringify([...this.cache.values()], null, 2), "utf8");
+    mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o750 });
+    // 0600: this file only ever holds deviceId/endpointNumber/deviceType (never a secret —
+    // see Phase 2 security review), but it lives in the same persistent data directory as
+    // real secrets, so it gets the same restrictive permission by default regardless.
+    writeFileSync(this.filePath, JSON.stringify([...this.cache.values()], null, 2), { mode: 0o600 });
   }
 
   list(): MatterEndpointMapping[] {

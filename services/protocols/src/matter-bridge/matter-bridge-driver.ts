@@ -41,18 +41,33 @@ export class MatterBridgeDriver {
 
   async start(): Promise<void> {
     if (this.started) return;
+    // A genuine server startup failure (§ Recovery — "Matter server startup failure") is NOT
+    // caught here: it must fail loud and leave `started` false, never a half-connected bridge.
     await this.server.start();
     // Re-expose every previously-bridged device at ITS ALREADY-ASSIGNED endpoint number —
-    // this is what makes identity survive a restart (§ Endpoint architecture).
+    // this is what makes identity survive a restart (§ Endpoint architecture). Each mapping
+    // is isolated: one device whose capability lookup throws (§ Recovery — "unavailable
+    // SupremeOS capability during startup") or whose Matter re-add fails must not prevent
+    // every OTHER already-working bridged device from coming back online. A failed mapping is
+    // logged and left un-exposed for this run — its persisted endpoint number is untouched,
+    // so it is retried at the SAME identity next start, never silently reissued.
     for (const mapping of this.registry.all()) {
-      const state = this.capabilities.getState(mapping.deviceId, "onoff");
-      await this.server.addOnOffLight({
-        endpointNumber: mapping.endpointNumber,
-        name: mapping.deviceId,
-        initialOn: state?.kind === "onoff" ? state.on : false,
-      });
-      this.exposedDevices.set(mapping.endpointNumber, mapping.deviceId);
-      this.endpointByDevice.set(mapping.deviceId, mapping.endpointNumber);
+      try {
+        const state = this.capabilities.getState(mapping.deviceId, "onoff");
+        await this.server.addOnOffLight({
+          endpointNumber: mapping.endpointNumber,
+          name: mapping.deviceId,
+          initialOn: state?.kind === "onoff" ? state.on : false,
+        });
+        this.exposedDevices.set(mapping.endpointNumber, mapping.deviceId);
+        this.endpointByDevice.set(mapping.deviceId, mapping.endpointNumber);
+      } catch (err) {
+        this.onLog(
+          "error",
+          `matter-bridge: failed to re-expose ${mapping.deviceId} at endpoint ${mapping.endpointNumber}: ` +
+            `${(err as Error).message} — endpoint identity preserved, will retry next start`,
+        );
+      }
     }
     this.unsubscribeCommand = this.server.onCommand((endpointNumber, on) => {
       void this.handleMatterCommand(endpointNumber, on);
