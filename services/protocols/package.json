@@ -27,6 +27,7 @@
     "@supreme/integration-layer": "workspace:*",
     "@supreme/lan": "workspace:*",
     "@supreme/messaging": "workspace:*",
+    "@matter/main": "^0.17.9",
     "coap": "^1.5.0",
     "coap-packet": "^1.1.1",
     "knxultimate": "^6.0.1",

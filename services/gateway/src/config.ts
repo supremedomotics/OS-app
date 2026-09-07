@@ -78,6 +78,12 @@ export interface GatewayConfig {
   matterEnabled: boolean;
   /** Filesystem path for the Matter controller's fabric/credential storage. */
   matterStoragePath: string;
+  /** § Matter Bridge Phase 3 — enable the on-box Matter BRIDGE driver (opt-in; ships
+   * disabled, independently of `matterEnabled`'s Matter CONTROLLER — Bridge and Controller
+   * are separate concerns and neither implies the other). Reuses `matterStoragePath` (a
+   * `/bridge` subdirectory of it) rather than a second storage-path variable — one Matter
+   * storage root for the whole deployment, per "avoid unnecessary configuration". */
+  matterBridgeEnabled: boolean;
   /** Optional cloud Matter service base URL (fabric/multi-admin sync); empty = local-only. */
   matterCloudUrl: string;
   /** Per-hub API key for the cloud Matter service (maps to this home). */
@@ -231,6 +237,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     knxPort: Number(env.SUPREME_KNX_PORT ?? 3671),
     matterEnabled: env.SUPREME_MATTER_ENABLED === "1" || env.SUPREME_MATTER_ENABLED === "true",
     matterStoragePath: env.SUPREME_MATTER_STORAGE_PATH ?? "",
+    matterBridgeEnabled: env.SUPREME_MATTER_BRIDGE_ENABLED === "1" || env.SUPREME_MATTER_BRIDGE_ENABLED === "true",
     matterCloudUrl: env.SUPREME_MATTER_CLOUD_URL ?? "",
     matterCloudApiKey: env.SUPREME_MATTER_CLOUD_API_KEY ?? "",
     homeId: env.SUPREME_HOME_ID ?? "primary",

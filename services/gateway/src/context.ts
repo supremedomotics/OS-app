@@ -66,6 +66,15 @@ import { CameraService } from "./camera-service.js";
 import type { GatewayConfig } from "./config.js";
 import { InstallerServices, type KnxDiscoveryDriverFactory } from "./installer-context.js";
 import type { MatterFabricManager, MatterProtocolDriver } from "@supreme/protocols";
+import {
+  MatterBridgeDriver,
+  RealMatterBridgeServer,
+  MatterEndpointRegistry,
+  FileMatterEndpointStore,
+  type MatterBridgeServer,
+  type MatterBridgeCapabilityPort,
+} from "@supreme/protocols";
+import { join } from "node:path";
 import type { VoiceStatePublisher } from "./voice-publisher.js";
 import { HapBridge, type HapCommand, type HapTransport } from "@supreme/homekit";
 import type { CapabilityCommand } from "@supreme/domain-model";
@@ -94,6 +103,16 @@ export interface MatterHandle {
   fabric: MatterFabricManager | null;
 }
 
+/** § Matter Bridge Phase 3 — the hub's optional Matter BRIDGE handle, present only when
+ * `matterBridgeEnabled`. Deliberately separate from {@link MatterHandle} (the Matter
+ * CONTROLLER) — the Bridge is not an `INativeProtocolDriver` (§ Phase 1 architecture
+ * decision: it exposes SupremeOS devices outward, it doesn't own a wire protocol), so it
+ * isn't in `nativeDrivers[]`/the SIL's adapter — it's driven directly, the same way this
+ * class already drives the optional HomeKit bridge below. */
+export interface MatterBridgeHandle {
+  driver: MatterBridgeDriver;
+}
+
 /** Injected dependencies — the SIL and the persisted stores. Anything omitted
  * falls back to the in-memory default (used by dev and tests). */
 export interface AppDeps {
@@ -104,6 +123,12 @@ export interface AppDeps {
   voicePublisher?: VoiceStatePublisher;
   /** HomeKit HAP transport (hap-nodejs-backed). Present → the local HomeKit bridge is enabled. */
   homekitTransport?: HapTransport;
+  /** § Matter Bridge Phase 3 — test-only injection seam for the Matter Bridge's transport.
+   * Production NEVER sets this: when `config.matterBridgeEnabled` is true and this is
+   * omitted, `AppContext` builds the REAL `@matter/main`-backed `RealMatterBridgeServer`.
+   * Tests inject a fake so they never open real UDP/mDNS sockets, mirroring exactly how
+   * `matter-bridge-driver.test.ts` already tests the driver in isolation. */
+  matterBridgeServer?: MatterBridgeServer;
   /** Optional live electricity-rate lookup (a provider/tariff API wired at the hub edge). */
   rateFetcher?: RateFetcher;
   /** Cross-process event bus (NATS in prod); defaults to in-process. */
@@ -248,6 +273,9 @@ export class AppContext {
   readonly voicePublisher: VoiceStatePublisher | null;
   /** Local HomeKit (HAP) bridge when a transport is configured; null otherwise. */
   homekit: HapBridge | null = null;
+  /** § Matter Bridge Phase 3 — Matter Bridge handle when enabled; null otherwise. Separate
+   * from {@link matter} (the Matter Controller). */
+  matterBridge: MatterBridgeHandle | null = null;
   /** Occupancy (vacation) simulation runner — toggles lights to look lived-in while away. */
   readonly occupancy: OccupancyRunner;
   /** Durable per-home settings (energy tariff, etc.). */
@@ -761,6 +789,48 @@ export class AppContext {
       this.homekit = bridge;
     }
 
+    // § Matter Bridge Phase 3 — native runtime wiring. Opt-in (ships disabled), no separate
+    // process/service: instantiated directly inside THIS gateway process, exactly like the
+    // HomeKit bridge above — no parallel Matter startup mechanism, no Driver Manager rewrite.
+    // Production always uses the REAL @matter/main-backed RealMatterBridgeServer; only tests
+    // pass `deps.matterBridgeServer` to avoid opening real sockets (§ instruction #4).
+    if (this.config.matterBridgeEnabled) {
+      if (!this.config.matterStoragePath) {
+        // Fail loud at boot rather than picking an arbitrary default path — the operator
+        // must set the one existing Matter storage variable, never a second config surface.
+        throw new Error(
+          "matter-bridge: SUPREME_MATTER_BRIDGE_ENABLED is set but SUPREME_MATTER_STORAGE_PATH " +
+            "is empty — the Bridge has nowhere durable to persist endpoint identity or fabric state.",
+        );
+      }
+      // Bridge and the (separate, pre-existing) Matter Controller never share a storage root
+      // — see real-server.ts's RealMatterBridgeServerOptions.storagePath doc.
+      const storagePath = join(this.config.matterStoragePath, "bridge");
+      const server = deps.matterBridgeServer ?? new RealMatterBridgeServer({ storagePath, nodeId: "supremeos-matter-bridge" });
+      const registry = new MatterEndpointRegistry(new FileMatterEndpointStore(join(storagePath, "endpoint-registry.json")));
+      const capabilities: MatterBridgeCapabilityPort = {
+        command: (deviceId, command) => this.sil.command(deviceId, command),
+        getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
+        onState: (listener) => this.sil.subscribe((e) => listener({ deviceId: e.deviceId, capability: e.capability, state: e.state })),
+      };
+      const matterBridgeDriver = new MatterBridgeDriver({
+        server,
+        registry,
+        capabilities,
+        onLog: (level, message) => (level === "error" ? console.error(message) : level === "warn" ? console.warn(message) : console.log(message)),
+      });
+      await matterBridgeDriver.start();
+      // Auto-expose every device with a real `onoff` capability — the minimum-configuration
+      // behavior the brief asked for (§3: "avoid unnecessary configuration"), mirroring the
+      // HomeKit bridge's own "offer every device as an accessory" policy directly above.
+      for (const device of await this.home.listDevices()) {
+        if (device.capabilities.some((c) => c.kind === "onoff")) {
+          await matterBridgeDriver.exposeLight(device.id, device.name);
+        }
+      }
+      this.matterBridge = { driver: matterBridgeDriver };
+    }
+
     this.ready = true;
   }
 
@@ -959,6 +1029,7 @@ export class AppContext {
     this.occupancy.stop();
     this.voicePublisher?.stop();
     await this.homekit?.stop();
+    await this.matterBridge?.driver.stop();
     await this.security.flush();
     await this.sil.stop();
     await this.bus.close();
