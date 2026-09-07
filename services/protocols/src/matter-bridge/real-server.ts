@@ -1,4 +1,4 @@
-import { Environment, ServerNode, Endpoint, VendorId } from "@matter/main";
+import { Environment, ServerNode, Endpoint, VendorId, Logger, LogLevel } from "@matter/main";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
 import { OnOffServer } from "@matter/main/behaviors/on-off";
@@ -93,6 +93,19 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
 
   async start(): Promise<void> {
     if (this.node) return;
+    // § Phase 5 §10 — security fix, not a workaround: @matter/node's CommissioningServer logs
+    // the passcode/discriminator/manual pairing code/QR text at NOTICE level on every boot
+    // while uncommissioned (`initiateCommissioning()`, verified against its real source — see
+    // Phase 4's commit). Left at its default, that line lands in `journalctl -u
+    // supreme-gateway` unredacted. This uses the SDK's own PUBLIC, documented facility-level
+    // API (`Logger.facilityLevels`, `@matter/general/src/log/Logger.ts`) to raise the
+    // "Commissioning" facility's floor to WARN — no fork, no monkey-patch, no reach into an
+    // unexported internal. Real commissioning ERRORS/WARNs (a genuinely failed pairing
+    // attempt) still print; only the routine, credential-bearing NOTICE line is suppressed.
+    // `getCommissioningState()` remains the intended, controlled way to retrieve the pairing
+    // code — gated at the API layer once a route exists (§ Phase 4's security review).
+    Logger.facilityLevels = { Commissioning: LogLevel.WARN };
+
     const environment = Environment.default;
     environment.vars.set("storage.path", this.opts.storagePath);
 

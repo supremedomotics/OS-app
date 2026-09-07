@@ -26,12 +26,15 @@
    <n> (<name>)` line per onoff device, with no startup error. Confirm `curl -s
    http://127.0.0.1:8080/healthz` still returns 200 — the Bridge must not destabilize the
    gateway even if a later step fails.
-3. **Locate Matter pairing information.** No UI exists for this yet (§ Phase 4 §6 — the backend
-   contract is defined, not built). Today the only way to see the manual pairing code / QR
-   payload is `@matter/main`'s own commissioning log line (NOTICE level, printed once per boot
-   while uncommissioned — see § Security review below for why this is where it is, and why that
-   is currently accepted, not overlooked). Record the manual pairing code and QR payload from
-   that log line.
+3. **Locate Matter pairing information.** No UI/HTTP route exists for this yet (§ Phase 4 §6 —
+   the backend contract is defined, not built). `sudo journalctl -u supreme-gateway` and find
+   the SupremeOS-owned line `matter-bridge: SENSITIVE — commissioning window open. Manual
+   pairing code: …` — printed once, only while genuinely uncommissioned (§ Phase 5 §10: this
+   REPLACES `@matter/main`'s own uncontrolled NOTICE-level log, which is now suppressed). The
+   QR payload isn't logged (too long to be a usable log line) — read it via
+   `MatterBridgeDriver.getCommissioningState().pairing.qrPairingCode` if a QR code is wanted
+   instead of the manual code (no route exposes this yet either; this requires a one-off
+   in-process read until one does).
 4. **Open commissioning window if necessary.** Not usually needed: `@matter/main` opens a basic
    commissioning window automatically on every boot while the node is not yet commissioned. If a
    window has since closed (e.g. a long-idle uncommissioned node), a restart (step 2) reopens it
@@ -130,15 +133,21 @@ guessed:
   authenticated + RBAC-restricted (installer/owner only), never on an unauthenticated or
   homeowner-general diagnostics endpoint. No such route exists yet — nothing in this codebase
   currently exposes it over HTTP.
-- **`@matter/main`'s own commissioning log line** (NOTICE level, prints passcode/discriminator/
-  manual code/QR text) is a real, disclosed tension: it is the ONLY way to find the pairing code
-  today (no UI/route yet), and it is genuinely necessary for a human to commission the device at
-  all. It lands in `journalctl -u supreme-gateway`, which on native-linux is root/`adm`-group
-  gated, NOT an unrestricted API — materially different from the "unrestricted API/log" case
-  the brief warns against, but still worth tightening once a real, RBAC-gated API route exists:
-  at that point, lower `@matter/main`'s commissioning logger verbosity in production and make
-  the gateway route the sole intended way to retrieve it. Not done in this phase — flagged as a
-  Phase 5 follow-up, not silently accepted as permanent.
+- **`@matter/main`'s own commissioning log line — FIXED this phase.** `RealMatterBridgeServer.
+  start()` now sets `Logger.facilityLevels = { Commissioning: LogLevel.WARN }` — the SDK's own
+  public, documented API (`@matter/general/src/log/Logger.ts`) — which raises the
+  "Commissioning" facility's floor above NOTICE, so the SDK's uncontrolled, credential-bearing
+  log line no longer prints. No fork, no monkey-patch, no reach into an unexported internal.
+  Real commissioning WARN/ERROR (a genuinely failed pairing attempt) still print.
+  `MatterBridgeDriver.start()` replaces it with exactly ONE controlled, clearly-labeled
+  SupremeOS-owned line (`matter-bridge: SENSITIVE — commissioning window open. Manual pairing
+  code: …`), emitted only while the node is genuinely uncommissioned (never repeats once
+  paired — proven by `matter-bridge-driver.test.ts`'s two new §10 tests). This is still a
+  stopgap, not the end state: it still lands in `journalctl -u supreme-gateway` (root/`adm`-
+  group gated, not an unrestricted API — materially different from the case the brief warns
+  against, but not the intended long-term mechanism either). The real fix is the future
+  authenticated, RBAC-gated gateway route (§ below) — once it exists, this log line should be
+  removed and the route become the sole retrieval path.
 - **Operational credentials / certificates / private keys**: never touched by SupremeOS code at
   all — `@matter/main` owns them entirely inside its own storage files; nothing in this codebase
   reads, logs, or copies them. `getCommissioningState()` deliberately exposes ONLY `commissioned`/

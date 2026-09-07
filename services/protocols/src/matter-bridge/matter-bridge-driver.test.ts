@@ -194,3 +194,38 @@ describe("MatterBridgeDriver — endpoint identity persistence across restart", 
     expect(server.endpoints.get(1)?.name).toBe("living-room-light");
   });
 });
+
+describe("MatterBridgeDriver — Phase 5 §10 controlled commissioning logging", () => {
+  it("logs the pairing code exactly once at start, while genuinely uncommissioned", async () => {
+    // FakeMatterBridgeServer.getCommissioningState() -> commissioned: false (see class above)
+    const onLog = vi.fn();
+    const server = new FakeMatterBridgeServer();
+    const registry = new MatterEndpointRegistry(new InMemoryMatterEndpointStore());
+    const capabilities = new FakeCapabilityPort();
+    const driver = new MatterBridgeDriver({ server, registry, capabilities, onLog });
+
+    await driver.start();
+
+    expect(onLog).toHaveBeenCalledWith("warn", expect.stringContaining("34970112332"));
+    expect(onLog).toHaveBeenCalledWith("warn", expect.stringContaining("SENSITIVE"));
+  });
+
+  it("does NOT log the pairing code once the node is already commissioned", async () => {
+    class CommissionedFakeServer extends FakeMatterBridgeServer {
+      getCommissioningState() {
+        return { commissioned: true, fabrics: [{ fabricIndex: 1, label: "Apple Home", rootVendorId: 0x1234 }], pairing: { manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 } };
+      }
+    }
+    const server = new CommissionedFakeServer();
+    const onLog = vi.fn();
+    const registry = new MatterEndpointRegistry(new InMemoryMatterEndpointStore());
+    const capabilities = new FakeCapabilityPort();
+    const driver = new MatterBridgeDriver({ server, registry, capabilities, onLog });
+
+    await driver.start();
+
+    for (const call of onLog.mock.calls) {
+      expect(call[1]).not.toContain("34970112332");
+    }
+  });
+});

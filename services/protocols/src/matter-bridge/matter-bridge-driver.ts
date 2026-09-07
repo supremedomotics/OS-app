@@ -75,6 +75,24 @@ export class MatterBridgeDriver {
     this.unsubscribeState = this.capabilities.onState((event) => {
       void this.handleSupremeStateChange(event.deviceId, event.capability, event.state);
     });
+
+    // § Phase 5 §10 — "controlled commissioning logging": the ONLY place this driver ever
+    // logs the pairing code, ONE line, ONLY while genuinely uncommissioned (never repeats
+    // once paired). Replaces reliance on @matter/main's own uncontrolled NOTICE-level log
+    // (suppressed in `real-server.ts` via the SDK's own public `Logger.facilityLevels` API —
+    // no fork). This is a stopgap until a real, authenticated gateway route exists (§ Phase
+    // 4's security review) — an operator with shell/journald access on the box is the
+    // intended audience, same exposure boundary as before, now at least a single, clearly
+    // labeled SupremeOS-owned line instead of raw SDK output repeated every boot.
+    const commissioning = this.server.getCommissioningState();
+    if (!commissioning.commissioned) {
+      this.onLog(
+        "warn",
+        `matter-bridge: SENSITIVE — commissioning window open. Manual pairing code: ` +
+          `${commissioning.pairing.manualPairingCode} — do not share this outside the ` +
+          `installer commissioning this bridge.`,
+      );
+    }
     this.started = true;
   }
 
