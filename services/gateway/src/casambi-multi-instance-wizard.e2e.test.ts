@@ -1,4 +1,5 @@
 import type { License } from "@supreme/contracts";
+import { InMemoryInstalledDriverStore } from "@supreme/drivers";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
@@ -64,6 +65,16 @@ describe("Casambi multi-instance setup wizard (§ install asNewInstance + per-in
       .filter((d) => d.key === "supreme-casambi")
       .map((d) => ({ key: d.key, installedId: d.installedId, label: d.label ?? null, instanceCount: d.instanceCount ?? 0, config: d.config }));
   }
+
+  it("a fresh single Cloud network (wizard count === 1, nothing pre-existing) installs with NO label, identical to the pre-wizard single-instance flow", async () => {
+    const net1 = await install({ key: "supreme-casambi" }); // exactly what the wizard sends for count===1, existingInstanceCount===0
+    expect(net1.label).toBeNull();
+    await setConfig(net1.id, { connectionType: "cloud", email: "solo@example.com", password: "pw", networkId: "net-solo" });
+    const rows = await registryRows();
+    const row = rows.find((r) => r.installedId === net1.id)!;
+    expect(row.instanceCount).toBe(1);
+    expect(row.label).toBeNull();
+  });
 
   it("Cloud mode, shared credentials: two networks become two instances with the SAME email/password and DIFFERENT network ids", async () => {
     const net1 = await install({ key: "supreme-casambi" }); // first instance: no asNewInstance, matches the wizard's own rule
@@ -155,5 +166,48 @@ describe("Casambi multi-instance setup wizard (§ install asNewInstance + per-in
     expect(rows.some((r) => r.installedId === drop.id)).toBe(false);
     const kept = rows.find((r) => r.installedId === keep.id)!;
     expect(kept.config.email).toBe("keep@example.com");
+  });
+});
+
+/**
+ * § Stage 2b review — instance labels must survive a genuine restart, not just stay alive because
+ * the same in-process object never got garbage collected. A real second `AppContext.create()`
+ * against the SAME store (not the same `ctx`) is what an actual hub restart looks like, and it
+ * re-runs `initializeNativeDrivers("boot")` — the reconcile pass that runs on every boot — so this
+ * also proves that pass never touches `label`.
+ */
+describe("Casambi instance labels survive a restart (§ Stage 2b review)", () => {
+  it("label and per-instance config are both intact after a fresh AppContext boot against the same store", async () => {
+    const driverStore = new InMemoryInstalledDriverStore();
+    const config = loadConfig({ SUPREME_LOG_LEVEL: "silent", SUPREME_DEV_MODE: "1" }); // dev mode unlocks every SKU, avoiding a separate license-activation dance for this direct-installer-call test
+
+    const firstBoot = await AppContext.create(config, { driverStore });
+    const primary = await firstBoot.installer.drivers.install("supreme-casambi");
+    const secondary = await firstBoot.installer.drivers.install("supreme-casambi", undefined, { asNewInstance: true, label: "Network 2" });
+    await firstBoot.installer.drivers.setConfig(secondary.id, {
+      connectionType: "cloud",
+      apiKey: "k",
+      email: "b@example.com",
+      password: "pw",
+      networkId: "net-b",
+    });
+
+    // A genuine second boot — the exact scenario "restart the hub" describes.
+    const secondBoot = await AppContext.create(config, { driverStore });
+    const rows = await secondBoot.installer.drivers.registry();
+    const casambiRows = rows.filter((r) => r.key === "supreme-casambi");
+
+    expect(casambiRows).toHaveLength(2);
+    const primaryRow = casambiRows.find((r) => r.installedId === primary.id)!;
+    const secondaryRow = casambiRows.find((r) => r.installedId === secondary.id)!;
+    expect(primaryRow.label).toBeNull(); // unchanged — the primary was never given one
+    expect(secondaryRow.label).toBe("Network 2"); // survived the restart
+    expect(secondaryRow.config.email).toBe("b@example.com"); // per-instance config survived too
+
+    // And install order — which decides which instance stays "primary" at runtime — is
+    // unchanged by the restart's own boot-time reconcile pass.
+    const instances = await secondBoot.installer.drivers.listInstances("supreme-casambi");
+    expect(instances[0]!.id).toBe(primary.id);
+    expect(instances[1]!.id).toBe(secondary.id);
   });
 });
