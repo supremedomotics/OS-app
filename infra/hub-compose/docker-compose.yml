@@ -118,6 +118,13 @@ services:
     volumes:
       # Runtime secrets the hub generates. Survives restarts.
       - supreme-secrets:/data/secrets
+      # § Matter Bridge Phase 2 — storage-boundary fix: SUPREME_MATTER_STORAGE_PATH already
+      # defaulted to /data/matter above, but nothing backed that path with a volume — it lived
+      # in the container's writable layer and was destroyed on every `up --force-recreate`
+      # (a normal driver upgrade/rollback/reinstall step). This volume is what makes Matter
+      # fabric/commissioning state (owned entirely by @matter/main under this path) and the
+      # SupremeOS endpoint-registry file survive a container recreate, not just a restart.
+      - supreme-matter:/data/matter
     networks:
       - supreme-edge
       - supreme-core
@@ -342,3 +349,4 @@ volumes:
   caddy-config:
   appletv-data:
   supreme-secrets:
+  supreme-matter:
