@@ -22,8 +22,10 @@ export interface MatterBridgeCapabilityPort {
   /** Route a command through the SAME path the REST API/automations use — never write to a
    * driver directly. */
   command(deviceId: DeviceId, command: CapabilityCommand): Promise<void>;
-  /** Last known Supreme state for a device+capability, if any. */
-  getState(deviceId: DeviceId, capability: CapabilityCommand["capability"]): CapabilityState | null;
+  /** Last known Supreme state for a device+capability, if any. Async because the real seam
+   * (`SupremeIntegrationLayer.getState`) is — this port must not force a synchronous cache
+   * read that the real production wiring cannot actually provide (§ Phase 3 native wiring). */
+  getState(deviceId: DeviceId, capability: CapabilityCommand["capability"]): Promise<CapabilityState | null>;
   /** Subscribe to every Supreme state change (physical feedback, automations, other
    * ecosystems) — the Bridge filters to the devices it has exposed. Returns an unsubscribe
    * function, mirroring every other `onState` seam in this codebase. */

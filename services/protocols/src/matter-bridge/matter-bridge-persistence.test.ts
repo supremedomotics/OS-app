@@ -56,7 +56,7 @@ class FakeCapabilityPort implements MatterBridgeCapabilityPort {
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
     this.commands.push({ deviceId, command });
   }
-  getState(deviceId: DeviceId): CapabilityState | null {
+  async getState(deviceId: DeviceId): Promise<CapabilityState | null> {
     if (this.throwOnGetStateFor.has(deviceId)) {
       throw new Error(`simulated: SupremeOS capability unavailable for ${deviceId}`);
     }

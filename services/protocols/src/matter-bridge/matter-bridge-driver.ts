@@ -53,7 +53,7 @@ export class MatterBridgeDriver {
     // so it is retried at the SAME identity next start, never silently reissued.
     for (const mapping of this.registry.all()) {
       try {
-        const state = this.capabilities.getState(mapping.deviceId, "onoff");
+        const state = await this.capabilities.getState(mapping.deviceId, "onoff");
         await this.server.addOnOffLight({
           endpointNumber: mapping.endpointNumber,
           name: mapping.deviceId,
@@ -91,7 +91,7 @@ export class MatterBridgeDriver {
    * Idempotent — calling twice for the same device reuses its existing endpoint. */
   async exposeLight(deviceId: DeviceId, name: string): Promise<void> {
     const mapping = this.registry.resolve(deviceId, "onOffLight");
-    const state = this.capabilities.getState(deviceId, "onoff");
+    const state = await this.capabilities.getState(deviceId, "onoff");
     await this.server.addOnOffLight({
       endpointNumber: mapping.endpointNumber,
       name,

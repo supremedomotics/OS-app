@@ -54,7 +54,7 @@ class FakeCapabilityPort implements MatterBridgeCapabilityPort {
       this.setState(deviceId, command.action === "on");
     }
   }
-  getState(deviceId: DeviceId): CapabilityState | null {
+  async getState(deviceId: DeviceId): Promise<CapabilityState | null> {
     return this.states.get(deviceId) ?? null;
   }
   onState(listener: (e: { deviceId: DeviceId; capability: string; state: CapabilityState }) => void): () => void {
