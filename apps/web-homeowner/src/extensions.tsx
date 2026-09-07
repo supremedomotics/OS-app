@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { DriverDetail, statusLabel } from "./drivers.js";
+import { MatterBridgePanel } from "./matter-bridge.js";
 
 /**
  * Extension Center (§ Extension Center) — the central place for every integration and protocol
@@ -85,6 +86,8 @@ export function ExtensionCenter() {
         <h1 className="title">Extension Center</h1>
         <p className="sub">Everything that connects to your home — browse, add and keep it healthy.</p>
       </div>
+
+      <MatterBridgePanel />
 
       <div className="chip-row">
         {CATS.filter((c) => c.id === "all" || (counts.get(c.id) ?? 0) > 0).map((c) => (

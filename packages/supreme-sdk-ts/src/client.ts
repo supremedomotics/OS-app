@@ -91,6 +91,21 @@ export interface ClimateScheduleResponse {
   holidayDeviceIds: string[];
 }
 
+/** § Matter Bridge Phase 6 — mirrors `services/gateway/src/context.ts`'s `MatterBridgeStatus`;
+ * not imported directly, same minimal-contract pattern as `ClimateScheduleEventInput` above. */
+export interface MatterBridgeStatus {
+  enabled: boolean;
+  running: boolean;
+  commissioned: boolean;
+  fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[];
+}
+/** SENSITIVE — see `MatterBridgeCommissioningState.pairing` (services/protocols). */
+export interface MatterBridgePairing {
+  manualPairingCode: string;
+  qrPairingCode: string;
+  discriminator: number;
+}
+
 /**
  * Supreme TypeScript SDK (§6). Clients (web homeowner/installer) bind to this, not
  * to raw endpoints — and certainly never to HA. The SDK validates responses with
@@ -518,6 +533,27 @@ export class SupremeClient {
   }
   uninstallDriver(id: DriverId): Promise<void> {
     return this.request("DELETE", `/v1/drivers/${id}`) as Promise<void>;
+  }
+
+  // § Matter Bridge Phase 6 — installer-only status/pairing/enable/disable/factory-reset.
+  // Separate from the Matter Controller's own status (see the plain `/v1/matter/status` route
+  // this SDK doesn't yet wrap) — the Bridge exposes SupremeOS devices outward.
+  matterBridgeStatus(): Promise<MatterBridgeStatus> {
+    return this.request("GET", "/v1/matter-bridge/status") as Promise<MatterBridgeStatus>;
+  }
+  /** Throws (409, "conflict") if the Bridge isn't currently running. */
+  matterBridgePairing(): Promise<MatterBridgePairing> {
+    return this.request("GET", "/v1/matter-bridge/pairing") as Promise<MatterBridgePairing>;
+  }
+  enableMatterBridge(): Promise<MatterBridgeStatus> {
+    return this.request("POST", "/v1/matter-bridge/enable") as Promise<MatterBridgeStatus>;
+  }
+  disableMatterBridge(): Promise<MatterBridgeStatus> {
+    return this.request("POST", "/v1/matter-bridge/disable") as Promise<MatterBridgeStatus>;
+  }
+  /** DESTRUCTIVE — wipes Matter node identity/fabrics/credentials. */
+  matterBridgeFactoryReset(): Promise<MatterBridgeStatus> {
+    return this.request("POST", "/v1/matter-bridge/factory-reset") as Promise<MatterBridgeStatus>;
   }
 
   /** `driverIds` (§ Installed Driver Selector): the installed-driver ids the installer selected —
