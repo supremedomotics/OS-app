@@ -106,7 +106,23 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     // code — gated at the API layer once a route exists (§ Phase 4's security review).
     Logger.facilityLevels = { Commissioning: LogLevel.WARN };
 
-    const environment = Environment.default;
+    // § live-confirmed fix — a FRESH `Environment` per server, never the process-wide
+    // `Environment.default` singleton. `Environment.default` is a module-level global
+    // (`@matter/general`'s `Environment.js`: `let global = new Environment("default")`), and
+    // its services (storage, endpoint numbering) are created once and cached on that ONE
+    // instance. The previous code mutated `Environment.default.vars["storage.path"]` on every
+    // `start()` call and handed the SAME shared environment to `ServerNode.create()` each time —
+    // so a second `RealMatterBridgeServer` in the same process (a real restart test, or two
+    // bridges running together) could inherit the FIRST server's already-initialized storage/
+    // endpoint state instead of genuinely isolated state for its own `storagePath`, surfacing as
+    // "Endpoint device-1 number 1 is allocated to another endpoint" and storage rename races.
+    // Each server now gets its own `Environment` instance, matching what "independent Matter
+    // node with its own storage" actually requires — parented to `Environment.default` so
+    // platform-registered services (`@matter/nodejs`'s Node crypto/Entropy provider, hooked onto
+    // `Environment.default` specifically at process bootstrap) still resolve via `Environment`'s
+    // own parent-fallback in `get()`, while storage/endpoint-numbering services — created fresh
+    // per environment instance — are never shared with a sibling server.
+    const environment = new Environment(this.opts.nodeId, Environment.default);
     environment.vars.set("storage.path", this.opts.storagePath);
 
     this.node = await ServerNode.create({
