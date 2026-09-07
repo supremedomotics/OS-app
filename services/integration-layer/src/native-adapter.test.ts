@@ -11,8 +11,8 @@ import { bindingKey, type INativeProtocolDriver, type ProtocolBinding } from "./
 
 /** A minimal fake protocol driver that records writes and can push bus state up. */
 class FakeDriver implements INativeProtocolDriver {
-  readonly protocol = "fake";
   connected = false;
+  constructor(readonly protocol: string = "fake") {}
   readonly writes: Array<{ deviceId: DeviceId; command: CapabilityCommand }> = [];
   readonly unbindCalls: DeviceId[] = [];
   private readonly bound = new Set<string>();
@@ -301,5 +301,42 @@ describe("runtime driver registration (manifest↔runtime bridge)", () => {
     expect(d1.isConnected()).toBe(false); // replaced → disconnected
     expect(d2.isConnected()).toBe(true);
     expect(adapter.registeredProtocols()).toEqual(["fake"]);
+  });
+
+  // § Multi-network Casambi — the bug that motivated a per-instance runtime protocol string
+  // (gateway's `withRuntimeProtocol`): the adapter's own `registerDriver` doc comment says a
+  // driver "replace[s] any existing instance for this protocol", one live instance per string.
+  // Confirms both halves: same string still replaces (the test above), and a genuinely DIFFERENT
+  // string — what a second Casambi network/gateway now gets — coexists instead.
+  it("does NOT replace a driver registered under a DIFFERENT protocol string — two instances of the same catalog key can run at once", async () => {
+    const adapter = new SupremeNativeAdapter();
+    await adapter.connect();
+    const primary = new FakeDriver("casambi");
+    const secondary = new FakeDriver("casambi#drv_network2");
+    await adapter.registerDriver(primary);
+    await adapter.registerDriver(secondary);
+
+    expect(primary.isConnected()).toBe(true); // NOT evicted by the second registration
+    expect(secondary.isConnected()).toBe(true);
+    expect(adapter.registeredProtocols().sort()).toEqual(["casambi", "casambi#drv_network2"]);
+    expect(adapter.protocolStatus().sort((a, b) => a.protocol.localeCompare(b.protocol))).toEqual([
+      { protocol: "casambi", connected: true, error: null },
+      { protocol: "casambi#drv_network2", connected: true, error: null },
+    ]);
+
+    // Each instance's own state and commands stay independent — no cross-talk between networks.
+    const devA = "device-net1" as DeviceId;
+    const devB = "device-net2" as DeviceId;
+    primary.pushState(devA, "onoff", { kind: "onoff", on: true });
+    secondary.pushState(devB, "onoff", { kind: "onoff", on: false });
+    expect(primary.getState(devB, "onoff")).toBeNull();
+    expect(secondary.getState(devA, "onoff")).toBeNull();
+
+    // Disconnecting one instance leaves the other running — the actual behavior an installer
+    // uninstalling one Casambi network must see for the other to stay usable.
+    await adapter.unregisterProtocol("casambi#drv_network2");
+    expect(secondary.isConnected()).toBe(false);
+    expect(primary.isConnected()).toBe(true);
+    expect(adapter.registeredProtocols()).toEqual(["casambi"]);
   });
 });

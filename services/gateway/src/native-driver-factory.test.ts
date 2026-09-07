@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildNativeDriver, hasNativeFactory } from "./native-driver-factory.js";
+import { buildNativeDriver, hasNativeFactory, withRuntimeProtocol } from "./native-driver-factory.js";
+import type { INativeProtocolDriver } from "@supreme/integration-layer";
 import { CasambiProtocolDriver } from "@supreme/protocols";
 import type { UdpBindOptions, UdpTransport } from "@supreme/lan";
 
@@ -197,5 +198,63 @@ describe("native-driver-factory — Casambi", () => {
     await driver.connect();
     expect(driver.isConnected()).toBe(true);
     await driver.disconnect();
+  });
+});
+
+
+describe("withRuntimeProtocol (§ Multi-network Casambi)", () => {
+  function fakeDriver(protocol: string): INativeProtocolDriver {
+    return {
+      protocol,
+      async connect() {},
+      async disconnect() {},
+      isConnected: () => true,
+      async bind() {},
+      manages: () => false,
+      async command() {},
+      getState: () => null,
+      async discover() { return []; },
+      onState: () => () => {},
+    };
+  }
+
+  it("returns the SAME instance, unmodified, when the protocol already matches", () => {
+    const driver = fakeDriver("casambi");
+    expect(withRuntimeProtocol(driver, "casambi")).toBe(driver);
+  });
+
+  it("reports a DIFFERENT protocol without changing any other behavior", async () => {
+    const driver = fakeDriver("casambi");
+    const wrapped = withRuntimeProtocol(driver, "casambi#drv_net2");
+    expect(wrapped.protocol).toBe("casambi#drv_net2");
+    expect(driver.protocol).toBe("casambi"); // the real instance is untouched
+    expect(wrapped.isConnected()).toBe(true); // every other member still forwards through
+    await wrapped.connect();
+    await wrapped.disconnect();
+  });
+
+  it("rebinds methods to the real instance, so internal `this` still resolves correctly", async () => {
+    // A driver whose methods read its OWN internal state via `this` — exactly what every real
+    // driver class does. If the wrapper failed to rebind (e.g. returned the raw class method
+    // without `.bind(target)`), calling it through the proxy would run with `this` set to the
+    // PROXY, not the real instance, and any real class using native `#private` fields would
+    // throw. CasambiProtocolDriver (the real caller) does use them, so this must hold.
+    class StatefulDriver implements INativeProtocolDriver {
+      readonly protocol = "casambi";
+      #connected = false;
+      async connect() { this.#connected = true; }
+      async disconnect() { this.#connected = false; }
+      isConnected() { return this.#connected; }
+      async bind() {}
+      manages() { return false; }
+      async command() {}
+      getState() { return null; }
+      async discover() { return []; }
+      onState() { return () => {}; }
+    }
+    const wrapped = withRuntimeProtocol(new StatefulDriver(), "casambi#drv_net2");
+    expect(wrapped.isConnected()).toBe(false);
+    await wrapped.connect();
+    expect(wrapped.isConnected()).toBe(true);
   });
 });

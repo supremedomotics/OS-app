@@ -156,6 +156,37 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   yamaha: (c, ctx) => new YamahaProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true }),
 };
 
+/**
+ * § Multi-network Casambi — wrap a built driver so it reports a DIFFERENT `.protocol` string
+ * than the one used to build it, without touching the driver class itself or any other protocol.
+ * Needed because `SupremeNativeAdapter` (the SIL) keys its live driver registry, connect/
+ * disconnect, and device ownership entirely off `driver.protocol` — one live instance per
+ * string. A catalog key can now be installed more than once (one Casambi network / Lithernet
+ * gateway per instance), so every instance beyond the first needs its OWN string
+ * (`"casambi#<installedId>"`) or registering the second would silently replace the first's live
+ * connection (`native-adapter.ts`'s `registerDriver` docs this: "replace any existing instance for
+ * this protocol"). The first/primary instance keeps the bare protocol name unchanged, so a
+ * single-instance install — still the overwhelming common case, and every already-deployed hub
+ * — needs no migration and behaves byte-for-byte as before.
+ *
+ * A Proxy, not a manual field-by-field wrapper, because {@link INativeProtocolDriver} carries
+ * ~20 mostly-optional methods (AVR diagnostics, keypad feedback, artwork, scenes, …); forwarding
+ * each by hand would be large and silently drift as the interface grows. Methods are rebound to
+ * the real instance (`Reflect.get(target, prop, target)` then `.bind(target)`) so internal `this`
+ * still resolves to the concrete driver — required for any class using native `#private` fields,
+ * which fail their brand check if invoked with the Proxy itself as `this`.
+ */
+export function withRuntimeProtocol<T extends INativeProtocolDriver>(driver: T, runtimeProtocol: string): T {
+  if (driver.protocol === runtimeProtocol) return driver;
+  return new Proxy(driver, {
+    get(target, prop, receiver) {
+      if (prop === "protocol") return runtimeProtocol;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 /** Build a native driver instance for a protocol from stored config; null if unsupported/unconfigured.
  * `ctx.onLog`, when given, surfaces the driver's connection lifecycle (connect/error) into the
  * Extension Center's per-driver log and the system-wide Logs page — without it a socket that never
