@@ -45,6 +45,12 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }
+  getCommissioningState() {
+    return { commissioned: false, fabrics: [], pairing: { manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 } };
+  }
+  async factoryReset() {
+    this.endpoints.clear();
+  }
 }
 
 class FakeCapabilityPort implements MatterBridgeCapabilityPort {
@@ -291,5 +297,41 @@ describe("Phase 2 — recovery: server and capability failures", () => {
 
     expect(server.endpoints.size).toBe(1);
     expect(registry.all()).toHaveLength(1);
+  });
+});
+
+describe("Phase 4 — factory reset is separate from restart", () => {
+  it("stop()/start() (restart) never calls factoryReset — endpoint mapping and Matter state both survive", async () => {
+    const store = new InMemoryMatterEndpointStore();
+    const server = new FakeMatterBridgeServer();
+    const factoryResetSpy = vi.spyOn(server, "factoryReset");
+    const driver = new MatterBridgeDriver({ server, registry: new MatterEndpointRegistry(store), capabilities: new FakeCapabilityPort() });
+
+    await driver.start();
+    await driver.exposeLight("light-a" as DeviceId, "Light A");
+    await driver.stop();
+    await driver.start();
+
+    expect(factoryResetSpy).not.toHaveBeenCalled();
+    expect(server.endpoints.has(1)).toBe(true);
+  });
+
+  it("factoryReset() clears live Matter exposure but PRESERVES the SupremeOS endpoint-registry mapping", async () => {
+    const store = new InMemoryMatterEndpointStore();
+    const registry = new MatterEndpointRegistry(store);
+    const server = new FakeMatterBridgeServer();
+    const driver = new MatterBridgeDriver({ server, registry, capabilities: new FakeCapabilityPort() });
+
+    await driver.start();
+    await driver.exposeLight("light-a" as DeviceId, "Light A");
+    expect(server.endpoints.has(1)).toBe(true);
+
+    await driver.factoryReset();
+
+    expect(server.endpoints.has(1)).toBe(false); // Matter-side identity genuinely wiped
+    // SupremeOS still remembers device -> endpoint 1, so re-commissioning re-uses it rather
+    // than renumbering (§ endpoint-registry.ts's "never reissue" rule, unaffected by a
+    // Matter-level reset — only explicit SupremeOS-side device removal frees a number).
+    expect(registry.resolve("light-a" as DeviceId).endpointNumber).toBe(1);
   });
 });

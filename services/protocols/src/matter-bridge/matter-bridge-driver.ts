@@ -112,6 +112,24 @@ export class MatterBridgeDriver {
     this.endpointByDevice.delete(deviceId);
   }
 
+  /** § Phase 4 §7 — read this node's real, live commissioning/fabric state. Pass-through to
+   * the server; kept on the driver so a future gateway route never needs to reach past this
+   * seam into the transport directly. */
+  getCommissioningState() {
+    return this.server.getCommissioningState();
+  }
+
+  /** § Phase 4 §7 — DELIBERATE, DESTRUCTIVE: see `MatterBridgeServer.factoryReset`'s doc.
+   * Nothing in `start()`/`stop()` calls this — a caller (a future explicit "Matter factory
+   * reset" action, never a restart/upgrade/rollback) must invoke it on purpose. Clears this
+   * driver's own in-memory exposure indexes too, since every endpoint the server just erased
+   * no longer genuinely exists on the Matter side. */
+  async factoryReset(): Promise<void> {
+    await this.server.factoryReset();
+    this.exposedDevices.clear();
+    this.endpointByDevice.clear();
+  }
+
   /** Matter ecosystem → SupremeOS (§1 required path, direction 1). A real ecosystem-issued
    * On/Off cluster command — never fabricated as a state report — routed through the SAME
    * command path the REST API/automations use, so the existing native driver executes it

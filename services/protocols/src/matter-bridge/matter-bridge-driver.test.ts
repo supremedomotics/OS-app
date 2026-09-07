@@ -32,6 +32,12 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }
+  getCommissioningState() {
+    return { commissioned: false, fabrics: [], pairing: { manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 } };
+  }
+  async factoryReset() {
+    this.endpoints.clear();
+  }
   /** Test helper: simulate a real ecosystem (Apple/Google/Alexa/a reference controller)
    * issuing a genuine On/Off cluster command. */
   simulateEcosystemCommand(endpointNumber: number, on: boolean): void {
