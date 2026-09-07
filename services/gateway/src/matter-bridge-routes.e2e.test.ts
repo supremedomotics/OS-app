@@ -135,4 +135,35 @@ describe("Matter Bridge REST routes (gateway e2e)", () => {
     expect(enable.status).toBe(200);
     expect(server.started).toBe(true);
   });
+
+  it("returns a conflict for refresh while not running", async () => {
+    await fetch(`${baseUrl}/v1/matter-bridge/disable`, { method: "POST", headers: auth() });
+    const res = await fetch(`${baseUrl}/v1/matter-bridge/refresh`, { method: "POST", headers: auth() });
+    expect(res.status).toBe(409);
+    await fetch(`${baseUrl}/v1/matter-bridge/enable`, { method: "POST", headers: auth() });
+  });
+
+  it("refresh bridges a newly commissioned onoff device without disturbing existing endpoints", async () => {
+    const before = new Map(server.endpoints);
+    expect(before.size).toBeGreaterThan(0);
+
+    const rooms = await ctx.home.listRooms();
+    const device = await ctx.installer.commissionDevice({
+      backendId: `test-refresh-${Date.now()}`,
+      name: "Refresh Test Light",
+      roomId: rooms[0].id,
+      capabilities: ["onoff"],
+    });
+
+    const refresh = await fetch(`${baseUrl}/v1/matter-bridge/refresh`, { method: "POST", headers: auth() });
+    expect(refresh.status).toBe(200);
+
+    // Every previously-bridged endpoint is untouched.
+    for (const [endpointNumber, entry] of before) {
+      expect(server.endpoints.get(endpointNumber)).toEqual(entry);
+    }
+    // The new device is now bridged too.
+    expect([...server.endpoints.values()].some((e) => e.name === device.name)).toBe(true);
+    expect(server.endpoints.size).toBe(before.size + 1);
+  });
 });

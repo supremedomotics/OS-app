@@ -545,6 +545,10 @@ export class SupremeClient {
   matterBridgePairing(): Promise<MatterBridgePairing> {
     return this.request("GET", "/v1/matter-bridge/pairing") as Promise<MatterBridgePairing>;
   }
+  /** Re-scan for newly discovered SupremeOS devices and bridge any not already exposed. */
+  refreshMatterBridge(): Promise<MatterBridgeStatus> {
+    return this.request("POST", "/v1/matter-bridge/refresh") as Promise<MatterBridgeStatus>;
+  }
   enableMatterBridge(): Promise<MatterBridgeStatus> {
     return this.request("POST", "/v1/matter-bridge/enable") as Promise<MatterBridgeStatus>;
   }

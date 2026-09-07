@@ -75,11 +75,15 @@ export function MatterBridgePanel() {
 
         <div className="row" style={{ gap: 8, marginBottom: 12 }}>
           {status.running ? (
-            <Button disabled={busy} onClick={() => run(() => client.disableMatterBridge())}>Disable</Button>
+            <>
+              <Button disabled={busy} onClick={() => run(() => client.disableMatterBridge())}>Disable</Button>
+              <Button disabled={busy} onClick={() => run(() => client.refreshMatterBridge())}>Refresh devices</Button>
+            </>
           ) : (
             <Button disabled={busy} variant="primary" onClick={() => run(() => client.enableMatterBridge())}>Enable</Button>
           )}
         </div>
+        {status.running && <p className="muted">Refresh picks up any new SupremeOS device — existing ones keep their identity.</p>}
 
         {status.running && (
           <>

@@ -131,6 +131,19 @@ export function registerMatterBridgeRoutes(app: FastifyInstance, ctx: AppContext
     }
   });
 
+  // Re-scan for newly commissioned/discovered devices and bridge any not already exposed —
+  // devices already bridged keep their existing endpoint identity untouched.
+  app.post("/v1/matter-bridge/refresh", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "update");
+      await ctx.refreshMatterBridge();
+      reply.send(await ctx.matterBridgeStatus());
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post("/v1/matter-bridge/enable", async (req, reply) => {
     try {
       const user = await authenticate(ctx, req);
