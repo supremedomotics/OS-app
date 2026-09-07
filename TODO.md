@@ -228,17 +228,36 @@
     - The position slider is reported **short form** (`0f.<lo>.<hi>`, type 15, 0-255) and therefore
       carries **no element index** — and the Casambi app writes it over BLE, so the gateway never
       observes an index we could copy. This is why `position: set` remains unmapped.
+- **New facts from System Manual 6.38 (found after this was paused):**
+    - A device has **exactly 8 custom elements, index 0-7, in ONE shared namespace** (§5.12.2.2.18).
+      Elements 0 and 1 are the observed Close/Open pair, so the position slider must be one of
+      **2-7** — a 6-value search space, not an unbounded one.
+    - Element control types are distinct: **16 = On/off toggle, 17 = Button, 18 = PushButton**
+      (p.203). Our motor reports type **16** (long form `0x90`) for Open/Close — a *toggle*, which
+      the doc does not describe as momentary. The press+release model may itself be wrong.
+    - Type **15 = Slider (custom element)** and the doc states indexed sliders are reported in
+      **long form `0x8F : INDEX : LEN : VALUE`**. Our motor reports it short form (no index), which
+      is why the index is not observable here — but `parseNotifyControlValues` already captures
+      `index` for long form, so a device that does report it needs no parser work.
+    - Writing an unsupported element is a documented and live-confirmed **no-op**, which makes an
+      empirical index sweep safe on live hardware.
+- **Probe tool (new):** `tools/casambi-element-probe/casambi-element-probe.mjs` — send-only UDP
+  prober for 0x3F. Its frame output is byte-identical to a real driver capture
+  (`c.72.7.3f.1.2d.0.0.1.ff`). Send-only on purpose: the gateway shares one port for send and
+  receive, which the running driver already binds.
 - **Next steps, in order:**
-    1. Capture the gateway console for attempt 3 (press+release) triggered from SupremeOS — we have
-       no wire evidence for it yet, only the user's report.
-    2. Determine whether the buttons are **hold-to-move** rather than press-to-toggle: time how long
-       the button is held in the Casambi app and whether the motor stops on release. If so, the
-       release must be delayed by the travel time, not sent immediately.
-    3. Only then consider probing for the slider's write index (elements 2-7) to enable
-       `position: set` — and probe it, never infer it. Two inferences have already been wrong.
-- **Complexity:** Low-medium once a capture of attempt 3 exists; the codec, targeting and framing
+    1. **Hold test** — `--hold 1 3000` and `--hold 1 8000`. If travel distance scales with the hold
+       time, the buttons are hold-to-move and attempts 1 and 3 both failed for the same reason: a
+       ~0ms hold. The fix is then a real hold duration, which cannot be guessed — it becomes an
+       installer-entered `device.metadata` travel time, or a closed loop that releases when the
+       (already working) type-15 position feedback stops changing.
+    2. **Index sweep** — `--sweep`. Whichever of elements 2-7 drives the curtain to ~50% is the
+       slider index; that unblocks `position: set` with no inference.
+    3. Only after both: plumb the discovered index through to `localCommandToUdpPacket`, which
+       today has no access to the unit's controls.
+- **Complexity:** Low-medium once the two probes above have run; the codec, targeting and framing
   are all already proven correct.
-- **Status:** Paused at the user's request. Cloud mode's `position` path (maps to the Casambi
+- **Status:** Active — blocked on the two hardware probes above. Cloud mode's `position` path (maps to the Casambi
   `Slider` control) is untested against this fixture and may simply work — worth trying first.
 
 ### Casambi Local Gateway — RGBW/CCT capability inference for Local mode
