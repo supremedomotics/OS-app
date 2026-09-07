@@ -63,10 +63,10 @@ export class InstalledDriverRepo implements IInstalledDriverStore {
   }
   async put(driver: InstalledDriver): Promise<void> {
     await this.db.query(
-      `INSERT INTO installed_drivers (id, home_id, key, version, channel, category, installed_at, enabled, status, config)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      `INSERT INTO installed_drivers (id, home_id, key, version, channel, category, installed_at, enabled, status, config, label)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
        ON CONFLICT (id) DO UPDATE SET
-         version=$4, channel=$5, category=$6, enabled=$8, status=$9, config=$10::jsonb`,
+         version=$4, channel=$5, category=$6, enabled=$8, status=$9, config=$10::jsonb, label=$11`,
       [
         driver.id, driver.homeId, driver.key, driver.version, driver.channel,
         driver.category, driver.installedAt, driver.enabled, driver.status,
