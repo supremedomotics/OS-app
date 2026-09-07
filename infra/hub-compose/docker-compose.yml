@@ -118,11 +118,16 @@ services:
     volumes:
       # Runtime secrets the hub generates. Survives restarts.
       - supreme-secrets:/data/secrets
-      # § Matter Bridge Phase 2 — storage-boundary fix: SUPREME_MATTER_STORAGE_PATH already
-      # defaulted to /data/matter above, but nothing backed that path with a volume — it lived
-      # in the container's writable layer and was destroyed on every `up --force-recreate`
-      # (a normal driver upgrade/rollback/reinstall step). This volume is what makes Matter
-      # fabric/commissioning state (owned entirely by @matter/main under this path) and the
+      # § Matter Bridge Phase 2 — storage-boundary fix. NOTE (§ Phase 2 native-Ubuntu
+      # correction): this compose file is DEVELOPMENT/CI INFRASTRUCTURE ONLY (§ ADR 0022
+      # Amendment) — SupremeOS production ships as a native Ubuntu install via
+      # infra/native-linux/install.sh, with no Docker runtime dependency. The bug this volume
+      # fixes was still real for THIS file's own purpose (dev/CI runs losing Matter state on
+      # every container recreate): SUPREME_MATTER_STORAGE_PATH already defaulted to
+      # /data/matter above, but nothing backed that path with a volume — it lived in the
+      # container's writable layer and was destroyed on every `up --force-recreate`. This
+      # volume is what makes Matter fabric/commissioning state (owned entirely by
+      # @matter/main under this path) and the
       # SupremeOS endpoint-registry file survive a container recreate, not just a restart.
       - supreme-matter:/data/matter
     networks:
