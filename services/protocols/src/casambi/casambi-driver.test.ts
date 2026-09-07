@@ -333,13 +333,13 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await driver.disconnect();
   });
 
-  it("command() still refuses a position action with no observable wire mapping, never fabricating one", async () => {
+  it("command() refuses stop until a real position has been observed, never guessing one", async () => {
     const { driver } = makeLocalDriver();
     const dev = "local-dev-6" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
     await driver.connect();
-    // open/close/set all map to the level channel (0x20); "stop" has no confirmed opcode
-    // that halts travel mid-way, so it must stay an honest error rather than a guess.
+    // "stop" halts by re-commanding the CURRENT position, so with no 0x4B reading yet there
+    // is nothing honest to send — an error, never a guess at where the curtain is.
     await expect(driver.command(dev, { capability: "position", action: "stop" })).rejects.toThrow(/unsupported command/);
     await driver.disconnect();
   });

@@ -15,10 +15,10 @@ import {
  * Cloud's shape is a JSON control-value object, Local's is a byte-oriented wire packet — forcing
  * either transport through the other's intermediate representation would buy no real reuse.
  *
- * `position` open/close/set are ALL mapped (§ live-confirmed against a real curtain motor — see
- * the case itself); `stop` is deliberately unmapped, because no opcode is confirmed to halt
- * travel mid-way. Returning `null` surfaces as the driver's existing "unsupported command"
- * error rather than a fabricated mapping.
+ * Every `position` action is mapped (§ live-confirmed against a real curtain motor — see the
+ * case itself); `stop` additionally needs a previously observed position, and without one it
+ * returns `null`, which surfaces as the driver's existing "unsupported command" error rather
+ * than a fabricated mapping.
  */
 export function localCommandToUdpPacket(
   netId: number,
@@ -75,17 +75,24 @@ export function localCommandToUdpPacket(
       // writing 0x3F element 1 only jogged the motor to 0.4%, and writing a scaled position to an
       // on/off element was silently ignored (out of range). The motor's elements 0/1 are its
       // Close/Open buttons — a secondary control surface, not where the position lives.
+      // "stop" halts travel by re-commanding the position the fixture is CURRENTLY at, read from
+      // the live 0x4B type-15 slider feedback. There is no documented halt opcode — 0x20 only ever
+      // commands an absolute target — but re-targeting the present position is the same absolute
+      // command the motor is already honouring, so it has no new failure mode. If no position has
+      // been observed yet there is nothing honest to send, so it stays an "unsupported command"
+      // error rather than a guess at where the curtain is.
       const pct =
         command.action === "open"
           ? 100
           : command.action === "close"
             ? 0
-            : typeof command.position === "number"
-              ? command.position
-              : null;
-      // "stop" stays unmapped: no opcode is confirmed to halt travel mid-way, and 0x20 only ever
-      // commands an absolute target. Returning null surfaces the driver's real "unsupported
-      // command" error rather than a fabricated mapping.
+            : command.action === "stop"
+              ? prev?.kind === "position" && typeof prev.position === "number"
+                ? prev.position
+                : null
+              : typeof command.position === "number"
+                ? command.position
+                : null;
       if (pct === null) return null;
       const clamped = Math.min(100, Math.max(0, pct));
       return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, Math.round((clamped / 100) * 255), fadeMs ?? 0);

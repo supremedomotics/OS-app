@@ -221,9 +221,13 @@
 - **Why the earlier attempts failed:** elements 0/1 on this motor are its Close/Open *buttons* — a
   secondary control surface. Writing them jogged the motor (0.4%) rather than commanding travel,
   and writing a scaled position to an on/off element was silently ignored as out of range.
-- **Still open:** `position: stop` remains deliberately unmapped — no opcode is confirmed to halt
-  travel mid-way, and `0x20` only ever commands an absolute target. It surfaces the driver's real
-  "unsupported command" error rather than a fabricated mapping.
+- **`stop` — implemented, needs one hardware check:** there is no documented halt opcode, so `stop`
+  re-commands the position the fixture is CURRENTLY at, read from the live 0x4B type-15 feedback
+  (`prev` is the driver's live per-capability state). Same absolute command the motor is already
+  honouring, so no new failure mode. With no position observed yet it stays an honest "unsupported
+  command" error rather than a guess. **Verify on hardware:** start a full-travel move, press the
+  UI's ↕ mid-travel, confirm the curtain halts where it is. If it does not halt, revert `stop` to
+  unmapped — do not iterate on guesses.
 - **Untested:** Cloud mode's `position` path (maps to the Casambi `Slider` control) has still never
   been exercised against this fixture.
 - **Probe tool kept:** `tools/casambi-element-probe/casambi-element-probe.mjs` — send-only 0x3F

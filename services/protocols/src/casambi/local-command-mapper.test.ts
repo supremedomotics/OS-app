@@ -102,8 +102,22 @@ describe("localCommandToUdpPacket", () => {
       }
     });
 
-    it("stop stays unmapped — no opcode is confirmed to halt travel mid-way", () => {
+    it("stop re-commands the position the fixture is currently at, halting travel", () => {
+      const packet = localCommandToUdpPacket(12, 45, { capability: "position", action: "stop" }, {
+        kind: "position",
+        position: 62,
+        moving: true,
+      })!;
+      expect(packet.opcode).toBe(0x20);
+      expect(packet.args[0]).toBe(158); // round(62/100*255)
+      expect(packet.args.slice(-2)).toEqual([CASAMBI_TARGET_TYPE.device, 45]);
+    });
+
+    it("stop with no observed position stays an honest error, never a guess at where the curtain is", () => {
       expect(localCommandToUdpPacket(12, 45, { capability: "position", action: "stop" }, null)).toBeNull();
+      expect(
+        localCommandToUdpPacket(12, 45, { capability: "position", action: "stop" }, { kind: "onoff", on: true }),
+      ).toBeNull();
     });
   });
 
