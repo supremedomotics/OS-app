@@ -19,6 +19,21 @@ Documentation=file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-D
 After=network-online.target postgresql.service supreme-nats.service mosquitto.service redis-server.service supreme-commissioning.service
 Wants=network-online.target
 Requires=postgresql.service
+# § NATS/Gateway readiness (real production evidence: ECONNREFUSED 127.0.0.1:4222 +
+# restart-loop when NATS wasn't actually ready yet). Deliberately NOT `Requires=
+# supreme-nats.service` — that would fail (or, worse, hold) Gateway startup entirely any
+# time NATS is briefly down, which can deadlock a recovery scenario where NATS itself needs
+# the Gateway's own health checks to be reachable via supremeos-support/health-check.sh.
+# `After=` (above) only orders unit *start*, it does not wait for NATS to be genuinely
+# accepting connections — that gap is closed two ways instead: (1) services/messaging/src/
+# nats-bus.ts's own NATS client connects with infinite reconnect + backoff, so a Gateway
+# that starts before NATS is ready keeps retrying instead of crashing; (2) the StartLimit*
+# directives below stop systemd from restart-storming the Gateway process itself while it
+# waits, and RestartSec's own backoff (unchanged at 2s) gives NATS room to come up between
+# attempts. Auto-recovery when NATS reappears is therefore the NATS client's own reconnect
+# logic — reused here, not a second mechanism invented at the deployment layer.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -47,7 +62,31 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# § Bug fix (Phase 2 runtime investigation): AF_NETLINK must be permitted, not just
+# AF_INET/AF_INET6/AF_UNIX. Real evidence: the Gateway reached Fastify startup, then
+# crashed with `SystemError [ERR_SYSTEM_ERROR]: uv_interface_addresses returned Unknown
+# system error 97` from `node:os.networkInterfaces()`, called by Fastify's own
+# `getAddresses()` (fastify/lib/server.js) when logging every address the server is
+# reachable on after `.listen()` resolves — completely unrelated to any Gateway/protocol
+# code, confirmed by reading the stack (fastify internals only, nothing from services/
+# gateway or the SIL). On Linux, `uv_interface_addresses()` enumerates interfaces via
+# `getifaddrs(3)`, which opens an `AF_NETLINK` (`NETLINK_ROUTE`) socket — errno 97 IS
+# `EAFNOSUPPORT` on Linux, the exact errno `RestrictAddressFamilies` seccomp-rejects a
+# disallowed family with. supreme-lan.service already permits AF_NETLINK for the same
+# real reason; this unit was simply missing it. Not a Node.js bug, not a Fastify bug, not
+# application code — a deployment-layer hardening gap. Fixed at the deployment layer only;
+# zero Gateway source code touched.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictRealtime=yes
+# Empty = drop every capability. The Gateway binds only high (>1024) ports and needs no
+# privileged syscalls (CAP_NET_BIND_SERVICE etc.) — confirmed against gateway.env.template
+# (port 8080 always) and installer-context.ts's real usage, never assumed.
+CapabilityBoundingSet=
+# § Documented exception: MemoryDenyWriteExecute is intentionally OMITTED here. Node.js'
+# V8 JIT compiler requires mmap/mprotect requesting simultaneous write+execute permission
+# on its code cache — a real, verified incompatibility (V8's JIT compilation model, not a
+# theoretical one), not an oversight. Every other memory/kernel-surface restriction above
+# still applies; only this one directive is excluded, and only for this reason.
 
 [Install]
 WantedBy=multi-user.target

@@ -65,16 +65,27 @@ describe("getDeviceUiCapabilities — single-device matrix", () => {
   });
 });
 
-describe("§ Step 4 — capability/state separation: missing state NEVER hides a capability-backed control", () => {
-  it("RGB capability, no RGB state reported yet → RGB control still visible", () => {
+describe("§ Step 4 / § Pass 24 — capability/state separation, tri-state unknown never shows a colour control", () => {
+  it("RGB capability, no RGB state reported yet → mode is unknown, neither RGB nor CCT shown", () => {
     const c = getDeviceUiCapabilities(caps(["onoff", "brightness", "color"]), undefined);
-    expect(c.showRGB).toBe(true); // safe default: has `color`, nothing reported yet → assume both
-    expect(c.showCCT).toBe(true);
+    expect(c.showRGB).toBe(false); // § Pass 24: unknown never renders as available
+    expect(c.showCCT).toBe(false);
+    expect(c.colorModeConfirmed).toBe(false);
   });
 
-  it("CCT capability, no kelvin reported yet → CCT control still visible (same safe default)", () => {
+  it("CCT capability, no kelvin reported yet → mode is unknown, CCT control hidden until confirmed", () => {
     const c = getDeviceUiCapabilities(caps(["color"]), null);
-    expect(c.showCCT).toBe(true);
+    expect(c.showCCT).toBe(false);
+    expect(c.showRGB).toBe(false);
+  });
+
+  it("capability arriving asynchronously: unknown → then real state lands → only the confirmed mode appears (no flash of the wrong control)", () => {
+    const beforeState = getDeviceUiCapabilities(caps(["onoff", "brightness", "color"]), undefined);
+    expect(beforeState.showRGB).toBe(false);
+    expect(beforeState.showCCT).toBe(false);
+    const afterState = getDeviceUiCapabilities(caps(["onoff", "brightness", "color"]), { kelvin: 2700 });
+    expect(afterState.showRGB).toBe(false);
+    expect(afterState.showCCT).toBe(true);
   });
 
   it("Brightness capability, no brightness state at all → brightness control still visible", () => {
@@ -173,11 +184,21 @@ describe("§ ADR 0017 — Capability Normalization: structural config wins over 
     expect(legacy.colorModeConfirmed).toBe(false); // inferred, not driver-confirmed
   });
 
-  it("unknown mode (§ Step 4): no config AND no state at all → safe neutral default (both shown), never fabricated single-mode support, and explicitly marked unconfirmed", () => {
+  it("unknown mode (§ Pass 24): no config AND no state at all → neither control shown (never fabricated support), and explicitly marked unconfirmed", () => {
     const unknown = getDeviceUiCapabilities(caps(["color"]), undefined);
-    expect(unknown.showRGB).toBe(true);
-    expect(unknown.showCCT).toBe(true);
+    expect(unknown.showRGB).toBe(false);
+    expect(unknown.showCCT).toBe(false);
     expect(unknown.colorModeConfirmed).toBe(false);
+  });
+
+  it("a stale mode override cannot resurrect RGB once the confirmed mode is CCT-only — showRGB is driven by tri-state, never by a cached UI choice", () => {
+    // Simulates lighting.tsx's own `resolveColorMode`: an RGB tab was previously selected while
+    // the mode was still unknown, then structural config resolves to CCT-only.
+    const stillUnknown = getDeviceUiCapabilities(caps(["onoff", "brightness", "color"]), undefined);
+    expect(stillUnknown.showRGB).toBe(false); // never true to begin with, so nothing to resurrect
+    const resolved = getDeviceUiCapabilities(capsWithColorConfig(["onoff", "brightness"], { rgb: false, cct: true }), undefined);
+    expect(resolved.showRGB).toBe(false);
+    expect(resolved.showCCT).toBe(true);
   });
 
   it("RGB only / CCT only / RGB+CCT / brightness only — the four structural-config shapes", () => {

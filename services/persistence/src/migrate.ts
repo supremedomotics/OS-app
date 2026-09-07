@@ -33,6 +33,7 @@ const MIGRATIONS = [
   "0023_automation_tags.sql",
   "0024_scene_import.sql",
   "0025_device_provider.sql",
+  "0026_username.sql",
 ] as const;
 
 /**

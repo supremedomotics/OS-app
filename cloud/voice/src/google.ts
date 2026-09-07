@@ -44,25 +44,36 @@ function googleTraits(cap: string): string[] {
 
 // ── SYNC ──────────────────────────────────────────────────────────────────────────────────────
 export function buildSyncResponse(requestId: string, agentUserId: string, devices: HubDevice[]): unknown {
-  const out = devices.map((d) => {
-    const caps = d.capabilities.map((c) => c.kind);
-    const traits = [...new Set(caps.flatMap(googleTraits))];
-    const attributes: Record<string, unknown> = {};
-    if (caps.includes("color")) attributes.colorModel = "hsv";
-    if (caps.includes("color")) attributes.colorTemperatureRange = { temperatureMinK: 2000, temperatureMaxK: 6500 };
-    if (caps.includes("temperature")) {
-      attributes.availableThermostatModes = ["off", "heat", "cool", "auto"];
-      attributes.thermostatTemperatureUnit = "C";
-    }
-    return {
-      id: d.id,
-      type: GOOGLE_TYPE[d.supremeType] ?? "action.devices.types.OUTLET",
-      traits,
-      name: { name: d.name },
-      willReportState: true,
-      attributes,
-    };
-  });
+  const out = devices
+    .map((d) => {
+      const caps = d.capabilities.map((c) => c.kind);
+      const traits = [...new Set(caps.flatMap(googleTraits))];
+      return { d, caps, traits };
+    })
+    // § Correctness Fix — a device whose capabilities map to zero real Google traits
+    // (e.g. `fan`/`vacuum`/`media`/`sensor`-only) previously still got synced with a
+    // device `type` (`GOOGLE_TYPE`) and an empty `traits` array: it showed up in
+    // Google Home but had nothing operable at all — advertised, unusable (§ Never
+    // advertise unsupported functionality). Omitted entirely, matching the Alexa
+    // discovery fix's reasoning exactly.
+    .filter(({ traits }) => traits.length > 0)
+    .map(({ d, caps, traits }) => {
+      const attributes: Record<string, unknown> = {};
+      if (caps.includes("color")) attributes.colorModel = "hsv";
+      if (caps.includes("color")) attributes.colorTemperatureRange = { temperatureMinK: 2000, temperatureMaxK: 6500 };
+      if (caps.includes("temperature")) {
+        attributes.availableThermostatModes = ["off", "heat", "cool", "auto"];
+        attributes.thermostatTemperatureUnit = "C";
+      }
+      return {
+        id: d.id,
+        type: GOOGLE_TYPE[d.supremeType] ?? "action.devices.types.OUTLET",
+        traits,
+        name: { name: d.name },
+        willReportState: true,
+        attributes,
+      };
+    });
   return { requestId, payload: { agentUserId, devices: out } };
 }
 

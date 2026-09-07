@@ -83,12 +83,30 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
     });
   });
 
+  // § Realtime State Architecture — driver connection-state frames aren't room-scoped
+  // (a driver isn't a device), so delivery is gated on the same "integration:view"
+  // permission the REST driver-diagnostics/registry routes already require, checked
+  // once per client per event (matches the state-frame per-event `can()` check above).
+  const unsubDriverState = ctx.onDriverState((event) => {
+    void (async () => {
+      if (!(await can(ctx, user, "integration", null, "view"))) return;
+      send(socket, {
+        type: "driver",
+        driverId: event.driverId,
+        state: event.state,
+        error: event.error ?? undefined,
+        ts: event.ts,
+      });
+    })();
+  });
+
   socket.on("message", (raw: Buffer) => {
     void handleFrame(ctx, socket, user, subscribedRooms, raw);
   });
   socket.on("close", () => {
     unsubState();
     unsubNotify();
+    unsubDriverState();
     // Best-effort presence drop; the TTL is the real safety net if this never runs.
     void ctx.presence.markOffline(presenceHomeId, user.id);
   });

@@ -68,14 +68,25 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
       }
     }
   }
-  function setGroupKelvin(k: number) {
+  // § PASS 18 bug fix — same split as lighting.tsx's LightingDetail: `show*` fires on
+  // every drag tick for visual feedback only; `commit*` (pointer release) is the only
+  // one that actually sends a command — and it fans out to every light in the group, so
+  // avoiding a command-per-tick here matters even more than the single-device case.
+  function showGroupKelvin(k: number) {
+    const kr = Math.round(k);
+    for (const d of cctLights) apply(d.id, "color", { kind: "color", on: true, level: levelOf(d), hue: null, saturation: null, kelvin: kr });
+  }
+  function commitGroupKelvin(k: number) {
     const kr = Math.round(k);
     for (const d of cctLights) {
       apply(d.id, "color", { kind: "color", on: true, level: levelOf(d), hue: null, saturation: null, kelvin: kr });
       void client.command(d.id as DeviceId, { capability: "color", kelvin: kr } as CapabilityCommand);
     }
   }
-  function setGroupColour(h: number, s: number) {
+  function showGroupColour(h: number, s: number) {
+    for (const d of rgbLights) apply(d.id, "color", { kind: "color", on: true, level: levelOf(d), hue: Math.round(h), saturation: Math.round(s * 100), kelvin: null });
+  }
+  function commitGroupColour(h: number, s: number) {
     for (const d of rgbLights) {
       apply(d.id, "color", { kind: "color", on: true, level: levelOf(d), hue: Math.round(h), saturation: Math.round(s * 100), kelvin: null });
       void client.command(d.id as DeviceId, { capability: "color", hue: Math.round(h), saturation: Math.round(s * 100) } as CapabilityCommand);
@@ -103,13 +114,13 @@ export function RoomLighting({ name, lights, onBack }: { roomId: string; name: s
           {cctLights.length > 0 && (
             <div className="rl-group-item">
               <span className="rl-group-lbl">Room colour temperature</span>
-              <TempSlider kelvin={cctAnchor?.kelvin ?? 2700} onChange={setGroupKelvin} />
+              <TempSlider kelvin={cctAnchor?.kelvin ?? 2700} onChange={showGroupKelvin} onCommit={commitGroupKelvin} />
             </div>
           )}
           {rgbLights.length > 0 && (
             <div className="rl-group-item">
               <span className="rl-group-lbl">Room colour</span>
-              <ColorWheel hue={rgbAnchor?.hue ?? 40} sat={(rgbAnchor?.saturation ?? 60) / 100} onChange={setGroupColour} />
+              <ColorWheel hue={rgbAnchor?.hue ?? 40} sat={(rgbAnchor?.saturation ?? 60) / 100} onChange={showGroupColour} onCommit={commitGroupColour} />
             </div>
           )}
         </div>

@@ -192,11 +192,8 @@ export class SupremeIntegrationLayer {
       throw new SupremeError("validation_failed", `capability ${command.capability} is read-only`);
     }
     if (!this.adapter.isConnected()) {
-      // HaAdapter (and any provider driver behind it) buffers; others surface a
-      // typed error the gateway maps to 503.
-      if (this.adapter.kind !== "ha") {
-        throw new SupremeError("backend_unavailable", "integration backend is not connected");
-      }
+      // Never fabricate connectivity — surface a typed error the gateway maps to 503.
+      throw new SupremeError("backend_unavailable", "integration backend is not connected");
     }
     await this.adapter.command(deviceId, command);
   }
@@ -219,6 +216,17 @@ export class SupremeIntegrationLayer {
   /** Fetch a device+capability's real AudioCapabilityConfig (null if none/unsupported). */
   async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
     return this.adapter.getCapabilityConfig ? this.adapter.getCapabilityConfig(deviceId, capability) : null;
+  }
+
+  /** § Pass 12.6, Part E — fetch a device's real AVR input list (null if none/unsupported). */
+  async getAvrInputs(deviceId: DeviceId): Promise<{ technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null> {
+    return this.adapter.getAvrInputs ? this.adapter.getAvrInputs(deviceId) : null;
+  }
+
+  /** § Pass 12.6, Part E — set/clear one AVR input's custom label. `false` if unsupported
+   * or the device's owning driver rejected the technicalId. */
+  async setAvrInputCustomName(deviceId: DeviceId, technicalId: string, name: string | null): Promise<boolean> {
+    return this.adapter.setAvrInputCustomName ? this.adapter.setAvrInputCustomName(deviceId, technicalId, name) : false;
   }
 
   /** Fetch a device's real connection/traffic diagnostics from its owning driver
@@ -306,6 +314,18 @@ export class SupremeIntegrationLayer {
    * diagnostics/orchestration callers, never a second command routing mechanism. */
   getNativeDriver(protocol: string): INativeProtocolDriver | null {
     return this.router?.engine.driverFor(protocol) ?? null;
+  }
+
+  /** § Live Feedback Diagnostic Pass — thin passthrough to the KNX driver's own
+   * composed diagnostic snapshot for one device (see `SupremeKnxDriver.knxFeedbackDiagnostics`).
+   * `null` when no "knx" driver is registered, or that driver doesn't manage this device. */
+  getKnxFeedbackDiagnostics(deviceId: DeviceId): unknown {
+    return this.getNativeDriver("knx")?.knxFeedbackDiagnostics?.(deviceId) ?? null;
+  }
+
+  /** § Live Feedback Diagnostic Pass — whether an arbitrary GA has a live KNX subscription. */
+  isKnxGaSubscribed(groupAddress: string): boolean {
+    return this.getNativeDriver("knx")?.isSubscribedToGa?.(groupAddress) ?? false;
   }
 
   /** Runtime diagnostics (ADR-0023 § Runtime Diagnostics): provider, lifecycle

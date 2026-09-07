@@ -51,8 +51,16 @@ export class SessionRepo implements ISessionStore {
     const { rows } = await this.db.query<SessionRow>("SELECT * FROM sessions WHERE id=$1", [id]);
     return rows[0] ? rowToSession(rows[0]) : null;
   }
-  async setCurrentJti(id: string, jti: string): Promise<void> {
-    await this.db.query("UPDATE sessions SET current_jti=$2 WHERE id=$1", [id, jti]);
+  async setCurrentJti(id: string, expectedJti: string, nextJti: string): Promise<boolean> {
+    // Atomic compare-and-swap in the WHERE clause — Postgres row-level locking makes this safe
+    // under concurrent UPDATEs of the same row without any explicit locking on our part (§
+    // refresh-token rotation race).
+    // SqlDb.query only exposes `rows`, not a row count — RETURNING gives us an equivalent signal.
+    const { rows } = await this.db.query<{ id: string }>(
+      "UPDATE sessions SET current_jti=$3 WHERE id=$1 AND current_jti=$2 RETURNING id",
+      [id, expectedJti, nextJti],
+    );
+    return rows.length > 0;
   }
   async revoke(id: string): Promise<void> {
     await this.db.query("UPDATE sessions SET revoked=TRUE WHERE id=$1", [id]);

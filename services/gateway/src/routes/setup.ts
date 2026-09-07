@@ -12,6 +12,8 @@ import { sendError } from "../http-errors.js";
  * Supreme-only: no Home Assistant user is ever created. Once an admin exists, POST is a
  * 409 so the wizard can't be replayed.
  */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export function registerSetupRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get("/v1/setup/status", async (_req, reply) => {
     reply.send({ setupRequired: ctx.setupRequired, systemName: ctx.config.systemName });
@@ -24,11 +26,20 @@ export function registerSetupRoutes(app: FastifyInstance, ctx: AppContext): void
       }
       const b = (req.body ?? {}) as Record<string, unknown>;
       const username = String(b.username ?? "").trim();
+      const email = String(b.email ?? "").trim();
       const password = String(b.password ?? "");
       const confirm = b.confirmPassword === undefined ? password : String(b.confirmPassword);
       const systemName = String(b.systemName ?? "").trim();
       if (username.length < 3) {
         throw new SupremeError("validation_failed", "username must be at least 3 characters");
+      }
+      // § live-confirmed fix — the administrator's email is now mandatory: password
+      // recovery (/v1/auth/forgot-password) already requires a real email to send a
+      // reset to, so a synthesized "@supreme.local" address (this route's old fallback
+      // when no email was given) silently locked the very first account out of its own
+      // recovery flow forever.
+      if (!EMAIL_RE.test(email)) {
+        throw new SupremeError("validation_failed", "a valid email address is required");
       }
       if (password.length < 8) {
         throw new SupremeError("validation_failed", "password must be at least 8 characters");
@@ -38,6 +49,7 @@ export function registerSetupRoutes(app: FastifyInstance, ctx: AppContext): void
       }
       const { login, loginEmail } = await ctx.completeSetup({
         username,
+        email,
         password,
         displayName: b.displayName ? String(b.displayName) : undefined,
         systemName,

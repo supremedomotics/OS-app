@@ -9,10 +9,9 @@ import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 
 /**
- * Native-migration controls (§16 Phase 4). Installer/admin surface to move backend
- * domains from Home Assistant onto the Supreme-native engine — the visible API and
- * every client are unaffected by the change (the migration guarantee). Disabled
- * gracefully when the hub isn't backed by a routing adapter.
+ * Native-engine domain status (§16 Phase 4). Installer/admin reporting surface —
+ * "native" is the only engine SupremeOS ever runs. Disabled gracefully when the
+ * hub isn't backed by a routing adapter.
  */
 export function registerMigrationRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get("/v1/migration", async (req, reply) => {

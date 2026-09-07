@@ -26,6 +26,14 @@ function startFakeHeos(): Promise<{ server: Server; port: number; received: stri
     const server = createServer((sock: Socket) => {
       sockets.add(sock);
       sock.on("close", () => sockets.delete(sock));
+      // § Bug fix — a per-connection socket with no "error" listener makes Node re-throw
+      // any socket error (e.g. ECONNRESET, expected whenever the driver-under-test
+      // disconnects/reconnects mid-test or `server.close()` runs while still connected)
+      // as an UNCAUGHT exception that fails the whole test run, even though every actual
+      // assertion passed. Pre-existing, unrelated to any recent commit (last touched
+      // 2026-07-23) — not a driver/production bug, purely this test fixture's own socket
+      // hygiene. A reset connection during teardown is expected, not a real failure.
+      sock.on("error", () => {});
       sock.setEncoding("utf8");
       let buf = "";
       sock.on("data", (chunk: string) => {

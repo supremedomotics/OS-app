@@ -30,6 +30,13 @@ export type CatalogList = z.infer<typeof CatalogList>;
 export const InstallDriverRequest = z.object({
   key: z.string(),
   version: z.string().regex(/^\d+\.\d+\.\d+$/).optional(),
+  /** § Multi-network Casambi — install ANOTHER instance of `key` instead of the default
+   * idempotent re-install. Omitted (or false) preserves the original behavior exactly: repeating
+   * an install call reuses the same instance and its config, never silently forking one. */
+  asNewInstance: z.boolean().optional(),
+  /** Installer-facing name for the created instance ("Network 2", "Gateway 2") — meaningful
+   * only alongside `asNewInstance`; ignored otherwise (a single-instance driver has no label). */
+  label: z.string().optional(),
 });
 export type InstallDriverRequest = z.infer<typeof InstallDriverRequest>;
 
@@ -65,6 +72,15 @@ export type NetworkInfo = z.infer<typeof NetworkInfo>;
 export const DriverDiscoveryResult = z.object({
   protocol: z.string(),
   driverName: z.string(),
+  /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) this result is FOR.
+   * A client matching a driver row to its scan result by `protocol` alone would collide once
+   * `protocol` is runtime-scoped ("casambi#<id>") for any instance but a key's first, since a
+   * driver row's own `protocols` field is always the bare manifest list — this carries the real
+   * identity directly, the same fix `DiscoveredDeviceView.driverId` makes for found devices. */
+  driverId: z.string().nullable().optional(),
+  /** § Multi-network Casambi, Stage 3 — this instance's real display label ("Network 1",
+   * "Gateway 2", or the deterministic legacy fallback). Null for a single-instance driver. */
+  instanceLabel: z.string().nullable().optional(),
   status: z.enum(["complete", "failed"]),
   count: z.number(),
   error: z.string().optional(),
@@ -99,6 +115,17 @@ export const DiscoveredDeviceView = z.object({
    * engine/provider name ("KNX Ultimate", "KNX IoT Provider" stay invisible). Null when
    * the device came from a source with no installed-driver mapping. */
   driverName: z.string().nullable().optional(),
+  /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) that discovered this
+   * device. `protocol` alone is not enough to resolve back to a driver row once it's
+   * runtime-scoped ("casambi#<id>") for any instance but a key's first — this carries the real
+   * identity directly, so a client never has to string-match `protocol` against a driver's bare
+   * manifest `protocols` array to find which extension owns a discovered device. */
+  driverId: z.string().nullable().optional(),
+  /** § Multi-network Casambi, Stage 3 — this device's originating instance, as an installer-
+   * facing label ("Network 1", "Gateway 2", or the deterministic legacy fallback) — never the
+   * raw runtime protocol string, and never derived from array position. Null for a
+   * single-instance driver, matching its unchanged, unlabeled presentation. */
+  instanceLabel: z.string().nullable().optional(),
   /** Driver-normalized per-capability config (§ ADR 0017/0018 — Capability Normalization
    * Pipeline), e.g. `{ color: { colorModes: { rgb, cct } } }` — known from the driver's own
    * protocol model at discovery time, never a guess. Pass straight through as
@@ -112,6 +139,10 @@ export const DiscoveredDeviceView = z.object({
   /** A real, wire-reported brand string (§ Discover Devices enrichment) — e.g. fetched from
    * a unit's UPnP description XML. Absent for sources that report no such field. */
   manufacturer: z.string().optional(),
+  /** § Casambi Local Gateway — Cloud device discovery: true when this device is known only from
+   * the Cloud API and hasn't yet had its identity confirmed by a real local signal (e.g. Casambi
+   * Local mode's first UDP packet). Absent/false for every other discovery source. */
+  awaitingLocalSignal: z.boolean().optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 

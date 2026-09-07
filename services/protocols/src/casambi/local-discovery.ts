@@ -22,14 +22,19 @@ import type { CasambiUnit } from "./entity-mapper.js";
  * `entity-mapper.ts`'s `capabilitiesFromUnit`/`statesFromUnit` already know how to read — Local
  * discovery is additive to the unified entity model, never a parallel implementation of it.
  *
- * Deliberately NOT mapped here (a documented, honest gap — see `TODO.md`): the color-related
- * control types (2 Color Temperature, 3 Hue/Saturation, 4 XY color, 5 Color Source Selector, 11
- * White channel). Their byte layouts are documented (p.277 of the UDP reference), but type 2's
- * single-byte "Color Temperature" value has no documented Kelvin range/normalization at this
- * layer (contrast opcode 0x48's SET command, which documents either a 0x400-0x4000 Kelvin range
- * or a separate 0x00-0xFF normalized form, p.310) — reporting a `kelvin` value from this byte
- * without knowing which encoding it uses would be a guess, not a fact, so this module leaves
- * color-capability inference out of Local discovery entirely rather than fabricate it.
+ * Deliberately NOT mapped here (a documented, honest gap — see `TODO.md`): the RGB/XY color
+ * control types (3 Hue/Saturation, 4 XY color, 5 Color Source Selector, 11 White channel). Their
+ * byte layouts are documented (p.277 of the UDP reference) but not enough to build a Supreme RGB
+ * state without guessing.
+ *
+ * Type 10 (Color Temperature, § System Manual 6.38 p.223) IS mapped, confirmed against the same
+ * manual's own 0x48 SET spec: Tc is either `0x400-0x4000` (literal Kelvin, 1000K-16000K) or
+ * `0x00-0xFF` (normalized to the fixture's own min/max Tc) — two non-overlapping ranges by the
+ * protocol's own design, so `>= 0x400` reliably means "literal Kelvin" with no guessing involved.
+ * A NotifyControlValues report is the 1-byte form (always `<= 0xFF`), so it's always normalized —
+ * `entity-mapper.ts`'s `statesFromUnit` leaves `kelvin` null for it (no per-fixture Tc range is
+ * available locally to convert against) while still surfacing the `cct` capability itself, which
+ * is what actually determines "dimmable" vs "tunable white" in discovery/commissioning.
  */
 export function updateUnitFromControlValues(
   unitId: number,
@@ -75,6 +80,24 @@ export function updateUnitFromControlValues(
       case 21: // presenceSensor — 1 byte, 0=inactive/1=active/2=hold (p.278)
         sensors.presence = cv.valueBytes[0] ?? 0;
         break;
+      case 10: // colorTemperature — 1 byte, normalized 0x00 (warmest) - 0xFF (coolest) (p.223)
+        setControl("colortemperature", cv.valueBytes[0] ?? 0);
+        break;
+      case 15: {
+        // § live-confirmed — Slider (custom element), 2 bytes little-endian (§ System Manual 6.38
+        // p.203, type "15 / 143"). Captured from a real Casambi curtain motor: its app-reported
+        // 53.3% position arrived as `0f.88.00` = 136, and 136/255 = 53.3%, so the range is 0-255
+        // in a 2-byte field — NOT a full 16-bit scale (that would have read `6c.88`). min/max are
+        // set explicitly because `statesFromUnit` defaults an absent max to 100, which would clamp
+        // every position above 39% to "100%".
+        const low = cv.valueBytes[0] ?? 0;
+        const high = cv.valueBytes[1] ?? 0;
+        const idx = controls.findIndex((c) => c.type === "slider");
+        const slider = { type: "slider", value: (high << 8) | low, min: 0, max: 255 };
+        if (idx >= 0) controls[idx] = slider;
+        else controls.push(slider);
+        break;
+      }
       default:
         // Unsupported/reserved/color types — honestly ignored per the doc's own "Client
         // requirements: ... ignore unknown or unsupported content" (p.276).

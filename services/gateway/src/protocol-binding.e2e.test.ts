@@ -160,6 +160,58 @@ describe("Native protocol binding e2e", () => {
     expect(driver.writes[0]?.deviceId).toBe(deviceId);
   });
 
+  it("deleting a device also removes its protocol binding — never left orphaned (§ live-confirmed fix)", async () => {
+    const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    const roomId = home.rooms[0]!.id;
+
+    const commissioned = await fetch(`${baseUrl}/v1/commissioning/commission`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ backendId: "fake.relay.2", name: "Doomed Relay", roomId, capabilities: ["onoff"] }),
+    });
+    const deviceId = ((await commissioned.json()) as { device: { id: string } }).device.id;
+    await fetch(`${baseUrl}/v1/commissioning/bind`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ deviceId, capability: "onoff", protocol: "fake", address: "bus/relay/2" }),
+    });
+    expect((await bindingStore.list()).some((b) => b.deviceId === deviceId)).toBe(true);
+
+    const del = await fetch(`${baseUrl}/v1/devices/${deviceId}`, { method: "DELETE", headers: auth() });
+    expect(del.status).toBe(204);
+
+    // Before this fix, HomeService.removeDevice only cleaned up the SIL's own registry —
+    // protocolBindingStore is separate gateway-layer state it has no knowledge of, so the
+    // binding for "bus/relay/2" survived the delete forever, orphaned. A later approval
+    // reusing that same bus address would then hit "device record no longer exists".
+    expect((await bindingStore.list()).some((b) => b.deviceId === deviceId)).toBe(false);
+  });
+
+  it("bulk-deleting devices also removes their protocol bindings", async () => {
+    const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
+    const roomId = home.rooms[0]!.id;
+
+    const commissioned = await fetch(`${baseUrl}/v1/commissioning/commission`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ backendId: "fake.relay.3", name: "Doomed Relay 2", roomId, capabilities: ["onoff"] }),
+    });
+    const deviceId = ((await commissioned.json()) as { device: { id: string } }).device.id;
+    await fetch(`${baseUrl}/v1/commissioning/bind`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ deviceId, capability: "onoff", protocol: "fake", address: "bus/relay/3" }),
+    });
+
+    const bulk = await fetch(`${baseUrl}/v1/devices/bulk`, {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ action: "remove", ids: [deviceId] }),
+    });
+    expect(bulk.status).toBe(200);
+    expect((await bindingStore.list()).some((b) => b.deviceId === deviceId)).toBe(false);
+  });
+
   it("discovers a bus device and auto-binds it on commission", async () => {
     const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth() })).json()) as HomeView;
     const roomId = home.rooms[0]!.id;

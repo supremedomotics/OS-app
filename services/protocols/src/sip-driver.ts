@@ -115,7 +115,16 @@ export class SipProtocolDriver implements INativeProtocolDriver {
       // Momentary release: reflect "unlocked" — a real station relatches shortly after.
       this.record(deviceId, "lock", { kind: "lock", locked: false, jammed: false });
     } else {
-      this.record(deviceId, "lock", { kind: "lock", locked: true, jammed: false });
+      // § Correctness Fix — a SIP door station has no relatch/close API at all
+      // (`SipDoorStation` only exposes `openDoor()`); there is no hardware call that
+      // could ever confirm a "lock" action succeeded. Previously this branch set
+      // `locked: true` unconditionally with zero hardware interaction — a fabricated
+      // success (§ Never fabricate). Honest behavior is to refuse the command the
+      // protocol genuinely cannot perform, exactly like the unsupported-capability
+      // check above, rather than report state that was never actually confirmed.
+      throw new Error(
+        `sip: cannot confirm "lock" on ${deviceId} — this door station has no relatch hardware; only "unlock" (momentary door release) is supported`,
+      );
     }
   }
 

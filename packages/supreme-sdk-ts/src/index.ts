@@ -11,6 +11,7 @@ export {
   type ClimateScheduleEvent,
   type ClimateScheduleEventInput,
   type ClimateScheduleResponse,
+  type SourceUpdateStatus,
 } from "./client.js";
 export {
   SupremeStream,

@@ -15,8 +15,7 @@ import { ProviderRegistry } from "./provider-registry.js";
 import type { SupremeNativeAdapter } from "./native-adapter.js";
 
 export interface ProviderRouterOptions {
-  /** The driver-hosting engine every provider (native protocols AND Home Assistant,
-   * via `HomeAssistantProviderDriver`) registers into identically. */
+  /** The driver-hosting engine every native protocol provider registers into. */
   engine: SupremeNativeAdapter;
   registry: ProviderRegistry;
   bindingEngine: DriverBindingEngine;
@@ -106,6 +105,13 @@ export class ProviderRouter implements IBackendAdapter {
   }
   async getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Promise<Record<string, unknown> | null> {
     return this.engine.getCapabilityConfig(deviceId, capability);
+  }
+
+  async getAvrInputs(deviceId: DeviceId): Promise<{ technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null> {
+    return this.engine.getAvrInputs(deviceId);
+  }
+  async setAvrInputCustomName(deviceId: DeviceId, technicalId: string, name: string | null): Promise<boolean> {
+    return this.engine.setAvrInputCustomName(deviceId, technicalId, name);
   }
 
   /** Real diagnostics only — provider, lifecycle state, binding/connection health,

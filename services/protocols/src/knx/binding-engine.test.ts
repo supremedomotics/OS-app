@@ -65,9 +65,309 @@ describe("planBindings", () => {
     expect(color.address).toBe("5/3/5");
     expect(color.config.statusAddress).toBe("5/3/6");
     expect(color.config.stepAddress).toBe("5/3/7");
+    // § PASS 17 bug fix — this fixture's real ETS DPT for the color capability is
+    // 7.600 (absolute Kelvin, tunable-white) — the binding must carry that REAL dpt,
+    // not the generic per-capability default (which was hardcoded to DPT232.600 RGB
+    // and would have silently mis-driven this genuinely CCT-only circuit as RGB).
+    expect(color.config.dpt).toBe("DPT7.600");
+    expect(brightness.config.dpt).toBe("DPT5.001");
+    expect(onoff.config.dpt).toBe("DPT1.001");
 
     // Every capability got a DIFFERENT write address — the bug this test guards
     // against bound all three to whichever address came first (5/3/0).
     expect(new Set([onoff.address, brightness.address, color.address]).size).toBe(3);
+  });
+
+  it("§ PASS 17 — a genuine RGB(W) color circuit's real DPT (232.600) is preserved, not overwritten by a CCT assumption", () => {
+    const device = mapUnifiedDevices({
+      ets: [
+        { id: "2/1/0", name: "Living Accent SW", dpt: "1.001" },
+        { id: "2/1/1", name: "Living Accent Colour RGB", dpt: "232.600" },
+      ],
+    })[0]!;
+    const plans = planBindings(device);
+    const color = plans.find((p) => p.capability === "color")!;
+    expect(color.address).toBe("2/1/1");
+    expect(color.config.dpt).toBe("DPT232.600");
+  });
+
+  it("§ PASS 17 — a color capability with NO real DPT reported on any of its objects falls back to the generic default, never fabricated", () => {
+    const device = mapUnifiedDevices({
+      ets: [{ id: "2/2/0", name: "Mystery Colour Object" }],
+    })[0]!;
+    const plans = planBindings(device);
+    const color = plans.find((p) => p.capability === "color");
+    if (color?.bindable) expect(color.config.dpt).toBe("DPT232.600"); // defaultDpt("color")
+  });
+
+  // § Binding Evidence Hierarchy (Pass 11.4) — the real Nirma-project finding: a
+  // capability can legitimately carry MORE than one "primary"-role write candidate
+  // (its own local circuit command plus one or more fanned-in shared/central GAs that
+  // also happen to carry a real SEND relationship to this device). `own[0]`/`.find()`
+  // picked whichever candidate happened to be first in the caller's ETS-export-order
+  // array; these tests prove primary/step selection is now order-independent, ranks a
+  // local object over a fanned-in shared one, and only falls back to a shared object
+  // when no local alternative exists — never a hardcoded GA-name/project rule.
+  describe("primary/step selection is deterministic and evidence-ranked, not array-order-dependent (Pass 11.4)", () => {
+    function threeLocalCandidatesFixture() {
+      // "1/0/1" and "1/0/2" are both genuinely local (each references only this one
+      // device — no multi-device links array), so id order alone must break the tie
+      // deterministically. "1/0/0" is a real shared/central GA (2+ distinct devices in
+      // its links) and must never outrank either local one, regardless of its id.
+      return {
+        ets: [
+          { id: "1/0/2", name: "Local Switch B", dpt: "1.001", individualAddress: "1.1.1", channel: 1 },
+          { id: "1/0/1", name: "Local Switch A", dpt: "1.001", individualAddress: "1.1.1", channel: 1 },
+          {
+            id: "1/0/0",
+            name: "All On",
+            dpt: "1.001",
+            individualAddress: "1.1.1",
+            channel: 1,
+            links: [
+              { role: "send" as const, individualAddress: "1.1.1" },
+              { role: "receive" as const, individualAddress: "1.1.2" },
+            ],
+          },
+        ],
+      };
+    }
+
+    it("multiple LOCAL primary candidates: the lowest GA id wins, deterministically, regardless of input array order", () => {
+      const forward = mapUnifiedDevices(threeLocalCandidatesFixture())[0]!;
+      const reversed = mapUnifiedDevices({ ets: [...threeLocalCandidatesFixture().ets].reverse() })[0]!;
+      const forwardOnoff = planBindings(forward).find((p) => p.capability === "onoff")!;
+      const reversedOnoff = planBindings(reversed).find((p) => p.capability === "onoff")!;
+      expect(forwardOnoff.address).toBe("1/0/1"); // lower id among the two LOCAL candidates
+      expect(reversedOnoff.address).toBe("1/0/1");
+      // extraCommandAddresses preserves evidence-ranked order (remaining local
+      // candidates before shared ones), not alphabetical.
+      expect(forwardOnoff.config.extraCommandAddresses).toEqual(["1/0/2", "1/0/0"]);
+      expect(reversedOnoff.config.extraCommandAddresses).toEqual(["1/0/2", "1/0/0"]);
+    });
+
+    it("multiple SHARED candidates and zero local ones: still falls back to a shared primary deterministically (never fabricated, never order-dependent)", () => {
+      const fixture = {
+        ets: [
+          {
+            id: "2/0/9",
+            name: "Central Scene B",
+            dpt: "1.001",
+            individualAddress: "1.1.5",
+            channel: 1,
+            links: [
+              { role: "send" as const, individualAddress: "1.1.5" },
+              { role: "receive" as const, individualAddress: "1.1.6" },
+            ],
+          },
+          {
+            id: "2/0/3",
+            name: "Central Scene A",
+            dpt: "1.001",
+            individualAddress: "1.1.5",
+            channel: 1,
+            links: [
+              { role: "send" as const, individualAddress: "1.1.5" },
+              { role: "receive" as const, individualAddress: "1.1.7" },
+            ],
+          },
+        ],
+      };
+      const forward = mapUnifiedDevices(fixture)[0]!;
+      const reversed = mapUnifiedDevices({ ets: [...fixture.ets].reverse() })[0]!;
+      const forwardOnoff = planBindings(forward).find((p) => p.capability === "onoff")!;
+      const reversedOnoff = planBindings(reversed).find((p) => p.capability === "onoff")!;
+      expect(forwardOnoff.address).toBe("2/0/3"); // lower id among the two SHARED candidates — no local alternative exists
+      expect(reversedOnoff.address).toBe("2/0/3");
+      expect(forwardOnoff.config.extraCommandAddresses).toEqual(["2/0/9"]);
+    });
+
+    it("step/nudge selection (relative dimming) is order-independent too — the same evidence hierarchy applies, not just primary/status", () => {
+      const fixture = {
+        ets: [
+          { id: "3/0/1", name: "Local Dim SW", dpt: "1.001", individualAddress: "1.1.9", channel: 1 },
+          { id: "3/0/2", name: "Local Dim Abs", dpt: "5.001", individualAddress: "1.1.9", channel: 1 },
+          { id: "3/0/3", name: "Local Relative Dim", dpt: "3.007", individualAddress: "1.1.9", channel: 1 },
+          {
+            // A fanned-in shared step object referencing a different physical device
+            // too — same DPT category, but must never outrank the device's own local
+            // step object just because of array position.
+            id: "3/0/4",
+            name: "Central Relative Dim",
+            dpt: "3.007",
+            individualAddress: "1.1.9",
+            channel: 1,
+            links: [
+              { role: "send" as const, individualAddress: "1.1.9" },
+              { role: "receive" as const, individualAddress: "1.1.10" },
+            ],
+          },
+        ],
+      };
+      const forward = mapUnifiedDevices(fixture)[0]!;
+      const reversed = mapUnifiedDevices({ ets: [...fixture.ets].reverse() })[0]!;
+      const forwardBrightness = planBindings(forward).find((p) => p.capability === "brightness")!;
+      const reversedBrightness = planBindings(reversed).find((p) => p.capability === "brightness")!;
+      expect(forwardBrightness.config.stepAddress).toBe("3/0/3"); // local step object, not the fanned-in shared one
+      expect(reversedBrightness.config.stepAddress).toBe("3/0/3");
+    });
+
+    // § Pass 26 — finding traced against a real customer ETS6 project: a multi-channel
+    // DALI actuator shares ONE individual address across every output channel, so one
+    // output's onoff command/status GA is ALSO referenced by a second, unrelated
+    // physical device (a diagnostics/logic module reading the same switch GA — real,
+    // legitimate KNX wiring) while a DIFFERENT sibling channel's onoff pair has no such
+    // cross-device reference. Before this fix, both onoff candidates tied on
+    // `local: false`/`local: true` in a way that let the wrong sibling channel's GA win
+    // purely by lexical id — even though this device's OWN brightness capability
+    // (genuinely local, no cross-device reference) unambiguously anchors it to the
+    // correct channel.
+    it("prefers the capability's own channel (evidenced by another unambiguous LOCAL capability on the same device) over a lexically-smaller sibling-channel GA, when the correct GA is itself shared with a second device", () => {
+      const fixture = {
+        ets: [
+          // This device's own output channel — onoff's write/status GA is legitimately
+          // ALSO read by a second device, so both objects are `local: false`.
+          {
+            id: "5/3/0",
+            name: "SW",
+            dpt: "1.001",
+            individualAddress: "1.1.9",
+            channel: 9,
+            // The second device (a diagnostics/logic module) reading the same switch
+            // GA — this is what makes 5/3/0 legitimately "shared", not a fabrication.
+            links: [
+              { role: "send" as const, individualAddress: "1.1.9" },
+              { role: "receive" as const, individualAddress: "1.1.20" },
+            ],
+          },
+          { id: "5/3/1", name: "SW Status", dpt: "1.001", individualAddress: "1.1.9", channel: 9 },
+          // This device's brightness pair on the SAME channel/device — genuinely local
+          // (no second device references it) — this is the anchor evidence.
+          { id: "5/3/3", name: "Abs Dim", dpt: "5.001", individualAddress: "1.1.9", channel: 9 },
+          { id: "5/3/4", name: "Abs Dim FB", dpt: "5.001", individualAddress: "1.1.9", channel: 9 },
+          // A sibling DALI output channel (channel 1) of the SAME actuator individual
+          // address, with its own onoff pair that lexically sorts BEFORE 5/3/x but
+          // belongs to a completely different physical output.
+          { id: "0/0/1", name: "SW", dpt: "1.001", individualAddress: "1.1.9", channel: 1 },
+          { id: "0/0/2", name: "SW Status", dpt: "1.001", individualAddress: "1.1.9", channel: 1 },
+        ],
+      };
+      const device = mapUnifiedDevices(fixture).find((d) =>
+        d.raw.communicationObjects.some((o) => o.id === "5/3/3"),
+      )!;
+      expect(device).toBeDefined();
+      const onoff = planBindings(device).find((p) => p.capability === "onoff")!;
+      expect(onoff.address).toBe("5/3/0");
+      expect(onoff.config.statusAddress).toBe("5/3/1");
+    });
+
+    it("a DPT-incompatible candidate is filtered out upstream (per-signal capability tagging) and never wins primary — no capability-mismatched binding is ever produced", () => {
+      // "3/0/9" is a genuine binary switch (DPT 1.001, onoff) on the SAME physical
+      // device/channel as a brightness object — it must never be considered for the
+      // brightness capability's primary slot just because it's local and low-id.
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "3/0/9", name: "Local Switch", dpt: "1.001", individualAddress: "1.1.20", channel: 1 },
+          { id: "4/0/5", name: "Local Abs Dim", dpt: "5.001", individualAddress: "1.1.20", channel: 1 },
+        ],
+      })[0]!;
+      const brightness = planBindings(device).find((p) => p.capability === "brightness")!;
+      expect(brightness.address).toBe("4/0/5");
+      expect(brightness.address).not.toBe("3/0/9");
+    });
+  });
+
+  // § P0-C (Pass 28) — the discovery/review-time `colorModes` signal (§ colorModesFromDpt,
+  // capability-mapper.ts) that lets a review card show "CCT"/"RGB" instead of the
+  // ambiguous "color" BEFORE approval even exists. Anonymized fixtures modeled on a real
+  // ETS tunable-white lighting circuit's actual GA/DPT shape (SW/SW-Status/Dimm/Abs Dim/
+  // Abs Dim FB/Abs Col/Abs Col FB, DPT1.001/3.007/5.001/7.600) — no real group addresses,
+  // room names, project names, or individual addresses from that project appear here.
+  describe("§ P0-C colorModes on the color capability's plan", () => {
+    it("TEST 1: onoff only — no color capability at all", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "SW", dpt: "1.001" },
+          { id: "1/1/1", name: "SW Status", dpt: "1.001" },
+        ],
+      })[0]!;
+      const plans = planBindings(device);
+      expect(plans.map((p) => p.capability)).toEqual(["onoff"]);
+      expect(plans.find((p) => p.capability === "color")).toBeUndefined();
+    });
+
+    it("TEST 2: onoff + brightness — still no color capability", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/2", name: "Fixture Abs Dim", dpt: "5.001" },
+          { id: "1/1/3", name: "Fixture Abs Dim FB", dpt: "5.001" },
+        ],
+      })[0]!;
+      const plans = planBindings(device);
+      expect(plans.map((p) => p.capability).sort()).toEqual(["brightness", "onoff"]);
+      expect(plans.find((p) => p.capability === "color")).toBeUndefined();
+    });
+
+    it("TEST 3: onoff + brightness + CCT (DPT 7.600) — color capability resolves colorModes.cct=true, rgb=false", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/2", name: "Fixture Abs Dim", dpt: "5.001" },
+          { id: "1/1/3", name: "Fixture Abs Dim FB", dpt: "5.001" },
+          { id: "1/1/4", name: "Fixture Abs Col", dpt: "7.600" },
+          { id: "1/1/5", name: "Fixture Abs Col FB", dpt: "7.600" },
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.bindable).toBe(true);
+      expect(color.config.dpt).toBe("DPT7.600");
+      expect(color.config.colorModes).toEqual({ rgb: false, cct: true });
+    });
+
+    it("TEST 4: onoff + brightness + RGB (DPT 232.600) — color capability resolves colorModes.rgb=true, cct=false", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/2", name: "Fixture Abs Dim", dpt: "5.001" },
+          { id: "1/1/3", name: "Fixture Abs Dim FB", dpt: "5.001" },
+          { id: "1/1/4", name: "Fixture Colour RGB", dpt: "232.600" },
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.bindable).toBe(true);
+      expect(color.config.dpt).toBe("DPT232.600");
+      expect(color.config.colorModes).toEqual({ rgb: true, cct: false });
+    });
+
+    it("TEST 9: write and status GAs stay distinct on a color capability with colorModes resolved — never merged into one address", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture SW Status", dpt: "1.001" },
+          { id: "1/1/4", name: "Fixture Abs Col", dpt: "7.600" },
+          { id: "1/1/5", name: "Fixture Abs Col FB", dpt: "7.600" },
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.address).toBe("1/1/4");
+      expect(color.config.statusAddress).toBe("1/1/5");
+      expect(color.address).not.toBe(color.config.statusAddress);
+    });
+
+    it("a color capability with no real project DPT at all falls back to the generic legacy default (RGB) — pre-existing, disclosed behavior, not changed by this pass", () => {
+      const device = mapUnifiedDevices({
+        ets: [
+          { id: "1/1/0", name: "Fixture SW", dpt: "1.001" },
+          { id: "1/1/1", name: "Fixture Colour RGB" }, // classified by name; no dpt attribute at all
+        ],
+      })[0]!;
+      const color = planBindings(device).find((p) => p.capability === "color")!;
+      expect(color.config.dpt).toBe("DPT232.600"); // defaultDpt("color") — unchanged legacy fallback
+      expect(color.config.colorModes).toEqual({ rgb: true, cct: false });
+    });
   });
 });

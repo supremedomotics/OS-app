@@ -1,20 +1,23 @@
 import { newId, type HomeId, type UserId } from "@supreme/domain-model";
-import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
+import { MockAdapter, SupremeIntegrationLayer, type DiscoveredDevice } from "@supreme/integration-layer";
 import { HomeService } from "@supreme/home";
 import { describe, expect, it } from "vitest";
 import { CommissioningService, extractNetwork, type IProtocolScanner } from "./index.js";
 
-async function setup(seedDiscovered = true) {
-  const seed = seedDiscovered
-    ? [
-        {
-          backendId: "light.studio",
-          suggestedName: "Studio Light",
-          capabilities: ["onoff", "brightness"] as const,
-          raw: {},
-        },
-      ]
-    : [];
+async function setup(seedDiscovered: boolean | DiscoveredDevice[] = true) {
+  const seed =
+    typeof seedDiscovered === "boolean"
+      ? seedDiscovered
+        ? [
+            {
+              backendId: "light.studio",
+              suggestedName: "Studio Light",
+              capabilities: ["onoff", "brightness"] as const,
+              raw: {},
+            },
+          ]
+        : []
+      : seedDiscovered;
   const adapter = new MockAdapter(seed as never);
   const sil = new SupremeIntegrationLayer({ adapter });
   await sil.start();
@@ -106,6 +109,41 @@ describe("CommissioningService", () => {
     expect(rescan.map((f) => f.backendId)).not.toContain("light.studio");
   });
 
+  it("survives an AVR rediscovery: a user-renamed device is neither re-surfaced by discover() nor overwritten by a fresh friendlyName (§ Pass 12.2)", async () => {
+    // Same exclusion mechanism as the generic test above, exercised end-to-end for the
+    // AVR case specifically: an AVR scanner whose suggestedName is UPnP-friendlyName-
+    // derived (per avr-driver.ts's discover()) reports a DIFFERENT friendlyName on the
+    // second scan (e.g. the installer renamed it in the Denon app) — Device.name must
+    // stay whatever the homeowner set, never re-derived from a later scan.
+    let avrFriendlyName = "Denon AVR-X3800H";
+    const avrScanner: IProtocolScanner = {
+      protocol: "avr" as never,
+      async scan() {
+        return [{ backendId: "avr.192.168.1.60", suggestedName: avrFriendlyName, capabilities: ["onoff", "media"], raw: {} }];
+      },
+    };
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home, [avrScanner]);
+    expect((await svc.discover()).map((f) => f.backendId)).toContain("avr.192.168.1.60");
+
+    const device = await svc.commission({
+      backendId: "avr.192.168.1.60",
+      name: "Denon AVR-X3800H",
+      roomId: roomId as never,
+      capabilities: ["onoff", "media"],
+    });
+    const renamed = await home.updateDevice(device.id, { name: "Living Room Receiver" });
+    expect(renamed.name).toBe("Living Room Receiver");
+
+    // Rediscovery reports a different friendlyName for the same physical unit.
+    avrFriendlyName = "Denon AVR-X3800H (2)";
+    const rescan = await svc.discover();
+    expect(rescan.map((f) => f.backendId)).not.toContain("avr.192.168.1.60");
+
+    const stillRenamed = await home.listDevicesInRoom(roomId as never);
+    expect(stillRenamed.find((d) => d.id === device.id)?.name).toBe("Living Room Receiver");
+  });
+
   it("filters discovery by protocol", async () => {
     const { sil, home } = await setup();
     const svc = new CommissioningService(sil, home, [knxScanner]);
@@ -147,5 +185,52 @@ describe("CommissioningService", () => {
       capabilities: ["onoff"],
     });
     expect((bare.metadata as { network?: unknown }).network).toBeUndefined();
+  });
+
+  // § Multi-network Casambi, Stage 3 — two Casambi networks (or two Lithernet gateways) can
+  // report the identical protocol-native backendId ("casambi:45" is just "unit 45"; nothing
+  // about the wire address itself is network-scoped, since that's Stage 4's job, not this one's).
+  // `protocol` IS scoped per instance since Stage 2a ("casambi" for the first, "casambi#<id>" for
+  // any other) — the dedup key must use it, or two genuinely different physical fixtures collapse
+  // into a single discovery result.
+  describe("de-duplication is scoped by (protocol, backendId), not bare backendId", () => {
+    function unit45(protocol: string): DiscoveredDevice {
+      return { backendId: "casambi:45", suggestedName: "Unit 45", capabilities: ["onoff"], raw: { protocol } };
+    }
+
+    it("identical Unit IDs on different Casambi networks remain distinguishable in one scan", async () => {
+      const { sil, home } = await setup([unit45("casambi"), unit45("casambi#drv_network2")]);
+      const svc = new CommissioningService(sil, home);
+      const found = await svc.discover();
+      // Both survive — NOT collapsed into one result just because they share a backendId.
+      expect(found).toHaveLength(2);
+      expect(found.map((f) => f.protocol).sort()).toEqual(["casambi", "casambi#drv_network2"]);
+      expect(found.every((f) => f.backendId === "casambi:45")).toBe(true);
+    });
+
+    it("identical Unit IDs on different Lithernet gateways remain distinguishable in one scan", async () => {
+      const { sil, home } = await setup([unit45("casambi"), unit45("casambi#drv_gateway2")]);
+      const svc = new CommissioningService(sil, home);
+      const found = await svc.discover();
+      expect(found).toHaveLength(2);
+      expect(found.map((f) => f.protocol).sort()).toEqual(["casambi", "casambi#drv_gateway2"]);
+    });
+
+    it("a TRUE duplicate — the SAME instance reporting the same unit twice in one scan — still collapses to one result", async () => {
+      const { sil, home } = await setup([unit45("casambi"), unit45("casambi")]);
+      const svc = new CommissioningService(sil, home);
+      const found = await svc.discover();
+      expect(found).toHaveLength(1);
+    });
+
+    it("single-instance discovery (no protocol scoping at all) is completely unaffected", async () => {
+      const { sil, home } = await setup([
+        { backendId: "light.studio", suggestedName: "Studio Light", capabilities: ["onoff"], raw: { protocol: "knx" } },
+      ]);
+      const svc = new CommissioningService(sil, home);
+      const found = await svc.discover();
+      expect(found).toHaveLength(1);
+      expect(found[0]!.backendId).toBe("light.studio");
+    });
   });
 });

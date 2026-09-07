@@ -8,7 +8,6 @@ import { ProviderRouter } from "./provider-router.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import { DriverBindingEngine } from "./driver-binding-engine.js";
 import { EntityRegistryMirror } from "./registry.js";
-import { commandToHaService } from "./ha/capability-mapper.js";
 import type { DiscoveredDevice } from "./adapter.js";
 import type { INativeProtocolDriver, ProtocolBinding } from "./protocols/driver.js";
 
@@ -98,26 +97,6 @@ describe("SupremeIntegrationLayer.unmapDevice — § Driver Lifecycle Completion
     await sil.start();
     const deviceId = newId("device") as DeviceId;
     await expect(sil.unmapDevice(deviceId)).resolves.toBeUndefined();
-  });
-});
-
-describe("HA capability mapper", () => {
-  it("maps brightness set to light.turn_on with brightness_pct", () => {
-    const call = commandToHaService("light.kitchen", {
-      capability: "brightness",
-      action: "set",
-      level: 60,
-    });
-    expect(call).toEqual({
-      domain: "light",
-      service: "turn_on",
-      data: { entity_id: "light.kitchen", brightness_pct: 60 },
-    });
-  });
-
-  it("maps lock unlock to lock.unlock", () => {
-    const call = commandToHaService("lock.front", { capability: "lock", action: "unlock" });
-    expect(call.service).toBe("unlock");
   });
 });
 

@@ -1,6 +1,12 @@
 # SupremeOS — Home Assistant Dependency Audit & Native Core Migration Roadmap
 
-> **Analysis only.** No application code was modified, no Home Assistant code was removed,
+> **2026-08-26 update: this migration is complete.** Home Assistant has been fully removed
+> from SupremeOS — not made optional, removed outright (runtime `services/integration-layer
+> /src/ha/*`, gateway backend="ha" wiring, native-linux headless install, docker-compose
+> service, CI, docs). "Native" is now the only real backend. The rest of this document is
+> retained as historical analysis of the pre-removal state.
+
+> **Analysis only (as of the original audit).** No application code was modified, no Home Assistant code was removed,
 > no protocol driver was redesigned. Every claim below cites the file/line it was verified
 > from. Anything that could not be verified from the repository is explicitly marked
 > **NOT VERIFIED** rather than guessed.

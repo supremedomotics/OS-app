@@ -23,8 +23,25 @@ interface NatsConnection {
   subscribe(subject: string): NatsSubscription;
   drain(): Promise<void>;
 }
+interface NatsConnectOpts {
+  servers: string;
+  // § Native-linux NATS/Gateway readiness hardening — real production evidence: the
+  // Gateway crashed with ECONNREFUSED 127.0.0.1:4222 and restart-looped under systemd
+  // whenever it started before NATS was accepting connections (e.g. right after boot, or
+  // mid-repair). `nats.connect()` by default only reconnects AFTER an established
+  // connection later drops — the FIRST attempt just throws if nothing is listening yet.
+  // `waitOnFirstConnect: true` is the nats.js client's own documented switch to apply its
+  // existing reconnect/backoff logic to that first attempt too — reusing the client's
+  // built-in mechanism instead of inventing a retry loop here. `maxReconnectAttempts: -1`
+  // (infinite) + a bounded `reconnectTimeWait` backoff means a Gateway that starts before
+  // NATS is ready — or loses it later, mid-run — keeps retrying quietly instead of
+  // crashing the process (which is what fed the systemd restart storm).
+  waitOnFirstConnect?: boolean;
+  maxReconnectAttempts?: number;
+  reconnectTimeWait?: number;
+}
 interface NatsModule {
-  connect(opts: { servers: string }): Promise<NatsConnection>;
+  connect(opts: NatsConnectOpts): Promise<NatsConnection>;
 }
 
 export interface NatsEventBusOptions {
@@ -41,7 +58,12 @@ export class NatsEventBus implements IEventBus {
     // Variable specifier so the bundler/tsc doesn't try to resolve `nats` at build.
     const moduleName = "nats";
     const nats = (await import(moduleName)) as unknown as NatsModule;
-    const nc = await nats.connect({ servers: opts.url });
+    const nc = await nats.connect({
+      servers: opts.url,
+      waitOnFirstConnect: true,
+      maxReconnectAttempts: -1,
+      reconnectTimeWait: 2000,
+    });
     return new NatsEventBus(nc);
   }
 

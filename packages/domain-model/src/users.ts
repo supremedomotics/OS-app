@@ -31,6 +31,11 @@ export const User = z.object({
   id: UserId,
   homeId: HomeId,
   email: z.string().email(),
+  /** Optional login alias set at Setup Wizard time (or by an admin creating a user) — lets
+   * someone log in without typing their full email. Nullable: accounts created before this field
+   * existed, or an admin-created user with none set, have no username and log in by email only.
+   * Unique among users that have one (enforced by a partial unique index — see migration 0026). */
+  username: z.string().min(3).nullable(),
   phone: z.string().nullable(),
   displayName: z.string().min(1),
   userType: UserType,

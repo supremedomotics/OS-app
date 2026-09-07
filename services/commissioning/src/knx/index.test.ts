@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { runKnxImport, toCommissionable } from "./index.js";
+import { runKnxImport, toCommissionable, knxSignalsFromModel } from "./index.js";
+import { emptyProjectModel, DEFAULT_COM_FLAGS } from "./types.js";
 
 describe("KNX import orchestrator", () => {
   it("runs the full pipeline end to end from a flat GA export", () => {
@@ -81,5 +82,230 @@ describe("KNX import orchestrator", () => {
     });
     const livingSpot = second.devices.find((d) => d.name.includes("Living Spot"));
     expect(livingSpot?.fingerprint).toBe(first.devices[0]!.fingerprint);
+  });
+});
+
+/** Test helper — a comm object that SENDS (writes) to the given GAs, matching the
+ * common case (a Switch/Dimming object commands its GA). Tests needing a Receive-role
+ * (feedback/status) object build the full literal directly. */
+function sendComObject(overrides: { id: string; deviceInstanceId: string; number: number; text: string; dpt: string; gaIds: string[] }) {
+  return {
+    id: overrides.id, deviceInstanceId: overrides.deviceInstanceId, number: overrides.number,
+    text: overrides.text, dpt: overrides.dpt, flags: DEFAULT_COM_FLAGS,
+    groupAddressIds: overrides.gaIds, sendGroupAddressIds: overrides.gaIds, receiveGroupAddressIds: [], channelId: null,
+  };
+}
+
+// § Production KNX Driver 2.0 — Physical Device Identity: knxSignalsFromModel() must
+// preserve individualAddress/manufacturer/model/channel from the ETS device tree,
+// instead of flattening every group address down to just {id,name,room,description,dpt}.
+describe("knxSignalsFromModel — physical device identity", () => {
+  it("attaches the owning DeviceInstance's individualAddress/manufacturer/model, and the channel parsed from the comm object's function text", () => {
+    const model = emptyProjectModel("Test Project");
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "DALI Device-1", individualAddress: "1.1.12",
+      manufacturer: "ABB", product: "DALI Gateway", hardwareName: "DG/S 1.1",
+      spaceId: null, comObjectIds: ["co-1", "co-2"],
+    });
+    model.communicationObjects.set("co-1", sendComObject({ id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Channel 1 Switch", dpt: "1.001", gaIds: ["ga-1"] }));
+    model.communicationObjects.set("co-2", sendComObject({ id: "co-2", deviceInstanceId: "dev-1", number: 2, text: "Channel 1 Dimming", dpt: "3.007", gaIds: ["ga-2"] }));
+    model.groupAddresses.set("ga-1", {
+      id: "ga-1", address: "1/1/1", name: "Ceiling SW", description: null, comment: null,
+      dpt: "1.001", mainGroup: "1", middleGroup: "1", comObjectIds: ["co-1"],
+    });
+    model.groupAddresses.set("ga-2", {
+      id: "ga-2", address: "1/1/2", name: "Ceiling Dimming", description: null, comment: null,
+      dpt: "3.007", mainGroup: "1", middleGroup: "1", comObjectIds: ["co-2"],
+    });
+
+    const signals = knxSignalsFromModel(model);
+    expect(signals).toHaveLength(2);
+    for (const s of signals) {
+      expect(s.individualAddress).toBe("1.1.12");
+      expect(s.manufacturer).toBe("ABB");
+      expect(s.model).toBe("DALI Gateway");
+      expect(s.channel).toBe(1);
+    }
+  });
+
+  // § Naming Evidence (Pass 10.1, § S.2) — ets-parser.ts already populates
+  // mainGroup/middleGroup on every parsed GroupAddress; knxSignalsFromModel must copy
+  // them through onto the returned KnxEtsSignal, not silently drop them.
+  it("threads mainGroup/middleGroup from the parsed GroupAddress record onto the returned KnxEtsSignal (Pass 10.1 § S.2)", () => {
+    const model = emptyProjectModel();
+    model.groupAddresses.set("ga-1", {
+      id: "ga-1", address: "1/1/1", name: "Ceiling SW", description: null, comment: null,
+      dpt: "1.001", mainGroup: "Lighting", middleGroup: "Ground Floor", comObjectIds: [],
+    });
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.mainGroup).toBe("Lighting");
+    expect(signal?.middleGroup).toBe("Ground Floor");
+  });
+
+  it("leaves mainGroup/middleGroup null (never fabricated) when the source GroupAddress carries none", () => {
+    const model = emptyProjectModel();
+    model.groupAddresses.set("ga-1", {
+      id: "ga-1", address: "1/1/1", name: "Flat Export GA", description: null, comment: null,
+      dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: [],
+    });
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.mainGroup).toBeNull();
+    expect(signal?.middleGroup).toBeNull();
+  });
+
+  it("leaves individualAddress/manufacturer/model/channel null for a group address with no owning communication object (flat GA export, no device tree)", () => {
+    const model = emptyProjectModel();
+    model.groupAddresses.set("ga-1", {
+      id: "ga-1", address: "1/1/1", name: "Kitchen Light SW", description: null, comment: null,
+      dpt: "1.001", mainGroup: "1", middleGroup: "1", comObjectIds: [],
+    });
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.individualAddress).toBeNull();
+    expect(signal?.manufacturer).toBeNull();
+    expect(signal?.model).toBeNull();
+    expect(signal?.channel).toBeNull();
+  });
+
+  // § Module/Channel Identity — real ETS6 `ChannelId` (confirmed regression: a real
+  // Supreme Domotics Showroom DALI-gateway export). The comm-object function text is
+  // empty on this export shape (no bundled application-program catalog), so channel
+  // identity comes ONLY from `ChannelId="MD-1_M-2_MI-<n>_CH-1"` — and a plain `\bMI-\d+\b`
+  // regex never matches there because `_` is itself a `\w` character, so neither the
+  // leading nor trailing word-boundary exists around "MI-3" in "..._MI-3_CH-1".
+  it("derives channel from ChannelId's Module Instance number when the comm-object text carries no channel token at all (real DALI-gateway shape)", () => {
+    const model = emptyProjectModel();
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "DALI Gateway", individualAddress: "1.1.2",
+      manufacturer: null, product: "DALI Control 2x64 Gateway", hardwareName: null, spaceId: null, comObjectIds: ["co-1", "co-2"],
+    });
+    model.communicationObjects.set("co-1", {
+      ...sendComObject({ id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "", dpt: "1.001", gaIds: ["ga-1"] }),
+      channelId: "MD-1_M-2_MI-3_CH-1",
+    });
+    model.communicationObjects.set("co-2", {
+      ...sendComObject({ id: "co-2", deviceInstanceId: "dev-1", number: 2, text: "", dpt: "1.001", gaIds: ["ga-2"] }),
+      channelId: "MD-1_M-2_MI-7_CH-1",
+    });
+    model.groupAddresses.set("ga-1", { id: "ga-1", address: "1/1/1", name: "SW", description: null, comment: null, dpt: "1.001", mainGroup: "Showroom Light-1", middleGroup: "Living DL", comObjectIds: ["co-1"] });
+    model.groupAddresses.set("ga-2", { id: "ga-2", address: "1/1/2", name: "SW", description: null, comment: null, dpt: "1.001", mainGroup: "Showroom Light-1", middleGroup: "Passage Cove", comObjectIds: ["co-2"] });
+
+    const signals = knxSignalsFromModel(model);
+    const byGa = new Map(signals.map((s) => [s.id, s]));
+    // § Module/Channel Identity (second pass) — `MD-N` alone collides across DIFFERENT
+    // module TYPES that each restart their own `MI-1` numbering (confirmed on the same
+    // real Showroom project: a curtain module and an unrelated screen module both under
+    // "MD-2" produced the identical synthesized channel and merged into one device) — the
+    // module-type identifier `M-N` is folded into the channel number too.
+    expect(byGa.get("1/1/1")?.channel).toBe(1002003);
+    expect(byGa.get("1/1/2")?.channel).toBe(1002007);
+    // Different Module Instances of the same physical device must resolve to different
+    // channels — this is the exact distinction that lets the Unified Device Mapper keep
+    // "Living DL" and "Passage Cove" as two separate logical circuits instead of
+    // collapsing every DALI channel onto one device.
+    expect(byGa.get("1/1/1")?.channel).not.toBe(byGa.get("1/1/2")?.channel);
+  });
+
+  it("returns null channel when the comm object's function text carries no channel token", () => {
+    const model = emptyProjectModel();
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "Single Switch Actuator", individualAddress: "1.1.5",
+      manufacturer: null, product: null, hardwareName: null, spaceId: null, comObjectIds: ["co-1"],
+    });
+    model.communicationObjects.set("co-1", sendComObject({ id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Switch", dpt: "1.001", gaIds: ["ga-1"] }));
+    model.groupAddresses.set("ga-1", {
+      id: "ga-1", address: "1/1/1", name: "Switch", description: null, comment: null,
+      dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-1"],
+    });
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.individualAddress).toBe("1.1.5");
+    expect(signal?.channel).toBeNull();
+  });
+
+  it("prefers the DeviceInstance's own Space placement over the Function/Space room fallback (§19 — device-tree metadata outranks Function-group inference)", () => {
+    const model = emptyProjectModel();
+    model.spaces.set("space-1", { id: "space-1", type: "room", name: "Living Room", parentId: null, childIds: [], deviceInstanceIds: ["dev-1"] });
+    model.spaces.set("space-2", { id: "space-2", type: "room", name: "Function Room (weaker signal)", parentId: null, childIds: [], deviceInstanceIds: [] });
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "Ceiling Light", individualAddress: "1.1.1",
+      manufacturer: null, product: null, hardwareName: null, spaceId: "space-1", comObjectIds: ["co-1"],
+    });
+    model.communicationObjects.set("co-1", sendComObject({ id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Switch", dpt: "1.001", gaIds: ["ga-1"] }));
+    model.functions.set("fn-1", { id: "fn-1", name: "Ceiling Light", spaceId: "space-2", groupAddressIds: ["ga-1"] });
+    model.groupAddresses.set("ga-1", {
+      id: "ga-1", address: "1/1/1", name: "Switch", description: null, comment: null,
+      dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-1"],
+    });
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.room).toBe("Living Room");
+  });
+});
+
+// § Critical Group Address Requirement (Production KNX Driver 2.0) — a GA referenced by
+// multiple communication objects (shared/central addresses, or a device's own command +
+// feedback pair) must have every relationship preserved, tagged by role, never collapsed
+// to "the first one found."
+describe("knxSignalsFromModel — Group Address relationship preservation", () => {
+  it("distinguishes a command (send) GA from a feedback/status (receive) GA on the same device", () => {
+    const model = emptyProjectModel();
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "Actuator", individualAddress: "1.1.1",
+      manufacturer: null, product: null, hardwareName: null, spaceId: null, comObjectIds: ["co-1", "co-2"],
+    });
+    // co-1 WRITES ga-1 (a command object) and co-2 READS ga-2 (a status/feedback object).
+    model.communicationObjects.set("co-1", {
+      id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Switch", dpt: "1.001",
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-1"], sendGroupAddressIds: ["ga-1"], receiveGroupAddressIds: [], channelId: null,
+    });
+    model.communicationObjects.set("co-2", {
+      id: "co-2", deviceInstanceId: "dev-1", number: 2, text: "Switch Status", dpt: "1.001",
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-2"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-2"], channelId: null,
+    });
+    model.groupAddresses.set("ga-1", { id: "ga-1", address: "1/1/1", name: "Switch", description: null, comment: null, dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-1"] });
+    model.groupAddresses.set("ga-2", { id: "ga-2", address: "1/1/2", name: "Switch Status", description: null, comment: null, dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-2"] });
+
+    const [commandSignal, feedbackSignal] = knxSignalsFromModel(model);
+    expect(commandSignal?.links).toEqual([{ deviceInstanceId: "dev-1", individualAddress: "1.1.1", comObjectId: "co-1", comObjectText: "Switch", role: "send", channel: null }]);
+    expect(feedbackSignal?.links).toEqual([{ deviceInstanceId: "dev-1", individualAddress: "1.1.1", comObjectId: "co-2", comObjectText: "Switch Status", role: "receive", channel: null }]);
+    expect(commandSignal?.isShared).toBe(false);
+    expect(feedbackSignal?.isShared).toBe(false);
+  });
+
+  it("a shared/central GA referenced by TWO different physical devices preserves BOTH relationships and is marked isShared", () => {
+    const model = emptyProjectModel();
+    model.deviceInstances.set("dev-1", {
+      id: "dev-1", name: "Actuator A", individualAddress: "1.1.1",
+      manufacturer: null, product: null, hardwareName: null, spaceId: null, comObjectIds: ["co-1"],
+    });
+    model.deviceInstances.set("dev-2", {
+      id: "dev-2", name: "Actuator B", individualAddress: "1.1.2",
+      manufacturer: null, product: null, hardwareName: null, spaceId: null, comObjectIds: ["co-2"],
+    });
+    // Both devices RECEIVE the same central/shared "All Off" group address.
+    model.communicationObjects.set("co-1", {
+      id: "co-1", deviceInstanceId: "dev-1", number: 1, text: "Central Off", dpt: "1.001",
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-central"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-central"], channelId: null,
+    });
+    model.communicationObjects.set("co-2", {
+      id: "co-2", deviceInstanceId: "dev-2", number: 1, text: "Central Off", dpt: "1.001",
+      flags: DEFAULT_COM_FLAGS, groupAddressIds: ["ga-central"], sendGroupAddressIds: [], receiveGroupAddressIds: ["ga-central"], channelId: null,
+    });
+    model.groupAddresses.set("ga-central", {
+      id: "ga-central", address: "1/1/99", name: "Central Off", description: null, comment: null,
+      dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: ["co-1", "co-2"],
+    });
+
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.isShared).toBe(true);
+    expect(signal?.links).toHaveLength(2);
+    expect(new Set(signal?.links.map((l) => l.deviceInstanceId))).toEqual(new Set(["dev-1", "dev-2"]));
+    expect(signal?.links.every((l) => l.role === "receive")).toBe(true);
+  });
+
+  it("a GA with no owning communication object at all has an empty links array, never fabricated relationships", () => {
+    const model = emptyProjectModel();
+    model.groupAddresses.set("ga-1", { id: "ga-1", address: "1/1/1", name: "Orphan", description: null, comment: null, dpt: "1.001", mainGroup: null, middleGroup: null, comObjectIds: [] });
+    const [signal] = knxSignalsFromModel(model);
+    expect(signal?.links).toEqual([]);
+    expect(signal?.isShared).toBe(false);
   });
 });

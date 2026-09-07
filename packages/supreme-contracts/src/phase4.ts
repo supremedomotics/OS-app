@@ -1,18 +1,18 @@
 import { z } from "zod";
 
 /**
- * Phase-4 contracts (§16): native migration controls. The visible API never
- * changes as domains move from HA to the Supreme-native engine — these endpoints
- * only drive the migration itself (installer/admin surface).
+ * Phase-4 contracts (§16): native-engine domain status. SupremeOS has no external
+ * home-automation backend — "native" is the only engine — so these endpoints are
+ * retained purely as an installer/admin domain-status reporting surface.
  */
-export const EngineKind = z.enum(["ha", "native"]);
+export const EngineKind = z.enum(["native"]);
 export type EngineKind = z.infer<typeof EngineKind>;
 
 export const MigrationStatus = z.object({
-  /** Whether per-domain migration is available (a routing backend is in use). */
+  /** Whether per-domain status reporting is available (a routing backend is in use). */
   enabled: z.boolean(),
   domains: z.array(z.object({ domain: z.string(), engine: EngineKind })),
-  /** True once every known domain runs natively (HA can be retired). */
+  /** True once every known domain has a status entry. */
   fullyMigrated: z.boolean(),
 });
 export type MigrationStatus = z.infer<typeof MigrationStatus>;

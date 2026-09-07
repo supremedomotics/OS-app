@@ -103,6 +103,20 @@ function classifyRole(dptCategory: DptCategory, roleText: string, mainGroup: str
   if (/\bfan\b/.test(t) && /speed|level/.test(t)) return "hvac_fan_speed";
   if (/\bmode\b/.test(t) && /hvac|climate|heat|cool|thermostat|ac\b/.test(context)) return "hvac_mode";
 
+  // § live-confirmed fix — DPST-1-8 (Up/Down) and DPST-1-9 (Open/Close) are structurally
+  // unambiguous cover controls (a distinct DPT subtype from a plain DPST-1-1 switch),
+  // exactly like color_rgbw/color_temperature_kelvin above — they never needed the
+  // `looksLikeCover(context)` name-keyword gate the block below applies, and gating them
+  // on it meant a genuinely-a-curtain device with a generic name (no "curtain"/"blind"/
+  // "shutter" word anywhere in its name or group hierarchy — e.g. one named just "Main")
+  // had its unambiguous up/down control silently fall through to "unknown", and its
+  // percentage position-feedback GA (DPT5.001, indistinguishable from a dimmer's by DPT
+  // alone — that part of the ambiguity is real and stays keyword-gated below) then
+  // classified as a dimmable light instead of a curtain.
+  if (dptCategory === "binary_updown" || dptCategory === "binary_openclose") {
+    return /status|feedback|state/.test(t) ? "position_status" : "updown";
+  }
+
   if (dptCategory === "binary_occupancy" || /occupan|presence|motion|\bpir\b/.test(t)) return "presence";
   if (dptCategory === "binary_windowdoor" || /\bwindow\b|\bdoor\b/.test(t)) return "window_door";
   if (/leak|flood/.test(t)) return "leak";
@@ -129,7 +143,7 @@ function classifyRole(dptCategory: DptCategory, roleText: string, mainGroup: str
   if (cover) {
     if (/stop/.test(t)) return "stop";
     if (/status|feedback|state/.test(t)) return "position_status";
-    if (dptCategory === "binary_updown" || /up.?down|move/.test(t)) return "updown";
+    if (/up.?down|move/.test(t)) return "updown"; // binary_updown/openclose already handled unconditionally above
     return "position";
   }
 
@@ -371,6 +385,11 @@ function clusterSignals(signals: GaSignal[], knownRoomNames: string[]): Map<stri
 
 // ── Device type classification ────────────────────────────────────────────────────
 
+/** Every {@link KnxDeviceType} the Covers branch of {@link classifyDeviceType} can
+ * return — used to re-tag an ambiguous brightness role as position once the cluster's
+ * OTHER roles have already settled that it's a cover (see the call site's own comment). */
+const COVER_DEVICE_TYPES = new Set<KnxDeviceType>(["curtain", "blind", "roller_shutter", "garage_door", "gate"]);
+
 /** Classify a cluster's device type from the SET of roles present, following the
  * documented priority: comm-object/DPT-derived roles first, then Main/Middle Group, then
  * product, then the raw name — each tier only breaks ties the previous tier left open. */
@@ -386,9 +405,15 @@ function classifyDeviceType(roles: Set<string>, mainGroups: Set<string>, middleG
   if (roles.has("rgb") || (roles.has("red_channel") && roles.has("green_channel") && roles.has("blue_channel"))) return "light_rgb";
   if (roles.has("color_temperature") && roles.has("brightness")) return "light_tunable_white";
   if (roles.has("color_temperature")) return "light_color_temp";
-  if (roles.has("brightness") || roles.has("brightness_status")) return "light_dimmable";
 
-  // Covers
+  // Covers — checked BEFORE the plain-brightness lighting fallback below (§ live-
+  // confirmed fix). "updown" is now derived unconditionally from an unambiguous DPT
+  // (see classifyRole) regardless of naming, so a cover circuit with no "curtain"/
+  // "blind"/"shutter" keyword anywhere (a device literally named "Main") still has its
+  // OWN percentage position GA correctly folded into "curtain" here rather than losing
+  // to the ambiguous "brightness" role that same keyword-less percentage GA got tagged
+  // with at the per-GA level — a real device can never be BOTH a dimmer and a cover, so
+  // the presence of any genuinely cover-specific role settles it.
   if (roles.has("position") || roles.has("updown") || roles.has("stop") || roles.has("position_status")) {
     if (/garage/.test(context)) return "garage_door";
     if (/gate/.test(context)) return "gate";
@@ -396,6 +421,7 @@ function classifyDeviceType(roles: Set<string>, mainGroups: Set<string>, middleG
     if (/blind/.test(context)) return "blind";
     return "curtain";
   }
+  if (roles.has("brightness") || roles.has("brightness_status")) return "light_dimmable";
 
   // HVAC
   if (roles.has("temperature_setpoint") || roles.has("temperature_ambient") || roles.has("hvac_mode") || roles.has("hvac_fan_speed") || roles.has("hvac_swing")) {
@@ -541,6 +567,20 @@ export function recognizeDevices(model: KnxProjectModel, knownRoomNames: string[
     const humanBaseName = humanizeName(rawBaseName);
 
     const deviceType = classifyDeviceType(roles, mainGroups, middleGroups, product, rawBaseName);
+    // § live-confirmed fix — `deviceType` above already looks past the ambiguous
+    // "brightness"/"brightness_status" role a keyword-less cover's percentage GA gets
+    // tagged with at the per-GA level (see classifyRole's own doc comment: a percentage
+    // DPT is genuinely indistinguishable from a dimmer's by DPT alone). Once the cluster
+    // is confirmed a cover by its OTHER, unambiguous roles (updown/stop), that same
+    // percentage GA must bind as `position`, not `brightness` — a real device is never
+    // both, so re-tag it here rather than leaving deviceType and the actual binding
+    // disagreeing with each other.
+    if (COVER_DEVICE_TYPES.has(deviceType)) {
+      for (const sig of sigs) {
+        if (sig.role === "brightness") sig.role = "position";
+        else if (sig.role === "brightness_status") sig.role = "position_status";
+      }
+    }
     const sourceDeviceInstanceId = deviceInstanceIds.size === 1 ? [...deviceInstanceIds][0]! : null;
     const confidence = sourceDeviceInstanceId ? 1 : deviceInstanceIds.size > 0 ? 0.8 : 0.6;
 

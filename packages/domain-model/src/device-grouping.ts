@@ -23,7 +23,7 @@
  * to — stripped from the end of a name before comparing. Matched whole-word, case-
  * insensitive. Extend this list; never hardcode a new protocol's own vocabulary here —
  * that belongs in the calling driver's own alias table (see {@link GroupingOptions}). */
-const DEFAULT_OPERATION_WORDS = [
+export const DEFAULT_OPERATION_WORDS = [
   // on/off + generic control
   "sw", "switch", "onoff", "on", "off", "toggle", "trigger",
   // dimming / brightness

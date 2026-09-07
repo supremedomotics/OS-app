@@ -9,6 +9,8 @@ export {
   type CasambiDriverOptions,
   type CasambiCommonDriverOptions,
   type CasambiHealth,
+  type CasambiNameSyncResult,
+  type CasambiCloudDiscoverResult,
 } from "./casambi-driver.js";
 export {
   HttpCasambiTransport,
@@ -60,7 +62,7 @@ export {
   type CasambiWireFormat,
   type CasambiPacket,
 } from "./local-transport/index.js";
-export { buildDiscoveredDevices } from "./discovery-engine.js";
+export { buildDiscoveredDevices, buildDiscoveredGroups, type CasambiDiscoveredGroup } from "./discovery-engine.js";
 export { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";
 export {
   CasambiEventBus,

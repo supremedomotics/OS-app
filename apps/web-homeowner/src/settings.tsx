@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { SourceUpdateStatus } from "@supreme/sdk";
 import {
   AUREON_ACCENTS,
   AUREON_MODES,
   applyAureonTheme,
   loadAureonTheme,
   saveAureonTheme,
+  ProgressBar,
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
@@ -51,6 +53,8 @@ export function ThemeSettings({ role }: { role?: string | null } = {}) {
     { id: "security", label: "Security & sign-in", icon: "⛨", hint: "Active sessions & devices", el: <SecuritySettings /> },
     { id: "backup", label: "Backup & restore", icon: "❖", hint: "Backups, schedule & restore", el: <BackupCenter /> },
     { id: "update", label: "Software update", icon: "⤓", hint: "Version & updates", el: <UpdateCenter /> },
+    // Master-only: this wipes the home, including every other user's account.
+    ...(role === "master" ? [{ id: "reset", label: "Reset System", icon: "⌫", hint: "Erase everything & start over", el: <ResetSystemSettings /> }] : []),
   ];
 
   const current = pages.find((p) => p.id === open);
@@ -1122,7 +1126,119 @@ function UpdateCenter() {
 
       <button disabled={busy} onClick={check} style={{ marginTop: 12 }}>{busy ? "Checking…" : "Check for updates"}</button>
       {err && <p className="err">{err}</p>}
+
+      <SourceUpdateSection />
     </section>
+  );
+}
+
+/**
+ * "Apply latest committed update (source mode)" (§ UI-triggered update). Deliberately a SEPARATE
+ * action from the OTA-channel check above it — that one asks "does a signed release artifact
+ * exist"; this one runs infra/native-linux/update.sh, which builds and switches to whatever is
+ * currently checked out in this box's own git repo. Conflating the two copy-wise would imply one
+ * "update" concept when they're mechanically different update paths. Renders nothing at all when
+ * the hub reports the feature unavailable (Docker/hub-compose deployments, or a native box that
+ * hasn't been provisioned with SUPREME_UPDATE_SCRIPT) — never a dead/greyed-out button with no
+ * explanation.
+ *
+ * § Self-restart tolerance: update.sh's own restart_services() step restarts the gateway process
+ * serving this very poll partway through a real run — a plain "poll failed once → show error"
+ * would misreport an update that's actually still progressing normally as failed. Polling here
+ * follows knx-discovery-workspace.tsx's own established pattern (consecutive-failure-tolerant,
+ * not immediate-failure-on-first-disconnect): only a run of several consecutive failures — long
+ * enough to rule out "the gateway is mid-restart" — is treated as a real problem.
+ */
+function SourceUpdateSection() {
+  const [status, setStatus] = useState<SourceUpdateStatus | null>(null);
+  const [triggerErr, setTriggerErr] = useState<string | null>(null);
+  const [pollErr, setPollErr] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let consecutiveFailures = 0;
+    const MAX_TRANSIENT_FAILURES = 8; // ~40s at 5s intervals — generous enough to ride out a real gateway restart
+    const POLL_MS = 5_000;
+
+    async function poll() {
+      try {
+        const s = (await client.sourceUpdateStatus()) as SourceUpdateStatus;
+        if (cancelled) return;
+        consecutiveFailures = 0;
+        setPollErr(null);
+        setStatus(s);
+        if (s.enabled && s.status === "running") {
+          pollRef.current = setTimeout(() => void poll(), POLL_MS);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_TRANSIENT_FAILURES) {
+          setPollErr(e instanceof Error ? e.message : "Lost contact with the hub while checking update progress.");
+        } else {
+          pollRef.current = setTimeout(() => void poll(), POLL_MS);
+        }
+      }
+    }
+    void poll();
+    return () => { cancelled = true; if (pollRef.current) clearTimeout(pollRef.current); };
+  }, []);
+
+  async function trigger() {
+    setTriggerErr(null);
+    try {
+      await client.sourceUpdateTrigger();
+      // Immediately re-enter the polling loop at "running" — the actual authoritative status
+      // arrives on the next poll tick above; this just avoids a dead button in the interim.
+      setStatus((s) => (s && s.enabled ? { ...s, status: "running", phase: null, error: null } : s));
+      if (pollRef.current) clearTimeout(pollRef.current);
+      const repoll = () => {
+        void client.sourceUpdateStatus().then((s) => {
+          setStatus(s as SourceUpdateStatus);
+          const s2 = s as SourceUpdateStatus;
+          if (s2.enabled && s2.status === "running") pollRef.current = setTimeout(repoll, 5_000);
+        }).catch(() => { pollRef.current = setTimeout(repoll, 5_000); });
+      };
+      pollRef.current = setTimeout(repoll, 1_000);
+    } catch (e) {
+      setTriggerErr(e instanceof Error ? e.message : "Could not start the update.");
+    }
+  }
+
+  if (!status || !status.enabled) return null; // feature not available on this deployment — say nothing, never a dead control
+
+  const running = status.status === "running";
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid var(--aureon-color-base-hairline, #333)" }}>
+      <p className="opt-label">Apply latest committed update (source mode)</p>
+      <p className="muted" style={{ marginTop: 4 }}>
+        Builds and switches to whatever is currently checked out on this hub's own repository — a
+        different action from the OTA channel check above. Automatically backs up first and rolls
+        back on failure.
+      </p>
+
+      <div className="lic-grid" style={{ marginTop: 10 }}>
+        <div><span className="k">Status</span><span className="v">
+          {status.status === "idle" && "Idle"}
+          {status.status === "running" && (status.phase ? `Running — ${status.phase}` : "Running…")}
+          {status.status === "completed" && "Completed"}
+          {status.status === "failed" && "Failed"}
+        </span></div>
+        {status.startedAt && <div><span className="k">Started</span><span className="v">{new Date(status.startedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span></div>}
+      </div>
+
+      {status.status === "failed" && (
+        <p className="err" style={{ marginTop: 8 }}>
+          Update failed{status.error ? `: ${status.error}` : "."} The hub automatically rolled back to the previous working version.
+        </p>
+      )}
+      {pollErr && <p className="err" style={{ marginTop: 8 }}>{pollErr} (the hub may still be restarting as part of the update — this page will recover automatically once it's back)</p>}
+      {triggerErr && <p className="err" style={{ marginTop: 8 }}>{triggerErr}</p>}
+
+      <button disabled={running} onClick={trigger} style={{ marginTop: 12 }}>{running ? "Updating…" : "Update now"}</button>
+    </div>
   );
 }
 
@@ -1339,6 +1455,135 @@ function RestoreWizard({ document: doc, fmt, onClose, onDone }: {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * System Reset (§ PASS 22 Part B, P0). Full factory reset: wipes every installed driver (and
+ * its devices/bindings), every room, every remaining device, and every user account — then
+ * returns the hub to first-run Setup. Two-step confirmation: a warning + counts, then a typed
+ * "RESET SYSTEM" phrase, mirroring the RestoreWizard's preview→confirm→run shape above.
+ */
+// § live-confirmed fix — mirrors services/gateway/src/routes/system.ts's exported
+// RESET_STEPS exactly (order and names) so the fraction/label shown here is real
+// progress the backend is actually reporting, never a guess or a padded fake timer.
+const RESET_STEP_LABELS: Record<string, string> = {
+  drivers: "Uninstalling drivers…",
+  devices_rooms: "Removing devices & rooms…",
+  scenes: "Removing scenes…",
+  automations: "Removing automations…",
+  pending_devices: "Clearing pending devices…",
+  users: "Resetting user accounts…",
+};
+const RESET_STEP_ORDER = Object.keys(RESET_STEP_LABELS);
+
+function ResetSystemSettings() {
+  const [step, setStep] = useState<"idle" | "warn" | "confirm" | "running" | "done">("idle");
+  const [info, setInfo] = useState<{ users: number; devices: number; rooms: number; installedDrivers: number } | null>(null);
+  const [phrase, setPhrase] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
+
+  async function begin() {
+    setErr(null);
+    try {
+      setInfo(await client.systemResetInfo());
+      setStep("warn");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not read current system state.");
+    }
+  }
+
+  async function run() {
+    setStep("running");
+    setErr(null);
+    setCurrentStep(RESET_STEP_ORDER[0]!);
+    // § live-confirmed fix — the backend genuinely runs all 6 real steps (in-memory, so
+    // it finishes in well under a second), which made the progress bar flash by too fast
+    // to actually read. Paces the reveal of those SAME real steps to a ~10s minimum —
+    // real content, deliberately not rushed — rather than polling a state machine too
+    // fast to ever observe an intermediate value from. "Done" still only ever shows once
+    // the real request has actually resolved (below), so a genuinely slower reset (a real
+    // driver with slow I/O) is never reported finished before it truly is — the pacer
+    // only stretches the perceived floor, never the actual completion signal.
+    const MIN_VISIBLE_MS = 10_000;
+    const start = Date.now();
+    let stepIndex = 0;
+    const pacer = setInterval(() => {
+      stepIndex = Math.min(stepIndex + 1, RESET_STEP_ORDER.length - 1);
+      setCurrentStep(RESET_STEP_ORDER[stepIndex]!);
+    }, MIN_VISIBLE_MS / RESET_STEP_ORDER.length);
+    try {
+      await client.systemReset();
+      const remaining = MIN_VISIBLE_MS - (Date.now() - start);
+      if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+      setStep("done");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Reset failed — nothing further was changed.");
+      setStep("confirm");
+    } finally {
+      clearInterval(pacer);
+      setCurrentStep(null);
+    }
+  }
+
+  if (step === "done") {
+    // The hub is back in first-run Setup; there's no session left to stay signed into.
+    window.location.reload();
+    return <p className="muted">Reset complete — reloading…</p>;
+  }
+
+  return (
+    <section className="card-section">
+      <h2 className="section-title">Reset System</h2>
+      <div className="danger-zone">
+        <p className="opt-label danger-label">Erase everything &amp; start over</p>
+        <p className="muted">
+          Permanently removes every installed driver, discovered/commissioned device, room, and user
+          account, then returns this hub to first-run Setup. This does not remove the operating
+          system or reinstall software — only the app's configured state.
+        </p>
+
+        {step === "idle" && <button className="danger" onClick={begin} style={{ marginTop: 8 }}>Reset System…</button>}
+
+        {step === "warn" && info && (
+          <>
+            <p className="err" style={{ marginTop: 10 }}>
+              This will permanently delete {info.users} user account{info.users === 1 ? "" : "s"},{" "}
+              {info.devices} device{info.devices === 1 ? "" : "s"}, {info.rooms} room{info.rooms === 1 ? "" : "s"}, and{" "}
+              {info.installedDrivers} installed driver{info.installedDrivers === 1 ? "" : "s"}. This cannot be undone.
+            </p>
+            <div className="dev-row2" style={{ marginTop: 8 }}>
+              <button className="danger" onClick={() => setStep("confirm")}>Continue</button>
+              <button onClick={() => setStep("idle")}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {(step === "confirm" || step === "running") && (
+          <>
+            <p className="err" style={{ marginTop: 10 }}>Type RESET SYSTEM to confirm.</p>
+            <input value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder="RESET SYSTEM" disabled={step === "running"} />
+            {err && <p className="err">{err}</p>}
+            <div className="dev-row2" style={{ marginTop: 8 }}>
+              <button className="danger" disabled={step === "running" || phrase !== "RESET SYSTEM"} onClick={run}>
+                {step === "running" ? "Resetting…" : "Reset now"}
+              </button>
+              <button disabled={step === "running"} onClick={() => { setStep("idle"); setPhrase(""); setErr(null); }}>Cancel</button>
+            </div>
+            {step === "running" && (
+              <ProgressBar
+                style={{ marginTop: 12 }}
+                label={currentStep ? RESET_STEP_LABELS[currentStep] ?? currentStep : "Starting…"}
+                value={currentStep ? (RESET_STEP_ORDER.indexOf(currentStep) + 1) / RESET_STEP_ORDER.length : undefined}
+              />
+            )}
+          </>
+        )}
+
+        {err && step === "warn" && <p className="err">{err}</p>}
+      </div>
+    </section>
   );
 }
 

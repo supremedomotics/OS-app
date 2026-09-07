@@ -1,9 +1,10 @@
 /**
  * @supreme/integration-layer (SIL) — the crown jewel (blueprint §7).
  *
- * The ONLY component in the system permitted to know that Home Assistant exists.
- * Everything above binds to {@link SupremeIntegrationLayer} and the Supreme domain;
- * everything HA-specific is confined to `./ha/*` and the `HaAdapter`.
+ * SupremeOS is local-first and native-only: every client binds to
+ * {@link SupremeIntegrationLayer} and the Supreme domain, which routes straight to
+ * native protocol drivers via {@link ProviderRouter} — no external home-automation
+ * backend is ever in the runtime path.
  */
 export type {
   BackendStateEvent,
@@ -62,10 +63,5 @@ export {
   type DriverLifecycleState,
 } from "./protocols/lifecycle.js";
 export { ProviderRouter, type ProviderRouterOptions } from "./provider-router.js";
-export { HomeAssistantProviderDriver } from "./ha/ha-provider-driver.js";
 export { MigrationPolicy, type EngineKind, type IMigrationPolicyStore } from "./migration.js";
 export { applyCommand } from "./apply.js";
-export { HaAdapter, type HaTransport, type HaAdapterOptions } from "./ha/ha-adapter.js";
-export { HaWsTransport, type HaWsTransportOptions } from "./ha/ha-ws-transport.js";
-export { provisionHaToken, haHttpFromWsUrl, type HaProvisionerOptions } from "./ha/ha-provisioner.js";
-export { commandToHaService, haStateToCapability, type HaServiceCall } from "./ha/capability-mapper.js";

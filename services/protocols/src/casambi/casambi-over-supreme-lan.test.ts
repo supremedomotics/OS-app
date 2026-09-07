@@ -140,7 +140,8 @@ describe("Casambi driver over @supreme/lan (NatsUdpTransportClient + UdpTranspor
     await driver.command(dev, { capability: "onoff", action: "on" });
 
     expect(gatewaySocket.sent).toEqual([
-      { msg: Buffer.from("0.72.4.20.ff.1.5\r\n", "ascii"), port: 10009, address: "192.168.0.45" },
+      // § live-confirmed fix — full-length 0x20 (explicit 0 Duration); see local-command-mapper.ts.
+      { msg: Buffer.from("0.72.6.20.ff.0.0.1.5\r\n", "ascii"), port: 10009, address: "192.168.0.45" },
     ]);
     expect(driver.getCasambiTransportMonitor().driver.commandsIssued).toBe(1);
     await driver.disconnect();

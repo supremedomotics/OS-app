@@ -8,7 +8,6 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { AutomationEngine, type AutomationExecutors } from "./engine.js";
 import { AutomationService } from "./service.js";
-import { compileToHa } from "./compiler.js";
 
 function executors(overrides: Partial<AutomationExecutors> = {}) {
   return {
@@ -159,8 +158,8 @@ describe("AutomationEngine — time & interval triggers", () => {
   });
 });
 
-describe("engine selection + HA compile", () => {
-  it("native engine ignores engine='ha' automations", async () => {
+describe("engine selection", () => {
+  it("native engine only runs enabled engine='supreme' automations", async () => {
     const ex = executors();
     const engine = new AutomationEngine({ executors: ex });
     const svc = new AutomationService(engine);
@@ -168,50 +167,97 @@ describe("engine selection + HA compile", () => {
     const d = devId();
     await svc.create({
       homeId: homeId(),
-      name: "HA-compiled",
-      engine: "ha",
+      name: "Supreme-native",
+      engine: "supreme",
       triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
       actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
     });
     await svc.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
+    expect(ex.command).toHaveBeenCalledTimes(1);
+  });
+
+  it("§ Native Backend Implementation — rejects creating a new engine='ha' automation instead of silently accepting-but-never-running it", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const d = devId();
+    await expect(
+      svc.create({
+        homeId: homeId(),
+        name: "HA-compiled",
+        // @ts-expect-error — "ha" is intentionally not a valid CreateAutomationInput.engine
+        // value; this exercises assertSupportedEngine()'s runtime guard for callers that
+        // bypass the type system (e.g. a raw JSON request body).
+        engine: "ha",
+        triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+        actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+      }),
+    ).rejects.toThrow(/engine "ha" automations are not executable/);
+  });
+
+  it("rejects re-pointing an existing automation at engine='ha' via update", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const d = devId();
+    const created = await svc.create({
+      homeId: homeId(),
+      name: "Native automation",
+      triggers: [{ type: "interval", everyMinutes: 5 }],
+      actions: [{ type: "notify", level: "info", title: "tick", body: "", userId: null }],
+    });
+    // @ts-expect-error — see the create() test above.
+    await expect(svc.update(created.id, { engine: "ha" })).rejects.toThrow(/engine "ha" automations are not executable/);
+  });
+
+  it("native engine never executes a legacy, already-persisted engine='ha' row (a pre-fix row loaded from storage)", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
+    const d = devId();
+    // Bypasses the service layer's create()/update() guard on purpose — simulates a
+    // row that predates HA's removal and is still sitting in a real database.
+    engine.setAutomations([
+      {
+        id: newId("automation") as never,
+        homeId: homeId(),
+        name: "Legacy HA automation",
+        enabled: true,
+        // @ts-expect-error — see the create() test above.
+        engine: "ha",
+        triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" }],
+        conditions: [],
+        actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "toggle" } }],
+        externalRef: null,
+        aiGenerated: false,
+        tags: [],
+      },
+    ]);
+    await engine.onDeviceState({ deviceId: d, capability: "onoff", state: { kind: "onoff", on: true } });
     expect(ex.command).not.toHaveBeenCalled();
   });
 
-  it("compiles a Supreme automation to an HA config shape", () => {
+  it("health() reports a legacy engine='ha' automation as broken — never silently 'healthy'/'waiting'", () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex });
     const d = devId();
-    const config = compileToHa({
+    const legacy = {
       id: newId("automation") as never,
       homeId: homeId(),
-      name: "x",
+      name: "Legacy HA automation",
       enabled: true,
-      triggers: [{ type: "time", at: "07:00", days: [] }],
+      engine: "ha" as never,
+      triggers: [{ type: "device_state", deviceId: d, capability: "onoff", field: "on", op: "changed" as const }],
       conditions: [],
-      actions: [{ type: "device_command", deviceId: d, command: { capability: "onoff", action: "on" } }],
-      engine: "ha",
+      actions: [{ type: "device_command" as const, deviceId: d, command: { capability: "onoff" as const, action: "toggle" as const } }],
       externalRef: null,
       aiGenerated: false,
       tags: [],
-    });
-    expect(config.trigger[0]).toMatchObject({ platform: "time", at: "07:00" });
-    expect(config.action[0]).toMatchObject({ service: "supreme.command" });
-  });
-
-  it("refuses to compile an intent action to HA — intents require the Supreme-native engine", () => {
-    const d = devId();
-    expect(() =>
-      compileToHa({
-        id: newId("automation") as never,
-        homeId: homeId(),
-        name: "x",
-        enabled: true,
-        triggers: [{ type: "time", at: "07:00", days: [] }],
-        conditions: [],
-        actions: [{ type: "intent", intentId: "toggleLight", target: { kind: "device", deviceId: d }, params: {} }],
-        engine: "ha",
-        externalRef: null,
-        aiGenerated: false,
-      }),
-    ).toThrow(/cannot compile to a Home Assistant automation/);
+    };
+    const health = engine.health(legacy);
+    expect(health.status).toBe("broken");
+    expect(health.reason).toMatch(/Home Assistant/);
   });
 });
 

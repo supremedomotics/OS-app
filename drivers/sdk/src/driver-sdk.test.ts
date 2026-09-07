@@ -12,7 +12,7 @@ const knx = {
   capabilities: ["onoff", "brightness", "position"],
   protocols: ["knx"],
   compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
-  backend: { type: "ha-integration", ref: "knx" },
+  backend: { type: "native", ref: "knx" },
 };
 
 describe("driver manifest", () => {

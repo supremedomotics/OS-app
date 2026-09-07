@@ -67,6 +67,69 @@ export interface ProviderDiagnostics {
    * connectionless CoAP). Optional/nullable so no existing provider's diagnostics()
    * literal needs to change. */
   connectionState?: import("./connection-manager.js").ConnectionState | null;
+  /** § PASS 19 diagnostic (KNX feedback pipeline investigation) — a real telegram
+   * arrived on the bus (destination GA + payload both decoded successfully) but no
+   * `subscribe()`'d handler was registered for that exact destination address string,
+   * so it was silently dropped before ever reaching the driver/binding layer. A
+   * nonzero, growing count here — while `packetsReceived` also grows — is the direct,
+   * unambiguous signature of a GA-string-format mismatch between what the binding
+   * engine stored (from ETS parsing) and what this provider's underlying KNX client
+   * library reports at runtime (e.g. differing zero-padding, casing, or 2-level vs
+   * 3-level group address notation) — NOT a bus/transport/actuator problem, which ETS's
+   * own Group Monitor has already ruled out. Optional/nullable so no other provider's
+   * `diagnostics()` literal needs to change (only `KnxUltimateProvider` populates it). */
+  unmatchedFeedbackTelegrams?: number;
+  /** § PASS 20 diagnostic (Part A) — the most recent feedback telegram that DID match a
+   * subscribed observer, and the most recent one that DIDN'T, as two separate bounded
+   * (one-entry) snapshots — never an unbounded log, never exposed for any capability
+   * this provider isn't actively diagnosing. `null` until the first relevant telegram
+   * of each kind ever arrives. Optional/nullable so no other provider's diagnostics()
+   * literal needs to change. */
+  lastFeedbackTelegram?: KnxFeedbackTelegramSnapshot | null;
+  lastUnmatchedFeedback?: KnxFeedbackTelegramSnapshot | null;
+  /** § Live Feedback Diagnostic Pass — real, incrementing-only breakdowns of
+   * `packetsReceived` by telegram type, so a human tester can tell at a glance whether
+   * ANY bus traffic reached this provider at all, and of what kind, without needing a
+   * separate bus sniffer. `groupReadsIgnored` is the § PASS 23 GroupValueRead-ignore
+   * path's own counter — a nonzero, growing value here alongside zero growth in the
+   * other two is the honest signature of "the bus is alive but nothing is writing
+   * feedback," not a driver bug. Optional/nullable so no other provider's diagnostics()
+   * literal needs to change (only `KnxUltimateProvider` populates them). */
+  groupWritesReceived?: number;
+  groupResponsesReceived?: number;
+  groupReadsIgnored?: number;
+  /** § Live Feedback Diagnostic Pass — the single most-recent REAL telegram this
+   * provider has seen on the bus, matched or not (superset of `lastFeedbackTelegram`/
+   * `lastUnmatchedFeedback`, which are keyed on match status) — lets a tester confirm
+   * "something arrived" even before checking whether it matched a binding. One bounded
+   * snapshot, never a log. `null` until the first one ever arrives. */
+  lastTelegram?: KnxRawTelegramSnapshot | null;
+}
+
+/** § Live Feedback Diagnostic Pass — one bounded snapshot of the most recent real
+ * GroupValueWrite/GroupValueResponse telegram, independent of whether it matched a
+ * subscribed observer. */
+export interface KnxRawTelegramSnapshot {
+  source: string | null;
+  destination: string;
+  type: "write" | "response";
+  dpt?: string;
+  value?: unknown;
+  ts: string;
+}
+
+/** § PASS 20 diagnostic (Part A) — one bounded snapshot of a feedback telegram, matched
+ * or not. `value`/`dpt` are populated only for the matched case, where the DPT is
+ * actually known (from the observer that matched) — decoding an unmatched telegram's
+ * raw bytes with an assumed/guessed DPT would be unsafe and potentially misleading, so
+ * the unmatched snapshot deliberately omits them. */
+export interface KnxFeedbackTelegramSnapshot {
+  source: string | null;
+  destination: string;
+  matched: boolean;
+  dpt?: string;
+  value?: unknown;
+  ts: string;
 }
 
 export interface IKnxProvider {
@@ -79,6 +142,10 @@ export interface IKnxProvider {
   execute(task: KnxTask): Promise<unknown>;
   subscribe(groupAddress: string, dpt: string, handler: (value: unknown) => void): void;
   unsubscribe(groupAddress: string): void;
+  /** § PASS 20 diagnostic (Part A) / § Live Feedback Diagnostic Pass — optional: whether
+   * an exact GA string currently has a registered observer. Optional so no other
+   * provider needs to grow one (only `KnxUltimateProvider` implements it today). */
+  isSubscribed?(groupAddress: string): boolean;
   health(): ProviderHealth;
   diagnostics(): ProviderDiagnostics;
   shutdown(): Promise<void>;

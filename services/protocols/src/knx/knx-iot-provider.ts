@@ -89,7 +89,7 @@ export class KnxIotProvider implements IKnxProvider {
       this.lastCommandAt = new Date().toISOString();
       this.packetsSent++;
       try {
-        const body = await this.transport.get(task.host, task.port ?? this.port, "/fb");
+        const body = await this.transport.get(task.host, task.port ?? this.port, "/fb", this.discoveryTimeoutMs);
         this.packetsReceived++;
         this.lastTelegramAt = new Date().toISOString();
         return body;

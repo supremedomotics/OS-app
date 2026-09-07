@@ -2,30 +2,14 @@ import { newId, type DeviceId, type HomeId, type UserId } from "@supreme/domain-
 import {
   DriverBindingEngine,
   EntityRegistryMirror,
-  HaAdapter,
-  HomeAssistantProviderDriver,
   MockAdapter,
   ProviderRegistry,
   ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
-  type HaTransport,
 } from "@supreme/integration-layer";
 import { describe, expect, it } from "vitest";
 import { HomeService, seedDemoHome } from "./home-service.js";
-
-/** Minimal no-socket HA transport (mirrors integration-layer's own ha-adapter.test.ts pattern). */
-class FakeHaTransport implements HaTransport {
-  opened = false;
-  async open(): Promise<void> { this.opened = true; }
-  async close(): Promise<void> { this.opened = false; }
-  isOpen(): boolean { return this.opened; }
-  onEvent(): void {}
-  async send(message: Record<string, unknown>): Promise<Record<string, unknown>> {
-    if (message.type === "get_states") return { result: [] };
-    return {};
-  }
-}
 
 async function setup() {
   const adapter = new MockAdapter();
@@ -66,6 +50,21 @@ describe("HomeService", () => {
       level: 50,
     });
     expect(updated?.state.brightness).toEqual({ kind: "brightness", on: true, level: 50 });
+  });
+
+  it("§ PASS 22 (Part K) — setDriverOwner records real ownership, idempotently, never regressing to a different driver", async () => {
+    const { home } = await setup();
+    const rooms = await home.listRooms();
+    const living = rooms.find((r) => r.name === "Living Room")!;
+    const device = (await home.listDevicesInRoom(living.id))[0]!;
+    expect(device.driverId).toBeNull(); // seed devices start unowned, same as production commissioning did before this fix
+
+    await home.setDriverOwner(device.id, "drv_knx" as never);
+    expect((await home.getDevice(device.id))?.driverId).toBe("drv_knx");
+
+    // Calling again with the SAME owner is a safe no-op (no duplicate change events).
+    await home.setDriverOwner(device.id, "drv_knx" as never);
+    expect((await home.getDevice(device.id))?.driverId).toBe("drv_knx");
   });
 
   it("moves any device to any room and renames it, keeping its binding", async () => {
@@ -158,11 +157,10 @@ describe("HomeService", () => {
     expect(await home.listFavorites(userId)).toHaveLength(0);
   });
 
-  describe("ADR-0023 § Commissioning — explicit provider assignment", () => {
+  describe("ADR-0023 § Commissioning — no implicit provider assignment", () => {
     async function setupRouter() {
       const registry = new EntityRegistryMirror();
-      const haDriver = new HomeAssistantProviderDriver(new HaAdapter({ transport: new FakeHaTransport(), registry }), registry);
-      const engine = new SupremeNativeAdapter({ drivers: [haDriver] });
+      const engine = new SupremeNativeAdapter();
       const providers = new ProviderRegistry();
       const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
       const sil = new SupremeIntegrationLayer({ adapter: router, registry, providers });
@@ -170,20 +168,7 @@ describe("HomeService", () => {
       return { sil, providers, home: new HomeService(sil) };
     }
 
-    it("addDevice() with backendIds binds through DriverBindingEngine — no implicit ownership side effect", async () => {
-      const { sil, providers, home } = await setupRouter();
-      const deviceId = newId("device") as DeviceId;
-      await home.addDevice(
-        { id: deviceId, roomId: null, name: "Lamp", supremeType: "dimmer", capabilities: [{ kind: "onoff" }], state: {}, metadata: {} },
-        { onoff: "light.lamp" },
-      );
-      // Real lifecycle state, not a fabricated default.
-      expect(providers.get(deviceId)).toMatchObject({ provider: "homeassistant", state: "ONLINE" });
-      // And it's genuinely commandable through the router (not just recorded as owned).
-      await expect(sil.command(deviceId, { capability: "onoff", action: "on" })).resolves.toBeUndefined();
-    });
-
-    it("a device with no backendIds stays unassigned — never defaulted to homeassistant", async () => {
+    it("a device with no backendIds stays unassigned — never given an implicit provider", async () => {
       const { providers, home } = await setupRouter();
       const deviceId = newId("device") as DeviceId;
       await home.addDevice(

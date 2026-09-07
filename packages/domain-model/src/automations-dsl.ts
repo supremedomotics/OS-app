@@ -6,11 +6,9 @@ import { NotificationLevel } from "./notifications.js";
 import { ScheduleWindow } from "./users.js";
 
 /**
- * The Supreme automation DSL (§10) — engine-agnostic by construction. The visual
- * Automation Builder edits this JSON DSL (never HA YAML). A native Supreme engine
- * executes it directly (`engine = "supreme"`); the SIL can also compile it to an HA
- * automation (`engine = "ha"`) and store an `externalRef`. Same DSL, swappable
- * executor — the migration guarantee applied to automations.
+ * The Supreme automation DSL (§10) — executed directly by the native Supreme
+ * automation engine (`engine = "supreme"`, the only supported engine). SupremeOS
+ * has no external home-automation backend to compile or delegate automations to.
  */
 
 const Comparator = z.enum(["eq", "ne", "gt", "lt", "gte", "lte", "changed"]);
@@ -98,9 +96,13 @@ export const Automation = z.object({
   triggers: z.array(AutomationTrigger).min(1),
   conditions: z.array(AutomationCondition).default([]),
   actions: z.array(AutomationAction).min(1),
-  /** "supreme" executes natively on the hub; "ha" compiles to an HA automation. */
-  engine: z.enum(["ha", "supreme"]).default("supreme"),
-  /** Opaque backend reference (e.g. HA automation id) — owned by the SIL. */
+  /** "supreme" is the only engine — executes natively on the hub. Retained as an
+   * enum (rather than a literal) for forward compatibility with the persisted
+   * `engine` column; any stored row bearing the legacy "ha" value fails validation
+   * loudly rather than being silently coerced or fabricated as native. */
+  engine: z.enum(["supreme"]).default("supreme"),
+  /** Opaque backend reference — unused now that there is no external backend to
+   * delegate to; retained only so legacy persisted rows still parse. */
   externalRef: z.string().nullable().default(null),
   /** True while the engine is actively running this automation's actions. */
   aiGenerated: z.boolean().default(false),

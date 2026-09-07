@@ -74,7 +74,6 @@ jobs:
       - name: Build hub images (gateway · commissioning · installer-portal)
         working-directory: infra/hub-compose
         env:
-          SUPREME_HA_TOKEN: ci
           SUPREME_TOKEN_SECRET: ci-token-secret-ci-token-secret-0123456789
           POSTGRES_PASSWORD: ci
         run: docker compose build gateway commissioning installer-portal

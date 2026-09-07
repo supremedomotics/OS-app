@@ -7,9 +7,12 @@ import { PasswordInput } from "./password-input.js";
  * shown). Mirrors the spec flow: Welcome → Administrator → System → Finish. On finish it
  * signs the new admin straight in.
  */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export function SetupWizard({ status, onDone }: { status: SetupStatus; onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [systemName, setSystemName] = useState(status.systemName || "");
@@ -20,16 +23,15 @@ export function SetupWizard({ status, onDone }: { status: SetupStatus; onDone: (
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const adminValid = username.trim().length >= 3 && password.length >= 8 && password === confirm;
+  const adminValid = username.trim().length >= 3 && EMAIL_RE.test(email.trim()) && password.length >= 8 && password === confirm;
 
   async function finish() {
     setError(null);
     setBusy(true);
     try {
-      await completeSetup({ username: username.trim(), password, confirmPassword: confirm, systemName, location, timeZone });
+      await completeSetup({ username: username.trim(), email: email.trim(), password, confirmPassword: confirm, systemName, location, timeZone });
       // Land logged in: authenticate through the SDK with the just-created credentials.
-      const email = username.includes("@") ? username.trim() : `${username.trim()}@supreme.local`;
-      const res = await client.login(email, password);
+      const res = await client.login(email.trim(), password);
       if (res.status === "ok") onDone();
       else setError("Account created. Please sign in.");
     } catch (e) {
@@ -57,6 +59,8 @@ export function SetupWizard({ status, onDone }: { status: SetupStatus; onDone: (
           <h2>Create administrator</h2>
           <p className="muted">This is the owner account for your home.</p>
           <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+          <input type="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} />
+          {email.length > 0 && !EMAIL_RE.test(email.trim()) && <p className="err">Enter a valid email address.</p>}
           <PasswordInput placeholder="Password (min 8 characters)" value={password} onChange={setPassword} />
           <PasswordInput placeholder="Confirm password" value={confirm} onChange={setConfirm} />
           {confirm.length > 0 && password !== confirm && <p className="err">Passwords don't match.</p>}

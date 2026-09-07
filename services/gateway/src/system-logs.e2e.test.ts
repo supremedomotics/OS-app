@@ -2,15 +2,12 @@ import type { CapabilityCommand, CapabilityKind, CapabilityState, DeviceId } fro
 import {
   EntityRegistryMirror,
   InMemoryProtocolBindingStore,
-  HaAdapter,
-  HomeAssistantProviderDriver,
   DriverBindingEngine,
   ProviderRegistry,
   ProviderRouter,
   SupremeIntegrationLayer,
   SupremeNativeAdapter,
   type DiscoveredDevice,
-  type HaTransport,
   type INativeProtocolDriver,
   type ProtocolBinding,
   type StateListener,
@@ -37,19 +34,20 @@ class FlakyDriver implements INativeProtocolDriver {
   onState(_l: StateListener): () => void { return () => {}; }
 }
 
-/** No-socket HA transport (mirrors integration-layer's own ha-adapter.test.ts pattern) —
- * registered so demo-seeded devices (which map onto "homeassistant" per ADR-0023 §
- * Commissioning) are genuinely bound, exactly like a real hub with HA configured. */
-class FakeHaTransport implements HaTransport {
-  opened = false;
-  async open(): Promise<void> { this.opened = true; }
-  async close(): Promise<void> { this.opened = false; }
-  isOpen(): boolean { return this.opened; }
-  onEvent(): void {}
-  async send(message: Record<string, unknown>): Promise<Record<string, unknown>> {
-    if (message.type === "get_states") return { result: [] };
-    return {};
-  }
+/** A native driver whose command() always succeeds — a genuinely reachable device,
+ * for the "logs a successful command" half of this test. */
+class WorkingDriver implements INativeProtocolDriver {
+  readonly protocol = "working";
+  private readonly devices = new Set<DeviceId>();
+  async connect(): Promise<void> {}
+  async disconnect(): Promise<void> {}
+  isConnected(): boolean { return true; }
+  async bind(b: ProtocolBinding): Promise<void> { this.devices.add(b.deviceId); }
+  manages(id: DeviceId): boolean { return this.devices.has(id); }
+  async command(): Promise<void> {}
+  getState(_id: DeviceId, _c: CapabilityKind): CapabilityState | null { return null; }
+  async discover(): Promise<DiscoveredDevice[]> { return []; }
+  onState(_l: StateListener): () => void { return () => {}; }
 }
 
 describe("Settings → Logs (§ Diagnostics): unified system log", () => {
@@ -59,8 +57,7 @@ describe("Settings → Logs (§ Diagnostics): unified system log", () => {
 
   beforeAll(async () => {
     const registry = new EntityRegistryMirror();
-    const haDriver = new HomeAssistantProviderDriver(new HaAdapter({ transport: new FakeHaTransport(), registry }), registry);
-    const routerEngine0 = new SupremeNativeAdapter({ drivers: [new FlakyDriver(), haDriver] });
+    const routerEngine0 = new SupremeNativeAdapter({ drivers: [new FlakyDriver(), new WorkingDriver()] });
     const routerProviders0 = new ProviderRegistry();
     const router = new ProviderRouter({ engine: routerEngine0, registry: routerProviders0, bindingEngine: new DriverBindingEngine(routerEngine0, routerProviders0) })
     const sil = new SupremeIntegrationLayer({ adapter: router, registry });
@@ -91,15 +88,27 @@ describe("Settings → Logs (§ Diagnostics): unified system log", () => {
   it("logs a successful device command and a failed one, both retrievable from /v1/system/logs", async () => {
     const token = await login();
 
-    // A real seeded device — commanding it should succeed and log an "info" entry.
     const home = (await (await fetch(`${baseUrl}/v1/home`, { headers: auth(token) })).json()) as {
       rooms: { id: string; name: string }[];
     };
     const living = home.rooms.find((r) => r.name === "Living Room")!;
-    const devices = (await (await fetch(`${baseUrl}/v1/rooms/${living.id}/devices`, { headers: auth(token) })).json()) as {
-      devices: { id: string; name: string; capabilities: { kind: string }[] }[];
-    };
-    const light = devices.devices.find((d) => d.capabilities.some((c) => c.kind === "onoff"))!;
+
+    // A device genuinely bound to a reachable native driver — commanding it should
+    // succeed and log an "info" entry.
+    const workingRes = await fetch(`${baseUrl}/v1/commissioning/commission`, {
+      method: "POST",
+      headers: auth(token),
+      body: JSON.stringify({
+        backendId: "working:1",
+        name: "Kitchen Light",
+        roomId: living.id,
+        capabilities: ["onoff"],
+        protocol: "working",
+        address: "10.0.0.1:1",
+      }),
+    });
+    expect(workingRes.status).toBe(201);
+    const { device: light } = (await workingRes.json()) as { device: { id: string; name: string } };
     const ok = await fetch(`${baseUrl}/v1/devices/${light.id}/command`, {
       method: "POST",
       headers: auth(token),

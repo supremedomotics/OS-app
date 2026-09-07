@@ -15,6 +15,7 @@ import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tr
 import { capabilitiesFromUnit, statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import {
   CasambiSessionExpiredError,
+  HttpCasambiTransport,
   type CasambiCredentials,
   type CasambiGroup,
   type CasambiSession,
@@ -23,7 +24,13 @@ import {
 } from "./cloud-transport.js";
 import { createConnection, type CasambiConnectionMode } from "./connection-manager.js";
 import type { CasambiLocalGatewayConfig, CasambiLocalTransport } from "./local-transport/index.js";
-import { buildDiscoveredDevices, startLocalDiscovery, stopLocalDiscovery } from "./discovery-engine.js";
+import {
+  buildDiscoveredDevices,
+  buildDiscoveredGroups,
+  startLocalDiscovery,
+  stopLocalDiscovery,
+  type CasambiDiscoveredGroup,
+} from "./discovery-engine.js";
 import { CasambiFeedbackEngine, WIRE_ID } from "./feedback-engine.js";
 import { CloudCommandEngine, LocalCommandEngine, type CasambiCommandEngine } from "./command-engine.js";
 import {
@@ -113,6 +120,25 @@ interface CasambiBinding {
   unitId: number;
 }
 
+/** Result of {@link CasambiProtocolDriver.syncNamesFromCloud} — how many already-discovered Local
+ * units were matched to a Cloud unit with a real name, out of how many the Cloud network reports
+ * in total. `matched < total` is expected and honest (a unit not yet seen locally, e.g. one that
+ * hasn't sent its first `NotifyControlValues` packet, simply can't be named yet). */
+export interface CasambiNameSyncResult {
+  matched: number;
+  total: number;
+  networkName: string | null;
+}
+
+/** Result of {@link CasambiProtocolDriver.discoverFromCloud} — how many previously-unknown Cloud
+ * units were added as pending (`awaitingLocalSignal`) devices, out of how many the Cloud network
+ * reports in total. `discovered < total` is expected when some units were already known locally. */
+export interface CasambiCloudDiscoverResult {
+  discovered: number;
+  total: number;
+  networkName: string | null;
+}
+
 /** Live health snapshot for monitoring/telemetry (no secrets). */
 export interface CasambiHealth {
   connectionType: CasambiConnectionMode;
@@ -145,6 +171,14 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private readonly units = new Map<number, CasambiUnit>();
   /** Group id → group (for auto room mapping from group names). */
   private readonly groups = new Map<number, CasambiGroup>();
+  /** § Casambi Local Gateway — Cloud device discovery. Unit ids added to `units` by
+   * {@link discoverFromCloud} that have NOT yet had a real local UDP signal applied — i.e. known
+   * to exist (real id/name/controls from the Cloud account) but never actually heard from on this
+   * LAN. `applyUnit` (the one path every genuine local signal flows through) clears an id from
+   * this set the moment a real packet arrives, so it always reflects live truth, never a stale
+   * guess. `discover()` reports this honestly via `raw.awaitingLocalSignal` — never fabricated as
+   * "online" or given fake state before the hardware has actually said anything. */
+  private readonly cloudOnlyUnitIds = new Set<number>();
 
   private session: CasambiSession | null = null;
   private wire: CasambiWire | null = null;
@@ -278,7 +312,174 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       // Late discovery before the first fetch — pull the model on demand.
       await this.loadNetwork();
     }
-    return buildDiscoveredDevices(this.units, this.groups);
+    return buildDiscoveredDevices(this.units, this.groups, this.cloudOnlyUnitIds);
+  }
+
+  /** § Casambi Group → Supreme Room — the group-level companion to {@link discover}. Group names
+   * come from the Cloud account (Local UDP carries none), so in Local mode this is populated by
+   * {@link discoverFromCloud}/{@link syncNamesFromCloud}, exactly like unit names are. */
+  async discoverGroups(): Promise<CasambiDiscoveredGroup[]> {
+    if (this.session && this.units.size === 0) await this.loadNetwork();
+    return buildDiscoveredGroups(this.units, this.groups);
+  }
+
+  /**
+   * § Casambi Local Gateway — one-time Cloud name sync. Local mode has no protocol-level path to
+   * a fixture's real name — confirmed by checking every locally-reachable Lithernet interface
+   * (UDP `NotifyControlValues`, the entire documented WebAPI, the web UI, `.ceg` export, the
+   * Diagnostics console): none carry a name field. Names exist only in the Casambi Cloud account.
+   *
+   * This opens a REST-only session (`createSession` + `fetchNetwork`, no WebSocket, no
+   * `openWire`), matches each Cloud unit to an already-discovered LOCAL unit by numeric id (the
+   * same Casambi network addressing scheme both transports share), copies over `name` where
+   * present, then discards the session entirely — nothing here becomes a live connection or an
+   * ongoing dependency. Local UDP stays the only transport for discovery, commands, and live
+   * state; this method touches naming metadata only, never a device's live state. Safe to call
+   * repeatedly (e.g. an installer "Re-sync names" action) — idempotent, no side effects beyond
+   * updating `unit.name` for units this call actually matched.
+   *
+   * Throws if called in Cloud mode (`connectionMode: "cloud"` already has real names from its own
+   * live session — this method exists specifically for the Local-mode gap) or if the Cloud
+   * request itself fails (invalid credentials, network unreachable) — never silently no-ops.
+   */
+  async syncNamesFromCloud(creds: CasambiCredentials, transport: CasambiTransport = new HttpCasambiTransport({ apiKey: creds.apiKey })): Promise<CasambiNameSyncResult> {
+    if (this.mode !== "local") {
+      throw new Error("casambi: syncNamesFromCloud is only meaningful in Local mode — Cloud mode already has real names from its own session");
+    }
+    const session = await transport.createSession(creds);
+    const network = await transport.fetchNetwork(session);
+    let matched = 0;
+    for (const cloudUnit of network.units) {
+      const local = this.units.get(cloudUnit.id);
+      if (!local) continue;
+      const name = cloudUnit.name?.trim();
+      if (!name) continue;
+      this.units.set(cloudUnit.id, { ...local, name });
+      matched += 1;
+    }
+    return { matched, total: network.units.length, networkName: session.networkName ?? null };
+  }
+
+  /**
+   * § Casambi Local Gateway — Cloud device discovery. Local UDP discovery is progressive and
+   * requires physical action (a unit only appears once it sends its first `NotifyControlValues`
+   * packet — e.g. someone toggles it), which makes commissioning a large fixture list slow and
+   * error-prone. This opens the SAME kind of REST-only session `syncNamesFromCloud` does (no
+   * WebSocket, no `openWire`, discarded immediately after the fetch) and adds a `units` entry for
+   * every Cloud-reported fixture NOT already known locally, using the Cloud API's own `controls`
+   * array (already sufficient for `capabilitiesFromUnit` — no local signal needed to know a unit
+   * is a dimmer/CCT/RGB fixture, only to know it's genuinely present and reachable on this LAN).
+   *
+   * Never overwrites a unit already known from a real local signal (checked via `this.units.has`)
+   * — Cloud data can lag or omit fields a live signal already reported correctly, so live-known
+   * state always wins. Newly-added units are tracked in `cloudOnlyUnitIds` and reported via
+   * `discover()`'s `raw.awaitingLocalSignal: true` — visible immediately with a real name, but
+   * never claimed as commanded, live, or bound until an actual local UDP packet confirms it (see
+   * `applyUnit`, the one place that clears an id from that set). Command/feedback for these
+   * devices, once bound, still goes exclusively through Local UDP — this method only seeds
+   * metadata, never becomes an ongoing dependency on the Cloud connection.
+   *
+   * Throws under the same conditions as `syncNamesFromCloud` (Cloud mode already discovers from
+   * its own live session; a failed Cloud request is never a silent no-op).
+   */
+  async discoverFromCloud(
+    creds: CasambiCredentials,
+    transport: CasambiTransport = new HttpCasambiTransport({ apiKey: creds.apiKey }),
+    wireBurstMs = 1500,
+  ): Promise<CasambiCloudDiscoverResult> {
+    if (this.mode !== "local") {
+      throw new Error("casambi: discoverFromCloud is only meaningful in Local mode — Cloud mode already discovers units from its own live session");
+    }
+    const session = await transport.createSession(creds);
+    const network = await transport.fetchNetwork(session);
+    // Local UDP carries no group information at all, so this is the only source Local mode ever
+    // has for room auto-mapping (buildDiscoveredDevices' `raw.room`) — seeded here as a side
+    // effect of the same fetch, never a separate ongoing Cloud dependency.
+    for (const group of network.groups) this.groups.set(group.id, group);
+    // § live-confirmed fix — `GET /v1/networks/{id}` (fetchNetwork) only returns structural
+    // fields (name/id/fixtureId/type) per Casambi's own docs; the `controls` array (Dimmer/CCT/
+    // Color, i.e. the thing that actually determines "dimmable" vs "tunable white") only comes
+    // from `GET /v1/networks/{id}/state` (fetchState) — the same call Cloud mode's own seedState()
+    // already makes at connect. Without this, every unit discovered from Cloud in Local mode was
+    // structurally correct but permanently capability-less beyond whatever Local UDP happened to
+    // report on its own. Merge state's controls onto each cloud unit before recording it.
+    const stateById = new Map((await transport.fetchState(session)).map((u) => [u.id, u]));
+    // § live-confirmed fix — even `/state` can under-report a fixture's real control set (live-
+    // confirmed on a real Lithernet/DALI-bridged CCT fixture: both REST endpoints reported only
+    // "Dimmer", never "CCT", for the exact same unit Cloud mode's own live WebSocket correctly
+    // reports "CCT" for). Cloud mode gets the fuller picture "for free" because its wire stays
+    // open forever and receives each unit's own unitChanged burst; Local mode's one-time Cloud-
+    // discovery step opens that SAME wire just long enough to catch it, then closes — never a
+    // standing dependency, matching the "never opens a WebSocket wire" contract everywhere else
+    // in this file (that guarantee is about Local mode's ONGOING operation, which stays UDP-only
+    // unconditionally; this is a one-time enrichment pass, exactly like fetchNetwork/fetchState
+    // above). Best-effort: any failure here still leaves the REST-derived data intact.
+    await this.enrichFromCloudWireBurst(session, transport, wireBurstMs);
+    let discovered = 0;
+    for (let cloudUnit of network.units) {
+      const state = stateById.get(cloudUnit.id);
+      if (state?.controls) cloudUnit = { ...cloudUnit, controls: state.controls };
+      const existing = this.units.get(cloudUnit.id);
+      if (!existing) {
+        this.units.set(cloudUnit.id, cloudUnit);
+        this.cloudOnlyUnitIds.add(cloudUnit.id);
+        discovered += 1;
+        continue;
+      }
+      // § live-confirmed fix — a unit Local UDP already saw (even just one dimmer packet, before
+      // its own colorTemperature/CCT NotifyControlValues arrived) was being left permanently
+      // "dimmable" forever: `discoverFromCloud` used to skip it outright, so the Cloud REST
+      // account's own `controls` (which DOES carry the full CCT/RGB set immediately) never
+      // reached it. Never clobber real local state (dimLevel/on/existing control values) —
+      // only add control TYPES local hasn't reported yet, so capability detection (`cct` etc.)
+      // is correct right away without discarding live feedback already recorded.
+      // Lowercased for the same reason as mergeUnit's own key — Cloud's "Slider"/"Dimmer" and
+      // Local's "slider"/"dimmer" are the same control, and letting both through leaves the unit
+      // carrying two entries with contradictory min/max.
+      const knownTypes = new Set((existing.controls ?? []).map((c) => (c.type ?? "").toLowerCase()));
+      const missing = (cloudUnit.controls ?? []).filter((c) => !knownTypes.has((c.type ?? "").toLowerCase()));
+      // § live-confirmed fix — merge the STRUCTURAL fields too, not just controls. Local UDP
+      // reports none of these (`updateUnitFromControlValues` only ever sets id/dimLevel/on/
+      // sensors/controls), and local discovery sees every unit before this runs, so a merge that
+      // copied only `controls` left `groupId` undefined on literally every unit — which silently
+      // emptied BOTH `buildDiscoveredGroups` (group membership is derived from `unit.groupId`)
+      // and `buildDiscoveredDevices`' own `raw.room` hint. Only ever fills a gap: a real local
+      // value, if one ever appears, is never overwritten by the Cloud's older copy.
+      this.units.set(cloudUnit.id, {
+        ...existing,
+        ...(existing.groupId === undefined && cloudUnit.groupId !== undefined ? { groupId: cloudUnit.groupId } : {}),
+        ...(existing.fixtureId === undefined && cloudUnit.fixtureId !== undefined ? { fixtureId: cloudUnit.fixtureId } : {}),
+        ...(existing.type === undefined && cloudUnit.type !== undefined ? { type: cloudUnit.type } : {}),
+        ...(existing.address === undefined && cloudUnit.address !== undefined ? { address: cloudUnit.address } : {}),
+        ...(missing.length > 0 ? { controls: [...(existing.controls ?? []), ...missing] } : {}),
+      });
+    }
+    return { discovered, total: network.units.length, networkName: session.networkName ?? null };
+  }
+
+  /** Opens a short-lived Cloud WebSocket wire — the same one Cloud mode keeps open forever — just
+   * long enough to catch each unit's initial `unitChanged` burst, merges any richer control data
+   * it reports via the normal {@link applyUnit} path, then closes. Best-effort: a connection
+   * failure here is swallowed, leaving whatever REST already provided intact. See
+   * {@link discoverFromCloud}'s own doc comment for why this is the one exception to Local mode
+   * never opening a wire. */
+  private async enrichFromCloudWireBurst(session: CasambiSession, transport: CasambiTransport, burstMs: number): Promise<void> {
+    if (burstMs <= 0) return;
+    try {
+      const wire = await transport.openWire({
+        onEvent: (event) => {
+          const signal = normalizeCloudEvent(event);
+          if (signal?.kind === "unit") this.applyUnit(signal.unit);
+        },
+        onClose: () => {},
+        onError: () => {},
+      });
+      wire.open(session, WIRE_ID);
+      await new Promise((resolve) => setTimeout(resolve, burstMs));
+      wire.close();
+    } catch {
+      // Best-effort enrichment only — REST-derived controls still apply.
+    }
   }
 
   onState(listener: StateListener): () => void {
@@ -557,6 +758,9 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
 
   /** Merge a unit into the cache (keeping previously-known fields) and emit any state changes. */
   private applyUnit(unit: CasambiUnit): void {
+    // A real signal for this unit just arrived — it's no longer merely Cloud-known, it's been
+    // genuinely confirmed on this LAN. See cloudOnlyUnitIds' own doc comment.
+    this.cloudOnlyUnitIds.delete(unit.id);
     const prevUnit = this.units.get(unit.id);
     const merged = this.mergeUnit(unit);
     if (typeof merged.activeSceneId === "number" && merged.activeSceneId !== prevUnit?.activeSceneId) {
@@ -576,7 +780,25 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
     // Events are complete for the state they carry; merge so static fields (name/type/fixture/group)
     // survive partial event payloads.
     const merged: CasambiUnit = { ...prev, ...unit };
-    if (!unit.controls && prev?.controls) merged.controls = prev.controls;
+    // § live-confirmed fix — a partial local update (e.g. only a dimmer-level packet, before the
+    // fixture's own colorTemperature packet has arrived) used to fully REPLACE `controls` with
+    // its own short list, silently dropping a CCT/color control `discoverFromCloud` had already
+    // merged in — a unit could go back to "dimmable only" after every plain brightness change.
+    // Union by control type instead: keep every previously-known type, let this update's own
+    // entries (a real, fresher read) win for the types it actually reports.
+    if (unit.controls) {
+      // § live-confirmed fix — key by LOWERCASED type. Cloud advertises "Slider"/"Dimmer"/"CCT"
+      // while Local UDP builds "slider"/"dimmer"/"colortemperature", so a case-sensitive key let
+      // both survive as separate controls with contradictory metadata. For a curtain that was
+      // actively wrong: Cloud's Slider carries min 0/max 100 and Local's carries min 0/max 255,
+      // and `statesFromUnit` takes whichever it finds first — so a real local reading of 136
+      // normalised against max 100 clamped every position to "100%".
+      const byType = new Map((prev?.controls ?? []).map((c) => [(c.type ?? "").toLowerCase(), c]));
+      for (const c of unit.controls) byType.set((c.type ?? "").toLowerCase(), c);
+      merged.controls = [...byType.values()];
+    } else if (prev?.controls) {
+      merged.controls = prev.controls;
+    }
     this.units.set(unit.id, merged);
     return merged;
   }

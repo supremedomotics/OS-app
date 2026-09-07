@@ -72,6 +72,12 @@ export interface DiscoveredView {
    * discover() genuinely fetches this from the unit's UPnP description XML. Absent (never
    * guessed) for sources that report no such field, like AVR's Telnet-only discover(). */
   manufacturer?: string;
+  /** § Casambi Local Gateway — Cloud device discovery: true when this device is known only from
+   * the Cloud API and has NOT yet had its identity/existence confirmed by a real local signal
+   * (e.g. Casambi Local mode's first UDP packet) — see CasambiProtocolDriver.discoverFromCloud's
+   * own doc comment. Absent/false for every discovery source that doesn't make this distinction;
+   * never fabricated as confirmed just because it isn't present. */
+  awaitingLocalSignal?: boolean;
 }
 
 /**
@@ -141,15 +147,35 @@ export class CommissioningService {
       for (const d of await scanner.scan()) out.push(view(d, scanner.protocol));
     }
 
-    // De-duplicate by backendId; backend-sourced entries win.
+    // De-duplicate by (protocol, backendId), NOT bare backendId (§ Multi-network Casambi,
+    // Stage 3). `backendId` alone is a protocol-native address ("casambi:45" is just "unit 45"),
+    // which can legitimately repeat across two Casambi networks or two Lithernet gateways — that
+    // is normal, expected hardware addressing, not a duplicate scan result. `protocol` is the
+    // scoped runtime identity Stage 2a already gives each driver INSTANCE ("casambi" for the
+    // first network/gateway, "casambi#<installedId>" for every other), so scoping the dedup key
+    // by it keeps genuinely-repeated results (the SAME instance reporting the SAME unit twice in
+    // one scan) collapsed, while two DIFFERENT instances' same-numbered units both survive as
+    // separate entries. Falls back to `source` only for the rare device with no protocol tag at
+    // all (matches `view()`'s own `source: protocol ?? source`), which never had per-instance
+    // identity to lose in the first place.
+    const dedupKey = (v: DiscoveredView) => `${v.protocol ?? v.source} ${v.backendId}`;
     const seen = new Map<string, DiscoveredView>();
-    for (const v of out) if (!seen.has(v.backendId)) seen.set(v.backendId, v);
+    for (const v of out) if (!seen.has(dedupKey(v))) seen.set(dedupKey(v), v);
 
     // Never re-surface an already-commissioned device as a "new find". Discovery sources
     // that poll (CoolMaster indoor units, AVR/HEOS/Yamaha SSDP, Shelly/mDNS…) report the
     // same stable backendId on every scan; without this a rescan shows the same physical
     // unit again and pairing it a second time silently creates a duplicate Supreme device
     // for the same hardware — "why are there multiple cards for one AC/light/curtain".
+    //
+    // NOTE (§ Multi-network Casambi, Stage 3 — known, deferred limitation): `reverseLookup`
+    // below is still keyed by BARE backendId (`registry.ts`'s `reverse: Map<string, ...>`), a
+    // single global index shared across every driver instance. Once one network/gateway's unit
+    // is committed, ANOTHER instance's same-numbered unit is filtered out here as "already
+    // commissioned" even though it is a genuinely different physical device — the discovery LIST
+    // now correctly shows both (the dedup fix above), but committing both still isn't safe until
+    // a commissioned device's persisted backendId is itself network/gateway-scoped. That address
+    // scoping is Stage 4's job, not this one's — deliberately not attempted here.
     const discovered = [...seen.values()].filter((v) => !this.sil.registry.reverseLookup(v.backendId));
     return { discovered, driverResults };
   }
@@ -261,6 +287,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const locationHint = extractLocationHint(d.raw);
   const zones = extractZones(d.raw);
   const manufacturer = extractManufacturer(d.raw);
+  const awaitingLocalSignal = d.raw?.awaitingLocalSignal === true;
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -275,6 +302,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     ...(zones ? { zones } : {}),
     ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
     ...(manufacturer ? { manufacturer } : {}),
+    ...(awaitingLocalSignal ? { awaitingLocalSignal } : {}),
   };
 }
 

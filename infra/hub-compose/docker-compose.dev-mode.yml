@@ -1,20 +1,8 @@
 # Developer Mode overlay — FOR DEVELOPMENT / DEBUGGING ONLY.
 #
-# ⚠️  WARNING ⚠️
-# This PUBLISHES Home Assistant on the host at http://<hub>:8123 and allows direct HA
-# login with the hidden internal account. It breaks the "HA is invisible" guarantee and
-# must NEVER be used in a production/customer install. Disabled by default — Supreme OS
-# ships with HA completely hidden.
-#
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.dev-mode.yml up -d
-#   # HA is then reachable at http://localhost:8123 (internal account: admin / admin@supremeos)
 services:
-  homeassistant:
-    # Expose HA's admin port to the host (normally there are NO published ports).
-    ports:
-      - "8123:8123"
-
   gateway:
     environment:
       # Surfaces the "Developer" navigation entry + diagnostics in the Supreme UI.

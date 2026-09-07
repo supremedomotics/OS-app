@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { resolveEmbeddedCasambiApiKey } from "./casambi-embedded-key.js";
 
 /**
  * Gateway configuration. All values come from the hub environment; sensible
@@ -18,20 +19,11 @@ export interface GatewayConfig {
   host: string;
   port: number;
   tokenSecret: string;
-  /** "mock" runs the offline vertical slice; "ha" uses the real HA backend. */
-  backend: "mock" | "ha" | "native";
-  haUrl: string;
-  /** HA long-lived token. Optional: when empty and backend=ha, the hub provisions HA
-   * headlessly on first boot and stores the generated token in the secrets manager. */
-  haToken: string;
-  /** HA HTTP base (for onboarding); derived from haUrl when not set. */
-  haHttpUrl: string;
-  /** Hidden internal HA account the gateway provisions + uses. Never shown in any UI. */
-  haAdminUser: string;
-  haAdminPassword: string;
-  /** Directory for runtime-generated secrets (the provisioned HA token); empty = in-memory. */
+  /** "mock" runs the offline vertical slice; "native" runs the real Supreme-native backend. */
+  backend: "mock" | "native";
+  /** Directory for runtime-generated secrets; empty = in-memory. */
   secretsDir: string;
-  /** Developer Mode (§dev): when true, HA may be published on 8123 for debugging. Off by default. */
+  /** Developer Mode (§dev): unlocks extra diagnostics surfaces. Off by default. */
   devMode: boolean;
   /**
    * When true, the runtime Developer-Mode toggle is LOCKED (customer/OEM builds set this). Default
@@ -45,7 +37,7 @@ export interface GatewayConfig {
   setupWizard: boolean;
   /** Friendly system/home name used during onboarding + shown in the UI. */
   systemName: string;
-  /** IANA time zone + optional coordinates seeded into HA's core config. */
+  /** IANA time zone + optional coordinates for the home's location. */
   timeZone: string;
   latitude: number | null;
   longitude: number | null;
@@ -190,27 +182,29 @@ export interface GatewayConfig {
   /** Stricter rate limit for /v1/auth/* (per IP, per minute). */
   authRateMax: number;
   logLevel: string;
+  /** § Native-linux source-mode "Update now" (Settings > Software update). Absolute path to
+   * infra/native-linux/update.sh on THIS host; empty = feature disabled (the Docker/hub-compose
+   * deployment never sets this — it has no equivalent privileged host script to trigger). Only
+   * install.sh/update.sh's own rendered gateway.env sets this, never user-supplied. */
+  updateScriptPath: string;
+  /** Absolute path update.sh's own systemd-run invocation is told to append its output to; the
+   * gateway tails this file for phase/progress. Empty = feature disabled (paired with the above). */
+  updateLogPath: string;
 }
 
 /** The insecure development default — refused in production (fail-closed). */
 export const DEV_TOKEN_SECRET = "dev-only-insecure-secret-change-me-change-me";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
-  // ADR-0023 § Native Backend: "native" (no Home Assistant leg at all) is the
-  // production default. "ha" additionally registers Home Assistant as one more
-  // provider driver. "mock" exists ONLY for tests/CI — never select it via a real
-  // deployment's env, since it's the one path that doesn't talk to a real backend.
-  const backend = env.SUPREME_BACKEND === "ha" ? "ha" : env.SUPREME_BACKEND === "mock" ? "mock" : "native";
+  // ADR-0023 § Native Backend: "native" is the production default and the only real
+  // backend — the SIL talks straight to native protocol drivers, no external hub.
+  // "mock" exists ONLY for tests/CI — never select it via a real deployment's env.
+  const backend = env.SUPREME_BACKEND === "mock" ? "mock" : "native";
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
     tokenSecret: secret(env, "SUPREME_TOKEN_SECRET") ?? DEV_TOKEN_SECRET,
     backend,
-    haUrl: env.SUPREME_HA_URL ?? "ws://127.0.0.1:8123/api/websocket",
-    haToken: secret(env, "SUPREME_HA_TOKEN") ?? "",
-    haHttpUrl: env.SUPREME_HA_HTTP_URL ?? "",
-    haAdminUser: env.SUPREME_HA_ADMIN_USER ?? "admin",
-    haAdminPassword: secret(env, "SUPREME_HA_ADMIN_PASSWORD") ?? "admin@supremeos",
     secretsDir: env.SUPREME_SECRETS_DIR ?? "",
     devMode: env.SUPREME_DEV_MODE === "1" || env.SUPREME_DEV_MODE === "true",
     devModeLocked: env.SUPREME_DEV_MODE_LOCKED === "1" || env.SUPREME_DEV_MODE_LOCKED === "true",
@@ -274,7 +268,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     lutronUsername: env.SUPREME_LUTRON_USERNAME ?? "lutron",
     lutronPassword: secret(env, "SUPREME_LUTRON_PASSWORD") ?? "integration",
     tuyaEnabled: env.SUPREME_TUYA_ENABLED === "1" || env.SUPREME_TUYA_ENABLED === "true",
-    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") ?? "",
+    // § Standalone per-hub Casambi API key — env/`_FILE` always wins when a deployment sets it
+    // explicitly; otherwise falls back to the ciphertext-in-source default (see
+    // casambi-embedded-key.ts) so a fresh install needs zero manual credential step.
+    // § live-confirmed fix — gateway.env ALWAYS sets SUPREME_CASAMBI_API_KEY (rendered from the
+    // template's placeholder), so an installer who never typed one gets an empty STRING here, not
+    // an absent env var. `??` only falls back on null/undefined, never on "", so the embedded
+    // default was silently skipped every time — `||` treats an empty string the same as unset,
+    // which is correct: a real API key is never legitimately "".
+    casambiApiKey: secret(env, "SUPREME_CASAMBI_API_KEY") || resolveEmbeddedCasambiApiKey() || "",
     casambiEmail: env.SUPREME_CASAMBI_EMAIL ?? "",
     casambiPassword: secret(env, "SUPREME_CASAMBI_PASSWORD") ?? "",
     casambiNetworkId: env.SUPREME_CASAMBI_NETWORK_ID ?? "",
@@ -296,6 +298,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     rateMax: Number(env.SUPREME_RATE_MAX ?? 1000),
     authRateMax: Number(env.SUPREME_AUTH_RATE_MAX ?? 50),
     logLevel: env.SUPREME_LOG_LEVEL ?? "info",
+    updateScriptPath: env.SUPREME_UPDATE_SCRIPT ?? "",
+    updateLogPath: env.SUPREME_UPDATE_LOG ?? "",
   };
 }
 
@@ -309,6 +313,11 @@ export function assertSecureConfig(config: GatewayConfig): void {
   if (config.tokenSecret === DEV_TOKEN_SECRET) problems.push("SUPREME_TOKEN_SECRET is the insecure dev default");
   if (config.tokenSecret.length < 32) problems.push("SUPREME_TOKEN_SECRET must be >= 32 chars");
   if (config.corsOrigins.length === 0) problems.push("SUPREME_CORS_ORIGINS must be set in production");
+  // § Native Backend Implementation — the offline mock vertical slice must never run a
+  // real production hub (§ Never fabricate data or capabilities): a mock-backed device
+  // silently "succeeds" against in-memory state that was never real. Use the default
+  // ("native") instead.
+  if (config.backend === "mock") problems.push('SUPREME_BACKEND=mock is not permitted in production — use "native" (the default)');
   if (problems.length > 0) {
     throw new Error(`refusing to boot (production hardening): ${problems.join("; ")}`);
   }

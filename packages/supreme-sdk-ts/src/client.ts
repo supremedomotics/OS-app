@@ -140,6 +140,13 @@ export interface SupremeClientOptions {
   onSessionExpired?: () => void;
 }
 
+/** GET /v1/system/source-update/status response — see services/gateway/src/routes/system-update.ts.
+ * Declared inline (not in @supreme/contracts) — single-consumer shape, matching this file's own
+ * systemResetInfo()/systemReset() precedent rather than round-tripping through a shared schema. */
+export type SourceUpdateStatus =
+  | { enabled: false; status: "unavailable" }
+  | { enabled: true; status: "idle" | "running" | "completed" | "failed"; phase: string | null; error: string | null; startedAt: string | null; logTail: string[] };
+
 export class SupremeClient {
   private readonly baseUrl: string;
   private readonly tokens: TokenStore;
@@ -623,6 +630,34 @@ export class SupremeClient {
   backupSchedule(): Promise<BackupScheduleResponse> {
     return this.request("GET", "/v1/backup/schedule") as Promise<BackupScheduleResponse>;
   }
+
+  // ── System Reset (§ PASS 22 Part B) — admin, factory-reset back to first-run Setup ──
+  /** Real counts for the confirmation dialog, not vague "everything" language. */
+  systemResetInfo(): Promise<{ users: number; devices: number; rooms: number; installedDrivers: number }> {
+    return this.request("GET", "/v1/system/reset-info") as Promise<{ users: number; devices: number; rooms: number; installedDrivers: number }>;
+  }
+  /** Wipes users/homes/devices/drivers and re-enters first-run Setup. Requires the literal
+   * confirmation phrase "RESET SYSTEM" as a second, deliberate step beyond the UI dialog. */
+  systemReset(): Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }> {
+    return this.request("POST", "/v1/system/reset", { confirm: "RESET SYSTEM" }) as Promise<{ ok: true; driversUninstalled: number; usersRemoved: number }>;
+  }
+  /** § live-confirmed fix — poll this WHILE `systemReset()`'s own request is still in
+   * flight to drive a real, honest progress bar (currentStep is one of RESET_STEPS —
+   * see services/gateway/src/routes/system.ts's own export — never a fabricated timer). */
+  systemResetStatus(): Promise<{ status: "idle" | "resetting" | "completed" | "failed"; lastError: string | null; failedStep: string | null; currentStep: string | null }> {
+    return this.request("GET", "/v1/system/reset-status") as Promise<{ status: "idle" | "resetting" | "completed" | "failed"; lastError: string | null; failedStep: string | null; currentStep: string | null }>;
+  }
+  // ── Source-mode "Update now" (native-linux only) — triggers infra/native-linux/update.sh on
+  // the host via a narrowly-scoped sudoers rule. A DIFFERENT concern from systemUpdate() above
+  // (which only checks a signed OTA-artifact channel); unavailable (enabled:false) on the
+  // hub-compose/Docker deployment, which has no equivalent privileged host script.
+  sourceUpdateStatus(): Promise<SourceUpdateStatus> {
+    return this.request("GET", "/v1/system/source-update/status") as Promise<SourceUpdateStatus>;
+  }
+  /** Admin-only. Rejects (409) if an update is already running. */
+  sourceUpdateTrigger(): Promise<{ ok: true; triggeredAt: string }> {
+    return this.request("POST", "/v1/system/source-update/trigger") as Promise<{ ok: true; triggeredAt: string }>;
+  }
   setBackupSchedule(input: { enabled?: boolean; everyHours?: number; retain?: number }): Promise<BackupScheduleResponse> {
     return this.request("PUT", "/v1/backup/schedule", input) as Promise<BackupScheduleResponse>;
   }
@@ -666,6 +701,15 @@ export class SupremeClient {
   }
 
   // ── transport ────────────────────────────────────────────────────────────────
+  /** Default per-request budget (§ resilience — a hung backend call must never leave a
+   * caller awaiting forever with no error, no matter how the hang happens). Generous
+   * enough for any real Supreme endpoint (none of which do heavy inline work — see the
+   * gateway's own worker-thread offload for the one exception, the KNX ETS import,
+   * which returns its 202 immediately and is polled separately) while still bounding
+   * the wait to something a UI can recover from. A safety net, not a fix for whatever
+   * made the backend slow — see PASS 13 investigation notes on the KNX job route. */
+  private static readonly DEFAULT_TIMEOUT_MS = 20_000;
+
   private async request(
     method: string,
     path: string,
@@ -679,11 +723,28 @@ export class SupremeClient {
       if (!token) throw new SupremeError("unauthorized", "not authenticated");
       headers.authorization = `Bearer ${token}`;
     }
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SupremeClient.DEFAULT_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // A network-level throw — including our own abort — is the SAME "transient,
+      // couldn't reach the backend" condition the 401-refresh path above already
+      // treats as non-fatal (see its own comment); never mint a fake "unauthorized"
+      // from it. AbortError specifically means our own timeout fired, not the caller.
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new SupremeError("backend_unavailable", `request timed out after ${SupremeClient.DEFAULT_TIMEOUT_MS / 1000}s`);
+      }
+      throw new SupremeError("backend_unavailable", err instanceof Error ? err.message : "network request failed");
+    } finally {
+      clearTimeout(timer);
+    }
     const text = await res.text();
     const json = text ? JSON.parse(text) : undefined;
     if (!res.ok) {
@@ -698,9 +759,17 @@ export class SupremeClient {
       if (auth && res.status === 401 && !isRetry) {
         try {
           await this.refresh();
-        } catch {
-          this.setTokens(null);
-          this.onSessionExpired?.();
+        } catch (refreshErr) {
+          // Only a genuine rejection from the server (refresh() got a real response back saying
+          // the refresh token/session is invalid — code "unauthorized", the only code a 401 ever
+          // maps to per httpStatusFor) means the session is actually over. A network-level throw
+          // (fetch never got a response) or any other SupremeError (5xx on the refresh endpoint
+          // itself, parsed as "internal"/"backend_unavailable") is a transient failure: leave the
+          // tokens alone so a later request can retry the refresh once the issue clears.
+          if (refreshErr instanceof SupremeError && refreshErr.code === "unauthorized") {
+            this.setTokens(null);
+            this.onSessionExpired?.();
+          }
           throw parsed;
         }
         return this.request(method, path, body, auth, true);

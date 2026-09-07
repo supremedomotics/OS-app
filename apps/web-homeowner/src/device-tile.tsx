@@ -1,5 +1,6 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { CapabilityCommand, Device, DeviceId } from "@supreme/domain-model";
+import { ShadingIcon, type ShadingKind } from "@supreme/aureon-web";
 import { client } from "./api.js";
 import { useLive } from "./live.js";
 import { recordUse } from "./usage.js";
@@ -113,7 +114,23 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
       onPointerUp={slidable ? () => { dragging.current = false; if (!moved.current) void toggle(); } : undefined}
     >
       <div className="fill" style={{ width: `${level}%` }} />
-      <DeviceIcon kind={isDimmer ? "light" : isCover ? "cover" : isLock ? "lock" : isFan ? "fan" : isVacuum ? "vacuum" : "switch"} on={on} />
+      {isCover ? (
+        // § live-confirmed fix — a real, live-updating cover icon instead of a static
+        // glyph: reflects the device's actual reported position (0=closed, 100=open,
+        // the same convention every protocol's position capability already uses), and
+        // animates as new state arrives. `shadingKind` is an installer-set fact stored on
+        // the `position` capability's own config (§ ADR 0017 Capability Normalization —
+        // the exact same mechanism `color`'s colorModes already uses) — never guessed,
+        // since a roller blind's DPT/capability shape can't tell you whether it moves
+        // up/down or slides open/closed. Defaults to the more common "updown" only when
+        // the installer hasn't set it yet — never blocks rendering.
+        <ShadingIcon
+          kind={(device.capabilities.find((c) => c.kind === "position")?.config?.shadingKind as ShadingKind | undefined) ?? "updown"}
+          position={level}
+        />
+      ) : (
+        <DeviceIcon kind={isDimmer ? "light" : isLock ? "lock" : isFan ? "fan" : isVacuum ? "vacuum" : "switch"} on={on} />
+      )}
       <span className="nm">{device.name}</span>
       <span className="rv">{valueLabel}</span>
       {onOpen && (

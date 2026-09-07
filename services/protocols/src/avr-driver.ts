@@ -13,7 +13,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { buildMediaState, commandToAvr, denonCapabilityConfig, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
+import { buildMediaState, commandToAvr, denonCapabilityConfig, DENON_INPUTS, DENON_INPUT_LABELS, parseAvrLine, parseHostPort, type AvrZone } from "./avr-codec.js";
 import {
   albumArtUrl,
   buildAppCommandRequests,
@@ -179,6 +179,9 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
    * per-zone). Absent for a host never successfully enriched yet — callers fall back to
    * the installer-declared default labels, exactly as before this feature existed. */
   private readonly inputEnrichment = new Map<string, { renamed: Map<string, string>; hidden: Set<string> }>();
+  /** § Pass 12.5, Part B/C — homeowner-set custom input labels, keyed by `host:port` then
+   * wire `SI` token. Separate map from `inputEnrichment` on purpose (see `bind()`'s doc). */
+  private readonly customInputNames = new Map<string, Map<string, string>>();
   /** One slow, adaptive-backoff poller per host — the concrete mechanism keeping
    * renamed/hidden inputs in sync with changes made via the OEM Denon Remote app
    * (Telnet has no push notification for a rename; see module doc). */
@@ -264,6 +267,16 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const hasExtendedAudio = binding.config?.hasExtendedAudio === true;
     const model = typeof binding.config?.model === "string" ? binding.config.model : null;
     const serial = typeof binding.config?.serial === "string" ? binding.config.serial : null;
+    // § Pass 12.5, Part B/C — SupremeOS-side custom input names, homeowner-set (never
+    // wire-discovered), stored in `binding.config` alongside the wire-discovered
+    // `renamedInputs`/`hiddenInputs` above — same persistence field, same key shape
+    // (wire `SI` token -> label), just a different writer. Kept in its own map (not
+    // merged into `inputEnrichment`) since it's config, not discovery state: it must
+    // never be cleared/overwritten by `refreshInputEnrichment()`'s AppCommand polling.
+    const customInputRaw = binding.config?.customInputNames;
+    if (customInputRaw && typeof customInputRaw === "object") {
+      this.customInputNames.set(key, new Map(Object.entries(customInputRaw as Record<string, string>)));
+    }
     const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
     const isFirstBindingForHost = !this.bindings.some((b) => `${b.host}:${b.port}` === key);
     // § Universal AVR SDK — seed enrichment synchronously from discover()'s preview
@@ -278,7 +291,14 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         hidden: Array.isArray(hiddenRaw) ? new Set(hiddenRaw as string[]) : new Set(),
       });
     }
-    this.bindings.push({ deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, hasAudyssey, hasExtendedAudio, model, serial });
+    // § Pass 12.6 — `bind()` is now called a second time for the same device+capability
+    // whenever the input-customization API re-persists a binding (see `setAvrInputCustomName`
+    // callers), not just once at first commission. Replace the existing entry instead of
+    // pushing a duplicate — otherwise `this.bindings` grows unboundedly across every rename.
+    const existingIdx = this.bindings.findIndex((b) => b.deviceId === binding.deviceId && b.capability === binding.capability);
+    const nextEntry = { deviceId: binding.deviceId, capability: binding.capability, host, port, zone, hasToneControl, hasAudyssey, hasExtendedAudio, model, serial };
+    if (existingIdx >= 0) this.bindings[existingIdx] = nextEntry;
+    else this.bindings.push(nextEntry);
     this.devices.add(binding.deviceId);
     if (binding.capability === "media" && !this.media.has(binding.deviceId)) {
       this.media.set(binding.deviceId, { volume: 0, muted: false, source: null });
@@ -333,6 +353,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       this.transport.releaseKey(key);
       this.httpClient.releaseKey(key);
       this.inputEnrichment.delete(key);
+      this.customInputNames.delete(key);
       this.enrichmentPollers.get(key)?.stop();
       this.enrichmentPollers.delete(key);
       this.initHandshakes.get(key)?.reset();
@@ -454,7 +475,49 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       hasExtendedAudio: b.zone === "main" && b.hasExtendedAudio,
       renamedInputs: enrichment?.renamed,
       hiddenInputs: enrichment?.hidden,
+      customInputNames: this.customInputNames.get(`${b.host}:${b.port}`),
     }) as unknown as Record<string, unknown>;
+  }
+
+  /** § Pass 12.6, Part E — the settings-facing counterpart to `getCapabilityConfig`'s merged
+   * `inputs[].label`: exposes the pre-merge layers (`reportedName`, `customName`) alongside the
+   * final `displayName`, keyed by the stable wire `SI` token, so a rename UI can show "currently
+   * shows X, override with Y" rather than only the flattened result. `null` when this driver
+   * doesn't manage the device (mirrors `getCapabilityConfig`'s contract). */
+  getAvrInputs(deviceId: DeviceId): { technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
+    if (!b) return null;
+    const key = `${b.host}:${b.port}`;
+    const enrichment = this.inputEnrichment.get(key);
+    const custom = this.customInputNames.get(key);
+    return DENON_INPUTS.filter((id) => !enrichment?.hidden.has(id)).map((id) => {
+      const reportedName = enrichment?.renamed.get(id) ?? DENON_INPUT_LABELS[id] ?? id;
+      const customName = custom?.get(id) ?? null;
+      return { technicalId: id, reportedName, customName, displayName: customName ?? reportedName };
+    });
+  }
+
+  /** § Pass 12.6, Part E — set/clear this device's homeowner-facing override for one input's
+   * label. Never touches the wire (no speculative Denon rename command exists/is sent — see
+   * module doc); this only updates the in-memory overlay `getCapabilityConfig`/`getAvrInputs`
+   * already read from. Callers are responsible for re-persisting `ProtocolBinding.config`
+   * (this method alone does not survive a restart) — see the gateway route, which re-runs
+   * `bindProtocol()` right after this call. Returns `false` for an unmanaged device or a
+   * `technicalId` that isn't one of this receiver's real wire tokens — a display name must
+   * never be able to invent a technical identity. */
+  setAvrInputCustomName(deviceId: DeviceId, technicalId: string, name: string | null): boolean {
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
+    if (!b) return false;
+    if (!(DENON_INPUTS as readonly string[]).includes(technicalId)) return false;
+    const key = `${b.host}:${b.port}`;
+    let map = this.customInputNames.get(key);
+    if (!map) {
+      map = new Map();
+      this.customInputNames.set(key, map);
+    }
+    if (name === null) map.delete(technicalId);
+    else map.set(technicalId, name);
+    return true;
   }
 
   /** § Capability Refresh (Part 2) — the classic Denon/Marantz Telnet protocol has no
@@ -672,6 +735,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       // not a fabricated Telnet capability. Best-effort: a fetch/parse failure here
       // must not fail discovery of the unit itself.
       let manufacturer: string | null = null;
+      let friendlyName: string | null = null;
       let modelName: string | null = null;
       let serialNumber: string | null = null;
       if (r.location) {
@@ -680,7 +744,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
           const res = await this.fetchImpl(r.location);
           if (res.ok) {
             const xml = await res.text();
-            ({ manufacturer, modelName, serialNumber } = parseUpnpDescription(xml));
+            ({ manufacturer, friendlyName, modelName, serialNumber } = parseUpnpDescription(xml));
             this.tracer.event(`discover: UPnP description ${r.address} — manufacturer=${manufacturer ?? "?"} model=${modelName ?? "?"} serial=${serialNumber ?? "?"}`);
           } else {
             this.tracer.event(`discover: UPnP description fetch for ${r.address} returned HTTP ${res.status}`);
@@ -728,7 +792,10 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       }
       return {
         backendId: r.address,
-        suggestedName: `AVR ${r.address}`,
+        // § Pass 12.2 — same UPnP `friendlyName` `yamaha-driver.ts` already uses for its
+        // suggestedName; falls back to the prior IP-based name when the unit's SSDP
+        // response has no LOCATION or the fetch/parse failed (best-effort, see above).
+        suggestedName: friendlyName || `AVR ${r.address}`,
         capabilities: ["onoff", "media"] as DiscoveredDevice["capabilities"],
         raw: {
           ip: r.address,

@@ -53,7 +53,8 @@ describe("LocalCommandEngine", () => {
     const udp = fakeUdp();
     const engine = new LocalCommandEngine(udp, 0);
     await engine.send(5, { capability: "onoff", action: "on" }, null);
-    expect(udp.sent).toEqual([{ netId: 0, direction: "toCasambi", opcode: 0x20, args: [255, CASAMBI_TARGET_TYPE.device, 5] }]);
+    // § live-confirmed fix — full-length 0x20 with explicit 0 Duration; see local-command-mapper.ts.
+    expect(udp.sent).toEqual([{ netId: 0, direction: "toCasambi", opcode: 0x20, args: [255, 0, 0, CASAMBI_TARGET_TYPE.device, 5] }]);
   });
 
   it("uses the configured Net ID, not a hard-coded one", async () => {
@@ -66,6 +67,7 @@ describe("LocalCommandEngine", () => {
   it("throws for an unsupported capability (position) rather than fabricating a mapping", async () => {
     const udp = fakeUdp();
     const engine = new LocalCommandEngine(udp, 0);
-    await expect(engine.send(5, { capability: "position", action: "open" }, null)).rejects.toThrow(/unsupported command/);
+    // open/close/set all map onto the position slider element now; "stop" has no element at all.
+    await expect(engine.send(5, { capability: "position", action: "stop" }, null)).rejects.toThrow(/unsupported command/);
   });
 });

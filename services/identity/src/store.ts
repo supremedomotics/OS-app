@@ -19,7 +19,15 @@ export interface StoredCredential {
 export interface IIdentityStore {
   getHome(): Promise<Home | null>;
   putHome(home: Home): Promise<void>;
+  /** § PASS 22B (System Reset) — clear the commissioned home record so `commission()`'s
+   * "home is already commissioned" guard doesn't wrongly reject re-provisioning after a
+   * reset. Identity's own home row is a SEPARATE record from HomeService's (see
+   * AppContext.completeSetup's own doc comment on why both stores exist) — resetting
+   * devices/rooms/users alone never touches it. */
+  deleteHome(): Promise<void>;
   findUserByEmail(email: string): Promise<User | null>;
+  /** § Real username login — see User.username's own doc comment. */
+  findUserByUsername(username: string): Promise<User | null>;
   getUser(id: UserId): Promise<User | null>;
   listUsers(): Promise<User[]>;
   putUser(user: User): Promise<void>;
@@ -50,7 +58,13 @@ export interface Session {
 export interface ISessionStore {
   create(session: Session): Promise<void>;
   get(id: string): Promise<Session | null>;
-  setCurrentJti(id: string, jti: string): Promise<void>;
+  /**
+   * Compare-and-swap rotation: only sets `currentJti` to `nextJti` if the stored value still
+   * equals `expectedJti`, atomically (§ refresh-token rotation race). Returns `true` if the swap
+   * happened, `false` if someone else already rotated this session first — the caller then knows
+   * it lost a benign race (not a reuse attempt) and should not revoke.
+   */
+  setCurrentJti(id: string, expectedJti: string, nextJti: string): Promise<boolean>;
   revoke(id: string): Promise<void>;
   /** All of a user's sessions (active + revoked), newest first — the login history. */
   listByUser(userId: UserId): Promise<Session[]>;
@@ -176,9 +190,11 @@ export class InMemorySessionStore implements ISessionStore {
   async get(id: string): Promise<Session | null> {
     return this.sessions.get(id) ?? null;
   }
-  async setCurrentJti(id: string, jti: string): Promise<void> {
+  async setCurrentJti(id: string, expectedJti: string, nextJti: string): Promise<boolean> {
     const s = this.sessions.get(id);
-    if (s) s.currentJti = jti;
+    if (!s || s.currentJti !== expectedJti) return false;
+    s.currentJti = nextJti;
+    return true;
   }
   async revoke(id: string): Promise<void> {
     const s = this.sessions.get(id);
@@ -206,10 +222,20 @@ export class InMemoryIdentityStore implements IIdentityStore {
   async putHome(home: Home): Promise<void> {
     this.home = home;
   }
+  async deleteHome(): Promise<void> {
+    this.home = null;
+  }
   async findUserByEmail(email: string): Promise<User | null> {
     const needle = email.toLowerCase();
     for (const u of this.users.values()) {
       if (u.email.toLowerCase() === needle) return u;
+    }
+    return null;
+  }
+  async findUserByUsername(username: string): Promise<User | null> {
+    const needle = username.toLowerCase();
+    for (const u of this.users.values()) {
+      if (u.username?.toLowerCase() === needle) return u;
     }
     return null;
   }

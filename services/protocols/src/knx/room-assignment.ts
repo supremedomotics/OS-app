@@ -36,15 +36,44 @@ export interface RoomAssignmentInput {
   aiInference?: (device: UnifiedKnxDevice) => string | null;
 }
 
+/** § Live-reproduced bug fix — ETS's own building/location tree records where an actuator
+ * is PHYSICALLY MOUNTED, which for a DIN-rail device (a DALI/KNX gateway, an actuator) is
+ * routinely a technical/utility space — a distribution board, an electrical closet — not
+ * where the CIRCUIT it controls logically belongs. Live evidence: a real ETS project's
+ * "Conference Hanging"/"Conference Curtain Cove"/"Conference Study Cove" lighting circuits
+ * all resolved to room "DB" (the distribution board housing their shared DALI gateway),
+ * even though their own names unambiguously say "Conference" — silently overriding what
+ * would otherwise be found by circuit_intelligence a few steps down this same chain. A
+ * short, exact-match (not substring) denylist of common technical-room labels — English
+ * and the German terms real ETS exports from this codebase's own test/live evidence have
+ * used (Verteiler = distribution board, UV/HV = Unter-/Hauptverteiler) — lets ETS/KNX-IoT
+ * metadata be skipped for exactly this case, falling through to the next real source
+ * instead, without weakening ETS/KNX-IoT as a source for every other device whose
+ * location genuinely IS its room. */
+const TECHNICAL_ROOM_NAMES = new Set([
+  "db", "distribution board", "distribution-board", "electrical room", "electrical closet",
+  "utility room", "utility closet", "server room", "comms room", "communications room",
+  "technical room", "plant room", "switch room", "panel room", "riser", "riser room",
+  "verteiler", "unterverteiler", "hauptverteiler", "uv", "hv",
+]);
+
+function isTechnicalRoomName(name: string): boolean {
+  return TECHNICAL_ROOM_NAMES.has(name.trim().toLowerCase());
+}
+
 /** Room already resolved by the Phase 3 metadata merge (KNX IoT title or ETS room) —
  * reused here rather than re-parsed, so this chain and the general merge never disagree
- * about what KNX IoT/ETS actually said. */
+ * about what KNX IoT/ETS actually said. Skips a technical/utility room name (see
+ * isTechnicalRoomName) so it falls through to the next source in the chain rather than
+ * winning outright — an actuator's mounting location is not its controlled circuit's room. */
 function mergedRoomSource(device: UnifiedKnxDevice): { room: string | null; source: "knx_iot" | "ets" | null } {
   const line = device.raw.mergeExplanation.find((e) => e.startsWith("room:"));
   if (!line) return { room: null, source: null };
   const match = line.match(/^room: "(.*)" ← (knx_iot|ets)$/);
   if (!match) return { room: null, source: null };
-  return { room: match[1] ?? null, source: match[2] as "knx_iot" | "ets" };
+  const room = match[1] ?? null;
+  if (room && isTechnicalRoomName(room)) return { room: null, source: null };
+  return { room, source: match[2] as "knx_iot" | "ets" };
 }
 
 export function assignRoom(input: RoomAssignmentInput): RoomAssignmentResult {

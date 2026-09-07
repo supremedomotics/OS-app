@@ -135,7 +135,12 @@ export function statesFromUnit(u: CasambiUnit): { capability: CapabilityKind; st
       let hue: number | null = null, saturation: number | null = null;
       const rgb = parseRgb(colorCtl?.rgb);
       if (rgb) { const hs = rgbToHueSat(rgb.r, rgb.g, rgb.b); hue = hs.hue; saturation = hs.saturation; }
-      const kelvin = typeof cctCtl?.value === "number" ? Math.round(cctCtl.value) : null;
+      // § System Manual 6.38 p.223 — Casambi's own Tc encoding is either literal Kelvin
+      // (0x400-0x4000, i.e. >= 1024) or normalized-to-fixture-range (0x00-0xFF). Cloud units
+      // report literal Kelvin; Local's NotifyControlValues type 10 always reports the
+      // normalized byte (see local-discovery.ts) — never confuse the two ranges into a fake
+      // Kelvin reading.
+      const kelvin = typeof cctCtl?.value === "number" && cctCtl.value >= 0x400 ? Math.round(cctCtl.value) : null;
       out.push({ capability: "color", state: { kind: "color", on, level, hue, saturation, kelvin } });
     } else if (cap === "position") {
       const slider = (u.controls ?? []).find((c) => ["slider", "vertical"].includes(controlType(c)));

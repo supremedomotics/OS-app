@@ -235,6 +235,43 @@
 .aureon-status-dot--critical { background: var(--aureon-color-status-critical); box-shadow: 0 0 8px color-mix(in srgb, var(--aureon-color-status-critical) 60%, transparent); }
 .aureon-status-dot--lg { width: 12px; height: 12px; }
 
+/* ── Progress bar ───────────────────────────────────────────────────────────── */
+.aureon-progress { width: 100%; }
+.aureon-progress-label { font-size: var(--aureon-text-caption, 12px); color: var(--aureon-color-text-secondary); margin-bottom: var(--aureon-space-xs); }
+.aureon-progress-track {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--aureon-color-base-hairline);
+  overflow: hidden;
+}
+.aureon-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--aureon-color-gold-500), var(--aureon-color-gold-400));
+  transition: width 0.35s ease;
+}
+/* No `value` given — honest "work is happening, duration unknown" motion, never a fake
+ * percentage. A fixed-width sweep translating across the track, GPU-accelerated
+ * (transform only). */
+.aureon-progress-track--indeterminate .aureon-progress-fill {
+  width: 40% !important;
+  animation: aureon-progress-sweep 1.3s ease-in-out infinite;
+  transition: none;
+}
+@keyframes aureon-progress-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aureon-progress-track--indeterminate .aureon-progress-fill { animation: none; width: 100% !important; opacity: 0.5; }
+}
+
+/* ── Shading icon (animated curtain/blind position) ────────────────────────── */
+.aureon-shading-icon-panel { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) { .aureon-shading-icon-panel { transition: none; } }
+
 /* ── Segmented control ──────────────────────────────────────────────────────── */
 
 .aureon-seg { display: flex; gap: 8px; flex-wrap: wrap; }

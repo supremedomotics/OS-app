@@ -85,6 +85,34 @@ describe("validateDriverConfig — requiredIf (mode-conditional required fields)
   });
 });
 
+describe("validateDriverConfig — fallbacks (§ Casambi fleet-wide env-var default)", () => {
+  const modeSchema: DriverConfigField[] = [
+    { key: "connectionType", label: "Connection type", type: "select", required: true, default: "cloud", secret: false },
+    { key: "apiKey", label: "API key", type: "password", requiredIf: { key: "connectionType", equals: "cloud" }, secret: true },
+    { key: "email", label: "Network admin email", type: "text", requiredIf: { key: "connectionType", equals: "cloud" }, secret: false },
+  ];
+
+  it("a fallback satisfies a required field left blank, without writing it into the persisted config", () => {
+    const { config, errors } = validateDriverConfig(modeSchema, { connectionType: "cloud" }, {}, { apiKey: "fleet-key", email: "fleet@example.com" });
+    expect(errors).toEqual([]);
+    expect(config.apiKey).toBeUndefined();
+    expect(config.email).toBeUndefined();
+  });
+
+  it("an explicitly submitted value still wins over the fallback and IS persisted", () => {
+    const { config, errors } = validateDriverConfig(modeSchema, { connectionType: "cloud", apiKey: "own-key", email: "own@example.com" }, {}, { apiKey: "fleet-key", email: "fleet@example.com" });
+    expect(errors).toEqual([]);
+    expect(config.apiKey).toBe("own-key");
+    expect(config.email).toBe("own@example.com");
+  });
+
+  it("still errors when neither the input nor a fallback has the required field", () => {
+    const { errors } = validateDriverConfig(modeSchema, { connectionType: "cloud" }, {}, { apiKey: "fleet-key" });
+    expect(errors).toContain("Network admin email is required");
+    expect(errors).not.toContain("API key is required");
+  });
+});
+
 describe("defaults + completeness", () => {
   it("defaultDriverConfig returns declared defaults", () => {
     expect(defaultDriverConfig(schema)).toEqual({ port: 3671 });
@@ -102,5 +130,14 @@ describe("defaults + completeness", () => {
     expect(isConfigComplete(modeSchema, { connectionType: "cloud" }).complete).toBe(true);
     expect(isConfigComplete(modeSchema, { connectionType: "local" })).toEqual({ complete: false, missing: ["gatewayIp"] });
     expect(isConfigComplete(modeSchema, { connectionType: "local", gatewayIp: "1.2.3.4" }).complete).toBe(true);
+  });
+
+  it("isConfigComplete treats a fallback-covered field as present (§ Casambi fleet-wide env-var default)", () => {
+    const modeSchema: DriverConfigField[] = [
+      { key: "connectionType", label: "Connection type", type: "select", default: "cloud", secret: false },
+      { key: "apiKey", label: "API key", type: "password", requiredIf: { key: "connectionType", equals: "cloud" }, secret: true },
+    ];
+    expect(isConfigComplete(modeSchema, { connectionType: "cloud" }).complete).toBe(false);
+    expect(isConfigComplete(modeSchema, { connectionType: "cloud" }, { apiKey: "fleet-key" }).complete).toBe(true);
   });
 });

@@ -47,6 +47,27 @@ describe("device recognition engine", () => {
     expect(devices[0]?.bindings.some((b) => b.capability === "position")).toBe(true);
   });
 
+  it(
+    "recognizes a curtain named just \"Main\" (no cover keyword anywhere) as a curtain, not a dimmable light (§ live-confirmed fix)",
+    () => {
+      // No "curtain"/"blind"/"shutter" keyword anywhere in the name — the ONLY signal
+      // this is a cover is the DPT itself: DPST-1-8 (Up/Down) is structurally unambiguous
+      // regardless of naming, unlike the percentage position/feedback GA (DPST-5-1),
+      // which really is DPT-ambiguous with a dimmer's and correctly still needs a
+      // keyword-driven tiebreaker — this fixture deliberately omits any such keyword to
+      // isolate the up/down signal.
+      const model = parseGaExport(`<x>
+        <GroupAddress Name="Main - Up/Down" Address="2/2/1" DPTs="DPST-1-8" />
+        <GroupAddress Name="Main - Position" Address="2/2/2" DPTs="DPST-5-1" />
+        <GroupAddress Name="Main - Position Feedback" Address="2/2/3" DPTs="DPST-5-1" />
+      </x>`);
+      const { devices } = recognizeDevices(model);
+      expect(devices).toHaveLength(1);
+      expect(devices[0]?.deviceType).toBe("curtain");
+      expect(devices[0]?.bindings.some((b) => b.capability === "position")).toBe(true);
+    },
+  );
+
   it("recognizes a scene-recall address as a 'scene' device but does not fabricate a capability binding", () => {
     const model = parseGaExport(`<x>
       <GroupAddress Name="Evening Scene - Recall" Address="3/1/1" DPTs="DPST-18-1" />

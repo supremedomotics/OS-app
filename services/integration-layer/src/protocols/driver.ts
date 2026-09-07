@@ -110,6 +110,19 @@ export interface INativeProtocolDriver {
    * data to render instead of a device with no config at all. */
   getCapabilityConfig?(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null;
 
+  /** § Pass 12.6, Part E — optional, AVR-only: this device's real input list with the
+   * pre-merge `reportedName`/`customName` layers alongside the final `displayName`, keyed by
+   * stable wire technical id. `null` when this driver doesn't manage the device or has no
+   * input-customization concept. */
+  getAvrInputs?(deviceId: DeviceId): { technicalId: string; reportedName: string; customName: string | null; displayName: string }[] | null;
+
+  /** § Pass 12.6, Part E — optional, AVR-only: set (or, with `name: null`, clear) one input's
+   * homeowner-facing custom label. Returns `false` for an unmanaged device or an unknown
+   * `technicalId` — never accepts an arbitrary string as a technical identity. Callers must
+   * re-persist the owning `ProtocolBinding.config` separately (this only updates in-memory
+   * driver state). */
+  setAvrInputCustomName?(deviceId: DeviceId, technicalId: string, name: string | null): boolean;
+
   /** Optional: this device's real connection/traffic diagnostics (§ Diagnostics
    * Console) — connection status, last command/response, RX/TX packet counts,
    * reconnect count, response time, last error. `null` when this driver doesn't
@@ -141,6 +154,18 @@ export interface INativeProtocolDriver {
    * `{ sent: true, subscribedRooms: 2 }` after a WebSocket send. A no-op for any driver
    * that doesn't implement diagnostics (i.e. everything but AVR-with-diagnostics-on). */
   recordDiagnosticStage?(traceId: string, stage: string, fields: Record<string, unknown>): void;
+
+  /** § Live Feedback Diagnostic Pass — optional, KNX-only: one composed snapshot of the
+   * bus→provider→driver feedback pipeline for a device (provider counters, subscription
+   * status, resolved runtime binding, last matched feedback, last recorded state).
+   * `null`/absent for every driver but `SupremeKnxDriver`. Return type is `unknown` here
+   * (not `@supreme/protocols`-typed) so this generic interface never needs to import a
+   * single protocol's shape — the gateway route that calls this owns the real cast. */
+  knxFeedbackDiagnostics?(deviceId: DeviceId): unknown;
+
+  /** § Live Feedback Diagnostic Pass — optional, KNX-only: whether an arbitrary group
+   * address currently has a live bus subscription. */
+  isSubscribedToGa?(groupAddress: string): boolean;
 
   /** § AVR Diagnostic Mode — optional: the complete, human-readable trace log this
    * driver has buffered since diagnostics was enabled, ending with a session summary

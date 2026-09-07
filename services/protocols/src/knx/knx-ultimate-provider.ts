@@ -1,5 +1,5 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
-import type { IKnxProvider, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
+import type { IKnxProvider, KnxFeedbackTelegramSnapshot, KnxRawTelegramSnapshot, KnxTask, ProviderDiagnostics, ProviderHealth } from "./provider.js";
 import { ConnectionManager, type ConnectionManagerMetrics, type ConnectionState } from "./connection-manager.js";
 
 /**
@@ -39,6 +39,7 @@ interface KnxUltimateDptLib {
 interface KnxUltimateIndication {
   cEMIMessage?: {
     dstAddress?: { toString(): string };
+    srcAddress?: { toString(): string };
     npdu?: { dataValue?: Buffer; isGroupWrite?: boolean; isGroupResponse?: boolean };
   };
 }
@@ -93,6 +94,15 @@ export class KnxUltimateProvider implements IKnxProvider {
   private lastCommandAt: string | null = null;
   private lastError: string | null = null;
   private reconnectAttempts = 0;
+  private unmatchedFeedbackTelegrams = 0;
+  // § PASS 20 diagnostic (Part A) — bounded, one-entry snapshots; never an unbounded log.
+  private lastFeedbackTelegram: KnxFeedbackTelegramSnapshot | null = null;
+  private lastUnmatchedFeedback: KnxFeedbackTelegramSnapshot | null = null;
+  // § Live Feedback Diagnostic Pass — real, incrementing-only breakdowns of packetsReceived.
+  private groupWritesReceived = 0;
+  private groupResponsesReceived = 0;
+  private groupReadsIgnored = 0;
+  private lastTelegram: KnxRawTelegramSnapshot | null = null;
 
   constructor(opts: KnxUltimateProviderOptions) {
     this.opts = opts;
@@ -238,12 +248,50 @@ export class KnxUltimateProvider implements IKnxProvider {
       if (this.client !== client) return;
       const cemi = packet.cEMIMessage;
       const dst = cemi?.dstAddress?.toString?.();
+      const src = cemi?.srcAddress?.toString?.() ?? null;
       const raw = cemi?.npdu?.dataValue;
       if (!dst || !raw) return;
+      // § PASS 23 bug fix — `NPDU.dataValue` (knxultimate) ALWAYS returns a Buffer, even
+      // for a GroupValueRead REQUEST with no payload (1-6 bit KNX values are packed into
+      // the low 6 bits of the APCI byte itself, and `dataValue`'s getter falls back to
+      // `Buffer.alloc(1, apci & 0x3f)` whenever `_data` is null — verified against the
+      // installed `knxultimate@6.0.1` package's `NPDU.js`). A GroupValueRead's APCI has
+      // those bits at 0, so `raw` was previously non-null/non-empty and got decoded as if
+      // it were real feedback — silently overwriting a device's true state with a bogus
+      // "0"/false the instant ANY GroupValueRead hit its status GA (a legitimate KNX bus
+      // event: another device's poll, an ETS Group Monitor read, or this driver's own
+      // `syncAll()`/State-Synchronization group-reads reflecting off the bus). This is the
+      // concrete mechanism behind "physical=ON shows OFF in the app" — only a real
+      // GroupValueWrite or GroupValueResponse telegram carries genuine feedback.
+      const npdu = cemi?.npdu as { isGroupWrite?: boolean; isGroupResponse?: boolean } | undefined;
+      if (!npdu?.isGroupWrite && !npdu?.isGroupResponse) {
+        // § Live Feedback Diagnostic Pass — a real GroupValueRead REQUEST, correctly
+        // ignored per the § PASS 23 fix above; counted separately so a tester can see
+        // "reads are arriving" without them ever masquerading as feedback.
+        this.groupReadsIgnored++;
+        return;
+      }
       this.packetsReceived++;
-      this.lastTelegramAt = new Date().toISOString();
+      const telegramType: "write" | "response" = npdu.isGroupResponse ? "response" : "write";
+      if (telegramType === "write") this.groupWritesReceived++; else this.groupResponsesReceived++;
+      const ts = new Date().toISOString();
+      this.lastTelegramAt = ts;
       const handlers = this.observers.get(dst);
-      if (!handlers?.length) return;
+      if (!handlers?.length) {
+        this.unmatchedFeedbackTelegrams++;
+        this.lastUnmatchedFeedback = { source: src, destination: dst, matched: false, ts };
+        this.lastTelegram = { source: src, destination: dst, type: telegramType, ts };
+        return;
+      }
+      // § PASS 20 diagnostic (Part A) — decode using the FIRST matched observer's own
+      // DPT for the snapshot (a GA can have multiple observers in principle, but always
+      // the same real DPT in practice — this is diagnostic visibility, not a second
+      // decode path); every matched handler still gets called exactly as before.
+      const { dpt: firstDpt } = handlers[0]!;
+      let decodedForDiagnostics: unknown;
+      try { decodedForDiagnostics = dptlib.fromBuffer(raw, dptlib.resolve(firstDpt)); } catch { /* diagnostic-only, never block real handling */ }
+      this.lastFeedbackTelegram = { source: src, destination: dst, matched: true, dpt: firstDpt, value: decodedForDiagnostics, ts };
+      this.lastTelegram = { source: src, destination: dst, type: telegramType, dpt: firstDpt, value: decodedForDiagnostics, ts };
       for (const { dpt, handler } of handlers) handler(dptlib.fromBuffer(raw, dptlib.resolve(dpt)));
     });
   }
@@ -277,6 +325,12 @@ export class KnxUltimateProvider implements IKnxProvider {
 
   unsubscribe(groupAddress: string): void {
     this.observers.delete(groupAddress);
+  }
+
+  /** § PASS 20 diagnostic (Part A) — a safe way to check whether an exact GA string
+   * currently has a registered observer, without exposing the observer map itself. */
+  isSubscribed(groupAddress: string): boolean {
+    return (this.observers.get(groupAddress)?.length ?? 0) > 0;
   }
 
   health(): ProviderHealth {
@@ -314,6 +368,13 @@ export class KnxUltimateProvider implements IKnxProvider {
       // back to the pre-first-connect local count otherwise.
       reconnectAttempts: this.connectionManager?.metrics().reconnectAttempts ?? this.reconnectAttempts,
       connectionState: this.connectionManager?.state ?? null,
+      unmatchedFeedbackTelegrams: this.unmatchedFeedbackTelegrams,
+      lastFeedbackTelegram: this.lastFeedbackTelegram,
+      lastUnmatchedFeedback: this.lastUnmatchedFeedback,
+      groupWritesReceived: this.groupWritesReceived,
+      groupResponsesReceived: this.groupResponsesReceived,
+      groupReadsIgnored: this.groupReadsIgnored,
+      lastTelegram: this.lastTelegram,
     };
   }
 }

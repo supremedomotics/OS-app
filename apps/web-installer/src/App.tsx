@@ -19,7 +19,6 @@ import {
   DriverStore,
   Fleet,
   Licensing,
-  Migration,
 } from "./pages.js";
 
 type Tab =
@@ -32,7 +31,6 @@ type Tab =
   | "backup"
   | "license"
   | "dealer"
-  | "migration"
   | "fleet";
 
 // Discover-first (§ Installer Experience): the installer's first action is scanning for devices —
@@ -48,7 +46,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "backup", label: "Backup / Restore" },
   { id: "license", label: "Licensing" },
   { id: "dealer", label: "Dealer Portal" },
-  { id: "migration", label: "Native Migration" },
   { id: "fleet", label: "Fleet" },
 ];
 
@@ -92,7 +89,6 @@ export function App() {
         {tab === "backup" && <BackupRestore />}
         {tab === "license" && <Licensing />}
         {tab === "dealer" && <Dealer />}
-        {tab === "migration" && <Migration />}
         {tab === "fleet" && <Fleet />}
       </main>
     </div>
