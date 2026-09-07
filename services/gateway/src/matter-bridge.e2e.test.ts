@@ -152,3 +152,44 @@ describe("Matter Bridge (gateway e2e — restart identity)", () => {
     }
   });
 });
+
+describe("Matter Bridge (gateway e2e — per-device isolation, real bug found live)", () => {
+  it("one device failing to expose does not stop the REST of the demo home's onoff devices from being bridged", async () => {
+    // Real production bug: this loop had no per-device try/catch, so one device throwing
+    // silently aborted the whole loop — every device queued AFTER the failing one never even
+    // got attempted, while devices already added stayed visible. Looked exactly like "only the
+    // first device appears" on a real Matter controller.
+    class FlakyOnceServer extends FakeMatterBridgeServer {
+      private failedOnce = false;
+      async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
+        if (!this.failedOnce && this.endpoints.size === 1) {
+          this.failedOnce = true;
+          throw new Error("simulated: second device failed to expose");
+        }
+        await super.addOnOffLight(args);
+      }
+    }
+    const dir = mkdtempSync(join(tmpdir(), "matter-bridge-isolation-e2e-"));
+    const server = new FlakyOnceServer();
+    try {
+      const ctx = await AppContext.create(
+        loadConfig({
+          SUPREME_PORT: "0",
+          SUPREME_LOG_LEVEL: "silent",
+          SUPREME_MATTER_BRIDGE_ENABLED: "1",
+          SUPREME_MATTER_STORAGE_PATH: dir,
+        }),
+        { matterBridgeServer: server },
+      );
+      const onoffDeviceCount = (await ctx.home.listDevices()).filter((d) => d.capabilities.some((c) => c.kind === "onoff")).length;
+      expect(onoffDeviceCount).toBeGreaterThan(2); // the demo home has several — this bug needs 3+ to reproduce
+
+      // The one device whose addOnOffLight call was made to fail is missing, but every OTHER
+      // onoff device — critically, the ones queued AFTER it — still got bridged.
+      expect(server.endpoints.size).toBe(onoffDeviceCount - 1);
+      await ctx.shutdown();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

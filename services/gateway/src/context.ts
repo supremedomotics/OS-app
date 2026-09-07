@@ -1052,16 +1052,40 @@ export class AppContext {
       onLog: (level, message) => (level === "error" ? console.error(message) : level === "warn" ? console.warn(message) : console.log(message)),
     });
     await driver.start();
-    // Auto-expose every device with a real `onoff` capability — the minimum-configuration
-    // behavior (§3: "avoid unnecessary configuration"), mirroring the HomeKit bridge's own
-    // "offer every device as an accessory" policy.
+    this.matterBridge = { driver };
+    await this.exposeOnOffDevices(driver);
+    if (opts.persist !== false) await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, true);
+  }
+
+  /** Auto-expose every device with a real `onoff` capability — the minimum-configuration
+   * behavior (§3: "avoid unnecessary configuration"), mirroring the HomeKit bridge's own
+   * "offer every device as an accessory" policy. Shared by `enableMatterBridge()` (first
+   * expose) and `refreshMatterBridge()` (pick up devices added/discovered since) — calling it
+   * again for an already-bridged device is a cheap no-op (`exposeLight` is idempotent, §
+   * Phase 2). Isolated per device — one device that fails to expose (a real bug found live:
+   * this loop had NO isolation, so device #2 throwing silently stopped device #3 from ever
+   * being attempted, while #1 stayed visible, looking exactly like "only the first device
+   * appears") must never block every other device from being bridged, matching the same
+   * isolation `MatterBridgeDriver.start()`'s restart-recovery loop already uses. */
+  private async exposeOnOffDevices(driver: MatterBridgeDriver): Promise<void> {
     for (const device of await this.home.listDevices()) {
       if (device.capabilities.some((c) => c.kind === "onoff")) {
-        await driver.exposeLight(device.id, device.name);
+        try {
+          await driver.exposeLight(device.id, device.name);
+        } catch (err) {
+          console.error(`matter-bridge: failed to expose ${device.id} (${device.name}): ${(err as Error).message}`);
+        }
       }
     }
-    this.matterBridge = { driver };
-    if (opts.persist !== false) await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, true);
+  }
+
+  /** § Matter Bridge Phase 6 — re-scan for newly commissioned/discovered SupremeOS devices and
+   * bridge any that aren't already exposed, WITHOUT disturbing devices already bridged (their
+   * endpoint identity is untouched — this only ever calls the same idempotent `exposeLight()`
+   * every device already went through once). Throws if the Bridge isn't currently running. */
+  async refreshMatterBridge(): Promise<void> {
+    if (!this.matterBridge) throw new SupremeError("conflict", "Matter Bridge is not running");
+    await this.exposeOnOffDevices(this.matterBridge.driver);
   }
 
   /** § Matter Bridge Phase 6 — live disable, no restart required. Idempotent. A clean
