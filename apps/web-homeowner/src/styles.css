@@ -1103,6 +1103,9 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 }
 /* Driver Manager */
 .drv-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+/* Instance label on a driver row — present only when a catalog key is installed more than
+   once (§ Multi-network Casambi). Secondary to the driver name, never competing with it. */
+.drv-instance { color: var(--aureon-color-text-secondary); font-weight: 400; }
 .drv-row { border: 1px solid var(--aureon-color-base-hairline); border-radius: 14px; overflow: hidden; background: var(--aureon-color-base-surface); }
 .drv-row.open { border-color: var(--aureon-color-gold-500); }
 .drv-head { width: 100%; display: flex; align-items: center; gap: 10px; background: none; border: 0; cursor: pointer; padding: 12px 14px; color: var(--aureon-color-text-primary); text-align: left; }

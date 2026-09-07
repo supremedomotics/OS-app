@@ -30,7 +30,7 @@ import type { CapabilityKind, DeviceId, DriverId, RoomId } from "@supreme/domain
 import type { UnifiedKnxDevice, BindingPlanItem } from "@supreme/protocols";
 import { CasambiProtocolDriver, CasambiLocalRestClient, CasambiUdpEngine, buildFailureAnalysisReport, buildReceiveCertificationReport, type LanForensicsInput } from "@supreme/protocols";
 import { NatsUdpTransportClient, LocalDirectUdpTransport, queryLanHealth, queryLanForensics, type LanDiagnosticsSnapshot, type LanForensicsResponse } from "@supreme/lan";
-import { resolveCasambiCloudCredentials } from "../native-driver-factory.js";
+import { resolveCasambiCloudCredentials, casambiUnitIdFromBackendId } from "../native-driver-factory.js";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
@@ -127,8 +127,8 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "create");
-      const { key, version } = InstallDriverRequest.parse(req.body);
-      const driver = await i().installDriver(key, version);
+      const { key, version, asNewInstance, label } = InstallDriverRequest.parse(req.body);
+      const driver = await i().installDriver(key, version, { asNewInstance, label });
       const body: InstalledDriverResponse = { driver };
       reply.code(201).send(body);
     } catch (err) {
@@ -246,7 +246,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "view");
       const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
       if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-      const driver = ctx.sil.getNativeDriver("casambi");
+      const driver = await i().runtimeDriverFor(req.params.id);
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
       reply.send(driver.getCasambiDiagnostics());
     } catch (err) {
@@ -299,7 +299,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "update");
       const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
       if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-      const driver = ctx.sil.getNativeDriver("casambi");
+      const driver = await i().runtimeDriverFor(req.params.id);
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
       const creds = resolveCreds(entry.config as Record<string, unknown>);
@@ -327,7 +327,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "update");
       const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
       if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-      const driver = ctx.sil.getNativeDriver("casambi");
+      const driver = await i().runtimeDriverFor(req.params.id);
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
       const creds = resolveCreds(entry.config as Record<string, unknown>);
@@ -354,22 +354,27 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "view");
       const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
       if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-      const driver = ctx.sil.getNativeDriver("casambi");
+      const driver = await i().runtimeDriverFor(req.params.id);
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
       const groups = await driver.discoverGroups();
       // Which members are still unpaired is what an installer actually needs to decide whether
       // pairing this group would do anything — computed from the SAME already-owned exclusion
       // `discoverWithStatus` applies, never guessed.
-      const { discovered } = await i().discoverWithStatus(["casambi"]);
-      const pairable = new Set(discovered.map((d) => d.backendId));
+      //
+      // § Multi-network Casambi, Stage 4 — scoped to THIS driver instance (`req.params.id`), not
+      // the bare "casambi" protocol, which only ever meant the primary instance. Compared by
+      // parsed unit id (`casambiUnitIdFromBackendId`), never a reconstructed address string, so
+      // this works identically whether this instance's addresses are bare or scoped.
+      const { discovered } = await i().discoverWithStatus([req.params.id]);
+      const pairableUnitIds = new Set(discovered.map((d) => casambiUnitIdFromBackendId(d.backendId)).filter((n): n is number => n !== null));
       reply.send({
         groups: groups.map((g) => ({
           groupId: g.groupId,
           name: g.name,
           unitIds: g.unitIds,
           memberCount: g.unitIds.length,
-          unpairedCount: g.unitIds.filter((u) => pairable.has(`casambi:${u}`)).length,
+          unpairedCount: g.unitIds.filter((u) => pairableUnitIds.has(u)).length,
         })),
       });
     } catch (err) {
@@ -387,7 +392,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "update");
       const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
       if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-      const driver = ctx.sil.getNativeDriver("casambi");
+      const driver = await i().runtimeDriverFor(req.params.id);
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
       const groupId = Number(req.params.groupId);
@@ -396,9 +401,18 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
 
       // Already-commissioned units are excluded by discoverWithStatus itself, so re-pairing a
       // group is safely idempotent: it only ever picks up members not yet in Supreme.
-      const { discovered } = await i().discoverWithStatus(["casambi"]);
-      const members = new Set(group.unitIds.map((u) => `casambi:${u}`));
-      const targets = discovered.filter((d) => members.has(d.backendId));
+      //
+      // § Multi-network Casambi, Stage 4 — scoped to THIS driver instance, matched by parsed
+      // unit id rather than a reconstructed address string — same reasoning as the /groups route
+      // above. Pairing "group 3" on Network 2 can now never accidentally match Network 1's own
+      // group 3 members, since discovery is scoped to `req.params.id` and comparison is by the
+      // unit id each discovered device's OWN (possibly-scoped) backendId actually names.
+      const { discovered } = await i().discoverWithStatus([req.params.id]);
+      const memberUnitIds = new Set(group.unitIds);
+      const targets = discovered.filter((d) => {
+        const unitId = casambiUnitIdFromBackendId(d.backendId);
+        return unitId !== null && memberUnitIds.has(unitId);
+      });
 
       const paired: { backendId: string; name: string }[] = [];
       const failures: { backendId: string; error: string }[] = [];
@@ -449,7 +463,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
       await enforce(ctx, user, "integration", null, "view");
       const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
       if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-      const driver = ctx.sil.getNativeDriver("casambi");
+      const driver = await i().runtimeDriverFor(req.params.id);
       if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
       const monitor = driver.getCasambiTransportMonitor();
       let lan: LanDiagnosticsSnapshot | null = null;
@@ -493,7 +507,7 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
         await enforce(ctx, user, "integration", null, "view");
         const entry = (await i().drivers.registry()).find((e) => e.installedId === req.params.id);
         if (!entry || !entry.protocols.includes("casambi")) throw new SupremeError("not_found", "casambi driver not installed");
-        const driver = ctx.sil.getNativeDriver("casambi");
+        const driver = await i().runtimeDriverFor(req.params.id);
         if (!(driver instanceof CasambiProtocolDriver)) throw new SupremeError("not_found", "casambi driver is not currently running");
 
         const snapshot = driver.getCasambiTransportMonitor();

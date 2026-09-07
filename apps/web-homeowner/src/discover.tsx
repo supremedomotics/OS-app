@@ -30,6 +30,15 @@ type Discovered = {
   network?: { ip?: string; mac?: string; host?: string };
   roomHint?: string | null;
   driverName?: string | null;
+  /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) that discovered this
+   * device. Use this to resolve back to a driver row — `protocol` alone can't, since it's
+   * runtime-scoped ("casambi#<id>") for any instance but a key's first, and would never match
+   * a driver row's bare manifest `protocols` array. */
+  driverId?: string | null;
+  /** § Multi-network Casambi, Stage 3 — this device's originating instance as an installer-
+   * facing label ("Network 1", "Gateway 2", or the deterministic legacy fallback). Null for a
+   * single-instance driver — render nothing, exactly as before Stage 3. */
+  instanceLabel?: string | null;
   capabilityConfig?: Record<string, Record<string, unknown>>;
   /** Extra logical zones this one physical unit exposes (§ Discover Devices enrichment) —
    * a real wire query (Yamaha's getFeatures), never present for a protocol that can't
@@ -49,7 +58,15 @@ const GROUPS_FILTER = "__groups__";
 
 type Room = { id: string; name: string; building: string | null; floor: number; area: string | null };
 type DriverStatus = "pending" | "scanning" | "complete" | "failed" | "not_selected";
-type DriverResult = { protocol: string; driverName: string; status: "complete" | "failed"; count: number; error?: string };
+type DriverResult = {
+  protocol: string;
+  driverName: string;
+  driverId?: string | null;
+  instanceLabel?: string | null;
+  status: "complete" | "failed";
+  count: number;
+  error?: string;
+};
 /** A real, targeted reachability + best-effort zone probe result (§ AVR Intelligent Manual
  * Add) — `zones` is only populated when `reachable`. `detected` is authoritative for Yamaha
  * (a genuine `/system/getFeatures` wire query) but only a best-effort heuristic for AVR
@@ -109,8 +126,22 @@ const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | nul
   mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
 };
 
-/** The extension that drives a given protocol, from registry metadata. */
-function recommend(registry: DriverEntry[], protocol?: string): DriverEntry | undefined {
+/** The extension that drives a discovered device, from registry metadata.
+ *
+ * § Multi-network Casambi, Stage 3 fix — `driverId` (the discovering instance's real
+ * installedId, now carried on every discovered device) is checked FIRST and is exact: no
+ * string matching, so it works identically for a single-instance driver and a scoped one. The
+ * `protocol` fallback stays for backward compatibility with anything that hasn't started
+ * sending `driverId` yet, but it was the SOURCE of a real bug this fix closes — matching
+ * `d.protocols.includes(protocol)` against a driver's bare manifest list (`["casambi"]`) can
+ * never find a match for a runtime-scoped protocol string (`"casambi#<id>"`), so every device
+ * discovered from any Casambi instance but the first silently showed "No matching extension."
+ */
+export function recommend(registry: DriverEntry[], driverId?: string | null, protocol?: string): DriverEntry | undefined {
+  if (driverId) {
+    const byId = registry.find((d) => d.installedId === driverId);
+    if (byId) return byId;
+  }
   if (!protocol) return undefined;
   return registry.find((d) => d.protocols.includes(protocol as never));
 }
@@ -171,8 +202,16 @@ export function DiscoverDevices() {
   // own, not commissionable as one), so it is fetched separately from its own endpoint and
   // rendered as its own kind of card rather than being forced into the protocol-agnostic
   // discovery contract every other driver flows through.
-  const [casambiGroups, setCasambiGroups] = useState<CasambiGroupView[] | null>(null);
-  const [groupsError, setGroupsError] = useState<string | null>(null);
+  //
+  // § Multi-network Casambi, Stage 3 — keyed by driverId, one entry PER selected Casambi
+  // instance, not a single flat list. `casambiDriverId()` used to pick just the FIRST selected
+  // Casambi driver, so scanning with two networks/gateways selected only ever showed the first
+  // one's groups — Network 2's own groups were silently invisible, and pairing one of Network 1's
+  // groups could never be confused with Network 2's only because there was no way to reach
+  // Network 2's groups at all. Each instance now gets its own fetch, its own error, its own
+  // section — never sharing state with a sibling instance.
+  const [casambiGroups, setCasambiGroups] = useState<Map<string, CasambiGroupView[]>>(new Map());
+  const [groupsError, setGroupsError] = useState<Map<string, string>>(new Map());
 
   const loadRooms = () =>
     client
@@ -213,8 +252,8 @@ export function DiscoverDevices() {
     // results from a differently-selected previous scan on screen while the new one runs.
     setFound([]);
     setDriverResults([]);
-    setCasambiGroups(null);
-    setGroupsError(null);
+    setCasambiGroups(new Map());
+    setGroupsError(new Map());
     setSourceFilter("all");
     try {
       const res = await client.discover(undefined, Array.from(selectedIds));
@@ -231,17 +270,31 @@ export function DiscoverDevices() {
   /** Non-blocking: a failure here never fails a scan that otherwise succeeded. But it is NOT
    * silent — an empty or failed group fetch is reported with its real reason (see the section's
    * own empty state), because "no groups" and "groups couldn't be loaded" are different facts and
-   * showing nothing at all reads as "this feature doesn't exist." */
+   * showing nothing at all reads as "this feature doesn't exist."
+   *
+   * § Multi-network Casambi, Stage 3 — one independent fetch per SELECTED Casambi instance, not
+   * just the first. Each instance's result (or error) lands under its own `driverId` key, so
+   * Network 1 failing to load never hides Network 2's groups, and Network 2's pairing action can
+   * never reach Network 1's driver — each `CasambiGroupSection` below is handed exactly one
+   * `driverId` and calls the server with that id alone. */
   async function loadCasambiGroups() {
-    const id = casambiDriverId(registry, selectedIds);
-    if (!id) return;
-    setGroupsError(null);
-    try {
-      setCasambiGroups(await listCasambiGroups(id));
-    } catch (e) {
-      setCasambiGroups([]);
-      setGroupsError(e instanceof Error ? e.message : "Could not load Casambi groups.");
-    }
+    const ids = casambiDriverIds(registry, selectedIds);
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const groups = await listCasambiGroups(id);
+          setCasambiGroups((cur) => new Map(cur).set(id, groups));
+          setGroupsError((cur) => {
+            if (!cur.has(id)) return cur;
+            const next = new Map(cur);
+            next.delete(id);
+            return next;
+          });
+        } catch (e) {
+          setGroupsError((cur) => new Map(cur).set(id, e instanceof Error ? e.message : "Could not load Casambi groups."));
+        }
+      }),
+    );
   }
 
   // Post-scan Source Filter (§ Priority 4): a display filter over the CURRENT result set —
@@ -290,23 +343,36 @@ export function DiscoverDevices() {
       {phase === "results" && (
         <>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", margin: "6px 0 12px", flexWrap: "wrap", gap: 8 }}>
-            <SourceFilterChips counts={sourceCounts} total={found.length} groupCount={casambiGroups?.length ?? 0} active={sourceFilter} onSelect={setSourceFilter} />
+            <SourceFilterChips
+              counts={sourceCounts}
+              total={found.length}
+              groupCount={[...casambiGroups.values()].reduce((n, g) => n + g.length, 0)}
+              active={sourceFilter}
+              onSelect={setSourceFilter}
+            />
             <button onClick={scan}>Rescan</button>
           </div>
-          {showGroups && casambiGroups !== null && casambiDriverId(registry, selectedIds) && (
-            <CasambiGroupSection
-              driverId={casambiDriverId(registry, selectedIds) ?? ""}
-              groups={casambiGroups}
-              loadError={groupsError}
-              onPaired={(backendIds) => {
-                // Paired members are no longer "new finds" — drop them from the device list the
-                // same way pairing one device does, so the two views can never disagree.
-                setFound((f) => f.filter((x) => !backendIds.includes(x.backendId)));
-                void loadCasambiGroups();
-                void loadRooms();
-              }}
-            />
-          )}
+          {/* § Multi-network Casambi, Stage 3 — one section PER selected Casambi instance, never
+              collapsed to "the first one." Each fetches, errors, and pairs independently — see
+              `loadCasambiGroups`'s own doc comment for why this used to silently drop every
+              instance but the first. */}
+          {showGroups &&
+            casambiDriverIds(registry, selectedIds).map((driverId) => (
+              <CasambiGroupSection
+                key={driverId}
+                driverId={driverId}
+                instanceLabel={registry.find((d) => d.installedId === driverId)?.displayLabel ?? null}
+                groups={casambiGroups.get(driverId) ?? []}
+                loadError={groupsError.get(driverId) ?? null}
+                onPaired={(backendIds) => {
+                  // Paired members are no longer "new finds" — drop them from the device list the
+                  // same way pairing one device does, so the two views can never disagree.
+                  setFound((f) => f.filter((x) => !backendIds.includes(x.backendId)));
+                  void loadCasambiGroups();
+                  void loadRooms();
+                }}
+              />
+            ))}
           {showDevices && found.length === 0 && (
             <p className="muted">No new devices found. Ensure devices are powered and on the network, then rescan.</p>
           )}
@@ -316,7 +382,7 @@ export function DiscoverDevices() {
               <FoundDevice
                 key={d.backendId}
                 device={d}
-                driver={recommend(registry, d.protocol)}
+                driver={recommend(registry, d.driverId, d.protocol)}
                 rooms={rooms}
                 onRoomCreated={loadRooms}
                 onPaired={() => setFound((f) => f.filter((x) => x.backendId !== d.backendId))}
@@ -332,11 +398,17 @@ export function DiscoverDevices() {
 
 /** The installed Casambi driver's id, but only when it was actually part of this scan — a group
  * section for a driver the installer deselected would be claiming a result the scan never ran. */
-function casambiDriverId(registry: DriverEntry[], selectedIds: Set<string>): string | null {
-  const entry = discoverableDrivers(registry).find(
-    (d) => d.protocols?.includes("casambi") && d.installedId && selectedIds.has(d.installedId),
-  );
-  return entry?.installedId ?? null;
+/** § Multi-network Casambi, Stage 3 fix — every SELECTED Casambi driver instance, not just the
+ * first. `casambiDriverId()` (singular) used to pick only the first match, so with two Casambi
+ * networks/gateways selected, Network 2's groups were never fetchable at all — not merely
+ * mislabeled, genuinely unreachable through this screen. Order matches `registry`'s own order
+ * (display order, by name/label) purely for a stable UI list; it is never used to infer WHICH
+ * instance is primary or to number anything — that comes only from each entry's own
+ * `displayLabel`, itself computed server-side from real install order. */
+export function casambiDriverIds(registry: DriverEntry[], selectedIds: Set<string>): string[] {
+  return discoverableDrivers(registry)
+    .filter((d) => d.protocols?.includes("casambi") && d.installedId && selectedIds.has(d.installedId))
+    .map((d) => d.installedId as string);
 }
 
 /**
@@ -351,11 +423,16 @@ function casambiDriverId(registry: DriverEntry[], selectedIds: Set<string>): str
  */
 function CasambiGroupSection({
   driverId,
+  instanceLabel,
   groups,
   loadError,
   onPaired,
 }: {
   driverId: string;
+  /** § Multi-network Casambi, Stage 3 — this section's OWN instance, e.g. "Network 1". Shown in
+   * the heading so pairing a group can never be mistaken for touching a sibling instance's
+   * groups — null only for a single-instance install, where there is nothing to disambiguate. */
+  instanceLabel?: string | null;
   groups: CasambiGroupView[];
   /** A real failure from the groups endpoint (e.g. the driver isn't running), surfaced instead of
    * being swallowed — "couldn't load" and "there are none" are different facts. */
@@ -383,7 +460,7 @@ function CasambiGroupSection({
 
   return (
     <div className="disc-groups">
-      <h2 className="section-title">Groups from Casambi</h2>
+      <h2 className="section-title">Groups from Casambi{instanceLabel ? ` · ${instanceLabel}` : ""}</h2>
       <p className="muted" style={{ marginTop: 0 }}>
         Pairing a group adds its fixtures to the room of the same name — matching an existing room,
         or creating it.
@@ -449,7 +526,7 @@ function CasambiGroupSection({
 }
 
 /** Installed, enabled drivers with a real installedId — the only ones selectable for discovery. */
-function discoverableDrivers(registry: DriverEntry[]): DriverEntry[] {
+export function discoverableDrivers(registry: DriverEntry[]): DriverEntry[] {
   return registry.filter((d) => d.installed && d.enabled && d.installedId && d.protocols.length > 0);
 }
 
@@ -521,17 +598,27 @@ function DriverStatusList({
   scanning: boolean;
 }) {
   if (drivers.length === 0) return null;
-  const byProtocol = new Map(results.map((r) => [r.protocol, r]));
+  // § Multi-network Casambi, Stage 3 fix — matched by driverId, not by `d.protocols.includes`.
+  // A driver row's `protocols` field is always the bare manifest list ("casambi"), but a scan
+  // result's `protocol` is runtime-scoped ("casambi#<id>") for any instance but a key's first —
+  // matching those against each other silently found the WRONG result (or none) for every
+  // Casambi instance but the primary, showing a second network/gateway stuck on "Pending" even
+  // after its own scan had genuinely completed.
+  const byDriverId = new Map(results.filter((r) => r.driverId).map((r) => [r.driverId as string, r]));
+  const byProtocol = new Map(results.map((r) => [r.protocol, r])); // fallback for non-instance-scoped drivers
   return (
     <div className="disc-status-list">
       {drivers.map((d) => {
         const id = d.installedId as string;
         const selected = selectedIds.has(id);
-        const result = d.protocols.map((p) => byProtocol.get(p)).find(Boolean);
+        const result = byDriverId.get(id) ?? d.protocols.map((p) => byProtocol.get(p)).find(Boolean);
         const status: DriverStatus = !selected ? "not_selected" : scanning ? "scanning" : result ? result.status : "pending";
         return (
           <div key={id} className={`disc-status-row status-${status}`}>
-            <span className="disc-status-name">{d.name}</span>
+            <span className="disc-status-name">
+              {d.name}
+              {d.displayLabel && <span className="drv-instance"> · {d.displayLabel}</span>}
+            </span>
             <span className="disc-status-value">
               {STATUS_LABEL[status]}
               {status === "complete" && result ? ` · ${result.count} device${result.count === 1 ? "" : "s"}` : ""}
@@ -699,7 +786,14 @@ function FoundDevice({
       <button className="ext-head" onClick={() => setOpen((v) => !v)}>
         <span className="ext-ic">📡</span>
         <span className="ext-meta">
-          <span className="ext-name">{device.suggestedName}</span>
+          <span className="ext-name">
+            {device.suggestedName}
+            {/* § Multi-network Casambi, Stage 3 — every discovered device carries its
+                originating network/gateway right on the card: "Living Room Light [Network 1]".
+                `instanceLabel` is null for a single-instance driver, so this renders nothing
+                extra for the overwhelmingly common case, unchanged from before Stage 3. */}
+            {device.instanceLabel && <span className="ext-instance"> [{device.instanceLabel}]</span>}
+          </span>
           <span className="ext-sub">
             {/* Prefer the installed driver's own user-facing name (tells the installer which
                 extension will handle it); then a real wire-reported manufacturer string

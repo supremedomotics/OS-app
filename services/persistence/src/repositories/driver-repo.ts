@@ -13,6 +13,7 @@ interface DriverRow {
   enabled: boolean;
   status: string;
   config: Record<string, unknown>;
+  label: string | null;
 }
 
 function rowToDriver(r: DriverRow): InstalledDriver {
@@ -27,6 +28,7 @@ function rowToDriver(r: DriverRow): InstalledDriver {
     enabled: r.enabled,
     status: r.status as InstalledDriver["status"],
     config: r.config,
+    ...(r.label ? { label: r.label } : {}),
   };
 }
 
@@ -43,19 +45,32 @@ export class InstalledDriverRepo implements IInstalledDriverStore {
     return rows[0] ? rowToDriver(rows[0]) : null;
   }
   async getByKey(key: string): Promise<InstalledDriver | null> {
-    const { rows } = await this.db.query<DriverRow>("SELECT * FROM installed_drivers WHERE key=$1", [key]);
+    // A key can now hold several instances (§ Multi-network Casambi). Order by install time so
+    // "the driver for this key" is deterministically the FIRST one installed — callers that need
+    // every instance use `listByKey`.
+    const { rows } = await this.db.query<DriverRow>(
+      "SELECT * FROM installed_drivers WHERE key=$1 ORDER BY installed_at, id LIMIT 1",
+      [key],
+    );
     return rows[0] ? rowToDriver(rows[0]) : null;
+  }
+  async listByKey(key: string): Promise<InstalledDriver[]> {
+    const { rows } = await this.db.query<DriverRow>(
+      "SELECT * FROM installed_drivers WHERE key=$1 ORDER BY installed_at, id",
+      [key],
+    );
+    return rows.map(rowToDriver);
   }
   async put(driver: InstalledDriver): Promise<void> {
     await this.db.query(
-      `INSERT INTO installed_drivers (id, home_id, key, version, channel, category, installed_at, enabled, status, config)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      `INSERT INTO installed_drivers (id, home_id, key, version, channel, category, installed_at, enabled, status, config, label)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
        ON CONFLICT (id) DO UPDATE SET
-         version=$4, channel=$5, category=$6, enabled=$8, status=$9, config=$10::jsonb`,
+         version=$4, channel=$5, category=$6, enabled=$8, status=$9, config=$10::jsonb, label=$11`,
       [
         driver.id, driver.homeId, driver.key, driver.version, driver.channel,
         driver.category, driver.installedAt, driver.enabled, driver.status,
-        JSON.stringify(driver.config),
+        JSON.stringify(driver.config), driver.label ?? null,
       ],
     );
   }

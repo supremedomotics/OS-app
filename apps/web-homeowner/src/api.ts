@@ -164,6 +164,21 @@ export interface DriverEntry {
   status: string;
   installedId: string | null;
   config: Record<string, unknown>;
+  /** Installer-facing name for THIS instance when a catalog key is installed more than once
+   * (§ Multi-network Casambi); null on single-instance installs. */
+  label?: string | null;
+  /** Installed instances of this catalog key: 0 not installed, 1 ordinary, >1 multi-network. */
+  instanceCount?: number;
+  /** § Multi-network Casambi, Stage 3 — this instance's 0-based real install-order position;
+   * null for the not-installed placeholder row. Never derive an instance's number from this
+   * array's own position — the registry's display order is sorted by name/label, not install
+   * order (see `driver-manager.ts`'s own doc comment on `instanceIndex`). */
+  instanceIndex?: number | null;
+  /** § Multi-network Casambi, Stage 3 — `label` when set, otherwise a deterministic fallback
+   * ("Network 2", "Gateway 1", …) whenever `instanceCount > 1`. Render THIS everywhere a
+   * driver's instance identity is shown — never raw `label` — so a pre-existing unlabeled
+   * instance is never left indistinguishable from a labeled sibling. */
+  displayLabel?: string | null;
 }
 
 export async function fetchDriverRegistry(): Promise<DriverEntry[]> {
@@ -272,9 +287,14 @@ export async function fetchSystemLogs(limit = 300): Promise<SystemLogEntry[]> {
 export async function connectDriver(id: string, connect: boolean): Promise<void> {
   await authed(`/v1/drivers/${id}/${connect ? "connect" : "disconnect"}`, { method: "POST", body: "{}" });
 }
-export async function installDriverByKey(key: string): Promise<void> {
-  const res = await authed("/v1/drivers/install", { method: "POST", body: JSON.stringify({ key }) });
+export async function installDriverByKey(
+  key: string,
+  opts: { asNewInstance?: boolean; label?: string } = {},
+): Promise<{ id: string; label: string | null }> {
+  const res = await authed("/v1/drivers/install", { method: "POST", body: JSON.stringify({ key, ...opts }) });
   if (!res.ok) throw new Error(await errorMessage(res, "Install failed."));
+  const { driver } = (await res.json()) as { driver: { id: string; label?: string | null } };
+  return { id: driver.id, label: driver.label ?? null };
 }
 export async function setDriverEnabled(id: string, enabled: boolean): Promise<void> {
   await authed(`/v1/drivers/${id}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) });

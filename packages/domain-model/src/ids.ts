@@ -76,10 +76,27 @@ export type IdKind = keyof typeof PREFIXES;
 
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32
 
+/** Per-process monotonic state for {@link newId} — see that function's doc comment for why this
+ * exists. Keyed by nothing (one clock for every id kind, matching the ULID spec's own monotonic
+ * factory, which shares one counter across all ids from one generator instance). */
+let lastTs = -1;
+let lastRand: number[] | null = null;
+
 /**
- * Generate a prefixed, ULID-style identifier. Monotonic-ish: the leading 48 bits
- * encode the timestamp so IDs sort roughly by creation time, which is convenient
- * for cursor pagination and time-ordered audit logs.
+ * Generate a prefixed, ULID-style identifier. The leading 48 bits encode the timestamp so IDs
+ * sort roughly by creation time — convenient for cursor pagination and time-ordered audit logs,
+ * and load-bearing for `DriverManager`'s multi-instance ordering (§ Multi-network Casambi,
+ * Stage 2a/2b), which determines which installed instance is "primary" by earliest creation.
+ *
+ * Genuinely monotonic within the SAME millisecond, not merely "sorts roughly right": two ids
+ * minted in the same `now` tick within this process increment the random suffix by 1 instead of
+ * drawing fresh randomness, so `id2 > id1` is guaranteed whenever `id2` was minted after `id1` —
+ * never a coin flip on their independently-random suffixes. Found by Stage 2b's own review: a
+ * driver-instance ordering test failed intermittently because two instances created back-to-back
+ * in a fast test legitimately shared one millisecond, and plain per-call randomness gives no
+ * guarantee about their relative order in that case. Monotonicity resets on the next millisecond
+ * (`now` advances), and is per-process only — this hub is a single process, so that's sufficient;
+ * it makes no claim across machines or restarts, which no ULID scheme does.
  */
 export function newId(kind: IdKind, now: number = Date.now()): string {
   let ts = now;
@@ -88,9 +105,21 @@ export function newId(kind: IdKind, now: number = Date.now()): string {
     timeChars.unshift(ULID_ALPHABET[ts % 32]!);
     ts = Math.floor(ts / 32);
   }
-  let rand = "";
-  for (let i = 0; i < 16; i++) {
-    rand += ULID_ALPHABET[Math.floor(Math.random() * 32)];
+  let randDigits: number[];
+  if (now === lastTs && lastRand) {
+    randDigits = [...lastRand];
+    for (let i = randDigits.length - 1; i >= 0; i--) {
+      randDigits[i] = (randDigits[i]! + 1) % 32;
+      if (randDigits[i] !== 0) break; // no carry needed
+      // carried past 31 -> continues into the next (more significant) digit; on the vanishingly
+      // unlikely case of overflowing all 16 digits within one millisecond, this wraps to zero
+      // rather than throwing — still far more ids than one process mints in a millisecond.
+    }
+  } else {
+    randDigits = Array.from({ length: 16 }, () => Math.floor(Math.random() * 32));
   }
+  lastTs = now;
+  lastRand = randDigits;
+  const rand = randDigits.map((d) => ULID_ALPHABET[d]).join("");
   return `${PREFIXES[kind]}_${timeChars.join("")}${rand}`;
 }

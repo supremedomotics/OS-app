@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { localCommandToUdpPacket } from "./local-command-mapper.js";
-import { CASAMBI_TARGET_TYPE, encodeCasambiPacket, type CasambiPacket } from "./local-transport/udp-codec.js";
+import { CASAMBI_TARGET_TYPE, encodeCasambiPacket } from "./local-transport/udp-codec.js";
 
 describe("localCommandToUdpPacket", () => {
   it("onoff 'on' targets the device with level 255, always emitting the explicit Duration bytes", () => {
@@ -70,33 +70,54 @@ describe("localCommandToUdpPacket", () => {
   });
 
   describe("position (§ live-confirmed against a real Casambi curtain motor)", () => {
-    // Open/Close are MOMENTARY on/off elements (index 1 / 0). The app sends press then release,
-    // and a lone press only jogs the motor (live-confirmed: it parked the curtain at 0.4%).
-    const seq = (action: "open" | "close") =>
-      localCommandToUdpPacket(0, 5, { capability: "position", action }, null) as CasambiPacket[];
+    // Position is the ordinary LEVEL channel (0x20), not a custom element. Proven on the wire:
+    // `c.72.6.20.bf.0.0.1.2d` — level 191 — drove a real curtain motor to 75%.
+    const args = (command: Parameters<typeof localCommandToUdpPacket>[2]) =>
+      localCommandToUdpPacket(12, 45, command, null)!;
 
-    it("open presses element 1 and then releases it", () => {
-      const packets = seq("open");
-      expect(packets.map((p) => p.opcode)).toEqual([0x3f, 0x3f]);
-      expect(packets[0]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 1]); // press
-      expect(packets[1]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 1, 0]); // release
+    it("set scales 0-100 to a 0-255 level on opcode 0x20, targeting the device", () => {
+      const packet = args({ capability: "position", action: "set", position: 75 });
+      expect(packet.opcode).toBe(0x20);
+      expect(packet.args).toEqual([191, 0, 0, CASAMBI_TARGET_TYPE.device, 45]);
+      expect(encodeCasambiPacket(packet, "hex-dot")).toBe("c.72.6.20.bf.0.0.1.2d\r\n"); // the live-confirmed frame
     });
 
-    it("close presses element 0 and then releases it", () => {
-      const packets = seq("close");
-      expect(packets[0]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 0, 1]);
-      expect(packets[1]!.args).toEqual([CASAMBI_TARGET_TYPE.device, 5, 0, 0, 0, 0]);
+    it("open is full level, close is zero", () => {
+      expect(args({ capability: "position", action: "open" }).args[0]).toBe(255);
+      expect(args({ capability: "position", action: "close" }).args[0]).toBe(0);
     });
 
-    it("never writes a position value to an on/off element — 0xFF/0x80 are out of range and the motor ignores them", () => {
-      for (const action of ["open", "close"] as const) {
-        for (const p of seq(action)) expect([0, 1]).toContain(p.args[p.args.length - 1]);
+    it("clamps an out-of-range position instead of emitting a level outside 0-255", () => {
+      expect(args({ capability: "position", action: "set", position: 140 }).args[0]).toBe(255);
+      expect(args({ capability: "position", action: "set", position: -20 }).args[0]).toBe(0);
+    });
+
+    it("always carries the explicit Duration bytes, so the target is never read as a fade", () => {
+      for (const c of [
+        { capability: "position", action: "open" },
+        { capability: "position", action: "close" },
+        { capability: "position", action: "set", position: 50 },
+      ] as const) {
+        expect(args(c).args.slice(-2)).toEqual([CASAMBI_TARGET_TYPE.device, 45]);
       }
     });
 
-    it("set and stop stay unmapped — the slider element index is not observable on the wire", () => {
-      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "set", position: 50 }, null)).toBeNull();
-      expect(localCommandToUdpPacket(0, 5, { capability: "position", action: "stop" }, null)).toBeNull();
+    it("stop re-commands the position the fixture is currently at, halting travel", () => {
+      const packet = localCommandToUdpPacket(12, 45, { capability: "position", action: "stop" }, {
+        kind: "position",
+        position: 62,
+        moving: true,
+      })!;
+      expect(packet.opcode).toBe(0x20);
+      expect(packet.args[0]).toBe(158); // round(62/100*255)
+      expect(packet.args.slice(-2)).toEqual([CASAMBI_TARGET_TYPE.device, 45]);
+    });
+
+    it("stop with no observed position stays an honest error, never a guess at where the curtain is", () => {
+      expect(localCommandToUdpPacket(12, 45, { capability: "position", action: "stop" }, null)).toBeNull();
+      expect(
+        localCommandToUdpPacket(12, 45, { capability: "position", action: "stop" }, { kind: "onoff", on: true }),
+      ).toBeNull();
     });
   });
 

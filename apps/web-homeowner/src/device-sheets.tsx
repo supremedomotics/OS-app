@@ -118,9 +118,9 @@ function CoverSheet({ device }: { device: Device }) {
     <>
       <Title name={device.name} status={`${Math.round(pos)}% open`} />
       <div className="cover-ctl">
-        <button onClick={() => act("open")}>↑</button>
-        <button onClick={() => act("stop")}>↕</button>
-        <button onClick={() => act("close")}>↓</button>
+        <button aria-label="Open" onClick={() => act("open")}>↑</button>
+        <button aria-label="Stop" onClick={() => act("stop")}>↕</button>
+        <button aria-label="Close" onClick={() => act("close")}>↓</button>
       </div>
       <input className="cover-slider" type="range" min={0} max={100} value={Math.round(pos)} onChange={(e) => set(Number(e.target.value))} />
     </>

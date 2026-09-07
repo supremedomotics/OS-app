@@ -3,7 +3,6 @@ import {
   CASAMBI_TARGET_TYPE,
   encodeSetColorHueSat,
   encodeSetColorTemperature,
-  encodeSetTargetElements,
   encodeSetTargetLevel,
   type CasambiPacket,
 } from "./local-transport/udp-codec.js";
@@ -16,10 +15,10 @@ import {
  * Cloud's shape is a JSON control-value object, Local's is a byte-oriented wire packet — forcing
  * either transport through the other's intermediate representation would buy no real reuse.
  *
- * `position` open/close ARE mapped (§ live-confirmed against a real curtain motor — see the case
- * itself); setting a specific position is still deliberately unmapped, because the element index
- * needed to write the slider is not observable from anything the gateway reports. Returning `null`
- * surfaces as the driver's existing "unsupported command" error rather than a fabricated mapping.
+ * Every `position` action is mapped (§ live-confirmed against a real curtain motor — see the
+ * case itself); `stop` additionally needs a previously observed position, and without one it
+ * returns `null`, which surfaces as the driver's existing "unsupported command" error rather
+ * than a fabricated mapping.
  */
 export function localCommandToUdpPacket(
   netId: number,
@@ -27,7 +26,7 @@ export function localCommandToUdpPacket(
   command: CapabilityCommand,
   prev: CapabilityState | null,
   fadeMs?: number,
-): CasambiPacket | CasambiPacket[] | null {
+): CasambiPacket | null {
   switch (command.capability) {
     // § live-confirmed fix — `fadeMs ?? 0`, never a bare `fadeMs`, on every 0x20 call below.
     // 0x20's Duration field is *optional* per the doc (omit it and the packet length drops from
@@ -68,31 +67,35 @@ export function localCommandToUdpPacket(
       return null;
     }
     case "position": {
-      // § live-confirmed — a real Casambi curtain motor exposes its Open/Close as custom on/off
-      // ELEMENTS, captured from the gateway console while driving it from the Casambi app:
-      //   close pressed  → `4b.2d.90.00.01.01`   (long-form type 0x90 = on/off, INDEX 0, value 1)
-      //   close released → `4b.2d.90.00.00`      (…INDEX 0, LEN 0)
-      //   open  pressed  → `4b.2d.90.01.01.01`   (…INDEX 1)
-      // so element 0 is Close and element 1 is Open, written with 0x3F SetTargetElements
-      // ([Index, Value] pairs, § System Manual 6.38 §5.12.2.2.18).
+      // § live-confirmed on a real Casambi curtain motor — position is the ordinary LEVEL
+      // channel (0x20 SetTargetLevel), exactly like a dimmable luminaire, NOT a custom element.
+      // Proven on the wire: `c.72.6.20.bf.0.0.1.2d` (level 191 = 75%) drove the curtain to 75%.
       //
-      // Two things this got wrong before, both live-confirmed on the wire:
-      //  1. The value is a BOOLEAN 1/0, not a position. Writing 0xFF (open) and 0x80 (50%) to an
-      //     on/off element is out of range, so the gateway forwarded them and the motor simply
-      //     ignored them — "open" and the slider did nothing at all.
-      //  2. They are MOMENTARY buttons. The app always sends press THEN release, and a press on
-      //     its own only jogs the motor — a lone `value 1` parked the curtain at 0.4%. So each
-      //     command is a two-packet sequence, which `LocalCommandEngine` sends in order.
-      const index = command.action === "open" ? 1 : command.action === "close" ? 0 : null;
-      // "set" (a specific position) and "stop" stay unmapped. The position slider is reported in
-      // SHORT form (`0f.<lo>.<hi>`), which carries no element index, and the Casambi app writes
-      // it over BLE — so the gateway never observes an index we could copy. Guessing one has
-      // already cost two deploy cycles here; it needs a real probe, not another inference.
-      if (index === null) return null;
-      return [
-        encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index, value: 1 }], fadeMs ?? 0),
-        encodeSetTargetElements(netId, CASAMBI_TARGET_TYPE.device, unitId, [{ index, value: 0 }], fadeMs ?? 0),
-      ];
+      // This supersedes two earlier element-based attempts, both disproved on real hardware:
+      // writing 0x3F element 1 only jogged the motor to 0.4%, and writing a scaled position to an
+      // on/off element was silently ignored (out of range). The motor's elements 0/1 are its
+      // Close/Open buttons — a secondary control surface, not where the position lives.
+      // "stop" halts travel by re-commanding the position the fixture is CURRENTLY at, read from
+      // the live 0x4B type-15 slider feedback. There is no documented halt opcode — 0x20 only ever
+      // commands an absolute target — but re-targeting the present position is the same absolute
+      // command the motor is already honouring, so it has no new failure mode. If no position has
+      // been observed yet there is nothing honest to send, so it stays an "unsupported command"
+      // error rather than a guess at where the curtain is.
+      const pct =
+        command.action === "open"
+          ? 100
+          : command.action === "close"
+            ? 0
+            : command.action === "stop"
+              ? prev?.kind === "position" && typeof prev.position === "number"
+                ? prev.position
+                : null
+              : typeof command.position === "number"
+                ? command.position
+                : null;
+      if (pct === null) return null;
+      const clamped = Math.min(100, Math.max(0, pct));
+      return encodeSetTargetLevel(netId, CASAMBI_TARGET_TYPE.device, unitId, Math.round((clamped / 100) * 255), fadeMs ?? 0);
     }
     default:
       return null;

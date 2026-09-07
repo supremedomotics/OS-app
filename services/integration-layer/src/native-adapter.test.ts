@@ -11,8 +11,8 @@ import { bindingKey, type INativeProtocolDriver, type ProtocolBinding } from "./
 
 /** A minimal fake protocol driver that records writes and can push bus state up. */
 class FakeDriver implements INativeProtocolDriver {
-  readonly protocol = "fake";
   connected = false;
+  constructor(readonly protocol: string = "fake") {}
   readonly writes: Array<{ deviceId: DeviceId; command: CapabilityCommand }> = [];
   readonly unbindCalls: DeviceId[] = [];
   private readonly bound = new Set<string>();
@@ -301,5 +301,92 @@ describe("runtime driver registration (manifest↔runtime bridge)", () => {
     expect(d1.isConnected()).toBe(false); // replaced → disconnected
     expect(d2.isConnected()).toBe(true);
     expect(adapter.registeredProtocols()).toEqual(["fake"]);
+  });
+
+  // § Multi-network Casambi — the bug that motivated a per-instance runtime protocol string
+  // (gateway's `withRuntimeProtocol`): the adapter's own `registerDriver` doc comment says a
+  // driver "replace[s] any existing instance for this protocol", one live instance per string.
+  // Confirms both halves: same string still replaces (the test above), and a genuinely DIFFERENT
+  // string — what a second Casambi network/gateway now gets — coexists instead.
+  it("does NOT replace a driver registered under a DIFFERENT protocol string — two instances of the same catalog key can run at once", async () => {
+    const adapter = new SupremeNativeAdapter();
+    await adapter.connect();
+    const primary = new FakeDriver("casambi");
+    const secondary = new FakeDriver("casambi#drv_network2");
+    await adapter.registerDriver(primary);
+    await adapter.registerDriver(secondary);
+
+    expect(primary.isConnected()).toBe(true); // NOT evicted by the second registration
+    expect(secondary.isConnected()).toBe(true);
+    expect(adapter.registeredProtocols().sort()).toEqual(["casambi", "casambi#drv_network2"]);
+    expect(adapter.protocolStatus().sort((a, b) => a.protocol.localeCompare(b.protocol))).toEqual([
+      { protocol: "casambi", connected: true, error: null },
+      { protocol: "casambi#drv_network2", connected: true, error: null },
+    ]);
+
+    // Each instance's own state and commands stay independent — no cross-talk between networks.
+    const devA = "device-net1" as DeviceId;
+    const devB = "device-net2" as DeviceId;
+    primary.pushState(devA, "onoff", { kind: "onoff", on: true });
+    secondary.pushState(devB, "onoff", { kind: "onoff", on: false });
+    expect(primary.getState(devB, "onoff")).toBeNull();
+    expect(secondary.getState(devA, "onoff")).toBeNull();
+
+    // Disconnecting one instance leaves the other running — the actual behavior an installer
+    // uninstalling one Casambi network must see for the other to stay usable.
+    await adapter.unregisterProtocol("casambi#drv_network2");
+    expect(secondary.isConnected()).toBe(false);
+    expect(primary.isConnected()).toBe(true);
+    expect(adapter.registeredProtocols()).toEqual(["casambi"]);
+  });
+
+  // § Multi-network Casambi, Stage 3 — the FULL chain the review asked to be careful about:
+  // driver instance -> discovery -> discovered device -> binding -> command routing. Not just
+  // "two drivers can be registered" (the test above) but "a device discovered from Network 1
+  // can be bound and commanded, and it is IMPOSSIBLE for that command to reach Network 2's
+  // driver" — using the SAME `discoverWithStatus`/`bind`/`command` path the real gateway route
+  // handlers call, with two instances that report an IDENTICAL unit id (exactly the real
+  // Casambi scenario: "unit 45" exists independently on both networks).
+  it("a device discovered from one instance can be bound and commanded WITHOUT ever reaching a sibling instance — identical unit ids included", async () => {
+    const adapter = new SupremeNativeAdapter();
+    await adapter.connect();
+    const network1 = new FakeDriver("casambi");
+    const network2 = new FakeDriver("casambi#drv_network2");
+    await adapter.registerDriver(network1);
+    await adapter.registerDriver(network2);
+
+    // Both instances report a device with the SAME backendId ("fake.1") — real Casambi hardware
+    // addressing has no network-scoping today (Stage 4's job), so this is the actual case that
+    // matters, not a contrived one.
+    const { devices } = await adapter.discoverWithStatus();
+    const fromNetwork1 = devices.find((d) => d.raw?.protocol === "casambi")!;
+    const fromNetwork2 = devices.find((d) => d.raw?.protocol === "casambi#drv_network2")!;
+    expect(fromNetwork1).toBeTruthy();
+    expect(fromNetwork2).toBeTruthy();
+    expect(fromNetwork1.backendId).toBe(fromNetwork2.backendId); // identical unit id, by design
+
+    // Commission each as its OWN Supreme device, bound through its OWN discovered protocol —
+    // exactly what `bindProtocol()`/`commissionDevice()` do with `DiscoveredDeviceView.protocol`.
+    const device1 = "device-from-network1" as DeviceId;
+    const device2 = "device-from-network2" as DeviceId;
+    await adapter.bind({ deviceId: device1, capability: "onoff", address: fromNetwork1.backendId }, fromNetwork1.raw!.protocol as string);
+    await adapter.bind({ deviceId: device2, capability: "onoff", address: fromNetwork2.backendId }, fromNetwork2.raw!.protocol as string);
+
+    await adapter.command(device1, { capability: "onoff", action: "on" });
+    await adapter.command(device2, { capability: "onoff", action: "off" });
+
+    // Network 1's command reached ONLY network1's driver.
+    expect(network1.writes).toHaveLength(1);
+    expect(network1.writes[0]).toMatchObject({ deviceId: device1, command: { action: "on" } });
+    // Network 2's command reached ONLY network2's driver — never network1's, despite the
+    // identical backendId both devices share.
+    expect(network2.writes).toHaveLength(1);
+    expect(network2.writes[0]).toMatchObject({ deviceId: device2, command: { action: "off" } });
+
+    // And each driver only MANAGES its own device — network1 has no idea device2 exists.
+    expect(network1.manages(device1)).toBe(true);
+    expect(network1.manages(device2)).toBe(false);
+    expect(network2.manages(device2)).toBe(true);
+    expect(network2.manages(device1)).toBe(false);
   });
 });

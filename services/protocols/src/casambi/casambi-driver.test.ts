@@ -313,29 +313,33 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await expect(driver.command(dev, { capability: "onoff", action: "on" })).rejects.toThrow(/not connected/);
   });
 
-  it("command() sends a real element packet for a curtain open/close (§ live-confirmed)", async () => {
+  it("command() drives a curtain through the level channel, not custom elements (§ live-confirmed)", async () => {
     const { socket, driver } = makeLocalDriver();
     const dev = "local-dev-6" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
     await driver.connect();
     socket.sent.length = 0;
     await driver.command(dev, { capability: "position", action: "open" });
-    // 0x3F SetTargetElements: TargetType 1, TargetID 6, duration 0, then [Index=1, Value=0xFE]
-    // - element 1 is the position slider; "open" is full travel, capped at 254 because
-    // 255 is Casambi's reserved "no change" value and was live-confirmed to be discarded.
+    await driver.command(dev, { capability: "position", action: "close" });
+    await driver.command(dev, { capability: "position", action: "set", position: 75 });
+    // 0x20 SetTargetLevel, exactly as for a dimmable luminaire: Level, Duration lo/hi,
+    // Target_Type 1 (device), Target_ID. Live-confirmed on a real curtain motor — level 191
+    // (0xbf) drove it to 75%.
     expect(socket.sent).toEqual([
-      "0.72.7.3f.1.6.0.0.1.1\r\n", // press element 1 (Open)
-      "0.72.7.3f.1.6.0.0.1.0\r\n", // release - a lone press only jogs the motor
+      "0.72.6.20.ff.0.0.1.6\r\n", // open  = full level
+      "0.72.6.20.0.0.0.1.6\r\n", // close = zero level
+      "0.72.6.20.bf.0.0.1.6\r\n", // 75%   = 191
     ]);
     await driver.disconnect();
   });
 
-  it("command() still refuses a position action with no observable wire mapping, never fabricating one", async () => {
+  it("command() refuses stop until a real position has been observed, never guessing one", async () => {
     const { driver } = makeLocalDriver();
     const dev = "local-dev-6" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "position", address: "casambi:6" });
     await driver.connect();
-    // open/close/set all drive the slider element; "stop" has no documented element at all.
+    // "stop" halts by re-commanding the CURRENT position, so with no 0x4B reading yet there
+    // is nothing honest to send — an error, never a guess at where the curtain is.
     await expect(driver.command(dev, { capability: "position", action: "stop" })).rejects.toThrow(/unsupported command/);
     await driver.disconnect();
   });

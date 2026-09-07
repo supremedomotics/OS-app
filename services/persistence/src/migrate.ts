@@ -34,6 +34,7 @@ const MIGRATIONS = [
   "0024_scene_import.sql",
   "0025_device_provider.sql",
   "0026_username.sql",
+  "0027_driver_instances.sql",
 ] as const;
 
 /**

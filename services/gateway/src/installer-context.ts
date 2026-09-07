@@ -32,11 +32,19 @@ import {
   type IInstalledDriverStore,
   type DriverSecretCrypto,
   type ConfigFallbacks,
+  type DriverRegistryEntry,
 } from "@supreme/drivers";
 import { CallbackProvider, DeveloperProvider, LicenseService, makeGrant, type LicenseTier, type ProviderGrant } from "@supreme/license-service";
 import { subjects, type IEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient, LocalDirectUdpTransport } from "@supreme/lan";
-import { buildNativeDriver, hasNativeFactory, resolveCasambiCloudCredentials, type NativeDriverFactoryContext } from "./native-driver-factory.js";
+import {
+  buildNativeDriver,
+  hasNativeFactory,
+  resolveCasambiCloudCredentials,
+  withCasambiInstanceAddressing,
+  withRuntimeProtocol,
+  type NativeDriverFactoryContext,
+} from "./native-driver-factory.js";
 import {
   knxSearch,
   SupremeKnxDriver,
@@ -554,7 +562,10 @@ export class InstallerServices {
     // every production hub. A catalog-installed entry (Extension Center flow) still wins
     // when present; an env-configured driver for the same protocol is the fallback,
     // identified the SAME `env:${protocol}` key runDriverLifecycle already uses.
-    const ownerEntry = (await this.drivers.registry()).find((e) => e.protocols.includes(binding.protocol) && e.installed);
+    // § Multi-network Casambi — `binding.protocol` may now be an instance-scoped runtime
+    // string ("casambi#<id>"), which a bare `e.protocols.includes(...)` match can no longer find
+    // for any instance but the first.
+    const ownerEntry = await this.entryForRuntimeProtocol(binding.protocol);
     const ownerId = (ownerEntry?.installedId as DriverId | null | undefined)
       ?? (this.d.envDrivers?.has(binding.protocol) ? (`env:${binding.protocol}` as DriverId) : null);
     if (ownerId) await this.d.home.setDriverOwner(binding.deviceId, ownerId);
@@ -1569,7 +1580,7 @@ export class InstallerServices {
    * connectDriver()/disconnectDriver() already use. A protocol with no matching installed
    * entry (e.g. mid-uninstall) is a silent no-op — there's no driverId left to address. */
   private async publishDriverStateForProtocol(protocol: string, state: "connecting" | "connected" | "disconnecting" | "disconnected" | "error", error?: string | null): Promise<void> {
-    const entry = (await this.drivers.registry()).find((e) => e.protocols.includes(protocol));
+    const entry = await this.entryForRuntimeProtocol(protocol);
     if (!entry?.installedId) return;
     await this.publishDriverState(entry.installedId, state, error);
   }
@@ -1657,6 +1668,89 @@ export class InstallerServices {
   }
 
   /**
+   * § Multi-network Casambi — the runtime identity of ONE installed driver instance's protocol,
+   * as actually registered with the SIL. Bare (`"casambi"`) for a key's FIRST instance (install
+   * order, matching `IInstalledDriverStore`'s own deterministic `getByKey`/`listByKey` ordering)
+   * — so a single-instance install, still the default case, is completely unaffected and needs
+   * no migration. Every instance after the first gets `"<protocol>#<installedId>"`, so it can
+   * register, connect, own devices, and tear down independently instead of silently replacing
+   * the first instance the moment it registers (see {@link withRuntimeProtocol}'s doc comment).
+   */
+  /** True single-instance fast path, callable WITHOUT `await` — unlike a fast branch inside an
+   * `async` method, this adds no microtask tick at all when it applies (awaiting any async
+   * function call, even one whose body never itself awaits, always defers by one tick per the JS
+   * spec). That distinction is not cosmetic: `reconcileManifestDrivers` runs in the background off
+   * `AppContext.create`, and one extra tick in the ubiquitous single-instance case measurably
+   * shifted real event ordering (driver-realtime-state.e2e's connect/disconnect sequencing). Every
+   * call site checks this FIRST and only falls through to the `await`ing {@link runtimeProtocolFor}
+   * when it returns `undefined` — i.e. only for an actual multi-instance key.
+   */
+  private runtimeProtocolIfSingleInstance(entry: { installedId: string | null; instanceCount?: number }, protocol: string): string | undefined {
+    if (!entry.installedId) return protocol;
+    if (entry.instanceCount === undefined || entry.instanceCount <= 1) return protocol;
+    return undefined;
+  }
+
+  /** § Multi-network Casambi — the runtime identity of ONE installed driver instance's protocol,
+   * as actually registered with the SIL. Bare (`"casambi"`) for a key's FIRST instance (install
+   * order, matching `IInstalledDriverStore`'s own deterministic `getByKey`/`listByKey` ordering)
+   * — so a single-instance install, still the default case, is completely unaffected and needs
+   * no migration. Every instance after the first gets `"<protocol>#<installedId>"`, so it can
+   * register, connect, own devices, and tear down independently instead of silently replacing
+   * the first instance the moment it registers (see {@link withRuntimeProtocol}'s doc comment).
+   *
+   * Prefer `runtimeProtocolIfSingleInstance(entry, protocol) ?? await this.runtimeProtocolFor(entry, protocol)`
+   * over calling this unconditionally — see that method's doc comment for why.
+   */
+  private async runtimeProtocolFor(entry: { key: string; installedId: string | null; instanceCount?: number }, protocol: string): Promise<string> {
+    const fast = this.runtimeProtocolIfSingleInstance(entry, protocol);
+    if (fast !== undefined) return fast;
+    const instances = await this.drivers.listInstances(entry.key);
+    const index = instances.findIndex((d) => d.id === entry.installedId);
+    return index <= 0 ? protocol : `${protocol}#${entry.installedId}`;
+  }
+
+
+  /** The registry entry that OWNS a runtime protocol string — the read-side mirror of
+   * {@link runtimeProtocolFor}. Every lookup that used to do
+   * `registry().find(e => e.protocols.includes(protocol))` goes through this instead, since that
+   * bare match can no longer find a non-primary instance once its protocol is scoped. */
+  private async entryForRuntimeProtocol(protocol: string, reg?: DriverRegistryEntry[]): Promise<DriverRegistryEntry | undefined> {
+    const registry = reg ?? (await this.drivers.registry());
+    for (const e of registry) {
+      if (!e.installed) continue;
+      for (const p of e.protocols) {
+        const fast = this.runtimeProtocolIfSingleInstance(e, p);
+        const runtime = fast !== undefined ? fast : await this.runtimeProtocolFor(e, p);
+        if (runtime === protocol) return e;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * § Multi-network Casambi, Stage 4 — the LIVE driver instance for a specific installed driver
+   * id, resolved through its own runtime-scoped protocol string. Every `/v1/drivers/:id/casambi/*`
+   * route used to call `ctx.sil.getNativeDriver("casambi")` with that literal bare string —
+   * correct for a single instance, but for a second Casambi network/gateway it silently returned
+   * the PRIMARY instance's driver regardless of which `:id` the URL named: diagnostics, group
+   * discovery/pairing, and Cloud name sync for Network 2 were all silently operating on Network
+   * 1's live connection. Every one of those routes now resolves through this instead.
+   */
+  async runtimeDriverFor(installedId: string): Promise<INativeProtocolDriver | null> {
+    const entry = (await this.drivers.registry()).find((e) => e.installedId === installedId);
+    if (!entry) return null;
+    for (const p of entry.protocols) {
+      if (!hasNativeFactory(p)) continue;
+      const fast = this.runtimeProtocolIfSingleInstance(entry, p);
+      const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(entry, p);
+      const driver = this.d.sil.getNativeDriver(runtimeProtocol);
+      if (driver) return driver;
+    }
+    return null;
+  }
+
+  /**
    * Reconcile installed+enabled+configured manifest drivers with their runtime native
    * protocol stacks: start what should run and isn't, stop what shouldn't. Runs on
    * boot AND after every install/enable/config-change (§ Driver Lifecycle — same
@@ -1664,22 +1758,42 @@ export class InstallerServices {
    */
   private async reconcileManifestDrivers(trigger: DriverLifecycleTrigger): Promise<void> {
     const reg = await this.drivers.registry();
-    const desired = new Map<string, { config: Record<string, unknown>; key: string }>();
+    // § Multi-network Casambi — desired/runtime bookkeeping is now keyed by the RUNTIME protocol
+    // (scoped for any instance past the first), not the bare manifest protocol — two instances of
+    // the same key would otherwise collide on one map entry, and only the last one processed
+    // would ever actually run (silently, with no error — exactly the bug this stage exists to
+    // fix). `buildProtocol` still receives the bare name (factory dispatch is keyed by it), and
+    // the built driver is wrapped so it REPORTS the runtime protocol from here on.
+    const desired = new Map<string, { config: Record<string, unknown>; key: string; buildProtocol: string; installedId: string | null }>();
     for (const d of reg) {
       if (!d.installed || !d.enabled) continue;
       if (!isConfigComplete(d.configSchema, d.config, this.fallbacksFor(d.protocols)).complete) continue;
-      for (const p of d.protocols) if (hasNativeFactory(p)) desired.set(p, { config: d.config, key: d.key });
+      for (const p of d.protocols) {
+        if (!hasNativeFactory(p)) continue;
+        const fast = this.runtimeProtocolIfSingleInstance(d, p);
+        const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(d, p);
+        desired.set(runtimeProtocol, { config: d.config, key: d.key, buildProtocol: p, installedId: d.installedId });
+      }
     }
-    for (const [protocol, { config, key }] of desired) {
-      this.desiredProtocols.set(protocol, { key, config });
-      const driver = buildNativeDriver(protocol, config, this.nativeDriverContext(key));
-      await this.runDriverLifecycle(protocol, driver, key, trigger);
+    for (const [runtimeProtocol, { config, key, buildProtocol, installedId }] of desired) {
+      this.desiredProtocols.set(runtimeProtocol, { key, config });
+      const built = buildNativeDriver(buildProtocol, config, this.nativeDriverContext(key));
+      // § Multi-network Casambi, Stage 4 — a non-primary Casambi instance ALSO gets its
+      // addresses scoped by its own installed id, not just its protocol string. `null` for the
+      // primary instance (runtimeProtocol === the bare buildProtocol) leaves it fully unwrapped.
+      const driver = built
+        ? withCasambiInstanceAddressing(
+            withRuntimeProtocol(built, runtimeProtocol),
+            buildProtocol === "casambi" && runtimeProtocol !== buildProtocol ? installedId : null,
+          )
+        : null;
+      await this.runDriverLifecycle(runtimeProtocol, driver, key, trigger);
     }
-    for (const [protocol, { key }] of [...this.desiredProtocols]) {
-      if (protocol.startsWith("env:")) continue;
-      if (!desired.has(protocol) && !(this.d.envDrivers?.has(protocol))) {
-        this.desiredProtocols.delete(protocol);
-        await this.runDriverLifecycle(protocol, null, key, "config_change");
+    for (const [runtimeProtocol, { key }] of [...this.desiredProtocols]) {
+      if (runtimeProtocol.startsWith("env:")) continue;
+      if (!desired.has(runtimeProtocol) && !(this.d.envDrivers?.has(runtimeProtocol))) {
+        this.desiredProtocols.delete(runtimeProtocol);
+        await this.runDriverLifecycle(runtimeProtocol, null, key, "config_change");
       }
     }
   }
@@ -1688,15 +1802,30 @@ export class InstallerServices {
    * config state — Extension Center install/enable/disable/config-edit all call this,
    * which is itself just this protocol's slice of {@link runDriverLifecycle}. */
   private async reregisterDriver(key: string): Promise<void> {
-    const entry = (await this.drivers.registry()).find((e) => e.key === key);
-    if (!entry) return;
-    for (const protocol of entry.protocols) {
-      if (!hasNativeFactory(protocol)) continue;
-      const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols)).complete;
-      const driver = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key)) : null;
-      if (runnable) this.desiredProtocols.set(protocol, { key, config: entry.config });
-      else this.desiredProtocols.delete(protocol);
-      await this.runDriverLifecycle(protocol, driver, key, "config_change");
+    // § Multi-network Casambi — EVERY installed instance of `key`, not just the first: since
+    // Stage 1, a key can hold several instances, and each one's own live protocol registration,
+    // desired-state bookkeeping and lifecycle must be reconciled independently (a bare `.find()`
+    // here previously meant a second instance's config change or install was silently ignored at
+    // runtime, even though its database row was correct).
+    const entries = (await this.drivers.registry()).filter((e) => e.key === key);
+    for (const entry of entries) {
+      for (const protocol of entry.protocols) {
+        if (!hasNativeFactory(protocol)) continue;
+        const fast = this.runtimeProtocolIfSingleInstance(entry, protocol);
+        const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(entry, protocol);
+        const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols)).complete;
+        const built = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key)) : null;
+        // § Multi-network Casambi, Stage 4 — same reasoning as reconcileManifestDrivers above.
+        const driver = built
+          ? withCasambiInstanceAddressing(
+              withRuntimeProtocol(built, runtimeProtocol),
+              protocol === "casambi" && runtimeProtocol !== protocol ? entry.installedId : null,
+            )
+          : null;
+        if (runnable) this.desiredProtocols.set(runtimeProtocol, { key, config: entry.config });
+        else this.desiredProtocols.delete(runtimeProtocol);
+        await this.runDriverLifecycle(runtimeProtocol, driver, key, "config_change");
+      }
     }
   }
 
@@ -1788,7 +1917,10 @@ export class InstallerServices {
     const reg = await this.drivers.registry();
     const out: DriverDiagnosticsEntry[] = [];
     for (const entry of reg) {
-      const protocolEntries = entry.protocols.map((p) => this.lifecycleStatus.get(p)).filter((s): s is DriverLifecycleStatus => !!s);
+      // § Multi-network Casambi — resolve each protocol to ITS instance’s runtime string, or a
+      // secondary instance would read the PRIMARY instance’s lifecycle status (or none at all).
+      const runtimeProtocols = await Promise.all(entry.protocols.map((p) => this.runtimeProtocolFor(entry, p)));
+      const protocolEntries = runtimeProtocols.map((p) => this.lifecycleStatus.get(p)).filter((s): s is DriverLifecycleStatus => !!s);
       out.push({
         key: entry.key,
         name: entry.name,
@@ -1848,7 +1980,10 @@ export class InstallerServices {
     if (!entry) throw new SupremeError("not_found", "driver not installed");
     const { complete, missing } = isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols));
     const protoStatus = this.d.sil.nativeProtocolStatus();
-    const status = entry.protocols.map((p) => protoStatus.find((s) => s.protocol === p)).find(Boolean);
+    // § Multi-network Casambi — match against THIS instance’s runtime protocol string, not
+    // the bare manifest one, or a secondary instance always reads as never connected.
+    const runtimeProtocols = await Promise.all(entry.protocols.map((p) => this.runtimeProtocolFor(entry, p)));
+    const status = runtimeProtocols.map((p) => protoStatus.find((s) => s.protocol === p)).find(Boolean);
     const connected = status ? status.connected : null;
     const connectError = status?.error ?? null;
     const verdict = !entry.enabled ? "disabled" : connectError ? "error" : !complete ? "not_configured" : "healthy";
@@ -1881,7 +2016,11 @@ export class InstallerServices {
     void this.publishDriverState(id, "connecting");
     let connected = false;
     try {
-      for (const p of entry.protocols) {
+      // § Multi-network Casambi — connect THIS instance’s own runtime protocol, not the bare
+      // manifest one, or Connect on a second instance would silently target the first.
+      for (const bareProtocol of entry.protocols) {
+        const fast = this.runtimeProtocolIfSingleInstance(entry, bareProtocol);
+        const p = fast !== undefined ? fast : await this.runtimeProtocolFor(entry, bareProtocol);
         if (await this.d.sil.connectNativeProtocol(p)) {
           connected = true;
           // § Realtime State Hardening — unconditional, not `if (prev)`: a driver
@@ -1909,7 +2048,12 @@ export class InstallerServices {
     void this.publishDriverState(id, "disconnecting");
     let disconnected = false;
     try {
-      for (const p of entry.protocols) if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+      // § Multi-network Casambi — same reasoning as connectDriver above.
+      for (const bareProtocol of entry.protocols) {
+        const fast = this.runtimeProtocolIfSingleInstance(entry, bareProtocol);
+        const p = fast !== undefined ? fast : await this.runtimeProtocolFor(entry, bareProtocol);
+        if (await this.d.sil.disconnectNativeProtocol(p)) disconnected = true;
+      }
     } catch (err) {
       void this.publishDriverState(id, "error", err instanceof Error ? err.message : String(err));
       throw err;
@@ -2013,11 +2157,13 @@ export class InstallerServices {
    * installed drivers that expose a `protocol` are discovery-relevant (the KNX Group
    * Address Schema field, for example, has none).
    */
-  async discoverableDrivers(): Promise<{ installedId: string; key: string; name: string; protocols: string[] }[]> {
+  async discoverableDrivers(): Promise<
+    { installedId: string; key: string; name: string; protocols: string[]; instanceCount: number; displayLabel: string | null }[]
+  > {
     const reg = await this.drivers.registry();
     return reg
       .filter((d) => d.installed && d.installedId && d.protocols.length > 0)
-      .map((d) => ({ installedId: d.installedId!, key: d.key, name: d.name, protocols: d.protocols }));
+      .map((d) => ({ installedId: d.installedId!, key: d.key, name: d.name, protocols: d.protocols, instanceCount: d.instanceCount, displayLabel: d.displayLabel }));
   }
 
   /**
@@ -2030,20 +2176,63 @@ export class InstallerServices {
    * (§ Driver Failure Isolation) so one bad connection never discards the rest.
    */
   async discoverWithStatus(driverIds?: string[]): Promise<{
-    discovered: (Awaited<ReturnType<CommissioningService["discover"]>>[number] & { driverName: string | null })[];
-    driverResults: { protocol: string; driverName: string; status: "complete" | "failed"; count: number; error?: string }[];
+    discovered: (Awaited<ReturnType<CommissioningService["discover"]>>[number] & {
+      driverName: string | null;
+      /** § Multi-network Casambi, Stage 3 — the driver INSTANCE (installedId) that discovered
+       * this device, not just its protocol family. Needed because `protocol` is runtime-scoped
+       * ("casambi#<id>") for any instance but a key's first, and matching that scoped string
+       * against a driver row's bare manifest `protocols` array (design intent: "mqtt"/"knx"/
+       * "modbus", never an instance suffix) would never find one — this sidesteps that string
+       * matching entirely by carrying the real identity directly. The client's extension-match
+       * and auto-install logic should key off THIS, not `protocol`. */
+      driverId: string | null;
+      /** § Multi-network Casambi, Stage 3 — this instance's real `displayLabel` ("Network 1",
+       * "Gateway 2", or the deterministic legacy fallback — never derived from array position).
+       * `null` for a single-instance driver, matching its unchanged, unlabeled presentation. */
+      instanceLabel: string | null;
+    })[];
+    driverResults: { protocol: string; driverName: string; driverId: string | null; instanceLabel: string | null; status: "complete" | "failed"; count: number; error?: string }[];
   }> {
     const drivers = await this.discoverableDrivers();
+    // § Multi-network Casambi — keyed by RUNTIME protocol, not the bare manifest one: two
+    // instances of the same key previously collided on one map entry (whichever driver was
+    // iterated last silently won the name for BOTH, including the other instance’s own
+    // devices), and a scoped instance’s discovered devices — which report their OWN runtime
+    // protocol — never matched the bare-keyed map at all.
     const nameByProtocol = new Map<string, string>();
-    for (const d of drivers) for (const p of d.protocols) nameByProtocol.set(p, d.name);
+    const driverIdByProtocol = new Map<string, string>();
+    const instanceLabelByProtocol = new Map<string, string | null>();
+    for (const d of drivers) {
+      for (const p of d.protocols) {
+        const fast = this.runtimeProtocolIfSingleInstance(d, p);
+        const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(d, p);
+        nameByProtocol.set(runtimeProtocol, d.name);
+        driverIdByProtocol.set(runtimeProtocol, d.installedId);
+        instanceLabelByProtocol.set(runtimeProtocol, d.displayLabel);
+      }
+    }
 
     const protocols = driverIds
-      ? drivers.filter((d) => driverIds.includes(d.installedId)).flatMap((d) => d.protocols)
+      ? await Promise.all(
+          drivers
+            .filter((d) => driverIds.includes(d.installedId))
+            .flatMap((d) => d.protocols.map((p) => this.runtimeProtocolFor(d, p))),
+        )
       : undefined;
     const { discovered, driverResults } = await this.commissioning.discoverWithStatus(protocols);
     return {
-      discovered: discovered.map((d) => ({ ...d, driverName: (d.protocol && nameByProtocol.get(d.protocol)) ?? null })),
-      driverResults: driverResults.map((r) => ({ ...r, driverName: nameByProtocol.get(r.protocol) ?? r.protocol })),
+      discovered: discovered.map((d) => ({
+        ...d,
+        driverName: (d.protocol && nameByProtocol.get(d.protocol)) ?? null,
+        driverId: (d.protocol && driverIdByProtocol.get(d.protocol)) ?? null,
+        instanceLabel: (d.protocol && instanceLabelByProtocol.get(d.protocol)) ?? null,
+      })),
+      driverResults: driverResults.map((r) => ({
+        ...r,
+        driverName: nameByProtocol.get(r.protocol) ?? r.protocol,
+        driverId: driverIdByProtocol.get(r.protocol) ?? null,
+        instanceLabel: instanceLabelByProtocol.get(r.protocol) ?? null,
+      })),
     };
   }
 
@@ -2452,9 +2641,9 @@ export class InstallerServices {
   }
 
   /** Install a driver (logged). */
-  async installDriver(key: string, version?: string) {
-    const d = await this.drivers.install(key, version);
-    this.appendLog(d.key, "info", `Installed v${d.version}`);
+  async installDriver(key: string, version?: string, opts: { asNewInstance?: boolean; label?: string } = {}) {
+    const d = await this.drivers.install(key, version, opts);
+    this.appendLog(d.key, "info", opts.asNewInstance ? `Installed v${d.version} (${d.label ?? "new instance"})` : `Installed v${d.version}`);
     await this.reregisterDriver(d.key);
     return d;
   }
@@ -2464,10 +2653,16 @@ export class InstallerServices {
    *  leaving it behind just orphans a dead entry in the devices list. */
   async uninstallDriver(id: DriverId) {
     const entry = (await this.drivers.registry()).find((e) => e.installedId === id);
+    // § Multi-network Casambi — resolved BEFORE `drivers.uninstall()` runs. `runtimeProtocolFor`
+    // determines primary-vs-scoped from the store’s CURRENT instance list; computed after
+    // deletion, a just-deleted secondary instance would no longer appear in that list at all
+    // and would be misread as “primary” (bare protocol) — tearing down whichever OTHER
+    // instance actually still owns that bare string, instead of itself.
+    const runtimeProtocols = entry ? await Promise.all(entry.protocols.map((p) => this.runtimeProtocolFor(entry, p))) : [];
     await this.drivers.uninstall(id);
     if (entry) {
       this.appendLog(entry.key, "info", "Uninstalled");
-      for (const p of entry.protocols) {
+      for (const p of runtimeProtocols) {
         if (this.desiredProtocols.has(p)) {
           this.desiredProtocols.delete(p);
           await this.runDriverLifecycle(p, null, entry.key, "config_change"); // teardown: releases owned devices, never leaves them silently
@@ -2489,6 +2684,13 @@ export class InstallerServices {
         await this.d.home.removeDevices(orphaned.map((dv) => dv.id));
         this.appendLog(entry.key, "info", `Removed ${orphaned.length} device(s) belonging to this driver`);
       }
+      // § Multi-network Casambi — uninstalling the PRIMARY instance while a secondary
+      // remains renumbers the secondary onto the bare protocol string (it is now the earliest
+      // surviving instance) — reconcile the whole key so any survivor picks up its new
+      // runtime identity immediately, rather than staying registered under a string that no
+      // longer matches this method’s own `runtimeProtocolFor` on the next lookup. A no-op,
+      // idempotent re-registration for the ordinary single-instance case.
+      await this.reregisterDriver(entry.key);
     }
   }
 

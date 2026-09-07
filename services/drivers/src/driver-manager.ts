@@ -52,11 +52,46 @@ export interface DriverRegistryEntry {
   status: string;
   installedId: string | null;
   config: Record<string, unknown>;
+  /** Installer-facing name for THIS instance when a key is installed more than once
+   * (§ Multi-network Casambi); null for single-instance installs. */
+  label: string | null;
+  /** How many instances of this catalog key are installed. 0 = not installed, 1 = the ordinary
+   * case, >1 = a multi-network/multi-gateway install. */
+  instanceCount: number;
+  /** § Multi-network Casambi, Stage 3 — this instance's 0-based position in REAL install order
+   * (`listInstances`' own deterministic ordering, the same ordering `installer-context.ts`'s
+   * `runtimeProtocolFor` uses to decide which instance keeps the bare, unscoped protocol string).
+   * `null` for the not-installed placeholder row. Exists so a consumer that needs a stable,
+   * unambiguous per-instance ordinal (a fallback label, a display badge) never has to derive one
+   * from this array's own position — `registry()`'s final sort is by NAME then LABEL for display,
+   * not install order, so array position here would silently be the wrong thing to use. */
+  instanceIndex: number | null;
+  /** § Multi-network Casambi, Stage 3 — `label` when explicitly set, otherwise a deterministic
+   * fallback ("Network 2", "Gateway 1", …) synthesized from `instanceIndex` whenever
+   * `instanceCount > 1` — never fabricated, never null-but-ambiguous, once a key genuinely holds
+   * more than one instance. `null` exactly when `label` is null AND there is nothing to
+   * disambiguate (0 or 1 instance), matching every existing single-instance install's display
+   * unchanged. Every consumer (Driver Manager row, Discover Devices instance badge) should render
+   * THIS, never raw `label`, so a pre-existing unlabeled instance never sits next to a labeled
+   * sibling with no way to tell them apart. See `casambiInstanceNoun` for the "Network"/"Gateway"
+   * word choice. */
+  displayLabel: string | null;
+}
+
+/** § Multi-network Casambi, Stage 3 — the noun a fallback instance label uses. Casambi is the
+ * only key with a real multi-instance UI today, and its two connection modes have genuinely
+ * different real-world nouns (a Cloud "network", a Local "gateway") — reading `connectionType`
+ * off the instance's OWN config, never guessed. Any other key that someday supports multiple
+ * instances gets the honest, generic "Instance" rather than a fabricated domain word this
+ * function has no way to know. */
+export function casambiInstanceNoun(key: string, config: Record<string, unknown>): string {
+  if (key !== "supreme-casambi") return "Instance";
+  return config.connectionType === "local" ? "Gateway" : "Network";
 }
 import { verifyBundle } from "@supreme/driver-sdk";
 import { defaultDriverConfig, validateDriverConfig, type ConfigFallbacks } from "./config.js";
 import type { ICatalog } from "./catalog.js";
-import { InMemoryInstalledDriverStore, type IInstalledDriverStore } from "./store.js";
+import { InMemoryInstalledDriverStore, listByKeyOf, type IInstalledDriverStore } from "./store.js";
 
 /**
  * Hub Driver Manager (§9). Browses the catalog and installs drivers only after:
@@ -106,12 +141,21 @@ export class DriverManager {
    */
   async registry(): Promise<DriverRegistryEntry[]> {
     const [bundles, installed] = await Promise.all([this.catalog.list(), this.store.list()]);
-    const byKey = new Map(installed.map((d) => [d.key, d]));
+    // A catalog key can hold SEVERAL installed instances (§ Multi-network Casambi — one per
+    // Casambi network / Lithernet gateway), so this is a one-to-many expansion, not the old
+    // one-row-per-key lookup. A key with no instances still yields exactly one row, so the
+    // catalog browse view is unchanged.
+    const byKey = new Map<string, InstalledDriver[]>();
+    for (const d of installed) byKey.set(d.key, [...(byKey.get(d.key) ?? []), d]);
+    for (const list of byKey.values()) {
+      list.sort((a, b) => a.installedAt.localeCompare(b.installedAt) || a.id.localeCompare(b.id));
+    }
     return bundles
-      .map((b) => {
+      .flatMap((b) => {
         const m = b.bundle.manifest;
-        const inst = byKey.get(m.key);
-        return {
+        const instances = byKey.get(m.key) ?? [];
+        const rows = instances.length > 0 ? instances : [undefined];
+        return rows.map((inst, instanceIndex) => ({
           key: m.key,
           name: m.name,
           description: m.description,
@@ -137,9 +181,14 @@ export class DriverManager {
           status: inst?.status ?? "not_installed",
           installedId: inst?.id ?? null,
           config: inst?.config ?? {},
-        } satisfies DriverRegistryEntry;
+          label: inst?.label ?? null,
+          instanceCount: instances.length,
+          instanceIndex: inst ? instanceIndex : null,
+          displayLabel:
+            inst?.label ?? (inst && instances.length > 1 ? `${casambiInstanceNoun(m.key, inst.config)} ${instanceIndex + 1}` : null),
+        } satisfies DriverRegistryEntry));
       })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.name.localeCompare(b.name) || (a.label ?? "").localeCompare(b.label ?? ""));
   }
 
   /** The manifest config schema for an installed driver (empty if none / not found). */
@@ -169,8 +218,17 @@ export class DriverManager {
     return updated;
   }
 
-  /** Install (or change to) a specific driver version. Verifies signature + license. */
-  async install(key: string, version?: string): Promise<InstalledDriver> {
+  /** Install (or change to) a specific driver version. Verifies signature + license.
+   *
+   * By default this is idempotent per key: re-installing reuses the existing instance's id and
+   * config, exactly as it always has. Pass `asNewInstance` to add ANOTHER instance of the same
+   * key instead (§ Multi-network Casambi — a second Casambi network, or a second Lithernet
+   * gateway), which gets a fresh id and schema-default config of its own. */
+  async install(
+    key: string,
+    version?: string,
+    opts: { asNewInstance?: boolean; label?: string } = {},
+  ): Promise<InstalledDriver> {
     const entry = await this.catalog.find(key, version);
     if (!entry) throw new SupremeError("not_found", `driver ${key}${version ? "@" + version : ""} not found`);
     this.verify(entry);
@@ -181,7 +239,7 @@ export class DriverManager {
       throw new SupremeError("forbidden", `driver ${key} requires the '${sku}' license`);
     }
 
-    const existing = await this.store.getByKey(key);
+    const existing = opts.asNewInstance ? undefined : await this.store.getByKey(key);
     const installed: InstalledDriver = {
       id: existing?.id ?? (newId("driver") as DriverId),
       homeId: this.homeId,
@@ -189,30 +247,77 @@ export class DriverManager {
       version: manifest.version,
       channel: manifest.channel,
       category: manifest.category,
-      installedAt: new Date().toISOString(),
+      // § Multi-network Casambi — preserved across a re-install (config edit, enable/disable,
+      // version update — `update()`/`rollback()` both call this method), set fresh ONLY for a
+      // truly new record. Before this fix, EVERY re-install reset this to "now" even when
+      // reusing the existing id — cosmetically harmless while a key could only ever hold one
+      // instance, but load-bearing once it can hold several: the runtime layer (§ Stage 2a,
+      // installer-context.ts's `runtimeProtocolFor`) determines which instance keeps the bare,
+      // unscoped protocol string by EARLIEST `installedAt` — so simply saving the primary
+      // instance's own config could have silently reset its timestamp past a sibling instance
+      // created moments earlier, reshuffling which one is "primary" on the next reconcile pass.
+      installedAt: existing?.installedAt ?? new Date().toISOString(),
       // Matter (and other shipsDisabled drivers) install disabled — opt-in to enable.
       enabled: existing?.enabled ?? !manifest.shipsDisabled,
       status: manifest.shipsDisabled && !existing?.enabled ? "disabled" : "active",
       // Preserve config on reinstall; on a fresh install seed the schema defaults.
       config: existing?.config ?? defaultDriverConfig(manifest.configSchema),
+      ...(opts.label ? { label: opts.label } : existing?.label ? { label: existing.label } : {}),
     };
     await this.store.put(installed);
     return installed;
   }
 
-  /** Update to the latest published version (no-op if already latest). */
+  /** Update to the latest published version (no-op if already latest).
+   *
+   * A version is a property of the KEY, not of one instance, so this moves EVERY installed
+   * instance of the key to the new version — leaving a site's second Casambi network pinned to
+   * an older driver than its first would be a silent inconsistency. Returns the first instance,
+   * preserving the previous single-instance return shape. */
   async update(key: string): Promise<InstalledDriver> {
     const installed = await this.requireInstalled(key);
     const latest = await this.catalog.find(key);
     if (!latest) throw new SupremeError("not_found", `driver ${key} not in catalog`);
     if (latest.bundle.manifest.version === installed.version) return installed;
-    return this.install(key, latest.bundle.manifest.version);
+    return this.setVersionForEveryInstance(key, latest.bundle.manifest.version);
   }
 
-  /** Roll back to a specific earlier version. */
+  /** Roll back to a specific earlier version — like {@link update}, across every instance. */
   async rollback(key: string, version: string): Promise<InstalledDriver> {
     await this.requireInstalled(key);
-    return this.install(key, version);
+    return this.setVersionForEveryInstance(key, version);
+  }
+
+  /** Move every installed instance of `key` to `version`, verifying signature/license once. */
+  private async setVersionForEveryInstance(key: string, version: string): Promise<InstalledDriver> {
+    const entry = await this.catalog.find(key, version);
+    if (!entry) throw new SupremeError("not_found", `driver ${key}@${version} not found`);
+    this.verify(entry);
+    const manifest = entry.bundle.manifest;
+    const sku = manifest.compat.requiresSku;
+    if (sku && !this.licensedSkus().has(sku)) {
+      throw new SupremeError("forbidden", `driver ${key} requires the '${sku}' license`);
+    }
+    const instances = await listByKeyOf(this.store, key);
+    const updated: InstalledDriver[] = [];
+    for (const inst of instances) {
+      const next: InstalledDriver = {
+        ...inst,
+        version: manifest.version,
+        channel: manifest.channel,
+        category: manifest.category,
+      };
+      await this.store.put(next);
+      updated.push(next);
+    }
+    const first = updated[0];
+    if (!first) throw new SupremeError("not_found", `driver ${key} is not installed`);
+    return first;
+  }
+
+  /** Every installed instance of a catalog key, in install order. */
+  listInstances(key: string): Promise<InstalledDriver[]> {
+    return listByKeyOf(this.store, key);
   }
 
   /** Enable/disable an installed driver — this is the Matter opt-in toggle (§9). */
