@@ -151,6 +151,17 @@ export {
   type MatterFabricSync,
   type MatterFabricManagerOptions,
 } from "./matter-fabric.js";
+export { MatterBridgeDriver, type MatterBridgeDriverOptions } from "./matter-bridge/matter-bridge-driver.js";
+export type { MatterBridgeServer } from "./matter-bridge/server.js";
+export type { MatterBridgeCapabilityPort } from "./matter-bridge/capability-port.js";
+export {
+  MatterEndpointRegistry,
+  InMemoryMatterEndpointStore,
+  FileMatterEndpointStore,
+  type IMatterEndpointStore,
+  type MatterEndpointMapping,
+} from "./matter-bridge/endpoint-registry.js";
+export { RealMatterBridgeServer, type RealMatterBridgeServerOptions } from "./matter-bridge/real-server.js";
 export {
   ZigbeeProtocolDriver,
   type ZigbeeDriverOptions,
