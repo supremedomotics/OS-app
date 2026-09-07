@@ -141,7 +141,14 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       },
     });
 
-    this.aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator" });
+    // § real root cause of "Endpoint device-1 number 1 is allocated to another endpoint"
+    // (reproduced deterministically on Linux, not an Environment-sharing artifact — see
+    // `ServerEndpointStores.assignNumber`, @matter/node's real source): added with no explicit
+    // `number`, the aggregator auto-allocates the SDK's first free number, which is 1 — the same
+    // number `addOnOffLight` then force-assigns to the first bridged device via its own
+    // 1-based `endpointNumber` contract. Giving the aggregator a fixed, reserved number outside
+    // that 1-based device range removes the collision instead of relying on allocation order.
+    this.aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator", number: 0xfffe });
     await this.node.add(this.aggregator);
     await this.node.start();
   }
