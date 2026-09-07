@@ -56,9 +56,22 @@ export function DriverManager() {
       {drivers === null && <p className="muted">Loading…</p>}
       {drivers?.length === 0 && <p className="muted">No drivers available.</p>}
       <div className="drv-list">
-        {(drivers ?? []).map((d) => (
-          <DriverRow key={d.key} driver={d} expanded={open === d.key} onToggle={() => setOpen(open === d.key ? null : d.key)} onChanged={load} />
-        ))}
+        {(drivers ?? []).map((d) => {
+          // § Multi-network Casambi — a catalog key can now appear more than once (one row per
+          // Casambi network / Lithernet gateway), so the row identity is the INSTALLED id, not
+          // the key. Keying on the key would collide in React and make every instance of a key
+          // expand and collapse together.
+          const rowId = d.installedId ?? d.key;
+          return (
+            <DriverRow
+              key={rowId}
+              driver={d}
+              expanded={open === rowId}
+              onToggle={() => setOpen(open === rowId ? null : rowId)}
+              onChanged={load}
+            />
+          );
+        })}
       </div>
     </section>
   );
@@ -126,7 +139,13 @@ function DriverRow({ driver, expanded, onToggle, onChanged }: { driver: DriverEn
     <div className={`drv-row${expanded ? " open" : ""}`}>
       <button className="drv-head" onClick={onToggle}>
         <div className="drv-title">
-          <span className="nm">{driver.name}</span>
+          <span className="nm">
+            {driver.name}
+            {/* The instance label is what distinguishes one Casambi network / Lithernet gateway
+                from another in a multi-instance install; single-instance rows have none and are
+                unchanged. */}
+            {driver.label && <span className="drv-instance"> · {driver.label}</span>}
+          </span>
           <span className="meta">{driver.category} · v{driver.version}{driver.requiresSku ? ` · ${driver.requiresSku}` : ""}</span>
         </div>
         <span className={`drv-badge ${s.cls}`}>{s.text}</span>

@@ -198,6 +198,10 @@ export const InstalledDriver = z.object({
   enabled: z.boolean().default(true),
   status: z.enum(["active", "disabled", "error"]).default("active"),
   config: z.record(z.unknown()).default({}),
+  /** Installer-facing name for THIS instance when a catalog key is installed more than once
+   * (§ Multi-network Casambi) — e.g. "Network 1", "Gateway 2". Absent on single-instance
+   * installs, which render under the catalog name exactly as they always have. */
+  label: z.string().optional(),
 });
 export type InstalledDriver = z.infer<typeof InstalledDriver>;
 

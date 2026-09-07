@@ -131,4 +131,75 @@ describe("DriverManager", () => {
     expect(await m.listInstalled()).toHaveLength(0);
     await expect(m.uninstall(newId("driver") as DriverId)).rejects.toThrow(/not installed/);
   });
+
+  // § Multi-network Casambi — a catalog key can be installed once per Casambi network /
+  // Lithernet gateway. Every per-driver API route already addresses drivers by their installed
+  // id, so instances need no route changes; what had to change is that a key is no longer
+  // unique in the store, and the registry expands one-to-many.
+  describe("driver instances", () => {
+    it("installs a second instance of the same key with its own id and config", async () => {
+      const m = manager({ licensed: ["pro"] });
+      const first = await m.install("supreme-casambi");
+      const second = await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "Network 2" });
+
+      expect(second.id).not.toBe(first.id);
+      expect(second.label).toBe("Network 2");
+      expect(await m.listInstances("supreme-casambi")).toHaveLength(2);
+
+      // Config is per instance — two Casambi networks have different credentials, so writing
+      // one must never reach the other.
+      const cloud = (email: string, networkId: string) => ({
+        connectionType: "cloud",
+        apiKey: "k",
+        email,
+        password: "p",
+        networkId,
+      });
+      await m.setConfig(first.id, cloud("site-a@example.com", "net-a"));
+      await m.setConfig(second.id, cloud("site-b@example.com", "net-b"));
+      expect((await m.getConfig(first.id)).email).toBe("site-a@example.com");
+      expect((await m.getConfig(first.id)).networkId).toBe("net-a");
+      expect((await m.getConfig(second.id)).email).toBe("site-b@example.com");
+      expect((await m.getConfig(second.id)).networkId).toBe("net-b");
+    });
+
+    it("re-installing WITHOUT asNewInstance stays idempotent, never silently forking an instance", async () => {
+      const m = manager({ licensed: ["pro"] });
+      const first = await m.install("supreme-casambi");
+      const again = await m.install("supreme-casambi");
+      expect(again.id).toBe(first.id);
+      expect(await m.listInstances("supreme-casambi")).toHaveLength(1);
+    });
+
+    it("lists every instance as its own registry row, so each gets its own config and controls", async () => {
+      const m = manager({ licensed: ["pro"] });
+      await m.install("supreme-casambi");
+      await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "Gateway 2" });
+
+      const rows = (await m.registry()).filter((r) => r.key === "supreme-casambi");
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.installed)).toBe(true);
+      expect(new Set(rows.map((r) => r.installedId)).size).toBe(2);
+      expect(rows.map((r) => r.label)).toContain("Gateway 2");
+      expect(rows.every((r) => r.instanceCount === 2)).toBe(true);
+    });
+
+    it("a key with no instances still yields exactly one catalog row", async () => {
+      const m = manager({ licensed: ["pro"] });
+      const rows = (await m.registry()).filter((r) => r.key === "supreme-casambi");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.installed).toBe(false);
+      expect(rows[0]!.instanceCount).toBe(0);
+      expect(rows[0]!.label).toBeNull();
+    });
+
+    it("uninstalling one instance leaves the others running", async () => {
+      const m = manager({ licensed: ["pro"] });
+      const first = await m.install("supreme-casambi");
+      const second = await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "Network 2" });
+      await m.uninstall(first.id);
+      const left = await m.listInstances("supreme-casambi");
+      expect(left.map((d) => d.id)).toEqual([second.id]);
+    });
+  });
 });

@@ -164,6 +164,11 @@ export interface DriverEntry {
   status: string;
   installedId: string | null;
   config: Record<string, unknown>;
+  /** Installer-facing name for THIS instance when a catalog key is installed more than once
+   * (§ Multi-network Casambi); null on single-instance installs. */
+  label?: string | null;
+  /** Installed instances of this catalog key: 0 not installed, 1 ordinary, >1 multi-network. */
+  instanceCount?: number;
 }
 
 export async function fetchDriverRegistry(): Promise<DriverEntry[]> {
