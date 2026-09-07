@@ -201,5 +201,36 @@ describe("DriverManager", () => {
       const left = await m.listInstances("supreme-casambi");
       expect(left.map((d) => d.id)).toEqual([second.id]);
     });
+
+    // § install order is load-bearing once a key can hold more than one instance: the runtime
+    // layer (installer-context.ts's `runtimeProtocolFor`) decides which instance keeps the bare,
+    // unscoped protocol string by EARLIEST `installedAt` among `listInstances`. A re-install that
+    // silently reset an existing instance's timestamp would let something as ordinary as saving
+    // config reshuffle which instance is "primary" — this is a regression test for exactly that.
+    it("re-installing an EXISTING instance never changes its installedAt, so install order — and which instance is primary — stays fixed", async () => {
+      const m = manager({ licensed: ["pro"] });
+      const first = await m.install("supreme-casambi");
+      const second = await m.install("supreme-casambi", undefined, { asNewInstance: true, label: "Network 2" });
+      const firstInstalledAt = first.installedAt;
+
+      // Re-install the FIRST instance several times (config save, enable/disable, and update()/
+      // rollback() all funnel through install()) — none of it may touch installedAt.
+      await m.install("supreme-casambi"); // no asNewInstance: reuses `first`'s id
+      await m.setConfig(first.id, {
+        connectionType: "cloud",
+        apiKey: "k",
+        email: "a@example.com",
+        password: "pw",
+      }); // any valid config write, not the point under test
+      await m.setEnabled(first.id, false);
+      await m.setEnabled(first.id, true);
+
+      const [refreshedFirst, refreshedSecond] = await m.listInstances("supreme-casambi");
+      expect(refreshedFirst!.installedAt).toBe(firstInstalledAt);
+      // Install order — and therefore which instance is primary — is unchanged: `first` still
+      // sorts before `second`.
+      expect(refreshedFirst!.id).toBe(first.id);
+      expect(refreshedSecond!.id).toBe(second.id);
+    });
   });
 });

@@ -165,6 +165,11 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const [health, setHealth] = useState<DriverHealth | null>(null);
   const { driverStates, applyDriverState } = useLive();
   const [logs, setLogs] = useState<{ ts: string; level: string; message: string }[]>([]);
+  // § Multi-network Casambi, Stage 2b — shown instead of a plain "Install" for a not-yet-set-up
+  // Casambi row, and as an additional action on an already-installed one (creating a SECOND
+  // network/gateway is a materially different operation from editing this instance's own config
+  // below, so it gets its own explicit entry point rather than overloading Install/Save).
+  const [showCasambiWizard, setShowCasambiWizard] = useState(false);
 
   useEffect(() => {
     if (!driver.installed || !driver.installedId) return;
@@ -194,6 +199,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const id = driver.installedId ?? "";
   const has = (op: string) => driver.operations.includes(op);
   const isProtocol = driver.protocols.length > 0;
+  const isCasambi = driver.key === "supreme-casambi";
 
   return (
     <div className="drv-detail">
@@ -239,9 +245,30 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
         </details>
       )}
 
+      {/* § Multi-network Casambi, Stage 2b — the wizard replaces the plain Install button for a
+          not-yet-set-up Casambi row (it needs mode + count before there's anything TO install),
+          and offers itself again as an explicit "Add" action once at least one instance exists.
+          Every other driver's Install button is completely unchanged. */}
+      {isCasambi && showCasambiWizard && (
+        <CasambiSetupWizard
+          existingInstanceCount={driver.instanceCount ?? 0}
+          onCancel={() => setShowCasambiWizard(false)}
+          onDone={() => {
+            setShowCasambiWizard(false);
+            onChanged();
+          }}
+        />
+      )}
+
       {/* Lifecycle actions */}
       <div className="drv-actions">
-        {!driver.installed && has("install") && <button className="primary" disabled={busy} onClick={() => run(() => installDriverByKey(driver.key), "Installed")}>Install</button>}
+        {!driver.installed && has("install") && isCasambi && (
+          <button className="primary" disabled={busy} onClick={() => setShowCasambiWizard(true)}>Set up Casambi</button>
+        )}
+        {!driver.installed && has("install") && !isCasambi && <button className="primary" disabled={busy} onClick={() => run(async () => { await installDriverByKey(driver.key); }, "Installed")}>Install</button>}
+        {driver.installed && isCasambi && !showCasambiWizard && (
+          <button disabled={busy} onClick={() => setShowCasambiWizard(true)}>Add network / gateway</button>
+        )}
         {driver.installed && (
           <>
             {driver.updateAvailable && <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>}
@@ -529,6 +556,143 @@ export function visibleCasambiConfigSchema(schema: DriverConfigField[], values: 
   });
 }
 
+// ── Casambi Setup Wizard (§ Multi-network Casambi, Stage 2b) — pure logic ────────────────────
+//
+// Deliberately separated from the wizard's React component below: this is the part with real
+// decisions worth getting right (credential distribution, duplicate/collision detection), and it
+// needs to be independently testable without a DOM — this project's web-homeowner package has no
+// React component test harness, only plain vitest, so logic that must be unit-tested has to live
+// in functions like these rather than inline in JSX handlers.
+
+export interface CasambiWizardCloudEntry {
+  networkId: string;
+  email: string;
+  password: string;
+}
+
+export interface CasambiWizardShared {
+  enabled: boolean;
+  email: string;
+  password: string;
+}
+
+export interface CasambiWizardValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+/** Expand wizard state into one config object per network — exactly the shape `setDriverConfig`
+ * already accepts for Cloud mode (`connectionType`/`email`/`password`/`networkId`, the same
+ * fields the single-instance UI has always saved). When credentials are shared, every entry's OWN
+ * email/password are ignored in favor of the one shared pair, so a stale per-entry value typed
+ * before switching to "shared" can never leak into a saved config. */
+export function casambiWizardCloudConfigs(entries: CasambiWizardCloudEntry[], shared: CasambiWizardShared): Record<string, unknown>[] {
+  return entries.map((e) => ({
+    connectionType: "cloud",
+    email: shared.enabled ? shared.email.trim() : e.email.trim(),
+    password: shared.enabled ? shared.password : e.password,
+    ...(e.networkId.trim() ? { networkId: e.networkId.trim() } : {}),
+  }));
+}
+
+/** Cloud-mode validation, thorough beyond "is this field non-empty":
+ *  - shared credentials must themselves be non-empty (there is nothing per-network to fall back to)
+ *  - a blank network id is normally fine (the manifest documents it as "whichever network the
+ *    account has access to") — EXCEPT when several networks share one account, where a blank id
+ *    is genuinely ambiguous: every blank-id instance would resolve to the SAME network, not the
+ *    "each is different" outcome the wizard exists to set up
+ *  - duplicate network ids under shared credentials would silently create two driver instances
+ *    pointed at the identical Casambi network — caught before either is ever created */
+export function validateCasambiWizardCloud(entries: CasambiWizardCloudEntry[], shared: CasambiWizardShared): CasambiWizardValidation {
+  const errors: string[] = [];
+  if (entries.length < 1) errors.push("Add at least one network.");
+  if (shared.enabled) {
+    if (!shared.email.trim()) errors.push("Email is required.");
+    if (!shared.password.trim()) errors.push("Password is required.");
+  }
+  entries.forEach((e, i) => {
+    const label = `Network ${i + 1}`;
+    if (!shared.enabled) {
+      if (!e.email.trim()) errors.push(`${label}: email is required.`);
+      if (!e.password.trim()) errors.push(`${label}: password is required.`);
+    }
+    if (entries.length > 1 && shared.enabled && !e.networkId.trim()) {
+      errors.push(`${label}: network id is required when multiple networks share one account.`);
+    }
+  });
+  if (shared.enabled) {
+    const ids = entries.map((e) => e.networkId.trim()).filter((id) => id.length > 0);
+    const dupes = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+    if (dupes.length > 0) errors.push(`Duplicate network id shared by more than one entry: ${dupes.join(", ")}.`);
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+export interface CasambiWizardLocalGateway {
+  gatewayIp: string;
+  restPort: string;
+  gatewayUsername: string;
+  gatewayPassword: string;
+  udpPort: string;
+  netId: string;
+  dataFormat: "hex-dot" | "dec-hash";
+  gatewayName: string;
+}
+
+/** One default, empty Local Gateway entry — `restPort` pre-filled with the manifest's own
+ * default (80) so a gateway with SSL disabled (the common case) needs no typing at all. */
+export function emptyCasambiWizardLocalGateway(): CasambiWizardLocalGateway {
+  return { gatewayIp: "", restPort: "80", gatewayUsername: "", gatewayPassword: "", udpPort: "", netId: "", dataFormat: "hex-dot", gatewayName: "" };
+}
+
+/** Expand wizard state into one config object per gateway — the SAME fields
+ * `CasambiLocalGatewayPanel` already saves for a single instance, just produced N times. */
+export function casambiWizardLocalConfigs(gateways: CasambiWizardLocalGateway[]): Record<string, unknown>[] {
+  return gateways.map((g) => ({
+    connectionType: "local",
+    gatewayIp: g.gatewayIp.trim(),
+    restPort: Number(g.restPort),
+    gatewayUsername: g.gatewayUsername.trim(),
+    gatewayPassword: g.gatewayPassword,
+    udpPort: Number(g.udpPort),
+    netId: g.netId.trim() === "" ? 0 : Number(g.netId),
+    dataFormat: g.dataFormat,
+    ...(g.gatewayName.trim() ? { gatewayName: g.gatewayName.trim() } : {}),
+  }));
+}
+
+/** Local-mode validation. Every required field the manifest itself requires in Local mode
+ * (gatewayIp/restPort/gatewayUsername/gatewayPassword/udpPort), PLUS a same-address collision
+ * check no single-instance UI ever needed to make: two gateways sharing one IP+UDP port would
+ * both try to bind the identical socket and race for the same datagrams on real hardware. */
+export function validateCasambiWizardLocal(gateways: CasambiWizardLocalGateway[]): CasambiWizardValidation {
+  const errors: string[] = [];
+  if (gateways.length < 1) errors.push("Add at least one gateway.");
+  gateways.forEach((g, i) => {
+    const label = `Gateway ${i + 1}`;
+    if (!g.gatewayIp.trim()) errors.push(`${label}: gateway IP is required.`);
+    if (!g.restPort.trim() || !Number.isFinite(Number(g.restPort))) errors.push(`${label}: REST port is required.`);
+    if (!g.gatewayUsername.trim()) errors.push(`${label}: gateway username is required.`);
+    if (!g.gatewayPassword.trim()) errors.push(`${label}: gateway password is required.`);
+    if (!g.udpPort.trim() || !Number.isFinite(Number(g.udpPort))) errors.push(`${label}: UDP port is required.`);
+  });
+  const addrs = gateways.map((g) => `${g.gatewayIp.trim()}:${g.udpPort.trim()}`).filter((a) => a !== ":");
+  const dupes = [...new Set(addrs.filter((a, i) => addrs.indexOf(a) !== i))];
+  if (dupes.length > 0) errors.push(`More than one gateway configured at the same address: ${dupes.join(", ")}.`);
+  return { valid: errors.length === 0, errors };
+}
+
+/** Instance labels for one wizard submission. A lone network/gateway created when NONE exist yet
+ * gets no label at all — identical to today's single-instance install, so the overwhelmingly
+ * common case renders exactly as it always has. Any other outcome (adding to an existing
+ * install, or creating more than one at once) labels every instance created in THIS run,
+ * numbered starting after however many already exist. */
+export function casambiWizardLabels(mode: "cloud" | "local", count: number, existingInstanceCount: number): (string | undefined)[] {
+  if (existingInstanceCount === 0 && count === 1) return [undefined];
+  const noun = mode === "cloud" ? "Network" : "Gateway";
+  return Array.from({ length: count }, (_, i) => `${noun} ${existingInstanceCount + i + 1}`);
+}
+
 /**
  * Renders the staged Test Connection result (§ UDP Diagnostics — "do not assume UDP behaves
  * like TCP"). REST reachability, HTTP authentication, and the UDP socket lifecycle are shown as
@@ -574,6 +738,212 @@ function CasambiTestConnectionReport({ res }: { res: CasambiTestConnectionResult
         gateway-confirmed acknowledgement of these settings, so this is a local check, not a remote one.
       </p>
       <p className="muted">{res.message}</p>
+    </div>
+  );
+}
+
+/**
+ * Casambi Setup Wizard (§ Multi-network Casambi, Stage 2b). Collects EVERY network/gateway's
+ * fields on one screen and creates nothing until "Create" is pressed — never a partial install
+ * left behind by a step the installer abandoned partway through.
+ *
+ * `existingInstanceCount` (from the registry's own `instanceCount`) decides whether this run
+ * is "set up Casambi for the first time" (0) or "add to what's already configured" (>0); either
+ * way the SAME flow runs, differing only in instance labeling (see `casambiWizardLabels`) and in
+ * every created instance passing `asNewInstance: true` once at least one already exists.
+ *
+ * Each instance is a real `installDriverByKey(..., { asNewInstance, label })` +
+ * `setDriverConfig(...)` pair — the exact two calls the single-instance "Install" button and
+ * config form already make — so a wizard-created instance is byte-for-byte the same kind of
+ * driver row Stage 2a's runtime fix already proved coexists correctly; nothing here is a UI-only
+ * simulation of multi-instance behavior.
+ */
+function CasambiSetupWizard({ existingInstanceCount, onDone, onCancel }: { existingInstanceCount: number; onDone: () => void; onCancel: () => void }) {
+  const [mode, setMode] = useState<"cloud" | "local">("cloud");
+  const [count, setCount] = useState(1);
+  const [shared, setShared] = useState<CasambiWizardShared>({ enabled: true, email: "", password: "" });
+  const [cloudEntries, setCloudEntries] = useState<CasambiWizardCloudEntry[]>([{ networkId: "", email: "", password: "" }]);
+  const [gateways, setGateways] = useState<CasambiWizardLocalGateway[]>([emptyCasambiWizardLocalGateway()]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Resizing `count` grows/shrinks the entry arrays, preserving whatever the installer already
+  // typed into the entries that still exist — switching from 3 networks to 2 and back to 3
+  // doesn't erase the first two.
+  function setCountAndResize(n: number) {
+    const next = Math.max(1, Math.min(8, n));
+    setCount(next);
+    setCloudEntries((cur) => Array.from({ length: next }, (_, i) => cur[i] ?? { networkId: "", email: "", password: "" }));
+    setGateways((cur) => Array.from({ length: next }, (_, i) => cur[i] ?? emptyCasambiWizardLocalGateway()));
+  }
+
+  const validation = mode === "cloud" ? validateCasambiWizardCloud(cloudEntries, shared) : validateCasambiWizardLocal(gateways);
+  const labels = casambiWizardLabels(mode, count, existingInstanceCount);
+  const noun = mode === "cloud" ? "Network" : "Gateway";
+
+  async function create() {
+    setErr(null);
+    if (!validation.valid) {
+      setErr(validation.errors[0] ?? "Fix the errors above before continuing.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const configs = mode === "cloud" ? casambiWizardCloudConfigs(cloudEntries, shared) : casambiWizardLocalConfigs(gateways);
+      for (let i = 0; i < configs.length; i++) {
+        const label = labels[i];
+        const asNewInstance = existingInstanceCount > 0 || i > 0;
+        const { id } = await installDriverByKey("supreme-casambi", asNewInstance ? { asNewInstance, label } : {});
+        await setDriverConfig(id, configs[i]!);
+      }
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Setup failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="drv-field casambi-wizard" style={{ marginBottom: 14 }}>
+      <span className="lbl">
+        {existingInstanceCount > 0 ? "Add Casambi network or gateway" : "Set up Casambi"}
+      </span>
+
+      <label className="drv-field">
+        <span className="lbl">Connection type</span>
+        <select value={mode} onChange={(e) => setMode(e.target.value === "local" ? "local" : "cloud")}>
+          <option value="cloud">Cloud</option>
+          <option value="local">Local Gateway</option>
+        </select>
+      </label>
+
+      <label className="drv-field">
+        <span className="lbl">Number of {mode === "cloud" ? "Casambi networks" : "Lithernet gateways"}</span>
+        <input type="number" min={1} max={8} value={count} onChange={(e) => setCountAndResize(Number(e.target.value) || 1)} />
+      </label>
+
+      {mode === "cloud" && count > 1 && (
+        <label className="drv-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={shared.enabled}
+            onChange={(e) => setShared((cur) => ({ ...cur, enabled: e.target.checked }))}
+          />
+          <span className="lbl">Use the same Casambi email and password for every network</span>
+        </label>
+      )}
+
+      {mode === "cloud" && shared.enabled && count > 1 && (
+        <>
+          <label className="drv-field">
+            <span className="lbl">Email *</span>
+            <input type="text" value={shared.email} onChange={(e) => setShared((cur) => ({ ...cur, email: e.target.value }))} />
+          </label>
+          <label className="drv-field">
+            <span className="lbl">Password *</span>
+            <input type="password" value={shared.password} onChange={(e) => setShared((cur) => ({ ...cur, password: e.target.value }))} />
+          </label>
+        </>
+      )}
+
+      {mode === "cloud" &&
+        cloudEntries.map((entry, i) => (
+          <fieldset key={i} className="casambi-wizard-entry">
+            <legend>{labels[i] ?? `${noun} ${i + 1}`}</legend>
+            {(!shared.enabled || count === 1) && (
+              <>
+                <label className="drv-field">
+                  <span className="lbl">Email *</span>
+                  <input
+                    type="text"
+                    value={entry.email}
+                    onChange={(e) => setCloudEntries((cur) => cur.map((c, j) => (j === i ? { ...c, email: e.target.value } : c)))}
+                  />
+                </label>
+                <label className="drv-field">
+                  <span className="lbl">Password *</span>
+                  <input
+                    type="password"
+                    value={entry.password}
+                    onChange={(e) => setCloudEntries((cur) => cur.map((c, j) => (j === i ? { ...c, password: e.target.value } : c)))}
+                  />
+                </label>
+              </>
+            )}
+            <label className="drv-field">
+              <span className="lbl">Network id{count > 1 && shared.enabled ? " *" : " (optional)"}</span>
+              <input
+                type="text"
+                value={entry.networkId}
+                onChange={(e) => setCloudEntries((cur) => cur.map((c, j) => (j === i ? { ...c, networkId: e.target.value } : c)))}
+              />
+            </label>
+          </fieldset>
+        ))}
+
+      {mode === "local" &&
+        gateways.map((g, i) => (
+          <fieldset key={i} className="casambi-wizard-entry">
+            <legend>{labels[i] ?? `${noun} ${i + 1}`}</legend>
+            <label className="drv-field">
+              <span className="lbl">Gateway IP *</span>
+              <input type="text" placeholder="192.168.1.50" value={g.gatewayIp} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, gatewayIp: e.target.value } : x)))} />
+            </label>
+            <label className="drv-field">
+              <span className="lbl">REST port *</span>
+              <input type="number" value={g.restPort} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, restPort: e.target.value } : x)))} />
+            </label>
+            <label className="drv-field">
+              <span className="lbl">Gateway username *</span>
+              <input type="text" value={g.gatewayUsername} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, gatewayUsername: e.target.value } : x)))} />
+            </label>
+            <label className="drv-field">
+              <span className="lbl">Gateway password *</span>
+              <input type="password" value={g.gatewayPassword} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, gatewayPassword: e.target.value } : x)))} />
+            </label>
+            <label className="drv-field">
+              <span className="lbl">UDP port *</span>
+              <input type="number" placeholder="5100" value={g.udpPort} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, udpPort: e.target.value } : x)))} />
+            </label>
+            <label className="drv-field">
+              <span className="lbl">Net ID</span>
+              <input type="number" min={0} max={254} value={g.netId} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, netId: e.target.value } : x)))} />
+            </label>
+            <label className="drv-field">
+              <span className="lbl">Data format</span>
+              <select value={g.dataFormat} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, dataFormat: e.target.value === "dec-hash" ? "dec-hash" : "hex-dot" } : x)))}>
+                <option value="hex-dot">Hex with dot</option>
+                <option value="dec-hash">Decimal with hash</option>
+              </select>
+            </label>
+            <label className="drv-field">
+              <span className="lbl">Gateway name</span>
+              <input type="text" placeholder="Living Room Gateway" value={g.gatewayName} onChange={(e) => setGateways((cur) => cur.map((x, j) => (j === i ? { ...x, gatewayName: e.target.value } : x)))} />
+            </label>
+          </fieldset>
+        ))}
+
+      {existingInstanceCount > 0 && count > 1 && (
+        <p className="help">
+          This adds {count} new {mode === "cloud" ? "networks" : "gateways"} alongside what's already configured.
+          An existing instance set up before this wizard existed keeps its current name unless you already gave it one.
+        </p>
+      )}
+
+      {err && <p className="error">{err}</p>}
+      {!validation.valid && !err && validation.errors.length > 0 && (
+        <ul className="error" style={{ margin: 0, paddingLeft: 18 }}>
+          {validation.errors.map((m) => <li key={m}>{m}</li>)}
+        </ul>
+      )}
+
+      <div className="drv-actions">
+        <button className="primary" disabled={busy || !validation.valid} onClick={() => void create()}>
+          {busy ? "Creating…" : `Create ${count} ${mode === "cloud" ? (count === 1 ? "network" : "networks") : count === 1 ? "gateway" : "gateways"}`}
+        </button>
+        <button disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
     </div>
   );
 }

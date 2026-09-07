@@ -2568,9 +2568,9 @@ export class InstallerServices {
   }
 
   /** Install a driver (logged). */
-  async installDriver(key: string, version?: string) {
-    const d = await this.drivers.install(key, version);
-    this.appendLog(d.key, "info", `Installed v${d.version}`);
+  async installDriver(key: string, version?: string, opts: { asNewInstance?: boolean; label?: string } = {}) {
+    const d = await this.drivers.install(key, version, opts);
+    this.appendLog(d.key, "info", opts.asNewInstance ? `Installed v${d.version} (${d.label ?? "new instance"})` : `Installed v${d.version}`);
     await this.reregisterDriver(d.key);
     return d;
   }

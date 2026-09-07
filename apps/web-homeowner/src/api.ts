@@ -277,9 +277,14 @@ export async function fetchSystemLogs(limit = 300): Promise<SystemLogEntry[]> {
 export async function connectDriver(id: string, connect: boolean): Promise<void> {
   await authed(`/v1/drivers/${id}/${connect ? "connect" : "disconnect"}`, { method: "POST", body: "{}" });
 }
-export async function installDriverByKey(key: string): Promise<void> {
-  const res = await authed("/v1/drivers/install", { method: "POST", body: JSON.stringify({ key }) });
+export async function installDriverByKey(
+  key: string,
+  opts: { asNewInstance?: boolean; label?: string } = {},
+): Promise<{ id: string; label: string | null }> {
+  const res = await authed("/v1/drivers/install", { method: "POST", body: JSON.stringify({ key, ...opts }) });
   if (!res.ok) throw new Error(await errorMessage(res, "Install failed."));
+  const { driver } = (await res.json()) as { driver: { id: string; label?: string | null } };
+  return { id: driver.id, label: driver.label ?? null };
 }
 export async function setDriverEnabled(id: string, enabled: boolean): Promise<void> {
   await authed(`/v1/drivers/${id}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) });

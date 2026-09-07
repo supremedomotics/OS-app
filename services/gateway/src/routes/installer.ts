@@ -127,8 +127,8 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     try {
       const user = await authenticate(ctx, req);
       await enforce(ctx, user, "integration", null, "create");
-      const { key, version } = InstallDriverRequest.parse(req.body);
-      const driver = await i().installDriver(key, version);
+      const { key, version, asNewInstance, label } = InstallDriverRequest.parse(req.body);
+      const driver = await i().installDriver(key, version, { asNewInstance, label });
       const body: InstalledDriverResponse = { driver };
       reply.code(201).send(body);
     } catch (err) {

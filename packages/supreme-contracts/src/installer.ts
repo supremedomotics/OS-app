@@ -30,6 +30,13 @@ export type CatalogList = z.infer<typeof CatalogList>;
 export const InstallDriverRequest = z.object({
   key: z.string(),
   version: z.string().regex(/^\d+\.\d+\.\d+$/).optional(),
+  /** § Multi-network Casambi — install ANOTHER instance of `key` instead of the default
+   * idempotent re-install. Omitted (or false) preserves the original behavior exactly: repeating
+   * an install call reuses the same instance and its config, never silently forking one. */
+  asNewInstance: z.boolean().optional(),
+  /** Installer-facing name for the created instance ("Network 2", "Gateway 2") — meaningful
+   * only alongside `asNewInstance`; ignored otherwise (a single-instance driver has no label). */
+  label: z.string().optional(),
 });
 export type InstallDriverRequest = z.infer<typeof InstallDriverRequest>;
 

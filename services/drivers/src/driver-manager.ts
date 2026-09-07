@@ -215,7 +215,16 @@ export class DriverManager {
       version: manifest.version,
       channel: manifest.channel,
       category: manifest.category,
-      installedAt: new Date().toISOString(),
+      // § Multi-network Casambi — preserved across a re-install (config edit, enable/disable,
+      // version update — `update()`/`rollback()` both call this method), set fresh ONLY for a
+      // truly new record. Before this fix, EVERY re-install reset this to "now" even when
+      // reusing the existing id — cosmetically harmless while a key could only ever hold one
+      // instance, but load-bearing once it can hold several: the runtime layer (§ Stage 2a,
+      // installer-context.ts's `runtimeProtocolFor`) determines which instance keeps the bare,
+      // unscoped protocol string by EARLIEST `installedAt` — so simply saving the primary
+      // instance's own config could have silently reset its timestamp past a sibling instance
+      // created moments earlier, reshuffling which one is "primary" on the next reconcile pass.
+      installedAt: existing?.installedAt ?? new Date().toISOString(),
       // Matter (and other shipsDisabled drivers) install disabled — opt-in to enable.
       enabled: existing?.enabled ?? !manifest.shipsDisabled,
       status: manifest.shipsDisabled && !existing?.enabled ? "disabled" : "active",
