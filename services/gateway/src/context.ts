@@ -1097,7 +1097,7 @@ export class AppContext {
           console.log(`matter-bridge: ${device.id} (${device.name}) not bridged — ${resolution.reason}`);
         }
       } catch (err) {
-        console.error(`matter-bridge: failed to expose ${device.id} (${device.name}): ${(err as Error).message}`);
+        console.error(`matter-bridge: failed to expose ${device.id} (${device.name}): ${describeMatterError(err)}`);
       }
     }
   }
@@ -1167,6 +1167,40 @@ export class AppContext {
       deviceTypeName: e.deviceTypeName,
     }));
   }
+}
+
+/** § live-confirmed fix — `@matter/main` reports endpoint-construction failures as a
+ * `MatterAggregateError` ("Behaviors have errors") wrapping one `BehaviorInitializationError`
+ * per failing behavior, each itself wrapping the REAL cause (e.g. a `ConstraintError`/
+ * `ConformanceError`) via `.cause` — `(err as Error).message` alone only ever showed the
+ * useless outer wrapper. This cost real debugging time tracing why Color Temperature Light
+ * endpoints failed to construct (the actual cause — unset `colorTempPhysicalMinMireds`/
+ * `colorTempPhysicalMaxMireds`/`coupleColorTempToLevelMinMireds` — was three `.cause`/`.errors`
+ * levels down, only found via a local reproduction against the real SDK). Walks both chains so
+ * this never has to happen again. */
+function describeMatterError(err: unknown): string {
+  const parts: string[] = [];
+  let cur: unknown = err;
+  let depth = 0;
+  while (cur && depth < 10) {
+    const e = cur as { message?: string; errors?: unknown[]; cause?: unknown };
+    if (typeof e.message === "string") parts.push(e.message);
+    if (Array.isArray(e.errors)) {
+      for (const inner of e.errors) {
+        let innerCur: unknown = inner;
+        let innerDepth = 0;
+        while (innerCur && innerDepth < 10) {
+          const ie = innerCur as { message?: string; cause?: unknown };
+          if (typeof ie.message === "string") parts.push(ie.message);
+          innerCur = ie.cause;
+          innerDepth++;
+        }
+      }
+    }
+    cur = e.cause;
+    depth++;
+  }
+  return parts.length > 0 ? parts.join(" <- ") : String(err);
 }
 
 /** Map a HomeKit-derived command to the Supreme CapabilityCommand the SIL validates. */
