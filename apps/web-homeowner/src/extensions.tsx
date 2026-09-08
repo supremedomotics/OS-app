@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { DriverDetail, statusLabel } from "./drivers.js";
-import { MatterBridgePanel } from "./matter-bridge.js";
+import { MatterBridgePanel, MatterBridgeDevicesPage } from "./matter-bridge.js";
 
 /**
  * Extension Center (§ Extension Center) — the central place for every integration and protocol
@@ -69,6 +69,7 @@ export function ExtensionCenter() {
   const [exts, setExts] = useState<DriverEntry[] | null>(null);
   const [cat, setCat] = useState<Cat>("all");
   const [open, setOpen] = useState<string | null>(null);
+  const [matterDevicesOpen, setMatterDevicesOpen] = useState(false);
 
   async function load() { setExts(await fetchDriverRegistry()); }
   useEffect(() => { void load(); }, []);
@@ -80,14 +81,16 @@ export function ExtensionCenter() {
   }, [exts]);
   const shown = (exts ?? []).filter((d) => matches(d, cat));
 
+  if (matterDevicesOpen) {
+    return <MatterBridgeDevicesPage onBack={() => setMatterDevicesOpen(false)} />;
+  }
+
   return (
     <div className="page">
       <div className="page-head">
         <h1 className="title">Extension Center</h1>
         <p className="sub">Everything that connects to your home — browse, add and keep it healthy.</p>
       </div>
-
-      <MatterBridgePanel />
 
       <div className="chip-row">
         {CATS.filter((c) => c.id === "all" || (counts.get(c.id) ?? 0) > 0).map((c) => (
@@ -101,6 +104,7 @@ export function ExtensionCenter() {
       {exts && shown.length === 0 && <p className="muted">No extensions in this category.</p>}
 
       <div className="ext-grid">
+        <MatterBridgePanel onOpenDevices={() => setMatterDevicesOpen(true)} />
         {shown.map((d) => {
           const s = statusLabel(d);
           const expanded = open === d.key;

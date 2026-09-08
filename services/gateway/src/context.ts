@@ -222,6 +222,14 @@ export interface MatterBridgeStatus {
   fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[];
 }
 
+/** § Extension Center — Bridged Devices page (`GET /v1/matter-bridge/devices`). `name` is
+ * `null` only for the honest-orphan case documented on `matterBridgeDevices` above. */
+export interface MatterBridgeDeviceEntry {
+  deviceId: string;
+  endpointNumber: number;
+  name: string | null;
+}
+
 export class AppContext {
   readonly identity: IdentityService;
   readonly policy = new PolicyEngine();
@@ -1124,6 +1132,24 @@ export class AppContext {
   async matterBridgeFactoryReset(): Promise<void> {
     if (!this.matterBridge) throw new SupremeError("conflict", "Matter Bridge is not running — nothing to factory-reset");
     await this.matterBridge.driver.factoryReset();
+  }
+
+  /** § Extension Center — Bridged Devices page. Every device the Bridge currently exposes to
+   * Apple/Google/Alexa/SmartThings, under its REAL SupremeOS name (never the raw deviceId the
+   * driver itself keys off — see `MatterBridgeDriver.listExposedDevices`'s doc for why the
+   * driver has no name of its own). A device removed from SupremeOS since it was bridged
+   * (rare — `home.listDevices()` no longer has it) is still listed, honestly labeled, rather
+   * than silently dropped — an installer looking at "what does my Matter controller see"
+   * needs to know a phantom entry exists so they can Refresh (which naturally drops it, since
+   * the re-expose loop only iterates currently-real devices) or investigate. */
+  async matterBridgeDevices(): Promise<MatterBridgeDeviceEntry[]> {
+    if (!this.matterBridge) return [];
+    const names = new Map((await this.home.listDevices()).map((d) => [d.id, d.name]));
+    return this.matterBridge.driver.listExposedDevices().map((e) => ({
+      deviceId: e.deviceId,
+      endpointNumber: e.endpointNumber,
+      name: names.get(e.deviceId) ?? null,
+    }));
   }
 }
 

@@ -137,15 +137,46 @@ export class MatterBridgeDriver {
     return this.server.getCommissioningState();
   }
 
+  /** § Extension Center — Bridged Devices page. Every SupremeOS device currently live on the
+   * Matter side, by endpoint number — the driver's own real exposure index, not the registry
+   * (`registry.all()` also lists a device that failed to re-expose after a restart; this
+   * reflects only what a Matter controller can genuinely see right now, matching the
+   * `getCommissioningState`/`addOnOffLight` calls this same index already backs). Names are
+   * resolved by the caller (AppContext, which owns `home.listDevices()`) — this driver has no
+   * device-name source of its own by design (§ Scope boundary, this file's own doc comment). */
+  listExposedDevices(): { deviceId: DeviceId; endpointNumber: number }[] {
+    return [...this.exposedDevices.entries()]
+      .map(([endpointNumber, deviceId]) => ({ deviceId, endpointNumber }))
+      .sort((a, b) => a.endpointNumber - b.endpointNumber);
+  }
+
   /** § Phase 4 §7 — DELIBERATE, DESTRUCTIVE: see `MatterBridgeServer.factoryReset`'s doc.
    * Nothing in `start()`/`stop()` calls this — a caller (a future explicit "Matter factory
    * reset" action, never a restart/upgrade/rollback) must invoke it on purpose. Clears this
    * driver's own in-memory exposure indexes too, since every endpoint the server just erased
-   * no longer genuinely exists on the Matter side. */
+   * no longer genuinely exists on the Matter side.
+   *
+   * § live-confirmed fix — `server.factoryReset()` leaves the underlying node undefined
+   * (`RealMatterBridgeServer.factoryReset`'s own doc: "a caller wanting a fresh node calls
+   * start() again"), but this method used to stop there: `this.started` stayed `true` and the
+   * command/state subscriptions stayed live, so `start()`'s own `if (this.started) return`
+   * guard made every future call a silent no-op. Every driver method touching the node
+   * (`getCommissioningState`, `exposeLight`, …) then threw "server not started" forever —
+   * confirmed on a real deployment via `journalctl`, reproducing on every status/refresh
+   * poll after one Factory Reset click. A factory reset button that permanently kills the
+   * feature it resets is not "reset", so this now restarts immediately with a fresh Matter
+   * identity — `start()` re-subscribes and re-exposes every already-registered device at its
+   * SAME SupremeOS endpoint number (only the Matter-side fabric/pairing identity is new). */
   async factoryReset(): Promise<void> {
+    this.unsubscribeCommand?.();
+    this.unsubscribeState?.();
+    this.unsubscribeCommand = null;
+    this.unsubscribeState = null;
     await this.server.factoryReset();
     this.exposedDevices.clear();
     this.endpointByDevice.clear();
+    this.started = false;
+    await this.start();
   }
 
   /** Matter ecosystem → SupremeOS (§1 required path, direction 1). A real ecosystem-issued

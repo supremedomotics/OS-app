@@ -14,6 +14,7 @@ export {
   type SourceUpdateStatus,
   type MatterBridgeStatus,
   type MatterBridgePairing,
+  type MatterBridgeDeviceEntry,
 } from "./client.js";
 export {
   SupremeStream,
