@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { MatterBridgeServer } from "@supreme/protocols";
+import type { CapabilityCommand, MatterBridgeEndpointSpec, MatterBridgeServer } from "@supreme/protocols";
+import { resolveMatterDeviceType } from "@supreme/protocols";
 import { InMemoryHomeStore } from "@supreme/home";
 import { InMemoryIdentityStore } from "@supreme/identity";
 import { loadConfig } from "./config.js";
@@ -22,24 +23,25 @@ import { buildServer } from "./server.js";
 class FakeMatterBridgeServer implements MatterBridgeServer {
   started = false;
   endpoints = new Map<number, { name: string; on: boolean }>();
-  private commandListeners = new Set<(endpointNumber: number, on: boolean) => void>();
+  private commandListeners = new Set<(endpointNumber: number, command: CapabilityCommand) => void>();
   async start(): Promise<void> {
     this.started = true;
   }
   async stop(): Promise<void> {
     this.started = false;
   }
-  async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
-    this.endpoints.set(args.endpointNumber, { name: args.name, on: args.initialOn });
+  async addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void> {
+    const on = spec.initialState && "on" in spec.initialState ? spec.initialState.on : false;
+    this.endpoints.set(spec.endpointNumber, { name: spec.name, on });
   }
   async removeEndpoint(endpointNumber: number): Promise<void> {
     this.endpoints.delete(endpointNumber);
   }
-  async setOnOffState(endpointNumber: number, on: boolean): Promise<void> {
+  async setCapabilityState(endpointNumber: number, state: { kind: string; on?: boolean }): Promise<void> {
     const e = this.endpoints.get(endpointNumber);
-    if (e) e.on = on;
+    if (e && "on" in state && typeof state.on === "boolean") e.on = state.on;
   }
-  onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void {
+  onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }
@@ -50,7 +52,7 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     this.endpoints.clear();
   }
   simulateEcosystemCommand(endpointNumber: number, on: boolean): void {
-    for (const l of this.commandListeners) l(endpointNumber, on);
+    for (const l of this.commandListeners) l(endpointNumber, { capability: "onoff", action: on ? "on" : "off" });
   }
 }
 
@@ -80,13 +82,26 @@ describe("Matter Bridge (gateway e2e — real native runtime wiring)", () => {
     rmSync(storageDir, { recursive: true, force: true });
   });
 
-  it("starts the Matter Bridge and auto-exposes every onoff device in the demo home as a bridged endpoint", () => {
+  it("starts the Matter Bridge and auto-exposes every bridgeable device in the demo home as a bridged endpoint", () => {
     expect(server.started).toBe(true);
     expect(server.endpoints.size).toBeGreaterThan(0);
   });
 
+  // § Matter Bridge Phase 1 foundation — `simulateEcosystemCommand` sends a raw OnOff cluster
+  // command, so it only round-trips through the SIL for a device whose driving capability is
+  // literally `onoff` (an On/Off Light). Since the demo home's FIRST bridged endpoint is now a
+  // Color Temperature Light (the very devices this Phase fixed from being silently skipped),
+  // these two tests locate a genuine On/Off Light endpoint via the driver's own real exposure
+  // index instead of assuming endpoint 1 — never hardcode "the first endpoint" as "an on/off
+  // device" again.
+  function onOffLightEndpointNumber(): number {
+    const entry = ctx.matterBridge!.driver.listExposedDevices().find((e) => e.deviceTypeName === "On/Off Light");
+    if (!entry) throw new Error("test setup: demo home has no On/Off Light-resolved device to exercise");
+    return entry.endpointNumber;
+  }
+
   it("routes a real Matter On command through the SIL to the actual device state (Matter -> SupremeOS)", async () => {
-    const [endpointNumber] = [...server.endpoints.keys()];
+    const endpointNumber = onOffLightEndpointNumber();
     const mapping = ctx.matterBridge!.driver; // sanity: handle exists
     expect(mapping).toBeTruthy();
 
@@ -97,7 +112,7 @@ describe("Matter Bridge (gateway e2e — real native runtime wiring)", () => {
   });
 
   it("mirrors a real SupremeOS state change onto the Matter attribute (SupremeOS -> Matter)", async () => {
-    const [endpointNumber] = [...server.endpoints.keys()];
+    const endpointNumber = onOffLightEndpointNumber();
     server.simulateEcosystemCommand(endpointNumber, false);
     await new Promise((r) => setTimeout(r, 50));
     expect(server.endpoints.get(endpointNumber)?.on).toBe(false);
@@ -161,12 +176,12 @@ describe("Matter Bridge (gateway e2e — per-device isolation, real bug found li
     // first device appears" on a real Matter controller.
     class FlakyOnceServer extends FakeMatterBridgeServer {
       private failedOnce = false;
-      async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
+      async addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void> {
         if (!this.failedOnce && this.endpoints.size === 1) {
           this.failedOnce = true;
           throw new Error("simulated: second device failed to expose");
         }
-        await super.addOnOffLight(args);
+        await super.addEndpoint(spec);
       }
     }
     const dir = mkdtempSync(join(tmpdir(), "matter-bridge-isolation-e2e-"));
@@ -181,12 +196,18 @@ describe("Matter Bridge (gateway e2e — per-device isolation, real bug found li
         }),
         { matterBridgeServer: server },
       );
-      const onoffDeviceCount = (await ctx.home.listDevices()).filter((d) => d.capabilities.some((c) => c.kind === "onoff")).length;
-      expect(onoffDeviceCount).toBeGreaterThan(2); // the demo home has several — this bug needs 3+ to reproduce
+      // § Matter Bridge Phase 1 foundation — bridgeable is no longer "carries a bare `onoff`
+      // capability"; it's "the device's full capability set resolves to a supported Matter
+      // Device Type" (the SAME resolver `exposeMatterDevices` itself calls), so the test's own
+      // expected count is computed the identical real way rather than re-guessing the old filter.
+      const bridgeableDeviceCount = (await ctx.home.listDevices()).filter(
+        (d) => resolveMatterDeviceType(d.capabilities).outcome === "SUPPORTED",
+      ).length;
+      expect(bridgeableDeviceCount).toBeGreaterThan(2); // the demo home has several — this bug needs 3+ to reproduce
 
-      // The one device whose addOnOffLight call was made to fail is missing, but every OTHER
-      // onoff device — critically, the ones queued AFTER it — still got bridged.
-      expect(server.endpoints.size).toBe(onoffDeviceCount - 1);
+      // The one device whose addEndpoint call was made to fail is missing, but every OTHER
+      // bridgeable device — critically, the ones queued AFTER it — still got bridged.
+      expect(server.endpoints.size).toBe(bridgeableDeviceCount - 1);
       await ctx.shutdown();
     } finally {
       rmSync(dir, { recursive: true, force: true });

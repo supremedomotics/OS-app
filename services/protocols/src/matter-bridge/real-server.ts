@@ -1,9 +1,28 @@
 import { Environment, ServerNode, Endpoint, VendorId, Logger, LogLevel } from "@matter/main";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
+import { DimmableLightDevice } from "@matter/main/devices/dimmable-light";
+import { ColorTemperatureLightDevice, ColorTemperatureLightRequirements } from "@matter/main/devices/color-temperature-light";
+import { ExtendedColorLightDevice, ExtendedColorLightRequirements } from "@matter/main/devices/extended-color-light";
+import { WindowCoveringDevice } from "@matter/main/devices/window-covering";
 import { OnOffServer } from "@matter/main/behaviors/on-off";
+import { LevelControlServer } from "@matter/main/behaviors/level-control";
+import { WindowCoveringServer, MovementType, MovementDirection } from "@matter/main/behaviors/window-covering";
+import { WindowCovering } from "@matter/main/clusters/window-covering";
+import { ColorControl } from "@matter/main/clusters/color-control";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
-import type { MatterBridgeServer, MatterBridgeCommissioningState, MatterBridgeFabricInfo } from "./server.js";
+import type { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
+import type { MatterBridgeServer, MatterBridgeCommissioningState, MatterBridgeFabricInfo, MatterBridgeEndpointSpec } from "./server.js";
+import { levelToMatter, levelFromMatter } from "./clusters/level-control-adapter.js";
+import {
+  kelvinToMireds,
+  miredsToKelvin,
+  hueSaturationToXy,
+  xyToHueSaturation,
+  xyChannelToMatter,
+  xyChannelFromMatter,
+} from "./clusters/color-control-adapter.js";
+import { positionToMatterPercent100ths, positionFromMatterPercent100ths } from "./clusters/window-covering-adapter.js";
 
 /**
  * The real `@matter/main` implementation of {@link MatterBridgeServer} (§3, §26 — no manual
@@ -14,6 +33,15 @@ import type { MatterBridgeServer, MatterBridgeCommissioningState, MatterBridgeFa
  * §29. Everything above this file (`MatterBridgeDriver`, `MatterEndpointRegistry`) is
  * transport-agnostic and IS unit-tested, against a fake `MatterBridgeServer`.
  *
+ * § Matter Bridge Phase 1 foundation — this file is the "Cluster Adapters → Matter Endpoint"
+ * end of the architecture: `device-types/matter-device-type-resolver.ts` decides WHICH Matter
+ * Device Type a SupremeOS device becomes, and this file is where that resolved device type
+ * actually gets composed from real `@matter/main` device definitions + cluster behaviors, using
+ * the pure conversion functions in `clusters/*-adapter.ts` for every value that crosses the
+ * SupremeOS↔Matter boundary. Five device types are wired: On/Off Light, Dimmable Light, Color
+ * Temperature Light, Extended Color Light, Window Covering (§ Phase 1's supported set,
+ * `device-types/matter-device-types.ts`).
+ *
  * STATUS: verified against `@matter/main@0.17.9`'s real, installed TypeScript types
  * (`pnpm typecheck`) — this is real, but bounded, verification: it proves the API is called
  * the way this SDK version declares it, not that a real ecosystem accepts the result.
@@ -21,21 +49,118 @@ import type { MatterBridgeServer, MatterBridgeCommissioningState, MatterBridgeFa
  * Home / Alexa / SmartThings, and operation over a real LAN.
  */
 
-/** One instance of the OnOff behavior override per endpoint, so the command callback below
- * can identify WHICH endpoint's cluster command fired — `this.endpoint.number` is the same
- * stable endpoint number the {@link MatterEndpointRegistry} assigned when the endpoint was
- * added, closing the loop between the persisted mapping and the live Matter node. */
-function createOnOffServerClass(onCommand: (endpointNumber: number, on: boolean) => void) {
+const ON_OFF_LIGHT = 0x0100;
+const DIMMABLE_LIGHT = 0x0101;
+const COLOR_TEMPERATURE_LIGHT = 0x010c;
+const EXTENDED_COLOR_LIGHT = 0x010d;
+const WINDOW_COVERING = 0x0202;
+
+type Emit = (endpointNumber: number, command: CapabilityCommand) => void;
+
+/** OnOff behavior that ROUTES a genuine Matter On/Off command into a SupremeOS capability
+ * command — used for On/Off Light (`onoff` capability) and Dimmable Light (`brightness`
+ * capability, whose command schema also has an `action: "on"|"off"`). `this.endpoint.number`
+ * is the same stable endpoint number the {@link MatterEndpointRegistry} assigned when the
+ * endpoint was added, closing the loop between the persisted mapping and the live Matter node.
+ * `super.on()/off()` still runs — it only updates the local OnOff attribute, real and desired,
+ * never fake movement (unlike LevelControl/ColorControl's default transition simulation, which
+ * the Level/Color adapter classes below deliberately do NOT invoke). */
+function createRoutedOnOffServerClass(emit: Emit, buildCommand: (on: boolean) => CapabilityCommand) {
   return class BridgedOnOffServer extends OnOffServer {
     override async on() {
       await super.on();
       const n = this.endpoint.number;
-      if (n !== undefined) onCommand(n, true);
+      if (n !== undefined) emit(n, buildCommand(true));
     }
     override async off() {
       await super.off();
       const n = this.endpoint.number;
-      if (n !== undefined) onCommand(n, false);
+      if (n !== undefined) emit(n, buildCommand(false));
+    }
+  };
+}
+
+/** § Phase 1 disclosed limitation — Color Temperature/Extended Color Light. SupremeOS's `color`
+ * capability command (`packages/domain-model/src/capabilities.ts`) has NO bare on/off action —
+ * only hue/saturation/kelvin/level, matching that a color light's "off" is naturally expressed
+ * as a level, not a separate boolean the schema doesn't carry. Rather than invent an unverified
+ * mapping (e.g. guessing "on" should restore a cached previous level), this behavior accepts and
+ * reflects the Matter OnOff cluster command LOCALLY (the attribute updates, so a controller's UI
+ * stays consistent) but does not route it to SupremeOS — dimming/color commands (which DO have a
+ * `level`/hue/saturation/kelvin) are the real, routed way to turn a color light functionally off
+ * (level 0) or on (any level > 0) from this Phase's Bridge. A future phase can close this gap
+ * once a considered decision is made about level-restore semantics; it is not silently guessed. */
+class LocalOnlyOnOffServer extends OnOffServer {}
+
+function createLevelControlServerClass(onLevel: (endpointNumber: number, matterLevel: number) => void) {
+  return class BridgedLevelControlServer extends LevelControlServer {
+    // Deliberately does NOT call super.moveToLevelLogic — the default implementation
+    // simulates a fake transition and writes CurrentLevel itself (§11: never fake feedback).
+    // Real state only ever reaches the Matter attribute via `setCapabilityState`, once
+    // SupremeOS's own native driver reports the physical device actually changed.
+    override moveToLevelLogic(level: number, _transitionTime: number | null, _withOnOff: boolean): void {
+      const n = this.endpoint.number;
+      if (n !== undefined) onLevel(n, level);
+    }
+  };
+}
+
+/** Color Temperature Light's ColorControl (§ Matter Bridge Phase 1 foundation) — extends the
+ * DEVICE TYPE's OWN generated, feature-selected base (`ColorTemperatureLightRequirements.
+ * ColorControlServer`, `@matter/node`'s `color-temperature-light.ts`: `.with("ColorTemperature")`
+ * — CT-only, no hue/saturation/xy) rather than reconstructing a feature set by hand, so this is
+ * guaranteed to compose validly with `ColorTemperatureLightDevice.with(...)` below. */
+function createColorTemperatureServerClass(onColorTemperature: (endpointNumber: number, mireds: number) => void) {
+  return class BridgedColorTemperatureServer extends ColorTemperatureLightRequirements.ColorControlServer {
+    override moveToColorTemperatureLogic(targetMireds: number, _transitionTime: number): void {
+      const n = this.endpoint.number;
+      if (n !== undefined) onColorTemperature(n, targetMireds);
+    }
+  };
+}
+
+/** Extended Color Light's ColorControl — extends `ExtendedColorLightRequirements.
+ * ColorControlServer` (`.with("Xy", "ColorTemperature")` — this SDK's generated Extended Color
+ * Light conforms via CIE xy chromaticity, not hue/saturation; see `clusters/
+ * color-control-adapter.ts`'s doc comment for the xy↔hue/saturation conversion this requires). */
+function createExtendedColorServerClass(
+  onXy: (endpointNumber: number, matterX: number, matterY: number) => void,
+  onColorTemperature: (endpointNumber: number, mireds: number) => void,
+) {
+  return class BridgedExtendedColorServer extends ExtendedColorLightRequirements.ColorControlServer {
+    override moveToColorLogic(targetX: number, targetY: number, _transitionTime: number): void {
+      const n = this.endpoint.number;
+      if (n !== undefined) onXy(n, targetX, targetY);
+    }
+    override moveToColorTemperatureLogic(targetMireds: number, _transitionTime: number): void {
+      const n = this.endpoint.number;
+      if (n !== undefined) onColorTemperature(n, targetMireds);
+    }
+  };
+}
+
+function createWindowCoveringServerClass(onMovement: (endpointNumber: number, command: { action: "open" | "close" | "stop" | "set"; position?: number }) => void) {
+  const Featured = WindowCoveringServer.with(WindowCovering.Feature.Lift, WindowCovering.Feature.PositionAwareLift);
+  return class BridgedWindowCoveringServer extends Featured {
+    // § Phase 1 — the SDK's own documented extension point ("Logic to actually move the
+    // device... The default implementation logs and immediately updates current position to
+    // the target positions. This is probably not desirable for a real device so do not invoke
+    // super.handleMovement()" — @matter/node's own WindowCoveringServer.ts doc comment). Real
+    // position only ever reaches the Matter attribute via `setCapabilityState`.
+    override handleMovement(type: MovementType, _reversed: boolean, direction: MovementDirection, targetPercent100ths?: number): void {
+      const n = this.endpoint.number;
+      if (n === undefined || type !== MovementType.Lift) return;
+      if (direction === MovementDirection.DefinedByPosition && targetPercent100ths !== undefined) {
+        onMovement(n, { action: "set", position: positionFromMatterPercent100ths(targetPercent100ths) });
+      } else if (direction === MovementDirection.Open) {
+        onMovement(n, { action: "open" });
+      } else if (direction === MovementDirection.Close) {
+        onMovement(n, { action: "close" });
+      }
+    }
+    override handleStopMovement(): void {
+      const n = this.endpoint.number;
+      if (n !== undefined) onMovement(n, { action: "stop" });
     }
   };
 }
@@ -48,7 +173,7 @@ export interface RealMatterBridgeServerOptions {
    *   SupremeOS-owned:  MatterEndpointRegistry's JSON file (deviceId <-> endpoint number)
    *   @matter/main-owned: node identity, fabric/commissioning state, operational
    *     credentials/certificates, and per-endpoint attribute state (incl. the OnOff value
-   *     `setOnOffState` writes) — everything else under this directory.
+   *     `setCapabilityState` writes) — everything else under this directory.
    *
    * SupremeOS never re-implements or reaches into @matter/main's own files — it only ever
    * calls the SDK's own API (`ServerNode`/`Endpoint`). The ONE thing SupremeOS must get right
@@ -76,18 +201,16 @@ export interface RealMatterBridgeServerOptions {
   vendorName?: string;
 }
 
-/** The concrete endpoint type returned for a bridged On/Off Light — used instead of the bare
- * `Endpoint` so `setOnOffState`'s `endpoint.set({ onOff: {...} })` is checked against the
- * real OnOff cluster's state shape rather than the untyped default `{}` behavior set. */
-type OnOffLightEndpoint = Endpoint<
-  ReturnType<typeof OnOffLightDevice.with<[typeof BridgedDeviceBasicInformationServer, ReturnType<typeof createOnOffServerClass>]>>
->;
+interface BridgedEndpointEntry {
+  endpoint: Endpoint;
+  deviceTypeId: number;
+}
 
 export class RealMatterBridgeServer implements MatterBridgeServer {
   private node: ServerNode | undefined;
   private aggregator: Endpoint | undefined;
-  private readonly endpoints = new Map<number, OnOffLightEndpoint>();
-  private readonly commandListeners = new Set<(endpointNumber: number, on: boolean) => void>();
+  private readonly endpoints = new Map<number, BridgedEndpointEntry>();
+  private readonly commandListeners = new Set<Emit>();
 
   constructor(private readonly opts: RealMatterBridgeServerOptions) {}
 
@@ -107,21 +230,9 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     Logger.facilityLevels = { Commissioning: LogLevel.WARN };
 
     // § live-confirmed fix — a FRESH `Environment` per server, never the process-wide
-    // `Environment.default` singleton. `Environment.default` is a module-level global
-    // (`@matter/general`'s `Environment.js`: `let global = new Environment("default")`), and
-    // its services (storage, endpoint numbering) are created once and cached on that ONE
-    // instance. The previous code mutated `Environment.default.vars["storage.path"]` on every
-    // `start()` call and handed the SAME shared environment to `ServerNode.create()` each time —
-    // so a second `RealMatterBridgeServer` in the same process (a real restart test, or two
-    // bridges running together) could inherit the FIRST server's already-initialized storage/
-    // endpoint state instead of genuinely isolated state for its own `storagePath`, surfacing as
-    // "Endpoint device-1 number 1 is allocated to another endpoint" and storage rename races.
-    // Each server now gets its own `Environment` instance, matching what "independent Matter
-    // node with its own storage" actually requires — parented to `Environment.default` so
-    // platform-registered services (`@matter/nodejs`'s Node crypto/Entropy provider, hooked onto
-    // `Environment.default` specifically at process bootstrap) still resolve via `Environment`'s
-    // own parent-fallback in `get()`, while storage/endpoint-numbering services — created fresh
-    // per environment instance — are never shared with a sibling server.
+    // `Environment.default` singleton — see git history for the full root-cause writeup
+    // (Environment.default's services are created once and cached on that one instance;
+    // sharing it across RealMatterBridgeServer instances leaked storage/endpoint state).
     const environment = new Environment(this.opts.nodeId, Environment.default);
     environment.vars.set("storage.path", this.opts.storagePath);
 
@@ -141,13 +252,9 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       },
     });
 
-    // § real root cause of "Endpoint device-1 number 1 is allocated to another endpoint"
-    // (reproduced deterministically on Linux, not an Environment-sharing artifact — see
-    // `ServerEndpointStores.assignNumber`, @matter/node's real source): added with no explicit
-    // `number`, the aggregator auto-allocates the SDK's first free number, which is 1 — the same
-    // number `addOnOffLight` then force-assigns to the first bridged device via its own
-    // 1-based `endpointNumber` contract. Giving the aggregator a fixed, reserved number outside
-    // that 1-based device range removes the collision instead of relying on allocation order.
+    // § real root cause of "Endpoint device-1 number 1 is allocated to another endpoint" —
+    // the aggregator auto-allocates the SDK's first free number (1) unless given an explicit,
+    // reserved one outside the 1-based device-number range `addEndpoint` uses.
     this.aggregator = new Endpoint(AggregatorEndpoint, { id: "aggregator", number: 0xfffe });
     await this.node.add(this.aggregator);
     await this.node.start();
@@ -160,46 +267,174 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     this.endpoints.clear();
   }
 
-  async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
+  /**
+   * § Matter Bridge Phase 1 foundation — composes the real `@matter/main` device definition +
+   * cluster behaviors for whichever Matter Device Type `spec.deviceTypeId` names, using the
+   * pure conversion functions in `clusters/*-adapter.ts` for every attribute value. This is the
+   * one place in the codebase that switches on a Matter Device Type id to build SDK objects —
+   * that is inherent to the SDK-integration boundary (a finite, spec-driven mapping), NOT the
+   * "infer device type from capability presence" anti-pattern this Phase exists to remove: the
+   * device type here is already RESOLVED (by `matter-device-type-resolver.ts`, upstream of this
+   * call) — this method never re-derives or second-guesses it from `spec.initialState`.
+   */
+  async addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void> {
     if (!this.aggregator) throw new Error("matter-bridge: server not started");
-    if (this.endpoints.has(args.endpointNumber)) return; // idempotent (§ Endpoint architecture)
+    if (this.endpoints.has(spec.endpointNumber)) return; // idempotent (§ Endpoint architecture)
 
-    const BridgedOnOffServer = createOnOffServerClass((endpointNumber, on) => {
-      for (const l of this.commandListeners) l(endpointNumber, on);
-    });
+    const emit: Emit = (endpointNumber, command) => {
+      for (const l of this.commandListeners) l(endpointNumber, command);
+    };
+    const baseOptions = {
+      id: `device-${spec.endpointNumber}`,
+      number: spec.endpointNumber,
+      bridgedDeviceBasicInformation: { nodeLabel: spec.name, reachable: true },
+    };
 
-    const endpoint = new Endpoint(
-      OnOffLightDevice.with(BridgedDeviceBasicInformationServer, BridgedOnOffServer),
-      {
-        id: `device-${args.endpointNumber}`,
-        number: args.endpointNumber,
-        bridgedDeviceBasicInformation: {
-          nodeLabel: args.name,
-          reachable: true,
-        },
-        onOff: { onOff: args.initialOn },
-      },
-    );
+    let endpoint: Endpoint;
+    switch (spec.deviceTypeId) {
+      case ON_OFF_LIGHT: {
+        const initial = spec.initialState?.kind === "onoff" ? spec.initialState : null;
+        const OnOffServerClass = createRoutedOnOffServerClass(emit, (on) => ({ capability: "onoff", action: on ? "on" : "off" }));
+        endpoint = new Endpoint(OnOffLightDevice.with(BridgedDeviceBasicInformationServer, OnOffServerClass), {
+          ...baseOptions,
+          onOff: { onOff: initial?.on ?? false },
+        });
+        break;
+      }
+      case DIMMABLE_LIGHT: {
+        const initial = spec.initialState?.kind === "brightness" ? spec.initialState : null;
+        const OnOffServerClass = createRoutedOnOffServerClass(emit, (on) => ({ capability: "brightness", action: on ? "on" : "off" }));
+        const LevelServerClass = createLevelControlServerClass((n, matterLevel) =>
+          emit(n, { capability: "brightness", action: "set", level: levelFromMatter(matterLevel) }),
+        );
+        endpoint = new Endpoint(DimmableLightDevice.with(BridgedDeviceBasicInformationServer, OnOffServerClass, LevelServerClass), {
+          ...baseOptions,
+          onOff: { onOff: initial?.on ?? false },
+          levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
+        });
+        break;
+      }
+      case COLOR_TEMPERATURE_LIGHT: {
+        const initial = spec.initialState?.kind === "color" ? spec.initialState : null;
+        const LevelServerClass = createLevelControlServerClass((n, matterLevel) => emit(n, { capability: "color", level: levelFromMatter(matterLevel) }));
+        const ColorServerClass = createColorTemperatureServerClass((n, mireds) => emit(n, { capability: "color", kelvin: miredsToKelvin(mireds) }));
+        endpoint = new Endpoint(ColorTemperatureLightDevice.with(BridgedDeviceBasicInformationServer, LocalOnlyOnOffServer, LevelServerClass, ColorServerClass), {
+          ...baseOptions,
+          onOff: { onOff: initial?.on ?? false },
+          levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
+          colorControl: { colorTemperatureMireds: kelvinToMireds(initial?.kelvin ?? 3000), colorMode: ColorControl.ColorMode.ColorTemperatureMireds },
+        });
+        break;
+      }
+      case EXTENDED_COLOR_LIGHT: {
+        const initial = spec.initialState?.kind === "color" ? spec.initialState : null;
+        const LevelServerClass = createLevelControlServerClass((n, matterLevel) => emit(n, { capability: "color", level: levelFromMatter(matterLevel) }));
+        const ColorServerClass = createExtendedColorServerClass(
+          (n, matterX, matterY) => {
+            const { hue, saturation } = xyToHueSaturation(xyChannelFromMatter(matterX), xyChannelFromMatter(matterY));
+            emit(n, { capability: "color", hue, saturation });
+          },
+          (n, mireds) => emit(n, { capability: "color", kelvin: miredsToKelvin(mireds) }),
+        );
+        const usesKelvin = initial?.kelvin != null;
+        const xy = usesKelvin ? { x: 0, y: 0 } : hueSaturationToXy(initial?.hue ?? 0, initial?.saturation ?? 0);
+        endpoint = new Endpoint(ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, LocalOnlyOnOffServer, LevelServerClass, ColorServerClass), {
+          ...baseOptions,
+          onOff: { onOff: initial?.on ?? false },
+          levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
+          colorControl: {
+            currentX: xyChannelToMatter(xy.x),
+            currentY: xyChannelToMatter(xy.y),
+            colorTemperatureMireds: kelvinToMireds(initial?.kelvin ?? 3000),
+            colorMode: usesKelvin ? ColorControl.ColorMode.ColorTemperatureMireds : ColorControl.ColorMode.CurrentXAndCurrentY,
+          },
+        });
+        break;
+      }
+      case WINDOW_COVERING: {
+        const initial = spec.initialState?.kind === "position" ? spec.initialState : null;
+        const percent100ths = positionToMatterPercent100ths(initial?.position ?? 100);
+        const CoveringServerClass = createWindowCoveringServerClass((n, command) => emit(n, { capability: "position", ...command }));
+        endpoint = new Endpoint(WindowCoveringDevice.with(BridgedDeviceBasicInformationServer, CoveringServerClass), {
+          ...baseOptions,
+          windowCovering: {
+            currentPositionLiftPercent100ths: percent100ths,
+            targetPositionLiftPercent100ths: percent100ths,
+          },
+        });
+        break;
+      }
+      default:
+        throw new Error(`matter-bridge: unsupported Matter Device Type id 0x${spec.deviceTypeId.toString(16)}`);
+    }
+
     await this.aggregator.add(endpoint);
-    this.endpoints.set(args.endpointNumber, endpoint);
+    this.endpoints.set(spec.endpointNumber, { endpoint, deviceTypeId: spec.deviceTypeId });
   }
 
   async removeEndpoint(endpointNumber: number): Promise<void> {
-    const endpoint = this.endpoints.get(endpointNumber);
-    if (!endpoint) return;
-    await endpoint.delete();
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) return;
+    await entry.endpoint.delete();
     this.endpoints.delete(endpointNumber);
   }
 
-  async setOnOffState(endpointNumber: number, on: boolean): Promise<void> {
-    const endpoint = this.endpoints.get(endpointNumber);
-    if (!endpoint) return;
-    // A direct attribute write — this is a STATE REPORT, not a command invocation, so it does
-    // NOT re-enter `BridgedOnOffServer.on()/off()` above (§11 loop-safety).
-    await endpoint.set({ onOff: { onOff: on } });
+  /** A direct attribute write — this is a STATE REPORT, not a command invocation, so it does
+   * NOT re-enter any of the Bridged*Server command handlers above (§11 loop-safety). Dispatches
+   * on `state.kind`, not on the endpoint's device type — a state kind that doesn't match
+   * anything this endpoint's composed clusters expose is simply ignored (§ Phase 1: a defensive
+   * no-op, never a crash — `handleSupremeStateChange` in `matter-bridge-driver.ts` already only
+   * forwards the endpoint's own `primaryCapability`, so this is a second, cheap safety net). */
+  async setCapabilityState(endpointNumber: number, state: CapabilityState): Promise<void> {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) return;
+    // § Matter Bridge Phase 1 foundation — `Endpoint.set()`'s parameter type is generic over
+    // the SPECIFIC composed behavior set that particular endpoint instance was constructed
+    // with (`addEndpoint`'s `switch`, five different compositions) — a value this method
+    // genuinely doesn't know statically, since a single `Map<number, BridgedEndpointEntry>`
+    // holds every device type's endpoints uniformly (the whole point of this being one
+    // generic method instead of five device-type-specific ones). Each branch below only ever
+    // sets keys that belong to the clusters ITS OWN device type actually composed in
+    // `addEndpoint` — verified by the `state.kind`/`deviceTypeId` guards, not by this cast.
+    const ep = entry.endpoint as unknown as { set(values: Record<string, unknown>): Promise<void> };
+    switch (state.kind) {
+      case "onoff":
+        await ep.set({ onOff: { onOff: state.on } });
+        return;
+      case "brightness":
+        await ep.set({ onOff: { onOff: state.on }, levelControl: { currentLevel: levelToMatter(state.level) } });
+        return;
+      case "color": {
+        const colorControl: Record<string, unknown> = {};
+        if (state.kelvin !== null) {
+          colorControl.colorTemperatureMireds = kelvinToMireds(state.kelvin);
+          colorControl.colorMode = ColorControl.ColorMode.ColorTemperatureMireds;
+        } else if (entry.deviceTypeId === EXTENDED_COLOR_LIGHT && state.hue !== null && state.saturation !== null) {
+          const xy = hueSaturationToXy(state.hue, state.saturation);
+          colorControl.currentX = xyChannelToMatter(xy.x);
+          colorControl.currentY = xyChannelToMatter(xy.y);
+          colorControl.colorMode = ColorControl.ColorMode.CurrentXAndCurrentY;
+        }
+        await ep.set({
+          onOff: { onOff: state.on },
+          levelControl: { currentLevel: levelToMatter(state.level) },
+          colorControl,
+        });
+        return;
+      }
+      case "position": {
+        const percent100ths = positionToMatterPercent100ths(state.position);
+        await ep.set({
+          windowCovering: { currentPositionLiftPercent100ths: percent100ths, targetPositionLiftPercent100ths: percent100ths },
+        });
+        return;
+      }
+      default:
+        return;
+    }
   }
 
-  onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void {
+  onCommand(listener: Emit): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }

@@ -104,6 +104,7 @@ export interface MatterBridgeDeviceEntry {
   deviceId: string;
   endpointNumber: number;
   name: string | null;
+  deviceTypeName: string;
 }
 /** SENSITIVE — see `MatterBridgeCommissioningState.pairing` (services/protocols). */
 export interface MatterBridgePairing {

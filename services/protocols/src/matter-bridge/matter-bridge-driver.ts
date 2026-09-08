@@ -1,33 +1,43 @@
-import type { DeviceId } from "@supreme/domain-model";
+import type { CapabilityCommand, CapabilityState, DeviceCapability, DeviceId } from "@supreme/domain-model";
 import type { MatterBridgeCapabilityPort } from "./capability-port.js";
 import type { MatterEndpointRegistry } from "./endpoint-registry.js";
 import type { MatterBridgeServer } from "./server.js";
+import { matterDeviceTypeRegistry, type MatterDeviceTypeRegistry } from "./device-types/matter-device-type-registry.js";
+import { resolveMatterDeviceType, type MatterDeviceTypeResolution } from "./device-types/matter-device-type-resolver.js";
+import type { MatterDeviceTypeDefinition } from "./device-types/matter-device-types.js";
 
 export interface MatterBridgeDriverOptions {
   server: MatterBridgeServer;
   registry: MatterEndpointRegistry;
   capabilities: MatterBridgeCapabilityPort;
   onLog?: (level: "info" | "warn" | "error", message: string) => void;
+  /** Injectable for tests; production always uses the shared, spec-derived registry. */
+  deviceTypeRegistry?: MatterDeviceTypeRegistry;
 }
 
 /**
- * SupremeOS Universal Light ↔ Matter On/Off Light — the Phase 1 vertical slice
- * (§ Matter Bridge Phase 1). Owns exactly two responsibilities: routing a genuine Matter
- * command into `capabilities.command()`, and mirroring a genuine SupremeOS `onoff` state
- * change onto the Matter attribute. Nothing else — no persistence beyond the endpoint
- * registry, no Driver Manager plumbing (§ Scope boundary), no second device model.
+ * SupremeOS Universal Entity ↔ Matter (§ Matter Bridge Phase 1 foundation). Routes a genuine
+ * Matter command into `capabilities.command()`, and mirrors a genuine SupremeOS capability-state
+ * change onto the Matter endpoint's attributes — for WHATEVER Matter Device Type the device
+ * resolved to (`device-types/matter-device-type-resolver.ts`), not only On/Off Light as before
+ * this Phase. Nothing else — no persistence beyond the endpoint registry, no Driver Manager
+ * plumbing (§ Scope boundary), no second device model.
  */
 export class MatterBridgeDriver {
   private readonly server: MatterBridgeServer;
   private readonly registry: MatterEndpointRegistry;
   private readonly capabilities: MatterBridgeCapabilityPort;
   private readonly onLog: (level: "info" | "warn" | "error", message: string) => void;
+  private readonly deviceTypeRegistry: MatterDeviceTypeRegistry;
   /** endpointNumber → deviceId, for routing an inbound Matter command back to a device. */
   private readonly exposedDevices = new Map<number, DeviceId>();
   /** deviceId → endpointNumber, the reverse index — a device only appears here once it has
-   * actually been bridged via `exposeLight`/restart re-exposure, never allocated on demand
+   * actually been bridged via `exposeDevice`/restart re-exposure, never allocated on demand
    * for an arbitrary state event (every device in the home emits `onState`, bridged or not). */
   private readonly endpointByDevice = new Map<DeviceId, number>();
+  /** endpointNumber → the resolved device type, needed to know WHICH SupremeOS capability
+   * drives an endpoint's state (`primaryCapability`) when a live `onState` event arrives. */
+  private readonly deviceTypeByEndpoint = new Map<number, MatterDeviceTypeDefinition>();
   private unsubscribeCommand: (() => void) | null = null;
   private unsubscribeState: (() => void) | null = null;
   private started = false;
@@ -37,6 +47,7 @@ export class MatterBridgeDriver {
     this.registry = opts.registry;
     this.capabilities = opts.capabilities;
     this.onLog = opts.onLog ?? (() => {});
+    this.deviceTypeRegistry = opts.deviceTypeRegistry ?? matterDeviceTypeRegistry;
   }
 
   async start(): Promise<void> {
@@ -52,15 +63,27 @@ export class MatterBridgeDriver {
     // logged and left un-exposed for this run — its persisted endpoint number is untouched,
     // so it is retried at the SAME identity next start, never silently reissued.
     for (const mapping of this.registry.all()) {
+      const deviceType = this.deviceTypeRegistry.byId(mapping.deviceTypeId);
+      if (!deviceType) {
+        this.onLog(
+          "error",
+          `matter-bridge: endpoint ${mapping.endpointNumber} (device ${mapping.deviceId}) persists an ` +
+            `unrecognized Matter Device Type id 0x${mapping.deviceTypeId.toString(16)} — skipped, endpoint ` +
+            `identity preserved for a future SupremeOS version that recognizes it`,
+        );
+        continue;
+      }
       try {
-        const state = await this.capabilities.getState(mapping.deviceId, "onoff");
-        await this.server.addOnOffLight({
+        const state = await this.capabilities.getState(mapping.deviceId, deviceType.primaryCapability);
+        await this.server.addEndpoint({
           endpointNumber: mapping.endpointNumber,
           name: mapping.deviceId,
-          initialOn: state?.kind === "onoff" ? state.on : false,
+          deviceTypeId: deviceType.id,
+          initialState: state,
         });
         this.exposedDevices.set(mapping.endpointNumber, mapping.deviceId);
         this.endpointByDevice.set(mapping.deviceId, mapping.endpointNumber);
+        this.deviceTypeByEndpoint.set(mapping.endpointNumber, deviceType);
       } catch (err) {
         this.onLog(
           "error",
@@ -69,8 +92,8 @@ export class MatterBridgeDriver {
         );
       }
     }
-    this.unsubscribeCommand = this.server.onCommand((endpointNumber, on) => {
-      void this.handleMatterCommand(endpointNumber, on);
+    this.unsubscribeCommand = this.server.onCommand((endpointNumber, command) => {
+      void this.handleMatterCommand(endpointNumber, command);
     });
     this.unsubscribeState = this.capabilities.onState((event) => {
       void this.handleSupremeStateChange(event.deviceId, event.capability, event.state);
@@ -105,19 +128,45 @@ export class MatterBridgeDriver {
     this.started = false;
   }
 
-  /** Bridge one more SupremeOS `onoff` device onto Matter as an On/Off Light endpoint.
-   * Idempotent — calling twice for the same device reuses its existing endpoint. */
-  async exposeLight(deviceId: DeviceId, name: string): Promise<void> {
-    const mapping = this.registry.resolve(deviceId, "onOffLight");
-    const state = await this.capabilities.getState(deviceId, "onoff");
-    await this.server.addOnOffLight({
+  /**
+   * Bridge one more SupremeOS device onto Matter, at whichever Matter Device Type its full
+   * capability set actually justifies (§ Matter Bridge Phase 1 foundation — the fix for the
+   * reported bug: this replaces the old onoff-only `exposeLight`, which silently skipped a
+   * device unless it carried a bare `onoff` capability entry). Idempotent — calling twice for
+   * the same device reuses its existing endpoint and device type.
+   *
+   * Returns the resolution outcome so the caller (`AppContext.exposeMatterDevices`) can log/
+   * track an UNSUPPORTED device honestly instead of it just silently never appearing — the
+   * driver itself never throws for "this device doesn't map to a Phase 1 device type," since
+   * that is an expected, common outcome (a lock, a sensor, a thermostat), not an error.
+   */
+  async exposeDevice(deviceId: DeviceId, name: string, capabilities: DeviceCapability[]): Promise<MatterDeviceTypeResolution> {
+    const resolution = resolveMatterDeviceType(capabilities, this.deviceTypeRegistry);
+    if (resolution.outcome !== "SUPPORTED" || !resolution.deviceType) {
+      return resolution;
+    }
+    const deviceType = resolution.deviceType;
+    const mapping = this.registry.resolve(deviceId, deviceType.id);
+    // The registry may return an EXISTING mapping whose deviceTypeId differs from what the
+    // device resolves to right now (§ endpoint-registry.ts's `resolve` doc) — Phase 1 always
+    // exposes using the PERSISTED device type, never silently re-typing an already-bridged
+    // endpoint out from under a real ecosystem's cached view of it.
+    const effectiveDeviceType = this.deviceTypeRegistry.byId(mapping.deviceTypeId) ?? deviceType;
+    const state = await this.capabilities.getState(deviceId, effectiveDeviceType.primaryCapability);
+    await this.server.addEndpoint({
       endpointNumber: mapping.endpointNumber,
       name,
-      initialOn: state?.kind === "onoff" ? state.on : false,
+      deviceTypeId: effectiveDeviceType.id,
+      initialState: state,
     });
     this.exposedDevices.set(mapping.endpointNumber, deviceId);
     this.endpointByDevice.set(deviceId, mapping.endpointNumber);
-    this.onLog("info", `matter-bridge: exposed ${deviceId} as endpoint ${mapping.endpointNumber} (${name})`);
+    this.deviceTypeByEndpoint.set(mapping.endpointNumber, effectiveDeviceType);
+    this.onLog(
+      "info",
+      `matter-bridge: exposed ${deviceId} as endpoint ${mapping.endpointNumber} (${name}) — ${effectiveDeviceType.name}`,
+    );
+    return { outcome: "SUPPORTED", deviceType: effectiveDeviceType, reason: null };
   }
 
   /** Unbridge a device — removes the Matter endpoint but keeps the registry's endpoint-number
@@ -128,6 +177,8 @@ export class MatterBridgeDriver {
     await this.server.removeEndpoint(endpointNumber);
     this.exposedDevices.delete(endpointNumber);
     this.endpointByDevice.delete(deviceId);
+    this.deviceTypeByEndpoint.delete(endpointNumber);
+    this.lastReported.delete(endpointNumber);
   }
 
   /** § Phase 4 §7 — read this node's real, live commissioning/fabric state. Pass-through to
@@ -140,13 +191,18 @@ export class MatterBridgeDriver {
   /** § Extension Center — Bridged Devices page. Every SupremeOS device currently live on the
    * Matter side, by endpoint number — the driver's own real exposure index, not the registry
    * (`registry.all()` also lists a device that failed to re-expose after a restart; this
-   * reflects only what a Matter controller can genuinely see right now, matching the
-   * `getCommissioningState`/`addOnOffLight` calls this same index already backs). Names are
-   * resolved by the caller (AppContext, which owns `home.listDevices()`) — this driver has no
-   * device-name source of its own by design (§ Scope boundary, this file's own doc comment). */
-  listExposedDevices(): { deviceId: DeviceId; endpointNumber: number }[] {
+   * reflects only what a Matter controller can genuinely see right now). Names are resolved by
+   * the caller (AppContext, which owns `home.listDevices()`) — this driver has no device-name
+   * source of its own by design (§ Scope boundary, this file's own doc comment). Includes the
+   * resolved Matter Device Type name/id (§ Phase 1 foundation — the diagnostics this
+   * architecture makes possible: an installer can now see WHAT each bridged device claims to
+   * be on the Matter side, not just that it's bridged). */
+  listExposedDevices(): { deviceId: DeviceId; endpointNumber: number; deviceTypeId: number; deviceTypeName: string }[] {
     return [...this.exposedDevices.entries()]
-      .map(([endpointNumber, deviceId]) => ({ deviceId, endpointNumber }))
+      .map(([endpointNumber, deviceId]) => {
+        const deviceType = this.deviceTypeByEndpoint.get(endpointNumber);
+        return { deviceId, endpointNumber, deviceTypeId: deviceType?.id ?? 0, deviceTypeName: deviceType?.name ?? "Unknown" };
+      })
       .sort((a, b) => a.endpointNumber - b.endpointNumber);
   }
 
@@ -161,7 +217,7 @@ export class MatterBridgeDriver {
    * start() again"), but this method used to stop there: `this.started` stayed `true` and the
    * command/state subscriptions stayed live, so `start()`'s own `if (this.started) return`
    * guard made every future call a silent no-op. Every driver method touching the node
-   * (`getCommissioningState`, `exposeLight`, …) then threw "server not started" forever —
+   * (`getCommissioningState`, `exposeDevice`, …) then threw "server not started" forever —
    * confirmed on a real deployment via `journalctl`, reproducing on every status/refresh
    * poll after one Factory Reset click. A factory reset button that permanently kills the
    * feature it resets is not "reset", so this now restarts immediately with a fresh Matter
@@ -175,25 +231,29 @@ export class MatterBridgeDriver {
     await this.server.factoryReset();
     this.exposedDevices.clear();
     this.endpointByDevice.clear();
+    this.deviceTypeByEndpoint.clear();
+    this.lastReported.clear();
     this.started = false;
     await this.start();
   }
 
   /** Matter ecosystem → SupremeOS (§1 required path, direction 1). A real ecosystem-issued
-   * On/Off cluster command — never fabricated as a state report — routed through the SAME
-   * command path the REST API/automations use, so the existing native driver executes it
-   * against the physical device exactly as it would for any other caller. This function does
-   * NOT assume success changed physical state: it does not write the Matter attribute itself;
-   * that only happens when real feedback arrives via `handleSupremeStateChange` (§11: "Do not
-   * fake feedback or assume successful command execution means the physical state changed"). */
-  private async handleMatterCommand(endpointNumber: number, on: boolean): Promise<void> {
+   * cluster command — never fabricated as a state report — routed through the SAME command
+   * path the REST API/automations use, so the existing native driver executes it against the
+   * physical device exactly as it would for any other caller. This function does NOT assume
+   * success changed physical state: it does not write the Matter attribute itself; that only
+   * happens when real feedback arrives via `handleSupremeStateChange` (§11: "Do not fake
+   * feedback or assume successful command execution means the physical state changed"). The
+   * command already arrives capability-shaped (`real-server.ts` fills in `capability` from the
+   * endpoint's resolved device type) — this method is device-type-agnostic. */
+  private async handleMatterCommand(endpointNumber: number, command: CapabilityCommand): Promise<void> {
     const deviceId = this.exposedDevices.get(endpointNumber);
     if (!deviceId) {
       this.onLog("warn", `matter-bridge: command for unmapped endpoint ${endpointNumber}`);
       return;
     }
     try {
-      await this.capabilities.command(deviceId, { capability: "onoff", action: on ? "on" : "off" });
+      await this.capabilities.command(deviceId, command);
     } catch (err) {
       this.onLog("error", `matter-bridge: command failed for ${deviceId}: ${(err as Error).message}`);
     }
@@ -202,21 +262,27 @@ export class MatterBridgeDriver {
   /** Physical device / automation / any other source → SupremeOS → Matter (§1 required path,
    * direction 2, and §11's "physical changes"/"automation changes"/"local physical controls"
    * cases — all of them are just SupremeOS state events at this seam, so one handler covers
-   * all three). Loop-safety: this only ever calls `setOnOffState` (an attribute write), never
-   * `onCommand`'s handler — a real Matter attribute write does not re-enter the command path,
-   * so there is no cycle to guard against structurally. The dedupe below is a cheap guard
-   * against redundant no-op writes, not a correctness requirement. */
-  private lastReported = new Map<number, boolean>();
-  private async handleSupremeStateChange(
-    deviceId: DeviceId,
-    capability: string,
-    state: { kind: string; on?: boolean } | null,
-  ): Promise<void> {
-    if (capability !== "onoff" || !state || state.kind !== "onoff" || typeof state.on !== "boolean") return;
+   * all three). Loop-safety: this only ever calls `setCapabilityState` (an attribute write),
+   * never `onCommand`'s handler — a real Matter attribute write does not re-enter the command
+   * path, so there is no cycle to guard against structurally. Only forwards a state change for
+   * the capability that IS the endpoint's resolved device type's `primaryCapability` — an
+   * unrelated capability change on a multi-capability device (e.g. a thermostat's temperature
+   * changing on a device also bridged for something else — not possible in Phase 1's one-
+   * capability-per-device-type model, but kept explicit for when Phase 3 changes that) must
+   * never be mistaken for this endpoint's own state. */
+  /** endpointNumber → the last state actually written to the Matter attribute, cheaply
+   * serialized — guards against redundant writes for an identical, unchanged state report
+   * (not a correctness requirement, since a no-op write is harmless, but avoids needless
+   * `@matter/main` attribute-change event churn on every duplicate `onState` delivery). */
+  private readonly lastReported = new Map<number, string>();
+  private async handleSupremeStateChange(deviceId: DeviceId, capability: string, state: CapabilityState | null): Promise<void> {
     const endpointNumber = this.endpointByDevice.get(deviceId);
     if (endpointNumber === undefined) return; // not a bridged device — most devices aren't
-    if (this.lastReported.get(endpointNumber) === state.on) return; // no real change
-    this.lastReported.set(endpointNumber, state.on);
-    await this.server.setOnOffState(endpointNumber, state.on);
+    const deviceType = this.deviceTypeByEndpoint.get(endpointNumber);
+    if (!deviceType || capability !== deviceType.primaryCapability || !state) return;
+    const serialized = JSON.stringify(state);
+    if (this.lastReported.get(endpointNumber) === serialized) return; // no real change
+    this.lastReported.set(endpointNumber, serialized);
+    await this.server.setCapabilityState(endpointNumber, state);
   }
 }
