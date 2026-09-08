@@ -91,7 +91,7 @@ export function MatterBridgePanel({ onOpenDevices }: { onOpenDevices: () => void
               <Button disabled={busy} variant="primary" onClick={() => run(() => client.enableMatterBridge())}>Enable</Button>
             )}
           </div>
-          {status.running && <p className="muted">Refresh picks up any new SupremeOS device — existing ones keep their identity.</p>}
+          {status.running && <p className="muted">Refresh synchronizes the Matter Bridge with your current SupremeOS devices — new devices are added, changed devices are updated, and removed devices are withdrawn. Unchanged devices keep their identity.</p>}
 
           {status.running && (
             <>
@@ -211,7 +211,7 @@ export function MatterBridgeDevicesPage({ onBack }: { onBack: () => void }) {
         <Button disabled={busy} variant="primary" onClick={refresh}>Refresh devices</Button>
       </div>
       {error && <p style={{ color: "var(--aureon-color-status-critical)" }}>{error}</p>}
-      <p className="muted" style={{ marginBottom: 16 }}>Refresh picks up any new SupremeOS device — existing ones keep their identity.</p>
+      <p className="muted" style={{ marginBottom: 16 }}>Refresh synchronizes the Matter Bridge with your current SupremeOS devices — new devices are added, changed devices are updated, and removed devices are withdrawn. Unchanged devices keep their identity.</p>
 
       {devices === null && <p className="muted">Loading…</p>}
       {devices && devices.length === 0 && <p className="muted">No devices are bridged yet. Enable the Bridge or click Refresh once you've added on/off devices.</p>}

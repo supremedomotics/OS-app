@@ -169,8 +169,16 @@ export class MatterBridgeDriver {
     return { outcome: "SUPPORTED", deviceType: effectiveDeviceType, reason: null };
   }
 
-  /** Unbridge a device — removes the Matter endpoint but keeps the registry's endpoint-number
-   * allocation (never reissued, §endpoint-registry.ts). */
+  /** Unbridge a device LIVE — removes the real Matter endpoint (§ Matter Bridge Phase 1.1:
+   * `server.removeEndpoint` calls the real `@matter/main` `Endpoint.delete()`, which detaches
+   * it from the aggregator's `parts`, so the Descriptor cluster's PartsList — computed live
+   * from that same collection, never hand-maintained — genuinely no longer lists it; this is
+   * not a SupremeOS-side illusion of removal) but KEEPS the registry's endpoint-number
+   * allocation (never reissued while the device still exists in SupremeOS, §endpoint-
+   * registry.ts) — used for "device still exists but is currently unsupported" (e.g. a
+   * capability changed), where the SAME endpoint identity should be reclaimed if it becomes
+   * supported again. For "device no longer exists in SupremeOS at all," use
+   * {@link forgetDevice} instead, which also frees the registry record. */
   async removeLight(deviceId: DeviceId): Promise<void> {
     const endpointNumber = this.endpointByDevice.get(deviceId);
     if (endpointNumber === undefined) return;
@@ -179,6 +187,87 @@ export class MatterBridgeDriver {
     this.endpointByDevice.delete(deviceId);
     this.deviceTypeByEndpoint.delete(endpointNumber);
     this.lastReported.delete(endpointNumber);
+  }
+
+  /** § Matter Bridge Phase 1.1 — full removal for a SupremeOS device that no longer exists at
+   * all (not merely unsupported): un-bridges the live endpoint (see {@link removeLight}) AND
+   * frees its persisted endpoint-registry record. A genuinely deleted device must never keep
+   * squatting on an endpoint number, and must never resurrect on the next restart (`start()`'s
+   * re-expose loop only iterates `registry.all()` — once the record is gone, restart can never
+   * bring it back). Idempotent: a no-op if the device was never bridged in the first place. */
+  async forgetDevice(deviceId: DeviceId): Promise<void> {
+    await this.removeLight(deviceId);
+    this.registry.remove(deviceId);
+  }
+
+  /**
+   * § Matter Bridge Phase 1.1 foundation — the lifecycle fix: "Refresh devices" (and every
+   * boot) used to be additive-only (`exposeDevice` per current device, nothing else), so a
+   * SupremeOS device deleted after being bridged stayed bridged FOREVER — its endpoint kept
+   * appearing to every Matter controller with no SupremeOS device backing it. This is the one
+   * place that now enforces the invariant "current accepted SupremeOS devices == current
+   * Matter bridged endpoints" (except UNSUPPORTED, which is diagnostic-only, never silently
+   * dropped either — see the returned `unsupported` list).
+   *
+   * `desired ∩ existing` → add/update via `exposeDevice` (idempotent, reuses the SAME endpoint
+   * number — never rebuilds an unchanged endpoint). `desired - existing` → create. `existing -
+   * desired` → {@link forgetDevice} (full removal, live endpoint + persisted record). A device
+   * still present in `devices` but no longer resolving to a supported Matter type is
+   * un-bridged LIVE via `removeLight` (its registry identity is preserved — it is not "gone
+   * from SupremeOS", so a future capability change can reclaim the SAME endpoint number) and
+   * reported in `unsupported`, never in `removed`.
+   */
+  async reconcile(
+    devices: { id: DeviceId; name: string; capabilities: DeviceCapability[] }[],
+  ): Promise<{
+    added: DeviceId[];
+    updated: DeviceId[];
+    removed: DeviceId[];
+    unsupported: { deviceId: DeviceId; reason: string }[];
+    failed: { deviceId: DeviceId; error: string }[];
+  }> {
+    const desiredIds = new Set(devices.map((d) => d.id));
+    const added: DeviceId[] = [];
+    const updated: DeviceId[] = [];
+    const removed: DeviceId[] = [];
+    const unsupported: { deviceId: DeviceId; reason: string }[] = [];
+    const failed: { deviceId: DeviceId; error: string }[] = [];
+
+    // Isolated per device — one device's construction throwing (§ Recovery, a real bug found
+    // live: this loop had no isolation once already, for the old onoff-only version) must
+    // never block every other device from being added, updated, or removed in this same pass.
+    for (const device of devices) {
+      try {
+        const wasExposed = this.endpointByDevice.has(device.id);
+        const resolution = await this.exposeDevice(device.id, device.name, device.capabilities);
+        if (resolution.outcome === "SUPPORTED") {
+          (wasExposed ? updated : added).push(device.id);
+        } else {
+          unsupported.push({ deviceId: device.id, reason: resolution.reason ?? "unsupported" });
+          if (wasExposed) {
+            // Still a real SupremeOS device, just no longer resolvable — un-bridge live but
+            // keep its identity, never forget it (§ distinguishing UNSUPPORTED from REMOVED).
+            await this.removeLight(device.id);
+            removed.push(device.id);
+          }
+        }
+      } catch (err) {
+        failed.push({ deviceId: device.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    for (const deviceId of [...this.endpointByDevice.keys()]) {
+      if (!desiredIds.has(deviceId)) {
+        try {
+          await this.forgetDevice(deviceId);
+          removed.push(deviceId);
+        } catch (err) {
+          failed.push({ deviceId, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+
+    return { added, updated, removed, unsupported, failed };
   }
 
   /** § Phase 4 §7 — read this node's real, live commissioning/fabric state. Pass-through to
