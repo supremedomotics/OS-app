@@ -34,6 +34,10 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     const e = this.endpoints.get(endpointNumber);
     if (e && "on" in state) e.on = state.on;
   }
+  async updateEndpointName(endpointNumber: number, name: string): Promise<void> {
+    const e = this.endpoints.get(endpointNumber);
+    if (e) e.name = name;
+  }
   onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);

@@ -405,6 +405,35 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     this.endpoints.delete(endpointNumber);
   }
 
+  /** § Matter Bridge Phase 1.2 — writes the BridgedDeviceBasicInformation cluster's `NodeLabel`
+   * attribute, the same field EVERY device type's `addEndpoint` branch above already seeds at
+   * construction time via `bridgedDeviceBasicInformation: { nodeLabel: ... }` — this is device-
+   * type-agnostic by construction (every branch composes `BridgedDeviceBasicInformationServer`
+   * identically), never a per-device-type special case. `NodeLabel` is a real, live-writable
+   * Matter attribute (not commissioning-only metadata), so a subscribed controller — Apple
+   * Home included — is expected to pick up the change without recommissioning; see this
+   * method's callers for the disclosed caveat about a controller's own local display cache. */
+  async updateEndpointName(endpointNumber: number, name: string): Promise<void> {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) return;
+    const ep = entry.endpoint as unknown as { set(values: Record<string, unknown>): Promise<void> };
+    await ep.set({ bridgedDeviceBasicInformation: { nodeLabel: name } });
+  }
+
+  /** § Matter Bridge Phase 1.2 — read back an endpoint's REAL, live `NodeLabel` attribute
+   * value directly off the `@matter/main` endpoint (not a SupremeOS-side copy) — exists so a
+   * test can prove `updateEndpointName`/`addEndpoint` actually wrote what a real Matter
+   * controller would read, not merely that the call didn't throw. Not part of the abstract
+   * `MatterBridgeServer` interface (no test-only surface leaks into the seam other transports
+   * implement) — a `RealMatterBridgeServer`-only diagnostic accessor. `null` if the endpoint
+   * doesn't exist. */
+  getEndpointNodeLabel(endpointNumber: number): string | null {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) return null;
+    const ep = entry.endpoint as unknown as { state: { bridgedDeviceBasicInformation?: { nodeLabel?: string } } };
+    return ep.state.bridgedDeviceBasicInformation?.nodeLabel ?? null;
+  }
+
   /** A direct attribute write — this is a STATE REPORT, not a command invocation, so it does
    * NOT re-enter any of the Bridged*Server command handlers above (§11 loop-safety). Dispatches
    * on `state.kind`, not on the endpoint's device type — a state kind that doesn't match

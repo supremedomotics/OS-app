@@ -76,6 +76,17 @@ export interface MatterBridgeServer {
   /** Remove a previously-added endpoint (device unbridged/deleted). */
   removeEndpoint(endpointNumber: number): Promise<void>;
 
+  /** § Matter Bridge Phase 1.2 — update an EXISTING endpoint's user-facing name (the
+   * BridgedDeviceBasicInformation cluster's `NodeLabel` attribute — the field Apple Home/
+   * Google Home/Alexa/SmartThings all read for a bridged accessory's display name) WITHOUT
+   * touching endpoint identity, device type, or any capability state. Separate from
+   * `addEndpoint` because `addEndpoint` is idempotent (a no-op once the endpoint number
+   * already exists, by design — re-adding on every restart must never rebuild an unchanged
+   * endpoint) — a rename must propagate even when the endpoint already exists, so it needs its
+   * own call that isn't swallowed by that idempotency guard. A no-op if the endpoint doesn't
+   * exist (mirrors `setCapabilityState`'s own defensive-no-op convention). */
+  updateEndpointName(endpointNumber: number, name: string): Promise<void>;
+
   /** Write an endpoint's driving-capability state onto its Matter attributes — a STATE REPORT,
    * not a command. Must never itself invoke the server's own command handler (that would be the
    * feedback loop §11 explicitly warns about); a real Matter attribute write is not a command

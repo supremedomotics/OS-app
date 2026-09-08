@@ -34,6 +34,10 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     const e = this.endpoints.get(endpointNumber);
     if (e && "on" in state) e.on = state.on;
   }
+  async updateEndpointName(endpointNumber: number, name: string): Promise<void> {
+    const e = this.endpoints.get(endpointNumber);
+    if (e) e.name = name;
+  }
   onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
@@ -197,7 +201,12 @@ describe("MatterBridgeDriver — endpoint identity persistence across restart", 
     });
     await driver2.start();
     expect(server.endpoints.has(1)).toBe(true);
-    expect(server.endpoints.get(1)?.name).toBe("living-room-light");
+    // § live-confirmed fix (Matter Bridge Phase 1.2) — this used to assert the raw device ID
+    // ("living-room-light"), which is EXACTLY the bug reported live: Apple Home displaying
+    // "dev01M1YC0RA8..." instead of the real device name, because start()'s restart re-expose
+    // loop had nothing but the deviceId to fall back to. The registry now persists the real
+    // name and start() uses it.
+    expect(server.endpoints.get(1)?.name).toBe("Living Room Light");
   });
 });
 

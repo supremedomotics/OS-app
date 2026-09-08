@@ -22,6 +22,15 @@ export interface MatterEndpointMapping {
    * array index (§ Matter Bridge Phase 1: "endpoint identity must remain stable"). */
   endpointNumber: number;
   deviceTypeId: MatterDeviceTypeId;
+  /** § Matter Bridge Phase 1.2 — the device's CURRENT SupremeOS `device.name`, the source for
+   * the Matter endpoint's user-facing BridgedDeviceBasicInformation `NodeLabel` (what Apple
+   * Home/Google Home/Alexa/SmartThings actually display — see `real-server.ts`'s doc comment
+   * for why the driver's OWN `start()` re-expose loop needs this persisted rather than looked
+   * up live: it has no access to `home.listDevices()`, only the registry). Kept in sync on
+   * every `resolve()` call that passes a current name (§ requirement 3 — renaming a SupremeOS
+   * device updates the Matter-visible name; endpoint identity, below, never changes because of
+   * a rename). */
+  name: string;
 }
 
 /** On/Off Light (0x0100) — the id every registry entry persisted before this Phase implicitly
@@ -118,7 +127,16 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
             `nor the legacy "onOffLight" string)`,
         );
       }
-      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId };
+      // § Matter Bridge Phase 1.2 — a pre-this-fix file has no `name` at all (the exact bug
+      // this Phase closes: the driver's restart re-expose loop had nothing but `deviceId` to
+      // fall back to, which is precisely what leaked into Apple Home as the accessory name).
+      // Falling back to `deviceId` here too is a deliberate, ONE-TIME degraded state, not a
+      // repeat of the bug: the very next `resolve()` call from a live reconcile pass (which
+      // always has the real `device.name`) overwrites and persists the correct name — this
+      // fallback only governs what a re-expose shows during the single restart that happens to
+      // land between an upgrade and the first reconcile.
+      const name = typeof raw_m.name === "string" && raw_m.name ? raw_m.name : raw_m.deviceId;
+      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId, name };
       if (map.has(m.deviceId)) {
         throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has a duplicate deviceId (${m.deviceId})`);
       }
@@ -166,17 +184,27 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
 export class MatterEndpointRegistry {
   constructor(private readonly store: IMatterEndpointStore) {}
 
-  /** Returns the existing mapping for this device, or allocates + persists a new one. An
-   * existing mapping's `deviceTypeId` is returned AS PERSISTED even if the caller passes a
-   * different one — a device's resolved Matter Device Type can change if its SupremeOS
-   * capabilities change (e.g. a driver update adds real color support to a previously
-   * onoff-only light), but that is an explicit re-classification decision for the caller to
-   * make (§ Phase 1 doesn't yet implement it), never a silent overwrite here. */
-  resolve(deviceId: DeviceId, deviceTypeId: MatterDeviceTypeId = 0x0100): MatterEndpointMapping {
+  /** Returns the existing mapping for this device (persisting a fresh `name` if it changed —
+   * § Matter Bridge Phase 1.2, requirement 3: renaming a SupremeOS device updates the Matter-
+   * visible name), or allocates + persists a new one. An existing mapping's `deviceTypeId` is
+   * returned AS PERSISTED even if the caller passes a different one — a device's resolved
+   * Matter Device Type can change if its SupremeOS capabilities change (e.g. a driver update
+   * adds real color support to a previously onoff-only light), but that is an explicit
+   * re-classification decision for the caller to make (§ Phase 1 doesn't yet implement it),
+   * never a silent overwrite here. `endpointNumber` — the stable identity — NEVER changes for
+   * an existing mapping, regardless of what `name` or `deviceTypeId` the caller passes. */
+  resolve(deviceId: DeviceId, deviceTypeId: MatterDeviceTypeId = 0x0100, name: string = deviceId): MatterEndpointMapping {
     const existing = this.store.get(deviceId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.name !== name) {
+        const renamed: MatterEndpointMapping = { ...existing, name };
+        this.store.put(renamed);
+        return renamed;
+      }
+      return existing;
+    }
     const next = this.nextEndpointNumber();
-    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceTypeId };
+    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceTypeId, name };
     this.store.put(mapping);
     return mapping;
   }

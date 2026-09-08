@@ -77,7 +77,15 @@ export class MatterBridgeDriver {
         const state = await this.capabilities.getState(mapping.deviceId, deviceType.primaryCapability);
         await this.server.addEndpoint({
           endpointNumber: mapping.endpointNumber,
-          name: mapping.deviceId,
+          // § live-confirmed fix (Matter Bridge Phase 1.2) — this used to be `mapping.deviceId`,
+          // which is EXACTLY what leaked into Apple Home as the accessory's displayed name:
+          // `start()` runs on every boot BEFORE any reconcile pass supplies the real name, and
+          // `addEndpoint` is deliberately idempotent (a no-op once the endpoint number already
+          // exists), so the wrong name set here was never overwritten by the correct one a
+          // moment later. `mapping.name` is the registry's own persisted "current SupremeOS
+          // device.name," kept fresh by every `exposeDevice`/`reconcile` call — see
+          // `endpoint-registry.ts`'s `resolve()`.
+          name: mapping.name,
           deviceTypeId: deviceType.id,
           initialState: state,
         });
@@ -146,7 +154,10 @@ export class MatterBridgeDriver {
       return resolution;
     }
     const deviceType = resolution.deviceType;
-    const mapping = this.registry.resolve(deviceId, deviceType.id);
+    // § Matter Bridge Phase 1.2 — passing the CURRENT name here is what makes a SupremeOS
+    // rename propagate: `resolve()` persists it (requirement 3), and it's also what `start()`'s
+    // restart re-expose loop reads on the next boot (`mapping.name`, see its own doc comment).
+    const mapping = this.registry.resolve(deviceId, deviceType.id, name);
     // The registry may return an EXISTING mapping whose deviceTypeId differs from what the
     // device resolves to right now (§ endpoint-registry.ts's `resolve` doc) — Phase 1 always
     // exposes using the PERSISTED device type, never silently re-typing an already-bridged
@@ -155,10 +166,17 @@ export class MatterBridgeDriver {
     const state = await this.capabilities.getState(deviceId, effectiveDeviceType.primaryCapability);
     await this.server.addEndpoint({
       endpointNumber: mapping.endpointNumber,
-      name,
+      name: mapping.name,
       deviceTypeId: effectiveDeviceType.id,
       initialState: state,
     });
+    // § Matter Bridge Phase 1.2 — `addEndpoint` is deliberately idempotent (a no-op once the
+    // endpoint number already exists), so a RENAME of an already-bridged device would otherwise
+    // never reach the live Matter attribute. This call is cheap and safe to make unconditionally
+    // (a real state-write on the fake in tests; on the real server it's a plain attribute set,
+    // not a rebuild) — it's what actually delivers requirement 3 for a device that was already
+    // exposed before this call.
+    await this.server.updateEndpointName(mapping.endpointNumber, mapping.name);
     this.exposedDevices.set(mapping.endpointNumber, deviceId);
     this.endpointByDevice.set(deviceId, mapping.endpointNumber);
     this.deviceTypeByEndpoint.set(mapping.endpointNumber, effectiveDeviceType);
