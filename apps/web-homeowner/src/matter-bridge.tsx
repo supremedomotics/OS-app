@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { Button } from "@supreme/aureon-web";
 import type { MatterBridgePairing, MatterBridgeStatus } from "@supreme/sdk";
 import { client } from "./api.js";
@@ -11,15 +12,14 @@ import { client } from "./api.js";
  * just to reuse that card grid would misrepresent it. This is its own small, honestly-labeled
  * panel calling the Bridge's own REST surface directly.
  *
- * No QR image is rendered here — pulling in a QR-rendering dependency (or, worse, sending the
- * pairing payload to a third-party QR-generator service) for one screen wasn't worth it; the
- * manual pairing code below is the spec-standard, fully sufficient way to commission a Matter
- * device by hand. The raw QR payload is shown as copyable text for anyone who wants to feed it
- * into their own tooling.
+ * The QR image is rendered entirely client-side via the `qrcode` package (pure computation,
+ * zero network calls) — the pairing payload never leaves the browser to reach a third-party
+ * QR-generator service, consistent with the Bridge staying 100% local end to end.
  */
 export function MatterBridgePanel() {
   const [status, setStatus] = useState<MatterBridgeStatus | null>(null);
   const [pairing, setPairing] = useState<MatterBridgePairing | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
@@ -29,12 +29,16 @@ export function MatterBridgePanel() {
     setStatus(s);
     if (s.running && !s.commissioned) {
       try {
-        setPairing(await client.matterBridgePairing());
+        const p = await client.matterBridgePairing();
+        setPairing(p);
+        setQrDataUrl(await QRCode.toDataURL(p.qrPairingCode, { margin: 1, width: 220 }));
       } catch {
         setPairing(null);
+        setQrDataUrl(null);
       }
     } else {
       setPairing(null);
+      setQrDataUrl(null);
     }
   }
   useEffect(() => {
@@ -107,14 +111,28 @@ export function MatterBridgePanel() {
                 <p className="muted">
                   Sensitive — use this to pair from Apple Home, Google Home, Alexa, or SmartThings. Don't share it.
                 </p>
-                <p>
-                  <strong>Manual pairing code:</strong>{" "}
-                  <code style={{ fontSize: "1.2em", letterSpacing: "0.05em" }}>{pairing.manualPairingCode}</code>
-                </p>
-                <details>
-                  <summary>QR payload (advanced)</summary>
-                  <code style={{ wordBreak: "break-all" }}>{pairing.qrPairingCode}</code>
-                </details>
+                <div className="row" style={{ gap: 16, alignItems: "flex-start" }}>
+                  {qrDataUrl && (
+                    <img
+                      src={qrDataUrl}
+                      alt="Matter pairing QR code — scan with your controller's app"
+                      width={220}
+                      height={220}
+                      style={{ borderRadius: 8, background: "#fff", padding: 8 }}
+                    />
+                  )}
+                  <div>
+                    <p>
+                      <strong>Manual pairing code:</strong>{" "}
+                      <code style={{ fontSize: "1.2em", letterSpacing: "0.05em" }}>{pairing.manualPairingCode}</code>
+                    </p>
+                    <p className="muted">Scan the QR code, or type the manual code, in Apple Home / Google Home / Alexa / SmartThings.</p>
+                    <details>
+                      <summary>QR payload (advanced)</summary>
+                      <code style={{ wordBreak: "break-all" }}>{pairing.qrPairingCode}</code>
+                    </details>
+                  </div>
+                </div>
               </div>
             )}
 
