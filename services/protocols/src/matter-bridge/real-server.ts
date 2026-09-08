@@ -49,6 +49,23 @@ import { positionToMatterPercent100ths, positionFromMatterPercent100ths } from "
  * Home / Alexa / SmartThings, and operation over a real LAN.
  */
 
+/**
+ * § live-confirmed fix — every Color Temperature / Extended Color Light endpoint construction
+ * failed with "Behaviors have errors" (root cause traced via a local reproduction against the
+ * real @matter/main runtime, not guessed): `colorTemperatureMireds` is CONSTRAINED at validation
+ * time against `colorTempPhysicalMinMireds`/`colorTempPhysicalMaxMireds` — two MANDATORY
+ * ColorTemperature-feature attributes this code never set, so they defaulted to an unset/zero
+ * bound that rejected literally any value, including the 3000K default. Matches SupremeOS's own
+ * `ColorState.kelvin` schema bounds (1000K-10000K, `packages/domain-model/src/capabilities.ts`)
+ * converted to mireds — never a per-device guess, always wide enough for any kelvin value
+ * SupremeOS itself can ever send. Confirmed the exact failure via `services/protocols/
+ * repro-cct.mjs` (a real ServerNode + real Endpoint construction, not a mock): ConstraintError
+ * "Value 333 is not within bounds defined by constraint (135)" — 333 mireds (3000K) with no
+ * declared physical range at all.
+ */
+const COLOR_TEMP_PHYSICAL_MIN_MIREDS = kelvinToMireds(10_000);
+const COLOR_TEMP_PHYSICAL_MAX_MIREDS = kelvinToMireds(1_000);
+
 const ON_OFF_LIGHT = 0x0100;
 const DIMMABLE_LIGHT = 0x0101;
 const COLOR_TEMPERATURE_LIGHT = 0x010c;
@@ -322,7 +339,13 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
           ...baseOptions,
           onOff: { onOff: initial?.on ?? false },
           levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
-          colorControl: { colorTemperatureMireds: kelvinToMireds(initial?.kelvin ?? 3000), colorMode: ColorControl.ColorMode.ColorTemperatureMireds },
+          colorControl: {
+            colorTempPhysicalMinMireds: COLOR_TEMP_PHYSICAL_MIN_MIREDS,
+            colorTempPhysicalMaxMireds: COLOR_TEMP_PHYSICAL_MAX_MIREDS,
+            coupleColorTempToLevelMinMireds: COLOR_TEMP_PHYSICAL_MIN_MIREDS,
+            colorTemperatureMireds: kelvinToMireds(initial?.kelvin ?? 3000),
+            colorMode: ColorControl.ColorMode.ColorTemperatureMireds,
+          },
         });
         break;
       }
@@ -343,6 +366,9 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
           onOff: { onOff: initial?.on ?? false },
           levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
           colorControl: {
+            colorTempPhysicalMinMireds: COLOR_TEMP_PHYSICAL_MIN_MIREDS,
+            colorTempPhysicalMaxMireds: COLOR_TEMP_PHYSICAL_MAX_MIREDS,
+            coupleColorTempToLevelMinMireds: COLOR_TEMP_PHYSICAL_MIN_MIREDS,
             currentX: xyChannelToMatter(xy.x),
             currentY: xyChannelToMatter(xy.y),
             colorTemperatureMireds: kelvinToMireds(initial?.kelvin ?? 3000),
