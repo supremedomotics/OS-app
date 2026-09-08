@@ -2,14 +2,32 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DeviceId } from "@supreme/domain-model";
 
+/** Matter Device Type id (0x0100 On/Off Light, 0x0101 Dimmable Light, 0x010c Color Temperature
+ * Light, 0x010d Extended Color Light, 0x0202 Window Covering, …) — see `device-types/
+ * matter-device-types.ts` for the authoritative registry these ids resolve against.
+ *
+ * § Matter Bridge Phase 1 foundation — this field used to be the string literal `"onOffLight"`,
+ * the exact architectural gap this Phase exists to close: the persistence model had no room for
+ * a second device type without a schema change, which is why every colour-temperature light and
+ * the curtain motor that triggered this work could never have been represented here even after
+ * the resolver/exposure logic learned about them. A real numeric Matter Device Type id is the
+ * permanent identity Phase 2's controller-side discovery will read/write against the SAME field.
+ */
+export type MatterDeviceTypeId = number;
+
 /** One persisted SupremeOS device ↔ Matter bridged-endpoint mapping. */
 export interface MatterEndpointMapping {
   deviceId: DeviceId;
   /** Stable Matter endpoint number, assigned once and reused across restarts — never an
    * array index (§ Matter Bridge Phase 1: "endpoint identity must remain stable"). */
   endpointNumber: number;
-  deviceType: "onOffLight";
+  deviceTypeId: MatterDeviceTypeId;
 }
+
+/** On/Off Light (0x0100) — the id every registry entry persisted before this Phase implicitly
+ * meant via the old `deviceType: "onOffLight"` string literal. Used only to normalize an
+ * old-format file on load (§ below); never referenced by new code that has a real resolution. */
+const LEGACY_ON_OFF_LIGHT_DEVICE_TYPE_ID = 0x0100;
 
 /** Persistence seam for the deviceId↔endpoint mapping (§ Persistence). This is deliberately
  * NOT `@matter/main`'s own storage — that owns fabric/commissioning/attribute state, which
@@ -74,16 +92,33 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
     }
     const map = new Map<DeviceId, MatterEndpointMapping>();
     const usedNumbers = new Set<number>();
-    for (const m of raw as MatterEndpointMapping[]) {
-      if (typeof m.deviceId !== "string" || !m.deviceId) {
+    for (const raw_m of raw as (MatterEndpointMapping & { deviceType?: unknown })[]) {
+      if (typeof raw_m.deviceId !== "string" || !raw_m.deviceId) {
         throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has an entry with an invalid deviceId`);
       }
-      if (!Number.isInteger(m.endpointNumber) || m.endpointNumber < 1) {
+      if (!Number.isInteger(raw_m.endpointNumber) || raw_m.endpointNumber < 1) {
         throw new Error(
           `matter-bridge: endpoint registry at ${this.filePath} has an invalid endpoint number ` +
-            `(${String(m.endpointNumber)}) for device ${m.deviceId} — must be a positive integer`,
+            `(${String(raw_m.endpointNumber)}) for device ${raw_m.deviceId} — must be a positive integer`,
         );
       }
+      // § Matter Bridge Phase 1 foundation — a pre-Phase-1 file has `deviceType: "onOffLight"`
+      // and no `deviceTypeId` at all; normalize it to the real id it always implicitly meant,
+      // so an existing deployment's already-bridged On/Off lights keep their identity untouched.
+      const deviceTypeId =
+        typeof raw_m.deviceTypeId === "number"
+          ? raw_m.deviceTypeId
+          : raw_m.deviceType === "onOffLight"
+            ? LEGACY_ON_OFF_LIGHT_DEVICE_TYPE_ID
+            : undefined;
+      if (deviceTypeId === undefined) {
+        throw new Error(
+          `matter-bridge: endpoint registry at ${this.filePath} has an entry for device ` +
+            `${raw_m.deviceId} with no recognizable device type (neither a numeric deviceTypeId ` +
+            `nor the legacy "onOffLight" string)`,
+        );
+      }
+      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId };
       if (map.has(m.deviceId)) {
         throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has a duplicate deviceId (${m.deviceId})`);
       }
@@ -131,12 +166,17 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
 export class MatterEndpointRegistry {
   constructor(private readonly store: IMatterEndpointStore) {}
 
-  /** Returns the existing mapping for this device, or allocates + persists a new one. */
-  resolve(deviceId: DeviceId, deviceType: MatterEndpointMapping["deviceType"] = "onOffLight"): MatterEndpointMapping {
+  /** Returns the existing mapping for this device, or allocates + persists a new one. An
+   * existing mapping's `deviceTypeId` is returned AS PERSISTED even if the caller passes a
+   * different one — a device's resolved Matter Device Type can change if its SupremeOS
+   * capabilities change (e.g. a driver update adds real color support to a previously
+   * onoff-only light), but that is an explicit re-classification decision for the caller to
+   * make (§ Phase 1 doesn't yet implement it), never a silent overwrite here. */
+  resolve(deviceId: DeviceId, deviceTypeId: MatterDeviceTypeId = 0x0100): MatterEndpointMapping {
     const existing = this.store.get(deviceId);
     if (existing) return existing;
     const next = this.nextEndpointNumber();
-    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceType };
+    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceTypeId };
     this.store.put(mapping);
     return mapping;
   }

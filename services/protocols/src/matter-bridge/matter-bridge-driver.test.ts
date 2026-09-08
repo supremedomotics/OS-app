@@ -1,16 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
-import type { CapabilityCommand, CapabilityState, DeviceId } from "@supreme/domain-model";
+import type { CapabilityCommand, CapabilityState, DeviceCapability, DeviceId } from "@supreme/domain-model";
 import { MatterBridgeDriver } from "./matter-bridge-driver.js";
 import { InMemoryMatterEndpointStore, MatterEndpointRegistry } from "./endpoint-registry.js";
-import type { MatterBridgeServer } from "./server.js";
+import type { MatterBridgeServer, MatterBridgeEndpointSpec } from "./server.js";
 import type { MatterBridgeCapabilityPort } from "./capability-port.js";
+
+/** A plain onoff device's capability list — the overwhelmingly common Phase 1 case this file's
+ * pre-existing tests already covered; kept as a shared constant so every `exposeDevice` call
+ * site reads the same as it did when the driver had a dedicated `exposeLight` shortcut. */
+const ONOFF_CAPS: DeviceCapability[] = [{ kind: "onoff", config: {} }];
 
 /** In-memory fake of the real `@matter/main`-backed server — this is what makes the driver's
  * routing/loop-prevention logic verifiable without a real LAN or ecosystem (§29). */
 class FakeMatterBridgeServer implements MatterBridgeServer {
   started = false;
   endpoints = new Map<number, { name: string; on: boolean }>();
-  private commandListeners = new Set<(endpointNumber: number, on: boolean) => void>();
+  private commandListeners = new Set<(endpointNumber: number, command: CapabilityCommand) => void>();
 
   async start(): Promise<void> {
     this.started = true;
@@ -18,17 +23,18 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
   async stop(): Promise<void> {
     this.started = false;
   }
-  async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
-    this.endpoints.set(args.endpointNumber, { name: args.name, on: args.initialOn });
+  async addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void> {
+    const on = spec.initialState && "on" in spec.initialState ? spec.initialState.on : false;
+    this.endpoints.set(spec.endpointNumber, { name: spec.name, on });
   }
   async removeEndpoint(endpointNumber: number): Promise<void> {
     this.endpoints.delete(endpointNumber);
   }
-  async setOnOffState(endpointNumber: number, on: boolean): Promise<void> {
+  async setCapabilityState(endpointNumber: number, state: CapabilityState): Promise<void> {
     const e = this.endpoints.get(endpointNumber);
-    if (e) e.on = on;
+    if (e && "on" in state) e.on = state.on;
   }
-  onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void {
+  onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }
@@ -41,7 +47,7 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
   /** Test helper: simulate a real ecosystem (Apple/Google/Alexa/a reference controller)
    * issuing a genuine On/Off cluster command. */
   simulateEcosystemCommand(endpointNumber: number, on: boolean): void {
-    for (const l of this.commandListeners) l(endpointNumber, on);
+    for (const l of this.commandListeners) l(endpointNumber, { capability: "onoff", action: on ? "on" : "off" });
   }
 }
 
@@ -89,7 +95,7 @@ describe("MatterBridgeDriver — startup + endpoint creation", () => {
     await driver.start();
     expect(server.started).toBe(true);
 
-    await driver.exposeLight("living-room-light" as DeviceId, "Living Room Light");
+    await driver.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
     expect(server.endpoints.size).toBe(1);
     const [[endpointNumber, endpoint]] = [...server.endpoints.entries()];
     expect(endpointNumber).toBe(1);
@@ -101,7 +107,7 @@ describe("MatterBridgeDriver — Matter → SupremeOS (direction 1)", () => {
   it("routes a real ecosystem On command through the SAME capability port every other caller uses", async () => {
     const { server, capabilities, driver } = build();
     await driver.start();
-    await driver.exposeLight("living-room-light" as DeviceId, "Living Room Light");
+    await driver.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
 
     server.simulateEcosystemCommand(1, true);
     await vi.waitFor(() => expect(capabilities.commands).toHaveLength(1));
@@ -124,7 +130,7 @@ describe("MatterBridgeDriver — SupremeOS → Matter (direction 2)", () => {
   it("mirrors real physical/automation feedback onto the Matter attribute", async () => {
     const { server, capabilities, driver } = build();
     await driver.start();
-    await driver.exposeLight("living-room-light" as DeviceId, "Living Room Light");
+    await driver.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
 
     capabilities.setState("living-room-light" as DeviceId, true);
     await vi.waitFor(() => expect(server.endpoints.get(1)?.on).toBe(true));
@@ -143,7 +149,7 @@ describe("MatterBridgeDriver — full bidirectional round trip + feedback-loop p
   it("Matter command → SupremeOS → native driver → physical state → feedback → Matter, with no re-entrant command", async () => {
     const { server, capabilities, driver } = build();
     await driver.start();
-    await driver.exposeLight("living-room-light" as DeviceId, "Living Room Light");
+    await driver.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
     expect(server.endpoints.get(1)?.on).toBe(false);
 
     server.simulateEcosystemCommand(1, true);
@@ -158,8 +164,8 @@ describe("MatterBridgeDriver — full bidirectional round trip + feedback-loop p
   it("does not re-issue setOnOffState for a redundant, unchanged state report", async () => {
     const { server, capabilities, driver } = build();
     await driver.start();
-    await driver.exposeLight("living-room-light" as DeviceId, "Living Room Light");
-    const spy = vi.spyOn(server, "setOnOffState");
+    await driver.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
+    const spy = vi.spyOn(server, "setCapabilityState");
 
     capabilities.setState("living-room-light" as DeviceId, true);
     await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
@@ -178,7 +184,7 @@ describe("MatterBridgeDriver — endpoint identity persistence across restart", 
 
     const driver1 = new MatterBridgeDriver({ server, registry, capabilities });
     await driver1.start();
-    await driver1.exposeLight("living-room-light" as DeviceId, "Living Room Light");
+    await driver1.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
     await driver1.stop();
     expect(server.started).toBe(false);
 

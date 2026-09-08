@@ -29,6 +29,22 @@ export interface MatterBridgeCommissioningState {
   pairing: { manualPairingCode: string; qrPairingCode: string; discriminator: number };
 }
 
+import type { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
+import type { MatterDeviceTypeId } from "./endpoint-registry.js";
+
+/** What one bridged endpoint should look like, device-type-agnostic (§ Matter Bridge Phase 1
+ * foundation). `initialState` is the driving SupremeOS capability's current state (see
+ * `matter-device-types.ts`'s `primaryCapability` doc — exactly one capability's state is enough
+ * to seed every cluster a Phase 1 device type requires) — `null` when SupremeOS has no state
+ * for it yet (a device that's never reported in), in which case the server seeds honest
+ * defaults (off, 0%, etc.) rather than fabricating a plausible-looking value. */
+export interface MatterBridgeEndpointSpec {
+  endpointNumber: number;
+  name: string;
+  deviceTypeId: MatterDeviceTypeId;
+  initialState: CapabilityState | null;
+}
+
 /**
  * Matter Bridge server transport seam (§ Matter Bridge Phase 1). Mirrors `MatterController`'s
  * existing pattern in `matter-driver.ts`: production wiring is a real `@matter/main`
@@ -46,24 +62,31 @@ export interface MatterBridgeServer {
    * of them may ever imply {@link factoryReset}). */
   stop(): Promise<void>;
 
-  /** Add one bridged On/Off Light endpoint at a SPECIFIC, caller-assigned endpoint number
-   * (the `MatterEndpointRegistry`'s persisted allocation — never left to the server to pick,
-   * so identity survives restart). Idempotent: re-adding the same endpoint number on a
-   * subsequent boot must not throw. */
-  addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void>;
+  /** Add one bridged endpoint of the given Matter Device Type at a SPECIFIC, caller-assigned
+   * endpoint number (the `MatterEndpointRegistry`'s persisted allocation — never left to the
+   * server to pick, so identity survives restart). Idempotent: re-adding the same endpoint
+   * number on a subsequent boot must not throw. § Matter Bridge Phase 1 foundation — this
+   * replaces the old `addOnOffLight`, which could only ever construct one device type; the
+   * concrete implementation (`real-server.ts`) dispatches on `deviceTypeId` to compose the
+   * right `@matter/main` device definition + cluster adapters, exactly the "Device Type →
+   * required/optional cluster set → cluster adapters → Matter endpoint" pipeline this Phase
+   * establishes. */
+  addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void>;
 
   /** Remove a previously-added endpoint (device unbridged/deleted). */
   removeEndpoint(endpointNumber: number): Promise<void>;
 
-  /** Write the On/Off attribute for an endpoint — a STATE REPORT, not a command. Must never
-   * itself invoke the server's own command handler (that would be the feedback loop §11
-   * explicitly warns about); a real Matter attribute write is not a command re-entry, only a
-   * genuine ecosystem-issued On/Off cluster invocation is. */
-  setOnOffState(endpointNumber: number, on: boolean): Promise<void>;
+  /** Write an endpoint's driving-capability state onto its Matter attributes — a STATE REPORT,
+   * not a command. Must never itself invoke the server's own command handler (that would be the
+   * feedback loop §11 explicitly warns about); a real Matter attribute write is not a command
+   * re-entry, only a genuine ecosystem-issued cluster command is. */
+  setCapabilityState(endpointNumber: number, state: CapabilityState): Promise<void>;
 
-  /** Fires once per genuine On/Off cluster command the server received from a Matter
-   * controller (Apple/Google/Alexa/a test controller/…). Returns an unsubscribe function. */
-  onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void;
+  /** Fires once per genuine cluster command the server received from a Matter controller
+   * (Apple/Google/Alexa/a test controller/…), already translated into the SAME
+   * `CapabilityCommand` shape the REST API/automations issue — the caller never sees a raw
+   * Matter cluster/attribute id. Returns an unsubscribe function. */
+  onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void;
 
   /** § Phase 4 — this node's REAL, live commissioning/fabric state (never a fabricated
    * placeholder). Throws if called before `start()`.

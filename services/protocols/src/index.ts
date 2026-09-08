@@ -152,7 +152,7 @@ export {
   type MatterFabricManagerOptions,
 } from "./matter-fabric.js";
 export { MatterBridgeDriver, type MatterBridgeDriverOptions } from "./matter-bridge/matter-bridge-driver.js";
-export type { MatterBridgeServer } from "./matter-bridge/server.js";
+export type { MatterBridgeServer, MatterBridgeEndpointSpec, MatterBridgeCommissioningState, MatterBridgeFabricInfo } from "./matter-bridge/server.js";
 export type { MatterBridgeCapabilityPort } from "./matter-bridge/capability-port.js";
 export {
   MatterEndpointRegistry,
@@ -160,8 +160,24 @@ export {
   FileMatterEndpointStore,
   type IMatterEndpointStore,
   type MatterEndpointMapping,
+  type MatterDeviceTypeId,
 } from "./matter-bridge/endpoint-registry.js";
 export { RealMatterBridgeServer, type RealMatterBridgeServerOptions } from "./matter-bridge/real-server.js";
+// § Matter Bridge Phase 1 foundation — the device-type registry/resolver/cluster-adapter
+// architecture, exported so callers outside this package (gateway e2e tests that need to
+// compute "how many of the demo home's devices SHOULD resolve to a supported device type",
+// and any future Phase 2+ consumer) never re-derive this logic by hand.
+export {
+  MatterDeviceTypeRegistry,
+  matterDeviceTypeRegistry,
+} from "./matter-bridge/device-types/matter-device-type-registry.js";
+export {
+  resolveMatterDeviceType,
+  type MatterDeviceTypeResolution,
+  type MatterEndpointOutcome,
+} from "./matter-bridge/device-types/matter-device-type-resolver.js";
+export type { MatterDeviceTypeDefinition, MatterClusterRequirement } from "./matter-bridge/device-types/matter-device-types.js";
+export { MatterClusterId, MatterClusterName } from "./matter-bridge/device-types/matter-cluster-ids.js";
 export {
   ZigbeeProtocolDriver,
   type ZigbeeDriverOptions,

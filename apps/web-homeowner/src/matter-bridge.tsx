@@ -226,7 +226,7 @@ export function MatterBridgeDevicesPage({ onBack }: { onBack: () => void }) {
                   <span className="ext-name-row">
                     <span className="ext-name">{d.name ?? `(removed from SupremeOS — ${d.deviceId})`}</span>
                   </span>
-                  <span className="ext-sub">Matter endpoint {d.endpointNumber}</span>
+                  <span className="ext-sub">{d.deviceTypeName} · Matter endpoint {d.endpointNumber}</span>
                 </span>
               </div>
             </div>

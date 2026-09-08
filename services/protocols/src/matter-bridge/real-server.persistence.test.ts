@@ -53,8 +53,8 @@ describe("RealMatterBridgeServer — real @matter/main storage persistence", () 
       return;
     }
 
-    await server1.addOnOffLight({ endpointNumber: 1, name: "Living Room Light", initialOn: false });
-    await server1.setOnOffState(1, true);
+    await server1.addEndpoint({ endpointNumber: 1, name: "Living Room Light", deviceTypeId: 0x0100, initialState: { kind: "onoff", on: false } });
+    await server1.setCapabilityState(1, { kind: "onoff", on: true });
     const before = server1.getCommissioningState();
     await server1.stop();
 

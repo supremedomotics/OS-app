@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { MatterBridgeServer } from "@supreme/protocols";
+import type { CapabilityCommand, MatterBridgeEndpointSpec, MatterBridgeServer } from "@supreme/protocols";
 import { loadConfig } from "./config.js";
 import { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
@@ -16,24 +16,25 @@ import { buildServer } from "./server.js";
 class FakeMatterBridgeServer implements MatterBridgeServer {
   started = false;
   endpoints = new Map<number, { name: string; on: boolean }>();
-  private commandListeners = new Set<(endpointNumber: number, on: boolean) => void>();
+  private commandListeners = new Set<(endpointNumber: number, command: CapabilityCommand) => void>();
   async start(): Promise<void> {
     this.started = true;
   }
   async stop(): Promise<void> {
     this.started = false;
   }
-  async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
-    this.endpoints.set(args.endpointNumber, { name: args.name, on: args.initialOn });
+  async addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void> {
+    const on = spec.initialState && "on" in spec.initialState ? spec.initialState.on : false;
+    this.endpoints.set(spec.endpointNumber, { name: spec.name, on });
   }
   async removeEndpoint(endpointNumber: number): Promise<void> {
     this.endpoints.delete(endpointNumber);
   }
-  async setOnOffState(endpointNumber: number, on: boolean): Promise<void> {
+  async setCapabilityState(endpointNumber: number, state: { kind: string; on?: boolean }): Promise<void> {
     const e = this.endpoints.get(endpointNumber);
-    if (e) e.on = on;
+    if (e && "on" in state && typeof state.on === "boolean") e.on = state.on;
   }
-  onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void {
+  onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }

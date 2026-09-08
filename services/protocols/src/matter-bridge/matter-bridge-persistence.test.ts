@@ -2,22 +2,27 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CapabilityCommand, CapabilityState, DeviceId } from "@supreme/domain-model";
+import type { CapabilityCommand, CapabilityState, DeviceCapability, DeviceId } from "@supreme/domain-model";
 import { MatterBridgeDriver } from "./matter-bridge-driver.js";
 import {
   InMemoryMatterEndpointStore,
   FileMatterEndpointStore,
   MatterEndpointRegistry,
 } from "./endpoint-registry.js";
-import type { MatterBridgeServer } from "./server.js";
+import type { MatterBridgeServer, MatterBridgeEndpointSpec } from "./server.js";
 import type { MatterBridgeCapabilityPort } from "./capability-port.js";
+
+/** A plain onoff device's capability list — every device this file bridges before Phase 1's
+ * device-type work is a plain on/off light, so this reads exactly as the old dedicated
+ * `exposeLight` shortcut did at each call site. */
+const ONOFF_CAPS: DeviceCapability[] = [{ kind: "onoff", config: {} }];
 
 /** § Phase 2 — same fakes as matter-bridge-driver.test.ts, plus failure injection for the
  * recovery scenarios this phase requires (server startup failure, partial endpoint creation). */
 class FakeMatterBridgeServer implements MatterBridgeServer {
   started = false;
   endpoints = new Map<number, { name: string; on: boolean }>();
-  private commandListeners = new Set<(endpointNumber: number, on: boolean) => void>();
+  private commandListeners = new Set<(endpointNumber: number, command: CapabilityCommand) => void>();
   startError: Error | null = null;
   failEndpointNumbers = new Set<number>();
 
@@ -28,20 +33,21 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
   async stop(): Promise<void> {
     this.started = false;
   }
-  async addOnOffLight(args: { endpointNumber: number; name: string; initialOn: boolean }): Promise<void> {
-    if (this.failEndpointNumbers.has(args.endpointNumber)) {
-      throw new Error(`simulated Matter internal failure adding endpoint ${args.endpointNumber}`);
+  async addEndpoint(spec: MatterBridgeEndpointSpec): Promise<void> {
+    if (this.failEndpointNumbers.has(spec.endpointNumber)) {
+      throw new Error(`simulated Matter internal failure adding endpoint ${spec.endpointNumber}`);
     }
-    this.endpoints.set(args.endpointNumber, { name: args.name, on: args.initialOn });
+    const on = spec.initialState && "on" in spec.initialState ? spec.initialState.on : false;
+    this.endpoints.set(spec.endpointNumber, { name: spec.name, on });
   }
   async removeEndpoint(endpointNumber: number): Promise<void> {
     this.endpoints.delete(endpointNumber);
   }
-  async setOnOffState(endpointNumber: number, on: boolean): Promise<void> {
+  async setCapabilityState(endpointNumber: number, state: CapabilityState): Promise<void> {
     const e = this.endpoints.get(endpointNumber);
-    if (e) e.on = on;
+    if (e && "on" in state) e.on = state.on;
   }
-  onCommand(listener: (endpointNumber: number, on: boolean) => void): () => void {
+  onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }
@@ -94,9 +100,9 @@ describe("Phase 2 — multi-device identity across restart", () => {
 
       const driver1 = new MatterBridgeDriver({ server, registry: new MatterEndpointRegistry(store), capabilities });
       await driver1.start();
-      await driver1.exposeLight("light-a" as DeviceId, "Light A");
-      await driver1.exposeLight("light-b" as DeviceId, "Light B");
-      await driver1.exposeLight("light-c" as DeviceId, "Light C");
+      await driver1.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS);
+      await driver1.exposeDevice("light-b" as DeviceId, "Light B", ONOFF_CAPS);
+      await driver1.exposeDevice("light-c" as DeviceId, "Light C", ONOFF_CAPS);
       const before = new Map(new MatterEndpointRegistry(store).all().map((m) => [m.deviceId, m.endpointNumber]));
       await driver1.stop();
 
@@ -123,14 +129,14 @@ describe("Phase 2 — multi-device identity across restart", () => {
     const driver = new MatterBridgeDriver({ server, registry, capabilities });
     await driver.start();
 
-    await driver.exposeLight("light-a" as DeviceId, "Light A"); // -> 1
-    await driver.exposeLight("light-b" as DeviceId, "Light B"); // -> 2
-    await driver.exposeLight("light-c" as DeviceId, "Light C"); // -> 3
+    await driver.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS); // -> 1
+    await driver.exposeDevice("light-b" as DeviceId, "Light B", ONOFF_CAPS); // -> 2
+    await driver.exposeDevice("light-c" as DeviceId, "Light C", ONOFF_CAPS); // -> 3
     const aNumber = registry.resolve("light-a" as DeviceId).endpointNumber;
     const cNumber = registry.resolve("light-c" as DeviceId).endpointNumber;
 
     await driver.removeLight("light-b" as DeviceId);
-    await driver.exposeLight("light-d" as DeviceId, "Light D");
+    await driver.exposeDevice("light-d" as DeviceId, "Light D", ONOFF_CAPS);
 
     // A and C keep their original numbers — untouched by B's removal.
     expect(registry.resolve("light-a" as DeviceId).endpointNumber).toBe(aNumber);
@@ -153,7 +159,7 @@ describe("Phase 2 — upgrade simulation (v1 -> v2, same storage)", () => {
       // "v1" of the driver.
       const v1 = new MatterBridgeDriver({ server, registry: new MatterEndpointRegistry(store), capabilities });
       await v1.start();
-      await v1.exposeLight("living-room-light" as DeviceId, "Living Room Light");
+      await v1.exposeDevice("living-room-light" as DeviceId, "Living Room Light", ONOFF_CAPS);
       const endpointBefore = new MatterEndpointRegistry(store).resolve("living-room-light" as DeviceId).endpointNumber;
       await v1.stop();
 
@@ -219,7 +225,7 @@ describe("Phase 2 — recovery: corrupted or invalid endpoint registry", () => {
     const { file, cleanup } = tempFile();
     try {
       const store = new FileMatterEndpointStore(file);
-      store.put({ deviceId: "light-a" as DeviceId, endpointNumber: 1, deviceType: "onOffLight" });
+      store.put({ deviceId: "light-a" as DeviceId, endpointNumber: 1, deviceTypeId: 0x0100 });
       const mode = statSync(file).mode & 0o777;
       expect(mode).toBe(0o600);
     } finally {
@@ -251,8 +257,8 @@ describe("Phase 2 — recovery: server and capability failures", () => {
     const server = new FakeMatterBridgeServer();
     const driver1 = new MatterBridgeDriver({ server, registry: new MatterEndpointRegistry(store), capabilities });
     await driver1.start();
-    await driver1.exposeLight("light-a" as DeviceId, "Light A");
-    await driver1.exposeLight("light-b" as DeviceId, "Light B");
+    await driver1.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS);
+    await driver1.exposeDevice("light-b" as DeviceId, "Light B", ONOFF_CAPS);
     await driver1.stop();
 
     capabilities.throwOnGetStateFor.add("light-a" as DeviceId);
@@ -274,7 +280,7 @@ describe("Phase 2 — recovery: server and capability failures", () => {
 
     const mapping = registry.resolve("light-a" as DeviceId);
     server.failEndpointNumbers.add(mapping.endpointNumber);
-    await expect(driver.exposeLight("light-a" as DeviceId, "Light A")).rejects.toThrow(/simulated Matter internal failure/);
+    await expect(driver.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS)).rejects.toThrow(/simulated Matter internal failure/);
 
     // The endpoint number allocation itself is NOT rolled back (safe to retry at the same
     // identity), but the device is not treated as live-bridged.
@@ -282,7 +288,7 @@ describe("Phase 2 — recovery: server and capability failures", () => {
     expect(server.endpoints.has(mapping.endpointNumber)).toBe(false);
 
     server.failEndpointNumbers.clear();
-    await driver.exposeLight("light-a" as DeviceId, "Light A"); // retry succeeds at the SAME number
+    await driver.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS); // retry succeeds at the SAME number
     expect(server.endpoints.has(mapping.endpointNumber)).toBe(true);
   });
 
@@ -292,8 +298,8 @@ describe("Phase 2 — recovery: server and capability failures", () => {
     const driver = new MatterBridgeDriver({ server, registry, capabilities: new FakeCapabilityPort() });
     await driver.start();
 
-    await driver.exposeLight("light-a" as DeviceId, "Light A");
-    await driver.exposeLight("light-a" as DeviceId, "Light A (renamed)");
+    await driver.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS);
+    await driver.exposeDevice("light-a" as DeviceId, "Light A (renamed)", ONOFF_CAPS);
 
     expect(server.endpoints.size).toBe(1);
     expect(registry.all()).toHaveLength(1);
@@ -308,7 +314,7 @@ describe("Phase 4 — factory reset is separate from restart", () => {
     const driver = new MatterBridgeDriver({ server, registry: new MatterEndpointRegistry(store), capabilities: new FakeCapabilityPort() });
 
     await driver.start();
-    await driver.exposeLight("light-a" as DeviceId, "Light A");
+    await driver.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS);
     await driver.stop();
     await driver.start();
 
@@ -331,7 +337,7 @@ describe("Phase 4 — factory reset is separate from restart", () => {
     const driver = new MatterBridgeDriver({ server, registry, capabilities: new FakeCapabilityPort() });
 
     await driver.start();
-    await driver.exposeLight("light-a" as DeviceId, "Light A");
+    await driver.exposeDevice("light-a" as DeviceId, "Light A", ONOFF_CAPS);
     expect(server.endpoints.has(1)).toBe(true);
 
     await driver.factoryReset();
