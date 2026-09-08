@@ -1058,10 +1058,32 @@ export class AppContext {
     const storagePath = join(this.config.matterStoragePath, "bridge");
     const server = this.deps.matterBridgeServer ?? new RealMatterBridgeServer({ storagePath, nodeId: "supremeos-matter-bridge" });
     const registry = new MatterEndpointRegistry(new FileMatterEndpointStore(join(storagePath, "endpoint-registry.json")));
+    // § TEMPORARY — Matter Bridge Phase 1.3 diagnostic tracing (boundaries D/E: the ONE
+    // protocol-agnostic choke point between "universal SupremeOS command" and the specific
+    // protocol driver `this.sil.command()`/`this.sil.subscribe()` eventually dispatch to —
+    // never a per-protocol hook, so this stays true to "no protocol-specific logic in the
+    // Matter bridge" while still tracing the exact boundary requested). Remove once KNX/
+    // Casambi/Pantry Strip failures are root-caused.
     const capabilities: MatterBridgeCapabilityPort = {
-      command: (deviceId, command) => this.sil.command(deviceId, command),
+      command: async (deviceId, command) => {
+        const tD = Date.now();
+        console.log(`matter-bridge TRACE D: dispatching to SIL — ts=${tD} device.id=${deviceId} capability=${command.capability} command=${JSON.stringify(command)}`);
+        try {
+          await this.sil.command(deviceId, command);
+          console.log(`matter-bridge TRACE E: SIL command resolved — ts=${Date.now()} elapsedMs=${Date.now() - tD} device.id=${deviceId} capability=${command.capability} result=ok`);
+        } catch (err) {
+          console.error(
+            `matter-bridge TRACE E: SIL command threw — ts=${Date.now()} elapsedMs=${Date.now() - tD} device.id=${deviceId} capability=${command.capability} error=${(err as Error).message}`,
+          );
+          throw err;
+        }
+      },
       getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
-      onState: (listener) => this.sil.subscribe((e) => listener({ deviceId: e.deviceId, capability: e.capability, state: e.state })),
+      onState: (listener) =>
+        this.sil.subscribe((e) => {
+          console.log(`matter-bridge TRACE F->G: SIL state event — ts=${Date.now()} device.id=${e.deviceId} capability=${e.capability} state=${JSON.stringify(e.state)}`);
+          listener({ deviceId: e.deviceId, capability: e.capability, state: e.state });
+        }),
     };
     const driver = new MatterBridgeDriver({
       server,

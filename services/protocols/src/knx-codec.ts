@@ -115,11 +115,15 @@ export function valueFromCommand(
   }
 }
 
-/** Translate a decoded KNX group value into a Supreme capability state (null = ignore). */
+/** Translate a decoded KNX group value into a Supreme capability state (null = ignore).
+ * `sibling` — the SAME device's own `onoff`/`brightness` capability's last known
+ * `{on, level}` — is ONLY consulted for the DPT7.600 (Kelvin-only) `color` case below; every
+ * other branch is unaffected. */
 export function stateFromValue(
   capability: CapabilityState["kind"],
   value: KnxValue,
   config: Record<string, unknown> = {},
+  sibling?: { on: boolean; level: number } | null,
 ): CapabilityState | null {
   switch (capability) {
     case "onoff":
@@ -132,8 +136,23 @@ export function stateFromValue(
       return { kind: "position", position: clampPct(Number(value)), moving: false };
     case "color": {
       if (typeof value === "number") {
-        // DPT7.600: colour-temperature-only telegram (tunable white).
-        return { kind: "color", on: true, level: 100, hue: null, saturation: null, kelvin: clampKelvin(value) };
+        // § live-confirmed fix (Matter Bridge Phase 1.3) — DPT7.600 (colour-temperature-only,
+        // "tunable white") carries ONLY a Kelvin value; it has no on/off or brightness signal
+        // at all. This used to hardcode `on:true, level:100` regardless of the device's REAL
+        // state — a genuine fabrication, and the exact root cause of "Apple Home On/Off doesn't
+        // work" for a KNX CCT light with separately-bound onoff/brightness/color capabilities
+        // (confirmed live against a real gateway, `dev_01M20KNF46BZ9ECFD40KVXM8G2` "Conference
+        // Hanging"): every CCT update reported this device as `on:true` via its `color`
+        // capability regardless of the ACTUAL onoff/brightness state, and the Matter Bridge
+        // seeds/refreshes its OnOff attribute from a Color Temperature Light's `color`
+        // capability (its `primaryCapability`) — so a real "off" on the onoff/brightness
+        // capability was permanently masked by this fabricated `on:true`. `sibling` — this same
+        // device's own onoff/brightness capability's last known `{on, level}`, the ACTUAL
+        // source of truth for a KNX light's on/off + level (see `SupremeKnxDriver.observe()`'s
+        // call site) — is used when available; falls back to the old hardcoded values only when
+        // genuinely nothing else is known yet (a device with no onoff/brightness binding at
+        // all), never worse than before.
+        return { kind: "color", on: sibling?.on ?? true, level: sibling?.level ?? 100, hue: null, saturation: null, kelvin: clampKelvin(value) };
       }
       if (typeof value === "object" && value !== null && "red" in value) {
         const { hue, saturation, level } = rgbToHsv(value.red, value.green, value.blue);

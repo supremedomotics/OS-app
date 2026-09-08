@@ -361,13 +361,33 @@ export class MatterBridgeDriver {
    * endpoint's resolved device type) — this method is device-type-agnostic. */
   private async handleMatterCommand(endpointNumber: number, command: CapabilityCommand): Promise<void> {
     const deviceId = this.exposedDevices.get(endpointNumber);
+    // § TEMPORARY — Matter Bridge Phase 1.3 diagnostic tracing (boundaries A/B/C, § FINAL
+    // CAPABILITY FAILURE ISOLATION). Remove once KNX/Casambi/Pantry Strip failures are root-
+    // caused. Deliberately protocol-agnostic — this fires for EVERY bridged device's command,
+    // the one choke point every Matter-issued command passes through regardless of protocol.
+    const t0 = Date.now();
+    this.onLog(
+      "info",
+      `matter-bridge TRACE A/B: command received — ts=${t0} endpointId=${endpointNumber} device.id=${deviceId ?? "UNMAPPED"} ` +
+        `capability=${command.capability} command=${JSON.stringify(command)}`,
+    );
     if (!deviceId) {
       this.onLog("warn", `matter-bridge: command for unmapped endpoint ${endpointNumber}`);
       return;
     }
     try {
       await this.capabilities.command(deviceId, command);
+      this.onLog(
+        "info",
+        `matter-bridge TRACE C: command accepted — ts=${Date.now()} elapsedMs=${Date.now() - t0} endpointId=${endpointNumber} ` +
+          `device.id=${deviceId} capability=${command.capability} result=accepted`,
+      );
     } catch (err) {
+      this.onLog(
+        "error",
+        `matter-bridge TRACE C: command rejected — ts=${Date.now()} elapsedMs=${Date.now() - t0} endpointId=${endpointNumber} ` +
+          `device.id=${deviceId} capability=${command.capability} result=error error=${(err as Error).message}`,
+      );
       this.onLog("error", `matter-bridge: command failed for ${deviceId}: ${(err as Error).message}`);
     }
   }
@@ -400,16 +420,46 @@ export class MatterBridgeDriver {
    * `@matter/main` attribute-change event churn on every duplicate `onState` delivery). */
   private readonly lastReported = new Map<number, string>();
   private async handleSupremeStateChange(deviceId: DeviceId, capability: string, state: CapabilityState | null): Promise<void> {
+    // § TEMPORARY — Matter Bridge Phase 1.3 diagnostic tracing (boundary G, this bridge's own
+    // receipt of a SupremeOS state event — the earliest point in THIS file a device/protocol
+    // change becomes visible; anything upstream of this — the protocol driver's own event
+    // receipt — is outside the Matter Bridge and is not traced here to avoid protocol-specific
+    // code in this file). Remove once KNX/Casambi/Pantry Strip failures are root-caused.
+    const tG = Date.now();
     const endpointNumber = this.endpointByDevice.get(deviceId);
+    this.onLog(
+      "info",
+      `matter-bridge TRACE G: SupremeOS state event received — ts=${tG} device.id=${deviceId} endpointId=${endpointNumber ?? "NOT_BRIDGED"} ` +
+        `capability=${capability} state=${JSON.stringify(state)}`,
+    );
     if (endpointNumber === undefined) return; // not a bridged device — most devices aren't
     const deviceType = this.deviceTypeByEndpoint.get(endpointNumber);
     if (!deviceType || !state) return;
     const relevantKinds = this.capabilityKindsByEndpoint.get(endpointNumber);
     const isRelevant = relevantKinds && relevantKinds.size > 0 ? relevantKinds.has(capability) : capability === deviceType.primaryCapability;
-    if (!isRelevant) return;
+    if (!isRelevant) {
+      this.onLog(
+        "info",
+        `matter-bridge TRACE G: state event IGNORED — capability=${capability} is not among this endpoint's relevant capabilities ` +
+          `(${relevantKinds ? [...relevantKinds].join(",") : `primaryCapability=${deviceType.primaryCapability}`}) endpointId=${endpointNumber} device.id=${deviceId}`,
+      );
+      return;
+    }
     const serialized = JSON.stringify(state);
-    if (this.lastReported.get(endpointNumber) === serialized) return; // no real change
+    if (this.lastReported.get(endpointNumber) === serialized) {
+      this.onLog("info", `matter-bridge TRACE G: state event DEDUPED (identical to last-written) endpointId=${endpointNumber} device.id=${deviceId}`);
+      return;
+    }
     this.lastReported.set(endpointNumber, serialized);
     await this.server.setCapabilityState(endpointNumber, state);
+    // § TRACE H/I — the Matter attribute write itself (`setCapabilityState`) is a synchronous
+    // `endpoint.set()` call (real-server.ts) that triggers @matter/main's own attribute-change/
+    // report machinery internally — @matter/main's own subscription-report scheduling from this
+    // point onward (I) is SDK-internal and not independently traceable from this file.
+    this.onLog(
+      "info",
+      `matter-bridge TRACE H: Matter attribute updated — ts=${Date.now()} elapsedMsSinceG=${Date.now() - tG} endpointId=${endpointNumber} ` +
+        `device.id=${deviceId} capability=${capability} state=${JSON.stringify(state)}`,
+    );
   }
 }
