@@ -22,7 +22,7 @@ import { registerSecurityRoutes } from "./routes/security.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerSystemUpdateRoutes } from "./routes/system-update.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
-import { registerMatterRoutes } from "./routes/matter.js";
+import { registerMatterRoutes, registerMatterBridgeRoutes } from "./routes/matter.js";
 import { registerIntelligenceRoutes } from "./routes/intelligence.js";
 import { attachObservability } from "./observability.js";
 import { attachStream } from "./stream.js";
@@ -134,6 +134,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerSecurityRoutes(app, ctx);
   registerMigrationRoutes(app, ctx);
   registerMatterRoutes(app, ctx);
+  registerMatterBridgeRoutes(app, ctx);
   registerIntelligenceRoutes(app, ctx);
   attachStream(app, ctx);
 
