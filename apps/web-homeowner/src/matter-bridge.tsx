@@ -29,7 +29,11 @@ export function MatterBridgePanel({ onOpenDevices }: { onOpenDevices: () => void
   async function refresh() {
     const s = await client.matterBridgeStatus();
     setStatus(s);
-    if (s.running && !s.commissioned) {
+    // § Matter Bridge Phase 1.2B — pairing info is relevant whenever the commissioning WINDOW is
+    // open, independent of whether a fabric already exists — an already-commissioned bridge
+    // (e.g. paired to Apple Home) can still open a fresh window to admit a SECOND ecosystem
+    // (Google Home, Alexa, ...), which the old `!s.commissioned` check would have hidden.
+    if (s.running && s.commissioningWindowOpen) {
       try {
         const p = await client.matterBridgePairing();
         setPairing(p);
@@ -95,8 +99,19 @@ export function MatterBridgePanel({ onOpenDevices }: { onOpenDevices: () => void
 
           {status.running && (
             <>
+              {/* § Matter Bridge Phase 1.2B — four SEPARATE states, never one collapsed boolean
+                  (§ Part F/G): a bridge can be commissioned (fabricCount > 0) while its pairing
+                  window is closed, or have its window open to admit an ADDITIONAL ecosystem while
+                  already commissioned by another. Multi-fabric native — "commissioned" never means
+                  "Apple Home specifically," only "at least one controller has a fabric here." */}
               <p>
-                <strong>Commissioned:</strong> {status.commissioned ? "Yes" : "No — ready to pair"}
+                <strong>Matter Fabric:</strong> {status.commissioned ? `COMMISSIONED (${status.fabricCount} fabric${status.fabricCount === 1 ? "" : "s"})` : "NOT COMMISSIONED"}
+              </p>
+              <p>
+                <strong>Commissioning Window:</strong> {status.commissioningWindowOpen ? "OPEN" : "CLOSED"}
+              </p>
+              <p>
+                <strong>Pairing:</strong> {status.commissioningWindowOpen ? "AVAILABLE" : "NOT AVAILABLE"}
               </p>
 
               {status.fabrics.length > 0 && (

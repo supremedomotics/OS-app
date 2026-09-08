@@ -97,6 +97,8 @@ export interface MatterBridgeStatus {
   enabled: boolean;
   running: boolean;
   commissioned: boolean;
+  fabricCount: number;
+  commissioningWindowOpen: boolean;
   fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[];
 }
 /** § Extension Center — mirrors `MatterBridgeDeviceEntry` (services/gateway/src/context.ts). */

@@ -31,6 +31,18 @@ export interface MatterEndpointMapping {
    * device updates the Matter-visible name; endpoint identity, below, never changes because of
    * a rename). */
   name: string;
+  /** § Matter Bridge Phase 1.2 — the device's CURRENT full set of declared SupremeOS capability
+   * kinds (e.g. `["onoff","brightness","color"]` for a KNX tunable light, `["brightness","color"]`
+   * for a Casambi CCT fixture with no separate onoff entry). Needed so `real-server.ts`'s OnOff/
+   * LevelControl cluster routing can target whichever capability the device ACTUALLY declares
+   * (mirroring `apps/web-homeowner/src/lighting.tsx`'s own `showBrightness ? "brightness" :
+   * "onoff"` fallback) instead of being hard-locked to the device type's single
+   * `primaryCapability` — a device type alone can't tell KNX's 3-capability shape apart from
+   * Casambi's 2-capability shape. Kept in sync on every `resolve()` call, same as `name`. Defaults
+   * to `[]` for a pre-this-fix persisted file (§ `load()` below) — a driver seeing an empty set
+   * falls back to the OLD single-capability routing for that one endpoint until the next
+   * reconcile pass supplies the real set. */
+  capabilityKinds: string[];
 }
 
 /** On/Off Light (0x0100) — the id every registry entry persisted before this Phase implicitly
@@ -136,7 +148,8 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
       // fallback only governs what a re-expose shows during the single restart that happens to
       // land between an upgrade and the first reconcile.
       const name = typeof raw_m.name === "string" && raw_m.name ? raw_m.name : raw_m.deviceId;
-      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId, name };
+      const capabilityKinds = Array.isArray(raw_m.capabilityKinds) ? raw_m.capabilityKinds.filter((k): k is string => typeof k === "string") : [];
+      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId, name, capabilityKinds };
       if (map.has(m.deviceId)) {
         throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has a duplicate deviceId (${m.deviceId})`);
       }
@@ -193,18 +206,25 @@ export class MatterEndpointRegistry {
    * re-classification decision for the caller to make (§ Phase 1 doesn't yet implement it),
    * never a silent overwrite here. `endpointNumber` — the stable identity — NEVER changes for
    * an existing mapping, regardless of what `name` or `deviceTypeId` the caller passes. */
-  resolve(deviceId: DeviceId, deviceTypeId: MatterDeviceTypeId = 0x0100, name: string = deviceId): MatterEndpointMapping {
+  resolve(
+    deviceId: DeviceId,
+    deviceTypeId: MatterDeviceTypeId = 0x0100,
+    name: string = deviceId,
+    capabilityKinds: string[] = [],
+  ): MatterEndpointMapping {
     const existing = this.store.get(deviceId);
     if (existing) {
-      if (existing.name !== name) {
-        const renamed: MatterEndpointMapping = { ...existing, name };
-        this.store.put(renamed);
-        return renamed;
+      const sameKinds =
+        existing.capabilityKinds.length === capabilityKinds.length && existing.capabilityKinds.every((k, i) => k === capabilityKinds[i]);
+      if (existing.name !== name || !sameKinds) {
+        const updated: MatterEndpointMapping = { ...existing, name, capabilityKinds: capabilityKinds.length ? capabilityKinds : existing.capabilityKinds };
+        this.store.put(updated);
+        return updated;
       }
       return existing;
     }
     const next = this.nextEndpointNumber();
-    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceTypeId, name };
+    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceTypeId, name, capabilityKinds };
     this.store.put(mapping);
     return mapping;
   }

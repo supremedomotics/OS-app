@@ -218,7 +218,13 @@ const MATTER_BRIDGE_ENABLED_KEY = "matter_bridge_enabled";
 export interface MatterBridgeStatus {
   enabled: boolean;
   running: boolean;
+  /** § Matter Bridge Phase 1.2B — commissioned fabric count > 0, never "a controller is
+   * currently connected" — see `MatterBridgeCommissioningState`'s doc (protocols/matter-bridge/
+   * server.ts) for the full model. Stays true even while `commissioningWindowOpen` is false. */
   commissioned: boolean;
+  fabricCount: number;
+  /** § Part F — separate from `commissioned`: is this node CURRENTLY advertising as pairable. */
+  commissioningWindowOpen: boolean;
   fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[];
 }
 
@@ -1063,7 +1069,24 @@ export class AppContext {
       capabilities,
       onLog: (level, message) => (level === "error" ? console.error(message) : level === "warn" ? console.warn(message) : console.log(message)),
     });
-    await driver.start();
+    // § Matter Bridge Phase 1.2A — "internal error after factory reset"/every enable failure:
+    // `sendError` (routes/matter.ts) intentionally never leaks a raw, unexpected exception's
+    // detail to the HTTP response (§6 error model — a homeowner never sees SDK internals), which
+    // previously meant the ENTIRE real cause (a `StorageLockError`, a `MatterAggregateError`
+    // chain, …) was invisible to the installer who clicked Enable — only `reply.log.error`'s raw
+    // `err.message` reached the server log, and for a `MatterAggregateError` that outer message
+    // is a useless "Behaviors have errors" (§ `describeMatterError`'s own doc). This route is
+    // already installer/admin-gated (`enforce(ctx, user, "integration", null, "update")`), so a
+    // detailed, walked-cause-chain message is safe to return here — never for an ordinary
+    // homeowner-facing route. Logged AND returned, so both the server log and the Extension
+    // Center diagnostic view show the real root cause, not a bare "internal error".
+    try {
+      await driver.start();
+    } catch (err) {
+      const detail = describeMatterError(err);
+      console.error(`matter-bridge: failed to enable: ${detail}`, err);
+      throw new SupremeError("internal", `Matter Bridge failed to enable: ${detail}`);
+    }
     this.matterBridge = { driver };
     await this.reconcileMatterDevices(driver);
     if (opts.persist !== false) await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, true);
@@ -1115,7 +1138,17 @@ export class AppContext {
    * a factory reset; that stays its own, separately-authorized, explicit action). */
   async disableMatterBridge(): Promise<void> {
     if (!this.matterBridge) return;
-    await this.matterBridge.driver.stop();
+    try {
+      await this.matterBridge.driver.stop();
+    } catch (err) {
+      // § Matter Bridge Phase 1.2A — same installer-only detailed-diagnostic reasoning as
+      // `enableMatterBridge`'s catch. Deliberately does NOT null `this.matterBridge` on a
+      // failed stop() — a driver that failed to stop is not honestly "disabled" (§ Part 5: never
+      // silently mark a handle gone when its underlying resources may still be live).
+      const detail = describeMatterError(err);
+      console.error(`matter-bridge: failed to disable: ${detail}`, err);
+      throw new SupremeError("internal", `Matter Bridge failed to disable: ${detail}`);
+    }
     this.matterBridge = null;
     await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, false);
   }
@@ -1127,9 +1160,16 @@ export class AppContext {
   async matterBridgeStatus(): Promise<MatterBridgeStatus> {
     const persistedEnabled = await this.homeConfig.get(this.homeId, MATTER_BRIDGE_ENABLED_KEY);
     const enabled = typeof persistedEnabled === "boolean" ? persistedEnabled : this.config.matterBridgeEnabled;
-    if (!this.matterBridge) return { enabled, running: false, commissioned: false, fabrics: [] };
+    if (!this.matterBridge) return { enabled, running: false, commissioned: false, fabricCount: 0, commissioningWindowOpen: false, fabrics: [] };
     const commissioning = this.matterBridge.driver.getCommissioningState();
-    return { enabled, running: true, commissioned: commissioning.commissioned, fabrics: commissioning.fabrics };
+    return {
+      enabled,
+      running: true,
+      commissioned: commissioning.commissioned,
+      fabricCount: commissioning.fabricCount,
+      commissioningWindowOpen: commissioning.commissioningWindowOpen,
+      fabrics: commissioning.fabrics,
+    };
   }
 
   /** § Matter Bridge Phase 6 — the sensitive pairing payload (§ Phase 4 §10: never through an
@@ -1145,7 +1185,15 @@ export class AppContext {
    * factoryReset`'s doc. Throws if the Bridge isn't currently running (nothing to reset). */
   async matterBridgeFactoryReset(): Promise<void> {
     if (!this.matterBridge) throw new SupremeError("conflict", "Matter Bridge is not running — nothing to factory-reset");
-    await this.matterBridge.driver.factoryReset();
+    try {
+      await this.matterBridge.driver.factoryReset();
+    } catch (err) {
+      // § Matter Bridge Phase 1.2A — same installer-only detailed-diagnostic reasoning as
+      // `enableMatterBridge`'s catch, above.
+      const detail = describeMatterError(err);
+      console.error(`matter-bridge: factory reset failed: ${detail}`, err);
+      throw new SupremeError("internal", `Matter Bridge factory reset failed: ${detail}`);
+    }
   }
 
   /** § Extension Center — Bridged Devices page. Every device the Bridge currently exposes to

@@ -15,9 +15,36 @@ export interface MatterBridgeFabricInfo {
  * SENSITIVE (§10 security review) — callers must gate exposure (RBAC-restricted API, never
  * logged wholesale, never in an unauthenticated diagnostic response). */
 export interface MatterBridgeCommissioningState {
-  /** True once at least one fabric has admitted this node — mirrors `@matter/main`'s own
-   * `CommissioningServer.state.commissioned`, not a SupremeOS-invented boolean. */
+  /** § Matter Bridge Phase 1.2B — "commissioned" means EXACTLY "at least one fabric has
+   * admitted this node" (`fabrics.length > 0`), never "a controller is currently connected" or
+   * "the commissioning window happens to be closed right now." Sourced from `@matter/main`'s own
+   * `CommissioningServer.state.commissioned` — verified against its real source
+   * (`behavior/system/commissioning/CommissioningServer.js`): it is LITERALLY
+   * `!!FabricManager.fabrics.length`, kept live via a real fabric-change event listener, not a
+   * cached/derived value. A commissioned bridge STAYS commissioned even after the commissioning
+   * window closes (§ Part F/G) — closing the pairing window has nothing to do with whether an
+   * already-admitted fabric (Apple Home, Google Home, ...) still exists. Multi-fabric native:
+   * Apple Home is ONE possible fabric among several a bridge can hold simultaneously — this
+   * field is never "is Apple Home specifically connected," only "is ANY fabric commissioned." */
   commissioned: boolean;
+  /** Redundant with `fabrics.length` but exposed explicitly (§ Part F) so a caller/UI never has
+   * to re-derive "how many controllers" from the array itself. */
+  fabricCount: number;
+  /** § Part F — a SEPARATE concept from `commissioned`: whether this node is CURRENTLY
+   * commissionable. § live-confirmed via a real repro against this SDK — the
+   * AdministratorCommissioning cluster's `windowStatus` attribute alone is NOT sufficient: a
+   * freshly-started, never-paired node reads `windowStatus === 0` (WindowNotOpen) even while
+   * genuinely advertising/accepting PASE, because the SDK's auto-opened-at-boot commissioning
+   * path (`CommissioningServer`'s `#enterOnlineMode()`) never drives that cluster's formal
+   * command flow — only an EXPLICIT `OpenCommissioningWindow`/`OpenBasicCommissioningWindow`
+   * command sets it. So this is `windowStatus !== 0` (an admin explicitly (re)opened a window —
+   * e.g. to admit a SECOND ecosystem after the first) OR `!commissioned` (the auto-opened window
+   * for a node with no fabric yet). A freshly-started, never-paired node has this `true` while
+   * `commissioned` is `false`. An already-commissioned node with no explicit re-open normally has
+   * this `false` while `commissioned` stays `true` — the exact distinction the old single
+   * `commissioned` boolean collapsed, producing "Commissioning: No — ready to pair" even once
+   * Apple Home had a live fabric. */
+  commissioningWindowOpen: boolean;
   fabrics: MatterBridgeFabricInfo[];
   /** The manual pairing code / QR payload / discriminator — the SAME values every time
    * (persisted by `@matter/main`, §2: never regenerated on restart) for as long as this node's
@@ -43,6 +70,14 @@ export interface MatterBridgeEndpointSpec {
   name: string;
   deviceTypeId: MatterDeviceTypeId;
   initialState: CapabilityState | null;
+  /** § Matter Bridge Phase 1.2 — the device's full declared SupremeOS capability-kind set (see
+   * `endpoint-registry.ts`'s `MatterEndpointMapping.capabilityKinds` doc). Lets `real-server.ts`
+   * route the OnOff/LevelControl clusters of a Color Temperature/Extended Color Light through
+   * whichever of `onoff`/`brightness` the device ACTUALLY declares, instead of a single
+   * hard-coded `primaryCapability` — this is what makes On/Off and dimming work identically for
+   * a KNX device (`["onoff","brightness","color"]`) and a Casambi device
+   * (`["brightness","color"]"`), no protocol-specific branching. Defaults to `[]` when unknown. */
+  capabilityKinds?: string[];
 }
 
 /**

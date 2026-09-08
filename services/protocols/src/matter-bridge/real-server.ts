@@ -97,17 +97,41 @@ function createRoutedOnOffServerClass(emit: Emit, buildCommand: (on: boolean) =>
   };
 }
 
-/** § Phase 1 disclosed limitation — Color Temperature/Extended Color Light. SupremeOS's `color`
- * capability command (`packages/domain-model/src/capabilities.ts`) has NO bare on/off action —
- * only hue/saturation/kelvin/level, matching that a color light's "off" is naturally expressed
- * as a level, not a separate boolean the schema doesn't carry. Rather than invent an unverified
- * mapping (e.g. guessing "on" should restore a cached previous level), this behavior accepts and
- * reflects the Matter OnOff cluster command LOCALLY (the attribute updates, so a controller's UI
- * stays consistent) but does not route it to SupremeOS — dimming/color commands (which DO have a
- * `level`/hue/saturation/kelvin) are the real, routed way to turn a color light functionally off
- * (level 0) or on (any level > 0) from this Phase's Bridge. A future phase can close this gap
- * once a considered decision is made about level-restore semantics; it is not silently guessed. */
+/** § Phase 1 disclosed limitation, narrowed in Phase 1.2 — Color Temperature/Extended Color
+ * Light. SupremeOS's `color` capability command has NO bare on/off action — only hue/saturation/
+ * kelvin/level. Every real CCT/RGB device this codebase bridges (KNX, Casambi) ALSO declares a
+ * separate `brightness` (or `onoff`) capability alongside `color` (§ `capabilityKinds` on the
+ * endpoint spec, populated from the device's real declared capabilities) — `createOnOffTargetFor`
+ * below resolves the correct one and routes through it, exactly mirroring
+ * `apps/web-homeowner/src/lighting.tsx`'s own `showBrightness ? "brightness" : "onoff"` toggle
+ * fallback. This LOCAL-ONLY stub now only fires for the genuinely unresolvable edge case — a
+ * device declaring `color` alone, with neither `onoff` nor `brightness` — where SupremeOS's
+ * schema has no way to express on/off at all; the Matter attribute still updates locally so a
+ * controller's UI stays consistent, but nothing is routed. */
 class LocalOnlyOnOffServer extends OnOffServer {}
+
+/** § Matter Bridge Phase 1.2 — "the common OnOff failure" / "KNX brightness failure" root-cause
+ * fix. Resolves which SupremeOS capability the OnOff/LevelControl clusters of a Color
+ * Temperature/Extended Color Light endpoint should route through, from the device's ACTUAL
+ * declared capability set — never a per-protocol special case. Preference order matches the
+ * frontend's own working convention (`lighting.tsx`): `brightness` (carries level too, so it's
+ * preferred whenever present) → `onoff` → neither (stays local-only, see
+ * {@link LocalOnlyOnOffServer}'s doc). This is why KNX (`["onoff","brightness","color"]`) and
+ * Casambi (`["brightness","color"]`) both resolve to the SAME target (`"brightness"`) despite
+ * KNX declaring onoff separately and Casambi not declaring it at all — no protocol knowledge
+ * required, only the capability set every driver already reports honestly. */
+export function resolveOnOffTarget(capabilityKinds: string[]): "brightness" | "onoff" | null {
+  if (capabilityKinds.includes("brightness")) return "brightness";
+  if (capabilityKinds.includes("onoff")) return "onoff";
+  return null;
+}
+
+/** LevelControl has no equivalent for `"onoff"` (that capability's command schema carries no
+ * `level` field at all — `packages/domain-model/src/capabilities.ts`) — only `"brightness"`
+ * qualifies; every other case keeps the prior, working `"color"` level-embedded fallback. */
+export function resolveLevelTarget(capabilityKinds: string[]): "brightness" | null {
+  return capabilityKinds.includes("brightness") ? "brightness" : null;
+}
 
 function createLevelControlServerClass(onLevel: (endpointNumber: number, matterLevel: number) => void) {
   return class BridgedLevelControlServer extends LevelControlServer {
@@ -164,10 +188,29 @@ function createWindowCoveringServerClass(onMovement: (endpointNumber: number, co
     // the target positions. This is probably not desirable for a real device so do not invoke
     // super.handleMovement()" — @matter/node's own WindowCoveringServer.ts doc comment). Real
     // position only ever reaches the Matter attribute via `setCapabilityState`.
+    //
+    // § live-confirmed fix (Matter Bridge Phase 1.3 — "Apple Home 32% -> ~50%, 75% -> ~100%,
+    // intermediate values not preserved"). Root cause traced against the REAL, installed
+    // `@matter/node` source (`WindowCoveringServer.js`'s `#prepareMovement`, lines ~266-271):
+    // whenever `direction === DefinedByPosition` AND the current lift position is already known
+    // (non-null — true for every movement after the very first, since `addEndpoint` always seeds
+    // a real initial position), the SDK ITSELF REWRITES `direction` to plain `Open`/`Close`
+    // before calling this handler — `DefinedByPosition` essentially never survives to reach here
+    // in practice, even for a slider-driven `GoToLiftPercentage` command. The OLD code only
+    // extracted `targetPercent100ths` on the `DefinedByPosition` branch, so every slider drag
+    // silently collapsed into a bare `{action:"open"}`/`{action:"close"}` — discarding the exact
+    // percentage entirely, which is exactly what produced the reported quantization (32%/75%
+    // both landing near whatever "fully open"/"fully closed" resolves to on the underlying
+    // driver). The SDK still passes the REAL, un-mangled `targetPercent100ths` through
+    // regardless of how it rewrote `direction` (confirmed in the same source — `#prepareMovement`
+    // forwards its own `targetPercent100ths` parameter unchanged to `handleMovement`), so the fix
+    // is to always prefer the precise target whenever one is present, and only fall back to a
+    // bare open/close when the command genuinely carries no percentage (a physical up/down
+    // button, or a plain `UpOrOpen`/`DownOrClose` command on a device with no position feature).
     override handleMovement(type: MovementType, _reversed: boolean, direction: MovementDirection, targetPercent100ths?: number): void {
       const n = this.endpoint.number;
       if (n === undefined || type !== MovementType.Lift) return;
-      if (direction === MovementDirection.DefinedByPosition && targetPercent100ths !== undefined) {
+      if (targetPercent100ths !== undefined) {
         onMovement(n, { action: "set", position: positionFromMatterPercent100ths(targetPercent100ths) });
       } else if (direction === MovementDirection.Open) {
         onMovement(n, { action: "open" });
@@ -333,9 +376,17 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       }
       case COLOR_TEMPERATURE_LIGHT: {
         const initial = spec.initialState?.kind === "color" ? spec.initialState : null;
-        const LevelServerClass = createLevelControlServerClass((n, matterLevel) => emit(n, { capability: "color", level: levelFromMatter(matterLevel) }));
+        const onOffTarget = resolveOnOffTarget(spec.capabilityKinds ?? []);
+        const levelTarget = resolveLevelTarget(spec.capabilityKinds ?? []);
+        const LevelServerClass = createLevelControlServerClass((n, matterLevel) => {
+          const level = levelFromMatter(matterLevel);
+          emit(n, levelTarget ? { capability: levelTarget, action: "set", level } : { capability: "color", level });
+        });
         const ColorServerClass = createColorTemperatureServerClass((n, mireds) => emit(n, { capability: "color", kelvin: miredsToKelvin(mireds) }));
-        endpoint = new Endpoint(ColorTemperatureLightDevice.with(BridgedDeviceBasicInformationServer, LocalOnlyOnOffServer, LevelServerClass, ColorServerClass), {
+        const OnOffServerClass = onOffTarget
+          ? createRoutedOnOffServerClass(emit, (on) => ({ capability: onOffTarget, action: on ? "on" : "off" }))
+          : LocalOnlyOnOffServer;
+        endpoint = new Endpoint(ColorTemperatureLightDevice.with(BridgedDeviceBasicInformationServer, OnOffServerClass, LevelServerClass, ColorServerClass), {
           ...baseOptions,
           onOff: { onOff: initial?.on ?? false },
           levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
@@ -351,7 +402,12 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       }
       case EXTENDED_COLOR_LIGHT: {
         const initial = spec.initialState?.kind === "color" ? spec.initialState : null;
-        const LevelServerClass = createLevelControlServerClass((n, matterLevel) => emit(n, { capability: "color", level: levelFromMatter(matterLevel) }));
+        const onOffTarget = resolveOnOffTarget(spec.capabilityKinds ?? []);
+        const levelTarget = resolveLevelTarget(spec.capabilityKinds ?? []);
+        const LevelServerClass = createLevelControlServerClass((n, matterLevel) => {
+          const level = levelFromMatter(matterLevel);
+          emit(n, levelTarget ? { capability: levelTarget, action: "set", level } : { capability: "color", level });
+        });
         const ColorServerClass = createExtendedColorServerClass(
           (n, matterX, matterY) => {
             const { hue, saturation } = xyToHueSaturation(xyChannelFromMatter(matterX), xyChannelFromMatter(matterY));
@@ -359,9 +415,12 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
           },
           (n, mireds) => emit(n, { capability: "color", kelvin: miredsToKelvin(mireds) }),
         );
+        const OnOffServerClass = onOffTarget
+          ? createRoutedOnOffServerClass(emit, (on) => ({ capability: onOffTarget, action: on ? "on" : "off" }))
+          : LocalOnlyOnOffServer;
         const usesKelvin = initial?.kelvin != null;
         const xy = usesKelvin ? { x: 0, y: 0 } : hueSaturationToXy(initial?.hue ?? 0, initial?.saturation ?? 0);
-        endpoint = new Endpoint(ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, LocalOnlyOnOffServer, LevelServerClass, ColorServerClass), {
+        endpoint = new Endpoint(ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, OnOffServerClass, LevelServerClass, ColorServerClass), {
           ...baseOptions,
           onOff: { onOff: initial?.on ?? false },
           levelControl: { currentLevel: levelToMatter(initial?.level ?? 0) },
@@ -432,6 +491,20 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     if (!entry) return null;
     const ep = entry.endpoint as unknown as { state: { bridgedDeviceBasicInformation?: { nodeLabel?: string } } };
     return ep.state.bridgedDeviceBasicInformation?.nodeLabel ?? null;
+  }
+
+  /** § Matter Bridge Phase 1.2B — test-only diagnostic accessor, same rationale as
+   * `getEndpointNodeLabel` above: invokes a REAL cluster command through the SDK's OWN command-
+   * dispatch entry point (`Endpoint.act()` — the same mechanism `@matter/node`'s interaction/
+   * command-processing layer uses for a genuine incoming Matter command from a real controller),
+   * not a direct call to our override method. This is what makes a test using it a genuine proof
+   * that "Apple Home sends OnOff.On" reaches our `emit()` callback — calling
+   * `behaviorInstance.on()` directly would only prove the METHOD exists, not that the SDK's own
+   * dispatch machinery resolves to it. Not part of the abstract `MatterBridgeServer` interface. */
+  async simulateCommandForTest<T>(endpointNumber: number, actor: (agent: { [key: string]: any }) => T | Promise<T>): Promise<T> {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) throw new Error(`matter-bridge: no endpoint ${endpointNumber} to simulate a command against`);
+    return entry.endpoint.act((agent) => actor(agent as unknown as { [key: string]: any }));
   }
 
   /** A direct attribute write — this is a STATE REPORT, not a command invocation, so it does
@@ -511,8 +584,26 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       label: f.label || null,
       rootVendorId: f.rootVendorId ?? null,
     }));
+    // § Matter Bridge Phase 1.2B — § live-confirmed via a real repro (a fresh, never-commissioned
+    // node's `administratorCommissioning.windowStatus` reads back 0/WindowNotOpen immediately
+    // after `start()`, even though the node IS genuinely commissionable — confirmed by the SAME
+    // repro's mDNS log showing "Publishing kind: commissionable"). The AdministratorCommissioning
+    // cluster's `windowStatus` attribute only reflects an EXPLICIT `OpenCommissioningWindow`/
+    // `OpenBasicCommissioningWindow` command having been issued — it is NOT set by the SDK's own
+    // auto-opened-at-boot commissioning path (`CommissioningServer`'s internal
+    // `#enterOnlineMode()`, documented on `getCommissioningState`'s own doc above), which
+    // advertises/accepts PASE without ever driving that cluster's command flow. So
+    // "commissionable right now" is genuinely `windowStatus !== 0` (an admin explicitly
+    // (re)opened a window — e.g. to admit a SECOND ecosystem after the first) OR `!commissioned`
+    // (the SDK's auto-opened window for a node with no fabric yet, which this bridge always
+    // relies on for first pairing).
+    const windowStatus = (this.node.state as unknown as { administratorCommissioning?: { windowStatus?: number } }).administratorCommissioning
+      ?.windowStatus;
+    const explicitWindowOpen = typeof windowStatus === "number" && windowStatus !== 0;
     return {
       commissioned: commissioning.commissioned,
+      fabricCount: fabrics.length,
+      commissioningWindowOpen: explicitWindowOpen || !commissioning.commissioned,
       fabrics,
       pairing: {
         manualPairingCode: commissioning.pairingCodes.manualPairingCode,
@@ -522,16 +613,37 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     };
   }
 
-  /** § Phase 4 §7 — delegates entirely to `ServerNode.erase()` (verified against its real
-   * source: closes sessions, goes offline, then wipes the node's own storage) — SupremeOS
-   * never reaches into the storage directory itself. Leaves this instance unusable
-   * afterward, same as `stop()` — a caller wanting a fresh node calls `start()` again, which
-   * will generate a NEW node identity/fabric/passcode since the old storage is gone. */
+  /** § Phase 4 §7, § live-confirmed fix (Matter Bridge Phase 1.2A — the "internal error after
+   * factory reset" production bug). Delegates to `ServerNode.erase()` — verified against its
+   * REAL, installed source (`@matter/node/dist/esm/node/ServerNode.js`'s `eraseWithMutex`):
+   * `erase()` clears `SessionManager`/`FabricManager`/`OccurrenceManager`/`ServerNodeStore`
+   * (commissioning identity, fabrics, credentials) and then brings the SAME node instance BACK
+   * ONLINE IN PLACE (`if (isOnline && shouldBeOnline) await this.startWithMutex()`) — it never
+   * destructs/closes the node, and never touches its child endpoint tree (the aggregator and
+   * every bridged device endpoint are untouched — `resetStorage()` only reaches the four
+   * services named above). This means the node keeps holding its `@matter/nodejs`
+   * `NodeJsDirectoryLock` on `storagePath` throughout.
+   *
+   * ROOT CAUSE this replaces: the previous version discarded `this.node`/`this.aggregator`/
+   * `this.endpoints` here (`this.node = undefined`), on the incorrect assumption that `erase()`
+   * destroys the node and a caller must build a fresh one — it does not. That orphaned the
+   * STILL-ALIVE, STILL-ONLINE, STILL-LOCK-HOLDING node: nothing ever called `.close()` on it, so
+   * its storage lock was never released. `MatterBridgeDriver.factoryReset()` immediately called
+   * `start()` again, which (seeing `this.node` falsely `undefined`) tried `ServerNode.create()` a
+   * SECOND time at the SAME `storagePath` — `@matter/nodejs`'s `acquireDirectoryLock` (`fs/
+   * lock-utils.js`) found the existing lock file still owned by THIS process's pid/token and
+   * threw `StorageLockError("Storage is already locked by this process")`, which surfaced to the
+   * Extension Center only as the generic "internal error" (§6 error model). Worse, that orphaned
+   * node/lock then lived for the rest of the gateway process's life — since it was never
+   * referenced or closed again, every SUBSEQUENT Enable attempt (even after a Disable, which
+   * closes the wrong — nulled-out, never-real — `this.node` reference) hit the identical
+   * `StorageLockError`, exactly matching the reported "Disable → Enable still fails" symptom.
+   *
+   * Fix: do not null out or replace anything — the SAME `node`/`aggregator`/`endpoints` are still
+   * genuinely valid after `erase()` returns (the SDK guarantees this), so nothing here needs
+   * rebuilding. A caller does NOT need to call `start()` afterward; the node is already online. */
   async factoryReset(): Promise<void> {
     if (!this.node) throw new Error("matter-bridge: server not started");
     await this.node.erase();
-    this.node = undefined;
-    this.aggregator = undefined;
-    this.endpoints.clear();
   }
 }

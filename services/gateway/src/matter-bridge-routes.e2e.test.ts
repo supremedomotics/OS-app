@@ -42,16 +42,24 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
   }
+  /** § Matter Bridge Phase 1.2B — mutable so a test can simulate the states the real SDK's own
+   * `FabricManager`/`AdministratorCommissioning.windowStatus` produce (a real fabric-add needs an
+   * external controller this sandbox has none of — §29) without touching Bridge internals. */
+  fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[] = [];
+  commissioningWindowOpen = true;
   getCommissioningState() {
     return {
-      commissioned: false,
-      fabrics: [] as { fabricIndex: number; label: string | null; rootVendorId: number | null }[],
+      commissioned: this.fabrics.length > 0,
+      fabricCount: this.fabrics.length,
+      commissioningWindowOpen: this.commissioningWindowOpen,
+      fabrics: this.fabrics,
       pairing: { manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 },
     };
   }
-  async factoryReset() {
-    this.endpoints.clear();
-  }
+  /** § Matter Bridge Phase 1.2A — models the REAL `ServerNode.erase()` behavior: it wipes
+   * commissioning/fabric identity but never touches the live endpoint tree (see `real-server.ts`
+   * `factoryReset()`'s doc for the full source-verified trace). Does NOT clear `this.endpoints`. */
+  async factoryReset() {}
 }
 
 describe("Matter Bridge REST routes (gateway e2e)", () => {
@@ -91,7 +99,7 @@ describe("Matter Bridge REST routes (gateway e2e)", () => {
   it("reports disabled status before anything is enabled", async () => {
     const res = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: false, running: false, commissioned: false, fabrics: [] });
+    expect(await res.json()).toEqual({ enabled: false, running: false, commissioned: false, fabricCount: 0, commissioningWindowOpen: false, fabrics: [] });
   });
 
   it("rejects an unauthenticated status request", async () => {
@@ -122,11 +130,11 @@ describe("Matter Bridge REST routes (gateway e2e)", () => {
   });
 
   it("factory-resets the real driver instance through the route, then comes back up live with a fresh identity", async () => {
-    // § live-confirmed fix — factory reset used to leave the Bridge zombied: the underlying
-    // node wiped, but nothing above it reset, so `started` stayed true and every later call
-    // (this test's own status check included) threw "server not started" forever. Confirmed
-    // via journalctl on a real deployment. It now restarts itself, so devices come right back
-    // (a genuinely new Matter identity, same SupremeOS devices) instead of staying dark.
+    // § live-confirmed fix (Matter Bridge Phase 1.2A) — factory reset delegates to the real
+    // `ServerNode.erase()`, which wipes commissioning/fabric identity but NEVER touches the live
+    // endpoint tree (see `real-server.ts`'s `factoryReset()` doc for the full source-verified
+    // trace) — the SAME node stays online throughout, so bridged devices are never dropped and
+    // never need re-exposing.
     expect(server.endpoints.size).toBeGreaterThan(0);
     const before = server.endpoints.size;
     const res = await fetch(`${baseUrl}/v1/matter-bridge/factory-reset`, { method: "POST", headers: auth() });
@@ -136,6 +144,61 @@ describe("Matter Bridge REST routes (gateway e2e)", () => {
     const status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ running: true });
+  });
+
+  // § Matter Bridge Phase 1.2B — the commissioning/fabric status model (§ Part F/G/H items
+  // 2,3,4,5,6): `commissioned` and `commissioningWindowOpen` are separate fields through the
+  // WHOLE real stack — gateway route → `AppContext.matterBridgeStatus()` →
+  // `MatterBridgeDriver.getCommissioningState()` (a pure pass-through) → the transport. A real
+  // fabric-add needs an external controller this sandbox has none of (§29), so this simulates the
+  // SDK-owned states the fake's `getCommissioningState()` would report from real
+  // `FabricManager`/`AdministratorCommissioning.windowStatus` data.
+  it("2. a commissioned fabric (Apple Home or any controller) reports commissioned=true", async () => {
+    server.fabrics = [{ fabricIndex: 1, label: "Apple Home", rootVendorId: 0xfff1 }];
+    server.commissioningWindowOpen = false; // window normally closes once paired
+    const status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    expect(await status.json()).toMatchObject({ commissioned: true, fabricCount: 1, commissioningWindowOpen: false });
+  });
+
+  it("3. commissioning window closed does not un-commission an existing fabric — commissioned stays true", async () => {
+    server.fabrics = [{ fabricIndex: 1, label: "Apple Home", rootVendorId: 0xfff1 }];
+    server.commissioningWindowOpen = false;
+    const status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    const body = await status.json();
+    expect(body.commissioned).toBe(true);
+    expect(body.commissioningWindowOpen).toBe(false);
+  });
+
+  it("4. commissioning window open is reported independently of fabric state", async () => {
+    server.fabrics = [];
+    server.commissioningWindowOpen = true;
+    const status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    const body = await status.json();
+    expect(body.commissioned).toBe(false);
+    expect(body.commissioningWindowOpen).toBe(true);
+  });
+
+  it("5. a fabric being removed (e.g. Apple Home 'Remove Accessory') correctly flips commissioned back to false once no fabrics remain", async () => {
+    server.fabrics = [{ fabricIndex: 1, label: "Apple Home", rootVendorId: 0xfff1 }];
+    let status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    expect((await status.json()).commissioned).toBe(true);
+
+    server.fabrics = [];
+    status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    expect((await status.json()).commissioned).toBe(false);
+  });
+
+  it("6. multiple simultaneous fabrics (multi-ecosystem, § Part G) still report commissioned=true and the correct count — never assumes a single controller", async () => {
+    server.fabrics = [
+      { fabricIndex: 1, label: "Apple Home", rootVendorId: 0xfff1 },
+      { fabricIndex: 2, label: "Google Home", rootVendorId: 0xfff2 },
+    ];
+    const status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    const body = await status.json();
+    expect(body.commissioned).toBe(true);
+    expect(body.fabricCount).toBe(2);
+    expect(body.fabrics).toHaveLength(2);
+    server.fabrics = []; // reset for later tests
   });
 
   it("disables the Bridge live via the route, then re-enabling starts a fresh instance", async () => {
