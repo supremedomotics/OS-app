@@ -34,6 +34,16 @@ describe("RealMatterBridgeServer — real @matter/main storage persistence", () 
       server1 = new RealMatterBridgeServer(opts);
       await server1.start();
     } catch (err) {
+      // § live-confirmed fix — `start()` can fail AFTER `node.add(aggregator)` already queued a
+      // lazy, fire-and-forget endpoint-number write (`ServerEndpointStores#persistNumber`,
+      // @matter/node's own source — never awaited by `add()` itself) and only THEN fail to bind
+      // the operational socket (a real collision on a real deployment: `supreme-gateway`'s own
+      // live Matter Bridge already holds :5540). Returning immediately here left that write
+      // in flight past this test's `afterEach` deleting the temp directory, surfacing as an
+      // "Unhandled Rejection: ENOENT ... rename" that failed the whole suite despite every test
+      // passing — confirmed via the deploy box's own test run (1053/1053 tests passed, exit 1
+      // anyway). `stop()` awaits it via `ServerEndpointStores.close()` before we return.
+      await server1!.stop().catch(() => {});
       // Environment cannot open the sockets @matter/main needs (sandboxed network namespace) —
       // disclosed honestly per §29, not silently reported as a pass.
       console.warn(
@@ -67,6 +77,8 @@ describe("RealMatterBridgeServer — real @matter/main storage persistence", () 
       server1 = new RealMatterBridgeServer(opts);
       await server1.start();
     } catch (err) {
+      // See the identical fix + comment in the test above — same dangling lazy-persist race.
+      await server1!.stop().catch(() => {});
       console.warn(
         `SKIPPED — real @matter/main ServerNode could not start in this sandbox (${(err as Error).message}). ` +
           `NOT VERIFIED — REQUIRES an environment with a normal LAN network namespace. This is "SDK ` +
