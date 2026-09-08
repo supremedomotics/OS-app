@@ -412,6 +412,20 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     };
   }
 
+  /** § live-confirmed fix (Matter Bridge Phase 1.3) — this device's own `onoff`/`brightness`
+   * capability's last known `{on, level}`, the REAL source of truth for a KNX light's combined
+   * on/off state — never re-derived or guessed, read straight from `this.states` (the SAME map
+   * `record()` populates). `brightness` is preferred when present (it also carries `level`,
+   * `onoff` doesn't); `null` when this device has neither bound, matching the honest "nothing
+   * known yet" case `stateFromValue`'s `color`/DPT7.600 branch falls back from. */
+  private combinedOnOffLevel(deviceId: DeviceId): { on: boolean; level: number } | null {
+    const brightness = this.states.get(bindingKey(deviceId, "brightness"));
+    if (brightness?.kind === "brightness") return { on: brightness.on, level: brightness.level };
+    const onoff = this.states.get(bindingKey(deviceId, "onoff"));
+    if (onoff?.kind === "onoff") return { on: onoff.on, level: onoff.on ? 100 : 0 };
+    return null;
+  }
+
   private observe(b: KnxDeviceBinding): void {
     for (const ga of [b.statusGa, ...b.extraStatusGas]) {
       this.ultimate.subscribe(ga, b.dpt, (value) => {
@@ -419,7 +433,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
         // reflects "a subscribed telegram for THIS device's GA reached the driver's own
         // handler," independent of whether stateFromValue() then accepted it.
         this.lastMatchedFeedback = { deviceId: b.deviceId, capability: b.capability, destination: ga, dpt: b.dpt, value, ts: new Date().toISOString() };
-        const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config);
+        const state = stateFromValue(b.capability as CapabilityState["kind"], value as never, b.config, this.combinedOnOffLevel(b.deviceId));
         if (state) this.record(b, state);
       });
     }
@@ -469,6 +483,18 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     provider: ProviderDiagnostics;
     isSubscribed: boolean;
     binding: { writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string } | null;
+    /** § Matter Bridge Phase 1.3 — "Final Capability Failure Isolation" diagnostic fix. A
+     * multi-capability device (e.g. a KNX CCT light: `onoff` + `brightness` + `color`, each its
+     * OWN binding — see `KnxDeviceBinding`'s doc) previously only ever showed `binding`, the
+     * FIRST entry `this.bindings.find()` happened to hit — silently hiding whether the device's
+     * OTHER capabilities are bound at all. This is EXACTLY the question "does this KNX device
+     * genuinely have a writable onoff/brightness GA, or only color" needs answered, and this
+     * route already existed for exactly this kind of live diagnosis — it just wasn't complete for
+     * a multi-capability device. Every capability this device has ANY binding for, each showing
+     * its own write/status GA/DPT — reuses the existing `getBindingInfo()` (already used
+     * elsewhere for the same purpose), never re-derived. Empty array (not `binding: null`) means
+     * this device has NO KNX binding for ANY capability at all. */
+    allBindings: { capability: CapabilityKind; writeGa: string; statusGa: string; extraStatusGas: string[]; dpt: string }[];
     lastMatchedFeedback: { deviceId: string; capability: string; destination: string; dpt: string; value: unknown; ts: string } | null;
     lastRecordedState: { deviceId: string; capability: string; kind: string; ts: string } | null;
   } | null {
@@ -479,6 +505,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
       provider: this.ultimate.diagnostics(),
       isSubscribed: this.isSubscribedToGa(b.statusGa),
       binding: this.getRuntimeBinding(deviceId, b.capability),
+      allBindings: this.getBindingInfo(deviceId),
       lastMatchedFeedback: this.lastMatchedFeedback?.deviceId === deviceId ? this.lastMatchedFeedback : null,
       lastRecordedState: this.lastRecordedState?.deviceId === deviceId ? this.lastRecordedState : null,
     };

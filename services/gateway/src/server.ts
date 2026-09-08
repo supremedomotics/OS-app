@@ -76,16 +76,34 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
 
   // Tolerate empty bodies on action POSTs (e.g. scene activate, user suspend) that
   // still carry a JSON content-type — treat them as an undefined body, not an error.
+  //
+  // § P0.34 diagnostic-only tracing — scoped to the KNX import route by URL check so
+  // every other request in the app (this parser is registered globally) is completely
+  // unaffected. Proves whether this callback is even invoked for a stuck request, and
+  // times JSON.parse specifically (a prior pass already benchmarked JSON.parse of a
+  // ~14MB string in isolation at ~10ms — this instruments the REAL call, on the REAL
+  // string Fastify hands this callback, to confirm that holds for the live request too,
+  // not to re-litigate it). Never logs body contents.
   app.addContentTypeParser(
     "application/json",
     { parseAs: "string" },
     (_req, body, done) => {
       const text = (body as string).trim();
+      const trace = typeof _req.url === "string" && _req.url.includes("/commissioning/knx/queue/job");
       if (text.length === 0) return done(null, undefined);
+      if (trace) _req.log.info({ stage: "KNX_TRACE parser_entered", reqId: _req.id, bytes: text.length }, "knx queue/job parser trace");
       try {
-        done(null, JSON.parse(text));
+        const t0 = trace ? process.hrtime.bigint() : 0n;
+        const parsed = JSON.parse(text);
+        if (trace) {
+          const parseMs = Number(process.hrtime.bigint() - t0) / 1_000_000;
+          _req.log.info({ stage: "KNX_TRACE parser_json_parse_end", reqId: _req.id, parseMs }, "knx queue/job parser trace");
+        }
+        if (trace) _req.log.info({ stage: "KNX_TRACE parser_callback", reqId: _req.id }, "knx queue/job parser trace");
+        done(null, parsed);
       } catch (err) {
         (err as { statusCode?: number }).statusCode = 400;
+        if (trace) _req.log.info({ stage: "KNX_TRACE parser_error", reqId: _req.id, error: (err as Error).message }, "knx queue/job parser trace");
         done(err as Error, undefined);
       }
     },

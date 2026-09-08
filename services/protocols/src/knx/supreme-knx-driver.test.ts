@@ -162,6 +162,89 @@ describe("SupremeKnxDriver", () => {
     expect(after?.lastRecordedState).toMatchObject({ deviceId, capability: "onoff", kind: "onoff" });
   });
 
+  it("§ Matter Bridge Phase 1.3 — knxFeedbackDiagnostics() reports EVERY bound capability for a multi-capability device (e.g. a CCT light with separate onoff/brightness/color bindings), not just the first one found — the diagnostic gap that hid whether onoff/brightness were genuinely bound at all", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    // A KNX tunable-white light with THREE separate bindings — mirrors the real, reported
+    // shape (e.g. "Conference Hanging"): onoff/brightness/color each addressed independently.
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    await driver.bind({ deviceId, capability: "brightness", address: "1/2/1", config: { statusAddress: "1/2/2" } });
+    await driver.bind({ deviceId, capability: "color", address: "1/3/1", config: { statusAddress: "1/3/2", dpt: "7.600" } });
+    await driver.connect();
+
+    const diag = driver.knxFeedbackDiagnostics(deviceId);
+    expect(diag?.allBindings).toHaveLength(3);
+    expect(diag?.allBindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ capability: "onoff", writeGa: "1/1/1", statusGa: "1/1/2" }),
+        expect.objectContaining({ capability: "brightness", writeGa: "1/2/1", statusGa: "1/2/2" }),
+        expect.objectContaining({ capability: "color", writeGa: "1/3/1", statusGa: "1/3/2" }),
+      ]),
+    );
+  });
+
+  it("§ Matter Bridge Phase 1.3 — a device bound for ONLY 'color' (the exact reported KNX CCT failure shape: CCT works, onoff/brightness don't) shows allBindings with just that one entry — making a missing binding diagnosable via the existing route rather than silently invisible", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "1/3/1", config: { statusAddress: "1/3/2", dpt: "7.600" } });
+    await driver.connect();
+
+    const diag = driver.knxFeedbackDiagnostics(deviceId);
+    expect(diag?.allBindings).toEqual([expect.objectContaining({ capability: "color", writeGa: "1/3/1" })]);
+    // The absence of "onoff"/"brightness" entries here IS the diagnosis — an installer or a
+    // future debugging session reading this response can now see directly that this device
+    // was never bound for onoff/brightness, rather than that being invisible.
+    expect(diag?.allBindings.some((b) => b.capability === "onoff")).toBe(false);
+    expect(diag?.allBindings.some((b) => b.capability === "brightness")).toBe(false);
+  });
+
+  it("§ live-confirmed fix (Matter Bridge Phase 1.3) — a DPT7.600 (Kelvin-only) color telegram reports the device's REAL onoff state instead of a hardcoded on:true — the exact root cause of 'Apple Home On/Off doesn't work' for a KNX CCT light, confirmed live against dev_01M20KNF46BZ9ECFD40KVXM8G2 'Conference Hanging'", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "5/3/0", config: { statusAddress: "5/3/1" } });
+    await driver.bind({ deviceId, capability: "brightness", address: "5/3/3", config: { statusAddress: "5/3/4" } });
+    await driver.bind({ deviceId, capability: "color", address: "5/3/5", config: { statusAddress: "5/3/6", dpt: "7.600" } });
+    await driver.connect();
+
+    // The physical light is switched OFF on the bus (a real wall switch, or a prior command).
+    provider.emit("5/3/1", false);
+    expect(driver.getState(deviceId, "onoff")).toEqual({ kind: "onoff", on: false });
+
+    // A CCT change now arrives (Apple Home setting kelvin, or any color-temperature telegram).
+    // The OLD, buggy behavior hardcoded `on: true` here regardless of the real onoff state —
+    // this is the fabrication that permanently masked "off" from the Matter Bridge (which seeds
+    // its OnOff attribute from this SAME `color` capability for a Color Temperature Light).
+    provider.emit("5/3/6", 4000);
+    expect(driver.getState(deviceId, "color")).toMatchObject({ kind: "color", on: false, kelvin: 4000 });
+  });
+
+  it("§ live-confirmed fix (Matter Bridge Phase 1.3) — a color telegram arriving AFTER a brightness telegram reflects the real brightness level too, not the hardcoded 100", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "brightness", address: "5/3/3", config: { statusAddress: "5/3/4" } });
+    await driver.bind({ deviceId, capability: "color", address: "5/3/5", config: { statusAddress: "5/3/6", dpt: "7.600" } });
+    await driver.connect();
+
+    provider.emit("5/3/4", 45); // 45% brightness on the bus
+    provider.emit("5/3/6", 4000);
+    expect(driver.getState(deviceId, "color")).toMatchObject({ kind: "color", on: true, level: 45, kelvin: 4000 });
+  });
+
+  it("§ live-confirmed fix (Matter Bridge Phase 1.3) — a device with ONLY 'color' bound (no onoff/brightness) still falls back to the original on:true/level:100 default — no regression for a device that genuinely has no separate onoff/brightness binding", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "color", address: "1/3/1", config: { statusAddress: "1/3/2", dpt: "7.600" } });
+    await driver.connect();
+
+    provider.emit("1/3/2", 3000);
+    expect(driver.getState(deviceId, "color")).toEqual({ kind: "color", on: true, level: 100, hue: null, saturation: null, kelvin: 3000 });
+  });
+
   it("§ Live Feedback Diagnostic Pass — knxFeedbackDiagnostics() is null for a device this driver doesn't manage", () => {
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });

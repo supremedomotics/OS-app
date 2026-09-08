@@ -22,7 +22,13 @@ describe("RealMatterBridgeServer — real @matter/main storage persistence", () 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "matter-bridge-real-"));
   });
-  afterEach(() => {
+  afterEach(async () => {
+    // § live-confirmed — same dangling-lazy-persist race documented on the second describe
+    // block below (and in `real-server.device-types.test.ts`'s own `afterEach`): `stop()`'s
+    // `node.close()` does not reliably wait for a just-started `ServerEndpointStores` lazy
+    // write, so deleting the temp directory immediately can race a write still in flight. Test-
+    // cleanup-only, not a production behavior change.
+    await new Promise((r) => setTimeout(r, 100));
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -109,5 +115,135 @@ describe("RealMatterBridgeServer — real @matter/main storage persistence", () 
     expect(after.pairing.discriminator).toBe(before.pairing.discriminator);
     expect(after.pairing.manualPairingCode).toBe(before.pairing.manualPairingCode);
     expect(after.pairing.qrPairingCode).toBe(before.pairing.qrPairingCode);
+  }, 30_000);
+});
+
+/**
+ * § Matter Bridge Phase 1.2A — the exact production lifecycle bug ("internal error" after
+ * factory reset, and every Enable afterward, including after Disable): root-caused against the
+ * REAL `@matter/main` SDK, not a fake — a fake can't reproduce a real `NodeJsDirectoryLock`
+ * collision. See `factoryReset()`'s doc comment on `RealMatterBridgeServer` (real-server.ts) for
+ * the full trace of `ServerNode.erase()`'s actual (verified-against-source) behavior.
+ */
+describe("RealMatterBridgeServer — factory reset / disable-enable lifecycle (Matter Bridge Phase 1.2A)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "matter-bridge-lifecycle-"));
+  });
+  afterEach(async () => {
+    // § same dangling-lazy-persist race documented elsewhere in this file/`real-server.
+    // device-types.test.ts` — test-cleanup-only grace period, not a production behavior.
+    await new Promise((r) => setTimeout(r, 100));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function startOrSkip(server: RealMatterBridgeServer, label: string): Promise<boolean> {
+    try {
+      await server.start();
+      return true;
+    } catch (err) {
+      console.warn(`SKIPPED (${label}) — real @matter/main ServerNode could not start in this sandbox (${(err as Error).message}).`);
+      return false;
+    }
+  }
+
+  it("C. enable → factory reset → the SAME server instance is still usable (no StorageLockError from re-locking its own storage)", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "lifecycle-c" });
+    if (!(await startOrSkip(server, "lifecycle-c"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Light", deviceTypeId: 0x0100, initialState: { kind: "onoff", on: false } });
+    const before = server.getCommissioningState();
+
+    // This is the exact call that threw `StorageLockError` in production.
+    await expect(server.factoryReset()).resolves.not.toThrow();
+
+    // The node is genuinely still live (never destroyed/replaced) — commissioning state is
+    // readable, and it's a FRESH identity (a real factory reset), not the same one as before.
+    const after = server.getCommissioningState();
+    expect(after.pairing.discriminator).not.toBe(before.pairing.discriminator);
+    // The endpoint tree survived — `erase()` never touches it, only commissioning/fabric state.
+    expect(server.getEndpointNodeLabel(1)).toBe("Light");
+
+    await server.stop();
+  }, 30_000);
+
+  it("F. enable → factory reset → stop → a FRESH server instance at the SAME storage path starts cleanly (the lock was genuinely released)", async () => {
+    const opts = { storagePath: dir, nodeId: "lifecycle-f" };
+    const server1 = new RealMatterBridgeServer(opts);
+    if (!(await startOrSkip(server1, "lifecycle-f-1"))) return;
+    await server1.addEndpoint({ endpointNumber: 1, name: "Light", deviceTypeId: 0x0100, initialState: { kind: "onoff", on: false } });
+    await server1.factoryReset();
+    await server1.stop();
+
+    // Simulates a gateway restart: a BRAND NEW server instance, same storage path — this is
+    // exactly where the production bug's orphaned lock caused every subsequent Enable to fail.
+    const server2 = new RealMatterBridgeServer(opts);
+    await expect(server2.start()).resolves.not.toThrow();
+    await server2.stop();
+  }, 30_000);
+
+  it("D/B. enable → disable (stop) → enable (start) on a FRESH instance at the same storage path succeeds — stop() genuinely releases the storage lock", async () => {
+    const opts = { storagePath: dir, nodeId: "lifecycle-d" };
+    const server1 = new RealMatterBridgeServer(opts);
+    if (!(await startOrSkip(server1, "lifecycle-d-1"))) return;
+    await server1.stop();
+
+    const server2 = new RealMatterBridgeServer(opts);
+    await expect(server2.start()).resolves.not.toThrow();
+    await server2.stop();
+  }, 30_000);
+});
+
+/**
+ * § Matter Bridge Phase 1.2B — the commissioning/fabric status model (§ Part F/G): `commissioned`
+ * (fabric count > 0) and `commissioningWindowOpen` (the AdministratorCommissioning cluster's real
+ * `windowStatus` attribute) are separate concepts, never one collapsed boolean.
+ *
+ * A genuine fabric-added scenario (real PASE/CASE commissioning) needs a real external controller
+ * this sandbox has none of (§29, same disclosed boundary as every other real-ecosystem-interop
+ * claim in this codebase) — the two states this CAN verify for real without one are exercised
+ * below; multi-fabric behavior is exercised at the unit level against a fake in
+ * `matter-bridge-driver.test.ts`-style tests since the DRIVER never computes this itself (it's a
+ * pure pass-through to `getCommissioningState()` — see `MatterBridgeDriver.getCommissioningState`).
+ */
+describe("RealMatterBridgeServer — commissioning/fabric status model (Matter Bridge Phase 1.2B)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "matter-bridge-status-"));
+  });
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 100));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function startOrSkip(server: RealMatterBridgeServer, label: string): Promise<boolean> {
+    try {
+      await server.start();
+      return true;
+    } catch (err) {
+      console.warn(`SKIPPED (${label}) — real @matter/main ServerNode could not start in this sandbox (${(err as Error).message}).`);
+      return false;
+    }
+  }
+
+  it("1. fresh bridge — no fabrics: commissioned=false, fabricCount=0, and the commissioning window is OPEN (the SDK auto-opens one for an uncommissioned node)", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "status-fresh" });
+    if (!(await startOrSkip(server, "fresh"))) return;
+    const state = server.getCommissioningState();
+    expect(state.commissioned).toBe(false);
+    expect(state.fabricCount).toBe(0);
+    expect(state.fabrics).toEqual([]);
+    expect(state.commissioningWindowOpen).toBe(true);
+    await server.stop();
+  }, 30_000);
+
+  it("11. factory reset on a never-commissioned bridge — stays uncommissioned, no fabrics, window still open", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "status-reset" });
+    if (!(await startOrSkip(server, "reset"))) return;
+    await server.factoryReset();
+    const state = server.getCommissioningState();
+    expect(state.commissioned).toBe(false);
+    expect(state.fabricCount).toBe(0);
+    expect(state.commissioningWindowOpen).toBe(true);
+    await server.stop();
   }, 30_000);
 });

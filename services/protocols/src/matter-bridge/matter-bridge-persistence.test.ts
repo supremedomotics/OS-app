@@ -56,11 +56,14 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     return () => this.commandListeners.delete(listener);
   }
   getCommissioningState() {
-    return { commissioned: false, fabrics: [], pairing: { manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 } };
+    return { commissioned: false, fabricCount: 0, commissioningWindowOpen: true, fabrics: [], pairing: { manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 } };
   }
-  async factoryReset() {
-    this.endpoints.clear();
-  }
+  /** § Matter Bridge Phase 1.2A — models the REAL `@matter/main` `ServerNode.erase()` behavior
+   * (see `real-server.ts`'s `factoryReset()` doc): it wipes commissioning/fabric identity but
+   * never touches the live endpoint tree, and brings the SAME node back online in place — it
+   * does NOT clear `this.endpoints`. Clearing them here (the old version of this fake) modeled
+   * an incorrect "node destroyed, must rebuild" assumption that caused the real production bug. */
+  async factoryReset() {}
 }
 
 class FakeCapabilityPort implements MatterBridgeCapabilityPort {
@@ -326,15 +329,23 @@ describe("Phase 4 — factory reset is separate from restart", () => {
     expect(server.endpoints.has(1)).toBe(true);
   });
 
-  it("factoryReset() wipes the Matter-side identity, then immediately restarts and re-exposes every device at its SAME SupremeOS endpoint number", async () => {
-    // § live-confirmed fix — factoryReset() used to stop at wiping the node, leaving the
-    // driver's own `started` flag true and its command/state subscriptions live: every
-    // subsequent call (getCommissioningState, exposeLight, a status/refresh poll) then threw
-    // "server not started" forever, since `start()`'s own guard made a manual re-enable a
-    // silent no-op. Confirmed on a real deployment (journalctl) reproducing on every poll
-    // after one Factory Reset click. A reset that permanently kills the bridge is not
-    // "reset" — it now restarts itself with a fresh identity, exactly like a real Matter
-    // accessory's factory-reset-then-recommission flow, so the button leaves the Bridge live.
+  it("factoryReset() wipes the Matter-side commissioning identity in place — the SAME live node/endpoints, never rebuilt, never zombied", async () => {
+    // § live-confirmed fix (Matter Bridge Phase 1.2A — the production "internal error after
+    // factory reset" bug). Two versions of this bug existed:
+    //   1. The ORIGINAL version stopped at wiping the node, leaving the driver's own `started`
+    //      flag true and subscriptions live: every subsequent call then threw "server not
+    //      started" forever, since `start()`'s guard made a manual re-enable a silent no-op.
+    //   2. The FIX for (1) — restarting immediately inside `factoryReset()` — introduced a WORSE
+    //      bug: `ServerNode.erase()` never actually destroys the node (confirmed against its
+    //      real, installed source — `real-server.ts`'s `factoryReset()` doc has the full trace);
+    //      it restarts ITSELF in place, still holding its storage lock. Calling `start()` again
+    //      on top of that tried to `ServerNode.create()` a SECOND node at the SAME storage path
+    //      and failed with `StorageLockError: "Storage is already locked by this process"` — the
+    //      exact "internal error" reported live, which then orphaned the still-locked node for
+    //      the rest of the process's life (every later Enable failed the same way).
+    // The real fix: `factoryReset()` does nothing beyond delegating to `server.factoryReset()` —
+    // no unsubscribe, no index clearing, no restart. The node/aggregator/endpoints/subscriptions
+    // were never actually invalidated, so this asserts they simply survive untouched.
     const store = new InMemoryMatterEndpointStore();
     const registry = new MatterEndpointRegistry(store);
     const server = new FakeMatterBridgeServer();
@@ -346,15 +357,11 @@ describe("Phase 4 — factory reset is separate from restart", () => {
 
     await driver.factoryReset();
 
-    // The device is back — re-exposed by the restart factoryReset() now performs — not left
-    // dangling until a separate manual re-enable (which was previously impossible anyway,
-    // since `started` never got reset).
+    // The device was NEVER removed — a real `ServerNode.erase()` never touches the endpoint
+    // tree, only commissioning/fabric state, so there is nothing to "re-expose".
     expect(server.endpoints.has(1)).toBe(true);
-    // SupremeOS still remembers device -> endpoint 1, so re-exposure re-uses it rather than
-    // renumbering (§ endpoint-registry.ts's "never reissue" rule, unaffected by a Matter-level
-    // reset — only explicit SupremeOS-side device removal frees a number).
     expect(registry.resolve("light-a" as DeviceId).endpointNumber).toBe(1);
-    // getCommissioningState works again — the driver is genuinely live, not zombied.
+    // getCommissioningState still works — the driver was never stopped/zombied.
     expect(() => driver.getCommissioningState()).not.toThrow();
   });
 });
