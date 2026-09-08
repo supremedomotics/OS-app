@@ -1065,50 +1065,49 @@ export class AppContext {
     });
     await driver.start();
     this.matterBridge = { driver };
-    await this.exposeMatterDevices(driver);
+    await this.reconcileMatterDevices(driver);
     if (opts.persist !== false) await this.homeConfig.set(this.homeId, MATTER_BRIDGE_ENABLED_KEY, true);
   }
 
-  /** Auto-expose every device whose FULL capability set resolves to a supported Matter Device
-   * Type (§ Matter Bridge Phase 1 foundation — this is the fix for the reported bug: the
-   * previous version only ever attempted a device carrying a literal `onoff` capability entry,
-   * silently skipping every Color Temperature light and the curtain motor that triggered this
-   * work, since dimmers/color lights/window coverings don't carry a bare `onoff` entry in
-   * SupremeOS's capability model). The device-type RESOLUTION now happens inside
-   * `MatterBridgeDriver.exposeDevice` (`device-types/matter-device-type-resolver.ts`) — this
-   * loop no longer pre-filters by capability kind at all, it hands every device to the driver
-   * and lets the resolver make the real decision, logging an honest reason for anything that
-   * doesn't resolve (a lock, a sensor, a thermostat — genuinely out of Phase 1's scope) instead
-   * of that device just silently never appearing with no trace of why.
+  /**
+   * § Matter Bridge Phase 1.1 — full reconciliation, not additive-only discovery. The invariant
+   * this maintains: current accepted SupremeOS devices == current Matter bridged endpoints
+   * (except UNSUPPORTED devices, which stay diagnostic-only, never silently dropped either).
    *
-   * Shared by `enableMatterBridge()` (first expose) and `refreshMatterBridge()` (pick up
-   * devices added/discovered since) — calling it again for an already-bridged device is a
-   * cheap no-op (`exposeDevice` is idempotent, § Phase 2). Isolated per device — one device
-   * that fails to expose (a real bug found live: this loop had NO isolation, so device #2
-   * throwing silently stopped device #3 from ever being attempted, while #1 stayed visible,
-   * looking exactly like "only the first device appears") must never block every other device
-   * from being bridged, matching the same isolation `MatterBridgeDriver.start()`'s
-   * restart-recovery loop already uses. */
-  private async exposeMatterDevices(driver: MatterBridgeDriver): Promise<void> {
-    for (const device of await this.home.listDevices()) {
-      try {
-        const resolution = await driver.exposeDevice(device.id, device.name, device.capabilities);
-        if (resolution.outcome !== "SUPPORTED") {
-          console.log(`matter-bridge: ${device.id} (${device.name}) not bridged — ${resolution.reason}`);
-        }
-      } catch (err) {
-        console.error(`matter-bridge: failed to expose ${device.id} (${device.name}): ${describeMatterError(err)}`);
-      }
+   * Fixes the reported lifecycle bug: the previous version only ever ADDED devices — a
+   * SupremeOS device deleted after being bridged stayed bridged FOREVER, its endpoint visible
+   * to every Matter controller with no SupremeOS device backing it anymore, and it even
+   * survived a gateway restart (`start()`'s re-expose loop only reads the persisted registry,
+   * which nothing ever pruned). `MatterBridgeDriver.reconcile()` now computes the real
+   * add/update/remove set against the CURRENT `home.listDevices()` result every time this
+   * runs — on `enableMatterBridge()` (so a stale device from BEFORE a disable period is culled
+   * the moment the bridge comes back up, not just from-now-on), on `refreshMatterBridge()`
+   * (§6 — the button is a full sync, not "pick up new devices"), and via `start()`'s own
+   * restart path being immediately followed by this same call, so a device deleted while the
+   * bridge was fully OFFLINE can never resurrect itself post-restart. Per-device isolation and
+   * the "not bridged" diagnostic logging both now live inside `reconcile()` itself, since it is
+   * the one place that owns this decision.
+   */
+  private async reconcileMatterDevices(driver: MatterBridgeDriver): Promise<void> {
+    const devices = await this.home.listDevices();
+    const result = await driver.reconcile(devices);
+    for (const u of result.unsupported) console.log(`matter-bridge: ${u.deviceId} not bridged — ${u.reason}`);
+    for (const f of result.failed) console.error(`matter-bridge: failed to reconcile ${f.deviceId}: ${describeMatterError(new Error(f.error))}`);
+    if (result.added.length || result.removed.length) {
+      console.log(
+        `matter-bridge: reconciled — ${result.added.length} added, ${result.updated.length} updated, ${result.removed.length} removed`,
+      );
     }
   }
 
-  /** § Matter Bridge Phase 6 — re-scan for newly commissioned/discovered SupremeOS devices and
-   * bridge any that aren't already exposed, WITHOUT disturbing devices already bridged (their
-   * endpoint identity is untouched — this only ever calls the same idempotent `exposeDevice()`
-   * every device already went through once). Throws if the Bridge isn't currently running. */
+  /** § Matter Bridge Phase 1.1 — full reconciliation with the current SupremeOS device set:
+   * new devices are added, changed devices are updated, and devices no longer present in
+   * SupremeOS are withdrawn (live endpoint removed AND its persisted registry record freed —
+   * see `MatterBridgeDriver.forgetDevice`). Not additive-only discovery. Throws if the Bridge
+   * isn't currently running. */
   async refreshMatterBridge(): Promise<void> {
     if (!this.matterBridge) throw new SupremeError("conflict", "Matter Bridge is not running");
-    await this.exposeMatterDevices(this.matterBridge.driver);
+    await this.reconcileMatterDevices(this.matterBridge.driver);
   }
 
   /** § Matter Bridge Phase 6 — live disable, no restart required. Idempotent. A clean
