@@ -131,6 +131,18 @@ export function registerMatterBridgeRoutes(app: FastifyInstance, ctx: AppContext
     }
   });
 
+  // § Extension Center — Bridged Devices page. Every device currently exposed to Matter, by
+  // its real SupremeOS name. Same "view" gate as /status (no sensitive pairing data here).
+  app.get("/v1/matter-bridge/devices", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "integration", null, "view");
+      reply.send({ devices: await ctx.matterBridgeDevices() });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // Re-scan for newly commissioned/discovered devices and bridge any not already exposed —
   // devices already bridged keep their existing endpoint identity untouched.
   app.post("/v1/matter-bridge/refresh", async (req, reply) => {

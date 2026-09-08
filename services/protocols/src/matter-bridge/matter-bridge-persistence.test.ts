@@ -316,7 +316,15 @@ describe("Phase 4 — factory reset is separate from restart", () => {
     expect(server.endpoints.has(1)).toBe(true);
   });
 
-  it("factoryReset() clears live Matter exposure but PRESERVES the SupremeOS endpoint-registry mapping", async () => {
+  it("factoryReset() wipes the Matter-side identity, then immediately restarts and re-exposes every device at its SAME SupremeOS endpoint number", async () => {
+    // § live-confirmed fix — factoryReset() used to stop at wiping the node, leaving the
+    // driver's own `started` flag true and its command/state subscriptions live: every
+    // subsequent call (getCommissioningState, exposeLight, a status/refresh poll) then threw
+    // "server not started" forever, since `start()`'s own guard made a manual re-enable a
+    // silent no-op. Confirmed on a real deployment (journalctl) reproducing on every poll
+    // after one Factory Reset click. A reset that permanently kills the bridge is not
+    // "reset" — it now restarts itself with a fresh identity, exactly like a real Matter
+    // accessory's factory-reset-then-recommission flow, so the button leaves the Bridge live.
     const store = new InMemoryMatterEndpointStore();
     const registry = new MatterEndpointRegistry(store);
     const server = new FakeMatterBridgeServer();
@@ -328,10 +336,15 @@ describe("Phase 4 — factory reset is separate from restart", () => {
 
     await driver.factoryReset();
 
-    expect(server.endpoints.has(1)).toBe(false); // Matter-side identity genuinely wiped
-    // SupremeOS still remembers device -> endpoint 1, so re-commissioning re-uses it rather
-    // than renumbering (§ endpoint-registry.ts's "never reissue" rule, unaffected by a
-    // Matter-level reset — only explicit SupremeOS-side device removal frees a number).
+    // The device is back — re-exposed by the restart factoryReset() now performs — not left
+    // dangling until a separate manual re-enable (which was previously impossible anyway,
+    // since `started` never got reset).
+    expect(server.endpoints.has(1)).toBe(true);
+    // SupremeOS still remembers device -> endpoint 1, so re-exposure re-uses it rather than
+    // renumbering (§ endpoint-registry.ts's "never reissue" rule, unaffected by a Matter-level
+    // reset — only explicit SupremeOS-side device removal frees a number).
     expect(registry.resolve("light-a" as DeviceId).endpointNumber).toBe(1);
+    // getCommissioningState works again — the driver is genuinely live, not zombied.
+    expect(() => driver.getCommissioningState()).not.toThrow();
   });
 });

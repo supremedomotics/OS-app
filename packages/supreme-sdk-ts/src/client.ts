@@ -99,6 +99,12 @@ export interface MatterBridgeStatus {
   commissioned: boolean;
   fabrics: { fabricIndex: number; label: string | null; rootVendorId: number | null }[];
 }
+/** § Extension Center — mirrors `MatterBridgeDeviceEntry` (services/gateway/src/context.ts). */
+export interface MatterBridgeDeviceEntry {
+  deviceId: string;
+  endpointNumber: number;
+  name: string | null;
+}
 /** SENSITIVE — see `MatterBridgeCommissioningState.pairing` (services/protocols). */
 export interface MatterBridgePairing {
   manualPairingCode: string;
@@ -544,6 +550,10 @@ export class SupremeClient {
   /** Throws (409, "conflict") if the Bridge isn't currently running. */
   matterBridgePairing(): Promise<MatterBridgePairing> {
     return this.request("GET", "/v1/matter-bridge/pairing") as Promise<MatterBridgePairing>;
+  }
+  /** § Extension Center — Bridged Devices page: every device currently exposed to Matter. */
+  matterBridgeDevices(): Promise<MatterBridgeDeviceEntry[]> {
+    return this.request("GET", "/v1/matter-bridge/devices").then((r) => (r as { devices: MatterBridgeDeviceEntry[] }).devices);
   }
   /** Re-scan for newly discovered SupremeOS devices and bridge any not already exposed. */
   refreshMatterBridge(): Promise<MatterBridgeStatus> {

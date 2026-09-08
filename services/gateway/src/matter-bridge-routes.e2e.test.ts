@@ -116,11 +116,21 @@ describe("Matter Bridge REST routes (gateway e2e)", () => {
     expect(await res.json()).toEqual({ manualPairingCode: "34970112332", qrPairingCode: "MT:FAKE", discriminator: 3840 });
   });
 
-  it("factory-resets the real driver instance through the route", async () => {
+  it("factory-resets the real driver instance through the route, then comes back up live with a fresh identity", async () => {
+    // § live-confirmed fix — factory reset used to leave the Bridge zombied: the underlying
+    // node wiped, but nothing above it reset, so `started` stayed true and every later call
+    // (this test's own status check included) threw "server not started" forever. Confirmed
+    // via journalctl on a real deployment. It now restarts itself, so devices come right back
+    // (a genuinely new Matter identity, same SupremeOS devices) instead of staying dark.
     expect(server.endpoints.size).toBeGreaterThan(0);
+    const before = server.endpoints.size;
     const res = await fetch(`${baseUrl}/v1/matter-bridge/factory-reset`, { method: "POST", headers: auth() });
     expect(res.status).toBe(200);
-    expect(server.endpoints.size).toBe(0);
+    expect(server.endpoints.size).toBe(before);
+
+    const status = await fetch(`${baseUrl}/v1/matter-bridge/status`, { headers: auth() });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ running: true });
   });
 
   it("disables the Bridge live via the route, then re-enabling starts a fresh instance", async () => {
