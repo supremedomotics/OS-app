@@ -47,6 +47,10 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     const e = this.endpoints.get(endpointNumber);
     if (e && "on" in state) e.on = state.on;
   }
+  async updateEndpointName(endpointNumber: number, name: string): Promise<void> {
+    const e = this.endpoints.get(endpointNumber);
+    if (e) e.name = name;
+  }
   onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
@@ -225,7 +229,7 @@ describe("Phase 2 — recovery: corrupted or invalid endpoint registry", () => {
     const { file, cleanup } = tempFile();
     try {
       const store = new FileMatterEndpointStore(file);
-      store.put({ deviceId: "light-a" as DeviceId, endpointNumber: 1, deviceTypeId: 0x0100 });
+      store.put({ deviceId: "light-a" as DeviceId, endpointNumber: 1, deviceTypeId: 0x0100, name: "Light A" });
       const mode = statSync(file).mode & 0o777;
       expect(mode).toBe(0o600);
     } finally {

@@ -128,4 +128,48 @@ describe("RealMatterBridgeServer — real @matter/main endpoint construction per
     await server.addEndpoint({ endpointNumber: 4, name: "Curtain motor", deviceTypeId: 0x0202, initialState: { kind: "position", position: 100, moving: false } });
     await server.stop();
   }, 30_000);
+
+  it("§ Matter Bridge Phase 1.2 — the REAL @matter/main BridgedDeviceBasicInformation.NodeLabel attribute holds the SupremeOS device name, and a rename genuinely rewrites it live", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "naming-test" });
+    if (!(await startOrSkip(server, "naming"))) return;
+    await server.addEndpoint({
+      endpointNumber: 1,
+      name: "Pantry DL-2",
+      deviceTypeId: 0x010c,
+      initialState: { kind: "color", on: false, level: 100, hue: null, saturation: null, kelvin: 3000 },
+    });
+    // The real Matter attribute Apple Home/Google Home/Alexa/SmartThings all read for the
+    // accessory's display name — read back off the live endpoint, not a SupremeOS-side copy.
+    expect(server.getEndpointNodeLabel(1)).toBe("Pantry DL-2");
+    expect(server.getEndpointNodeLabel(1)).not.toContain("dev_"); // never the raw deviceId shape
+
+    await server.updateEndpointName(1, "Pantry Ceiling DL-2");
+    expect(server.getEndpointNodeLabel(1)).toBe("Pantry Ceiling DL-2");
+
+    await server.stop();
+  }, 30_000);
+
+  it("§ Matter Bridge Phase 1.2 — the real NodeLabel attribute is populated correctly for every Phase 1 device type, not only lights", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "naming-all-types-test" });
+    if (!(await startOrSkip(server, "naming-all-types"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "R&D Study table Led Strip", deviceTypeId: 0x0101, initialState: { kind: "brightness", on: false, level: 0 } });
+    await server.addEndpoint({
+      endpointNumber: 2,
+      name: "Pantry DL-1",
+      deviceTypeId: 0x010c,
+      initialState: { kind: "color", on: false, level: 100, hue: null, saturation: null, kelvin: 3000 },
+    });
+    await server.addEndpoint({
+      endpointNumber: 3,
+      name: "Pantry Strip",
+      deviceTypeId: 0x010d,
+      initialState: { kind: "color", on: true, level: 80, hue: 210, saturation: 60, kelvin: null },
+    });
+    await server.addEndpoint({ endpointNumber: 4, name: "Curtain motor", deviceTypeId: 0x0202, initialState: { kind: "position", position: 100, moving: false } });
+    expect(server.getEndpointNodeLabel(1)).toBe("R&D Study table Led Strip");
+    expect(server.getEndpointNodeLabel(2)).toBe("Pantry DL-1");
+    expect(server.getEndpointNodeLabel(3)).toBe("Pantry Strip");
+    expect(server.getEndpointNodeLabel(4)).toBe("Curtain motor");
+    await server.stop();
+  }, 30_000);
 });
