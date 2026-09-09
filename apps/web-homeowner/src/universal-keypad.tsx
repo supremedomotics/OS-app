@@ -77,6 +77,7 @@ export function UniversalKeypad() {
         onConfigure={(control, event) => { setEditorSeed({ control, event }); setEditingMappingId("new"); }}
         onEdit={(mapping) => { setEditorSeed(null); setEditingMappingId(mapping.id); }}
         onDeleted={reload}
+        onKeypadUpdated={reload}
       />
     );
   }
@@ -117,7 +118,7 @@ export function UniversalKeypad() {
 // ── Keypad programming view (§4) — one card per physical button, Short/Long Press independent ──
 
 function KeypadProgramming({
-  keypad, room, mappings, onBack, onConfigure, onEdit, onDeleted,
+  keypad, room, mappings, onBack, onConfigure, onEdit, onDeleted, onKeypadUpdated,
 }: {
   keypad: Device;
   room: { name: string } | null;
@@ -126,6 +127,7 @@ function KeypadProgramming({
   onConfigure: (control: string, event: KeypadMappingInput["event"]) => void;
   onEdit: (mapping: KeypadMapping) => void;
   onDeleted: () => void;
+  onKeypadUpdated: () => void;
 }) {
   const [capabilities] = useAsync<KeypadCapabilityDeclaration | null>(
     () => client.keypadCapabilities(keypad.id).then((r) => r.capabilities),
@@ -138,7 +140,20 @@ function KeypadProgramming({
     onDeleted();
   }
 
-  const controls = capabilities?.controls ?? null;
+  // § Casambi Universal Keypad — button list persistence. The live driver-reported
+  // declaration (`capabilities`) is real but IN-MEMORY on the driver — it resets on every
+  // gateway restart and stays empty until a real button-press telegram has been decoded at
+  // least once. Mappings the installer already programmed must keep showing regardless
+  // (§ "mapping should always show... no matter if gateway has rebooted, tab has been
+  // changed"), so an installer-confirmed button count — persisted on the device record via
+  // the same `device.metadata.<field>` pattern climate-console.tsx already uses — is the
+  // PRIMARY source of truth once set; the live declaration only ever offers itself as the
+  // one-time default suggestion in the setup prompt below.
+  const persistedButtonCount = typeof keypad.metadata.buttonCount === "number" ? keypad.metadata.buttonCount : null;
+  const controls =
+    persistedButtonCount !== null
+      ? synthesizeButtonControls(persistedButtonCount)
+      : (capabilities?.controls ?? null);
 
   return (
     <div className="ukp-page">
@@ -152,8 +167,24 @@ function KeypadProgramming({
 
       {controls === null && (
         <div className="card ukp-gate-notice">
-          <p>This keypad's buttons haven't been reported by its driver yet — Driver required.</p>
-          <p className="muted">You can still program a button manually if you know its control id (e.g. from the keypad's install documentation).</p>
+          <p>This keypad's button count hasn't been set up yet.</p>
+          <p className="muted">
+            Tell SupremeOS how many physical buttons this keypad has — button 1 is control id
+            0, button 2 is 1, and so on (matches the numbering the driver itself reports over
+            the wire). This is remembered even if the gateway restarts, so you only set it up
+            once.
+          </p>
+          <ButtonCountSetup
+            suggested={capabilities?.controls.length ?? null}
+            onSet={async (n) => {
+              await client.updateDevice(keypad.id, { metadata: { ...keypad.metadata, buttonCount: n } });
+              onKeypadUpdated();
+            }}
+          />
+          <p className="muted" style={{ marginTop: 16 }}>
+            Don't know the button count? You can still program a single button manually if you
+            know its control id (e.g. from the keypad's install documentation).
+          </p>
           <ManualControlEntry onAdd={(control) => onConfigure(control, "short_press")} />
         </div>
       )}
@@ -187,6 +218,38 @@ function KeypadProgramming({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** § Casambi Universal Keypad — button-count setup. Control ids are 0-indexed to match the
+ * driver's own wire numbering exactly (button 1 = control id "0", button 2 = "1", …) — never a
+ * fabricated count, only ever what the installer explicitly confirms. */
+function synthesizeButtonControls(count: number): KeypadCapabilityDeclaration["controls"] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: String(i),
+    kind: "button" as const,
+    label: `Button ${i + 1}`,
+    input: [],
+    feedback: [],
+  }));
+}
+
+function ButtonCountSetup({ suggested, onSet }: { suggested: number | null; onSet: (n: number) => Promise<void> }) {
+  const [value, setValue] = useState(String(suggested && suggested > 0 ? suggested : 4));
+  const [saving, setSaving] = useState(false);
+  const n = Number.parseInt(value, 10);
+  const valid = Number.isInteger(n) && n >= 1 && n <= 16;
+  return (
+    <div className="row" style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+      <label className="ukp-field" style={{ marginBottom: 0 }}>
+        <span>Number of buttons</span>
+        <input type="number" min={1} max={16} value={value} onChange={(e) => setValue(e.target.value)} />
+      </label>
+      <Button variant="primary" disabled={!valid || saving} onClick={async () => { setSaving(true); try { await onSet(n); } finally { setSaving(false); } }}>
+        {saving ? "Saving…" : "Set up"}
+      </Button>
+      {suggested !== null && <span className="muted">Driver last reported {suggested}.</span>}
     </div>
   );
 }
