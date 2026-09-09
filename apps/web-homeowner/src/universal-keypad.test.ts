@@ -14,6 +14,7 @@ import {
   emptyKeypadMappingForm,
   groupKeypadsByRoom,
   mappingToFormState,
+  summarizeMapping,
   targetableCapabilities,
   validateKeypadMappingForm,
   type KeypadMappingFormState,
@@ -234,6 +235,57 @@ describe("Universal Keypad — validation (§11)", () => {
     expect(validateKeypadMappingForm(noName)).toMatch(/name/i);
     const noControl = { ...noName, name: "X", control: "" };
     expect(validateKeypadMappingForm(noControl)).toMatch(/button|control/i);
+  });
+});
+
+describe("Universal Keypad — press-slot summary shows target device · capability · behavior, never the raw mapping name (§ thumb rule for every keypad/button/press type)", () => {
+  const devices = [light(L1, "Conference Hanging", "room-1"), light(L2, "Pantry Downlight", "room-1")];
+
+  it("a toggle mapping (target-based) summarizes as 'device · capability · behavior'", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "SD1PN3S4 — 1", input: { keypadId: KP1, control: "1", event: "short_press" },
+      behavior: "toggle", target: { deviceId: L1, capability: "onoff", step: 10 },
+    });
+    expect(summarizeMapping(stored, devices)).toBe("Conference Hanging · Power · Toggle");
+  });
+
+  it("a direct mapping (action-based) summarizes from its first device_command action", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "SD1PN3S4 — 2", input: { keypadId: KP1, control: "2", event: "short_press" },
+      actions: [{ type: "device_command", deviceId: L2, command: { capability: "onoff", action: "on" } }],
+    });
+    expect(summarizeMapping(stored, devices)).toBe("Pantry Downlight · Power · Direct");
+  });
+
+  it("a direct mapping with multiple device_command actions notes how many more", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "Multi-action", input: { keypadId: KP1, control: "3", event: "short_press" },
+      actions: [
+        { type: "device_command", deviceId: L1, command: { capability: "onoff", action: "on" } },
+        { type: "device_command", deviceId: L2, command: { capability: "onoff", action: "on" } },
+      ],
+    });
+    expect(summarizeMapping(stored, devices)).toBe("Conference Hanging · Power · Direct +1 more");
+  });
+
+  it("a cycle mapping always has a target (schema requirement) — summarizeMapping prefers it, matching what actually fires", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "Cycle", input: { keypadId: KP1, control: "4", event: "short_press" },
+      behavior: "cycle", target: { deviceId: L1, capability: "onoff", step: 10 },
+      actions: [
+        { type: "device_command", deviceId: L1, command: { capability: "onoff", action: "on" } },
+        { type: "device_command", deviceId: L2, command: { capability: "onoff", action: "on" } },
+      ],
+    });
+    expect(summarizeMapping(stored, devices)).toBe("Conference Hanging · Power · Cycle");
+  });
+
+  it("falls back to the mapping's own name only when it genuinely has no device to show (scene/notify-only)", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "Notify only", input: { keypadId: KP1, control: "4", event: "short_press" },
+      actions: [{ type: "notify", level: "info", title: "Pressed", body: "Pressed" }],
+    });
+    expect(summarizeMapping(stored, devices)).toBe("Notify only");
   });
 });
 

@@ -2216,14 +2216,38 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 .ukp-keypad-meta { display: flex; align-items: center; gap: 6px; color: var(--aureon-color-text-secondary); font-size: 13px; }
 .ukp-keypad-protocol { color: var(--aureon-color-text-muted, var(--aureon-color-text-secondary)); font-size: 12px; opacity: 0.75; }
 
+.ukp-gate-notice { border-color: var(--aureon-color-gold-500); }
 .ukp-gate-notice p { margin: 0 0 6px; }
-.ukp-button-card { margin-bottom: 16px; }
-.ukp-button-card h3 { margin: 0 0 12px; font-size: 16px; }
-.ukp-press-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.ukp-press-slot { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--aureon-color-base-surface); border: 1px solid var(--aureon-color-base-hairline); }
-.ukp-press-title { font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--aureon-color-text-secondary); }
-.ukp-press-subtitle { font-size: 11px; }
-.ukp-press-summary { font-size: 13px; }
+.ukp-gate-notice p:first-child { font-weight: 600; margin-top: 0; }
+
+/* Restrained, architectural: gold reserved for the one primary action per empty slot
+   ("+ Configure"), an assigned mapping reads as quiet text behind a hairline edge, never a
+   repeated wall of solid pill buttons. */
+.ukp-button-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 4px; }
+.ukp-button-card {
+  background: var(--aureon-color-base-surface-raised); border: 1px solid var(--aureon-color-base-hairline);
+  border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 0;
+}
+.ukp-button-label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--aureon-color-gold-400); }
+.ukp-press-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ukp-press-slot {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 12px; min-height: 84px;
+  background: var(--aureon-color-base-surface); border: 1px solid transparent;
+}
+.ukp-press-slot.assigned { border-color: var(--aureon-color-base-hairline); }
+.ukp-press-title { font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--aureon-color-text-secondary); }
+.ukp-press-subtitle { font-size: 11px; color: var(--aureon-color-text-secondary); }
+.ukp-press-summary { font-size: 13.5px; line-height: 1.35; }
+.ukp-press-summary.muted { color: var(--aureon-color-text-secondary); font-size: 12px; }
+.ukp-press-actions { display: flex; gap: 12px; margin-top: 2px; }
+.ukp-link { background: none; border: 0; padding: 0; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--aureon-color-gold-400); }
+.ukp-link.danger { color: var(--aureon-color-status-critical); }
+.ukp-configure {
+  align-self: flex-start; margin-top: auto; background: none; cursor: pointer;
+  border: 1px dashed var(--aureon-color-base-hairline); border-radius: 999px; padding: 7px 14px;
+  color: var(--aureon-color-gold-400); font-size: 13px; font-weight: 600; transition: border-color 0.15s ease;
+}
+.ukp-configure:hover { border-color: var(--aureon-color-gold-500); }
 
 .ukp-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
 .ukp-field span:first-child { font-size: 12px; color: var(--aureon-color-text-secondary); }

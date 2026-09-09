@@ -68,6 +68,26 @@ export const BEHAVIOR_LABELS: Record<KeypadMappingBehavior, string> = {
   decrement: "Decrement",
 };
 
+/** § Universal Keypad — press-slot summary. `mapping.name` is whatever the installer typed
+ * (or the auto-generated "<keypad name> — <control id>" default) when the mapping was
+ * created — never a reliable description of WHAT it actually does. This reads the mapping's
+ * real target (device name · capability · behavior), the same thumb rule for every keypad,
+ * every button, every event — `target` for toggle/alternate/increment/decrement, the first
+ * `device_command` action for direct/cycle. Falls back to `mapping.name` only for the
+ * genuinely deviceless case (a direct mapping whose actions are all scene/notify/delay). */
+export function summarizeMapping(mapping: KeypadMapping, devices: readonly Device[]): string {
+  const deviceName = (id: DeviceId) => devices.find((d) => d.id === id)?.name ?? "Unknown device";
+  if (mapping.target) {
+    return `${deviceName(mapping.target.deviceId)} · ${CAPABILITY_LABELS[mapping.target.capability]} · ${BEHAVIOR_LABELS[mapping.behavior]}`;
+  }
+  const firstCommand = mapping.actions.find((a) => a.type === "device_command");
+  if (firstCommand && firstCommand.type === "device_command") {
+    const extra = mapping.actions.length > 1 ? ` +${mapping.actions.length - 1} more` : "";
+    return `${deviceName(firstCommand.deviceId)} · ${CAPABILITY_LABELS[firstCommand.command.capability]} · ${BEHAVIOR_LABELS[mapping.behavior]}${extra}`;
+  }
+  return mapping.name;
+}
+
 /** Short, homeowner-facing description of what each behavior does — never mentions
  * `behaviorState`/`lastDirection`/`cycleIndex` (§8: those are backend-owned runtime state,
  * never surfaced as something the installer configures). */

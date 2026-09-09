@@ -18,6 +18,7 @@ import {
   groupKeypadsByRoom,
   mappingToFormState,
   resolveCommandDefinitions,
+  summarizeMapping,
   targetableCapabilities,
   validateKeypadMappingForm,
   type KeypadActionFormEntry,
@@ -71,6 +72,7 @@ export function UniversalKeypad() {
     return (
       <KeypadProgramming
         keypad={selectedKeypad}
+        devices={devices ?? []}
         room={home?.rooms.find((r) => r.id === selectedKeypad.roomId) ?? null}
         mappings={(mappings ?? []).filter((m) => m.input.keypadId === selectedKeypad.id)}
         onBack={() => setSelectedKeypadId(null)}
@@ -118,9 +120,10 @@ export function UniversalKeypad() {
 // ── Keypad programming view (§4) — one card per physical button, Short/Long Press independent ──
 
 function KeypadProgramming({
-  keypad, room, mappings, onBack, onConfigure, onEdit, onDeleted, onKeypadUpdated,
+  keypad, devices, room, mappings, onBack, onConfigure, onEdit, onDeleted, onKeypadUpdated,
 }: {
   keypad: Device;
+  devices: Device[];
   room: { name: string } | null;
   mappings: KeypadMapping[];
   onBack: () => void;
@@ -189,35 +192,42 @@ function KeypadProgramming({
         </div>
       )}
 
-      {controls?.map((control) => {
-        const forControl = mappings.filter((m) => m.input.control === control.id);
-        const short = forControl.find((m) => m.input.event === "short_press") ?? null;
-        const longStart = forControl.find((m) => m.input.event === "hold_start") ?? null;
-        const longEnd = forControl.find((m) => m.input.event === "hold_end") ?? null;
-        return (
-          <div key={control.id} className="card ukp-button-card">
-            <h3>{control.label ?? control.id}</h3>
-            <div className="ukp-press-row">
-              <PressSlot
-                title="Short Press"
-                mapping={short}
-                onConfigure={() => onConfigure(control.id, "short_press")}
-                onEdit={() => short && onEdit(short)}
-                onRemove={() => short && remove(short)}
-              />
-              <PressSlot
-                title="Long Press"
-                subtitle="Start / End preserved independently"
-                mapping={longStart}
-                secondaryMapping={longEnd}
-                onConfigure={() => onConfigure(control.id, "hold_start")}
-                onEdit={() => longStart && onEdit(longStart)}
-                onRemove={() => longStart && remove(longStart)}
-              />
-            </div>
-          </div>
-        );
-      })}
+      {controls && controls.length > 0 && (
+        <div className="ukp-button-grid">
+          {controls.map((control) => {
+            const forControl = mappings.filter((m) => m.input.control === control.id);
+            const short = forControl.find((m) => m.input.event === "short_press") ?? null;
+            const longStart = forControl.find((m) => m.input.event === "hold_start") ?? null;
+            const longEnd = forControl.find((m) => m.input.event === "hold_end") ?? null;
+            const label = control.label ?? `Button ${Number(control.id) + 1 || control.id}`;
+            return (
+              <div key={control.id} className="ukp-button-card">
+                <span className="ukp-button-label">{label}</span>
+                <div className="ukp-press-row">
+                  <PressSlot
+                    title="Short Press"
+                    devices={devices}
+                    mapping={short}
+                    onConfigure={() => onConfigure(control.id, "short_press")}
+                    onEdit={() => short && onEdit(short)}
+                    onRemove={() => short && remove(short)}
+                  />
+                  <PressSlot
+                    title="Long Press"
+                    subtitle="Start / end preserved independently"
+                    devices={devices}
+                    mapping={longStart}
+                    secondaryMapping={longEnd}
+                    onConfigure={() => onConfigure(control.id, "hold_start")}
+                    onEdit={() => longStart && onEdit(longStart)}
+                    onRemove={() => longStart && remove(longStart)}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -265,10 +275,11 @@ function ManualControlEntry({ onAdd }: { onAdd: (control: string) => void }) {
 }
 
 function PressSlot({
-  title, subtitle, mapping, secondaryMapping, onConfigure, onEdit, onRemove,
+  title, subtitle, devices, mapping, secondaryMapping, onConfigure, onEdit, onRemove,
 }: {
   title: string;
   subtitle?: string;
+  devices: Device[];
   mapping: KeypadMapping | null;
   secondaryMapping?: KeypadMapping | null;
   onConfigure: () => void;
@@ -276,21 +287,21 @@ function PressSlot({
   onRemove: () => void;
 }) {
   return (
-    <div className="ukp-press-slot">
+    <div className={`ukp-press-slot${mapping ? " assigned" : ""}`}>
       <span className="ukp-press-title">{title}</span>
-      {subtitle && <span className="muted ukp-press-subtitle">{subtitle}</span>}
+      {subtitle && <span className="ukp-press-subtitle">{subtitle}</span>}
       {mapping ? (
         <>
-          <span className="ukp-press-summary">{mapping.name} — {BEHAVIOR_LABELS[mapping.behavior]}</span>
-          <div className="row" style={{ gap: 8 }}>
-            <Button onClick={onEdit}>Edit</Button>
-            <Button variant="danger" onClick={onRemove}>Remove</Button>
+          <span className="ukp-press-summary">{summarizeMapping(mapping, devices)}</span>
+          <div className="ukp-press-actions">
+            <button className="ukp-link" onClick={onEdit}>Edit</button>
+            <button className="ukp-link danger" onClick={onRemove}>Remove</button>
           </div>
         </>
       ) : (
-        <Button variant="primary" onClick={onConfigure}>Configure</Button>
+        <button className="ukp-configure" onClick={onConfigure}>+ Configure</button>
       )}
-      {secondaryMapping && <span className="muted ukp-press-summary">On release: {secondaryMapping.name}</span>}
+      {secondaryMapping && <span className="ukp-press-summary muted">On release: {summarizeMapping(secondaryMapping, devices)}</span>}
     </div>
   );
 }
