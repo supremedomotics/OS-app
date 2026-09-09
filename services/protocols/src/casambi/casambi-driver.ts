@@ -3,6 +3,8 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 import {
   bindingKey,
@@ -12,7 +14,7 @@ import {
   type StateListener,
 } from "@supreme/integration-layer";
 import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tracer.js";
-import { capabilitiesFromUnit, statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
+import { capabilitiesFromUnit, isKeypadUnit, statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import { updateUnitFromKeypadButton } from "./local-discovery.js";
 import {
   CasambiSessionExpiredError,
@@ -101,7 +103,31 @@ export interface CasambiCommonDriverOptions {
    * (`core/packet-recorder.ts`) — wiring the real UDP engine's raw datagrams into that recorder
    * is a documented follow-up, not yet done (see TODO.md). */
   trace?: boolean;
+  /** § Supreme Universal Keypad, Stage 4A — resolves between this driver's own protocol-native
+   * unit identity and the real Supreme `DeviceId` a keypad was commissioned as. This driver only
+   * ever knows "unit 4"; it has no access to the SIL's entity registry (nor should it — that
+   * would be a protocol driver reaching above its own layer). The gateway supplies this resolver
+   * at construction time, built from `EntityRegistryMirror.reverseLookupDevice`/
+   * `backendIdOfDevice`, the SAME registry Stage 3A's commissioning fix already populates for a
+   * capability-less keypad device — no new registry, no new identity model, just this driver
+   * finally being handed the existing one. Absent (e.g. every test that doesn't care about
+   * `onInputEvent`/`getKeypadCapabilities`) means both hooks honestly report nothing rather than
+   * guessing a `DeviceId`. */
+  keypadIdentity?: {
+    deviceIdForUnit(unitId: number): DeviceId | null;
+    unitForDeviceId(deviceId: DeviceId): number | null;
+  };
 }
+
+/** Casambi's own button-event action label -> the Supreme keypad event vocabulary (§ Supreme
+ * Universal Keypad, Stage 4A). Only the three documented codes `CASAMBI_BUTTON_EVENT` (in
+ * `local-transport/udp-codec.ts`) actually decodes are mapped; a `type_<n>` label for a real but
+ * undocumented event code is honestly dropped by `onInputEvent` below, never guessed at. */
+const CASAMBI_TO_KEYPAD_EVENT: Partial<Record<string, KeypadInputEvent["type"]>> = {
+  short_press: "short_press",
+  long_press_start: "hold_start",
+  long_press_end: "hold_end",
+};
 
 export type CasambiDriverOptions =
   | (CasambiCommonDriverOptions & {
@@ -161,6 +187,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
   private readonly commandEngine: CasambiCommandEngine;
   private readonly events = new CasambiEventBus();
   private readonly tracer: ProtocolTracer;
+  private readonly keypadIdentity?: CasambiCommonDriverOptions["keypadIdentity"];
   private readonly pingIntervalMs?: number;
   private readonly reconnectBaseMs?: number;
   private readonly reconnectMaxMs?: number;
@@ -231,6 +258,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
         ? new LocalCommandEngine(this.localTransport.udp, this.localTransport.config.netId ?? 0)
         : new CloudCommandEngine(this.feedback);
     this.tracer = createProtocolTracer("casambi", opts.trace === true, opts.onLog);
+    this.keypadIdentity = opts.keypadIdentity;
     this.pingIntervalMs = opts.pingIntervalMs;
     this.reconnectBaseMs = opts.reconnectBaseMs;
     this.reconnectMaxMs = opts.reconnectMaxMs;
@@ -492,6 +520,47 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
    * ButtonEvent/SceneEvent/SensorEvent/NetworkEvent/DiagnosticEvent), additive to {@link onState}. */
   onDriverEvent(listener: CasambiEventListener): () => void {
     return this.events.on(listener);
+  }
+
+  /** § Universal Keypad Framework, Stage 4A — the ONE bridge from this driver's own private
+   * `ButtonEvent` bus (already fed by real 0x51 telegrams, see `applyButtonEvent`) to the
+   * standard `INativeProtocolDriver.onInputEvent` hook `SupremeNativeAdapter` already wires
+   * every driver through automatically. No new event system: `CasambiEventBus` is unchanged,
+   * this just also republishes a `"button"` signal as a normalized `KeypadInputEvent`, honestly
+   * dropping it (never fabricating a `DeviceId`) when `keypadIdentity` can't resolve the unit —
+   * e.g. the keypad hasn't been commissioned yet — or the action code isn't one of the three
+   * documented ones `CASAMBI_TO_KEYPAD_EVENT` maps. */
+  onInputEvent(listener: (event: KeypadInputEvent) => void): () => void {
+    return this.events.on((e) => {
+      if (e.type !== "button") return;
+      const keypadId = this.keypadIdentity?.deviceIdForUnit(e.unitId);
+      if (!keypadId) return;
+      const type = CASAMBI_TO_KEYPAD_EVENT[e.action];
+      if (!type) return;
+      listener({ type, keypadId, control: String(e.button), ts: e.ts } as KeypadInputEvent);
+    });
+  }
+
+  /** § Universal Keypad Framework, Stage 4A — this keypad's real, progressively-observed button
+   * count (`isKeypadUnit`/`keypadButtonCount`, § Stage 1), never a fabricated fixed count. `null`
+   * when `keypadIdentity` can't resolve this device to a unit, the unit isn't a keypad, or no
+   * button has been pressed yet (`keypadButtonCount` still 0 — nothing to honestly report). */
+  getKeypadCapabilities(deviceId: DeviceId): KeypadCapabilityDeclaration | null {
+    const unitId = this.keypadIdentity?.unitForDeviceId(deviceId);
+    if (unitId == null) return null;
+    const unit = this.units.get(unitId);
+    if (!unit || !isKeypadUnit(unit) || !unit.keypadButtonCount) return null;
+    return {
+      keypadId: deviceId,
+      protocol: "casambi",
+      controls: Array.from({ length: unit.keypadButtonCount }, (_, i) => ({
+        id: String(i),
+        kind: "button" as const,
+        label: null,
+        input: ["buttons", "hold"] as const,
+        feedback: [],
+      })),
+    };
   }
 
   /** Health snapshot for monitoring — carries no secrets. */

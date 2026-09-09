@@ -65,6 +65,15 @@ export class EntityRegistryMirror {
     return this.reverseDevice.get(backendId);
   }
 
+  /** Supreme → backend, capability-less devices only — the forward counterpart to
+   * {@link reverseLookupDevice} (§ Supreme Universal Keypad, Stage 4A: a driver's
+   * `getKeypadCapabilities(deviceId)` needs to resolve its OWN protocol-native identity back
+   * from the Supreme `deviceId` it's handed, the mirror image of turning a raw button event's
+   * unit id into a `deviceId`). `undefined` for a device registered through `map()` instead. */
+  backendIdOfDevice(deviceId: DeviceId): string | undefined {
+    return this.deviceBackendId.get(deviceId);
+  }
+
   /** True if `backendId` is already owned by some Supreme device, through either
    * registration path — the dedup check every discovery/pending-approval call site
    * actually needs (it never cared which capability, only "already known or not"). */

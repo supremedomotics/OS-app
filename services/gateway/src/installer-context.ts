@@ -39,8 +39,11 @@ import { subjects, type IEventBus } from "@supreme/messaging";
 import { NatsUdpTransportClient, LocalDirectUdpTransport } from "@supreme/lan";
 import {
   buildNativeDriver,
+  casambiUnitIdFromBackendId,
   hasNativeFactory,
   resolveCasambiCloudCredentials,
+  scopeCasambiBackendId,
+  unscopeCasambiBackendId,
   withCasambiInstanceAddressing,
   withRuntimeProtocol,
   type NativeDriverFactoryContext,
@@ -1601,7 +1604,14 @@ export class InstallerServices {
    * the env-only Apple TV driver — now available to any manifest-driven driver too
    * (AVR is the first to use it). `artworkUrlFor` is omitted entirely when
    * `publicBaseUrl` isn't configured (dev/local) rather than building a broken URL. */
-  private nativeDriverContext(key: string): NativeDriverFactoryContext {
+  /** `casambiInstanceId` mirrors EXACTLY the `installedId` `withCasambiInstanceAddressing` gets
+   * at each call site below (`null` for the primary Casambi instance, that instance's own
+   * installed id for any other) — the keypad identity resolver has to apply the SAME address
+   * scoping `discover()`/`bind()` already do, or a non-primary instance's keypad would resolve
+   * against the wrong (unscoped) backendId and never match. Meaningless for every protocol but
+   * Casambi; harmless to pass for the rest since `keypadIdentity` is only ever read by the one
+   * driver that implements the hooks it resolves for. */
+  private nativeDriverContext(key: string, casambiInstanceId: string | null = null): NativeDriverFactoryContext {
     return {
       onLog: (level, message) => this.appendLog(key, level, message),
       ...(this.d.config.publicBaseUrl
@@ -1623,6 +1633,23 @@ export class InstallerServices {
       // required fields set (SUPREME_CASAMBI_API_KEY/EMAIL/PASSWORD); see the field's own doc
       // comment on `NativeDriverFactoryContext`.
       ...this.casambiContextDefaults(),
+      // § Supreme Universal Keypad, Stage 4A — see `CasambiCommonDriverOptions.keypadIdentity`'s
+      // doc comment. Built from the SIL's own entity registry (Stage 3A's `mapDevice`/
+      // `reverseLookupDevice`/`backendIdOfDevice`) — the SAME capability-less-device identity
+      // already used for commissioning/dedup, never a second registry.
+      keypadIdentity: {
+        deviceIdForUnit: (unitId) => {
+          const bare = `casambi:${unitId}`;
+          const backendId = casambiInstanceId ? scopeCasambiBackendId(bare, casambiInstanceId) : bare;
+          return this.d.sil.registry.reverseLookupDevice(backendId) ?? null;
+        },
+        unitForDeviceId: (deviceId) => {
+          const backendId = this.d.sil.registry.backendIdOfDevice(deviceId);
+          if (!backendId) return null;
+          const bare = casambiInstanceId ? unscopeCasambiBackendId(backendId, casambiInstanceId) : backendId;
+          return casambiUnitIdFromBackendId(bare);
+        },
+      },
     };
   }
 
@@ -1777,16 +1804,12 @@ export class InstallerServices {
     }
     for (const [runtimeProtocol, { config, key, buildProtocol, installedId }] of desired) {
       this.desiredProtocols.set(runtimeProtocol, { key, config });
-      const built = buildNativeDriver(buildProtocol, config, this.nativeDriverContext(key));
       // § Multi-network Casambi, Stage 4 — a non-primary Casambi instance ALSO gets its
       // addresses scoped by its own installed id, not just its protocol string. `null` for the
       // primary instance (runtimeProtocol === the bare buildProtocol) leaves it fully unwrapped.
-      const driver = built
-        ? withCasambiInstanceAddressing(
-            withRuntimeProtocol(built, runtimeProtocol),
-            buildProtocol === "casambi" && runtimeProtocol !== buildProtocol ? installedId : null,
-          )
-        : null;
+      const casambiInstanceId = buildProtocol === "casambi" && runtimeProtocol !== buildProtocol ? installedId : null;
+      const built = buildNativeDriver(buildProtocol, config, this.nativeDriverContext(key, casambiInstanceId));
+      const driver = built ? withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId) : null;
       await this.runDriverLifecycle(runtimeProtocol, driver, key, trigger);
     }
     for (const [runtimeProtocol, { key }] of [...this.desiredProtocols]) {
@@ -1814,14 +1837,10 @@ export class InstallerServices {
         const fast = this.runtimeProtocolIfSingleInstance(entry, protocol);
         const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(entry, protocol);
         const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols)).complete;
-        const built = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key)) : null;
         // § Multi-network Casambi, Stage 4 — same reasoning as reconcileManifestDrivers above.
-        const driver = built
-          ? withCasambiInstanceAddressing(
-              withRuntimeProtocol(built, runtimeProtocol),
-              protocol === "casambi" && runtimeProtocol !== protocol ? entry.installedId : null,
-            )
-          : null;
+        const casambiInstanceId = protocol === "casambi" && runtimeProtocol !== protocol ? entry.installedId : null;
+        const built = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key, casambiInstanceId)) : null;
+        const driver = built ? withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId) : null;
         if (runnable) this.desiredProtocols.set(runtimeProtocol, { key, config: entry.config });
         else this.desiredProtocols.delete(runtimeProtocol);
         await this.runDriverLifecycle(runtimeProtocol, driver, key, "config_change");

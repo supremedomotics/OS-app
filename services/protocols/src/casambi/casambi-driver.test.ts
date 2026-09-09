@@ -234,11 +234,12 @@ class FakeUdpTransport implements UdpTransport {
 }
 
 describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
-  function makeLocalDriver() {
+  function makeLocalDriver(extra: Partial<ConstructorParameters<typeof CasambiProtocolDriver>[0]> = {}) {
     const socket = new FakeUdpTransport();
     const driver = new CasambiProtocolDriver({
       connectionMode: "local",
       local: { gatewayIp: "192.168.1.90", restPort: 80, udpPort: 5100, netId: 0, udpTransportFactory: () => socket },
+      ...extra,
     });
     return { socket, driver };
   }
@@ -401,6 +402,86 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       expect.objectContaining({ type: "button", unitId: 4, button, action: "short_press" }),
     ));
     await driver.disconnect();
+  });
+
+  describe("§ Supreme Universal Keypad Stage 4A — onInputEvent/getKeypadCapabilities (INativeProtocolDriver hooks)", () => {
+    it("onInputEvent republishes a real button telegram as a KeypadInputEvent once keypadIdentity resolves the unit to a real DeviceId", async () => {
+      const keypadDeviceId = "kp-device-1" as DeviceId;
+      const { socket, driver } = makeLocalDriver({
+        keypadIdentity: { deviceIdForUnit: (unitId) => (unitId === 4 ? keypadDeviceId : null), unitForDeviceId: () => null },
+      });
+      await driver.connect();
+      const events: unknown[] = [];
+      driver.onInputEvent?.((e) => events.push(e));
+      socket.receive("0.70.5.51.4.1.0.2\r\n"); // unit 4, button 0, short press
+      expect(events).toEqual([{ type: "short_press", keypadId: keypadDeviceId, control: "0", ts: expect.any(String) }]);
+      await driver.disconnect();
+    });
+
+    it("onInputEvent honestly drops a button event for a unit keypadIdentity can't resolve — never fabricates a DeviceId", async () => {
+      const { socket, driver } = makeLocalDriver({
+        keypadIdentity: { deviceIdForUnit: () => null, unitForDeviceId: () => null },
+      });
+      await driver.connect();
+      const events: unknown[] = [];
+      driver.onInputEvent?.((e) => events.push(e));
+      socket.receive("0.70.5.51.4.1.0.2\r\n");
+      expect(events).toEqual([]);
+      await driver.disconnect();
+    });
+
+    it("onInputEvent drops without any keypadIdentity option at all (e.g. a test/driver that never opted in)", async () => {
+      const { socket, driver } = makeLocalDriver();
+      await driver.connect();
+      const events: unknown[] = [];
+      driver.onInputEvent?.((e) => events.push(e));
+      socket.receive("0.70.5.51.4.1.0.2\r\n");
+      expect(events).toEqual([]);
+      await driver.disconnect();
+    });
+
+    it("onInputEvent preserves LONG_PRESS_START/LONG_PRESS_END as two distinct events, never collapsed", async () => {
+      const keypadDeviceId = "kp-device-1" as DeviceId;
+      const { socket, driver } = makeLocalDriver({
+        keypadIdentity: { deviceIdForUnit: (unitId) => (unitId === 4 ? keypadDeviceId : null), unitForDeviceId: () => null },
+      });
+      await driver.connect();
+      const events: unknown[] = [];
+      driver.onInputEvent?.((e) => events.push(e));
+      socket.receive("0.70.5.51.4.1.2.9\r\n"); // long press start, button 2
+      socket.receive("0.70.5.51.4.1.2.c\r\n"); // long press end, button 2
+      expect(events).toEqual([
+        { type: "hold_start", keypadId: keypadDeviceId, control: "2", ts: expect.any(String) },
+        { type: "hold_end", keypadId: keypadDeviceId, control: "2", ts: expect.any(String) },
+      ]);
+      await driver.disconnect();
+    });
+
+    it("getKeypadCapabilities reports the real, progressively-observed button count once keypadIdentity resolves the device", async () => {
+      const keypadDeviceId = "kp-device-1" as DeviceId;
+      const { socket, driver } = makeLocalDriver({
+        keypadIdentity: { deviceIdForUnit: () => null, unitForDeviceId: (id) => (id === keypadDeviceId ? 4 : null) },
+      });
+      await driver.connect();
+      expect(driver.getKeypadCapabilities?.(keypadDeviceId)).toBeNull(); // nothing observed yet
+      socket.receive("0.70.5.51.4.1.0.2\r\n");
+      socket.receive("0.70.5.51.4.1.1.2\r\n");
+      const decl = driver.getKeypadCapabilities?.(keypadDeviceId);
+      expect(decl).toEqual({
+        keypadId: keypadDeviceId,
+        protocol: "casambi",
+        controls: [
+          { id: "0", kind: "button", label: null, input: ["buttons", "hold"], feedback: [] },
+          { id: "1", kind: "button", label: null, input: ["buttons", "hold"], feedback: [] },
+        ],
+      });
+      await driver.disconnect();
+    });
+
+    it("getKeypadCapabilities returns null when keypadIdentity can't resolve the device to a unit", async () => {
+      const { driver } = makeLocalDriver({ keypadIdentity: { deviceIdForUnit: () => null, unitForDeviceId: () => null } });
+      expect(driver.getKeypadCapabilities?.("unknown-device" as DeviceId)).toBeNull();
+    });
   });
 
   it("a 0x3A Notify Node removed forgets the unit and publishes a networkUpdated event", async () => {
