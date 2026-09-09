@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import type { CapabilityCommand, CapabilityKind, CapabilityState, DeviceId } from "@supreme/domain-model";
 import {
   EntityRegistryMirror,
@@ -184,4 +185,186 @@ describe("Auto-commission media (AVR/HEOS/Yamaha) → confidence-based rooms + z
     // Everything discoverable was already commissioned by the previous test.
     expect(res.status).toBe(422);
   });
+});
+
+/** A minimal in-process Denon-style receiver — same query/reply shape as
+ * `avr-probe.test.ts`'s own `startFakeAvr`, kept local here since it exercises a
+ * different caller (`autoCommissionMedia`, not `probeAvr` directly). Only ever
+ * answers the handful of `?` queries the init burst sends. */
+function startFakeDenonReceiver(): Promise<{ server: import("node:net").Server; port: number }> {
+  return new Promise((resolve) => {
+    const server = createServer((sock) => {
+      sock.setEncoding("utf8");
+      let buf = "";
+      sock.on("data", (chunk: string) => {
+        buf += chunk;
+        const parts = buf.split("\r");
+        buf = parts.pop() ?? "";
+        for (const cmd of parts) {
+          if (cmd === "PW?") sock.write("PWON\r");
+          else if (cmd === "ZM?") sock.write("ZMON\r");
+          else if (cmd === "MV?") sock.write("MV50\r");
+          else if (cmd === "MU?") sock.write("MUOFF\r");
+          else if (cmd === "SI?") sock.write("SICD\r");
+          // The paced init-sync handshake (av-sdk/init-handshake.ts) sends one query at a
+          // time and only advances on a reply to THAT query — every unconditional base
+          // token must be answered or the handshake stalls before ever reaching Z2?/Z2MU?
+          // (the tokens actually under test here), never a timing race.
+          else if (cmd === "PSTONE CTRL ?") sock.write("PSTONE CTRL ON\r");
+          else if (cmd === "PSBAS ?") sock.write("PSBAS 50\r");
+          else if (cmd === "PSTRE ?") sock.write("PSTRE 50\r");
+          else if (cmd === "MS?") sock.write("MSMOVIE\r");
+          else if (cmd === "Z2?") sock.write("Z2ON\r"); // Zone 2 answers — this is the unit under test
+          else if (cmd === "Z2MU?") sock.write("Z2MUOFF\r");
+        }
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      resolve({ server, port: typeof addr === "object" && addr ? addr.port : 0 });
+    });
+  });
+}
+
+/**
+ * § Fix — auto-commission's Denon/Marantz Telnet path could never report a Zone 2
+ * because `discover()`'s SSDP/UPnP scan has no wire signal for it (unlike Yamaha's real
+ * getFeatures() query). This proves `autoCommissionMedia("avr")` now runs the SAME
+ * active zone2 probe `probeAvr` already uses for the manual-add flow, against a REAL
+ * fake receiver — not a fabricated capability.
+ */
+describe("Auto-commission media — AVR active zone2 probe (§ auto-discovery Zone 2 fix)", () => {
+  it("auto-generates a Zone 2 device for a real Denon-shaped unit whose receiver answers Z2?, using the same active probe as manual add", async () => {
+    const fake = await startFakeDenonReceiver();
+    try {
+      class FakeAvrDiscovery implements INativeProtocolDriver {
+        readonly protocol = "avr";
+        private readonly devices = new Set<DeviceId>();
+        private readonly listeners = new Set<StateListener>();
+        async connect(): Promise<void> {}
+        async disconnect(): Promise<void> {}
+        isConnected(): boolean { return true; }
+        async bind(b: ProtocolBinding): Promise<void> { this.devices.add(b.deviceId); }
+        manages(id: DeviceId): boolean { return this.devices.has(id); }
+        async command(): Promise<void> {}
+        getState(): CapabilityState | null { return null; }
+        async discover(): Promise<DiscoveredDevice[]> {
+          return [
+            {
+              backendId: `127.0.0.1:${fake.port}`,
+              suggestedName: "Theater Receiver",
+              capabilities: ["onoff", "media"],
+              // No `raw.zones` at all — exactly what real Denon Telnet discovery
+              // produces (no wire-level zone signal), unlike the Yamaha fixture above.
+              raw: { protocol: "avr", bindConfig: { zone: "main" } },
+            },
+          ];
+        }
+        onState(l: StateListener): () => void { this.listeners.add(l); return () => this.listeners.delete(l); }
+      }
+
+      const registry = new EntityRegistryMirror();
+      const engine = new SupremeNativeAdapter({ drivers: [new FakeAvrDiscovery()] });
+      const providers = new ProviderRegistry();
+      const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
+      const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+      const avrCtx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+        sil,
+        protocolBindingStore: new InMemoryProtocolBindingStore(),
+      });
+      const avrApp = await buildServer(avrCtx);
+      await avrApp.listen({ host: "127.0.0.1", port: 0 });
+      const addr = avrApp.server.address();
+      const avrBaseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+      try {
+        const loginRes = await fetch(`${avrBaseUrl}/v1/auth/login`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+        });
+        const avrToken = ((await loginRes.json()) as { accessToken: string }).accessToken;
+        const avrAuth = { authorization: `Bearer ${avrToken}`, "content-type": "application/json" };
+
+        const res = await fetch(`${avrBaseUrl}/v1/commissioning/auto-media`, {
+          method: "POST",
+          headers: avrAuth,
+          body: JSON.stringify({ protocol: "avr" }),
+        });
+        expect(res.status).toBe(201);
+        const out = (await res.json()) as { devices: number; created: { name: string; room: string | null }[] };
+        expect(out.devices).toBe(2); // main + the actively-probed zone2
+        const zone2 = out.created.find((d) => d.name === "Theater Receiver Zone 2");
+        expect(zone2).toBeTruthy();
+      } finally {
+        await avrApp.close();
+        await avrCtx.shutdown();
+      }
+    } finally {
+      await new Promise<void>((r) => fake.server.close(() => r()));
+    }
+  }, 15_000);
+
+  it("commissions only the main zone when the receiver never answers Z2? (honest — no fabricated zone)", async () => {
+    class FakeAvrNoZone2 implements INativeProtocolDriver {
+      readonly protocol = "avr";
+      private readonly devices = new Set<DeviceId>();
+      private readonly listeners = new Set<StateListener>();
+      async connect(): Promise<void> {}
+      async disconnect(): Promise<void> {}
+      isConnected(): boolean { return true; }
+      async bind(b: ProtocolBinding): Promise<void> { this.devices.add(b.deviceId); }
+      manages(id: DeviceId): boolean { return this.devices.has(id); }
+      async command(): Promise<void> {}
+      getState(): CapabilityState | null { return null; }
+      async discover(): Promise<DiscoveredDevice[]> {
+        return [
+          {
+            // Nothing real is listening here — the active probe must fail closed
+            // (unreachable), never fabricating a zone2 it couldn't confirm.
+            backendId: "127.0.0.1:1",
+            suggestedName: "Bedroom Receiver",
+            capabilities: ["onoff", "media"],
+            raw: { protocol: "avr", bindConfig: { zone: "main" } },
+          },
+        ];
+      }
+      onState(l: StateListener): () => void { this.listeners.add(l); return () => this.listeners.delete(l); }
+    }
+
+    const registry = new EntityRegistryMirror();
+    const engine = new SupremeNativeAdapter({ drivers: [new FakeAvrNoZone2()] });
+    const providers = new ProviderRegistry();
+    const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
+    const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+    const avrCtx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+      sil,
+      protocolBindingStore: new InMemoryProtocolBindingStore(),
+    });
+    const avrApp = await buildServer(avrCtx);
+    await avrApp.listen({ host: "127.0.0.1", port: 0 });
+    const addr = avrApp.server.address();
+    const avrBaseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    try {
+      const loginRes = await fetch(`${avrBaseUrl}/v1/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+      });
+      const avrToken = ((await loginRes.json()) as { accessToken: string }).accessToken;
+      const avrAuth = { authorization: `Bearer ${avrToken}`, "content-type": "application/json" };
+
+      const res = await fetch(`${avrBaseUrl}/v1/commissioning/auto-media`, {
+        method: "POST",
+        headers: avrAuth,
+        body: JSON.stringify({ protocol: "avr" }),
+      });
+      expect(res.status).toBe(201);
+      const out = (await res.json()) as { devices: number; created: { name: string }[] };
+      expect(out.devices).toBe(1); // main zone only — no fabricated zone2
+      expect(out.created.some((d) => d.name.includes("Zone 2"))).toBe(false);
+    } finally {
+      await avrApp.close();
+      await avrCtx.shutdown();
+    }
+  }, 15_000);
 });
