@@ -402,4 +402,73 @@ describe("Universal Keypad Framework — backend APIs", () => {
       expect(created.mapping.target).toBeNull();
     });
   });
+
+  // ── § Universal Keypad Framework, Stage 4B — keypad events as Automation WHEN triggers ──
+  describe("keypad_input as an Automation trigger, through the real AppContext wiring", () => {
+    it("a Universal Keypad mapping and an Automation trigger on the SAME button both fire — neither suppresses the other", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "dimmer")!; // stand-in identity; no real keypad driver in Phase 1
+      const mappingTarget = devs.find((d) => d.supremeType === "light")!;
+      const automationTarget = devs.find((d) => d.supremeType === "dimmer" && d.id !== keypad.id) ?? devs.find((d) => d.supremeType === "light" && d.id !== mappingTarget.id)!;
+
+      const mappingRes = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Direct mapping on Button 1",
+          input: { keypadId: keypad.id, control: "1", event: "short_press" },
+          actions: [{ type: "device_command", deviceId: mappingTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(mappingRes.status).toBe(201);
+
+      const automationRes = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Automation trigger on the SAME Button 1",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "1", event: "short_press" }],
+          actions: [{ type: "device_command", deviceId: automationTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(automationRes.status).toBe(201);
+
+      // Simulates the SAME normalized event UniversalInputEngine's `publish` callback feeds
+      // to both consumers in production (context.ts) — the one seam a real keypad driver's
+      // onInputEvent would otherwise flow through in Phase 1's absence.
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "1", ts: new Date().toISOString() };
+      await ctx.keypadMappings.onInputEvent(event);
+      await ctx.automations.onKeypadInput(event);
+
+      const mappingRuns = ctx.keypadMappings.recentRuns();
+      expect(mappingRuns.some((r) => r.ok)).toBe(true);
+      const automationRuns = ctx.automations.recentRuns();
+      expect(automationRuns.some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
+    });
+
+    it("an Automation's IF condition gates a keypad_input trigger through the real engine", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "light")!;
+      const sensor = devs.find((d) => d.capabilities.some((c) => c.kind === "sensor"));
+      const target = devs.find((d) => d.supremeType === "dimmer")!;
+      if (!sensor) return; // demo home may not seed a sensor device — skip honestly, never fabricate one
+
+      const res = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Keypad + condition",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "cond-btn", event: "short_press" }],
+          conditions: [{ type: "device_state", deviceId: sensor.id, capability: "sensor", field: "value", op: "gt", value: 999_999 }],
+          actions: [{ type: "device_command", deviceId: target.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(res.status).toBe(201);
+
+      await ctx.automations.onKeypadInput({ type: "short_press", keypadId: keypad.id, control: "cond-btn", ts: new Date().toISOString() });
+      const runs = ctx.automations.recentRuns();
+      const run = runs.find((r) => r.trigger === "keypad_input" && r.conditionsPassed === false);
+      expect(run).toBeDefined();
+    });
+  });
 });

@@ -860,7 +860,7 @@ export interface AutomationView {
   id: string;
   name: string;
   enabled: boolean;
-  triggers: { type: string; deviceId?: string; capability?: string; field?: string; at?: string; everyMinutes?: number }[];
+  triggers: { type: string; deviceId?: string; capability?: string; field?: string; at?: string; everyMinutes?: number; keypadId?: string; control?: string; event?: string }[];
   conditions: { type: string; deviceId?: string; capability?: string; field?: string }[];
   actions: { type: string; deviceId?: string; command?: Record<string, unknown> }[];
   tags: string[];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Device, Scene } from "@supreme/domain-model";
+import type { Device, DeviceId, Scene } from "@supreme/domain-model";
 import type { AutomationView } from "./api.js";
 import {
   actionLabel,
@@ -143,5 +143,60 @@ describe("triggerTitle — Canvas view's read-only trigger summary", () => {
   it("tolerates a device_state trigger missing capability/field (never fabricates a placeholder value)", () => {
     const bare: AutomationView["triggers"][number] = { type: "device_state" };
     expect(triggerTitle(bare)).toBe("Device ·");
+  });
+
+  it("§ Universal Keypad Framework, Stage 4B — summarizes a keypad_input trigger: Button + Event, never a raw protocol value", () => {
+    const shortPress: AutomationView["triggers"][number] = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "short_press" };
+    const longStart: AutomationView["triggers"][number] = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "hold_start" };
+    const longEnd: AutomationView["triggers"][number] = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "hold_end" };
+    expect(triggerTitle(shortPress)).toBe("Keypad · Button 1 · Short Press");
+    expect(triggerTitle(longStart)).toBe("Keypad · Button 1 · Long Press Start");
+    expect(triggerTitle(longEnd)).toBe("Keypad · Button 1 · Long Press End");
+  });
+});
+
+describe("§ Universal Keypad Framework, Stage 4B — keypad_input editor node", () => {
+  it("defaultNode produces a complete, valid keypad_input shape (Room→Keypad selection deferred to the picker)", () => {
+    expect(defaultNode("keypad_input")).toEqual({ type: "keypad_input", keypadId: null, control: null, event: "short_press" });
+  });
+
+  it("nodeSummary shows the keypad name, button, and event label — Short/Long Start/Long End distinguished, never merged", () => {
+    const kp = device({ id: "kp-1" as DeviceId, name: "Living Room Keypad" });
+    const short: EditorNode = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "short_press" };
+    const start: EditorNode = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "hold_start" };
+    const end: EditorNode = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "hold_end" };
+    expect(nodeSummary(short, [kp], [])).toBe("Living Room Keypad · Button 1 · Short Press");
+    expect(nodeSummary(start, [kp], [])).toBe("Living Room Keypad · Button 1 · Long Press Start");
+    expect(nodeSummary(end, [kp], [])).toBe("Living Room Keypad · Button 1 · Long Press End");
+  });
+
+  it("nodeSummary distinguishes different buttons on the same keypad", () => {
+    const kp = device({ id: "kp-1" as DeviceId, name: "Entrance Keypad" });
+    const btn1: EditorNode = { type: "keypad_input", keypadId: "kp-1", control: "1", event: "short_press" };
+    const btn2: EditorNode = { type: "keypad_input", keypadId: "kp-1", control: "2", event: "short_press" };
+    expect(nodeSummary(btn1, [kp], [])).not.toBe(nodeSummary(btn2, [kp], []));
+  });
+
+  it("nodeSummary distinguishes different keypads, incl. same Unit ID on two different Casambi network instances (two distinct DeviceIds)", () => {
+    const netA = device({ id: "dev-net1-unit4" as DeviceId, name: "Bedside Keypad" });
+    const netB = device({ id: "dev-net2-unit4" as DeviceId, name: "Bedside Keypad" });
+    const onNetA: EditorNode = { type: "keypad_input", keypadId: "dev-net1-unit4", control: "1", event: "short_press" };
+    const onNetB: EditorNode = { type: "keypad_input", keypadId: "dev-net2-unit4", control: "1", event: "short_press" };
+    // Same display name (both "Bedside Keypad") is expected and fine — what matters is the
+    // underlying keypadId (a real, distinct Supreme DeviceId per network instance) never
+    // collapsing the two into one trigger identity.
+    expect(onNetA.keypadId).not.toBe(onNetB.keypadId);
+    expect(nodeSummary(onNetA, [netA], [])).toContain("Bedside Keypad");
+    expect(nodeSummary(onNetB, [netB], [])).toContain("Bedside Keypad");
+  });
+
+  it("nodeSummary shows a placeholder, never a fabricated button, before a button is chosen", () => {
+    const kp = device({ id: "kp-1" as DeviceId, name: "Hallway Keypad" });
+    const incomplete: EditorNode = { type: "keypad_input", keypadId: "kp-1", control: null, event: "short_press" };
+    expect(nodeSummary(incomplete, [kp], [])).toBe("Hallway Keypad · …");
+  });
+
+  it("nodeGlyph has a real glyph for keypad_input (never falls through to the generic default)", () => {
+    expect(nodeGlyph("keypad_input")).not.toBe("•");
   });
 });

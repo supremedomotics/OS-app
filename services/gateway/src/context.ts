@@ -806,6 +806,12 @@ export class AppContext {
       publish: (event) => {
         void this.bus.publish(subjects.keypadInput(this.homeId), event);
         void this.keypadMappings.onInputEvent(event);
+        // § Universal Keypad Framework, Stage 4B — the SAME normalized event also reaches
+        // Automation as an independent `keypad_input` trigger source, exactly like
+        // `onDeviceState` below is independent of everything else that observes SIL state.
+        // A button press with both a direct Universal Keypad mapping and an Automation
+        // trigger runs both; neither suppresses the other.
+        void this.automations.onKeypadInput(event);
       },
     });
     this.sil.subscribeKeypadInput((event) => this.keypadInputEngine.ingest(event));

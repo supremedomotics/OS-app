@@ -116,6 +116,187 @@ describe("AutomationEngine — device_state triggers", () => {
   });
 });
 
+describe("AutomationEngine — keypad_input triggers (§ Universal Keypad Framework, Stage 4B)", () => {
+  function pressEvent(keypadId: DeviceId, control: string, type: "short_press" | "hold_start" | "hold_end") {
+    return { type, keypadId, control, ts: new Date().toISOString() } as const;
+  }
+
+  it("fires on a Short Press trigger", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const keypad = devId();
+    const light = devId();
+    await svc.create({
+      homeId: homeId(),
+      name: "Button 1 short press",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "short_press" }],
+      actions: [{ type: "device_command", deviceId: light, command: { capability: "onoff", action: "toggle" } }],
+    });
+
+    await svc.onKeypadInput(pressEvent(keypad, "1", "short_press"));
+    expect(ex.command).toHaveBeenCalledTimes(1);
+  });
+
+  it("Long Press Start and Long Press End are distinct triggers, never merged", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const keypad = devId();
+    const startTarget = devId();
+    const endTarget = devId();
+    await svc.create({
+      homeId: homeId(), name: "Long press start",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "hold_start" }],
+      actions: [{ type: "device_command", deviceId: startTarget, command: { capability: "onoff", action: "on" } }],
+    });
+    await svc.create({
+      homeId: homeId(), name: "Long press end",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "hold_end" }],
+      actions: [{ type: "device_command", deviceId: endTarget, command: { capability: "onoff", action: "off" } }],
+    });
+
+    await svc.onKeypadInput(pressEvent(keypad, "1", "hold_start"));
+    expect(ex.command).toHaveBeenCalledTimes(1);
+    expect(ex.command).toHaveBeenCalledWith(startTarget, { capability: "onoff", action: "on" });
+
+    await svc.onKeypadInput(pressEvent(keypad, "1", "hold_end"));
+    expect(ex.command).toHaveBeenCalledTimes(2);
+    expect(ex.command).toHaveBeenCalledWith(endTarget, { capability: "onoff", action: "off" });
+  });
+
+  it("different buttons on the same keypad remain isolated", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const keypad = devId();
+    const target = devId();
+    await svc.create({
+      homeId: homeId(), name: "Button 1 only",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "short_press" }],
+      actions: [{ type: "device_command", deviceId: target, command: { capability: "onoff", action: "on" } }],
+    });
+
+    await svc.onKeypadInput(pressEvent(keypad, "2", "short_press")); // wrong button
+    expect(ex.command).not.toHaveBeenCalled();
+    await svc.onKeypadInput(pressEvent(keypad, "1", "short_press"));
+    expect(ex.command).toHaveBeenCalledTimes(1);
+  });
+
+  it("different keypads remain isolated, incl. the SAME Unit ID on two different Casambi network instances (two distinct DeviceIds)", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    // Two distinct Supreme DeviceIds — exactly what Stage 1/4A's multi-instance addressing
+    // guarantees for "Network A Unit 4" vs "Network B Unit 4": this engine needs no protocol
+    // awareness at all, distinct DeviceIds are already sufficient isolation.
+    const keypadNetA = devId();
+    const keypadNetB = devId();
+    const targetA = devId();
+    const targetB = devId();
+    await svc.create({
+      homeId: homeId(), name: "Network A button 1",
+      triggers: [{ type: "keypad_input", keypadId: keypadNetA, control: "1", event: "short_press" }],
+      actions: [{ type: "device_command", deviceId: targetA, command: { capability: "onoff", action: "on" } }],
+    });
+    await svc.create({
+      homeId: homeId(), name: "Network B button 1",
+      triggers: [{ type: "keypad_input", keypadId: keypadNetB, control: "1", event: "short_press" }],
+      actions: [{ type: "device_command", deviceId: targetB, command: { capability: "onoff", action: "on" } }],
+    });
+
+    await svc.onKeypadInput(pressEvent(keypadNetA, "1", "short_press"));
+    expect(ex.command).toHaveBeenCalledTimes(1);
+    expect(ex.command).toHaveBeenCalledWith(targetA, { capability: "onoff", action: "on" });
+
+    await svc.onKeypadInput(pressEvent(keypadNetB, "1", "short_press"));
+    expect(ex.command).toHaveBeenCalledTimes(2);
+    expect(ex.command).toHaveBeenCalledWith(targetB, { capability: "onoff", action: "on" });
+  });
+
+  it("IF conditions gate a keypad_input trigger exactly like any other trigger", async () => {
+    const keypad = devId();
+    const luxSensor = devId();
+    const light = devId();
+    const ex = executors({
+      getState: vi.fn(async () => ({ kind: "sensor", value: 300, unit: "lx", measure: "illuminance" }) as CapabilityState),
+    });
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    await svc.create({
+      homeId: homeId(),
+      name: "Keypad + lux condition",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "short_press" }],
+      conditions: [{ type: "device_state", deviceId: luxSensor, capability: "sensor", field: "value", op: "lt", value: 200 }],
+      actions: [{ type: "device_command", deviceId: light, command: { capability: "brightness", action: "set", level: 40 } }],
+    });
+
+    // Lux too bright (300 >= 200) — condition fails, no action.
+    await svc.onKeypadInput(pressEvent(keypad, "1", "short_press"));
+    expect(ex.command).not.toHaveBeenCalled();
+    const run1 = engine.recentRuns()[0]!;
+    expect(run1.conditionsPassed).toBe(false);
+    expect(run1.trigger).toBe("keypad_input");
+
+    // Lux now low enough — condition passes.
+    (ex.getState as ReturnType<typeof vi.fn>).mockResolvedValue({ kind: "sensor", value: 100, unit: "lx", measure: "illuminance" });
+    await svc.onKeypadInput(pressEvent(keypad, "1", "short_press"));
+    expect(ex.command).toHaveBeenCalledWith(light, { capability: "brightness", action: "set", level: 40 });
+  });
+
+  it("multiple THEN actions all run in order for one keypad_input trigger", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const keypad = devId();
+    const scene = "scene_welcome" as SceneId;
+    const hvac = devId();
+    const curtains = devId();
+    await svc.create({
+      homeId: homeId(),
+      name: "Entrance keypad welcome",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "short_press" }],
+      actions: [
+        { type: "scene_activate", sceneId: scene },
+        { type: "device_command", deviceId: hvac, command: { capability: "temperature", targetC: 22 } },
+        { type: "device_command", deviceId: curtains, command: { capability: "position", action: "open" } },
+      ],
+    });
+
+    await svc.onKeypadInput(pressEvent(keypad, "1", "short_press"));
+    expect(ex.activateScene).toHaveBeenCalledWith(scene);
+    expect(ex.command).toHaveBeenCalledWith(hvac, { capability: "temperature", targetC: 22 });
+    expect(ex.command).toHaveBeenCalledWith(curtains, { capability: "position", action: "open" });
+    const run = engine.recentRuns()[0]!;
+    expect(run.ok).toBe(true);
+    expect(run.actions).toHaveLength(3);
+  });
+
+  it("does not fire keypad_input triggers from a plain device_state event, and vice versa", async () => {
+    const ex = executors();
+    const engine = new AutomationEngine({ executors: ex, sleep: async () => {} });
+    const svc = new AutomationService(engine);
+    await svc.start();
+    const keypad = devId();
+    const sensor = devId();
+    const target = devId();
+    await svc.create({
+      homeId: homeId(), name: "Keypad only",
+      triggers: [{ type: "keypad_input", keypadId: keypad, control: "1", event: "short_press" }],
+      actions: [{ type: "device_command", deviceId: target, command: { capability: "onoff", action: "on" } }],
+    });
+
+    await svc.onDeviceState({ deviceId: sensor, capability: "sensor", state: { kind: "sensor", value: 1, unit: "", measure: "x" } as CapabilityState });
+    expect(ex.command).not.toHaveBeenCalled();
+  });
+});
+
 describe("AutomationEngine — time & interval triggers", () => {
   it("fires a time trigger once at the matching minute", async () => {
     const ex = executors();

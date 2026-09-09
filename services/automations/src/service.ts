@@ -6,6 +6,7 @@ import {
   type AutomationId,
   type AutomationTrigger,
   type HomeId,
+  type KeypadInputEvent,
 } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
 import { AutomationEngine, type DeviceStateEvent } from "./engine.js";
@@ -164,6 +165,14 @@ export class AutomationService {
   /** Feed a normalized device-state delta to the engine. */
   onDeviceState(event: DeviceStateEvent): Promise<void> {
     return this.loaded ? this.engine.onDeviceState(event) : Promise.resolve();
+  }
+
+  /** § Universal Keypad Framework, Stage 4B — feed a normalized keypad input event to the
+   * engine, the SAME event `KeypadMappingService.onInputEvent` also receives from
+   * `UniversalInputEngine`'s `publish` callback. Independent consumer, same as `onDeviceState`
+   * above is independent from whatever else observes SIL state. */
+  onKeypadInput(event: KeypadInputEvent): Promise<void> {
+    return this.loaded ? this.engine.onKeypadInput(event) : Promise.resolve();
   }
 
   /** Drive time/interval triggers (gateway calls this once a minute). */
