@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { probeAvr } from "./avr-probe.js";
 import {
   newId,
   type CapabilityKind,
@@ -1488,10 +1489,25 @@ export class InstallerServices {
       // §Automatic Zone Generation — extra zones this ONE physical unit genuinely has
       // (a real getFeatures query, see yamaha-driver.ts), each its own Supreme device
       // in the SAME room, sharing the SAME physical connection (address), differing
-      // only by `config.zone`. Never attempted for a protocol that can't back it
-      // honestly (Denon Telnet's Zone 2 stays a deliberate, documented manual step —
-      // see avr-codec.ts — because the protocol has no wire-level way to detect it).
-      const extraZones = extractMediaZones(d.raw).filter((z) => z.id !== (typeof bindConfig?.zone === "string" ? bindConfig.zone : "main"));
+      // only by `config.zone`.
+      //
+      // Denon/Marantz classic Telnet (§ avr-codec.ts's module doc) has no such
+      // feature-query — `discover()`'s SSDP/UPnP scan can never report a zone2 the way
+      // Yamaha's wire-queried getFeatures() does. The "Add device manually" flow
+      // (avr-probe.ts's `probeAvr`) already works around this with an ACTIVE probe:
+      // bind zone2 speculatively on a throwaway driver and see if the receiver answers
+      // within a bounded window. Auto-commission reuses the SAME probe rather than
+      // reinventing zone detection for this one protocol — it just runs it against
+      // every newly auto-commissioned AVR unit instead of only a manually-typed IP.
+      const activeProbedZones: { id: string; label: string }[] =
+        protocol === "avr"
+          ? (await probeAvr(d.backendId).catch(() => null))?.zones
+              .filter((z) => z.detected && z.id !== "main")
+              .map((z) => ({ id: z.id, label: z.label })) ?? []
+          : [];
+      const extraZones = [...extractMediaZones(d.raw), ...activeProbedZones].filter(
+        (z) => z.id !== (typeof bindConfig?.zone === "string" ? bindConfig.zone : "main"),
+      );
       for (const zone of extraZones) {
         const zoneName = `${d.suggestedName} ${zone.label}`;
         const zoneDevice = await this.commissioning.commission({
