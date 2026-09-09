@@ -60,6 +60,23 @@ export type KeypadMappingInput = z.infer<typeof KeypadMappingInput>;
 export const KeypadMappingBehavior = z.enum(["direct", "toggle", "alternate", "cycle", "increment", "decrement"]);
 export type KeypadMappingBehavior = z.infer<typeof KeypadMappingBehavior>;
 
+/**
+ * § Universal Keypad Framework, Stage 5A-3 — Capability Compatibility Validation.
+ *
+ * These are the SAME capability sets `@supreme/keypad-framework`'s `behavior.ts`
+ * (`readOnOff`/`readLevel`) already enforces at execution time — promoted here as
+ * the single source of truth so `KeypadMapping`'s own schema validation (below) can
+ * reject an impossible behavior/capability combination at create/update time instead
+ * of only discovering it on the mapping's first firing. Never re-derive this list a
+ * second time anywhere else; `behavior.ts` still owns the actual command-building
+ * switch statements (which command shape, which action), this only owns "is this
+ * capability even eligible for this behavior at all." Protocol-independent by
+ * construction — it's keyed on Supreme's own `CapabilityKind` vocabulary, never a
+ * driver/brand distinction.
+ */
+export const TOGGLE_CAPABLE_CAPABILITIES: readonly CapabilityKind[] = ["onoff", "brightness", "fan", "lock", "vacuum"];
+export const LEVEL_STEP_CAPABLE_CAPABILITIES: readonly CapabilityKind[] = ["brightness", "position"];
+
 /** The single device+capability a non-`"direct"` behavior resolves its command against.
  * `step` is the level delta `alternate`/`increment`/`decrement` apply to a level-shaped
  * capability (brightness/position) — meaningless for `toggle`/`cycle`. */
@@ -122,6 +139,29 @@ export const KeypadMapping = z
     }
     if (m.behavior === "cycle" && m.actions.length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["actions"], message: "a \"cycle\" mapping needs at least one action to cycle through" });
+    }
+    // § Stage 5A-3 — reject at validation time what `resolveBehaviorCommand` would
+    // otherwise only discover on first firing. "cycle" has no capability constraint
+    // here (it walks `actions[]` rather than resolving a synthesized command against
+    // `target.capability` at all), so it's deliberately excluded from both checks.
+    if (m.target) {
+      if (m.behavior === "toggle" && !TOGGLE_CAPABLE_CAPABILITIES.includes(m.target.capability)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["target", "capability"],
+          message: `behavior "toggle" is not supported for capability "${m.target.capability}"`,
+        });
+      }
+      if (
+        (m.behavior === "alternate" || m.behavior === "increment" || m.behavior === "decrement") &&
+        !LEVEL_STEP_CAPABLE_CAPABILITIES.includes(m.target.capability)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["target", "capability"],
+          message: `behavior "${m.behavior}" is not supported for capability "${m.target.capability}"`,
+        });
+      }
     }
   });
 export type KeypadMapping = z.infer<typeof KeypadMapping>;
