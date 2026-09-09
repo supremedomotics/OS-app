@@ -107,6 +107,64 @@ describe("Postgres-backed persistence (PGlite)", () => {
     expect(await new HomeService(sil, stores.home).getDevice(dimmer.id)).toBeNull();
   });
 
+  it("§ Supreme Universal Keypad, Stage 5A-1 — a keypad's device-level backendId survives a restart (rebindRegistry), so isKnownBackendId stays true and rediscovery never mints a duplicate DeviceId", async () => {
+    const sil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
+    await sil.start();
+    const home = new HomeService(sil, stores.home);
+    const homeId = newId("home") as HomeId;
+    const roomId = newId("room") as RoomId;
+    await home.addRoom({
+      id: roomId,
+      homeId,
+      name: "Living Room",
+      building: null,
+      floor: 0,
+      area: null,
+      areaType: "living",
+      sortOrder: 0,
+      icon: null,
+      heroImageUrl: null,
+      parentRoomId: null,
+    });
+    const keypadId = newId("device") as DeviceId;
+    await home.addDevice(
+      {
+        id: keypadId,
+        homeId,
+        roomId,
+        name: "Living Room Keypad",
+        supremeType: "keypad",
+        manufacturer: null,
+        model: null,
+        driverId: null,
+        status: "online",
+        capabilities: [],
+        state: {},
+        metadata: {},
+      },
+      {}, // capability-less — backendIds is necessarily empty
+      "casambi:4", // the device-level backendId, Stage 1's real hardware evidence unit
+    );
+    expect(sil.registry.isKnownBackendId("casambi:4")).toBe(true);
+    expect(sil.registry.reverseLookupDevice("casambi:4")).toBe(keypadId);
+
+    // Before the fix, a fresh HomeService + rebindRegistry() (exactly what happens on
+    // every gateway restart) silently dropped this — `backendIds` for a keypad is `{}`,
+    // and the old rebindRegistry() skipped any device whose backendIds was empty,
+    // never restoring the device-level mapping at all.
+    const freshSil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
+    await freshSil.start();
+    const restarted = new HomeService(freshSil, stores.home);
+    await restarted.rebindRegistry();
+    expect(freshSil.registry.isKnownBackendId("casambi:4")).toBe(true);
+    expect(freshSil.registry.reverseLookupDevice("casambi:4")).toBe(keypadId);
+    // Same identity the driver's onInputEvent/getKeypadCapabilities hooks rely on
+    // (§ Stage 4A's keypadIdentity resolver) — never a different, freshly-minted one.
+    expect(freshSil.registry.backendIdOfDevice(keypadId)).toBe("casambi:4");
+
+    await restarted.removeDevice(keypadId);
+  });
+
   it("persists the room location hierarchy (building / floor / area)", async () => {
     const sil = new SupremeIntegrationLayer({ adapter: new MockAdapter() });
     await sil.start();
