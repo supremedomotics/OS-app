@@ -5,6 +5,7 @@ import {
   commandToTargetControls,
   rgbToHueSat,
   statesFromUnit,
+  suggestedKindFromUnit,
   type CasambiUnit,
 } from "./entity-mapper.js";
 
@@ -36,6 +37,38 @@ describe("Casambi codec — capability derivation", () => {
   it("derives a sensor for sensor units", () => {
     const u: CasambiUnit = { id: 5, type: "Sensor", sensors: { lux: 320 } };
     expect(capabilitiesFromUnit(u)).toEqual(["sensor"]);
+  });
+});
+
+describe("Casambi codec — suggestedKindFromUnit (§ Casambi Device-Kind Override)", () => {
+  it("suggests 'keypad' for a unit already tagged keypad by a real button telegram", () => {
+    const u: CasambiUnit = { id: 1, type: "keypad", keypadButtonCount: 2 };
+    expect(suggestedKindFromUnit(u)).toBe("keypad");
+  });
+
+  it("suggests 'light' for a dimmable luminaire", () => {
+    const u: CasambiUnit = { id: 2, controls: [{ type: "Dimmer", value: 0.5 }] };
+    expect(suggestedKindFromUnit(u)).toBe("light");
+  });
+
+  it("suggests 'light' for a non-dimmable but colour-capable unit", () => {
+    const u: CasambiUnit = { id: 3, controls: [{ type: "CCT", value: 4000 }] };
+    expect(suggestedKindFromUnit(u)).toBe("light");
+  });
+
+  it("suggests 'curtain' for a slider/vertical unit with no dimmer/colour", () => {
+    const u: CasambiUnit = { id: 4, controls: [{ type: "Slider", value: 40 }] };
+    expect(suggestedKindFromUnit(u)).toBe("curtain");
+  });
+
+  it("falls back to 'onoff_relay' for a bare on/off unit with no other distinguishing signal — the honest default, never a guess", () => {
+    const u: CasambiUnit = { id: 5, controls: [{ type: "OnOff", value: 1 }] };
+    expect(suggestedKindFromUnit(u)).toBe("onoff_relay");
+  });
+
+  it("never returns 'ir_blaster' — no real Casambi wire signal exists to detect it from, so it is never guessed, only installer-chosen", () => {
+    const u: CasambiUnit = { id: 6, controls: [{ type: "OnOff", value: 0 }] };
+    expect(suggestedKindFromUnit(u)).not.toBe("ir_blaster");
   });
 });
 

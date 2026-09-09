@@ -51,6 +51,10 @@ type Discovered = {
   /** § Casambi Local Gateway — Cloud device discovery: known only from the Cloud API, not yet
    * confirmed by a real local signal (e.g. Casambi Local mode's first UDP packet). */
   awaitingLocalSignal?: boolean;
+  /** § Casambi Device-Kind Override — the driver's own best-guess classification, never
+   * authoritative. Only Casambi populates this today; every other source omits it, and the
+   * override control below only renders when it's present. */
+  suggestedKind?: "light" | "curtain" | "keypad" | "onoff_relay" | "ir_blaster";
 };
 /** Source-filter value for the Groups chip. Deliberately not a real source name — groups are a
  * different kind of result, and a driver could legitimately be called "Groups". */
@@ -708,6 +712,10 @@ function FoundDevice({
   // asked once at add time regardless of which protocol/driver found it.
   const isCover = (device.capabilities as string[]).includes("position");
   const [shadingKind, setShadingKind] = useState<ShadingKind>("updown");
+  // § Casambi Device-Kind Override — defaults to the driver's own suggestion, always
+  // installer-changeable before committing. Only rendered when the driver actually supplied
+  // one (Casambi today) — every other protocol's cards are unaffected.
+  const [kindOverride, setKindOverride] = useState<NonNullable<Discovered["suggestedKind"]>>(device.suggestedKind ?? "onoff_relay");
   // `rooms` loads asynchronously and can go from empty to populated after this card has already
   // mounted — the useState() initializers above only run once, so without this sync the <select>
   // visually falls back to showing the first room (a bare browser default for a value that no
@@ -766,6 +774,9 @@ function FoundDevice({
               },
             }
           : {}),
+        // § Casambi Device-Kind Override — only sent when the driver offered a suggestion in
+        // the first place; the backend translates it into the real capabilities/supremeType.
+        ...(device.suggestedKind ? { kindOverride } : {}),
         ...(device.protocol ? { protocol: device.protocol } : {}),
         ...(device.network ? { network: device.network } : {}),
       });
@@ -865,6 +876,19 @@ function FoundDevice({
                     </datalist>
                   </label>
                 </>
+              )}
+
+              {device.suggestedKind && (
+                <label className="drv-field">
+                  <span className="lbl">Device type</span>
+                  <select value={kindOverride} onChange={(e) => setKindOverride(e.target.value as typeof kindOverride)}>
+                    <option value="light">Light</option>
+                    <option value="curtain">Curtain</option>
+                    <option value="keypad">Keypad</option>
+                    <option value="onoff_relay">On/Off Relay</option>
+                    <option value="ir_blaster">IR Blaster</option>
+                  </select>
+                </label>
               )}
 
               {isCover && (

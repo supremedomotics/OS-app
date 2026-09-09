@@ -143,6 +143,11 @@ export const DiscoveredDeviceView = z.object({
    * the Cloud API and hasn't yet had its identity confirmed by a real local signal (e.g. Casambi
    * Local mode's first UDP packet). Absent/false for every other discovery source. */
   awaitingLocalSignal: z.boolean().optional(),
+  /** § Casambi Device-Kind Override — the driver's own best-guess classification, never
+   * authoritative — shown as the default selection in an installer-facing override control.
+   * Only ever populated by drivers that genuinely can't fully disambiguate from capabilities
+   * alone (Casambi today); absent for every other discovery source. */
+  suggestedKind: z.enum(["light", "curtain", "keypad", "onoff_relay", "ir_blaster"]).optional(),
 });
 export type DiscoveredDeviceView = z.infer<typeof DiscoveredDeviceView>;
 
@@ -237,8 +242,17 @@ export const CommissionRequest = z.object({
   /** A driver-reported room hint (e.g. `DiscoveredDeviceView.roomHint`) — used to find-or-
    * create a room only when `roomId` is not supplied. */
   roomNameHint: z.string().nullable().optional(),
-  capabilities: z.array(CapabilityKind).min(1),
+  /** § Casambi Device-Kind Override — empty is valid ONLY when `kindOverride` names a
+   * capability-less kind ("keypad"/"ir_blaster"); every other kind still requires at least one
+   * real capability. Enforced server-side (`installer-context.ts`), not by this schema alone,
+   * since the valid shape depends on `kindOverride`. */
+  capabilities: z.array(CapabilityKind),
   supremeType: SupremeDeviceType.optional(),
+  /** § Casambi Device-Kind Override — an installer-confirmed classification that can disagree
+   * with (and takes priority over) the driver's own auto-detected `capabilities`/`raw.
+   * suggestedKind`. Casambi-specific today (`raw.suggestedKind` is only ever populated by the
+   * Casambi driver); other protocols simply never send this field. */
+  kindOverride: z.enum(["light", "curtain", "keypad", "onoff_relay", "ir_blaster"]).optional(),
   manufacturer: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
   /**
