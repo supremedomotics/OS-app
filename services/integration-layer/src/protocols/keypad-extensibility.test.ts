@@ -152,4 +152,90 @@ describe("Driver SDK Extension — keypad capability seam", () => {
     // subscribeKeypadInput never throws even though no registered driver implements onInputEvent.
     expect(() => sil.subscribeKeypadInput(() => {})()).not.toThrow();
   });
+
+  /** § Universal Keypad Framework, Stage 5A-4 — a REAL keypad's own identity, resolved
+   * purely from `getKeypadCapabilities`' own `deviceId` parameter (exactly how
+   * `CasambiProtocolDriver`'s `keypadIdentity` resolver works — § Stage 4A), never from
+   * `manages()`/`bind()`. A keypad has zero capabilities, so real commissioning
+   * (`CommissioningService.commission` → `HomeService.addDevice` → `SIL.mapDeviceEntity`)
+   * never calls `bind()` at all — the ABOVE test's `native.bind(..., "onoff", ...)` line
+   * is a fabricated capability no real keypad has, which is exactly why it masked this
+   * gap. This driver recognizes its OWN unit by device identity alone (a `Map`
+   * populated at construction, mirroring a driver's own protocol-native unit list —
+   * never `SupremeNativeAdapter.ownerByDevice`, which stays empty for this device the
+   * whole test). */
+  class IdentityOnlyKeypadDriver implements INativeProtocolDriver {
+    readonly protocol = "fake-identity-only-keypad";
+    private connected = false;
+    readonly sentFeedback: KeypadFeedbackCommand[] = [];
+    constructor(private readonly ownKeypadId: DeviceId) {}
+    async connect(): Promise<void> {
+      this.connected = true;
+    }
+    async disconnect(): Promise<void> {
+      this.connected = false;
+    }
+    isConnected(): boolean {
+      return this.connected;
+    }
+    async bind(): Promise<void> {
+      throw new Error("real keypad commissioning never calls bind() — this driver must never see it");
+    }
+    manages(): boolean {
+      return false; // deliberately never true — proves getKeypadCapabilities doesn't depend on it
+    }
+    async command(): Promise<void> {}
+    getState(): CapabilityState | null {
+      return null;
+    }
+    async discover(): Promise<DiscoveredDevice[]> {
+      return [];
+    }
+    onState(): () => void {
+      return () => {};
+    }
+    getKeypadCapabilities(deviceId: DeviceId): KeypadCapabilityDeclaration | null {
+      if (deviceId !== this.ownKeypadId) return null; // honest — not this driver's unit
+      return { keypadId: deviceId, protocol: this.protocol, controls: [{ id: "1", kind: "button", label: null, input: ["buttons"], feedback: [] }] };
+    }
+    onInputEvent(): () => void {
+      return () => {};
+    }
+    async sendKeypadFeedback(command: KeypadFeedbackCommand): Promise<void> {
+      this.sentFeedback.push(command);
+    }
+  }
+
+  it("§ Stage 5A-4 — getKeypadCapabilities resolves for a keypad commissioned WITHOUT any capability bind (the real production path), by driver-identity scan, not ownerByDevice", async () => {
+    const keypadId = newId("device") as DeviceId;
+    const driver = new IdentityOnlyKeypadDriver(keypadId);
+    const native = new SupremeNativeAdapter({ drivers: [driver] });
+    const sil = new SupremeIntegrationLayer({ adapter: native });
+    await sil.start();
+
+    // The ONLY thing real keypad commissioning ever does — no bind() call at all.
+    sil.mapDeviceEntity(keypadId, "fake:4");
+
+    const decl = await sil.getKeypadCapabilities(keypadId);
+    expect(decl?.controls[0]?.id).toBe("1");
+
+    // A different, never-commissioned deviceId still honestly resolves to null — the
+    // driver-scan never guesses/fabricates an owner for an id it doesn't recognize.
+    expect(await sil.getKeypadCapabilities(newId("device") as DeviceId)).toBeNull();
+  });
+
+  it("§ Stage 5A-4 — sendKeypadFeedback reaches the SAME identity-resolved driver, and never fabricates success for a driver that doesn't recognize the keypad", async () => {
+    const keypadId = newId("device") as DeviceId;
+    const driver = new IdentityOnlyKeypadDriver(keypadId);
+    const native = new SupremeNativeAdapter({ drivers: [driver] });
+    const sil = new SupremeIntegrationLayer({ adapter: native });
+    await sil.start();
+    sil.mapDeviceEntity(keypadId, "fake:4");
+
+    await sil.sendKeypadFeedback({ type: "led_on", keypadId, control: "1" });
+    expect(driver.sentFeedback).toEqual([{ type: "led_on", keypadId, control: "1" }]);
+
+    const strangerId = newId("device") as DeviceId;
+    await expect(sil.sendKeypadFeedback({ type: "led_on", keypadId: strangerId, control: "1" })).rejects.toThrow();
+  });
 });

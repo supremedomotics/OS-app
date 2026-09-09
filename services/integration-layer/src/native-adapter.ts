@@ -373,10 +373,34 @@ export class SupremeNativeAdapter implements IBackendAdapter {
 
   // ── Universal Keypad Framework (§ Driver SDK Extension) ─────────────────────
 
-  /** Fetch the owning driver's real keypad capability declaration for this device. */
+  /**
+   * Fetch the owning driver's real keypad capability declaration for this device.
+   *
+   * § Universal Keypad Framework, Stage 5A-4 — deliberately NOT `ownerByDevice.get
+   * (deviceId)` (unlike every other per-device method in this class). `ownerByDevice`
+   * is populated ONLY by {@link bind}, which real keypad commissioning never calls — a
+   * keypad has zero `CapabilityKind`s (§ Stage 1), so there is no `ProtocolBinding` to
+   * bind at all; its identity reaches this adapter purely through the SIL registry's
+   * device-level `mapDeviceEntity` (see `EntityRegistryMirror.deviceBackendId`). Before
+   * this fix, `getKeypadCapabilities`/`sendKeypadFeedback` always returned null/threw
+   * for every real commissioned keypad in production — `keypad-extensibility.test.ts`'s
+   * own passing test only worked because it fabricated an `onoff` capability binding
+   * for its test keypad, which no real keypad ever has.
+   *
+   * The fix mirrors how `onInputEvent`'s fan-out already works without `ownerByDevice`
+   * at all: each driver's own `keypadIdentity` resolver (§ Stage 4A) already knows
+   * whether a given `deviceId` is one of ITS units, and honestly returns null when it
+   * isn't (see `CasambiProtocolDriver.getKeypadCapabilities`) — so trying every driver
+   * and taking the first non-null answer is exactly as safe as the input path, and
+   * introduces no new binding/ownership registry (§ "do not create a second keypad
+   * registry"). Multi-instance isolation (§ Stage 4A) still holds: two driver instances
+   * scoped to different networks each only recognize their OWN units' deviceIds.
+   */
   async getKeypadCapabilities(deviceId: DeviceId): Promise<KeypadCapabilityDeclaration | null> {
-    const owner = this.ownerByDevice.get(deviceId);
-    if (owner?.getKeypadCapabilities) return owner.getKeypadCapabilities(deviceId);
+    for (const driver of this.drivers) {
+      const decl = await driver.getKeypadCapabilities?.(deviceId);
+      if (decl) return decl;
+    }
     return null;
   }
 
@@ -389,16 +413,25 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   /** Route a generic feedback command to its target keypad's owning driver. Fails
    * loudly (mirroring `command()`) rather than silently dropping a write the caller
    * believes reached the hardware — a compliant caller (the Universal Feedback
-   * Engine) only calls this after confirming the driver via `getKeypadCapabilities`. */
+   * Engine) only calls this after confirming the driver via `getKeypadCapabilities`.
+   *
+   * § Stage 5A-4 — same fix as {@link getKeypadCapabilities} and for the identical
+   * reason: `ownerByDevice` is never populated for a capability-less keypad. Identifies
+   * the owning driver the same way — the one driver whose own `keypadIdentity` resolver
+   * recognizes `command.keypadId` at all (§ multi-instance isolation, only one driver
+   * ever will) — then delegates the actual write to it. */
   async sendKeypadFeedback(command: KeypadFeedbackCommand): Promise<void> {
-    const owner = this.ownerByDevice.get(command.keypadId);
-    if (!owner?.sendKeypadFeedback) {
-      throw new SupremeError(
-        "backend_unavailable",
-        `keypad ${command.keypadId} has no bound driver supporting feedback`,
-      );
+    for (const driver of this.drivers) {
+      const decl = await driver.getKeypadCapabilities?.(command.keypadId);
+      if (decl && driver.sendKeypadFeedback) {
+        await driver.sendKeypadFeedback(command);
+        return;
+      }
     }
-    await owner.sendKeypadFeedback(command);
+    throw new SupremeError(
+      "backend_unavailable",
+      `keypad ${command.keypadId} has no bound driver supporting feedback`,
+    );
   }
 
   /** Release the owning driver's per-device resources (§ Driver Lifecycle Completion)
