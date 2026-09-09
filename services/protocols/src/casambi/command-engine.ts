@@ -49,7 +49,12 @@ export class LocalCommandEngine implements CasambiCommandEngine {
   ) {}
 
   async send(unitId: number, command: CapabilityCommand, prev: CapabilityState | null): Promise<void> {
-    const packet = localCommandToUdpPacket(this.netId, unitId, command, prev);
+    // § Keypad dim-speed — `localCommandToUdpPacket` has always accepted a real `fadeMs`
+    // (see its own doc comment on the 0x20 Duration field); this was the one missing wire
+    // between `CapabilityCommand.fadeMs` and the already-fade-capable local codec. Only
+    // `brightness`/`color` carry the field at all (narrowed by the discriminated union).
+    const fadeMs = command.capability === "brightness" || command.capability === "color" ? command.fadeMs : undefined;
+    const packet = localCommandToUdpPacket(this.netId, unitId, command, prev, fadeMs);
     if (!packet) throw new Error(`casambi: unsupported command for ${command.capability}`);
     await this.udp.send(packet);
   }

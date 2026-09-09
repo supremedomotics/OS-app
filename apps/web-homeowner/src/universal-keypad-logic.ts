@@ -179,11 +179,26 @@ export interface KeypadMappingFormState {
   targetDeviceId: DeviceId | null;
   targetCapability: CapabilityKind | null;
   step: number;
+  /** § Keypad dim-speed — seconds, NOT milliseconds (UI-friendly unit; converted to
+   * `KeypadMappingTarget.fadeMs` at request-build time). `null` means unset/instant, never `0`
+   * masquerading as "the installer chose zero seconds." */
+  fadeSeconds: number | null;
   actions: KeypadActionFormEntry[];
 }
 
 export function emptyKeypadMappingForm(keypadId: DeviceId, control: string, event: KeypadMappingInput["event"]): KeypadMappingFormState {
-  return { name: "", keypadId, control, event, behavior: "direct", targetDeviceId: null, targetCapability: null, step: 10, actions: [] };
+  return { name: "", keypadId, control, event, behavior: "direct", targetDeviceId: null, targetCapability: null, step: 10, fadeSeconds: null, actions: [] };
+}
+
+/** § Keypad dim-speed — only Casambi's Local UDP path has a real, driver-verified fade concept
+ * (see `local-command-mapper.ts`'s documented 0x20 Duration field); every other protocol
+ * silently ignores `fadeMs` today. Gates the UI control accordingly rather than offering a
+ * setting that would do nothing — matches this app's existing capability-gating rule. Reuses
+ * `device.metadata.protocol`, the SAME field `universal-keypad.tsx`'s room-grid keypad card
+ * already reads for its protocol chip — never a second way of asking "what protocol is this." */
+export function deviceSupportsDimSpeed(device: Device | null, capability: CapabilityKind | null): boolean {
+  if (!device || capability !== "brightness") return false;
+  return device.metadata.protocol === "casambi";
 }
 
 function actionEntryToRequestAction(e: KeypadActionFormEntry): Record<string, unknown> {
@@ -210,7 +225,12 @@ export function validateKeypadMappingForm(form: KeypadMappingFormState): string 
 function buildTarget(form: KeypadMappingFormState): KeypadMappingTarget | null {
   if (!behaviorRequiresTarget(form.behavior)) return null;
   if (!form.targetDeviceId || !form.targetCapability) return null;
-  return { deviceId: form.targetDeviceId, capability: form.targetCapability, step: form.step };
+  return {
+    deviceId: form.targetDeviceId,
+    capability: form.targetCapability,
+    step: form.step,
+    ...(form.fadeSeconds !== null ? { fadeMs: Math.round(form.fadeSeconds * 1000) } : {}),
+  };
 }
 
 /** Assembles a `CreateKeypadMappingRequest` from form state (§11: `behavior`/`target`/
@@ -264,6 +284,7 @@ export function mappingToFormState(mapping: KeypadMapping): KeypadMappingFormSta
     targetDeviceId: mapping.target?.deviceId ?? null,
     targetCapability: mapping.target?.capability ?? null,
     step: mapping.target?.step ?? 10,
+    fadeSeconds: typeof mapping.target?.fadeMs === "number" ? mapping.target.fadeMs / 1000 : null,
     actions: mapping.actions
       .filter((a): a is Extract<typeof a, { type: "device_command" }> => a.type === "device_command")
       .map((a) => {

@@ -14,6 +14,7 @@ import {
   behaviorUsesStep,
   buildCreateKeypadMappingRequest,
   buildUpdateKeypadMappingRequest,
+  deviceSupportsDimSpeed,
   emptyKeypadMappingForm,
   groupKeypadsByRoom,
   mappingToFormState,
@@ -455,7 +456,7 @@ function TargetPicker({
           onChange={(e) => {
             const id = (e.target.value || null) as DeviceId | null;
             const dev = devices.find((d) => d.id === id) ?? null;
-            const caps = dev ? targetableCapabilities(dev) : [];
+            const caps = dev ? targetCapabilitiesForBehavior(dev, form.behavior) : [];
             setForm((f) => ({ ...f, targetDeviceId: id, targetCapability: caps[0] ?? null }));
           }}
         >
@@ -475,6 +476,21 @@ function TargetPicker({
         <label className="ukp-field">
           <span>Step</span>
           <input type="number" min={1} max={100} value={form.step} onChange={(e) => setForm((f) => ({ ...f, step: Number(e.target.value) || 10 }))} />
+        </label>
+      )}
+      {deviceSupportsDimSpeed(targetDevice, form.targetCapability) && (
+        <label className="ukp-field">
+          <span>Dim speed (seconds)</span>
+          <input
+            type="number"
+            min={0}
+            max={60}
+            step={0.5}
+            placeholder="Instant"
+            value={form.fadeSeconds ?? ""}
+            onChange={(e) => setForm((f) => ({ ...f, fadeSeconds: e.target.value === "" ? null : Math.max(0, Number(e.target.value)) }))}
+          />
+          <span className="muted">How long a 0→100% change takes to ramp — blank means instant.</span>
         </label>
       )}
     </div>

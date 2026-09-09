@@ -27,6 +27,18 @@ describe("localCommandToUdpPacket", () => {
     }
   });
 
+  it("§ Keypad dim-speed — a real fadeMs (passed positionally, the same way command-engine.ts extracts it from CapabilityCommand.fadeMs) is encoded into the wire packet's Duration bytes (10s -> 1000 units -> 0xE8,0x03), never silently dropped", () => {
+    const packet = localCommandToUdpPacket(0, 5, { capability: "brightness", action: "set", level: 50 }, null, 10_000);
+    // 50% of 255 rounds to 128; Duration units are fadeMs/10 (§ encodeFadeMs) — 10000ms = 1000
+    // units = 0x03E8, little-endian [low, high] = [0xe8, 0x03] = [232, 3].
+    expect(packet).toEqual({ netId: 0, direction: "toCasambi", opcode: 0x20, args: [128, 232, 3, CASAMBI_TARGET_TYPE.device, 5] });
+  });
+
+  it("§ Keypad dim-speed — no fadeMs on the command means Duration 0,0 (instant), unchanged from every command sent before this field existed", () => {
+    const packet = localCommandToUdpPacket(0, 5, { capability: "brightness", action: "set", level: 50 }, null);
+    expect(packet?.args.slice(1, 3)).toEqual([0, 0]);
+  });
+
   it("onoff 'off' targets the device with level 0", () => {
     const packet = localCommandToUdpPacket(0, 5, { capability: "onoff", action: "off" }, null);
     expect(packet?.args[0]).toBe(0);

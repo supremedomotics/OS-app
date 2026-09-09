@@ -61,8 +61,11 @@ async function readLevel(ex: AutomationExecutors, target: KeypadMappingTarget): 
   throw new Error(`keypad-framework: level-stepping behaviors are not supported for capability "${target.capability}"`);
 }
 
-function levelCommand(capability: KeypadMappingTarget["capability"], level: number): CapabilityCommand {
-  if (capability === "brightness") return { capability: "brightness", action: "set", level };
+/** § Keypad dim-speed — `fadeMs` only ever applies to `brightness` (the only level-stepping
+ * capability with a real fade concept; `position` is motor movement, not a light ramp, and
+ * has no such field on its own `CapabilityCommand` variant). */
+function levelCommand(capability: KeypadMappingTarget["capability"], level: number, fadeMs?: number): CapabilityCommand {
+  if (capability === "brightness") return { capability: "brightness", action: "set", level, ...(fadeMs !== undefined ? { fadeMs } : {}) };
   if (capability === "position") return { capability: "position", action: "set", position: level };
   throw new Error(`keypad-framework: level-stepping behaviors are not supported for capability "${capability}"`);
 }
@@ -99,17 +102,17 @@ export async function resolveBehaviorCommand(
       const level = await readLevel(ex, target);
       const nextLevel = clamp(direction === "up" ? level + target.step : level - target.step, 0, 100);
       return {
-        command: levelCommand(target.capability, nextLevel),
+        command: levelCommand(target.capability, nextLevel, target.fadeMs),
         nextBehaviorState: { ...mapping.behaviorState, lastDirection: direction },
       };
     }
     case "increment": {
       const level = await readLevel(ex, target);
-      return { command: levelCommand(target.capability, clamp(level + target.step, 0, 100)) };
+      return { command: levelCommand(target.capability, clamp(level + target.step, 0, 100), target.fadeMs) };
     }
     case "decrement": {
       const level = await readLevel(ex, target);
-      return { command: levelCommand(target.capability, clamp(level - target.step, 0, 100)) };
+      return { command: levelCommand(target.capability, clamp(level - target.step, 0, 100), target.fadeMs) };
     }
     default:
       throw new Error(`keypad-framework: resolveBehaviorCommand does not handle "${mapping.behavior}"`);

@@ -124,3 +124,41 @@ describe("resolveBehaviorCommand — increment / decrement", () => {
     expect(r.command).toEqual({ capability: "position", action: "set", position: 30 });
   });
 });
+
+describe("resolveBehaviorCommand — dim speed (§ Keypad dim-speed)", () => {
+  it("increment merges target.fadeMs onto the resolved brightness command", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 15, fadeMs: 10_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 20 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "increment", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 35, fadeMs: 10_000 });
+  });
+
+  it("decrement merges target.fadeMs too", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 15, fadeMs: 5_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 50 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "decrement", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 35, fadeMs: 5_000 });
+  });
+
+  it("alternate merges target.fadeMs too", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 10, fadeMs: 2_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 50 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "alternate", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 60, fadeMs: 2_000 });
+  });
+
+  it("no fadeMs on target -> no fadeMs field on the command at all (not even undefined) — instant, unchanged from every mapping created before this field existed", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 15 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 20 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "increment", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 35 });
+    expect(r.command).not.toHaveProperty("fadeMs");
+  });
+
+  it("fadeMs is meaningless (simply unused) for position — no fadeMs field ever appears on a position command", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "position", step: 20, fadeMs: 10_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "position", position: 50, moving: false }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "decrement", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "position", action: "set", position: 30 });
+  });
+});
