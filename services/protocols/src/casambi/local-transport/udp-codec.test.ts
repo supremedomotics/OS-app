@@ -229,6 +229,24 @@ describe("responses from Casambi (fromCasambi direction)", () => {
     expect(parseButtonEvent(fromCasambi(0x51, [9, 1, 0, 12])).eventLabel).toBe("long_press_end");
     expect(parseButtonEvent(fromCasambi(0x51, [9, 1, 0, 250])).eventLabel).toBeUndefined();
   });
+
+  it("§ live-confirmed fix — parseButtonEvent also accepts opcode 0x50, the real wire value a real 4-button Xpress keypad on real Evolution firmware uses for button notifications", () => {
+    // Captured directly off the wire, unedited: a 4-button keypad, short press 1-4-in-sequence.
+    // "05.50.04.01.00.02" -> len 5, opcode 0x50, unit 4, source 1, button 0 (physical button 1), event 2.
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 0, 2])).eventLabel).toBe("short_press");
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 1, 2])).eventLabel).toBe("short_press");
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 2, 2])).eventLabel).toBe("short_press");
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 3, 2])).eventLabel).toBe("short_press");
+    // Same keypad, long press 1-4-in-sequence: each button reports 0x09 (hold start) then 0x0c (release).
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 0, 9])).eventLabel).toBe("long_press_start");
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 0, 12])).eventLabel).toBe("long_press_end");
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 1, 9])).eventLabel).toBe("long_press_start");
+    expect(parseButtonEvent(fromCasambi(0x50, [4, 1, 1, 12])).eventLabel).toBe("long_press_end");
+  });
+
+  it("parseButtonEvent still rejects an unrelated opcode", () => {
+    expect(() => parseButtonEvent(fromCasambi(0x4b, [4, 1, 0, 2]))).toThrow(/expected opcode 0x50 or 0x51/);
+  });
 });
 
 describe("0x1A/0x1B SetParameterValue vs ParametersComplete (flagged doc inconsistency)", () => {

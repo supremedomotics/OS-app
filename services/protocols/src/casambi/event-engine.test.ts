@@ -90,6 +90,29 @@ describe("normalizeLocalPacket", () => {
     expect(normalizeLocalPacket(packet, noPrev)).toEqual({ kind: "button", unitId: 9, button: 0, action: "short_press" });
   });
 
+  it("§ live-confirmed fix — also maps a button event on opcode 0x50, the real wire value captured off a real 4-button Xpress keypad on real Evolution firmware", () => {
+    // Verbatim capture: 4-button keypad, short press buttons 1-4 in sequence.
+    const packets = [
+      "c.70.5.50.4.1.0.2\r\n",
+      "c.70.5.50.4.1.1.2\r\n",
+      "c.70.5.50.4.1.2.2\r\n",
+      "c.70.5.50.4.1.3.2\r\n",
+    ].map((raw) => decodeCasambiPacket(raw, "hex-dot"));
+    expect(packets.map((p) => normalizeLocalPacket(p, noPrev))).toEqual([
+      { kind: "button", unitId: 4, button: 0, action: "short_press" },
+      { kind: "button", unitId: 4, button: 1, action: "short_press" },
+      { kind: "button", unitId: 4, button: 2, action: "short_press" },
+      { kind: "button", unitId: 4, button: 3, action: "short_press" },
+    ]);
+  });
+
+  it("§ live-confirmed fix — 0x50 long-press sequence (hold start then release) decodes correctly", () => {
+    const start = decodeCasambiPacket("c.70.5.50.4.1.0.9\r\n", "hex-dot");
+    const end = decodeCasambiPacket("c.70.5.50.4.1.0.c\r\n", "hex-dot");
+    expect(normalizeLocalPacket(start, noPrev)).toEqual({ kind: "button", unitId: 4, button: 0, action: "long_press_start" });
+    expect(normalizeLocalPacket(end, noPrev)).toEqual({ kind: "button", unitId: 4, button: 0, action: "long_press_end" });
+  });
+
   it("maps a node-removed event (0x3A)", () => {
     const packet = decodeCasambiPacket("0.70.2.3a.7\r\n", "hex-dot");
     expect(normalizeLocalPacket(packet, noPrev)).toEqual({ kind: "unitRemoved", unitId: 7 });

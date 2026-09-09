@@ -679,9 +679,23 @@ export const CASAMBI_BUTTON_EVENT: Record<number, string> = {
 };
 
 /** 0x51 - NotifyButtonEvent Responses (p.279). Length 5: Unit_ID, Source, Button (0-7), Event.
- * Only Evolution firmware >= 39.50, and only after `encodeNotifyButtonEvent(netId, true)`. */
+ * Only Evolution firmware >= 39.50, and only after `encodeNotifyButtonEvent(netId, true)`.
+ *
+ * § live-confirmed fix — a real 4-button Xpress keypad on real Evolution firmware notifies
+ * button events on opcode 0x50 (the SAME opcode `encodeNotifyButtonEvent` uses to SUBSCRIBE,
+ * just in the opposite direction — `fromCasambi` here, `toCasambi` for the subscribe command,
+ * never ambiguous since this parser only ever runs on a RECEIVED packet), not the 0x51 the
+ * reference doc names for this response. Captured directly off the wire (own hex, unedited):
+ *   short press,  button 1-4:  05.50.04.01.00.02 / .01.02 / .02.02 / .03.02
+ *   long press,   button 1-4:  05.50.04.01.00.09+0c / .01.09+0c / .02.09+0c / .03.09+0c
+ * — opcode 0x50 throughout, payload shape identical to the documented 0x51 response
+ * (Unit_ID=4, Source=1, Button=0-3, Event=2/9/12 matching `CASAMBI_BUTTON_EVENT` exactly).
+ * Accepting both keeps whichever firmware genuinely uses 0x51 working too — never a guess,
+ * both are real, observed wire values. */
 export function parseButtonEvent(packet: CasambiPacket): CasambiButtonEvent {
-  assertOpcode(packet, 0x51, "parseButtonEvent");
+  if (packet.opcode !== 0x50 && packet.opcode !== 0x51) {
+    throw new Error(`parseButtonEvent: expected opcode 0x50 or 0x51, got 0x${packet.opcode.toString(16)}`);
+  }
   const [unitId, source, button, event] = padArgs<[number, number, number, number]>(packet.args, 4);
   return { unitId, source, button, event, eventLabel: CASAMBI_BUTTON_EVENT[event] };
 }

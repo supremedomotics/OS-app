@@ -209,6 +209,12 @@ export function normalizeLocalPacket(
       const unit = updateUnitFromControlValues(notify.targetId, notify.values, getPrevUnit(notify.targetId));
       return { kind: "unit", unit };
     }
+    // § live-confirmed fix — real Evolution firmware notifies button events on 0x50 (see
+    // `parseButtonEvent`'s own doc comment for the captured wire evidence), the SAME opcode
+    // `encodeNotifyButtonEvent` sends TO Casambi to subscribe — never ambiguous here since this
+    // function only ever processes an INCOMING packet. 0x51 stays accepted too for whichever
+    // firmware genuinely uses it, per the reference doc.
+    case 0x50:
     case 0x51: {
       const btn = parseButtonEvent(packet);
       return { kind: "button", unitId: btn.unitId, button: btn.button, action: btn.eventLabel ?? `type_${btn.event}` };
