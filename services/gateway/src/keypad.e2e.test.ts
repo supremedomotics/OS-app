@@ -446,6 +446,99 @@ describe("Universal Keypad Framework — backend APIs", () => {
       expect(automationRuns.some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
     });
 
+    it("§ Stage 5A-2 — a direct mapping alone fires without any Automation trigger existing", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "dimmer")!;
+      const mappingTarget = devs.find((d) => d.supremeType === "light")!;
+
+      const mappingRes = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Mapping-only button",
+          input: { keypadId: keypad.id, control: "mapping-only", event: "short_press" },
+          actions: [{ type: "device_command", deviceId: mappingTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(mappingRes.status).toBe(201);
+
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "mapping-only", ts: new Date().toISOString() };
+      const automationRunsBefore = ctx.automations.recentRuns().length;
+      await ctx.keypadMappings.onInputEvent(event);
+      await ctx.automations.onKeypadInput(event); // no trigger registered for this control — must be a quiet no-op, never an error
+
+      const mappingRuns = ctx.keypadMappings.recentRuns();
+      expect(mappingRuns.some((r) => r.ok)).toBe(true);
+      expect(ctx.automations.recentRuns().length).toBe(automationRunsBefore);
+    });
+
+    it("§ Stage 5A-2 — an Automation trigger alone fires without any direct mapping existing", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "light")!;
+      const automationTarget = devs.find((d) => d.supremeType === "dimmer")!;
+
+      const automationRes = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Automation-only button",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "automation-only", event: "short_press" }],
+          actions: [{ type: "device_command", deviceId: automationTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(automationRes.status).toBe(201);
+
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "automation-only", ts: new Date().toISOString() };
+      const mappingRunsBefore = ctx.keypadMappings.recentRuns().length;
+      await ctx.keypadMappings.onInputEvent(event); // no mapping registered for this control — quiet no-op
+      await ctx.automations.onKeypadInput(event);
+
+      expect(ctx.keypadMappings.recentRuns().length).toBe(mappingRunsBefore);
+      const automationRuns = ctx.automations.recentRuns();
+      expect(automationRuns.some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
+    });
+
+    it("§ Stage 5A-2 — identical actions from both consumers on the SAME button both execute; the platform never de-duplicates fan-out (documented policy, not suppression)", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "dimmer")!;
+      const sharedTarget = devs.find((d) => d.supremeType === "light")!;
+
+      const mappingRes = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Identical-action mapping",
+          input: { keypadId: keypad.id, control: "identical-action", event: "short_press" },
+          actions: [{ type: "device_command", deviceId: sharedTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(mappingRes.status).toBe(201);
+
+      const automationRes = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Identical-action automation",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "identical-action", event: "short_press" }],
+          actions: [{ type: "device_command", deviceId: sharedTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(automationRes.status).toBe(201);
+
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "identical-action", ts: new Date().toISOString() };
+      await ctx.keypadMappings.onInputEvent(event);
+      await ctx.automations.onKeypadInput(event);
+
+      // Both fired successfully — the platform's documented policy is intentional
+      // independent fan-out, never arbitrary suppression of a "duplicate-looking" action
+      // (§ Stage 5A-2 spec: "Do not introduce arbitrary suppression"). Two independent
+      // writes to the SAME idempotent onoff:on command is harmless by construction; a
+      // future non-idempotent action (e.g. increment) would rely on the SAME honest
+      // "both run" contract, which is why this is a documented policy, not a gap.
+      expect(ctx.keypadMappings.recentRuns().some((r) => r.ok)).toBe(true);
+      expect(ctx.automations.recentRuns().some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
+    });
+
     it("an Automation's IF condition gates a keypad_input trigger through the real engine", async () => {
       const devs = await devices();
       const keypad = devs.find((d) => d.supremeType === "light")!;
