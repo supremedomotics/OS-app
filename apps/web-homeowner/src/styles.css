@@ -609,6 +609,10 @@ button.link {
 .dtile .dic.on { color: var(--aureon-color-gold-400); }
 .dtile .nm { font-weight: 600; }
 .dtile .rv { margin-left: auto; color: var(--aureon-color-text-secondary); font-variant-numeric: tabular-nums; }
+.dtile.keypad { cursor: pointer; }
+.dtile.keypad .rv { display: inline-flex; align-items: center; gap: 6px; }
+.kp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--aureon-color-text-secondary); flex: none; }
+.kp-dot.on { background: var(--aureon-color-status-good); }
 .dtile-open {
   position: relative; z-index: 1; flex: none; margin-left: 2px;
   width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;

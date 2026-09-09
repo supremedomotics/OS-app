@@ -38,6 +38,12 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
   const isVacuum = !isDimmer && !isCover && !isLock && !isFan && caps.includes("vacuum");
   const isSwitch = !isDimmer && !isCover && !isLock && !isFan && !isVacuum && caps.includes("onoff");
   const isSensor = !isDimmer && !isSwitch && !isCover && !isLock && !isFan && !isVacuum && caps.includes("sensor");
+  // § Supreme Universal Keypad, Room Integration — a keypad is an INPUT device (§2 of the
+  // spec): it has no `CapabilityKind` at all (see entities.ts's `SupremeDeviceType` doc
+  // comment), so every `is*` flag above is already false for it — this just makes that
+  // explicit rather than silently falling through to the generic onoff-toggle tile below,
+  // which would let a tap send a fabricated `onoff` command to a device that isn't one.
+  const isKeypad = device.supremeType === "keypad";
   const slidable = isDimmer || isCover;
 
   const bright = merged.brightness;
@@ -100,6 +106,23 @@ export function DeviceTile({ device, onOpen }: { device: Device; onOpen?: () => 
         <DeviceIcon kind="sensor" on={false} />
         <span className="nm">{device.name}</span>
         <span className="rv">{s?.value ?? "—"} {s?.unit ?? ""}</span>
+      </div>
+    );
+  }
+
+  // § Supreme Universal Keypad, Room Integration §4 — the Room page's keypad card: primary
+  // identity is the user-facing name, status is online/offline, never a raw protocol value
+  // (no "0x50"/"Unit 04") — those stay diagnostics-only in the Universal Keypad page itself.
+  // Read-only by design: a keypad is an input device, not something a room card toggles.
+  if (isKeypad) {
+    return (
+      <div className="dtile keypad" onClick={onOpen}>
+        <DeviceIcon kind="switch" on={false} />
+        <span className="nm">{device.name}</span>
+        <span className="rv">
+          <span className={`kp-dot${device.status === "online" ? " on" : ""}`} aria-hidden />
+          {device.status === "online" ? "Online" : "Offline"}
+        </span>
       </div>
     );
   }
