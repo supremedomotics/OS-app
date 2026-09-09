@@ -32,3 +32,4 @@ export {
 } from "./service.js";
 export { InMemoryKeypadMappingStore, type IKeypadMappingStore } from "./store.js";
 export { expandVariables } from "./variables.js";
+export { resolveBehaviorCommand, type ResolvedBehavior } from "./behavior.js";

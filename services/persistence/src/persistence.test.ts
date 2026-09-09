@@ -1,4 +1,5 @@
 import {
+  KeypadMapping,
   newId,
   type DeviceId,
   type HomeId,
@@ -13,7 +14,7 @@ import { buildGrant } from "@supreme/permissions";
 import { NotificationService } from "@supreme/notifications";
 import { SecurityService } from "@supreme/security";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createPersistence, type PersistenceStores } from "./index.js";
+import { createPersistence, KeypadMappingRepo, type PersistenceStores } from "./index.js";
 
 /**
  * Exercises every repository against real embedded Postgres (PGlite). Because the
@@ -363,5 +364,31 @@ describe("Postgres-backed persistence (PGlite)", () => {
     await notifications.markRead(userId, [n.id]);
     list = await notifications.list(userId);
     expect(list.find((x) => x.id === n.id)?.readAt).not.toBeNull();
+  });
+
+  it("§ Supreme Universal Keypad, Stage 2 — persists a KeypadMapping (behavior/target/behaviorState included) across a restart", async () => {
+    const homeId = newId("home") as HomeId;
+    const mapping: KeypadMapping = KeypadMapping.parse({
+      id: newId("keypadMapping"),
+      homeId,
+      name: "Bedside Keypad — Button 1 Long Press",
+      input: { keypadId: newId("device") as DeviceId, control: "button-1", event: "hold_start" },
+      behavior: "alternate",
+      target: { deviceId: newId("device") as DeviceId, capability: "brightness", step: 10 },
+      behaviorState: { lastDirection: "up", cycleIndex: 0 },
+    });
+    await stores.keypadMappings.put(mapping);
+
+    // A fresh repo instance over the SAME db (simulating a restart) sees it intact.
+    const reloaded = await new KeypadMappingRepo(stores.db).get(mapping.id);
+    expect(reloaded).toEqual(mapping);
+
+    // Updating just behaviorState (what a live "alternate" firing does) round-trips too.
+    await stores.keypadMappings.put({ ...mapping, behaviorState: { lastDirection: "down", cycleIndex: 0 } });
+    const afterFire = await new KeypadMappingRepo(stores.db).get(mapping.id);
+    expect(afterFire?.behaviorState).toEqual({ lastDirection: "down", cycleIndex: 0 });
+
+    await stores.keypadMappings.remove(mapping.id);
+    expect(await stores.keypadMappings.get(mapping.id)).toBeNull();
   });
 });

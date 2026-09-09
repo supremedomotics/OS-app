@@ -1210,6 +1210,9 @@ importers:
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer
+      '@supreme/keypad-framework':
+        specifier: workspace:*
+        version: link:../keypad-framework
       '@supreme/notifications':
         specifier: workspace:*
         version: link:../notifications

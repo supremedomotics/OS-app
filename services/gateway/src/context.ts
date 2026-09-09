@@ -41,6 +41,7 @@ import {
   type IAutomationStore,
 } from "@supreme/automations";
 import {
+  InMemoryKeypadMappingStore,
   InMemoryKeypadSubscriptionStore,
   KeypadMappingEngine,
   KeypadMappingService,
@@ -762,6 +763,9 @@ export class AppContext {
     // actions ARE automation actions, by design (see `KeypadMapping` in
     // `@supreme/domain-model`), so there is exactly one "run a Supreme action"
     // implementation for the gateway to wire up, not two.
+    // § Stage 2 — resolved once so the engine's `persistBehaviorState` callback and the
+    // service both write through the SAME store instance (never one persisted, one not).
+    const keypadMappingStore = deps.keypadMappingStore ?? new InMemoryKeypadMappingStore();
     const keypadMappingEngine = new KeypadMappingEngine({
       executors,
       onRun: (id, ok) => {
@@ -772,8 +776,15 @@ export class AppContext {
           resourceId: id,
         });
       },
+      // § Universal Keypad, Stage 2 — an "alternate"/"cycle" mapping's `lastDirection`/
+      // `cycleIndex` must survive a restart (the whole point of persisting it at all), so a
+      // firing writes it straight to the real store, not just the engine's in-memory copy.
+      persistBehaviorState: async (id, behaviorState) => {
+        const current = await keypadMappingStore.get(id);
+        if (current) await keypadMappingStore.put({ ...current, behaviorState });
+      },
     });
-    this.keypadMappings = new KeypadMappingService(keypadMappingEngine, deps.keypadMappingStore);
+    this.keypadMappings = new KeypadMappingService(keypadMappingEngine, keypadMappingStore);
     await this.keypadMappings.start();
 
     this.keypadSubscriptions = new SubscriptionManager(deps.keypadSubscriptionStore ?? new InMemoryKeypadSubscriptionStore());

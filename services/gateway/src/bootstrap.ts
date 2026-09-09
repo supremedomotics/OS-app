@@ -99,6 +99,7 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.backupStore = stores.backups;
     deps.pendingDeviceStore = stores.pendingDevices;
     deps.providerStore = stores.deviceProvider;
+    deps.keypadMappingStore = stores.keypadMappings;
     migrationStore = stores.migrationPolicy;
     deps.db = stores.db;
 

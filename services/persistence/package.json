@@ -28,6 +28,7 @@
     "@supreme/notifications": "workspace:*",
     "@supreme/drivers": "workspace:*",
     "@supreme/automations": "workspace:*",
+    "@supreme/keypad-framework": "workspace:*",
     "@supreme/security": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
     "pg": "^8.13.1"
