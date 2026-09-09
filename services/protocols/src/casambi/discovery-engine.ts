@@ -1,5 +1,5 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
-import { capabilitiesFromUnit, colorConfigFromUnit, type CasambiUnit } from "./entity-mapper.js";
+import { capabilitiesFromUnit, colorConfigFromUnit, isKeypadUnit, type CasambiUnit } from "./entity-mapper.js";
 import type { CasambiGroup } from "./cloud-transport.js";
 import {
   encodeNotifyControlValuesSetDefaultMask,
@@ -87,7 +87,10 @@ export function buildDiscoveredDevices(
   const out: DiscoveredDevice[] = [];
   for (const unit of units.values()) {
     const capabilities = capabilitiesFromUnit(unit);
-    if (capabilities.length === 0) continue;
+    // § Supreme Universal Keypad, Stage 1 — a keypad is legitimately capability-less (see
+    // `capabilitiesFromUnit`'s doc comment); every OTHER unit with zero capabilities is a real
+    // unit this driver simply can't yet classify, and stays excluded exactly as before.
+    if (capabilities.length === 0 && !isKeypadUnit(unit)) continue;
     const group = unit.groupId ? groups.get(unit.groupId) : undefined;
     const colorConfig = colorConfigFromUnit(unit);
     out.push({
@@ -106,6 +109,11 @@ export function buildDiscoveredDevices(
         room: group?.name ?? null,
         type: unit.type ?? null,
         awaitingLocalSignal: cloudOnlyUnitIds?.has(unit.id) ?? false,
+        // § Supreme Universal Keypad, Stage 1 — installer-facing, honest markers: `keypad: true`
+        // lets a caller special-case this device instead of guessing from `capabilities: []`
+        // (which a genuinely mis-detected unit could also have); `buttonCount` is the same
+        // progressive count `updateUnitFromKeypadButton` tracks, never a fabricated fixed number.
+        ...(isKeypadUnit(unit) ? { keypad: true, buttonCount: unit.keypadButtonCount ?? 0 } : {}),
       },
     });
   }

@@ -23,6 +23,18 @@ import { InMemoryHomeStore, type IHomeStore } from "./store.js";
  * reason. */
 export type DeviceChangeEvent = { type: "upsert"; device: Device } | { type: "delete"; deviceId: DeviceId };
 
+/** § Supreme Universal Keypad, Stage 5A-1 — reserved `backendIds` key for a
+ * capability-less device's device-level backend id (see `EntityRegistryMirror.
+ * deviceBackendId`'s doc comment). Never a real `CapabilityKind` (those are lowercase
+ * words like "onoff"/"brightness"; this is deliberately shaped to never collide with
+ * one), so it rides in the SAME persisted `backendIds` map every device already has —
+ * no new store/column — while staying distinguishable from a capability entry at
+ * every read site (`rebindRegistry`, `mapEntities`). This is what was previously
+ * MISSING: `deviceBackendId` reached the SIL's in-memory registry at commission time
+ * but was never persisted anywhere, so a gateway restart silently lost it (see
+ * `rebindRegistry`'s fix). */
+const DEVICE_LEVEL_BACKEND_ID_KEY = "__device__";
+
 /**
  * Home service (§4 rooms + devices services, plus favorites). Owns the Supreme
  * topology and binds each device capability to a backend entity in the SIL entity
@@ -54,6 +66,18 @@ export class HomeService {
   /** Restore every stored device's entity mapping on boot. */
   async rebindRegistry(): Promise<void> {
     for (const { device, backendIds } of await this.store.listDevices()) {
+      // § Supreme Universal Keypad, Stage 5A-1 — a capability-less device (a keypad)
+      // has no CapabilityKind entries in `backendIds` at all, so the old
+      // `if (Object.keys(backendIds).length === 0) continue` skipped it entirely: its
+      // device-level backend id (now persisted under DEVICE_LEVEL_BACKEND_ID_KEY, see
+      // `addDevice`) never made it back into the SIL registry after a restart. That
+      // silently dropped `registry.isKnownBackendId()` for the keypad, so the next
+      // discovery scan re-surfaced it as a brand-new pending device — approving it would
+      // have minted a second DeviceId and orphaned every mapping/automation pointed at
+      // the original one. Restore the device-level mapping FIRST (it's the only entry a
+      // pure keypad has), then fall through to the capability loop unchanged.
+      const deviceBackendId = backendIds[DEVICE_LEVEL_BACKEND_ID_KEY];
+      if (deviceBackendId) this.sil.mapDeviceEntity(device.id, deviceBackendId);
       if (Object.keys(backendIds).length === 0) continue;
       this.mapEntities(device, backendIds);
     }
@@ -107,10 +131,25 @@ export class HomeService {
    * Commission a device (ADR-0023 § Commissioning: Create Device → Assign Provider →
    * Bind Driver). `backendIds` non-empty maps device capabilities onto backend
    * entity ids in the SIL's entity registry.
+   *
+   * `deviceBackendId` (§ Supreme Universal Keypad) is the device-level counterpart for a
+   * capability-less device (a keypad) — `backendIds` is necessarily empty for one (there is
+   * no `CapabilityKind` to key it by), so without this its backendId would never reach the
+   * SIL's registry at all, and every re-scan would treat it as a brand-new find forever.
+   * Never set for a device with any real capability — that case still goes through
+   * `backendIds` exactly as before.
    */
-  async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
-    await this.store.putDevice(device, backendIds);
+  async addDevice(device: Device, backendIds: Record<string, string>, deviceBackendId?: string): Promise<void> {
+    // § Supreme Universal Keypad, Stage 5A-1 — persist `deviceBackendId` under the
+    // reserved sentinel key so `rebindRegistry()` can restore it after a restart; it
+    // used to reach ONLY the SIL's in-memory registry below and vanish on the next boot.
+    const persistedBackendIds =
+      device.capabilities.length === 0 && deviceBackendId
+        ? { ...backendIds, [DEVICE_LEVEL_BACKEND_ID_KEY]: deviceBackendId }
+        : backendIds;
+    await this.store.putDevice(device, persistedBackendIds);
     this.mapEntities(device, backendIds);
+    if (device.capabilities.length === 0 && deviceBackendId) this.sil.mapDeviceEntity(device.id, deviceBackendId);
     this.emitChanged({ type: "upsert", device });
   }
 

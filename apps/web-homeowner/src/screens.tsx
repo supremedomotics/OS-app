@@ -227,7 +227,7 @@ export function RoomsScreen({
 // ── Room navigation (§11.1): Room → control-type category → device list → individual control.
 // A room is never a flat junk-drawer of every device type — you choose WHAT you're here to
 // control first, exactly like a wall keypad is laid out zone by zone.
-export type CategoryKind = "lighting" | "climate" | "media" | "curtains" | "security" | "fans" | "cleaning" | "other";
+export type CategoryKind = "lighting" | "climate" | "media" | "curtains" | "security" | "fans" | "cleaning" | "keypads" | "other";
 interface CategoryDef { kind: CategoryKind; label: string; icon: string }
 const CATEGORY_DEFS: CategoryDef[] = [
   { kind: "lighting", label: "Lighting", icon: "☀" },
@@ -237,6 +237,7 @@ const CATEGORY_DEFS: CategoryDef[] = [
   { kind: "security", label: "Security", icon: "🔒" },
   { kind: "fans", label: "Fans", icon: "≋" },
   { kind: "cleaning", label: "Cleaning", icon: "◌" },
+  { kind: "keypads", label: "Keypads", icon: "⌨" },
   { kind: "other", label: "Other", icon: "•" },
 ];
 
@@ -254,7 +255,14 @@ function categoryOf(caps: CapabilityKind[]): CategoryKind {
 export function categorize(devices: Device[]): (CategoryDef & { devices: Device[] })[] {
   const buckets = new Map<CategoryKind, Device[]>();
   for (const d of devices) {
-    const k = categoryOf(d.capabilities.map((c) => c.kind));
+    // § Supreme Universal Keypad, Room Integration — a keypad is an INPUT/CONTROL device,
+    // never an actuator, regardless of what its underlying protocol's wire representation
+    // looks like (§2: "even if the underlying protocol exposes some button information using
+    // an On/Off-like data type"). Classified from the common Supreme device semantic
+    // (`supremeType`, § Universal Keypad architecture), never a protocol check — a genuine
+    // onoff/brightness/etc. device keeps going through `categoryOf`'s capability-driven
+    // classification exactly as before, completely unaffected.
+    const k = d.supremeType === "keypad" ? "keypads" : categoryOf(d.capabilities.map((c) => c.kind));
     buckets.set(k, [...(buckets.get(k) ?? []), d]);
   }
   return CATEGORY_DEFS.filter((c) => buckets.has(c.kind)).map((c) => ({ ...c, devices: buckets.get(c.kind)! }));
@@ -297,6 +305,10 @@ function categorySummary(kind: CategoryKind, devices: Device[], live: Record<str
     case "cleaning": {
       const active = devices.filter((d) => (merged(d).vacuum as { status?: string } | undefined)?.status === "cleaning").length;
       return active > 0 ? "Cleaning" : "Idle";
+    }
+    case "keypads": {
+      const online = devices.filter((d) => d.status === "online").length;
+      return online === devices.length ? `${devices.length} online` : `${online} of ${devices.length} online`;
     }
     default: {
       const on = devices.filter((d) => (merged(d).onoff as { on?: boolean } | undefined)?.on).length;

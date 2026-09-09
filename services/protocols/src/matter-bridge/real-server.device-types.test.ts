@@ -60,6 +60,34 @@ describe("RealMatterBridgeServer — real @matter/main endpoint construction per
     }
   }
 
+  it("§ Matter Bridge Phase 2A — constructs a real On/Off Plug-in Unit endpoint (Identify/Groups/OnOff/ScenesManagement) without throwing, distinct from On/Off Light", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "plug-test" });
+    if (!(await startOrSkip(server, "plug"))) return;
+    await server.addEndpoint({
+      endpointNumber: 1,
+      name: "Test Plug",
+      deviceTypeId: 0x010a,
+      initialState: { kind: "onoff", on: false },
+      capabilityKinds: ["onoff"],
+    });
+    expect(server.getEndpointNodeLabel(1)).toBe("Test Plug");
+    await server.stop();
+  }, 30_000);
+
+  it("§ Matter Bridge Phase 2B, Test C — constructs a real Generic Switch endpoint (Identify/Switch, momentary features) without throwing", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "switch-test" });
+    if (!(await startOrSkip(server, "switch"))) return;
+    await server.addEndpoint({
+      endpointNumber: 1,
+      name: "Button 1",
+      deviceTypeId: 0x000f,
+      initialState: null,
+      capabilityKinds: [],
+    });
+    expect(server.getEndpointNodeLabel(1)).toBe("Button 1");
+    await server.stop();
+  }, 30_000);
+
   it("constructs a real Dimmable Light endpoint (OnOff + LevelControl) without throwing", async () => {
     const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "dimmable-test" });
     if (!(await startOrSkip(server, "dimmable"))) return;

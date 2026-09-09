@@ -87,7 +87,7 @@ describe("normalizeLocalPacket", () => {
 
   it("maps a button event (0x51)", () => {
     const packet = decodeCasambiPacket("0.70.5.51.9.1.0.2\r\n", "hex-dot");
-    expect(normalizeLocalPacket(packet, noPrev)).toEqual({ kind: "button", unitId: 9, action: "short_press" });
+    expect(normalizeLocalPacket(packet, noPrev)).toEqual({ kind: "button", unitId: 9, button: 0, action: "short_press" });
   });
 
   it("maps a node-removed event (0x3A)", () => {

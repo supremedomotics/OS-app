@@ -1,4 +1,5 @@
 import type { DiscoveredDevice, INativeProtocolDriver, ProtocolBinding } from "@supreme/integration-layer";
+import type { DeviceId } from "@supreme/domain-model";
 import {
   AvrProtocolDriver,
   CasambiProtocolDriver,
@@ -49,6 +50,15 @@ export interface NativeDriverFactoryContext {
    * enough for a deployment to never require typing it. Never a literal credential in source —
    * only ever read from the running deployment's own environment/secrets. */
   casambiCloudDefaults?: { apiKey?: string; email?: string; password?: string; networkId?: string };
+  /** § Supreme Universal Keypad, Stage 4A — forwarded verbatim to the `casambi` factory branch
+   * below (the only current keypad-capable driver); see `CasambiCommonDriverOptions.
+   * keypadIdentity`'s own doc comment for what this resolves and why the driver can't do it
+   * itself. Built once by `installer-context.ts`'s `nativeDriverContext()` from the SIL's own
+   * entity registry — no new identity model, this only threads the existing one through. */
+  keypadIdentity?: {
+    deviceIdForUnit(unitId: number): DeviceId | null;
+    unitForDeviceId(deviceId: DeviceId): number | null;
+  };
 }
 export type NativeDriverFactory = (config: Record<string, unknown>, ctx: NativeDriverFactoryContext) => INativeProtocolDriver | null;
 
@@ -121,6 +131,7 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
         },
         onLog,
         trace: c.logging === true,
+        keypadIdentity: ctx.keypadIdentity,
       });
     }
     const creds = resolveCasambiCloudCredentials(c, ctx.casambiCloudDefaults);
@@ -129,6 +140,7 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
       credentials: creds,
       onLog,
       trace: c.logging === true,
+      keypadIdentity: ctx.keypadIdentity,
     });
   },
   coolmaster: (c) => {

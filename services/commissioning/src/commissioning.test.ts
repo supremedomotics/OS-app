@@ -89,6 +89,36 @@ describe("CommissioningService", () => {
     expect((await home.listDevicesInRoom(roomId as never)).map((d) => d.id)).toContain(device.id);
   });
 
+  it("§ Supreme Universal Keypad — rejects a 0-capability device with no explicit supremeType, unchanged from before", async () => {
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home);
+    await expect(
+      svc.commission({ backendId: "casambi:4", name: "Bedside Keypad", roomId: roomId as never, capabilities: [] }),
+    ).rejects.toThrow(/at least one capability/);
+  });
+
+  it("§ Supreme Universal Keypad — commissions a 0-capability keypad when supremeType is explicit, and registers its backendId for dedup", async () => {
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home);
+    const device = await svc.commission({
+      backendId: "casambi:4",
+      name: "Bedside Keypad",
+      roomId: roomId as never,
+      capabilities: [],
+      supremeType: "keypad",
+    });
+    expect(device.supremeType).toBe("keypad");
+    expect(device.capabilities).toEqual([]);
+    expect((await home.listDevicesInRoom(roomId as never)).map((d) => d.id)).toContain(device.id);
+
+    // The whole point: a re-discovery of the SAME keypad no longer looks like a new find.
+    expect(sil.registry.isKnownBackendId("casambi:4")).toBe(true);
+    expect(sil.registry.reverseLookupDevice("casambi:4")).toBe(device.id);
+    // reverseLookup (capability-keyed) stays empty for a capability-less device — it was
+    // never meant to answer "is this owned", only "which capability" (see isKnownBackendId).
+    expect(sil.registry.reverseLookup("casambi:4")).toBeUndefined();
+  });
+
   it("stops re-surfacing an already-commissioned device as a new find on a rescan", async () => {
     // Polling discovery sources (CoolMaster indoor units, AVR/HEOS/Yamaha SSDP, mDNS…)
     // report the same stable backendId on every scan — without filtering, a rescan shows

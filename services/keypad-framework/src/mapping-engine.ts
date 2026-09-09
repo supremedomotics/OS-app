@@ -1,7 +1,8 @@
 import type { AutomationExecutors } from "@supreme/automations";
 import { describeAutomationAction, runAutomationAction } from "@supreme/automations";
-import type { AutomationCondition, KeypadInputEvent, KeypadMapping } from "@supreme/domain-model";
+import type { AutomationAction, AutomationCondition, KeypadInputEvent, KeypadMapping, KeypadMappingBehaviorState, KeypadMappingId } from "@supreme/domain-model";
 import { evaluateComparator, isWithinScheduleWindow, readCapabilityField } from "@supreme/domain-model";
+import { resolveBehaviorCommand } from "./behavior.js";
 
 /**
  * Mapping Engine (§ Universal Keypad Framework, deliverable 8 — backend only, no
@@ -47,6 +48,14 @@ export interface KeypadMappingEngineOptions {
   historyLimit?: number;
   /** Monotonic clock for durations (tests can inject); defaults to Date.now. */
   now?: () => number;
+  /** § Stage 2 — persist a behavior-driven mapping's updated `behaviorState` (the new
+   * `lastDirection` after an "alternate" firing, the new `cycleIndex` after a "cycle"
+   * firing) so it survives a restart. Called after a successful resolution, before the
+   * resolved command is dispatched. Optional: an engine built without one (e.g. a test that
+   * doesn't care about restart persistence) simply keeps the update in memory only — the
+   * in-memory `this.mappings` entry is still updated either way, so back-to-back firings in
+   * the SAME process always see the latest state regardless. */
+  persistBehaviorState?: (mappingId: KeypadMappingId, behaviorState: KeypadMappingBehaviorState) => Promise<void>;
 }
 
 export class KeypadMappingEngine {
@@ -57,6 +66,7 @@ export class KeypadMappingEngine {
   private readonly runs: KeypadMappingRun[] = [];
   private readonly historyLimit: number;
   private readonly now: () => number;
+  private readonly persistBehaviorState?: (mappingId: KeypadMappingId, behaviorState: KeypadMappingBehaviorState) => Promise<void>;
   private runSeq = 0;
 
   constructor(opts: KeypadMappingEngineOptions) {
@@ -65,6 +75,7 @@ export class KeypadMappingEngine {
     this.onRun = opts.onRun;
     this.historyLimit = opts.historyLimit ?? 100;
     this.now = opts.now ?? (() => Date.now());
+    this.persistBehaviorState = opts.persistBehaviorState;
   }
 
   recentRuns(mappingId?: string, limit = 50): KeypadMappingRun[] {
@@ -105,20 +116,30 @@ export class KeypadMappingEngine {
     let ok = true;
     let error: string | undefined;
     if (conditionsPassed) {
-      // m.actions are already concrete, validated AutomationActions — any "{{name}}"
-      // reference into m.variables was resolved once, at mapping create/update time
-      // (see `expandVariables` in variables.ts), never re-resolved per firing.
-      for (const action of m.actions) {
-        const a0 = this.now();
-        try {
-          await runAutomationAction(action, this.ex, this.sleep);
-          actions.push({ type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAutomationAction(action) });
-        } catch (e) {
-          ok = false;
-          error = e instanceof Error ? e.message : String(e);
-          actions.push({ type: action.type, ok: false, error, durationMs: this.now() - a0, summary: describeAutomationAction(action) });
-          break; // stop the run on the first failing action, mirroring the Automation Engine
+      try {
+        // § Stage 2 — a non-"direct" behavior resolves to a run of exactly ONE action
+        // (toggle/alternate/increment/decrement: a single synthesized `device_command`;
+        // cycle: one entry of `m.actions`, advanced by index), never "run everything in
+        // `actions`" — that's `"direct"`'s job alone, unchanged from before Stage 2.
+        const toRun = await this.resolveActionsToRun(m);
+        for (const action of toRun) {
+          const a0 = this.now();
+          try {
+            await runAutomationAction(action, this.ex, this.sleep);
+            actions.push({ type: action.type, ok: true, durationMs: this.now() - a0, summary: describeAutomationAction(action) });
+          } catch (e) {
+            ok = false;
+            error = e instanceof Error ? e.message : String(e);
+            actions.push({ type: action.type, ok: false, error, durationMs: this.now() - a0, summary: describeAutomationAction(action) });
+            break; // stop the run on the first failing action, mirroring the Automation Engine
+          }
         }
+      } catch (e) {
+        // Behavior resolution itself failed (e.g. an unsupported capability for "toggle") —
+        // never silently swallowed; recorded as a run failure with zero actions attempted,
+        // same as any other unrunnable mapping.
+        ok = false;
+        error = e instanceof Error ? e.message : String(e);
       }
     }
 
@@ -133,6 +154,35 @@ export class KeypadMappingEngine {
       ok: conditionsPassed && ok,
       ...(error ? { error } : {}),
     });
+  }
+
+  /** § Stage 2 — turn one mapping firing into the concrete `AutomationAction[]` to actually
+   * run, and persist any `behaviorState` change the resolution produced. */
+  private async resolveActionsToRun(m: KeypadMapping): Promise<AutomationAction[]> {
+    if (m.behavior === "direct") return m.actions;
+
+    if (m.behavior === "cycle") {
+      if (m.actions.length === 0) return [];
+      const index = m.behaviorState.cycleIndex % m.actions.length;
+      const action = m.actions[index]!;
+      await this.applyBehaviorState(m, { ...m.behaviorState, cycleIndex: (index + 1) % m.actions.length });
+      return [action];
+    }
+
+    const resolved = await resolveBehaviorCommand(this.ex, m);
+    if (resolved.nextBehaviorState) await this.applyBehaviorState(m, resolved.nextBehaviorState);
+    return [{ type: "device_command", deviceId: m.target!.deviceId, command: resolved.command }];
+  }
+
+  /** Update this mapping's `behaviorState` both in the engine's own in-memory copy (so the
+   * VERY NEXT firing in this same process sees it immediately, with no store round-trip) and,
+   * when a persistence hook was supplied, durably — so it survives a restart. Mutates the
+   * `this.mappings` entry in place by replacing it, never the caller's own object. */
+  private async applyBehaviorState(m: KeypadMapping, next: KeypadMappingBehaviorState): Promise<void> {
+    m.behaviorState = next;
+    const idx = this.mappings.findIndex((x) => x.id === m.id);
+    if (idx >= 0) this.mappings[idx] = m;
+    if (this.persistBehaviorState) await this.persistBehaviorState(m.id, next);
   }
 
   private record(run: KeypadMappingRun): void {

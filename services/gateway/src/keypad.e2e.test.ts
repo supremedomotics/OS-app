@@ -201,4 +201,367 @@ describe("Universal Keypad Framework — backend APIs", () => {
     const res = await fetch(`${baseUrl}/v1/keypad/mappings`);
     expect(res.status).toBe(401);
   });
+
+  // ── § Universal Keypad Framework, Stage 3A — behavior/target through the real gateway API ──
+  describe("behavior model (toggle/alternate/cycle/increment/decrement) via /v1/keypad/mappings", () => {
+    it("creates a toggle mapping with no actions[], target round-trips exactly", async () => {
+      const devs = await devices();
+      const light = devs.find((d) => d.supremeType === "light")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Toggle via API",
+            input: { keypadId: light.id, control: "btnA", event: "short_press" },
+            behavior: "toggle",
+            target: { deviceId: light.id, capability: "onoff", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+
+      expect(created.mapping.behavior).toBe("toggle");
+      expect(created.mapping.actions).toEqual([]);
+      expect(created.mapping.target).toEqual({ deviceId: light.id, capability: "onoff", step: 10 });
+      expect(created.mapping.behaviorState).toEqual({ lastDirection: null, cycleIndex: 0 });
+    });
+
+    it("fires a toggle mapping through the run endpoint and reads live target state, not a cached flag", async () => {
+      const devs = await devices();
+      const light = devs.find((d) => d.supremeType === "light")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Toggle run",
+            input: { keypadId: light.id, control: "btnRun", event: "short_press" },
+            behavior: "toggle",
+            target: { deviceId: light.id, capability: "onoff", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+
+      const runRes = await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}/run`, { method: "POST", headers: auth() });
+      expect(runRes.status).toBe(204);
+      const runs = (await (await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}/runs`, { headers: auth() })).json()) as KeypadMappingRunList;
+      expect(runs.runs[0]!.ok).toBe(true);
+    });
+
+    it("creates an alternate mapping and its lastDirection advances after each firing", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Alternate dim via API",
+            input: { keypadId: dimmer.id, control: "btnAlt", event: "hold_start" },
+            behavior: "alternate",
+            target: { deviceId: dimmer.id, capability: "brightness", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(created.mapping.behaviorState.lastDirection).toBeNull();
+
+      await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}/run`, { method: "POST", headers: auth() });
+
+      const list = (await (await fetch(`${baseUrl}/v1/keypad/mappings`, { headers: auth() })).json()) as KeypadMappingList;
+      const reloaded = list.mappings.find((m) => m.id === created.mapping.id)!;
+      expect(reloaded.behaviorState.lastDirection).toBe("up");
+    });
+
+    it("creates a cycle mapping with a real actions[] list to walk through", async () => {
+      const devs = await devices();
+      const light = devs.find((d) => d.supremeType === "light")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Cycle via API",
+            input: { keypadId: light.id, control: "btnCycle", event: "short_press" },
+            behavior: "cycle",
+            target: { deviceId: light.id, capability: "onoff", step: 10 },
+            actions: [
+              { type: "device_command", deviceId: light.id, command: { capability: "onoff", action: "on" } },
+              { type: "device_command", deviceId: light.id, command: { capability: "onoff", action: "off" } },
+            ],
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(created.mapping.behavior).toBe("cycle");
+      expect(created.mapping.actions).toHaveLength(2);
+    });
+
+    it("creates increment and decrement mappings against a real dimmer target", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const inc = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Increment via API",
+            input: { keypadId: dimmer.id, control: "btnInc", event: "short_press" },
+            behavior: "increment",
+            target: { deviceId: dimmer.id, capability: "brightness", step: 15 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(inc.mapping.behavior).toBe("increment");
+      expect(inc.mapping.target?.step).toBe(15);
+
+      const dec = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Decrement via API",
+            input: { keypadId: dimmer.id, control: "btnDec", event: "short_press" },
+            behavior: "decrement",
+            target: { deviceId: dimmer.id, capability: "brightness", step: 15 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(dec.mapping.behavior).toBe("decrement");
+    });
+
+    it("update() changes behavior/target without a body field for behaviorState existing at all", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Updatable",
+            input: { keypadId: dimmer.id, control: "btnUpd", event: "short_press" },
+            behavior: "toggle",
+            target: { deviceId: dimmer.id, capability: "onoff", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+
+      const patched = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}`, {
+          method: "PATCH",
+          headers: auth(),
+          body: JSON.stringify({ behavior: "increment", target: { deviceId: dimmer.id, capability: "brightness", step: 20 } }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(patched.mapping.behavior).toBe("increment");
+      expect(patched.mapping.target).toEqual({ deviceId: dimmer.id, capability: "brightness", step: 20 });
+    });
+
+    it("rejects a non-direct mapping body with no target — 422 (§6 error model)", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const res = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Missing target",
+          input: { keypadId: dimmer.id, control: "btnBad1", event: "short_press" },
+          behavior: "toggle",
+        }),
+      });
+      expect(res.status).toBe(422);
+    });
+
+    it("rejects a direct mapping body with empty actions[] — 422, same rule as before Stage 3A", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const res = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "No actions",
+          input: { keypadId: dimmer.id, control: "btnBad2", event: "short_press" },
+        }),
+      });
+      expect(res.status).toBe(422);
+    });
+
+    it("legacy request body (actions[] only, no behavior/target keys) still creates a working direct mapping", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Old-shape body",
+            input: { keypadId: dimmer.id, control: "btnLegacy", event: "short_press" },
+            actions: [{ type: "device_command", deviceId: dimmer.id, command: { capability: "onoff", action: "toggle" } }],
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(created.mapping.behavior).toBe("direct");
+      expect(created.mapping.target).toBeNull();
+    });
+  });
+
+  // ── § Universal Keypad Framework, Stage 4B — keypad events as Automation WHEN triggers ──
+  describe("keypad_input as an Automation trigger, through the real AppContext wiring", () => {
+    it("a Universal Keypad mapping and an Automation trigger on the SAME button both fire — neither suppresses the other", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "dimmer")!; // stand-in identity; no real keypad driver in Phase 1
+      const mappingTarget = devs.find((d) => d.supremeType === "light")!;
+      const automationTarget = devs.find((d) => d.supremeType === "dimmer" && d.id !== keypad.id) ?? devs.find((d) => d.supremeType === "light" && d.id !== mappingTarget.id)!;
+
+      const mappingRes = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Direct mapping on Button 1",
+          input: { keypadId: keypad.id, control: "1", event: "short_press" },
+          actions: [{ type: "device_command", deviceId: mappingTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(mappingRes.status).toBe(201);
+
+      const automationRes = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Automation trigger on the SAME Button 1",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "1", event: "short_press" }],
+          actions: [{ type: "device_command", deviceId: automationTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(automationRes.status).toBe(201);
+
+      // Simulates the SAME normalized event UniversalInputEngine's `publish` callback feeds
+      // to both consumers in production (context.ts) — the one seam a real keypad driver's
+      // onInputEvent would otherwise flow through in Phase 1's absence.
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "1", ts: new Date().toISOString() };
+      await ctx.keypadMappings.onInputEvent(event);
+      await ctx.automations.onKeypadInput(event);
+
+      const mappingRuns = ctx.keypadMappings.recentRuns();
+      expect(mappingRuns.some((r) => r.ok)).toBe(true);
+      const automationRuns = ctx.automations.recentRuns();
+      expect(automationRuns.some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
+    });
+
+    it("§ Stage 5A-2 — a direct mapping alone fires without any Automation trigger existing", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "dimmer")!;
+      const mappingTarget = devs.find((d) => d.supremeType === "light")!;
+
+      const mappingRes = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Mapping-only button",
+          input: { keypadId: keypad.id, control: "mapping-only", event: "short_press" },
+          actions: [{ type: "device_command", deviceId: mappingTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(mappingRes.status).toBe(201);
+
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "mapping-only", ts: new Date().toISOString() };
+      const automationRunsBefore = ctx.automations.recentRuns().length;
+      await ctx.keypadMappings.onInputEvent(event);
+      await ctx.automations.onKeypadInput(event); // no trigger registered for this control — must be a quiet no-op, never an error
+
+      const mappingRuns = ctx.keypadMappings.recentRuns();
+      expect(mappingRuns.some((r) => r.ok)).toBe(true);
+      expect(ctx.automations.recentRuns().length).toBe(automationRunsBefore);
+    });
+
+    it("§ Stage 5A-2 — an Automation trigger alone fires without any direct mapping existing", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "light")!;
+      const automationTarget = devs.find((d) => d.supremeType === "dimmer")!;
+
+      const automationRes = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Automation-only button",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "automation-only", event: "short_press" }],
+          actions: [{ type: "device_command", deviceId: automationTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(automationRes.status).toBe(201);
+
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "automation-only", ts: new Date().toISOString() };
+      const mappingRunsBefore = ctx.keypadMappings.recentRuns().length;
+      await ctx.keypadMappings.onInputEvent(event); // no mapping registered for this control — quiet no-op
+      await ctx.automations.onKeypadInput(event);
+
+      expect(ctx.keypadMappings.recentRuns().length).toBe(mappingRunsBefore);
+      const automationRuns = ctx.automations.recentRuns();
+      expect(automationRuns.some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
+    });
+
+    it("§ Stage 5A-2 — identical actions from both consumers on the SAME button both execute; the platform never de-duplicates fan-out (documented policy, not suppression)", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "dimmer")!;
+      const sharedTarget = devs.find((d) => d.supremeType === "light")!;
+
+      const mappingRes = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Identical-action mapping",
+          input: { keypadId: keypad.id, control: "identical-action", event: "short_press" },
+          actions: [{ type: "device_command", deviceId: sharedTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(mappingRes.status).toBe(201);
+
+      const automationRes = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Identical-action automation",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "identical-action", event: "short_press" }],
+          actions: [{ type: "device_command", deviceId: sharedTarget.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(automationRes.status).toBe(201);
+
+      const event = { type: "short_press" as const, keypadId: keypad.id, control: "identical-action", ts: new Date().toISOString() };
+      await ctx.keypadMappings.onInputEvent(event);
+      await ctx.automations.onKeypadInput(event);
+
+      // Both fired successfully — the platform's documented policy is intentional
+      // independent fan-out, never arbitrary suppression of a "duplicate-looking" action
+      // (§ Stage 5A-2 spec: "Do not introduce arbitrary suppression"). Two independent
+      // writes to the SAME idempotent onoff:on command is harmless by construction; a
+      // future non-idempotent action (e.g. increment) would rely on the SAME honest
+      // "both run" contract, which is why this is a documented policy, not a gap.
+      expect(ctx.keypadMappings.recentRuns().some((r) => r.ok)).toBe(true);
+      expect(ctx.automations.recentRuns().some((r) => r.trigger === "keypad_input" && r.ok)).toBe(true);
+    });
+
+    it("an Automation's IF condition gates a keypad_input trigger through the real engine", async () => {
+      const devs = await devices();
+      const keypad = devs.find((d) => d.supremeType === "light")!;
+      const sensor = devs.find((d) => d.capabilities.some((c) => c.kind === "sensor"));
+      const target = devs.find((d) => d.supremeType === "dimmer")!;
+      if (!sensor) return; // demo home may not seed a sensor device — skip honestly, never fabricate one
+
+      const res = await fetch(`${baseUrl}/v1/automations`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Keypad + condition",
+          triggers: [{ type: "keypad_input", keypadId: keypad.id, control: "cond-btn", event: "short_press" }],
+          conditions: [{ type: "device_state", deviceId: sensor.id, capability: "sensor", field: "value", op: "gt", value: 999_999 }],
+          actions: [{ type: "device_command", deviceId: target.id, command: { capability: "onoff", action: "on" } }],
+        }),
+      });
+      expect(res.status).toBe(201);
+
+      await ctx.automations.onKeypadInput({ type: "short_press", keypadId: keypad.id, control: "cond-btn", ts: new Date().toISOString() });
+      const runs = ctx.automations.recentRuns();
+      const run = runs.find((r) => r.trigger === "keypad_input" && r.conditionsPassed === false);
+      expect(run).toBeDefined();
+    });
+  });
 });

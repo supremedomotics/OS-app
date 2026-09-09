@@ -41,6 +41,7 @@ import {
   type IAutomationStore,
 } from "@supreme/automations";
 import {
+  InMemoryKeypadMappingStore,
   InMemoryKeypadSubscriptionStore,
   KeypadMappingEngine,
   KeypadMappingService,
@@ -762,6 +763,9 @@ export class AppContext {
     // actions ARE automation actions, by design (see `KeypadMapping` in
     // `@supreme/domain-model`), so there is exactly one "run a Supreme action"
     // implementation for the gateway to wire up, not two.
+    // § Stage 2 — resolved once so the engine's `persistBehaviorState` callback and the
+    // service both write through the SAME store instance (never one persisted, one not).
+    const keypadMappingStore = deps.keypadMappingStore ?? new InMemoryKeypadMappingStore();
     const keypadMappingEngine = new KeypadMappingEngine({
       executors,
       onRun: (id, ok) => {
@@ -772,8 +776,15 @@ export class AppContext {
           resourceId: id,
         });
       },
+      // § Universal Keypad, Stage 2 — an "alternate"/"cycle" mapping's `lastDirection`/
+      // `cycleIndex` must survive a restart (the whole point of persisting it at all), so a
+      // firing writes it straight to the real store, not just the engine's in-memory copy.
+      persistBehaviorState: async (id, behaviorState) => {
+        const current = await keypadMappingStore.get(id);
+        if (current) await keypadMappingStore.put({ ...current, behaviorState });
+      },
     });
-    this.keypadMappings = new KeypadMappingService(keypadMappingEngine, deps.keypadMappingStore);
+    this.keypadMappings = new KeypadMappingService(keypadMappingEngine, keypadMappingStore);
     await this.keypadMappings.start();
 
     this.keypadSubscriptions = new SubscriptionManager(deps.keypadSubscriptionStore ?? new InMemoryKeypadSubscriptionStore());
@@ -795,6 +806,12 @@ export class AppContext {
       publish: (event) => {
         void this.bus.publish(subjects.keypadInput(this.homeId), event);
         void this.keypadMappings.onInputEvent(event);
+        // § Universal Keypad Framework, Stage 4B — the SAME normalized event also reaches
+        // Automation as an independent `keypad_input` trigger source, exactly like
+        // `onDeviceState` below is independent of everything else that observes SIL state.
+        // A button press with both a direct Universal Keypad mapping and an Automation
+        // trigger runs both; neither suppresses the other.
+        void this.automations.onKeypadInput(event);
       },
     });
     this.sil.subscribeKeypadInput((event) => this.keypadInputEngine.ingest(event));
@@ -1084,6 +1101,10 @@ export class AppContext {
           console.log(`matter-bridge TRACE F->G: SIL state event — ts=${Date.now()} device.id=${e.deviceId} capability=${e.capability} state=${JSON.stringify(e.state)}`);
           listener({ deviceId: e.deviceId, capability: e.capability, state: e.state });
         }),
+      // § Matter Bridge Phase 2B — the SAME Universal Keypad seam `routes/keypad.ts` already
+      // uses, never a second keypad model or protocol-specific hook.
+      getKeypadCapabilities: (deviceId) => this.sil.getKeypadCapabilities(deviceId),
+      onKeypadInput: (listener) => this.sil.subscribeKeypadInput(listener),
     };
     const driver = new MatterBridgeDriver({
       server,
@@ -1135,12 +1156,34 @@ export class AppContext {
    */
   private async reconcileMatterDevices(driver: MatterBridgeDriver): Promise<void> {
     const devices = await this.home.listDevices();
-    const result = await driver.reconcile(devices);
+    // § Matter Bridge Phase 2A — `supremeType` is the ONLY honest signal that can tell an
+    // onoff-only "switch" (plug/outlet) apart from an onoff-only "light" — Matter's own spec
+    // draws no capability-level line between the two device types (see
+    // `matter-device-type-resolver.ts`'s doc). Threaded through here, never inferred from a
+    // protocol/driver check.
+    const result = await driver.reconcile(devices.map((d) => ({ id: d.id, name: d.name, capabilities: d.capabilities, kind: d.supremeType })));
     for (const u of result.unsupported) console.log(`matter-bridge: ${u.deviceId} not bridged — ${u.reason}`);
     for (const f of result.failed) console.error(`matter-bridge: failed to reconcile ${f.deviceId}: ${describeMatterError(new Error(f.error))}`);
     if (result.added.length || result.removed.length) {
       console.log(
         `matter-bridge: reconciled — ${result.added.length} added, ${result.updated.length} updated, ${result.removed.length} removed`,
+      );
+    }
+    // § Matter Bridge Phase 2B — keypad buttons participate in the SAME desired∩existing/
+    // desired-existing/existing-desired reconciliation model as regular devices (§ requirement
+    // 10), as its own pass (`reconcileKeypads`'s own doc explains why it stays separate rather
+    // than folding into `driver.reconcile()` above). `getKeypadCapabilities` returns `null` for
+    // the overwhelming majority of devices (not keypad-capable) — never fabricated, exactly the
+    // same seam `/v1/devices/:id/keypad-capabilities` already uses.
+    const keypads = await Promise.all(
+      devices.map(async (d) => ({ id: d.id, name: d.name, declaration: await this.sil.getKeypadCapabilities(d.id) })),
+    );
+    const keypadResult = await driver.reconcileKeypads(keypads.filter((k) => k.declaration !== null));
+    for (const u of keypadResult.unsupported) console.log(`matter-bridge: ${u.keypadId}::${u.controlId} not bridged — ${u.reason}`);
+    for (const f of keypadResult.failed) console.error(`matter-bridge: failed to reconcile ${f.keypadId}::${f.controlId}: ${describeMatterError(new Error(f.error))}`);
+    if (keypadResult.added.length || keypadResult.removed.length) {
+      console.log(
+        `matter-bridge: keypads reconciled — ${keypadResult.added.length} added, ${keypadResult.updated.length} updated, ${keypadResult.removed.length} removed`,
       );
     }
   }

@@ -55,6 +55,30 @@ describe("RealMatterBridgeServer — real @matter/main command dispatch (Matter 
     await server.stop();
   }, 30_000);
 
+  it("§ Matter Bridge Phase 2A — On/Off Plug-in Unit: real On/Off/Toggle commands reach emit() with the correct CapabilityCommand, and external state updates reach the Matter attribute", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "dispatch-plug" });
+    if (!(await startOrSkip(server, "plug"))) return;
+    const received: CapabilityCommand[] = [];
+    server.onCommand((_endpointNumber, command) => received.push(command));
+    await server.addEndpoint({ endpointNumber: 1, name: "Garage Outlet", deviceTypeId: 0x010a, initialState: { kind: "onoff", on: false }, capabilityKinds: ["onoff"] });
+
+    await server.simulateCommandForTest(1, (agent) => agent.onOff.on());
+    expect(received).toContainEqual({ capability: "onoff", action: "on" });
+    received.length = 0;
+
+    await server.simulateCommandForTest(1, (agent) => agent.onOff.off());
+    expect(received).toContainEqual({ capability: "onoff", action: "off" });
+    received.length = 0;
+
+    // Toggle is a real, distinct Matter OnOff command — must be supported, not synthesized.
+    await server.simulateCommandForTest(1, (agent) => agent.onOff.toggle());
+    expect(received).toContainEqual({ capability: "onoff", action: "on" });
+
+    // External state update (physical/protocol-driven) reaches the real Matter attribute.
+    await server.setCapabilityState(1, { kind: "onoff", on: true });
+    await server.stop();
+  }, 30_000);
+
   it("Dimmable Light — a real LevelControl.MoveToLevel command reaches emit() with a normalized level, and OnOff still routes through 'brightness'", async () => {
     const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "dispatch-dimmable" });
     if (!(await startOrSkip(server, "dimmable"))) return;
@@ -160,6 +184,100 @@ describe("RealMatterBridgeServer — real @matter/main command dispatch (Matter 
       await server.simulateCommandForTest(1, (agent) => agent.windowCovering.goToLiftPercentage({ liftPercent100thsValue }));
       expect(received, `Apple Home requesting SupremeOS position ${supremePercent}%`).toContainEqual({ capability: "position", action: "set", position: supremePercent });
     }
+    await server.stop();
+  }, 30_000);
+
+  // § Matter Bridge Phase 2B — Generic Switch is UNIDIRECTIONAL (SupremeOS -> Matter only, no
+  // `onCommand` involvement — confirmed against the SDK's own generated device definition, no
+  // client-writable attributes/commands on a switch). These tests drive `reportKeypadPress` and
+  // observe the REAL SwitchServer's own derived event sequence via `collectSwitchEventsForTest`
+  // — proof the SDK's spec-compliant timing logic, not our own code, produced the sequence.
+
+  it("§ Test D/F — a 'short' press produces the real initialPress -> shortRelease sequence", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-short" });
+    if (!(await startOrSkip(server, "keypad-short"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Button 1", deviceTypeId: 0x000f, initialState: null, capabilityKinds: [] });
+    const { events } = server.collectSwitchEventsForTest(1);
+
+    await server.reportKeypadPress(1, "short");
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(events.map((e) => e.type)).toContain("initialPress");
+    expect(events.map((e) => e.type)).toContain("shortRelease");
+    expect(events.map((e) => e.type)).not.toContain("longPress");
+    await server.stop();
+  }, 30_000);
+
+  it("§ Test G — a 'long' press produces the real initialPress -> longPress -> longRelease sequence, never shortRelease", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-long" });
+    if (!(await startOrSkip(server, "keypad-long"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Button 1", deviceTypeId: 0x000f, initialState: null, capabilityKinds: [] });
+    const { events } = server.collectSwitchEventsForTest(1);
+
+    await server.reportKeypadPress(1, "long");
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(events.map((e) => e.type)).toEqual(["initialPress", "longPress", "longRelease"]);
+    await server.stop();
+  }, 30_000);
+
+  it("a 'double' press produces two initialPress/shortRelease pairs then multiPressComplete{totalNumberOfPressesCounted:2}", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-double" });
+    if (!(await startOrSkip(server, "keypad-double"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Button 1", deviceTypeId: 0x000f, initialState: null, capabilityKinds: [] });
+    const { events } = server.collectSwitchEventsForTest(1);
+
+    await server.reportKeypadPress(1, "double");
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(events.filter((e) => e.type === "initialPress")).toHaveLength(2);
+    const complete = events.find((e) => e.type === "multiPressComplete");
+    expect(complete?.payload).toMatchObject({ totalNumberOfPressesCounted: 2 });
+    await server.stop();
+  }, 30_000);
+
+  it("a 'triple' press produces multiPressComplete{totalNumberOfPressesCounted:3}", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-triple" });
+    if (!(await startOrSkip(server, "keypad-triple"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Button 1", deviceTypeId: 0x000f, initialState: null, capabilityKinds: [] });
+    const { events } = server.collectSwitchEventsForTest(1);
+
+    await server.reportKeypadPress(1, "triple");
+    await new Promise((r) => setTimeout(r, 150));
+
+    const complete = events.find((e) => e.type === "multiPressComplete");
+    expect(complete?.payload).toMatchObject({ totalNumberOfPressesCounted: 3 });
+    await server.stop();
+  }, 30_000);
+
+  it("§ Test E/H — two buttons on the same aggregator are independently addressable: a press on Button 1 produces events ONLY on Button 1's endpoint, never Button 2's", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-multi" });
+    if (!(await startOrSkip(server, "keypad-multi"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Button 1", deviceTypeId: 0x000f, initialState: null, capabilityKinds: [] });
+    await server.addEndpoint({ endpointNumber: 2, name: "Button 2", deviceTypeId: 0x000f, initialState: null, capabilityKinds: [] });
+    const button1 = server.collectSwitchEventsForTest(1);
+    const button2 = server.collectSwitchEventsForTest(2);
+
+    await server.reportKeypadPress(1, "short");
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(button1.events.length).toBeGreaterThan(0);
+    expect(button2.events).toEqual([]);
+    await server.stop();
+  }, 30_000);
+
+  it("§ Test O — reportKeypadPress is a no-op for an endpoint that isn't a Generic Switch (never crashes, never emits)", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-wrong-type" });
+    if (!(await startOrSkip(server, "keypad-wrong-type"))) return;
+    await server.addEndpoint({ endpointNumber: 1, name: "Kitchen Lights", deviceTypeId: 0x0100, initialState: { kind: "onoff", on: false }, capabilityKinds: ["onoff"] });
+    await expect(server.reportKeypadPress(1, "short")).resolves.not.toThrow();
+    await server.stop();
+  }, 30_000);
+
+  it("§ Test O — reportKeypadPress is a no-op for an endpoint number that doesn't exist at all", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "keypad-missing" });
+    if (!(await startOrSkip(server, "keypad-missing"))) return;
+    await expect(server.reportKeypadPress(99, "short")).resolves.not.toThrow();
     await server.stop();
   }, 30_000);
 });

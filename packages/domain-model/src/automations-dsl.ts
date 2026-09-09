@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CapabilityCommand, CapabilityKind } from "./capabilities.js";
 import { AutomationId, DeviceId, HomeId, SceneId, UserId } from "./ids.js";
 import { IntentTarget } from "./intents.js";
+import { KeypadInputEventType } from "./keypad-events.js";
 import { NotificationLevel } from "./notifications.js";
 import { ScheduleWindow } from "./users.js";
 
@@ -35,6 +36,23 @@ export const AutomationTrigger = z.discriminatedUnion("type", [
   }),
   /** Fires on a fixed period. */
   z.object({ type: z.literal("interval"), everyMinutes: z.number().int().positive() }),
+  /**
+   * § Universal Keypad Framework, Stage 4B — fires on a normalized physical keypad input
+   * event. Deliberately reuses `KeypadMappingInput`'s exact identity fields (`keypadId`/
+   * `control`/`event`, § keypad-mapping.ts) and `KeypadInputEventType` (§ keypad-events.ts)
+   * verbatim rather than declaring a second keypad-event vocabulary — an automation trigger
+   * and a Universal Keypad mapping are two independent CONSUMERS of the exact same normalized
+   * event, never two different event models. `keypadId` is a real Supreme `DeviceId` (already
+   * carrying whatever multi-instance/network scoping commissioning gave it — see Stage 1/4A),
+   * so this trigger is inherently protocol-independent and inherently isolated per physical
+   * keypad instance without any protocol-specific code here.
+   */
+  z.object({
+    type: z.literal("keypad_input"),
+    keypadId: DeviceId,
+    control: z.string().min(1),
+    event: KeypadInputEventType,
+  }),
 ]);
 export type AutomationTrigger = z.infer<typeof AutomationTrigger>;
 

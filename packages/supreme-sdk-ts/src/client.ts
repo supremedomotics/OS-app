@@ -51,6 +51,13 @@ import {
   type CreateUserRequest,
   type UserList,
   type UserResponse,
+  type CreateKeypadMappingRequest,
+  type UpdateKeypadMappingRequest,
+  type SetKeypadMappingEnabledRequest,
+  type KeypadCapabilitiesResponse,
+  type KeypadMappingResponse,
+  type KeypadMappingList,
+  type KeypadMappingRunList,
 } from "@supreme/contracts";
 import type {
   CapabilityCommand,
@@ -58,6 +65,7 @@ import type {
   DeviceId,
   DriverId,
   FavoriteRef,
+  KeypadMappingId,
   License,
   ProtocolKind,
   RoomId,
@@ -486,6 +494,39 @@ export class SupremeClient {
   }
   scenes(): Promise<SceneList> {
     return this.request("GET", "/v1/scenes") as Promise<SceneList>;
+  }
+
+  // ── Universal Keypad Framework (§ Universal Keypad Framework, Stage 3B) ────────────
+  // A keypad is discovered/commissioned/listed as an ordinary Device (supremeType:
+  // "keypad") through the existing device endpoints above — no separate keypad
+  // registry. These methods cover the mapping (program a button) surface only.
+
+  /** This device's real, driver-reported keypad control declaration — `null` when the
+   * device isn't a keypad, or its driver hasn't implemented keypad support yet (never
+   * fabricated; see `getKeypadCapabilities` in `@supreme/integration-layer`). */
+  keypadCapabilities(deviceId: DeviceId): Promise<KeypadCapabilitiesResponse> {
+    return this.request("GET", `/v1/devices/${deviceId}/keypad-capabilities`) as Promise<KeypadCapabilitiesResponse>;
+  }
+  listKeypadMappings(): Promise<KeypadMappingList> {
+    return this.request("GET", "/v1/keypad/mappings") as Promise<KeypadMappingList>;
+  }
+  createKeypadMapping(input: CreateKeypadMappingRequest): Promise<KeypadMappingResponse> {
+    return this.request("POST", "/v1/keypad/mappings", input) as Promise<KeypadMappingResponse>;
+  }
+  updateKeypadMapping(id: KeypadMappingId, patch: UpdateKeypadMappingRequest): Promise<KeypadMappingResponse> {
+    return this.request("PATCH", `/v1/keypad/mappings/${id}`, patch) as Promise<KeypadMappingResponse>;
+  }
+  setKeypadMappingEnabled(id: KeypadMappingId, enabled: boolean): Promise<KeypadMappingResponse> {
+    return this.request("POST", `/v1/keypad/mappings/${id}/enabled`, { enabled } satisfies SetKeypadMappingEnabledRequest) as Promise<KeypadMappingResponse>;
+  }
+  runKeypadMapping(id: KeypadMappingId): Promise<void> {
+    return this.request("POST", `/v1/keypad/mappings/${id}/run`) as Promise<void>;
+  }
+  keypadMappingRuns(id: KeypadMappingId): Promise<KeypadMappingRunList> {
+    return this.request("GET", `/v1/keypad/mappings/${id}/runs`) as Promise<KeypadMappingRunList>;
+  }
+  deleteKeypadMapping(id: KeypadMappingId): Promise<void> {
+    return this.request("DELETE", `/v1/keypad/mappings/${id}`) as Promise<void>;
   }
   /** Create a scene (e.g. a snapshot of the current device states). */
   createScene(input: { name: string; scope?: "room" | "home"; roomId?: string | null; icon?: string | null; steps: unknown[] }): Promise<{ scene: unknown }> {

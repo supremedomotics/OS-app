@@ -15,6 +15,7 @@ export const MatterClusterId = {
   ColorControl: 0x0300,
   WindowCovering: 0x0102,
   OccupancySensing: 0x0406,
+  Switch: 0x003b,
 } as const;
 export type MatterClusterId = (typeof MatterClusterId)[keyof typeof MatterClusterId];
 

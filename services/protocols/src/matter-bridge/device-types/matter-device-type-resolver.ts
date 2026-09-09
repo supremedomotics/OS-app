@@ -1,4 +1,4 @@
-import { ColorCapabilityConfig, type DeviceCapability } from "@supreme/domain-model";
+import { ColorCapabilityConfig, type DeviceCapability, type SupremeDeviceType } from "@supreme/domain-model";
 import { matterDeviceTypeRegistry, type MatterDeviceTypeRegistry } from "./matter-device-type-registry.js";
 import type { MatterDeviceTypeDefinition } from "./matter-device-types.js";
 
@@ -55,12 +55,21 @@ function has(capabilities: DeviceCapability[], kind: DeviceCapability["kind"]): 
  *      Extended Color Light promises real hue/saturation control the driver hasn't confirmed it
  *      can honor, which is worse than under-claiming.
  *   3. `brightness` → Dimmable Light
- *   4. `onoff` → On/Off Light
+ *   4. `onoff` → On/Off Light, UNLESS `deviceKind` says "switch" (§ Matter Bridge Phase 2A) →
+ *      On/Off Plug-in Unit instead. Matter's own spec draws no capability-level line between a
+ *      switched outlet and a simple light — both need only Identify/Groups/OnOff/
+ *      ScenesManagement — so `deviceKind` (SupremeOS's own `device.supremeType`, e.g. "switch"
+ *      vs "light") is the ONLY honest signal that can pick one over the other. Never a
+ *      protocol-specific check (a KNX relay and a Casambi plug both reach this the same way,
+ *      through the SAME `supremeType` field every driver already populates) — `deviceKind`
+ *      absent/undefined (a caller that hasn't threaded it through yet) defaults to Light, the
+ *      existing, already-correct behavior for every device this resolver saw before Phase 2A.
  *   5. none of the above → UNSUPPORTED, with a stated reason (never a silent skip)
  */
 export function resolveMatterDeviceType(
   capabilities: DeviceCapability[],
   registry: MatterDeviceTypeRegistry = matterDeviceTypeRegistry,
+  deviceKind?: SupremeDeviceType,
 ): MatterDeviceTypeResolution {
   const position = has(capabilities, "position");
   if (position) {
@@ -88,8 +97,9 @@ export function resolveMatterDeviceType(
 
   const onoff = has(capabilities, "onoff");
   if (onoff) {
-    const deviceType = registry.byId(0x0100);
-    if (!deviceType) return unsupportedRegistryGap(0x0100);
+    const id = deviceKind === "switch" ? 0x010a : 0x0100;
+    const deviceType = registry.byId(id);
+    if (!deviceType) return unsupportedRegistryGap(id);
     return { outcome: "SUPPORTED", deviceType, reason: null };
   }
 
@@ -101,6 +111,34 @@ export function resolveMatterDeviceType(
       "this phase (onoff, brightness, color, position) — sensors, locks, thermostats, fans, " +
       "media, and energy devices are not yet bridgeable (§ Phase 2-4).",
   };
+}
+
+/**
+ * § Matter Bridge Phase 2B — ONE physical keypad control (button, rotary encoder, touch zone,
+ * slider — `KeypadControlDescriptor.kind`) → Matter Device Type. Deliberately SEPARATE from
+ * {@link resolveMatterDeviceType}: a keypad control has no `DeviceCapability`/`CapabilityState`
+ * at all (it's an INPUT, described by `KeypadCapabilityDeclaration`/`KeypadInputEvent` — see
+ * `packages/domain-model/src/keypad-capabilities.ts`), so it can never flow through the
+ * capability-driven resolver above. Only `kind: "button"` is supported in this phase — a real,
+ * spec-correct Generic Switch device type exists for it (Identify + Switch, momentary-switch
+ * features). `rotary_encoder`/`touch_zone`/`slider` have no equivalent official Matter device
+ * type mapping decided yet (§ disclosed gap, not guessed) and resolve UNSUPPORTED, same honesty
+ * contract as `resolveMatterDeviceType`'s own UNSUPPORTED path — never silently dropped.
+ */
+export function resolveKeypadControlDeviceType(
+  controlKind: "button" | "rotary_encoder" | "touch_zone" | "slider",
+  registry: MatterDeviceTypeRegistry = matterDeviceTypeRegistry,
+): MatterDeviceTypeResolution {
+  if (controlKind !== "button") {
+    return {
+      outcome: "UNSUPPORTED",
+      deviceType: null,
+      reason: `keypad control kind "${controlKind}" has no Matter device type mapping decided yet in this phase (only "button" -> Generic Switch) — not silently dropped, just not yet supported`,
+    };
+  }
+  const deviceType = registry.byId(0x000f);
+  if (!deviceType) return unsupportedRegistryGap(0x000f);
+  return { outcome: "SUPPORTED", deviceType, reason: null };
 }
 
 function unsupportedRegistryGap(id: number): MatterDeviceTypeResolution {

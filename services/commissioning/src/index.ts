@@ -176,7 +176,7 @@ export class CommissioningService {
     // now correctly shows both (the dedup fix above), but committing both still isn't safe until
     // a commissioned device's persisted backendId is itself network/gateway-scoped. That address
     // scoping is Stage 4's job, not this one's — deliberately not attempted here.
-    const discovered = [...seen.values()].filter((v) => !this.sil.registry.reverseLookup(v.backendId));
+    const discovered = [...seen.values()].filter((v) => !this.sil.registry.isKnownBackendId(v.backendId));
     return { discovered, driverResults };
   }
 
@@ -198,7 +198,14 @@ export class CommissioningService {
     network?: NetworkInfo;
   }): Promise<Device> {
     const home = await this.requireHome();
-    if (input.capabilities.length === 0) {
+    // § Supreme Universal Keypad — the ONE legitimate 0-capability exception (a keypad's real
+    // capability declaration lives in the separate Universal Keypad Framework, never in
+    // `CapabilityKind`; see `EntityRegistryMirror.deviceBackendId`'s doc comment). Every other
+    // 0-capability attempt is still rejected exactly as before — this never silently accepts
+    // an uncategorized device with no capabilities. `supremeType` must be explicit here since
+    // `inferType([])` has nothing to infer from and would otherwise default to "switch", wrong
+    // for an input device.
+    if (input.capabilities.length === 0 && input.supremeType !== "keypad") {
       throw new SupremeError("validation_failed", "device must declare at least one capability");
     }
     await this.home.requireRoom(input.roomId);
@@ -223,7 +230,7 @@ export class CommissioningService {
       metadata: { commissionedAt: new Date().toISOString(), ...(network ? { network } : {}) },
     };
     const backendIds = Object.fromEntries(input.capabilities.map((c) => [c, input.backendId]));
-    await this.home.addDevice(device, backendIds);
+    await this.home.addDevice(device, backendIds, input.capabilities.length === 0 ? input.backendId : undefined);
     return device;
   }
 

@@ -307,6 +307,16 @@ describe("scopeCasambiBackendId / unscopeCasambiBackendId / casambiUnitIdFromBac
     expect(casambiUnitIdFromBackendId("knx.1_1_5")).toBeNull();
     expect(casambiUnitIdFromBackendId("mqtt/lamp/1")).toBeNull();
   });
+
+  it("§ Supreme Universal Keypad Stage 1 — scopes a keypad's backendId exactly like any other unit, so 'Network 1 Unit 4' and 'Network 2 Unit 4' keypads never collide", () => {
+    const net1 = scopeCasambiBackendId("casambi:4", "drv_net1");
+    const net2 = scopeCasambiBackendId("casambi:4", "drv_net2");
+    expect(net1).not.toBe(net2);
+    expect(unscopeCasambiBackendId(net1, "drv_net1")).toBe("casambi:4");
+    expect(unscopeCasambiBackendId(net2, "drv_net2")).toBe("casambi:4");
+    expect(casambiUnitIdFromBackendId(net1)).toBe(4);
+    expect(casambiUnitIdFromBackendId(net2)).toBe(4);
+  });
 });
 
 describe("withCasambiInstanceAddressing", () => {

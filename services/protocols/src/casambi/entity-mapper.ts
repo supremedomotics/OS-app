@@ -43,14 +43,39 @@ export interface CasambiUnit {
   controls?: CasambiControl[];
   sensors?: Record<string, unknown>;
   image?: string;
+  /** § Supreme Universal Keypad, Stage 1 — highest physical button index observed on this unit,
+   * plus one. Progressive and honest, like Local discovery's own control-value model: a 4-button
+   * keypad only reports `4` once button index 3 has actually been pressed at least once; it may
+   * read lower than the real hardware button count until every button has been exercised at
+   * least once. Only ever set by `local-discovery.ts`'s `updateUnitFromKeypadButton`. */
+  keypadButtonCount?: number;
 }
 
 const controlType = (c: CasambiControl): string => (c.type ?? "").toLowerCase();
 const hasControl = (u: CasambiUnit, ...types: string[]): boolean =>
   (u.controls ?? []).some((c) => types.includes(controlType(c)));
 
+/**
+ * A Casambi unit synthesized purely from 0x51 button telegrams (§ Supreme Universal Keypad,
+ * Stage 1) — never from any real Casambi wire field (Casambi's own REST/Cloud unit model has no
+ * documented "keypad" `type` value; `local-discovery.ts`'s `updateUnitFromKeypadButton` is the
+ * ONE place that sets this marker, exactly when it creates the unit stub). Distinguishing this
+ * from a fabricated protocol value: `type: "keypad"` here is Supreme's own bookkeeping tag for
+ * "this unit id has only ever been observed via button events, never a NotifyControlValues
+ * control-value report" — it never claims Casambi itself reports a unit type by this name.
+ */
+export function isKeypadUnit(u: CasambiUnit): boolean {
+  return (u.type ?? "").toLowerCase() === "keypad";
+}
+
 /** Derive the Supreme capabilities a Casambi unit supports from its advertised controls. */
 export function capabilitiesFromUnit(u: CasambiUnit): CapabilityKind[] {
+  // A keypad is an INPUT device — it has no `CapabilityKind` of its own (mirrors the
+  // 0-capability "camera" precedent in `Device.capabilities`'s own doc comment). Its real
+  // capability declaration flows through the separate Universal Keypad Framework
+  // (`KeypadCapabilityDeclaration`), never through this vocabulary — never fabricate an
+  // `onoff`/`brightness` here just because a keypad happens to have no dimmer/color control.
+  if (isKeypadUnit(u)) return [];
   const type = (u.type ?? "").toLowerCase();
   // Sensors (lux / presence / temperature / …) surface as Supreme sensors.
   if (type === "sensor" || (u.sensors && Object.keys(u.sensors).length > 0 && !hasControl(u, "dimmer"))) {
@@ -229,9 +254,11 @@ export type CasambiEntityKind =
   | "presence"
   | "lux"
   | "sensor"
-  | "relay";
+  | "relay"
+  | "keypad";
 
 export function describeCasambiEntityKind(u: CasambiUnit): CasambiEntityKind {
+  if (isKeypadUnit(u)) return "keypad";
   const caps = capabilitiesFromUnit(u);
   if (caps.includes("position")) return "position";
   if (caps.includes("sensor")) {

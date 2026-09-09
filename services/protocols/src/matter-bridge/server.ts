@@ -128,6 +128,17 @@ export interface MatterBridgeServer {
    * re-entry, only a genuine ecosystem-issued cluster command is. */
   setCapabilityState(endpointNumber: number, state: CapabilityState): Promise<void>;
 
+  /** § Matter Bridge Phase 2B — reports ONE real Universal Input Event (already classified by
+   * SupremeOS's own Input Engine — this never re-derives short-vs-long-vs-multi itself) onto a
+   * Generic Switch endpoint. Implemented by driving REAL `currentPosition` transitions through
+   * `endpoint.set()` (never manual event injection) — `@matter/node`'s own spec-compliant
+   * `SwitchServer` derives the correct `initialPress`/`shortRelease`/`longPress`/`longRelease`/
+   * `multiPressComplete` event sequence from those transitions, exactly the same "drive real SDK
+   * state, let the SDK do the rest" convention `setCapabilityState` already uses for every other
+   * cluster. A no-op if the endpoint doesn't exist (mirrors `setCapabilityState`'s own defensive
+   * no-op) or isn't a Generic Switch. */
+  reportKeypadPress(endpointNumber: number, press: "short" | "long" | "double" | "triple"): Promise<void>;
+
   /** Fires once per genuine cluster command the server received from a Matter controller
    * (Apple/Google/Alexa/a test controller/…), already translated into the SAME
    * `CapabilityCommand` shape the REST API/automations issue — the caller never sees a raw

@@ -12,6 +12,7 @@ import type { IGrantStore } from "@supreme/permissions";
 import type { INotificationStore } from "@supreme/notifications";
 import type { IInstalledDriverStore } from "@supreme/drivers";
 import type { IAutomationStore } from "@supreme/automations";
+import type { IKeypadMappingStore } from "@supreme/keypad-framework";
 import type { ISecurityStore } from "@supreme/security";
 import type { IProtocolBindingStore, IDeviceProviderStore } from "@supreme/integration-layer";
 import type { IPushTokenStore } from "@supreme/notifications";
@@ -38,6 +39,7 @@ import { BackupRepo } from "./repositories/backup-repo.js";
 import { PendingDeviceRepo, type IPendingDeviceStore } from "./repositories/pending-device-repo.js";
 import { DeviceOwnershipRepo } from "./repositories/device-ownership-repo.js";
 import { DeviceProviderRepo } from "./repositories/device-provider-repo.js";
+import { KeypadMappingRepo } from "./repositories/keypad-mapping-repo.js";
 
 export { migrate } from "./migrate.js";
 export { PgDb, PgliteDb, type SqlDb } from "./sql-db.js";
@@ -69,6 +71,7 @@ export { ProtocolBindingRepo } from "./repositories/protocol-binding-repo.js";
 export { DeviceOwnershipRepo } from "./repositories/device-ownership-repo.js";
 export { DeviceProviderRepo } from "./repositories/device-provider-repo.js";
 export { PushTokenRepo } from "./repositories/push-token-repo.js";
+export { KeypadMappingRepo } from "./repositories/keypad-mapping-repo.js";
 export { MigrationPolicyRepo } from "./repositories/migration-policy-repo.js";
 export { IntelligenceRepo, type SieHistoryRecord, type SieSavingsAggregate } from "./repositories/intelligence-repo.js";
 export { migrateOwnershipToProvider, type OwnershipMigrationReport } from "./migrate-ownership.js";
@@ -96,6 +99,7 @@ export interface PersistenceStores {
   /** Legacy read-only accessor for the one-time ownership→provider migration only. */
   deviceOwnership: DeviceOwnershipRepo;
   deviceProvider: IDeviceProviderStore;
+  keypadMappings: IKeypadMappingStore;
 }
 
 /** Build store implementations over an already-migrated {@link SqlDb}. */
@@ -120,6 +124,7 @@ export function buildStores(db: SqlDb): Omit<PersistenceStores, "db"> {
     webAuthn: new WebAuthnRepo(db),
     deviceOwnership: new DeviceOwnershipRepo(db),
     deviceProvider: new DeviceProviderRepo(db),
+    keypadMappings: new KeypadMappingRepo(db),
   };
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CapabilityKind, Device, Scene } from "@supreme/domain-model";
+import type { CapabilityKind, Device, Room, Scene } from "@supreme/domain-model";
+import { groupKeypadsByRoom } from "./universal-keypad-logic.js";
 import {
   client,
   createAutomation,
@@ -877,6 +878,7 @@ export type EditorNode = Node;
 const PALETTE: { section: "triggers" | "conditions" | "actions"; type: string; label: string }[] = [
   { section: "triggers", type: "time", label: "Time" },
   { section: "triggers", type: "device_state", label: "Device" },
+  { section: "triggers", type: "keypad_input", label: "Keypad" },
   { section: "conditions", type: "device_state", label: "Device is" },
   { section: "actions", type: "device_command", label: "Adjust Device" },
   { section: "actions", type: "scene_activate", label: "Run Scene" },
@@ -889,6 +891,10 @@ export function defaultNode(type: string): Node {
     // § Capability-Driven Builder — no capability is assumed; the field/action pickers populate
     // themselves the moment a Runtime Object is chosen, from THAT device's real capabilities.
     case "device_state": return { type, deviceId: null, capability: null, field: null, op: "eq", value: null };
+    // § Universal Keypad Framework, Stage 4B — references the SAME normalized keypad event
+    // identity (keypadId/control/event) the Universal Keypad page's mappings use; this is a
+    // trigger referencing that event, never a second keypad event model.
+    case "keypad_input": return { type, keypadId: null, control: null, event: "short_press" };
     case "device_command": return { type, deviceId: null, command: null };
     case "scene_activate": return { type, sceneId: null };
     case "notify": return { type, level: "info", title: "Alert", body: "" };
@@ -902,10 +908,12 @@ function Editor({ onClose }: { onClose: () => void }) {
   const [nodes, setNodes] = useState<{ triggers: Node[]; conditions: Node[]; actions: Node[] }>({ triggers: [], conditions: [], actions: [] });
   const [sel, setSel] = useState<{ section: keyof typeof nodes; index: number } | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [scenes, setScenes] = useState<Scene[]>([]);
 
   useEffect(() => {
     void client.home().then(async (h) => {
+      setRooms(h.rooms);
       const all: Device[] = [];
       for (const r of h.rooms) all.push(...(await client.devicesInRoom(r.id)).devices);
       setDevices(all);
@@ -959,7 +967,7 @@ function Editor({ onClose }: { onClose: () => void }) {
       </div>
 
       {sel && nodes[sel.section][sel.index] && (
-        <NodeConfig node={nodes[sel.section][sel.index]!} devices={devices} scenes={scenes} onChange={update} onDone={() => setSel(null)} />
+        <NodeConfig node={nodes[sel.section][sel.index]!} devices={devices} rooms={rooms} scenes={scenes} onChange={update} onDone={() => setSel(null)} />
       )}
 
       <p className="palette-hint">Drag a block onto a zone (or tap to add)</p>
@@ -1010,7 +1018,75 @@ function kindsForNode(device: Device | undefined, type: string): CapabilityKind[
   return type === "device_command" ? commandableCapabilities(kinds) : kinds;
 }
 
-function NodeConfig({ node, devices, scenes, onChange, onDone }: { node: Node; devices: Device[]; scenes: Scene[]; onChange: (n: Node) => void; onDone: () => void }) {
+/**
+ * § Universal Keypad Framework, Stage 4B — WHEN → Keypad → Room → Keypad → Button → Event.
+ * References the SAME keypad `Device` entity and room grouping the Universal Keypad page
+ * (`universal-keypad.tsx`/`universal-keypad-logic.ts`) already uses — no second keypad
+ * registry, no duplicated programming UI, this is Automation simply pointing at an existing
+ * normalized event as its trigger.
+ */
+function KeypadTriggerFields({ node, devices, rooms, onChange }: { node: Node; devices: Device[]; rooms: Room[]; onChange: (n: Node) => void }) {
+  const groups = groupKeypadsByRoom(devices, rooms);
+  const keypad = devices.find((d) => d.id === node.keypadId) ?? null;
+  const [controls, setControls] = useState<{ id: string; label: string | null }[] | null>(null);
+
+  useEffect(() => {
+    setControls(null);
+    if (!keypad) return;
+    let live = true;
+    void client.keypadCapabilities(keypad.id).then((r) => {
+      if (live) setControls(r.capabilities?.controls.map((c) => ({ id: c.id, label: c.label })) ?? null);
+    });
+    return () => { live = false; };
+  }, [keypad?.id]);
+
+  return (
+    <>
+      <label className="drv-field"><span className="lbl">Keypad</span>
+        <select
+          value={String(node.keypadId ?? "")}
+          onChange={(e) => onChange({ ...node, keypadId: e.target.value || null, control: null })}
+        >
+          <option value="">Select a keypad…</option>
+          {groups.map((g) => (
+            <optgroup key={g.room?.id ?? "unassigned"} label={g.room?.name ?? "Unassigned"}>
+              {g.keypads.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      {keypad && (
+        controls && controls.length > 0 ? (
+          <label className="drv-field"><span className="lbl">Button</span>
+            <select value={String(node.control ?? "")} onChange={(e) => onChange({ ...node, control: e.target.value || null })}>
+              <option value="">Select a button…</option>
+              {controls.map((c) => <option key={c.id} value={c.id}>{c.label ?? c.id}</option>)}
+            </select>
+          </label>
+        ) : (
+          <label className="drv-field"><span className="lbl">Button (control id)</span>
+            <input
+              placeholder="e.g. 0, button-1…"
+              value={String(node.control ?? "")}
+              onChange={(e) => onChange({ ...node, control: e.target.value || null })}
+            />
+          </label>
+        )
+      )}
+      {keypad && (
+        <label className="drv-field"><span className="lbl">Event</span>
+          <select value={String(node.event ?? "short_press")} onChange={(e) => onChange({ ...node, event: e.target.value })}>
+            <option value="short_press">Short Press</option>
+            <option value="hold_start">Long Press — Start</option>
+            <option value="hold_end">Long Press — End</option>
+          </select>
+        </label>
+      )}
+    </>
+  );
+}
+
+function NodeConfig({ node, devices, rooms, scenes, onChange, onDone }: { node: Node; devices: Device[]; rooms: Room[]; scenes: Scene[]; onChange: (n: Node) => void; onDone: () => void }) {
   const t = node.type;
   return (
     <div className="node-config">
@@ -1018,6 +1094,7 @@ function NodeConfig({ node, devices, scenes, onChange, onDone }: { node: Node; d
       {t === "time" && (
         <input type="time" value={String(node.at ?? "07:00")} onChange={(e) => onChange({ ...node, at: e.target.value })} />
       )}
+      {t === "keypad_input" && <KeypadTriggerFields node={node} devices={devices} rooms={rooms} onChange={onChange} />}
       {t === "delay" && (
         <label>Delay (s) <input type="number" min={1} max={60} value={Math.round(Number(node.ms ?? 5000) / 1000)} onChange={(e) => onChange({ ...node, ms: Number(e.target.value) * 1000 })} /></label>
       )}
@@ -1411,8 +1488,18 @@ export function nodeSummary(n: Node, devices: Device[], scenes: Scene[]): string
     case "scene_activate": return `Scene · ${scenes.find((s) => s.id === n.sceneId)?.name ?? "…"}`;
     case "device_command": return `${dev(n.deviceId)} → ${describeCommand(n.command as ({ capability: CapabilityKind } & Record<string, unknown>) | null)}`;
     case "device_state": return `${dev(n.deviceId)} ${describeFieldCondition(n.capability as CapabilityKind | null, n.field as string | null, n.op as string, n.value)}`;
+    case "keypad_input": return describeKeypadTrigger(n, devices);
     default: return n.type;
   }
+}
+
+const KEYPAD_EVENT_LABELS: Record<string, string> = { short_press: "Short Press", hold_start: "Long Press Start", hold_end: "Long Press End" };
+/** § Universal Keypad Framework, Stage 4B — shared phrase-builder for a keypad_input trigger,
+ * used by both the node chip and the full sentence summary, so the two never drift. */
+function describeKeypadTrigger(n: Node, devices: Device[]): string {
+  const name = devices.find((d) => d.id === n.keypadId)?.name ?? "Keypad";
+  if (!n.control) return `${name} · …`;
+  return `${name} · Button ${n.control} · ${KEYPAD_EVENT_LABELS[n.event as string] ?? n.event}`;
 }
 
 /** § Part 6 — the shared phrase-builder behind both node chips and the full sentence summary,
@@ -1455,6 +1542,7 @@ function summarizeAutomation(triggers: Node[], conditions: Node[], actions: Node
       case "time": return `it's ${n.at}`;
       case "interval": return `every ${n.everyMinutes} minutes`;
       case "device_state": return `${dev(n.deviceId)}'s ${describeFieldCondition(n.capability as CapabilityKind | null, n.field as string | null, n.op as string, n.value)}`;
+      case "keypad_input": return `${describeKeypadTrigger(n, devices)} fires`;
       case "time_window": return "it's within the scheduled window";
       default: return "a condition is met";
     }
@@ -1710,6 +1798,7 @@ export function nodeGlyph(type: string): string {
     scene_activate: "✦",
     notify: "🔔",
     delay: "⏱",
+    keypad_input: "▦",
   }[type] ?? "•";
 }
 export function actionLabel(type?: string): string {
@@ -1729,6 +1818,7 @@ export function condTitle(c: AutomationView["conditions"][number]): string {
 export function triggerTitle(t: AutomationView["triggers"][number]): string {
   if (t.type === "time") return `Time · ${t.at ?? ""}`;
   if (t.type === "interval") return `Every ${t.everyMinutes}m`;
+  if (t.type === "keypad_input") return `Keypad · Button ${t.control} · ${KEYPAD_EVENT_LABELS[t.event ?? ""] ?? t.event}`;
   const kind = t.capability as CapabilityKind | undefined;
   const label = kind ? CAPABILITY_LABELS[kind] : "Device";
   return `${label} · ${(STATE_FIELDS[kind ?? "onoff"] ?? []).find((f) => f.key === t.field)?.label ?? t.field ?? ""}`.trim();

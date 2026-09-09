@@ -8,6 +8,7 @@ import type {
   CapabilityState,
   DeviceId,
   IntentTarget,
+  KeypadInputEvent,
   NotificationLevel,
   SceneId,
   UserId,
@@ -72,7 +73,7 @@ export interface AutomationRun {
   id: string;
   automationId: string;
   startedAt: string;
-  /** What set it off: "device_state" | "time" | "interval" | "manual". */
+  /** What set it off: "device_state" | "time" | "interval" | "keypad_input" | "manual". */
   trigger: string;
   conditionsPassed: boolean;
   /** The first condition that failed (why it didn't run), when applicable. */
@@ -125,6 +126,24 @@ export class AutomationEngine {
           evaluateComparator(readCapabilityField(event.state, t.field), t.op, t.value),
       );
       if (fired) await this.execute(a, "device_state");
+    }
+  }
+
+  /** § Universal Keypad Framework, Stage 4B — evaluate `keypad_input` triggers against a
+   * normalized keypad event, the SAME event `KeypadMappingEngine.onInputEvent` also consumes
+   * (see `UniversalInputEngine`'s `publish` callback in `context.ts`, which calls both). This
+   * is the Automation Engine's own independent match — never routed through, or dependent on,
+   * any Universal Keypad mapping; a button can have a direct mapping, an automation trigger,
+   * both, or neither, and none of those combinations affects any other. Mirrors `onDeviceState`
+   * exactly: no new event bus, no protocol knowledge — `event.keypadId` is already a real
+   * Supreme `DeviceId` carrying whatever multi-instance identity commissioning gave it, so two
+   * different keypads (or two different protocols) can never collide here. */
+  async onKeypadInput(event: KeypadInputEvent): Promise<void> {
+    for (const a of this.automations) {
+      const fired = a.triggers.some(
+        (t) => t.type === "keypad_input" && t.keypadId === event.keypadId && t.control === event.control && t.event === event.type,
+      );
+      if (fired) await this.execute(a, "keypad_input");
     }
   }
 

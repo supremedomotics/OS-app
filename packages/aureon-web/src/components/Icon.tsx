@@ -29,13 +29,17 @@ export type IconName =
   | "speaker" | "gamepad" | "volume" | "volume-mute" | "image" | "remote" | "film" | "music-note"
   | "apple-tv" | "cabinet"
   // § Infrastructure Design Language — Energy (reusable across Solar/Battery/EV/Generator)
-  | "plug" | "sun" | "ev" | "generator-unit" | "leaf" | "trend-up" | "flow";
+  | "plug" | "sun" | "ev" | "generator-unit" | "leaf" | "trend-up" | "flow"
+  // § Supreme Universal Keypad — a physical button controller (distinct from "devices"'
+  // generic device-stack glyph): a 2x2 grid of discrete buttons.
+  | "keypad";
 
 const PATHS: Record<IconName, JSX.Element> = {
   home: <><path d="M3 10.7 12 3.5l9 7.2" /><path d="M5.6 9.6V20h12.8V9.6" /><path d="M10 20v-5h4v5" /></>,
   dashboard: <><rect x="3.5" y="3.5" width="7.5" height="9.5" rx="1.4" /><rect x="3.5" y="16" width="7.5" height="4.5" rx="1.4" /><rect x="13" y="3.5" width="7.5" height="4.5" rx="1.4" /><rect x="13" y="11" width="7.5" height="9.5" rx="1.4" /></>,
   discover: <><circle cx="11" cy="11" r="6.5" /><path d="M11 4.5v3M11 14.5v3M4.5 11h3M14.5 11h3" /><path d="M20.5 20.5 16 16" /></>,
   devices: <><rect x="3.5" y="5" width="12" height="14" rx="1.6" /><rect x="17" y="9" width="3.5" height="10" rx="1.2" /><path d="M6.5 8.5h6M6.5 12h6" /></>,
+  keypad: <><rect x="3.5" y="3.5" width="17" height="17" rx="2.4" /><circle cx="9" cy="9" r="1.6" /><circle cx="15" cy="9" r="1.6" /><circle cx="9" cy="15" r="1.6" /><circle cx="15" cy="15" r="1.6" /></>,
   extensions: <><path d="M9 3.5h3.2a1 1 0 0 1 1 1V6a1.6 1.6 0 0 0 3.2 0V4.5h2.1a1 1 0 0 1 1 1V8h1.4a1.6 1.6 0 0 1 0 3.2H20v3.3a1 1 0 0 1-1 1h-2.6" /><path d="M13.2 20.5H5.5a1 1 0 0 1-1-1v-6.8H6a1.6 1.6 0 0 0 0-3.2H4.5V4.5" /></>,
   rooms: <><rect x="3.5" y="3.5" width="7" height="7" rx="1.4" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.4" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.4" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.4" /></>,
   areas: <><path d="M3.5 8.5 12 4l8.5 4.5-8.5 4.5z" /><path d="M3.5 13 12 17.5 20.5 13" /><path d="M3.5 8.5v4.5M20.5 8.5v4.5" /></>,

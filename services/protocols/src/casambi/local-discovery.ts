@@ -109,3 +109,32 @@ export function updateUnitFromControlValues(
   if (controls.length > 0) unit.controls = controls;
   return unit;
 }
+
+/**
+ * § Supreme Universal Keypad, Stage 1 — a pure Casambi keypad (buttons only, no dimmer/sensor
+ * control channel) never sends a 0x4B NotifyControlValues report at all, so
+ * {@link updateUnitFromControlValues} alone would never create a unit entry for it — the button
+ * would decode fine (`event-engine.ts`'s 0x51 handling) but the physical keypad itself would stay
+ * permanently invisible to `discover()`. This is the keypad-side equivalent: folds one observed
+ * button press into the existing (or a fresh) unit record, tagging it `type: "keypad"` (see
+ * `entity-mapper.ts`'s `isKeypadUnit` doc comment for why that tag is Supreme-internal bookkeeping,
+ * never a fabricated Casambi wire value) and tracking the highest button index seen so far.
+ *
+ * Deliberately does NOT hardcode a button count — real hardware varies (this framework's own
+ * driving spec documents a 4-button unit, but nothing here assumes that number). `keypadButtonCount`
+ * honestly reflects only what's been observed, exactly like Local discovery's progressive
+ * control-value model already does for ordinary units.
+ */
+export function updateUnitFromKeypadButton(
+  unitId: number,
+  button: number,
+  previous?: CasambiUnit,
+): CasambiUnit {
+  const observedCount = button + 1;
+  return {
+    ...previous,
+    id: unitId,
+    type: "keypad",
+    keypadButtonCount: Math.max(previous?.keypadButtonCount ?? 0, observedCount),
+  };
+}
