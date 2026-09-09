@@ -104,7 +104,7 @@ describe("Casambi Packet Replay — automatic regression suite (no hardware requ
     for (const packet of capture.packets) gatewaySocket.injectDatagram(packet);
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(events).toContainEqual({ type: "button", unitId: 9, action: "short_press", ts: expect.any(String) });
+    expect(events).toContainEqual({ type: "button", unitId: 9, button: 0, action: "short_press", ts: expect.any(String) });
     const monitor = driver.getCasambiTransportMonitor();
     expect(monitor.adapter?.decoded).toBe(1);
     await driver.disconnect();

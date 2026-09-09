@@ -78,6 +78,10 @@ export const SupremeDeviceType = z.enum([
   "vacuum",
   "sensor",
   "camera",
+  /** § Supreme Universal Keypad — a physical input device (buttons/encoders/…). Legitimately
+   * 0-`capabilities` like "camera" above: its real capability declaration flows through the
+   * separate `KeypadCapabilityDeclaration` model, never through `CapabilityKind`. */
+  "keypad",
 ]);
 export type SupremeDeviceType = z.infer<typeof SupremeDeviceType>;
 

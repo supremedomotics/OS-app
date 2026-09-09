@@ -13,6 +13,7 @@ import {
 } from "@supreme/integration-layer";
 import { createProtocolTracer, type ProtocolTracer } from "../av-sdk/protocol-tracer.js";
 import { capabilitiesFromUnit, statesFromUnit, type CasambiUnit } from "./entity-mapper.js";
+import { updateUnitFromKeypadButton } from "./local-discovery.js";
 import {
   CasambiSessionExpiredError,
   HttpCasambiTransport,
@@ -726,7 +727,7 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
         });
         break;
       case "button":
-        this.events.publish({ type: "button", unitId: signal.unitId, action: signal.action, ts: nowIso() });
+        this.applyButtonEvent(signal.unitId, signal.button, signal.action);
         break;
       case "sceneRaw":
         // No unitId/sceneId to publish as a typed event yet — see event-engine.ts's doc comment.
@@ -772,6 +773,18 @@ export class CasambiProtocolDriver implements INativeProtocolDriver {
       const entry = states.find((s) => s.capability === b.capability);
       if (entry) this.record(b.deviceId, b.capability, entry.state, b.unitId);
     }
+  }
+
+  /** § Supreme Universal Keypad, Stage 1 — the ONE reaction to a real 0x51 button telegram
+   * (Local UDP only; Cloud has no documented button-event equivalent to relay, an honest gap
+   * rather than a fabricated Cloud signal). Folds the observed button into `this.units` via
+   * {@link updateUnitFromKeypadButton} — exactly what {@link applyUnit} does for an ordinary
+   * unit's control-value packet — so a pure keypad (which never sends 0x4B) still becomes
+   * visible to `discover()`, then republishes the transport-independent `ButtonEvent`. */
+  private applyButtonEvent(unitId: number, button: number, action: string): void {
+    const prev = this.units.get(unitId);
+    this.units.set(unitId, updateUnitFromKeypadButton(unitId, button, prev));
+    this.events.publish({ type: "button", unitId, button, action, ts: nowIso() });
   }
 
   private mergeUnit(unit: CasambiUnit): CasambiUnit {

@@ -126,7 +126,7 @@ describe("Casambi driver over @supreme/lan (NatsUdpTransportClient + UdpTranspor
     // 0x51: Unit_ID=9, Source=1, Button=0, Event=2 (short press)
     gatewaySocket.receiveBroadcast(Buffer.from("0.70.5.51.9.1.0.2\r\n", "ascii"));
     await new Promise((r) => setTimeout(r, 10)); // one real bus hop (server -> NATS -> client)
-    expect(events).toContainEqual({ type: "button", unitId: 9, action: "short_press", ts: expect.any(String) });
+    expect(events).toContainEqual({ type: "button", unitId: 9, button: 0, action: "short_press", ts: expect.any(String) });
     await driver.disconnect();
   });
 

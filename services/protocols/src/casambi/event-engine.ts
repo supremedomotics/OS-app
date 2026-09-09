@@ -40,11 +40,15 @@ export interface DeviceEvent extends CasambiEventBase {
   state: CapabilityState;
 }
 
-/** A physical Casambi keypad/button press. Reserved for a future button-capable unit type —
- * nothing publishes this yet. */
+/** A physical Casambi keypad/button press (§ Supreme Universal Keypad, Stage 1 — the first real
+ * publisher of this event). `button` is the physical button index (0-7, per the 0x51 wire format,
+ * p.279) — WHICH control on the keypad fired; `action` is the decoded lifecycle label
+ * (`short_press`/`long_press_start`/`long_press_end`, from `CASAMBI_BUTTON_EVENT`), or
+ * `type_<n>` for a real-but-undocumented event code Casambi may report on some firmware. */
 export interface ButtonEvent extends CasambiEventBase {
   type: "button";
   unitId: number;
+  button: number;
   action: string;
 }
 
@@ -133,7 +137,7 @@ export type CasambiSignal =
   | { kind: "unit"; unit: CasambiUnit }
   | { kind: "unitRemoved"; unitId: number }
   | { kind: "networkUpdated" }
-  | { kind: "button"; unitId: number; action: string }
+  | { kind: "button"; unitId: number; button: number; action: string }
   /** Local-only 0x0D "Scene called" — an 8-bit, installer-app-configured code with no
    * unitId/sceneId equivalent to `SceneEvent`. Carried through as raw data rather than forced
    * into a shape it doesn't fit; see TODO.md for the open question of what a real typed event
@@ -207,7 +211,7 @@ export function normalizeLocalPacket(
     }
     case 0x51: {
       const btn = parseButtonEvent(packet);
-      return { kind: "button", unitId: btn.unitId, action: btn.eventLabel ?? `type_${btn.event}` };
+      return { kind: "button", unitId: btn.unitId, button: btn.button, action: btn.eventLabel ?? `type_${btn.event}` };
     }
     case 0x3a: {
       const removed = parseNodeRemoved(packet);

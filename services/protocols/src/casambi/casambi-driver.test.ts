@@ -351,7 +351,55 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     driver.onDriverEvent((e) => events.push(e));
     // 0x51: Unit_ID=9, Source=1, Button=0, Event=2 (short press)
     socket.receive("0.70.5.51.9.1.0.2\r\n");
-    expect(events).toContainEqual({ type: "button", unitId: 9, action: "short_press", ts: expect.any(String) });
+    expect(events).toContainEqual({ type: "button", unitId: 9, button: 0, action: "short_press", ts: expect.any(String) });
+    await driver.disconnect();
+  });
+
+  it("§ Supreme Universal Keypad Stage 1 — button events alone make a pure keypad unit discoverable, capability-less and progressively counted", async () => {
+    const { socket, driver } = makeLocalDriver();
+    await driver.connect();
+    // Real hardware evidence (Unit 04, 4 buttons): short presses on buttons 0-3.
+    socket.receive("0.70.5.51.4.1.0.2\r\n");
+    let discovered = await driver.discover();
+    expect(discovered).toEqual([
+      expect.objectContaining({ backendId: "casambi:4", capabilities: [], raw: expect.objectContaining({ keypad: true, buttonCount: 1 }) }),
+    ]);
+    socket.receive("0.70.5.51.4.1.1.2\r\n");
+    socket.receive("0.70.5.51.4.1.2.2\r\n");
+    socket.receive("0.70.5.51.4.1.3.2\r\n");
+    discovered = await driver.discover();
+    expect(discovered).toEqual([
+      expect.objectContaining({ backendId: "casambi:4", capabilities: [], raw: expect.objectContaining({ keypad: true, buttonCount: 4 }) }),
+    ]);
+    await driver.disconnect();
+  });
+
+  it("§ Supreme Universal Keypad Stage 1 — preserves the full long-press lifecycle (start/end), never collapsed into one event", async () => {
+    const { socket, driver } = makeLocalDriver();
+    await driver.connect();
+    const events: CasambiDriverEvent[] = [];
+    driver.onDriverEvent((e) => events.push(e));
+    // Button 2: long press start (event=9), then long press end (event=12=0xc).
+    socket.receive("0.70.5.51.4.1.2.9\r\n");
+    socket.receive("0.70.5.51.4.1.2.c\r\n");
+    expect(events).toEqual([
+      expect.objectContaining({ type: "button", unitId: 4, button: 2, action: "long_press_start" }),
+      expect.objectContaining({ type: "button", unitId: 4, button: 2, action: "long_press_end" }),
+    ]);
+    await driver.disconnect();
+  });
+
+  it("§ Supreme Universal Keypad Stage 1 — decodes short press on every button of a 4-button keypad", async () => {
+    const { socket, driver } = makeLocalDriver();
+    await driver.connect();
+    const events: CasambiDriverEvent[] = [];
+    driver.onDriverEvent((e) => events.push(e));
+    for (const button of [0, 1, 2, 3]) {
+      socket.receive(`0.70.5.51.4.1.${button}.2\r\n`);
+    }
+    expect(events).toEqual([0, 1, 2, 3].map((button) =>
+      expect.objectContaining({ type: "button", unitId: 4, button, action: "short_press" }),
+    ));
     await driver.disconnect();
   });
 
