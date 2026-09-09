@@ -1386,7 +1386,7 @@ export class InstallerServices {
   async autoCommissionMedia(protocol: "avr" | "heos" | "yamaha"): Promise<MediaAutoCommissionResult> {
     const discovered = (await this.d.sil.discover())
       .filter((d) => (typeof d.raw?.protocol === "string" ? d.raw.protocol : "") === protocol)
-      .filter((d) => !this.d.sil.registry.reverseLookup(d.backendId));
+      .filter((d) => !this.d.sil.registry.isKnownBackendId(d.backendId));
     if (discovered.length === 0) {
       throw new SupremeError("validation_failed", `no new ${protocol} devices discovered to commission`);
     }
@@ -2277,9 +2277,9 @@ export class InstallerServices {
     // going forward, so the loop below would never reach it again to clean it up.
     if (store) {
       for (const p of existingPending) {
-        if (this.d.sil.registry.reverseLookup(p.backendId)) await store.remove(this.d.homeId, p.id);
+        if (this.d.sil.registry.isKnownBackendId(p.backendId)) await store.remove(this.d.homeId, p.id);
       }
-      existingPending = existingPending.filter((p) => !this.d.sil.registry.reverseLookup(p.backendId));
+      existingPending = existingPending.filter((p) => !this.d.sil.registry.isKnownBackendId(p.backendId));
     }
     const existingPendingByBackendId = new Map(existingPending.map((p) => [p.backendId, p.id]));
     if (store) {
@@ -2358,6 +2358,12 @@ export class InstallerServices {
       roomId: input.roomId,
       roomNameHint: rec.roomHint,
       capabilities: (input.capabilities ?? (rec.capabilities as CapabilityKind[])),
+      // § Supreme Universal Keypad — a 0-capability pending record can currently only be a
+      // keypad (`canAutoCommission` routes every capability-less discovery here; nothing else
+      // produces one), so this is the one honest inference this method makes, not a guess:
+      // `CommissioningService.commission` requires an EXPLICIT `supremeType: "keypad"` to accept
+      // zero capabilities at all, precisely so this can never silently widen to any other device.
+      ...((input.capabilities ?? (rec.capabilities as CapabilityKind[])).length === 0 ? { supremeType: "keypad" as const } : {}),
       // § ADR 0018 — the SAME structural capability config discovery resolved, carried through
       // Pending Approval instead of being lost, producing the identical persisted device the
       // auto-commit fast path would have produced for this same device.

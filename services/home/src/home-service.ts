@@ -107,10 +107,18 @@ export class HomeService {
    * Commission a device (ADR-0023 § Commissioning: Create Device → Assign Provider →
    * Bind Driver). `backendIds` non-empty maps device capabilities onto backend
    * entity ids in the SIL's entity registry.
+   *
+   * `deviceBackendId` (§ Supreme Universal Keypad) is the device-level counterpart for a
+   * capability-less device (a keypad) — `backendIds` is necessarily empty for one (there is
+   * no `CapabilityKind` to key it by), so without this its backendId would never reach the
+   * SIL's registry at all, and every re-scan would treat it as a brand-new find forever.
+   * Never set for a device with any real capability — that case still goes through
+   * `backendIds` exactly as before.
    */
-  async addDevice(device: Device, backendIds: Record<string, string>): Promise<void> {
+  async addDevice(device: Device, backendIds: Record<string, string>, deviceBackendId?: string): Promise<void> {
     await this.store.putDevice(device, backendIds);
     this.mapEntities(device, backendIds);
+    if (device.capabilities.length === 0 && deviceBackendId) this.sil.mapDeviceEntity(device.id, deviceBackendId);
     this.emitChanged({ type: "upsert", device });
   }
 

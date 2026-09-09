@@ -172,6 +172,13 @@ export class SupremeIntegrationLayer {
     this.registry.map(deviceId, capability, ref);
   }
 
+  /** § Supreme Universal Keypad — the device-level counterpart to {@link mapEntity}, for a
+   * device with no `CapabilityKind` at all (a keypad; see `EntityRegistryMirror.
+   * deviceBackendId`'s doc comment). Never called for a device that has any real capability. */
+  mapDeviceEntity(deviceId: DeviceId, backendId: string): void {
+    this.registry.mapDevice(deviceId, backendId);
+  }
+
   /** Drop every backend mapping AND provider/lifecycle record for a device (used
    * when the device is deleted) — an orphaned record would otherwise let a future
    * device reuse the same id. Also releases the owning driver's own per-device
