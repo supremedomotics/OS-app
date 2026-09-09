@@ -9,6 +9,7 @@ import { ForgotPassword, SetupWizard } from "./onboarding.js";
 import { PasswordInput } from "./password-input.js";
 import { ThemeSettings, NotificationCenter } from "./settings.js";
 import { Automations } from "./automations.js";
+import { UniversalKeypad } from "./universal-keypad.js";
 import { DiscoverDevices } from "./discover.js";
 import { DeviceManager } from "./devices.js";
 import { Media } from "./media.js";
@@ -25,8 +26,8 @@ import { CanonicalDeviceDetail, DeviceDetailContext } from "./device-detail-rout
 
 export type Tab =
   | "dashboard" | "discover" | "devices" | "extensions"
-  | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "lighting" | "security" | "energy" | "notifications" | "settings" | "developer";
-type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "scenes" | "rooms" | "areas" | "media" | "climate" | "light" | "security" | "energy" | "notifications" | "settings" | "developer";
+  | "automations" | "keypad" | "scenes" | "rooms" | "areas" | "media" | "climate" | "lighting" | "security" | "energy" | "notifications" | "settings" | "developer";
+type NavIcon = "dashboard" | "discover" | "devices" | "extensions" | "automations" | "keypad" | "scenes" | "rooms" | "areas" | "media" | "climate" | "light" | "security" | "energy" | "notifications" | "settings" | "developer";
 
 // The full platform navigation (§ Navigation). Nothing is hidden behind URLs — every backend area is
 // a first-class destination. "developer" appears only in Developer Mode.
@@ -36,6 +37,7 @@ const NAV: { id: Tab; label: string; icon: NavIcon; dev?: boolean }[] = [
   { id: "devices", label: "Devices", icon: "devices" },
   { id: "extensions", label: "Extension Center", icon: "extensions" },
   { id: "automations", label: "Automations", icon: "automations" },
+  { id: "keypad", label: "Supreme Universal Keypad", icon: "keypad" },
   { id: "scenes", label: "Scenes", icon: "scenes" },
   { id: "rooms", label: "Rooms", icon: "rooms" },
   { id: "areas", label: "Areas", icon: "areas" },
@@ -303,6 +305,7 @@ export function App() {
       {tab === "devices" && <DeviceManager onNavigate={go} devMode={showInstallerDiagnostics} />}
       {tab === "extensions" && <ExtensionCenter />}
       {tab === "automations" && <Automations devMode={showInstallerDiagnostics} />}
+      {tab === "keypad" && <UniversalKeypad />}
       {tab === "scenes" && <Scenes />}
       {tab === "rooms" && <RoomsScreen selected={selectedRoom} onSelect={setSelectedRoom} devMode={showInstallerDiagnostics} />}
       {tab === "areas" && <AreasScreen onNavigate={go} />}
