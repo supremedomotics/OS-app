@@ -20,6 +20,7 @@ import {
   resolveCommandDefinitions,
   summarizeMapping,
   targetableCapabilities,
+  targetCapabilitiesForBehavior,
   validateKeypadMappingForm,
   type KeypadActionFormEntry,
   type KeypadMappingFormState,
@@ -163,7 +164,10 @@ function KeypadProgramming({
       <button className="back" onClick={onBack}>‹ Supreme Universal Keypad</button>
       <div className="screen-head">
         <div>
-          <h1>{keypad.name}</h1>
+          <span className="row" style={{ gap: 10 }}>
+            <h1>{keypad.name}</h1>
+            <button className="ukp-link" onClick={() => rename(keypad, onKeypadUpdated)}>Rename</button>
+          </span>
           <p className="muted">{room?.name ?? "Unassigned"} • {keypad.status === "online" ? "Online" : "Offline"}</p>
         </div>
       </div>
@@ -230,6 +234,21 @@ function KeypadProgramming({
       )}
     </div>
   );
+}
+
+/** § Universal Keypad — same rename pattern as `device-detail-sections.tsx`'s
+ * `DeviceManageActions.rename()` (reused verbatim, not a second implementation): a real
+ * keypad is still just a `Device`, renamed through the SAME generic `updateDevice` endpoint
+ * every other device uses. */
+async function rename(keypad: Device, onRenamed: () => void): Promise<void> {
+  const name = window.prompt("Rename keypad", keypad.name);
+  if (!name || !name.trim() || name === keypad.name) return;
+  try {
+    await client.updateDevice(keypad.id, { name: name.trim() });
+    onRenamed();
+  } catch (e) {
+    window.alert(e instanceof Error ? e.message : "Could not rename this keypad.");
+  }
 }
 
 /** § Casambi Universal Keypad — button-count setup. Control ids are 0-indexed to match the
@@ -327,7 +346,10 @@ function MappingEditor({
   const [error, setError] = useState<string | null>(null);
 
   const targetDevice = devices.find((d) => d.id === form.targetDeviceId) ?? null;
-  const targetCapabilities = targetDevice ? targetableCapabilities(targetDevice) : [];
+  // § live-confirmed fix — only offer capabilities this specific behavior actually supports
+  // (e.g. "Toggle" excludes "Color" — toggling between what and what? — the backend's own
+  // schema already rejects it, this just stops the installer from selecting it at all).
+  const targetCapabilities = targetDevice ? targetCapabilitiesForBehavior(targetDevice, form.behavior) : [];
 
   async function save() {
     setError(null);
@@ -373,7 +395,21 @@ function MappingEditor({
 
       <label className="ukp-field">
         <span>Behavior</span>
-        <select value={form.behavior} onChange={(e) => setForm((f) => ({ ...f, behavior: e.target.value as KeypadMappingBehavior }))}>
+        <select
+          value={form.behavior}
+          onChange={(e) => {
+            const behavior = e.target.value as KeypadMappingBehavior;
+            setForm((f) => {
+              // § live-confirmed fix — a capability valid for the OLD behavior (e.g. "Color"
+              // under "Direct") can be invalid for the new one ("Toggle") — reset to the
+              // first still-valid choice rather than carry forward a combination the
+              // backend's own schema would reject at save time.
+              const stillValid = targetDevice && targetCapabilitiesForBehavior(targetDevice, behavior).includes(f.targetCapability as CapabilityKind);
+              const fallback = targetDevice ? targetCapabilitiesForBehavior(targetDevice, behavior)[0] ?? null : null;
+              return { ...f, behavior, targetCapability: stillValid ? f.targetCapability : fallback };
+            });
+          }}
+        >
           {KEYPAD_BEHAVIORS.map((b) => <option key={b} value={b}>{BEHAVIOR_LABELS[b]}</option>)}
         </select>
       </label>
