@@ -1,5 +1,5 @@
 import type { DiscoveredDevice } from "@supreme/integration-layer";
-import { capabilitiesFromUnit, colorConfigFromUnit, isKeypadUnit, type CasambiUnit } from "./entity-mapper.js";
+import { capabilitiesFromUnit, colorConfigFromUnit, isKeypadUnit, suggestedKindFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import type { CasambiGroup } from "./cloud-transport.js";
 import {
   encodeNotifyControlValuesSetDefaultMask,
@@ -114,6 +114,10 @@ export function buildDiscoveredDevices(
         // (which a genuinely mis-detected unit could also have); `buttonCount` is the same
         // progressive count `updateUnitFromKeypadButton` tracks, never a fabricated fixed number.
         ...(isKeypadUnit(unit) ? { keypad: true, buttonCount: unit.keypadButtonCount ?? 0 } : {}),
+        // § Casambi Device-Kind Override — the driver's own best guess, never authoritative;
+        // the installer confirms/overrides it at commissioning time or any time afterward
+        // (`kindOverride` on CommissionRequest / the device-kind PATCH endpoint).
+        suggestedKind: suggestedKindFromUnit(unit),
       },
     });
   }

@@ -78,6 +78,11 @@ export interface DiscoveredView {
    * own doc comment. Absent/false for every discovery source that doesn't make this distinction;
    * never fabricated as confirmed just because it isn't present. */
   awaitingLocalSignal?: boolean;
+  /** § Casambi Device-Kind Override — the driver's own best-guess classification (Light/
+   * Curtain/Keypad/On-Off Relay), never authoritative — the installer confirms or overrides it
+   * via `CommissionRequest.kindOverride`. Only ever populated by drivers that genuinely can't
+   * fully disambiguate from capabilities alone (Casambi today); absent for every other source. */
+  suggestedKind?: "light" | "curtain" | "keypad" | "onoff_relay" | "ir_blaster";
 }
 
 /**
@@ -295,6 +300,12 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
   const zones = extractZones(d.raw);
   const manufacturer = extractManufacturer(d.raw);
   const awaitingLocalSignal = d.raw?.awaitingLocalSignal === true;
+  const suggestedKindRaw = d.raw?.suggestedKind;
+  const suggestedKind =
+    typeof suggestedKindRaw === "string" &&
+    (["light", "curtain", "keypad", "onoff_relay", "ir_blaster"] as const).includes(suggestedKindRaw as never)
+      ? (suggestedKindRaw as DiscoveredView["suggestedKind"])
+      : undefined;
   return {
     backendId: d.backendId,
     suggestedName: d.suggestedName,
@@ -310,6 +321,7 @@ function view(d: DiscoveredDevice, source: string): DiscoveredView {
     ...(d.capabilityConfig ? { capabilityConfig: d.capabilityConfig } : {}),
     ...(manufacturer ? { manufacturer } : {}),
     ...(awaitingLocalSignal ? { awaitingLocalSignal } : {}),
+    ...(suggestedKind ? { suggestedKind } : {}),
   };
 }
 

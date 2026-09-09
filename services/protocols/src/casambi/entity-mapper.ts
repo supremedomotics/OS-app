@@ -93,6 +93,32 @@ export function capabilitiesFromUnit(u: CasambiUnit): CapabilityKind[] {
   return caps;
 }
 
+/** § Casambi Device-Kind Override — the installer-facing classification vocabulary. Distinct
+ * from `CapabilityKind` (a light and an on/off relay both resolve to capability `onoff`, but are
+ * different KINDS an installer needs to tell apart at commissioning time). */
+export type CasambiSuggestedKind = "light" | "curtain" | "keypad" | "onoff_relay" | "ir_blaster";
+
+/**
+ * The driver's own best-guess classification — never authoritative, always overridable by the
+ * installer (see `raw.suggestedKind` in `discovery-engine.ts`'s `buildDiscoveredDevices`).
+ * Reuses exactly the same signals `capabilitiesFromUnit`/`isKeypadUnit` already compute; adds no
+ * new detection logic of its own. `ir_blaster` has no real Casambi wire signal to detect from
+ * today (Casambi's own unit model never reports "IR" anywhere) — it is never guessed, only ever
+ * chosen by the installer via the override; this function can't and doesn't return it.
+ * `onoff_relay` is the honest fallback for a bare on/off unit with no other distinguishing
+ * signal (a keypad, a curtain, and a real IR blaster all have SOME advertised signal or protocol
+ * marker; a plain relay is definitionally "none of the above").
+ */
+export function suggestedKindFromUnit(u: CasambiUnit): Exclude<CasambiSuggestedKind, "ir_blaster"> {
+  if (isKeypadUnit(u)) return "keypad";
+  const dimmable = hasControl(u, "dimmer");
+  const colour = hasControl(u, "color", "rgb", "xy", "cct", "colortemperature");
+  const cover = hasControl(u, "slider", "vertical") && !dimmable && !colour;
+  if (cover) return "curtain";
+  if (dimmable || colour) return "light";
+  return "onoff_relay";
+}
+
 /**
  * Structural color-mode normalization (§ ADR 0017 — Capability Normalization). Casambi's own
  * unit model advertises a real `type` per control (`rgb`/`xy` vs `cct`/`colortemperature`) — a

@@ -662,17 +662,52 @@ export class InstallerServices {
      * `bindings` when capabilities need distinct addresses/config; omit it (using the plain
      * `protocol`/`address`/`config` trio above) for the common single-address case. */
     bindings?: { capability: CapabilityKind; address: string; config?: Record<string, unknown> }[];
+    /** § Casambi Device-Kind Override — an installer-confirmed classification that overrides
+     * the driver's own auto-detected `capabilities`/`supremeType` (never the reverse: this
+     * always wins when present). Casambi-specific today; other protocols never send it. */
+    kindOverride?: "light" | "curtain" | "keypad" | "onoff_relay" | "ir_blaster";
   }): Promise<Awaited<ReturnType<CommissioningService["commission"]>>> {
-    const { protocol, address, config, bindings, roomNameHint, ...commissionInput } = input;
+    const { protocol, address, config, bindings, roomNameHint, kindOverride, ...commissionInput } = input;
     const roomId = await this.resolveOrCreateRoom(input.roomId, roomNameHint ?? null, input.name);
-    const device = await this.commissioning.commission({ ...commissionInput, roomId });
+    // § Casambi Device-Kind Override — translates the installer's confirmed kind into the
+    // capabilities/supremeType CommissioningService actually understands, never a parallel
+    // commissioning path. "keypad" reuses the SAME 0-capability exemption
+    // (`CommissioningService.commission`'s `supremeType !== "keypad"` check) Stage 1's real
+    // Casambi keypad commissioning already relies on — the per-capability bind loop below
+    // naturally no-ops for an empty `capabilities` array, so no separate binding logic is
+    // needed for it either.
+    const kindOverrides: Record<NonNullable<typeof kindOverride>, { capabilities?: CapabilityKind[]; supremeType: Parameters<CommissioningService["commission"]>[0]["supremeType"] }> = {
+      light: { supremeType: "light" },
+      curtain: { capabilities: ["position"], supremeType: "cover" },
+      keypad: { capabilities: [], supremeType: "keypad" },
+      onoff_relay: { capabilities: commissionInput.capabilities.length > 0 ? commissionInput.capabilities : ["onoff"], supremeType: "switch" },
+      // § No real IR capability exists in this codebase yet (§ Casambi Device-Kind Override
+      // plan's documented gap) — refusing loudly rather than silently misclassifying as
+      // "keypad" (a real input device) or fabricating a capability that doesn't exist.
+      ir_blaster: { supremeType: undefined },
+    };
+    if (kindOverride === "ir_blaster") {
+      throw new SupremeError("validation_failed", "IR blaster commissioning is not yet supported — no Supreme capability exists for it yet");
+    }
+    const resolved = kindOverride ? kindOverrides[kindOverride] : null;
+    const device = await this.commissioning.commission({
+      ...commissionInput,
+      ...(resolved?.capabilities ? { capabilities: resolved.capabilities } : {}),
+      ...(resolved ? { supremeType: resolved.supremeType } : {}),
+      roomId,
+    });
     if (bindings && protocol) {
       for (const b of bindings) {
         await this.bindProtocol({ deviceId: device.id, capability: b.capability, protocol, address: b.address, config: b.config });
       }
     } else if (protocol) {
       const busAddress = address ?? input.backendId;
-      for (const capability of input.capabilities) {
+      // § Casambi Device-Kind Override — bind exactly the capabilities the device was actually
+      // committed with above (`resolved.capabilities` when the override changed them), never
+      // the pre-override `input.capabilities` — otherwise a "curtain" override would still try
+      // to bind the driver's original "onoff" address against a device that has no such
+      // capability.
+      for (const capability of resolved?.capabilities ?? input.capabilities) {
         await this.bindProtocol({ deviceId: device.id, capability, protocol, address: busAddress, config });
       }
     }
