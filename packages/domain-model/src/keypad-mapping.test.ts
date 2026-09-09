@@ -26,7 +26,7 @@ describe("KeypadMapping — capability compatibility validation (Stage 5A-3)", (
       });
       expect(result.success, `toggle + ${capability} should be valid`).toBe(true);
     }
-    for (const capability of ["brightness", "position"] as const) {
+    for (const capability of ["brightness", "position", "color"] as const) {
       for (const behavior of ["alternate", "increment", "decrement"] as const) {
         const result = KeypadMapping.safeParse({
           ...base(),
@@ -52,9 +52,9 @@ describe("KeypadMapping — capability compatibility validation (Stage 5A-3)", (
     }
   });
 
-  it("rejects increment/decrement/alternate against a non-steppable capability (e.g. onoff, lock)", () => {
+  it("rejects increment/decrement/alternate against a non-steppable capability (e.g. onoff, lock) — color is level-shaped now (§ Keypad color-alternate) and steppable", () => {
     for (const behavior of ["increment", "decrement", "alternate"] as const) {
-      for (const capability of ["onoff", "lock", "media", "color"] as const) {
+      for (const capability of ["onoff", "lock", "media"] as const) {
         const result = KeypadMapping.safeParse({
           ...base(),
           behavior,
