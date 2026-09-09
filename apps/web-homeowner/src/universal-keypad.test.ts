@@ -16,6 +16,7 @@ import {
   mappingToFormState,
   summarizeMapping,
   targetableCapabilities,
+  targetCapabilitiesForBehavior,
   validateKeypadMappingForm,
   type KeypadMappingFormState,
 } from "./universal-keypad-logic.js";
@@ -129,6 +130,26 @@ describe("Universal Keypad — target selection (§6)", () => {
 
   it("targetableCapabilities returns every commandable capability the device actually has", () => {
     expect(targetableCapabilities(light("l1", "Light", "r1"))).toEqual(["onoff", "brightness"]);
+  });
+});
+
+describe("Universal Keypad — behavior/capability compatibility filtering (§ live-confirmed fix: Toggle + Color threw 'request validation failed')", () => {
+  const colorLight: Device = { ...light("cl1", "Color Light", "r1"), capabilities: [{ kind: "onoff", config: {} }, { kind: "brightness", config: {} }, { kind: "color", config: {} }] };
+
+  it("'toggle' excludes 'color' — the same TOGGLE_CAPABLE_CAPABILITIES list the backend schema enforces", () => {
+    expect(targetCapabilitiesForBehavior(colorLight, "toggle")).toEqual(["onoff", "brightness"]);
+    expect(targetCapabilitiesForBehavior(colorLight, "toggle")).not.toContain("color");
+  });
+
+  it("'alternate'/'increment'/'decrement' only offer level-shaped capabilities (brightness/position), excluding onoff and color", () => {
+    expect(targetCapabilitiesForBehavior(colorLight, "alternate")).toEqual(["brightness"]);
+    expect(targetCapabilitiesForBehavior(colorLight, "increment")).toEqual(["brightness"]);
+    expect(targetCapabilitiesForBehavior(colorLight, "decrement")).toEqual(["brightness"]);
+  });
+
+  it("'direct'/'cycle' have no target.capability restriction — every commandable capability stays offered", () => {
+    expect(targetCapabilitiesForBehavior(colorLight, "direct")).toEqual(["onoff", "brightness", "color"]);
+    expect(targetCapabilitiesForBehavior(colorLight, "cycle")).toEqual(["onoff", "brightness", "color"]);
   });
 });
 

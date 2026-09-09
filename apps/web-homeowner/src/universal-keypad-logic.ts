@@ -9,6 +9,7 @@ import type {
   Room,
   RoomId,
 } from "@supreme/domain-model";
+import { LEVEL_STEP_CAPABLE_CAPABILITIES, TOGGLE_CAPABLE_CAPABILITIES } from "@supreme/domain-model";
 import type { CreateKeypadMappingRequest, UpdateKeypadMappingRequest } from "@supreme/contracts";
 import { CAPABILITY_LABELS, commandableCapabilities, resolveCommandDefinitions } from "./automation-capability-fields.js";
 
@@ -134,6 +135,23 @@ export function alternatePreview(capability: CapabilityKind | undefined): { firs
  * do" is answered identically everywhere in the app, never re-derived per page. */
 export function targetableCapabilities(device: Device): CapabilityKind[] {
   return commandableCapabilities(device.capabilities.map((c) => c.kind));
+}
+
+/** § live-confirmed fix — `targetableCapabilities` alone let the installer pick a
+ * behavior/capability combination the backend's own schema rejects (e.g. "Toggle" + "Color" —
+ * toggling between what and what? — `KeypadMapping`'s `TOGGLE_CAPABLE_CAPABILITIES` never
+ * included it), surfacing only a generic "request validation failed" at save time. Filters the
+ * SAME server-side compatibility lists (`TOGGLE_CAPABLE_CAPABILITIES`/
+ * `LEVEL_STEP_CAPABLE_CAPABILITIES` — never a second, drifting copy) so an incompatible
+ * combination can't be selected in the first place. `"direct"`/`"cycle"` have no such
+ * restriction (they resolve `actions[]`, never a single `target.capability`). */
+export function targetCapabilitiesForBehavior(device: Device, behavior: KeypadMappingBehavior): CapabilityKind[] {
+  const all = targetableCapabilities(device);
+  if (behavior === "toggle") return all.filter((c) => TOGGLE_CAPABLE_CAPABILITIES.includes(c));
+  if (behavior === "alternate" || behavior === "increment" || behavior === "decrement") {
+    return all.filter((c) => LEVEL_STEP_CAPABLE_CAPABILITIES.includes(c));
+  }
+  return all;
 }
 
 export { CAPABILITY_LABELS, resolveCommandDefinitions };
