@@ -125,6 +125,7 @@ export function behaviorUsesStep(behavior: KeypadMappingBehavior): boolean {
  * only — text-only, never reads or exposes `behaviorState.lastDirection`. */
 export function alternatePreview(capability: CapabilityKind | undefined): { first: string; next: string } {
   if (capability === "position") return { first: "First activation: Open a step", next: "Next activation: Close a step" };
+  if (capability === "color") return { first: "First activation: Warmer", next: "Next activation: Cooler" };
   return { first: "First activation: Dim up", next: "Next activation: Dim down" };
 }
 
@@ -190,14 +191,16 @@ export function emptyKeypadMappingForm(keypadId: DeviceId, control: string, even
   return { name: "", keypadId, control, event, behavior: "direct", targetDeviceId: null, targetCapability: null, step: 10, fadeSeconds: null, actions: [] };
 }
 
-/** § Keypad dim-speed — only Casambi's Local UDP path has a real, driver-verified fade concept
- * (see `local-command-mapper.ts`'s documented 0x20 Duration field); every other protocol
- * silently ignores `fadeMs` today. Gates the UI control accordingly rather than offering a
- * setting that would do nothing — matches this app's existing capability-gating rule. Reuses
- * `device.metadata.protocol`, the SAME field `universal-keypad.tsx`'s room-grid keypad card
- * already reads for its protocol chip — never a second way of asking "what protocol is this." */
+/** § Keypad dim-speed / color-alternate — only Casambi's Local UDP path has a real,
+ * driver-verified fade concept for EITHER capability (`local-command-mapper.ts`'s 0x20 Duration
+ * field for brightness/position/onoff, its 0x48 colour command's own MANDATORY Duration field
+ * for color/kelvin); every other protocol silently ignores `fadeMs` today. Gates the UI control
+ * accordingly rather than offering a setting that would do nothing — matches this app's
+ * existing capability-gating rule. Reuses `device.metadata.protocol`, the SAME field
+ * `universal-keypad.tsx`'s room-grid keypad card already reads for its protocol chip — never a
+ * second way of asking "what protocol is this." */
 export function deviceSupportsDimSpeed(device: Device | null, capability: CapabilityKind | null): boolean {
-  if (!device || capability !== "brightness") return false;
+  if (!device || (capability !== "brightness" && capability !== "color")) return false;
   return device.metadata.protocol === "casambi";
 }
 

@@ -480,7 +480,7 @@ function TargetPicker({
       )}
       {deviceSupportsDimSpeed(targetDevice, form.targetCapability) && (
         <label className="ukp-field">
-          <span>Dim speed (seconds)</span>
+          <span>Transition speed (seconds)</span>
           <input
             type="number"
             min={0}
@@ -490,7 +490,11 @@ function TargetPicker({
             value={form.fadeSeconds ?? ""}
             onChange={(e) => setForm((f) => ({ ...f, fadeSeconds: e.target.value === "" ? null : Math.max(0, Number(e.target.value)) }))}
           />
-          <span className="muted">How long a 0→100% change takes to ramp — blank means instant.</span>
+          <span className="muted">
+            {form.targetCapability === "color"
+              ? "How long a full warm↔cool sweep takes to ramp — blank means instant."
+              : "How long a 0→100% change takes to ramp — blank means instant."}
+          </span>
         </label>
       )}
     </div>
