@@ -43,11 +43,15 @@ export interface MatterDeviceTypeDefinition {
   revision: number;
   requiredServerClusters: MatterClusterRequirement[];
   optionalServerClusters: MatterClusterRequirement[];
-  /** § Phase 1 bridge-direction only — see doc comment above. */
-  primaryCapability: CapabilityCommand["capability"];
+  /** § Phase 1 bridge-direction only — see doc comment above. `null` for a device type with no
+   * SupremeOS *capability* equivalent at all (§ Matter Bridge Phase 2B — Generic Switch is an
+   * INPUT device: it has no `CapabilityState`/`CapabilityCommand`, only Universal Input Events,
+   * so there is no capability for this field to name). Every existing capability-driven device
+   * type keeps a real, non-null value — this only widens the type, it changes nothing for them. */
+  primaryCapability: CapabilityCommand["capability"] | null;
 }
 
-const { Identify, Groups, OnOff, LevelControl, ScenesManagement, ColorControl, WindowCovering, OccupancySensing } =
+const { Identify, Groups, OnOff, LevelControl, ScenesManagement, ColorControl, WindowCovering, OccupancySensing, Switch } =
   Object.fromEntries(Object.entries(MatterClusterId).map(([k, v]) => [k, cluster(v)])) as Record<
     keyof typeof MatterClusterId,
     MatterClusterRequirement
@@ -67,6 +71,23 @@ export const MATTER_DEVICE_TYPES: MatterDeviceTypeDefinition[] = [
     id: 0x0100,
     name: "On/Off Light",
     revision: 3,
+    requiredServerClusters: [Identify, Groups, OnOff, ScenesManagement],
+    optionalServerClusters: [LevelControl, OccupancySensing],
+    primaryCapability: "onoff",
+  },
+  {
+    // § Matter Bridge Phase 2A — On/Off Plug-in Unit (0x010A / 266), transcribed directly from
+    // `@matter/node`'s generated `devices/on-off-plug-in-unit.js`: required server clusters are
+    // Identify/Groups/OnOff/ScenesManagement — STRUCTURALLY IDENTICAL to On/Off Light's cluster
+    // set (0x0100). The two device types exist purely to tell a controller (Apple/Google/Alexa)
+    // "this is a switched outlet" vs "this is a light" for icon/category purposes — Matter's own
+    // spec has no capability-level distinction between them, so SupremeOS's own
+    // `device.supremeType` ("switch" vs "light") is the ONLY honest signal that can pick one over
+    // the other (see `matter-device-type-resolver.ts`'s `resolveMatterDeviceType` — never a
+    // capability-only guess, and never a protocol-specific check).
+    id: 0x010a,
+    name: "On/Off Plug-in Unit",
+    revision: 4,
     requiredServerClusters: [Identify, Groups, OnOff, ScenesManagement],
     optionalServerClusters: [LevelControl, OccupancySensing],
     primaryCapability: "onoff",
@@ -102,5 +123,23 @@ export const MATTER_DEVICE_TYPES: MatterDeviceTypeDefinition[] = [
     requiredServerClusters: [Identify, WindowCovering],
     optionalServerClusters: [Groups],
     primaryCapability: "position",
+  },
+  {
+    // § Matter Bridge Phase 2B — Generic Switch (0x000F / 15), transcribed directly from
+    // `@matter/node`'s generated `devices/generic-switch.js`: required server clusters are only
+    // Identify + Switch. `primaryCapability: null` — this is an INPUT device (Universal Input
+    // Events, not a `CapabilityState`), resolved through its own separate path
+    // (`resolveKeypadControlDeviceType` in `matter-device-type-resolver.ts`), never through
+    // `resolveMatterDeviceType`'s `DeviceCapability[]`-driven resolution. One endpoint = one
+    // physical control (button) — a multi-button keypad becomes multiple Generic Switch
+    // endpoints, the same "one SupremeOS thing = one Matter endpoint" pattern every other device
+    // type here already uses, just applied per-control instead of per-device (§ endpoint
+    // architecture doc, `matter-bridge-driver.ts`'s `exposeKeypadButton`).
+    id: 0x000f,
+    name: "Generic Switch",
+    revision: 3,
+    requiredServerClusters: [Identify, Switch],
+    optionalServerClusters: [],
+    primaryCapability: null,
   },
 ];

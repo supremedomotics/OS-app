@@ -1,6 +1,10 @@
 import { Environment, ServerNode, Endpoint, VendorId, Logger, LogLevel } from "@matter/main";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
+import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
+import { GenericSwitchDevice } from "@matter/main/devices/generic-switch";
+import { SwitchServer } from "@matter/main/behaviors/switch";
+import { Switch } from "@matter/main/clusters/switch";
 import { DimmableLightDevice } from "@matter/main/devices/dimmable-light";
 import { ColorTemperatureLightDevice, ColorTemperatureLightRequirements } from "@matter/main/devices/color-temperature-light";
 import { ExtendedColorLightDevice, ExtendedColorLightRequirements } from "@matter/main/devices/extended-color-light";
@@ -67,10 +71,33 @@ const COLOR_TEMP_PHYSICAL_MIN_MIREDS = kelvinToMireds(10_000);
 const COLOR_TEMP_PHYSICAL_MAX_MIREDS = kelvinToMireds(1_000);
 
 const ON_OFF_LIGHT = 0x0100;
+const ON_OFF_PLUG_IN_UNIT = 0x010a;
 const DIMMABLE_LIGHT = 0x0101;
 const COLOR_TEMPERATURE_LIGHT = 0x010c;
 const EXTENDED_COLOR_LIGHT = 0x010d;
 const WINDOW_COVERING = 0x0202;
+const GENERIC_SWITCH = 0x000f;
+
+/** § Matter Bridge Phase 2B — SupremeOS's Universal Input Engine has ALREADY classified the
+ * press (short/long/double/triple, with its own timing state machine — see
+ * `packages/domain-model/src/keypad-events.ts`'s doc) by the time this reaches the Bridge. These
+ * two knobs are shrunk from the SDK's real-world defaults (2s / 300ms) purely so a Matter report
+ * doesn't sit behind an ARTIFICIAL wait that has nothing to do with the real button press —
+ * SupremeOS's own timing decision already happened; a Matter subscriber should see it promptly
+ * (§ Phase 1.3's "near-immediate local state propagation" principle applies here too). Small
+ * enough that `reportKeypadPress`'s own driving delays (below) stay well clear of either
+ * threshold in both directions, never a source of ambiguity between press types. */
+const SWITCH_LONG_PRESS_DELAY_MS = 40;
+const SWITCH_MULTI_PRESS_DELAY_MS = 60;
+/** How long `reportKeypadPress` holds `currentPosition` at "pressed" before releasing, for a
+ * press type that must resolve as SHORT relative to `SWITCH_LONG_PRESS_DELAY_MS` above. */
+const SWITCH_SHORT_HOLD_MS = 5;
+/** How long `reportKeypadPress` holds `currentPosition` at "pressed" for a press type that must
+ * resolve as LONG — deliberately > `SWITCH_LONG_PRESS_DELAY_MS`. */
+const SWITCH_LONG_HOLD_MS = 60;
+/** Gap between the two/three taps of a multi-press sequence — deliberately « `SWITCH_MULTI_
+ * PRESS_DELAY_MS` so the SDK's own multi-press window is still open for the next tap. */
+const SWITCH_MULTI_PRESS_GAP_MS = 10;
 
 type Emit = (endpointNumber: number, command: CapabilityCommand) => void;
 
@@ -361,6 +388,22 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
         });
         break;
       }
+      // § Matter Bridge Phase 2A — On/Off Plug-in Unit. Structurally identical cluster
+      // composition to ON_OFF_LIGHT (same required clusters, same routing) — the ONLY
+      // difference is `OnOffPlugInUnitDevice` vs `OnOffLightDevice`, which is what tells Apple/
+      // Google/Alexa/SmartThings to render this as a switched outlet, not a light. Never a
+      // second code path — this is a straight copy of the ON_OFF_LIGHT branch below with the
+      // device definition swapped, deliberately, so the two branches drift in lockstep if the
+      // shared On/Off routing logic ever changes.
+      case ON_OFF_PLUG_IN_UNIT: {
+        const initial = spec.initialState?.kind === "onoff" ? spec.initialState : null;
+        const OnOffServerClass = createRoutedOnOffServerClass(emit, (on) => ({ capability: "onoff", action: on ? "on" : "off" }));
+        endpoint = new Endpoint(OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer, OnOffServerClass), {
+          ...baseOptions,
+          onOff: { onOff: initial?.on ?? false },
+        });
+        break;
+      }
       case DIMMABLE_LIGHT: {
         const initial = spec.initialState?.kind === "brightness" ? spec.initialState : null;
         const OnOffServerClass = createRoutedOnOffServerClass(emit, (on) => ({ capability: "brightness", action: on ? "on" : "off" }));
@@ -449,6 +492,40 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
         });
         break;
       }
+      // § Matter Bridge Phase 2B — Generic Switch (one physical button = one endpoint, per the
+      // architecture decision in `matter-device-types.ts`'s doc). Momentary-switch features only
+      // (Release/LongPress/MultiPress) — no LatchingSwitch (a physical button isn't latching) and
+      // no ActionSwitch (we don't suppress the ongoing multi-press reports). No `emit`/command
+      // routing at all: unlike every other device type here, a Generic Switch is UNIDIRECTIONAL
+      // (SupremeOS → Matter only) — a real Matter controller has no "command" to send a switch,
+      // only subscribes to its events, confirmed against the SDK's own generated device
+      // definition (`generic-switch.js`: no client-writable attributes, no commands).
+      case GENERIC_SWITCH: {
+        const SwitchServerClass = SwitchServer.with(
+          Switch.Feature.MomentarySwitch,
+          Switch.Feature.MomentarySwitchRelease,
+          Switch.Feature.MomentarySwitchLongPress,
+          Switch.Feature.MomentarySwitchMultiPress,
+        );
+        endpoint = new Endpoint(GenericSwitchDevice.with(BridgedDeviceBasicInformationServer, SwitchServerClass), {
+          ...baseOptions,
+          switch: {
+            currentPosition: 0,
+            numberOfPositions: 2,
+            // § `longPressDelay`/`multiPressDelay` are the SDK's own `Duration`-branded type
+            // (`@matter/general`'s `Millis()`) — a plain number is functionally identical at
+            // runtime (Duration is a nominal number brand, not a distinct runtime type) but
+            // fails the structural type check; casting through the SAME behavior's own generic
+            // `set()` signature (used identically by every other cluster write in this file) is
+            // simpler than importing `Millis` from a transitive dependency this package doesn't
+            // declare directly.
+            longPressDelay: SWITCH_LONG_PRESS_DELAY_MS,
+            multiPressDelay: SWITCH_MULTI_PRESS_DELAY_MS,
+            multiPressMax: 3,
+          } as unknown as Record<string, unknown>,
+        });
+        break;
+      }
       default:
         throw new Error(`matter-bridge: unsupported Matter Device Type id 0x${spec.deviceTypeId.toString(16)}`);
     }
@@ -507,6 +584,24 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     return entry.endpoint.act((agent) => actor(agent as unknown as { [key: string]: any }));
   }
 
+  /** § Matter Bridge Phase 2B — test-only diagnostic accessor, same rationale as
+   * `simulateCommandForTest`: subscribes directly to the REAL Switch cluster's own event
+   * observables (`endpoint.events.switch.*`) so a test can prove `reportKeypadPress` produces
+   * the exact `initialPress`/`shortRelease`/`longPress`/`longRelease`/`multiPressComplete`
+   * sequence the real SDK's spec-compliant `SwitchServer` derives — not a call to our own code
+   * asserting itself. Not part of the abstract `MatterBridgeServer` interface. */
+  collectSwitchEventsForTest(endpointNumber: number): { events: { type: string; payload: unknown }[] } {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) throw new Error(`matter-bridge: no endpoint ${endpointNumber} to observe switch events on`);
+    const events: { type: string; payload: unknown }[] = [];
+    const switchEvents = (entry.endpoint as unknown as { events: { switch: Record<string, { on(cb: (payload: unknown) => void): unknown }> } })
+      .events.switch;
+    for (const type of ["initialPress", "shortRelease", "longPress", "longRelease", "multiPressComplete"]) {
+      switchEvents[type]?.on((payload: unknown) => events.push({ type, payload }));
+    }
+    return { events };
+  }
+
   /** A direct attribute write — this is a STATE REPORT, not a command invocation, so it does
    * NOT re-enter any of the Bridged*Server command handlers above (§11 loop-safety). Dispatches
    * on `state.kind`, not on the endpoint's device type — a state kind that doesn't match
@@ -558,6 +653,42 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
         return;
       }
       default:
+        return;
+    }
+  }
+
+  /** § Matter Bridge Phase 2B — see the `MatterBridgeServer` interface doc for the full
+   * rationale. Drives REAL `currentPosition` transitions through `endpoint.set()`; the real,
+   * spec-compliant `SwitchServer` behavior composed in `addEndpoint`'s `GENERIC_SWITCH` case
+   * derives the correct event sequence from them (verified live against this SDK — see the
+   * command-dispatch test suite). Never touches any endpoint that isn't a Generic Switch. */
+  async reportKeypadPress(endpointNumber: number, press: "short" | "long" | "double" | "triple"): Promise<void> {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry || entry.deviceTypeId !== GENERIC_SWITCH) return;
+    const ep = entry.endpoint as unknown as { set(values: Record<string, unknown>): Promise<void> };
+    const tap = async (holdMs: number) => {
+      await ep.set({ switch: { currentPosition: 1 } });
+      await new Promise((r) => setTimeout(r, holdMs));
+      await ep.set({ switch: { currentPosition: 0 } });
+    };
+    switch (press) {
+      case "short":
+        await tap(SWITCH_SHORT_HOLD_MS);
+        return;
+      case "long":
+        await tap(SWITCH_LONG_HOLD_MS);
+        return;
+      case "double":
+        await tap(SWITCH_SHORT_HOLD_MS);
+        await new Promise((r) => setTimeout(r, SWITCH_MULTI_PRESS_GAP_MS));
+        await tap(SWITCH_SHORT_HOLD_MS);
+        return;
+      case "triple":
+        await tap(SWITCH_SHORT_HOLD_MS);
+        await new Promise((r) => setTimeout(r, SWITCH_MULTI_PRESS_GAP_MS));
+        await tap(SWITCH_SHORT_HOLD_MS);
+        await new Promise((r) => setTimeout(r, SWITCH_MULTI_PRESS_GAP_MS));
+        await tap(SWITCH_SHORT_HOLD_MS);
         return;
     }
   }

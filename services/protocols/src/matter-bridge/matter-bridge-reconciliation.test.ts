@@ -38,6 +38,7 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     const e = this.endpoints.get(endpointNumber);
     if (e) e.name = name;
   }
+  async reportKeypadPress(): Promise<void> {}
   onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
@@ -59,11 +60,42 @@ class FakeCapabilityPort implements MatterBridgeCapabilityPort {
   onState(): () => void {
     return () => {};
   }
+  async getKeypadCapabilities() {
+    return null;
+  }
+  onKeypadInput(): () => void {
+    return () => {};
+  }
 }
 
 function device(id: string, name: string): { id: DeviceId; name: string; capabilities: DeviceCapability[] } {
   return { id: id as DeviceId, name, capabilities: ONOFF_CAPS };
 }
+
+describe("MatterBridgeDriver.reconcile — § Matter Bridge Phase 2A (deviceKind threading)", () => {
+  it("a device with kind:'switch' resolves to On/Off Plug-in Unit (0x010a) through the full reconcile() path, not On/Off Light", async () => {
+    const server = new FakeMatterBridgeServer();
+    const registry = new MatterEndpointRegistry(new InMemoryMatterEndpointStore());
+    const driver = new MatterBridgeDriver({ server, registry, capabilities: new FakeCapabilityPort() });
+    await driver.start();
+
+    await driver.reconcile([{ id: "plug-a" as DeviceId, name: "Garage Outlet", capabilities: ONOFF_CAPS, kind: "switch" }]);
+    const exposed = driver.listExposedDevices().find((e) => e.deviceId === "plug-a");
+    expect(exposed?.deviceTypeId).toBe(0x010a);
+    expect(exposed?.deviceTypeName).toBe("On/Off Plug-in Unit");
+  });
+
+  it("a device with kind omitted (or 'light') still resolves to On/Off Light (0x0100) — no regression for every pre-existing caller", async () => {
+    const server = new FakeMatterBridgeServer();
+    const registry = new MatterEndpointRegistry(new InMemoryMatterEndpointStore());
+    const driver = new MatterBridgeDriver({ server, registry, capabilities: new FakeCapabilityPort() });
+    await driver.start();
+
+    await driver.reconcile([device("light-a", "Kitchen Lights")]);
+    const exposed = driver.listExposedDevices().find((e) => e.deviceId === "light-a");
+    expect(exposed?.deviceTypeId).toBe(0x0100);
+  });
+});
 
 describe("MatterBridgeDriver.reconcile — § Matter Bridge Phase 1.1 (the reported ghost-device bug)", () => {
   it("§ the exact reported bug — a device removed from SupremeOS is withdrawn from the live Matter endpoint, not left bridged forever", async () => {

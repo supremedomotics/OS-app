@@ -1,10 +1,27 @@
-import type { CapabilityCommand, CapabilityState, DeviceCapability, DeviceId } from "@supreme/domain-model";
+import type { CapabilityCommand, CapabilityState, DeviceCapability, DeviceId, KeypadCapabilityDeclaration, KeypadInputEvent, SupremeDeviceType } from "@supreme/domain-model";
 import type { MatterBridgeCapabilityPort } from "./capability-port.js";
-import type { MatterEndpointRegistry } from "./endpoint-registry.js";
+import { matterEndpointKey, type MatterEndpointRegistry } from "./endpoint-registry.js";
 import type { MatterBridgeServer } from "./server.js";
 import { matterDeviceTypeRegistry, type MatterDeviceTypeRegistry } from "./device-types/matter-device-type-registry.js";
-import { resolveMatterDeviceType, type MatterDeviceTypeResolution } from "./device-types/matter-device-type-resolver.js";
+import { resolveMatterDeviceType, resolveKeypadControlDeviceType, type MatterDeviceTypeResolution } from "./device-types/matter-device-type-resolver.js";
 import type { MatterDeviceTypeDefinition } from "./device-types/matter-device-types.js";
+
+/** § Matter Bridge Phase 2B — the ONLY `KeypadInputEvent` types this Bridge translates to a
+ * Matter Generic Switch press. SupremeOS's Universal Input Engine has ALREADY resolved these
+ * from the raw `button_pressed`/`button_released` primitives (or a device's own onboard
+ * recognition) — see `packages/domain-model/src/keypad-events.ts`'s doc — so the Bridge never
+ * re-derives short-vs-long-vs-multi itself, only translates an already-classified event. The
+ * raw primitives themselves (`button_pressed`/`button_released`/`hold_start`/`holding`/
+ * `hold_end`) and non-button gestures (`rotate_*`/`swipe`/`gesture`) are deliberately NOT
+ * translated — forwarding both the raw AND derived event for the same physical press would
+ * double-report it to Apple Home, and rotation/swipe/gesture have no Generic Switch equivalent
+ * (§ `resolveKeypadControlDeviceType`'s own disclosed-gap doc). */
+const TRANSLATED_KEYPAD_EVENT_TYPES: Partial<Record<KeypadInputEvent["type"], "short" | "long" | "double" | "triple">> = {
+  short_press: "short",
+  long_press: "long",
+  double_press: "double",
+  triple_press: "triple",
+};
 
 export interface MatterBridgeDriverOptions {
   server: MatterBridgeServer;
@@ -45,8 +62,19 @@ export class MatterBridgeDriver {
    * color capabilities (e.g. KNX) reports state changes on ANY of them, not only the device
    * type's single `primaryCapability`. */
   private readonly capabilityKindsByEndpoint = new Map<number, Set<string>>();
+  /** § Matter Bridge Phase 2B — endpointNumber → the keypad button identity, for
+   * `listExposedButtons`. Fully separate from `exposedDevices` (a light/plug/etc. never shares
+   * this map with a button, and a keypad's 4 buttons never collide with each other here — each
+   * gets its OWN endpoint number). */
+  private readonly exposedButtons = new Map<number, { keypadId: DeviceId; controlId: string }>();
+  /** § Matter Bridge Phase 2B — the reverse index, keyed by `matterEndpointKey(keypadId,
+   * controlId)` (the SAME composite key `endpoint-registry.ts` uses) — this is what makes
+   * `handleKeypadInput` below route one `KeypadInputEvent` to the RIGHT one of a keypad's
+   * several bridged buttons, never all of them. */
+  private readonly endpointByButton = new Map<string, number>();
   private unsubscribeCommand: (() => void) | null = null;
   private unsubscribeState: (() => void) | null = null;
+  private unsubscribeKeypadInput: (() => void) | null = null;
   private started = false;
 
   constructor(opts: MatterBridgeDriverOptions) {
@@ -81,7 +109,12 @@ export class MatterBridgeDriver {
         continue;
       }
       try {
-        const state = await this.capabilities.getState(mapping.deviceId, deviceType.primaryCapability);
+        // § Matter Bridge Phase 2B — Generic Switch (an INPUT device, `primaryCapability: null`)
+        // has no `CapabilityState` to fetch at all — re-exposing it is just re-adding the
+        // endpoint with no initial state; its live press events resume via the SAME
+        // `onKeypadInput` subscription `start()` sets up below, unconditionally, for every
+        // bridged control.
+        const state = deviceType.primaryCapability ? await this.capabilities.getState(mapping.deviceId, deviceType.primaryCapability) : null;
         await this.server.addEndpoint({
           endpointNumber: mapping.endpointNumber,
           // § live-confirmed fix (Matter Bridge Phase 1.2) — this used to be `mapping.deviceId`,
@@ -97,8 +130,17 @@ export class MatterBridgeDriver {
           initialState: state,
           capabilityKinds: mapping.capabilityKinds,
         });
-        this.exposedDevices.set(mapping.endpointNumber, mapping.deviceId);
-        this.endpointByDevice.set(mapping.deviceId, mapping.endpointNumber);
+        // § Matter Bridge Phase 2B — a keypad-button mapping (`controlId` set) tracks into the
+        // SEPARATE button indexes, never the device ones — a keypad's `deviceId` deliberately
+        // does NOT go into `endpointByDevice` (which assumes one endpoint per deviceId; a
+        // 4-button keypad needs 4).
+        if (mapping.controlId) {
+          this.exposedButtons.set(mapping.endpointNumber, { keypadId: mapping.deviceId, controlId: mapping.controlId });
+          this.endpointByButton.set(matterEndpointKey(mapping.deviceId, mapping.controlId), mapping.endpointNumber);
+        } else {
+          this.exposedDevices.set(mapping.endpointNumber, mapping.deviceId);
+          this.endpointByDevice.set(mapping.deviceId, mapping.endpointNumber);
+        }
         this.deviceTypeByEndpoint.set(mapping.endpointNumber, deviceType);
         this.capabilityKindsByEndpoint.set(mapping.endpointNumber, new Set(mapping.capabilityKinds));
       } catch (err) {
@@ -114,6 +156,9 @@ export class MatterBridgeDriver {
     });
     this.unsubscribeState = this.capabilities.onState((event) => {
       void this.handleSupremeStateChange(event.deviceId, event.capability, event.state);
+    });
+    this.unsubscribeKeypadInput = this.capabilities.onKeypadInput((event) => {
+      void this.handleKeypadInput(event);
     });
 
     // § Phase 5 §10 — "controlled commissioning logging": the ONLY place this driver ever
@@ -139,8 +184,10 @@ export class MatterBridgeDriver {
   async stop(): Promise<void> {
     this.unsubscribeCommand?.();
     this.unsubscribeState?.();
+    this.unsubscribeKeypadInput?.();
     this.unsubscribeCommand = null;
     this.unsubscribeState = null;
+    this.unsubscribeKeypadInput = null;
     await this.server.stop();
     this.started = false;
   }
@@ -157,8 +204,8 @@ export class MatterBridgeDriver {
    * driver itself never throws for "this device doesn't map to a Phase 1 device type," since
    * that is an expected, common outcome (a lock, a sensor, a thermostat), not an error.
    */
-  async exposeDevice(deviceId: DeviceId, name: string, capabilities: DeviceCapability[]): Promise<MatterDeviceTypeResolution> {
-    const resolution = resolveMatterDeviceType(capabilities, this.deviceTypeRegistry);
+  async exposeDevice(deviceId: DeviceId, name: string, capabilities: DeviceCapability[], deviceKind?: SupremeDeviceType): Promise<MatterDeviceTypeResolution> {
+    const resolution = resolveMatterDeviceType(capabilities, this.deviceTypeRegistry, deviceKind);
     if (resolution.outcome !== "SUPPORTED" || !resolution.deviceType) {
       return resolution;
     }
@@ -173,6 +220,13 @@ export class MatterBridgeDriver {
     // exposes using the PERSISTED device type, never silently re-typing an already-bridged
     // endpoint out from under a real ecosystem's cached view of it.
     const effectiveDeviceType = this.deviceTypeRegistry.byId(mapping.deviceTypeId) ?? deviceType;
+    // § Matter Bridge Phase 2B — `resolveMatterDeviceType` (this method's only caller for the
+    // resolution above) never returns a `primaryCapability: null` device type (Generic Switch
+    // resolves through the separate `exposeKeypadButton`/`resolveKeypadControlDeviceType` path)
+    // — this guard exists only to satisfy the now-widened type, not a reachable runtime case.
+    if (!effectiveDeviceType.primaryCapability) {
+      throw new Error(`matter-bridge: device type ${effectiveDeviceType.name} has no primaryCapability — cannot be exposed via exposeDevice()`);
+    }
     const state = await this.capabilities.getState(deviceId, effectiveDeviceType.primaryCapability);
     await this.server.addEndpoint({
       endpointNumber: mapping.endpointNumber,
@@ -197,6 +251,140 @@ export class MatterBridgeDriver {
       `matter-bridge: exposed ${deviceId} as endpoint ${mapping.endpointNumber} (${name}) — ${effectiveDeviceType.name}`,
     );
     return { outcome: "SUPPORTED", deviceType: effectiveDeviceType, reason: null };
+  }
+
+  /**
+   * § Matter Bridge Phase 2B — bridge ONE physical control (button) of a SupremeOS keypad onto
+   * Matter, as its own Generic Switch endpoint (§ endpoint architecture decision, `matter-
+   * device-types.ts`'s doc: one endpoint per control, never one endpoint per keypad). Idempotent
+   * — same contract as {@link exposeDevice}. Only `kind: "button"` controls resolve SUPPORTED in
+   * this phase; a rotary encoder/touch zone/slider on the SAME keypad is reported UNSUPPORTED
+   * for THAT control alone, never silently dropped and never blocking the keypad's OTHER,
+   * supported buttons (§ Recovery — the same per-item isolation `reconcileKeypads` already
+   * requires below).
+   */
+  async exposeKeypadButton(
+    keypadId: DeviceId,
+    keypadName: string,
+    control: { id: string; kind: "button" | "rotary_encoder" | "touch_zone" | "slider"; label: string | null },
+  ): Promise<MatterDeviceTypeResolution> {
+    const resolution = resolveKeypadControlDeviceType(control.kind, this.deviceTypeRegistry);
+    if (resolution.outcome !== "SUPPORTED" || !resolution.deviceType) {
+      return resolution;
+    }
+    const deviceType = resolution.deviceType;
+    // § Matter Bridge Phase 2B, requirement 8 (friendly naming) — the button's own configured
+    // label when present, else "<keypad name> — <button id>", never the raw control id alone.
+    // Mirrors `exposeDevice`'s "current name propagates on every call" contract exactly — a
+    // rename (of the keypad OR the button) reaches the Matter-visible name on the next
+    // reconcile, endpoint identity untouched.
+    const name = control.label ?? `${keypadName} — ${control.id}`;
+    const mapping = this.registry.resolveButton(keypadId, control.id, deviceType.id, name);
+    const effectiveDeviceType = this.deviceTypeRegistry.byId(mapping.deviceTypeId) ?? deviceType;
+    await this.server.addEndpoint({
+      endpointNumber: mapping.endpointNumber,
+      name: mapping.name,
+      deviceTypeId: effectiveDeviceType.id,
+      initialState: null,
+      capabilityKinds: [],
+    });
+    await this.server.updateEndpointName(mapping.endpointNumber, mapping.name);
+    this.exposedButtons.set(mapping.endpointNumber, { keypadId, controlId: control.id });
+    this.endpointByButton.set(matterEndpointKey(keypadId, control.id), mapping.endpointNumber);
+    this.deviceTypeByEndpoint.set(mapping.endpointNumber, effectiveDeviceType);
+    this.onLog(
+      "info",
+      `matter-bridge: exposed ${keypadId}::${control.id} as endpoint ${mapping.endpointNumber} (${name}) — ${effectiveDeviceType.name}`,
+    );
+    return { outcome: "SUPPORTED", deviceType: effectiveDeviceType, reason: null };
+  }
+
+  /** Unbridge one button LIVE — same "keep registry identity" contract as {@link removeLight},
+   * for a button no longer resolvable (its control kind changed, or was removed from the
+   * keypad's declaration) but the keypad DEVICE itself still exists. */
+  async removeKeypadButton(keypadId: DeviceId, controlId: string): Promise<void> {
+    const key = matterEndpointKey(keypadId, controlId);
+    const endpointNumber = this.endpointByButton.get(key);
+    if (endpointNumber === undefined) return;
+    await this.server.removeEndpoint(endpointNumber);
+    this.exposedButtons.delete(endpointNumber);
+    this.endpointByButton.delete(key);
+    this.deviceTypeByEndpoint.delete(endpointNumber);
+  }
+
+  /** Full removal — same "keypad/button genuinely gone from SupremeOS" contract as
+   * {@link forgetDevice}: un-bridges the live endpoint AND frees its persisted registry record,
+   * so it never resurrects on restart. */
+  async forgetKeypadButton(keypadId: DeviceId, controlId: string): Promise<void> {
+    await this.removeKeypadButton(keypadId, controlId);
+    this.registry.remove(keypadId, controlId);
+  }
+
+  /**
+   * § Matter Bridge Phase 2B — full reconciliation for keypad buttons, the SAME `desired ∩
+   * existing` / `desired - existing` / `existing - desired` model {@link reconcile} already
+   * applies to regular devices (§ requirement 10), kept as a genuinely separate pass rather than
+   * folded into `reconcile()` because a keypad's desired set is "every control its OWN
+   * declaration lists," not "every device in the home" — a different shape of desired-set
+   * entirely, not a special case bolted onto the device loop.
+   *
+   * `keypads` — every keypad-capable device (`declaration !== null` from
+   * `MatterBridgeCapabilityPort.getKeypadCapabilities`) currently in SupremeOS, with its full
+   * current control list. Per-control isolation (§ Recovery, same discipline as `reconcile`):
+   * one control's construction failing must never block its keypad's OTHER buttons, or another
+   * keypad entirely.
+   */
+  async reconcileKeypads(
+    keypads: { id: DeviceId; name: string; declaration: KeypadCapabilityDeclaration | null }[],
+  ): Promise<{
+    added: { keypadId: DeviceId; controlId: string }[];
+    updated: { keypadId: DeviceId; controlId: string }[];
+    removed: { keypadId: DeviceId; controlId: string }[];
+    unsupported: { keypadId: DeviceId; controlId: string; reason: string }[];
+    failed: { keypadId: DeviceId; controlId: string; error: string }[];
+  }> {
+    const added: { keypadId: DeviceId; controlId: string }[] = [];
+    const updated: { keypadId: DeviceId; controlId: string }[] = [];
+    const removed: { keypadId: DeviceId; controlId: string }[] = [];
+    const unsupported: { keypadId: DeviceId; controlId: string; reason: string }[] = [];
+    const failed: { keypadId: DeviceId; controlId: string; error: string }[] = [];
+
+    const desiredKeys = new Set<string>();
+    for (const keypad of keypads) {
+      for (const control of keypad.declaration?.controls ?? []) {
+        const key = matterEndpointKey(keypad.id, control.id);
+        desiredKeys.add(key);
+        try {
+          const wasExposed = this.endpointByButton.has(key);
+          const resolution = await this.exposeKeypadButton(keypad.id, keypad.name, control);
+          if (resolution.outcome === "SUPPORTED") {
+            (wasExposed ? updated : added).push({ keypadId: keypad.id, controlId: control.id });
+          } else {
+            unsupported.push({ keypadId: keypad.id, controlId: control.id, reason: resolution.reason ?? "unsupported" });
+            if (wasExposed) {
+              await this.removeKeypadButton(keypad.id, control.id);
+              removed.push({ keypadId: keypad.id, controlId: control.id });
+            }
+          }
+        } catch (err) {
+          failed.push({ keypadId: keypad.id, controlId: control.id, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+
+    for (const [key, endpointNumber] of [...this.endpointByButton.entries()]) {
+      if (desiredKeys.has(key)) continue;
+      const identity = this.exposedButtons.get(endpointNumber);
+      if (!identity) continue;
+      try {
+        await this.forgetKeypadButton(identity.keypadId, identity.controlId);
+        removed.push(identity);
+      } catch (err) {
+        failed.push({ ...identity, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    return { added, updated, removed, unsupported, failed };
   }
 
   /** Unbridge a device LIVE — removes the real Matter endpoint (§ Matter Bridge Phase 1.1:
@@ -249,7 +437,7 @@ export class MatterBridgeDriver {
    * reported in `unsupported`, never in `removed`.
    */
   async reconcile(
-    devices: { id: DeviceId; name: string; capabilities: DeviceCapability[] }[],
+    devices: { id: DeviceId; name: string; capabilities: DeviceCapability[]; kind?: SupremeDeviceType }[],
   ): Promise<{
     added: DeviceId[];
     updated: DeviceId[];
@@ -270,7 +458,7 @@ export class MatterBridgeDriver {
     for (const device of devices) {
       try {
         const wasExposed = this.endpointByDevice.has(device.id);
-        const resolution = await this.exposeDevice(device.id, device.name, device.capabilities);
+        const resolution = await this.exposeDevice(device.id, device.name, device.capabilities, device.kind);
         if (resolution.outcome === "SUPPORTED") {
           (wasExposed ? updated : added).push(device.id);
         } else {
@@ -322,6 +510,18 @@ export class MatterBridgeDriver {
       .map(([endpointNumber, deviceId]) => {
         const deviceType = this.deviceTypeByEndpoint.get(endpointNumber);
         return { deviceId, endpointNumber, deviceTypeId: deviceType?.id ?? 0, deviceTypeName: deviceType?.name ?? "Unknown" };
+      })
+      .sort((a, b) => a.endpointNumber - b.endpointNumber);
+  }
+
+  /** § Matter Bridge Phase 2B — every keypad button currently exposed to Matter, by endpoint
+   * number. Same rationale as `listExposedDevices` — the driver's own real exposure index, not
+   * the registry. */
+  listExposedButtons(): { keypadId: DeviceId; controlId: string; endpointNumber: number; deviceTypeId: number; deviceTypeName: string }[] {
+    return [...this.exposedButtons.entries()]
+      .map(([endpointNumber, identity]) => {
+        const deviceType = this.deviceTypeByEndpoint.get(endpointNumber);
+        return { ...identity, endpointNumber, deviceTypeId: deviceType?.id ?? 0, deviceTypeName: deviceType?.name ?? "Unknown" };
       })
       .sort((a, b) => a.endpointNumber - b.endpointNumber);
   }
@@ -461,5 +661,25 @@ export class MatterBridgeDriver {
       `matter-bridge TRACE H: Matter attribute updated — ts=${Date.now()} elapsedMsSinceG=${Date.now() - tG} endpointId=${endpointNumber} ` +
         `device.id=${deviceId} capability=${capability} state=${JSON.stringify(state)}`,
     );
+  }
+
+  /** § Matter Bridge Phase 2B — Physical keypad press → SupremeOS Universal Input Event →
+   * Matter Generic Switch (§1 required path, direction 2's keypad equivalent). Only the four
+   * ALREADY-CLASSIFIED press types in `TRANSLATED_KEYPAD_EVENT_TYPES` are translated — every
+   * other `KeypadInputEvent` type (raw primitives, rotation, swipe, gesture) is silently ignored
+   * here, by design (§ `TRANSLATED_KEYPAD_EVENT_TYPES`'s own doc), not a gap. An event for a
+   * keypad/control this driver hasn't bridged (most keypads/controls aren't) is also a no-op —
+   * mirrors `handleSupremeStateChange`'s own "not a bridged device" early return. */
+  private async handleKeypadInput(event: KeypadInputEvent): Promise<void> {
+    const press = TRANSLATED_KEYPAD_EVENT_TYPES[event.type];
+    if (!press) return;
+    const endpointNumber = this.endpointByButton.get(matterEndpointKey(event.keypadId, event.control));
+    if (endpointNumber === undefined) return;
+    this.onLog(
+      "info",
+      `matter-bridge TRACE keypad: reporting press — ts=${Date.now()} endpointId=${endpointNumber} keypadId=${event.keypadId} ` +
+        `control=${event.control} eventType=${event.type} press=${press}`,
+    );
+    await this.server.reportKeypadPress(endpointNumber, press);
   }
 }

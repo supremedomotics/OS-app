@@ -1,4 +1,4 @@
-import type { CapabilityCommand, CapabilityState, DeviceId } from "@supreme/domain-model";
+import type { CapabilityCommand, CapabilityState, DeviceId, KeypadCapabilityDeclaration, KeypadInputEvent } from "@supreme/domain-model";
 
 /**
  * The Matter Bridge's ONLY entry point into SupremeOS (§ Matter Bridge Phase 1).
@@ -30,4 +30,14 @@ export interface MatterBridgeCapabilityPort {
    * ecosystems) — the Bridge filters to the devices it has exposed. Returns an unsubscribe
    * function, mirroring every other `onState` seam in this codebase. */
   onState(listener: (event: { deviceId: DeviceId; capability: string; state: CapabilityState }) => void): () => void;
+
+  /** § Matter Bridge Phase 2B — the SAME seam the Universal Keypad UI itself uses
+   * (`SupremeIntegrationLayer.getKeypadCapabilities`/`routes/keypad.ts`'s `/keypad-capabilities`
+   * route), never a second keypad model. `null` for a device that isn't keypad-capable — the
+   * Bridge uses this to decide WHETHER a device has buttons to expose, never to guess. */
+  getKeypadCapabilities(deviceId: DeviceId): Promise<KeypadCapabilityDeclaration | null>;
+  /** Subscribe to every Universal Input Event across every keypad-capable driver this hub has
+   * registered — the SAME seam `SupremeIntegrationLayer.subscribeKeypadInput` already provides.
+   * The Bridge filters to the keypads/controls it has exposed, exactly like `onState` above. */
+  onKeypadInput(listener: (event: KeypadInputEvent) => void): () => void;
 }

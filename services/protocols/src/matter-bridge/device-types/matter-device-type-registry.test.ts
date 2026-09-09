@@ -8,6 +8,16 @@ describe("MatterDeviceTypeRegistry — § Matter Bridge Phase 1 foundation", () 
     expect(matterDeviceTypeRegistry.byId(0x010c)?.name).toBe("Color Temperature Light");
     expect(matterDeviceTypeRegistry.byId(0x010d)?.name).toBe("Extended Color Light");
     expect(matterDeviceTypeRegistry.byId(0x0202)?.name).toBe("Window Covering");
+    expect(matterDeviceTypeRegistry.byId(0x010a)?.name).toBe("On/Off Plug-in Unit");
+    expect(matterDeviceTypeRegistry.byId(0x000f)?.name).toBe("Generic Switch");
+  });
+
+  it("§ Matter Bridge Phase 2B — Generic Switch requires exactly Identify + Switch (per @matter/node's own generic-switch.js), and has no primaryCapability (it's an input device, not a capability-state device)", () => {
+    const genericSwitch = matterDeviceTypeRegistry.byId(0x000f)!;
+    const names = genericSwitch.requiredServerClusters.map((c) => c.clusterName).sort();
+    expect(names).toEqual(["Identify", "Switch"]);
+    expect(genericSwitch.optionalServerClusters).toEqual([]);
+    expect(genericSwitch.primaryCapability).toBeNull();
   });
 
   it("returns null for an id it doesn't know, never throws or fabricates a definition", () => {

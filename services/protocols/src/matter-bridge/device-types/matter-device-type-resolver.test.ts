@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { DeviceCapability } from "@supreme/domain-model";
-import { resolveMatterDeviceType } from "./matter-device-type-resolver.js";
+import { resolveMatterDeviceType, resolveKeypadControlDeviceType } from "./matter-device-type-resolver.js";
 
 function cap(kind: DeviceCapability["kind"], config: Record<string, unknown> = {}): DeviceCapability {
   return { kind, config };
@@ -12,6 +12,22 @@ describe("resolveMatterDeviceType — § Matter Bridge Phase 1 foundation", () =
     expect(r.outcome).toBe("SUPPORTED");
     expect(r.deviceType?.id).toBe(0x0100);
     expect(r.deviceType?.primaryCapability).toBe("onoff");
+  });
+
+  it("§ Matter Bridge Phase 2A — onoff-only device with deviceKind 'switch' -> On/Off Plug-in Unit (0x010a), not a Light", () => {
+    const r = resolveMatterDeviceType([cap("onoff")], undefined, "switch");
+    expect(r.outcome).toBe("SUPPORTED");
+    expect(r.deviceType?.id).toBe(0x010a);
+    expect(r.deviceType?.name).toBe("On/Off Plug-in Unit");
+  });
+
+  it("§ Matter Bridge Phase 2A — deviceKind 'light' (or omitted) keeps resolving onoff-only to On/Off Light — no regression for the pre-existing default", () => {
+    expect(resolveMatterDeviceType([cap("onoff")], undefined, "light").deviceType?.id).toBe(0x0100);
+    expect(resolveMatterDeviceType([cap("onoff")]).deviceType?.id).toBe(0x0100);
+  });
+
+  it("§ Matter Bridge Phase 2A — deviceKind 'switch' has no effect once the device has richer capabilities (brightness/color/position) — a dimmable switch is still a Dimmable Light, never demoted to a plug", () => {
+    expect(resolveMatterDeviceType([cap("onoff"), cap("brightness")], undefined, "switch").deviceType?.id).toBe(0x0101);
   });
 
   it("brightness (dimmer, no color) -> Dimmable Light (0x0101)", () => {
@@ -62,5 +78,23 @@ describe("resolveMatterDeviceType — § Matter Bridge Phase 1 foundation", () =
     const r = resolveMatterDeviceType([]);
     expect(r.outcome).toBe("UNSUPPORTED");
     expect(r.deviceType).toBeNull();
+  });
+});
+
+describe("resolveKeypadControlDeviceType — § Matter Bridge Phase 2B (Test B: resolver test)", () => {
+  it("a 'button' control resolves to Generic Switch (0x000f)", () => {
+    const r = resolveKeypadControlDeviceType("button");
+    expect(r.outcome).toBe("SUPPORTED");
+    expect(r.deviceType?.id).toBe(0x000f);
+    expect(r.deviceType?.name).toBe("Generic Switch");
+  });
+
+  it("a 'rotary_encoder'/'touch_zone'/'slider' control is UNSUPPORTED with a stated reason — a disclosed gap, never silently dropped or guessed", () => {
+    for (const kind of ["rotary_encoder", "touch_zone", "slider"] as const) {
+      const r = resolveKeypadControlDeviceType(kind);
+      expect(r.outcome).toBe("UNSUPPORTED");
+      expect(r.deviceType).toBeNull();
+      expect(r.reason).toContain(kind);
+    }
   });
 });

@@ -3,6 +3,8 @@ import type {
   CapabilityKind,
   CapabilityState,
   DeviceId,
+  KeypadCapabilityDeclaration,
+  KeypadInputEvent,
 } from "@supreme/domain-model";
 import {
   bindingKey,
@@ -61,6 +63,17 @@ interface KnxDeviceBinding {
   config: Record<string, unknown>;
 }
 
+/** § Supreme Universal Keypad, Stage 5B — one physical push-button, registered directly
+ * against its owning Supreme `DeviceId` + `controlId` (§ Identity: never the group
+ * address alone). Deliberately separate from {@link KnxDeviceBinding} — a button has no
+ * `CapabilityKind` at all, exactly like a Casambi keypad's own 0-capability device. */
+interface KnxKeypadButtonBinding {
+  deviceId: DeviceId;
+  controlId: string;
+  ga: string;
+  dpt: string;
+}
+
 export class SupremeKnxDriver implements INativeProtocolDriver {
   readonly protocol = "knx";
   private readonly router = new KnxTaskRouter();
@@ -70,6 +83,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   private readonly devices = new Set<DeviceId>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly listeners = new Set<StateListener>();
+  /** § Supreme Universal Keypad, Stage 5B — see {@link KnxKeypadButtonBinding}. Fully
+   * separate from `bindings`/`states`/the capability command path above — a keypad
+   * button is never a capability, never gets a `CapabilityState`, and never flows
+   * through `command()`. */
+  private readonly keypadButtons: KnxKeypadButtonBinding[] = [];
+  private readonly keypadListeners = new Set<(event: KeypadInputEvent) => void>();
   private connected = false;
 
   // Unified Device Intelligence counters (§ Diagnostics — Phase 3). Real, only set when
@@ -138,6 +157,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     await this.ultimate.connect();
     this.connected = true;
     for (const b of this.bindings) this.observe(b);
+    for (const b of this.keypadButtons) this.observeKeypadButton(b);
   }
 
   async disconnect(): Promise<void> {
@@ -203,14 +223,97 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   async unbind(deviceId: DeviceId): Promise<void> {
     const removed = this.bindings.filter((b) => b.deviceId === deviceId);
     removeDeviceBindings(this.bindings, deviceId);
+    // § Supreme Universal Keypad, Stage 5B — a keypad device's buttons are removed
+    // right alongside its (nonexistent) capability bindings, through the SAME generic
+    // device-removal path every other driver already uses (§ Reconciliation/Restart —
+    // no separate keypad registry, no separate removal call).
+    const removedButtons = this.keypadButtons.filter((b) => b.deviceId === deviceId);
+    for (let i = this.keypadButtons.length - 1; i >= 0; i--) {
+      if (this.keypadButtons[i]!.deviceId === deviceId) this.keypadButtons.splice(i, 1);
+    }
     this.devices.delete(deviceId);
     removeDeviceStates(this.states, deviceId);
     this.offlineQueue.evict((subject) => subject === deviceId);
     const releasedGas = new Set(removed.flatMap((b) => [b.statusGa, ...b.extraStatusGas]));
+    for (const b of removedButtons) releasedGas.add(b.ga);
     for (const ga of releasedGas) {
-      if (this.bindings.some((b) => b.statusGa === ga || b.extraStatusGas.includes(ga))) continue;
+      const stillUsed =
+        this.bindings.some((b) => b.statusGa === ga || b.extraStatusGas.includes(ga)) ||
+        this.keypadButtons.some((b) => b.ga === ga);
+      if (stillUsed) continue;
       this.ultimate.unsubscribe(ga);
     }
+  }
+
+  /** § Supreme Universal Keypad, Stage 5B — register one push-button's group address
+   * directly against a Supreme `DeviceId`/`controlId` (§ Identity: the group address is
+   * the protocol backend identity, never the universal keypad ID itself — that's
+   * `deviceId`, assigned by SupremeOS's existing commissioning path exactly like any
+   * other device). Idempotent for the same (deviceId, controlId) pair, mirroring
+   * `bind()`. `dpt` defaults to DPT1.001 (boolean switch/trigger) — the only telegram
+   * shape a plain momentary push-button genuinely sends (§ Do not assume DPT without
+   * confirming — this default matches `defaultDpt("onoff")`, the same boolean shape
+   * every other bare on/off-style KNX signal in this codebase already uses). */
+  bindKeypadButton(deviceId: DeviceId, controlId: string, ga: string, dpt = "DPT1.001"): void {
+    const entry: KnxKeypadButtonBinding = { deviceId, controlId, ga, dpt };
+    const existing = this.keypadButtons.findIndex((b) => b.deviceId === deviceId && b.controlId === controlId);
+    if (existing >= 0) this.keypadButtons[existing] = entry;
+    else this.keypadButtons.push(entry);
+    this.devices.add(deviceId); // ownership lives here, never in a provider (§ Ownership)
+    if (this.connected) this.observeKeypadButton(entry);
+  }
+
+  private observeKeypadButton(b: KnxKeypadButtonBinding): void {
+    this.ultimate.subscribe(b.ga, b.dpt, (value) => {
+      // § Smallest correct mapping (§6) — a plain KNX push-button's group object
+      // carries no more information than "make" (pressed) / "break" (released); this
+      // driver never derives short/long/double/triple itself — that classification is
+      // the Universal Input Engine's job, from the SAME raw `button_pressed`/
+      // `button_released` primitives every other driver feeds it. A non-boolean value
+      // here means this GA isn't genuinely a momentary push-button signal (wrong DPT
+      // configured) — honestly dropped, never fabricated into a press.
+      if (typeof value !== "boolean") return;
+      const event: KeypadInputEvent = {
+        type: value ? "button_pressed" : "button_released",
+        keypadId: b.deviceId,
+        control: b.controlId,
+        ts: new Date().toISOString(),
+      };
+      for (const l of this.keypadListeners) l(event);
+    });
+  }
+
+  /** § Supreme Universal Keypad, Stage 5B — mirrors `CasambiProtocolDriver.
+   * onInputEvent`'s contract exactly: every registered button's press/release,
+   * normalized, protocol detail (group address, DPT) never leaked past this point. */
+  onInputEvent(listener: (event: KeypadInputEvent) => void): () => void {
+    this.keypadListeners.add(listener);
+    return () => this.keypadListeners.delete(listener);
+  }
+
+  /** § Supreme Universal Keypad, Stage 5B — reports only the buttons genuinely
+   * registered via {@link bindKeypadButton} for this device, never a fabricated count.
+   * `input: ["buttons", "hold"]` — "hold" is honest here too: KNX gives this driver only
+   * make/break, but `["buttons", "hold"]` describes what the INPUT MODEL (raw press +
+   * release, fed through the same Universal Input Engine every other driver uses)
+   * genuinely supports deriving, not a claim about KNX-native long-press hardware.
+   * `feedback: []` — no KNX keypad feedback (LED/display) path exists in this driver;
+   * an honest empty capability rather than a pretended one (§9). `null` when this
+   * device has no registered buttons at all. */
+  getKeypadCapabilities(deviceId: DeviceId): KeypadCapabilityDeclaration | null {
+    const buttons = this.keypadButtons.filter((b) => b.deviceId === deviceId);
+    if (buttons.length === 0) return null;
+    return {
+      keypadId: deviceId,
+      protocol: "knx",
+      controls: buttons.map((b) => ({
+        id: b.controlId,
+        kind: "button" as const,
+        label: null,
+        input: ["buttons", "hold"] as const,
+        feedback: [],
+      })),
+    };
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {

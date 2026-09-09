@@ -31,6 +31,12 @@ export interface MatterEndpointMapping {
    * device updates the Matter-visible name; endpoint identity, below, never changes because of
    * a rename). */
   name: string;
+  /** § Matter Bridge Phase 2B — `null` for every regular device (unchanged, one endpoint per
+   * `deviceId`). Set to a keypad's `KeypadControlDescriptor.id` when this mapping represents ONE
+   * BUTTON of a multi-control keypad device — a keypad with 4 buttons produces 4 separate
+   * mappings sharing the SAME `deviceId` but each with its OWN `controlId` and endpoint number
+   * (§ `matterEndpointKey`'s doc below for why the store's addressing had to widen for this). */
+  controlId: string | null;
   /** § Matter Bridge Phase 1.2 — the device's CURRENT full set of declared SupremeOS capability
    * kinds (e.g. `["onoff","brightness","color"]` for a KNX tunable light, `["brightness","color"]`
    * for a Casambi CCT fixture with no separate onoff entry). Needed so `real-server.ts`'s OnOff/
@@ -50,30 +56,40 @@ export interface MatterEndpointMapping {
  * old-format file on load (§ below); never referenced by new code that has a real resolution. */
 const LEGACY_ON_OFF_LIGHT_DEVICE_TYPE_ID = 0x0100;
 
-/** Persistence seam for the deviceId↔endpoint mapping (§ Persistence). This is deliberately
- * NOT `@matter/main`'s own storage — that owns fabric/commissioning/attribute state, which
- * this never duplicates. This is the one genuinely new piece of state SupremeOS itself must
- * own: "which endpoint number did we already hand out for this device." */
+/** § Matter Bridge Phase 2B — the store's real addressing key: a plain `deviceId` for every
+ * regular device (byte-identical to what every pre-Phase-2B caller already passes, so an
+ * existing persisted file/in-memory map needs no migration), or `${deviceId}::${controlId}` for
+ * one button of a multi-control keypad — the ONLY reason the store's key type widened from
+ * `DeviceId` to `string`: two mappings can now legitimately share a `deviceId` (a keypad's 4
+ * buttons), which a `DeviceId`-only key could never distinguish. */
+export function matterEndpointKey(deviceId: DeviceId, controlId: string | null = null): string {
+  return controlId ? `${deviceId}::${controlId}` : deviceId;
+}
+
+/** Persistence seam for the deviceId(+controlId)↔endpoint mapping (§ Persistence). This is
+ * deliberately NOT `@matter/main`'s own storage — that owns fabric/commissioning/attribute
+ * state, which this never duplicates. This is the one genuinely new piece of state SupremeOS
+ * itself must own: "which endpoint number did we already hand out for this device/control." */
 export interface IMatterEndpointStore {
   list(): MatterEndpointMapping[];
-  get(deviceId: DeviceId): MatterEndpointMapping | null;
+  get(key: string): MatterEndpointMapping | null;
   put(mapping: MatterEndpointMapping): void;
-  remove(deviceId: DeviceId): void;
+  remove(key: string): void;
 }
 
 export class InMemoryMatterEndpointStore implements IMatterEndpointStore {
-  private readonly map = new Map<DeviceId, MatterEndpointMapping>();
+  private readonly map = new Map<string, MatterEndpointMapping>();
   list(): MatterEndpointMapping[] {
     return [...this.map.values()];
   }
-  get(deviceId: DeviceId): MatterEndpointMapping | null {
-    return this.map.get(deviceId) ?? null;
+  get(key: string): MatterEndpointMapping | null {
+    return this.map.get(key) ?? null;
   }
   put(mapping: MatterEndpointMapping): void {
-    this.map.set(mapping.deviceId, mapping);
+    this.map.set(matterEndpointKey(mapping.deviceId, mapping.controlId), mapping);
   }
-  remove(deviceId: DeviceId): void {
-    this.map.delete(deviceId);
+  remove(key: string): void {
+    this.map.delete(key);
   }
 }
 
@@ -83,7 +99,7 @@ export class InMemoryMatterEndpointStore implements IMatterEndpointStore {
  * one without changing any caller — deliberately not built speculatively now (ponytail: YAGNI
  * until a second real consumer needs it). */
 export class FileMatterEndpointStore implements IMatterEndpointStore {
-  private cache: Map<DeviceId, MatterEndpointMapping>;
+  private cache: Map<string, MatterEndpointMapping>;
 
   constructor(private readonly filePath: string) {
     this.cache = this.load();
@@ -95,7 +111,7 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
    * number), is NEVER treated as "start clean" — that would silently reissue identities a
    * real ecosystem may still hold cached. It throws a clear, actionable error instead so the
    * operator fixes or restores the file rather than the bridge quietly renumbering everyone. */
-  private load(): Map<DeviceId, MatterEndpointMapping> {
+  private load(): Map<string, MatterEndpointMapping> {
     if (!existsSync(this.filePath)) return new Map();
     let raw: unknown;
     try {
@@ -111,7 +127,7 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
     if (!Array.isArray(raw)) {
       throw new Error(`matter-bridge: endpoint registry at ${this.filePath} is not a JSON array`);
     }
-    const map = new Map<DeviceId, MatterEndpointMapping>();
+    const map = new Map<string, MatterEndpointMapping>();
     const usedNumbers = new Set<number>();
     for (const raw_m of raw as (MatterEndpointMapping & { deviceType?: unknown })[]) {
       if (typeof raw_m.deviceId !== "string" || !raw_m.deviceId) {
@@ -149,9 +165,13 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
       // land between an upgrade and the first reconcile.
       const name = typeof raw_m.name === "string" && raw_m.name ? raw_m.name : raw_m.deviceId;
       const capabilityKinds = Array.isArray(raw_m.capabilityKinds) ? raw_m.capabilityKinds.filter((k): k is string => typeof k === "string") : [];
-      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId, name, capabilityKinds };
-      if (map.has(m.deviceId)) {
-        throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has a duplicate deviceId (${m.deviceId})`);
+      // § Matter Bridge Phase 2B — absent on every pre-2B persisted entry; `null` there is
+      // exactly the pre-existing "one endpoint per deviceId" meaning, not a migration.
+      const controlId = typeof raw_m.controlId === "string" && raw_m.controlId ? raw_m.controlId : null;
+      const m: MatterEndpointMapping = { deviceId: raw_m.deviceId, endpointNumber: raw_m.endpointNumber, deviceTypeId, name, capabilityKinds, controlId };
+      const key = matterEndpointKey(m.deviceId, m.controlId);
+      if (map.has(key)) {
+        throw new Error(`matter-bridge: endpoint registry at ${this.filePath} has a duplicate entry for ${key}`);
       }
       if (usedNumbers.has(m.endpointNumber)) {
         throw new Error(
@@ -160,7 +180,7 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
         );
       }
       usedNumbers.add(m.endpointNumber);
-      map.set(m.deviceId, m);
+      map.set(key, m);
     }
     return map;
   }
@@ -176,15 +196,15 @@ export class FileMatterEndpointStore implements IMatterEndpointStore {
   list(): MatterEndpointMapping[] {
     return [...this.cache.values()];
   }
-  get(deviceId: DeviceId): MatterEndpointMapping | null {
-    return this.cache.get(deviceId) ?? null;
+  get(key: string): MatterEndpointMapping | null {
+    return this.cache.get(key) ?? null;
   }
   put(mapping: MatterEndpointMapping): void {
-    this.cache.set(mapping.deviceId, mapping);
+    this.cache.set(matterEndpointKey(mapping.deviceId, mapping.controlId), mapping);
     this.persist();
   }
-  remove(deviceId: DeviceId): void {
-    this.cache.delete(deviceId);
+  remove(key: string): void {
+    this.cache.delete(key);
     this.persist();
   }
 }
@@ -212,7 +232,27 @@ export class MatterEndpointRegistry {
     name: string = deviceId,
     capabilityKinds: string[] = [],
   ): MatterEndpointMapping {
-    const existing = this.store.get(deviceId);
+    return this.resolveInternal(deviceId, null, deviceTypeId, name, capabilityKinds);
+  }
+
+  /** § Matter Bridge Phase 2B — same contract as {@link resolve}, for ONE button/control of a
+   * multi-control keypad: `controlId` (a `KeypadControlDescriptor.id`) is part of this mapping's
+   * identity alongside `deviceId`, so 4 buttons on the same keypad device each get their own
+   * stable endpoint number, independently. `capabilityKinds` has no meaning for an input-only
+   * control — always persisted empty. */
+  resolveButton(deviceId: DeviceId, controlId: string, deviceTypeId: MatterDeviceTypeId, name: string): MatterEndpointMapping {
+    return this.resolveInternal(deviceId, controlId, deviceTypeId, name, []);
+  }
+
+  private resolveInternal(
+    deviceId: DeviceId,
+    controlId: string | null,
+    deviceTypeId: MatterDeviceTypeId,
+    name: string,
+    capabilityKinds: string[],
+  ): MatterEndpointMapping {
+    const key = matterEndpointKey(deviceId, controlId);
+    const existing = this.store.get(key);
     if (existing) {
       const sameKinds =
         existing.capabilityKinds.length === capabilityKinds.length && existing.capabilityKinds.every((k, i) => k === capabilityKinds[i]);
@@ -224,7 +264,7 @@ export class MatterEndpointRegistry {
       return existing;
     }
     const next = this.nextEndpointNumber();
-    const mapping: MatterEndpointMapping = { deviceId, endpointNumber: next, deviceTypeId, name, capabilityKinds };
+    const mapping: MatterEndpointMapping = { deviceId, controlId, endpointNumber: next, deviceTypeId, name, capabilityKinds };
     this.store.put(mapping);
     return mapping;
   }
@@ -237,8 +277,8 @@ export class MatterEndpointRegistry {
     return this.store.list();
   }
 
-  remove(deviceId: DeviceId): void {
-    this.store.remove(deviceId);
+  remove(deviceId: DeviceId, controlId: string | null = null): void {
+    this.store.remove(matterEndpointKey(deviceId, controlId));
   }
 
   private nextEndpointNumber(): number {

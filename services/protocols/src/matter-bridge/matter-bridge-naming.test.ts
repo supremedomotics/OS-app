@@ -37,6 +37,7 @@ class FakeMatterBridgeServer implements MatterBridgeServer {
     const e = this.endpoints.get(endpointNumber);
     if (e) e.name = name;
   }
+  async reportKeypadPress(): Promise<void> {}
   onCommand(listener: (endpointNumber: number, command: CapabilityCommand) => void): () => void {
     this.commandListeners.add(listener);
     return () => this.commandListeners.delete(listener);
@@ -55,6 +56,12 @@ class FakeCapabilityPort implements MatterBridgeCapabilityPort {
     return null;
   }
   onState(): () => void {
+    return () => {};
+  }
+  async getKeypadCapabilities() {
+    return null;
+  }
+  onKeypadInput(): () => void {
     return () => {};
   }
 }

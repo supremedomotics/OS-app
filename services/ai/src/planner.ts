@@ -205,7 +205,12 @@ function describe(t: ParsedTrigger): string {
   const tr = t.trigger;
   if (tr.type === "time") return `at ${tr.at}`;
   if (tr.type === "interval") return `every ${tr.everyMinutes}m`;
-  return `when ${tr.deviceId} changes`;
+  // § this planner's parseTrigger() only ever produces time/interval/device_state (never
+  // keypad_input — there is no NL grammar for "keypad button X pressed" here), but the
+  // AutomationTrigger union gained keypad_input for the Universal Keypad Framework, so this
+  // branch must stay type-safe rather than assume every remaining variant has `deviceId`.
+  if (tr.type === "device_state") return `when ${tr.deviceId} changes`;
+  return `when ${tr.keypadId} button ${tr.control} ${tr.event}`;
 }
 function describeCmd(c: CapabilityCommand): string {
   if (c.capability === "brightness" && c.action === "set") return `set to ${c.level ?? 0}%`;

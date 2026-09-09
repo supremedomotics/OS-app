@@ -227,6 +227,17 @@ export interface INativeProtocolDriver {
    * gates on the declaration before calling this, so a compliant caller never sends
    * an undeclared type, but the driver must not crash if one arrives regardless. */
   sendKeypadFeedback?(command: KeypadFeedbackCommand): Promise<void>;
+
+  /** Optional: register one physical control (e.g. a single push-button) with its own
+   * protocol-native address — the button-level counterpart to `bind()`, which only
+   * ever binds a `CapabilityKind`. Exists for a driver whose bus requires an EXPLICIT
+   * subscription per control to receive its telegrams at all (KNX: a group address
+   * only produces events once subscribed) — a driver whose keypad input already
+   * arrives self-addressed on a shared channel (e.g. Casambi's BLE mesh, resolved via
+   * its own `keypadIdentity` option) never needs this and simply omits it. `deviceId`
+   * is supplied directly by the caller (commissioning), exactly like `bind()` — no
+   * separate identity resolution required. */
+  bindKeypadButton?(deviceId: DeviceId, controlId: string, address: string, dpt?: string): void;
 }
 
 /** A binding tagged with the owning protocol, as persisted + rebound on boot. */
