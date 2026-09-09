@@ -84,6 +84,11 @@ export const KeypadMappingTarget = z.object({
   deviceId: DeviceId,
   capability: CapabilityKind,
   step: z.number().min(1).max(100).default(10),
+  /** § Keypad dim-speed — ramp duration (ms) for a resolved brightness/color level command,
+   * same shape/contract as `CapabilityCommand.brightness.fadeMs`. Meaningless (simply unused)
+   * for `onoff`/any non-level capability, exactly like `step` already is. Optional: omitted
+   * means instant, unchanged from every mapping created before this field existed. */
+  fadeMs: z.number().int().min(0).max(60_000).optional(),
 });
 export type KeypadMappingTarget = z.infer<typeof KeypadMappingTarget>;
 

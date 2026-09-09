@@ -11,6 +11,7 @@ import {
   behaviorUsesStep,
   buildCreateKeypadMappingRequest,
   buildUpdateKeypadMappingRequest,
+  deviceSupportsDimSpeed,
   emptyKeypadMappingForm,
   groupKeypadsByRoom,
   mappingToFormState,
@@ -130,6 +131,63 @@ describe("Universal Keypad — target selection (§6)", () => {
 
   it("targetableCapabilities returns every commandable capability the device actually has", () => {
     expect(targetableCapabilities(light("l1", "Light", "r1"))).toEqual(["onoff", "brightness"]);
+  });
+});
+
+describe("Universal Keypad — dim speed (§ Keypad dim-speed)", () => {
+  const casambiLight: Device = { ...light("dl1", "Dimmer", "r1"), metadata: { protocol: "casambi" } };
+  const knxLight: Device = { ...light("dl2", "Dimmer", "r1"), metadata: { protocol: "knx" } };
+
+  it("deviceSupportsDimSpeed is true only for brightness on a Casambi-owned device", () => {
+    expect(deviceSupportsDimSpeed(casambiLight, "brightness")).toBe(true);
+  });
+
+  it("deviceSupportsDimSpeed is false for any other protocol — the field must not be offered where no driver actually honors it", () => {
+    expect(deviceSupportsDimSpeed(knxLight, "brightness")).toBe(false);
+  });
+
+  it("deviceSupportsDimSpeed is false for a non-brightness capability, even on Casambi", () => {
+    expect(deviceSupportsDimSpeed(casambiLight, "onoff")).toBe(false);
+    expect(deviceSupportsDimSpeed(casambiLight, "color")).toBe(false);
+  });
+
+  it("deviceSupportsDimSpeed is false with no device selected yet", () => {
+    expect(deviceSupportsDimSpeed(null, "brightness")).toBe(false);
+  });
+
+  it("a set fadeSeconds round-trips to KeypadMappingTarget.fadeMs (seconds -> ms) through buildCreateKeypadMappingRequest", () => {
+    const form: KeypadMappingFormState = {
+      ...emptyKeypadMappingForm(KP1, "1", "short_press"),
+      name: "Dim speed test", behavior: "increment", targetDeviceId: L1, targetCapability: "brightness", fadeSeconds: 2.5,
+    };
+    const req = buildCreateKeypadMappingRequest(form);
+    expect(req.target).toEqual({ deviceId: L1, capability: "brightness", step: 10, fadeMs: 2500 });
+  });
+
+  it("no fadeSeconds set (null) means no fadeMs field at all on the built target — instant, unchanged from before this field existed", () => {
+    const form: KeypadMappingFormState = {
+      ...emptyKeypadMappingForm(KP1, "1", "short_press"),
+      name: "No dim speed", behavior: "increment", targetDeviceId: L1, targetCapability: "brightness",
+    };
+    const req = buildCreateKeypadMappingRequest(form);
+    expect(req.target).toEqual({ deviceId: L1, capability: "brightness", step: 10 });
+    expect(req.target).not.toHaveProperty("fadeMs");
+  });
+
+  it("mappingToFormState reads a stored fadeMs back as fadeSeconds (ms -> seconds)", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "Stored dim", input: { keypadId: KP1, control: "1", event: "short_press" },
+      behavior: "increment", target: { deviceId: L1, capability: "brightness", step: 10, fadeMs: 7_000 },
+    });
+    expect(mappingToFormState(stored).fadeSeconds).toBe(7);
+  });
+
+  it("mappingToFormState reads no fadeMs as fadeSeconds: null, never a fabricated 0", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "No dim", input: { keypadId: KP1, control: "1", event: "short_press" },
+      behavior: "increment", target: { deviceId: L1, capability: "brightness", step: 10 },
+    });
+    expect(mappingToFormState(stored).fadeSeconds).toBeNull();
   });
 });
 
