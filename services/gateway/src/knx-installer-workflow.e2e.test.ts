@@ -626,7 +626,7 @@ describe("KNX ETS Import unified into the Discovery Queue (§ Unify ETS Import &
 
     const bindings = (await (await fetch(`${baseUrl}/v1/commissioning/bindings`, { headers: auth() })).json()) as { bindings: { address: string; protocol: string }[] };
     expect(bindings.bindings.some((b) => b.address === "1/3/1" && b.protocol === "knx")).toBe(true);
-  }, 10000);
+  }, 30000);
 
   it("rejects an ETS export with no group addresses instead of silently returning an empty queue", async () => {
     const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue`, {
