@@ -925,7 +925,12 @@ describe("KNX ETS import — worker thread cancellation & failure isolation (§ 
     ).join("")}</GroupAddress-Export>`;
 
   type Job = { status: string; stage: string; progress: number; result: { queue: unknown[] } | null; error: string | null };
-  const poll = async (jobId: string, until: (j: Job) => boolean, tries = 400): Promise<Job> => {
+  // § default budget: 25ms * 2000 = 50s, comfortably under this file's 60000ms `it()` timeouts
+  // while still returning fast in the common case — 400 tries (10s) was too tight for a real
+  // worker-thread ETS import competing for CPU under full-workspace test load (confirmed live:
+  // "cancelling one of two concurrent imports never disturbs the other" gave up on the survivor
+  // job before it reached "completed", not because the job actually failed).
+  const poll = async (jobId: string, until: (j: Job) => boolean, tries = 2000): Promise<Job> => {
     let job: Job | null = null;
     for (let n = 0; n < tries; n++) {
       const res = await fetch(`${baseUrl}/v1/commissioning/knx/queue/job/${jobId}`, { headers: auth() });
