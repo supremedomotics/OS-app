@@ -201,4 +201,205 @@ describe("Universal Keypad Framework — backend APIs", () => {
     const res = await fetch(`${baseUrl}/v1/keypad/mappings`);
     expect(res.status).toBe(401);
   });
+
+  // ── § Universal Keypad Framework, Stage 3A — behavior/target through the real gateway API ──
+  describe("behavior model (toggle/alternate/cycle/increment/decrement) via /v1/keypad/mappings", () => {
+    it("creates a toggle mapping with no actions[], target round-trips exactly", async () => {
+      const devs = await devices();
+      const light = devs.find((d) => d.supremeType === "light")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Toggle via API",
+            input: { keypadId: light.id, control: "btnA", event: "short_press" },
+            behavior: "toggle",
+            target: { deviceId: light.id, capability: "onoff", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+
+      expect(created.mapping.behavior).toBe("toggle");
+      expect(created.mapping.actions).toEqual([]);
+      expect(created.mapping.target).toEqual({ deviceId: light.id, capability: "onoff", step: 10 });
+      expect(created.mapping.behaviorState).toEqual({ lastDirection: null, cycleIndex: 0 });
+    });
+
+    it("fires a toggle mapping through the run endpoint and reads live target state, not a cached flag", async () => {
+      const devs = await devices();
+      const light = devs.find((d) => d.supremeType === "light")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Toggle run",
+            input: { keypadId: light.id, control: "btnRun", event: "short_press" },
+            behavior: "toggle",
+            target: { deviceId: light.id, capability: "onoff", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+
+      const runRes = await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}/run`, { method: "POST", headers: auth() });
+      expect(runRes.status).toBe(204);
+      const runs = (await (await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}/runs`, { headers: auth() })).json()) as KeypadMappingRunList;
+      expect(runs.runs[0]!.ok).toBe(true);
+    });
+
+    it("creates an alternate mapping and its lastDirection advances after each firing", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Alternate dim via API",
+            input: { keypadId: dimmer.id, control: "btnAlt", event: "hold_start" },
+            behavior: "alternate",
+            target: { deviceId: dimmer.id, capability: "brightness", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(created.mapping.behaviorState.lastDirection).toBeNull();
+
+      await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}/run`, { method: "POST", headers: auth() });
+
+      const list = (await (await fetch(`${baseUrl}/v1/keypad/mappings`, { headers: auth() })).json()) as KeypadMappingList;
+      const reloaded = list.mappings.find((m) => m.id === created.mapping.id)!;
+      expect(reloaded.behaviorState.lastDirection).toBe("up");
+    });
+
+    it("creates a cycle mapping with a real actions[] list to walk through", async () => {
+      const devs = await devices();
+      const light = devs.find((d) => d.supremeType === "light")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Cycle via API",
+            input: { keypadId: light.id, control: "btnCycle", event: "short_press" },
+            behavior: "cycle",
+            target: { deviceId: light.id, capability: "onoff", step: 10 },
+            actions: [
+              { type: "device_command", deviceId: light.id, command: { capability: "onoff", action: "on" } },
+              { type: "device_command", deviceId: light.id, command: { capability: "onoff", action: "off" } },
+            ],
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(created.mapping.behavior).toBe("cycle");
+      expect(created.mapping.actions).toHaveLength(2);
+    });
+
+    it("creates increment and decrement mappings against a real dimmer target", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const inc = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Increment via API",
+            input: { keypadId: dimmer.id, control: "btnInc", event: "short_press" },
+            behavior: "increment",
+            target: { deviceId: dimmer.id, capability: "brightness", step: 15 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(inc.mapping.behavior).toBe("increment");
+      expect(inc.mapping.target?.step).toBe(15);
+
+      const dec = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Decrement via API",
+            input: { keypadId: dimmer.id, control: "btnDec", event: "short_press" },
+            behavior: "decrement",
+            target: { deviceId: dimmer.id, capability: "brightness", step: 15 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(dec.mapping.behavior).toBe("decrement");
+    });
+
+    it("update() changes behavior/target without a body field for behaviorState existing at all", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Updatable",
+            input: { keypadId: dimmer.id, control: "btnUpd", event: "short_press" },
+            behavior: "toggle",
+            target: { deviceId: dimmer.id, capability: "onoff", step: 10 },
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+
+      const patched = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings/${created.mapping.id}`, {
+          method: "PATCH",
+          headers: auth(),
+          body: JSON.stringify({ behavior: "increment", target: { deviceId: dimmer.id, capability: "brightness", step: 20 } }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(patched.mapping.behavior).toBe("increment");
+      expect(patched.mapping.target).toEqual({ deviceId: dimmer.id, capability: "brightness", step: 20 });
+    });
+
+    it("rejects a non-direct mapping body with no target — 422 (§6 error model)", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const res = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "Missing target",
+          input: { keypadId: dimmer.id, control: "btnBad1", event: "short_press" },
+          behavior: "toggle",
+        }),
+      });
+      expect(res.status).toBe(422);
+    });
+
+    it("rejects a direct mapping body with empty actions[] — 422, same rule as before Stage 3A", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const res = await fetch(`${baseUrl}/v1/keypad/mappings`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({
+          name: "No actions",
+          input: { keypadId: dimmer.id, control: "btnBad2", event: "short_press" },
+        }),
+      });
+      expect(res.status).toBe(422);
+    });
+
+    it("legacy request body (actions[] only, no behavior/target keys) still creates a working direct mapping", async () => {
+      const devs = await devices();
+      const dimmer = devs.find((d) => d.supremeType === "dimmer")!;
+      const created = (await (
+        await fetch(`${baseUrl}/v1/keypad/mappings`, {
+          method: "POST",
+          headers: auth(),
+          body: JSON.stringify({
+            name: "Old-shape body",
+            input: { keypadId: dimmer.id, control: "btnLegacy", event: "short_press" },
+            actions: [{ type: "device_command", deviceId: dimmer.id, command: { capability: "onoff", action: "toggle" } }],
+          }),
+        })
+      ).json()) as KeypadMappingResponse;
+      expect(created.mapping.behavior).toBe("direct");
+      expect(created.mapping.target).toBeNull();
+    });
+  });
 });

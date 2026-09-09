@@ -5,8 +5,10 @@ import {
   newId,
   type HomeId,
   type KeypadInputEvent,
+  type KeypadMappingBehavior,
   type KeypadMappingId,
   type KeypadMappingInput,
+  type KeypadMappingTarget,
 } from "@supreme/domain-model";
 import { SupremeError } from "@supreme/contracts";
 import { KeypadMappingEngine } from "./mapping-engine.js";
@@ -29,8 +31,17 @@ export interface CreateKeypadMappingInput {
   input: KeypadMappingInput;
   /** Raw JSON, `AutomationCondition`-shaped once `variables` are expanded. */
   conditions?: unknown[];
-  /** Raw JSON, `AutomationAction`-shaped once `variables` are expanded. */
-  actions: unknown[];
+  /** Raw JSON, `AutomationAction`-shaped once `variables` are expanded. Required (non-empty)
+   * only for `"direct"`/`"cycle"` behavior — enforced by `KeypadMapping`'s own `superRefine`
+   * when this input is assembled into a mapping below, not re-validated here. */
+  actions?: unknown[];
+  /** § Stage 3A — defaults to `"direct"` (via `KeypadMapping.parse`) when omitted, matching
+   * every mapping created before Stage 2 existed. */
+  behavior?: KeypadMappingBehavior;
+  /** Required for every behavior but `"direct"` — enforced by `KeypadMapping`'s own
+   * `superRefine`, not here. `undefined`/omitted defaults to `null` (no target), correct for
+   * `"direct"`. */
+  target?: KeypadMappingTarget | null;
   variables?: Record<string, string | number | boolean>;
 }
 
@@ -40,6 +51,8 @@ export interface UpdateKeypadMappingInput {
   input?: KeypadMappingInput;
   conditions?: unknown[];
   actions?: unknown[];
+  behavior?: KeypadMappingBehavior;
+  target?: KeypadMappingTarget | null;
   variables?: Record<string, string | number | boolean>;
 }
 
@@ -72,7 +85,14 @@ export class KeypadMappingService {
   async create(input: CreateKeypadMappingInput): Promise<KeypadMapping> {
     const variables = input.variables ?? {};
     const conditions = AutomationCondition.array().parse((input.conditions ?? []).map((c) => expandVariables(c, variables)));
-    const actions = AutomationAction.array().parse(input.actions.map((a) => expandVariables(a, variables)));
+    const actions = AutomationAction.array().parse((input.actions ?? []).map((a) => expandVariables(a, variables)));
+    // § Stage 3A — behavior/target pass straight through; `KeypadMapping.parse` supplies
+    // "direct"/null when omitted and, via its own `superRefine`, is the ONE place that
+    // enforces "actions non-empty for direct/cycle" / "target required for every other
+    // behavior" — never duplicated here. `behaviorState` is NEVER accepted from either input
+    // type, so a client can't set engine-owned runtime state even if it tried: `KeypadMapping.
+    // parse` always supplies its own default (`{lastDirection: null, cycleIndex: 0}`) for a
+    // brand-new mapping, which is exactly correct — there IS no prior firing to remember yet.
     const mapping = KeypadMapping.parse({
       id: newId("keypadMapping"),
       homeId: input.homeId,
@@ -81,6 +101,8 @@ export class KeypadMappingService {
       input: input.input,
       conditions,
       actions,
+      behavior: input.behavior,
+      target: input.target,
       variables,
     });
     await this.store.put(mapping);
@@ -104,6 +126,15 @@ export class KeypadMappingService {
       input: patch.input ?? current.input,
       conditions,
       actions,
+      behavior: patch.behavior ?? current.behavior,
+      // `undefined` (field omitted) keeps the existing target; an EXPLICIT `null` in the
+      // patch clears it (e.g. switching a mapping back to "direct"). Both are legitimate,
+      // distinguishable client intents — `??` alone couldn't tell them apart.
+      target: patch.target !== undefined ? patch.target : current.target,
+      // `behaviorState` is never in `patch` (no such field on `UpdateKeypadMappingInput`) —
+      // `...current` above is what carries it forward untouched across every update, exactly
+      // as required: an installer editing a mapping's name/actions must never reset a live
+      // "alternate" mapping's `lastDirection` back to null.
       variables,
     });
     await this.store.put(next);

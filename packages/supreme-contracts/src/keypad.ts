@@ -3,7 +3,9 @@ import {
   DeviceId,
   KeypadCapabilityDeclaration,
   KeypadMapping,
+  KeypadMappingBehavior,
   KeypadMappingInput,
+  KeypadMappingTarget,
   KeypadSubscription,
 } from "@supreme/domain-model";
 import { z } from "zod";
@@ -31,13 +33,28 @@ export type KeypadCapabilitiesResponse = z.infer<typeof KeypadCapabilitiesRespon
  * before anything is stored; an unresolvable placeholder or wrong-shaped action
  * fails with the same 422 validation error the rest of the gateway already produces
  * for a bad automation body (§6 error model).
+ *
+ * `behavior`/`target` (§ Universal Keypad Framework, Stage 3A) are the API surface for
+ * the Stage 2 behavior model — `KeypadMappingBehavior`/`KeypadMappingTarget` are
+ * imported straight from `@supreme/domain-model` rather than redeclared here, so this
+ * contract can never drift out of sync with the domain schema that actually validates
+ * a stored mapping. `actions` drops its old `.min(1)` (a "direct"/"cycle" mapping still
+ * needs at least one — enforced by `KeypadMapping`'s own `superRefine` when the service
+ * parses the assembled mapping, the SAME place that already enforces every other
+ * behavior-conditional rule; duplicating that check here would just be a second source
+ * of truth to keep in sync). `behaviorState` is deliberately ABSENT from this contract —
+ * it is runtime/persisted engine state the `KeypadMappingEngine` owns exclusively
+ * (`lastDirection`/`cycleIndex`), never something a client sets directly; omitting the
+ * field here is what actually enforces that, not a comment.
  */
 export const CreateKeypadMappingRequest = z.object({
   name: z.string().min(1),
   enabled: z.boolean().default(true),
   input: KeypadMappingInput,
   conditions: z.array(z.record(z.string(), z.unknown())).default([]),
-  actions: z.array(z.record(z.string(), z.unknown())).min(1),
+  actions: z.array(z.record(z.string(), z.unknown())).default([]),
+  behavior: KeypadMappingBehavior.default("direct"),
+  target: KeypadMappingTarget.nullable().default(null),
   variables: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
 });
 export type CreateKeypadMappingRequest = z.infer<typeof CreateKeypadMappingRequest>;
