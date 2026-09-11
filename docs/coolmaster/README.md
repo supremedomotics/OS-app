@@ -204,16 +204,44 @@ commands trigger. A gateway with no `props` support, or a transient failure read
 never fails the rest of discovery — indoor units, lines, and every other device type are
 unaffected; only the friendly-name map comes back empty for that pass.
 
-**Format confidence — LOW, unverified against real hardware.** The reference material
-(`CoolMaster_Core_Reference_Part3_v1.0.txt` §7) names `props` and its documented SET form
-(`props <uid> name <name>`) but gives no LIST response line syntax at all. No real captured
-`props` output exists anywhere in this repository or its documentation set. The parser
-tolerates the two most plausible layouts — `<uid> name <name...>` (echoing the SET form's
-own "name" token) and a bare `<uid> <name...>` fallback — and degrades safely for anything
-else (a UID with no resolvable name line is simply absent from the map, never a fabricated
-or corrupted entry, and one malformed line never affects any other line or unit). **This
-still requires validation against a real CoolMasterNet's actual `props` list output before
-being trusted as protocol truth.**
+**Format confidence — LIVE-TESTED against real hardware, and the guessed format was wrong.**
+`props` and `query <uid>` were both tried against a real CoolMasterNet unit with real names
+already configured through the vendor's own app:
+
+- Bare `props` returns a genuine, real response — but it's a **pipe-delimited table**, not
+  the `<uid> name <name>` line shape this driver guessed from the SET form's own documented
+  syntax:
+  ```
+    UID  |      Name      | Visi |      Modes      |   Fspeeds   | TLim | Cool | Heat |   Elocks  |
+  -------+----------------+------+-----------------+-------------+--------------------+-----------+
+  OK
+  ```
+  On this unit the table came back with a header and separator but **zero data rows**, even
+  though the units genuinely have names set in the vendor app — the "Visi" (visibility)
+  column suggests each property may need to be marked visible before it appears here, but
+  this is unconfirmed.
+- `props L1.101` (querying one specific unit) returned `Bad Format`.
+- `query L1.101` (the SAME argument shape this driver already uses internally for swing/
+  filter/demand/fault/lock/inhibit detail) returned the IDENTICAL `Bad Format` error on this
+  same unit — meaning that enrichment call has likely never actually worked against this
+  hardware either (silently: it's wrapped in try/catch and degrades to ls2-only data, so
+  nothing crashes — the advanced controls it would populate simply stay correctly gated off,
+  per `indoorUnitCapabilityConfig`'s null-checks, rather than breaking anything).
+- REST v2 (port 10103) and a local web config UI (plain HTTP) are both unreachable on this
+  unit, ruling out either as an alternative source.
+
+**No further guesses were made against this conclusion** — three different inferred argument
+shapes (`props <uid> name <name>`'s LIST form, `props <uid>`, `query <uid>`) all failed to
+produce usable data on real hardware, and continuing to try syntax variations against a
+live production gateway has a real cost. The parser's existing dual-layout tolerance is left
+in place (harmless — it simply never matches this hardware's pipe-table format, degrading to
+the honest "no name" empty map, exactly as designed for any unrecognized layout), and
+`suggestedName` correctly falls back to the bare UID. **Getting real names from this
+protocol requires either the official CoolMaster PRM's exact `props`/per-unit-query syntax
+(not available in this repo's reference material) or CoolAutomation support confirming the
+correct command** — this is the single highest-priority open item before friendly names can
+work on real hardware; everything else in this driver (control, discovery, multi-instance,
+gateway auto-discovery) is functioning correctly on this same real unit.
 
 **Name synchronization**: like every other driver in this codebase, `suggestedName` is a
 discovery-time *suggestion* — it is what a not-yet-commissioned device is offered as by

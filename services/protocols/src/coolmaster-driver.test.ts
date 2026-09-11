@@ -326,5 +326,55 @@ describe("CoolMasterProtocolDriver", () => {
       });
       await expect(autoDriver.connect()).rejects.toThrow(/found no CoolMaster gateways/);
     });
+
+    it("§ live-confirmed fix — with autoDiscover: true AND a known host, connect() uses the fast direct path and never runs a LAN scan at all", async () => {
+      // No discoveryCandidateHosts given at all — if this fell back to a scan, it would try
+      // to enumerate this machine's real network interfaces instead of the fake gateway,
+      // and almost certainly fail to find it. Connecting successfully here IS the proof no
+      // scan ever ran.
+      const autoDriver = new CoolMasterProtocolDriver({
+        autoDiscover: true,
+        host: "127.0.0.1",
+        gatewaySerial: "GW-TEST-01",
+        asciiPort: gateway.port,
+        protocol: "ascii",
+        pollMs: 100_000,
+        slowPollMs: 100_000,
+        discoveryIntervalMs: 100_000,
+        timeoutMs: 2_000,
+        retryCount: 1,
+      });
+      try {
+        await autoDriver.connect();
+        expect(autoDriver.isConnected()).toBe(true);
+      } finally {
+        await autoDriver.disconnect();
+      }
+    });
+
+    it("§ live-confirmed fix — with autoDiscover: true and a STALE known host that doesn't answer, connect() falls back to a fresh LAN scan and recovers (the actual DHCP-change recovery path)", async () => {
+      // A real gateway's port doesn't change on a DHCP renewal — only its IP does — so the
+      // "stale" case is: same asciiPort, wrong host. 127.0.0.2 has nothing listening;
+      // discoveryCandidateHosts gives the fallback scan the REAL address (127.0.0.1) to find
+      // instead, using the SAME port the gateway actually listens on.
+      const autoDriver = new CoolMasterProtocolDriver({
+        autoDiscover: true,
+        host: "127.0.0.2", // stale/wrong IP — nothing listens here
+        gatewaySerial: "GW-TEST-01",
+        discoveryCandidateHosts: ["127.0.0.1"], // the fallback scan finds the real gateway here
+        asciiPort: gateway.port,
+        protocol: "ascii",
+        timeoutMs: 500,
+        retryCount: 1,
+      });
+      try {
+        await autoDriver.connect();
+        expect(autoDriver.isConnected()).toBe(true); // recovered via the fallback scan
+        const devices = await autoDriver.discover();
+        expect(devices[0]).toMatchObject({ backendId: "L1.100" });
+      } finally {
+        await autoDriver.disconnect();
+      }
+    });
   });
 });

@@ -210,4 +210,16 @@ describe("friendly names (§ Friendly Name Discovery)", () => {
     expect(map.get("L1.101")).toBe("Office");
     expect(map.get("L1.102")).toBe("Office");
   });
+
+  it("§ live-confirmed finding — a real gateway's pipe-delimited props table (header + separator, no recognized line shape) degrades to an empty map, never a fabricated entry", () => {
+    // Live-captured from a real CoolMasterNet unit: bare `props` returns a table, not the
+    // `<uid> name <name>` line shape this driver's parser expects — confirmed NOT to match
+    // either tolerated layout, and confirmed to degrade safely rather than crash or invent data.
+    const map = parsePropsBlock([
+      "  UID  |      Name      | Visi |      Modes      |   Fspeeds   | TLim | Cool | Heat |   Elocks  |",
+      "-------+----------------+------+-----------------+-------------+--------------------+-----------+",
+      "OK",
+    ]);
+    expect(map.size).toBe(0);
+  });
 });
