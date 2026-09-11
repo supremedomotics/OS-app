@@ -349,6 +349,25 @@ export async function discoverKnxGateways(): Promise<KnxGateway[]> {
   return ((await res.json()) as { interfaces: KnxGateway[] }).interfaces;
 }
 
+/** A CoolMaster gateway found by a real LAN probe (§ Gateway Auto-Discovery) — the ASCII_IF
+ * prompt handshake actually succeeded against this host, so `serial` is real gateway identity,
+ * never a guess. */
+export interface CoolMasterGateway {
+  gatewayId: string;
+  serial: string;
+  host: string;
+  asciiPort: number;
+  firmwareVersion: string;
+  application: string | null;
+}
+/** Scans the LAN for CoolMaster gateways (§ Gateway Auto-Discovery) — same discovery-panel
+ * pattern as {@link discoverKnxGateways}. */
+export async function discoverCoolMasterGateways(): Promise<CoolMasterGateway[]> {
+  const res = await authed("/v1/commissioning/coolmaster/gateways");
+  if (!res.ok) throw new Error(await errorMessage(res, "Gateway discovery failed."));
+  return ((await res.json()) as { gateways: CoolMasterGateway[] }).gateways;
+}
+
 // ── Casambi Driver Refactor — Foundation (authenticated) ──────────────────────────
 /** One entry in the bounded UDP protocol trace (§ UDP Receive Pipeline Audit) — recorded for
  * every datagram received, parsed or not, so a real capture (e.g. Wireshark) can be cross-checked

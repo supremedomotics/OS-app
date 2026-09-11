@@ -14,7 +14,8 @@ export const DEFAULT_RETRY_COUNT = 3;
 export const DEFAULT_BACKOFF_BASE_MS = 1_000;
 export const DEFAULT_BACKOFF_MAX_MS = 60_000;
 
-export const DEFAULT_CONFIG: Omit<ResolvedCoolMasterConfig, "host" | "createSocket" | "fetchImpl"> = {
+export const DEFAULT_CONFIG: Omit<ResolvedCoolMasterConfig, "host" | "createSocket" | "fetchImpl" | "gatewaySerial" | "discoveryCandidateHosts"> = {
+  autoDiscover: false,
   protocol: "auto",
   asciiPort: DEFAULT_ASCII_PORT,
   restPort: DEFAULT_REST_PORT,

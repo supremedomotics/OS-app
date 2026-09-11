@@ -14,6 +14,7 @@ import {
 import { CoolMasterConnection } from "./coolmaster-connection.js";
 import { CoolMasterStateCache } from "./coolmaster-cache.js";
 import { DEFAULT_CONFIG } from "./coolmaster-constants.js";
+import { discoverCoolMasterGateways } from "./coolmaster-gateway-discovery.js";
 import { cmdGroupPower, cmdMainControllerPower, cmdVentilationPower, cmdWaterHeaterPower, cmdWaterHeaterTemp } from "./coolmaster-commands.js";
 import { discoverAll } from "./coolmaster-discovery.js";
 import { CoolMasterConfigError, CoolMasterUnsupportedCommandError } from "./coolmaster-errors.js";
@@ -59,10 +60,11 @@ interface CmBinding {
 }
 
 function resolveConfig(opts: CoolMasterDriverConfig): ResolvedCoolMasterConfig {
-  if (!opts.host || opts.host.trim().length === 0) {
-    throw new CoolMasterConfigError("coolmaster: host is required");
+  const hasHost = !!opts.host && opts.host.trim().length > 0;
+  if (!hasHost && !opts.autoDiscover) {
+    throw new CoolMasterConfigError("coolmaster: host is required (or set autoDiscover: true)");
   }
-  return { ...DEFAULT_CONFIG, ...opts, host: opts.host.trim() };
+  return { ...DEFAULT_CONFIG, ...opts, host: hasHost ? opts.host!.trim() : "" };
 }
 
 /**
@@ -76,11 +78,18 @@ function resolveConfig(opts: CoolMasterDriverConfig): ResolvedCoolMasterConfig {
 export class CoolMasterProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "coolmaster";
 
-  private readonly config: ResolvedCoolMasterConfig;
+  /** Not `readonly` — `config.host` is mutated once, from "" to the resolved address, when
+   * `autoDiscover` defers host resolution to `connect()` (see resolveGatewayViaDiscovery). */
+  private config: ResolvedCoolMasterConfig;
   private readonly logger: CoolMasterLogger;
   private readonly log: CoolMasterScopedLogger;
   private readonly events = new CoolMasterEventBus();
-  private readonly connection: CoolMasterConnection;
+  /** Assigned synchronously in the constructor when `host` is already known; deferred to
+   * `connect()` when `config.autoDiscover` is true and `host` was omitted — see
+   * `resolveGatewayViaDiscovery()`. Definite-assignment is safe because every
+   * `INativeProtocolDriver` method other than `connect()` is only ever called after
+   * `connect()` has resolved, per the interface's own lifecycle contract. */
+  private connection!: CoolMasterConnection;
   private readonly unitCache = new CoolMasterStateCache();
   private readonly commandQueue = new CoolMasterCommandQueue();
   private readonly poller: CoolMasterPoller;
@@ -98,7 +107,7 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
     this.config = resolveConfig(opts);
     this.logger = new CoolMasterLogger({ debug: this.config.debug });
     this.log = this.logger.child("driver");
-    this.connection = new CoolMasterConnection(this.config, this.events, this.logger.child("connection"));
+    if (this.config.host) this.connection = new CoolMasterConnection(this.config, this.events, this.logger.child("connection"));
     this.poller = new CoolMasterPoller({
       fastMs: this.config.pollMs,
       slowMs: this.config.slowPollMs,
@@ -114,9 +123,46 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     this.unsubscribeEvents = this.events.on((e) => this.onDriverEvent(e));
+    if (!this.connection) {
+      const gateway = await this.resolveGatewayViaDiscovery();
+      this.config.host = gateway.host;
+      this.connection = new CoolMasterConnection(this.config, this.events, this.logger.child("connection"));
+      this.log.info("auto-discovery resolved gateway", { host: gateway.host, serial: gateway.serial });
+    }
     await this.connection.connect();
     await this.runDiscovery();
     this.poller.start();
+  }
+
+  /** § Gateway Auto-Discovery — resolves `config.host` from a LAN scan instead of
+   * requiring the installer to type an IP. Uses `gatewaySerial` to pick a specific,
+   * already-known gateway (also how the SAME physical unit is re-found after its IP
+   * changes on DHCP renewal — § Gateway Identity); without it, exactly one discovered
+   * gateway is required to proceed unambiguously — zero or more than one is a config
+   * error the installer must resolve (pick a serial), never a silent guess. */
+  private async resolveGatewayViaDiscovery(): Promise<{ host: string; serial: string }> {
+    const results = await discoverCoolMasterGateways({
+      asciiPort: this.config.asciiPort,
+      timeoutMs: this.config.timeoutMs,
+      createSocket: this.config.createSocket,
+      candidateHosts: this.config.discoveryCandidateHosts,
+    });
+    if (this.config.gatewaySerial) {
+      const match = results.find((g) => g.serial === this.config.gatewaySerial);
+      if (!match) {
+        throw new CoolMasterConfigError(
+          `coolmaster: auto-discovery found no gateway with serial "${this.config.gatewaySerial}" (found: ${results.map((g) => g.serial).join(", ") || "none"})`,
+        );
+      }
+      return match;
+    }
+    if (results.length === 0) throw new CoolMasterConfigError("coolmaster: auto-discovery found no CoolMaster gateways on the LAN");
+    if (results.length > 1) {
+      throw new CoolMasterConfigError(
+        `coolmaster: auto-discovery found ${results.length} gateways — set "gatewaySerial" to pick one (${results.map((g) => g.serial).join(", ")})`,
+      );
+    }
+    return results[0]!;
   }
 
   async disconnect(): Promise<void> {
@@ -181,6 +227,17 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
   async discover(): Promise<DiscoveredDevice[]> {
     if (!this.discoveryResult) await this.runDiscovery();
     return this.buildDiscoveredDevices(this.discoveryResult!);
+  }
+
+  /** § Friendly Name Discovery / explicit rediscovery — re-runs a full discovery pass on
+   * demand (e.g. an installer "Rescan" action), refreshing indoor units, lines,
+   * secondary device types, and `props` friendly names alike. `discover()` alone does
+   * NOT do this once a discovery result already exists (it only discovers lazily on
+   * first call) — this is the explicit trigger for "run it again right now", alongside
+   * the other allowed full-discovery cadences (initial connect, the periodic
+   * `discoveryIntervalMs` timer, reconnect). */
+  async refreshDiscovery(): Promise<void> {
+    await this.runDiscovery();
   }
 
   onState(listener: StateListener): () => void {
@@ -274,7 +331,7 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
    * specific discovery list (cheap: these are always small counts, unlike "hundreds of
    * indoor units") and re-publishing is both correct and inexpensive. */
   private async refreshSecondaryDevices(): Promise<void> {
-    const result = await discoverAll(this.connection, this.logger.child("discovery"), { enrichWithQuery: false });
+    const result = await discoverAll(this.connection, this.logger.child("discovery"), { enrichWithQuery: false, includeNames: false });
     if (this.discoveryResult) {
       this.discoveryResult = { ...this.discoveryResult, waterHeaters: result.waterHeaters, ventilation: result.ventilation, mainControllers: result.mainControllers };
     } else {
@@ -307,10 +364,10 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
 
   private buildDiscoveredDevices(result: CoolMasterDiscoveryResult): DiscoveredDevice[] {
     const out: DiscoveredDevice[] = [];
-    for (const unit of result.units) out.push(indoorUnitDiscoveredDevice(unit, result.gateway));
-    for (const wh of result.waterHeaters) out.push(waterHeaterDiscoveredDevice(wh, result.gateway));
-    for (const vam of result.ventilation) out.push(ventilationDiscoveredDevice(vam, result.gateway));
-    for (const main of result.mainControllers) out.push(mainControllerDiscoveredDevice(main, result.gateway));
+    for (const unit of result.units) out.push(indoorUnitDiscoveredDevice(unit, result.gateway, result.propNames));
+    for (const wh of result.waterHeaters) out.push(waterHeaterDiscoveredDevice(wh, result.gateway, result.propNames));
+    for (const vam of result.ventilation) out.push(ventilationDiscoveredDevice(vam, result.gateway, result.propNames));
+    for (const main of result.mainControllers) out.push(mainControllerDiscoveredDevice(main, result.gateway, result.propNames));
     for (const group of result.groups) out.push(groupDiscoveredDevice(group.id, group.label, group.memberUids, result.gateway));
     return out;
   }

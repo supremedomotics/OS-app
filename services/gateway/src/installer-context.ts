@@ -46,10 +46,13 @@ import {
   scopeCasambiBackendId,
   unscopeCasambiBackendId,
   withCasambiInstanceAddressing,
+  withCoolMasterInstanceAddressing,
   withRuntimeProtocol,
   type NativeDriverFactoryContext,
 } from "./native-driver-factory.js";
 import {
+  discoverCoolMasterGateways as scanForCoolMasterGateways,
+  type DiscoveredCoolMasterGateway,
   knxSearch,
   SupremeKnxDriver,
   scoreConfidence,
@@ -1338,6 +1341,13 @@ export class InstallerServices {
     return knxSearch();
   }
 
+  /** § Gateway Auto-Discovery (REQUIREMENT 2) — scans the LAN for CoolMaster gateways so the
+   * installer can pick one instead of typing an IP, the same "discovery panel" pattern
+   * {@link discoverKnxInterfaces} already established for KNX. Returns [] when none answer. */
+  async discoverCoolMasterGateways(): Promise<DiscoveredCoolMasterGateway[]> {
+    return scanForCoolMasterGateways();
+  }
+
   /**
    * Generic Room Assignment Engine — find-or-create (§ Automatic Room Creation): the ONE
    * place in the codebase that turns a room NAME (from any source — ETS Function/Space
@@ -1859,8 +1869,14 @@ export class InstallerServices {
       // addresses scoped by its own installed id, not just its protocol string. `null` for the
       // primary instance (runtimeProtocol === the bare buildProtocol) leaves it fully unwrapped.
       const casambiInstanceId = buildProtocol === "casambi" && runtimeProtocol !== buildProtocol ? installedId : null;
+      // § Multi-instance CoolMaster (REQUIREMENT 3) — same reasoning as casambiInstanceId
+      // above, for CoolMaster's own gateway-local UID addressing (see
+      // withCoolMasterInstanceAddressing's doc comment).
+      const coolmasterInstanceId = buildProtocol === "coolmaster" && runtimeProtocol !== buildProtocol ? installedId : null;
       const built = buildNativeDriver(buildProtocol, config, this.nativeDriverContext(key, casambiInstanceId));
-      const driver = built ? withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId) : null;
+      const driver = built
+        ? withCoolMasterInstanceAddressing(withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId), coolmasterInstanceId)
+        : null;
       await this.runDriverLifecycle(runtimeProtocol, driver, key, trigger);
     }
     for (const [runtimeProtocol, { key }] of [...this.desiredProtocols]) {
@@ -1888,10 +1904,14 @@ export class InstallerServices {
         const fast = this.runtimeProtocolIfSingleInstance(entry, protocol);
         const runtimeProtocol = fast !== undefined ? fast : await this.runtimeProtocolFor(entry, protocol);
         const runnable = entry.installed && entry.enabled && isConfigComplete(entry.configSchema, entry.config, this.fallbacksFor(entry.protocols)).complete;
-        // § Multi-network Casambi, Stage 4 — same reasoning as reconcileManifestDrivers above.
+        // § Multi-network Casambi, Stage 4 / § Multi-instance CoolMaster — same reasoning
+        // as reconcileManifestDrivers above.
         const casambiInstanceId = protocol === "casambi" && runtimeProtocol !== protocol ? entry.installedId : null;
+        const coolmasterInstanceId = protocol === "coolmaster" && runtimeProtocol !== protocol ? entry.installedId : null;
         const built = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key, casambiInstanceId)) : null;
-        const driver = built ? withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId) : null;
+        const driver = built
+          ? withCoolMasterInstanceAddressing(withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId), coolmasterInstanceId)
+          : null;
         if (runnable) this.desiredProtocols.set(runtimeProtocol, { key, config: entry.config });
         else this.desiredProtocols.delete(runtimeProtocol);
         await this.runDriverLifecycle(runtimeProtocol, driver, key, "config_change");

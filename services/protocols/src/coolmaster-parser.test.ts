@@ -11,6 +11,8 @@ import {
   parseLs2Line,
   parseLsLine,
   parseMainControllerLine,
+  parsePropsBlock,
+  parsePropsLine,
   parseTemperatureToken,
   parseUnitJson,
   parseUnitJsonList,
@@ -155,5 +157,57 @@ describe("secondary device type parsers (low confidence, inferred grammar)", () 
   });
   it("returns null for a group line with no resolvable members", () => {
     expect(parseGroupLine("SomeGroup")).toBeNull();
+  });
+});
+
+describe("friendly names (§ Friendly Name Discovery)", () => {
+  it("parses the documented 'props <uid> name <name>' shape, including a multi-word name", () => {
+    expect(parsePropsLine("L1.101 name Sample room")).toEqual({ uid: "L1.101", name: "Sample room" });
+  });
+
+  it("tolerates a bare '<uid> <name...>' line with no 'name' token", () => {
+    expect(parsePropsLine("L1.102 Kitchen")).toEqual({ uid: "L1.102", name: "Kitchen" });
+  });
+
+  it("tolerates an echoed leading 'props' verb", () => {
+    expect(parsePropsLine("props L1.103 name Living Room")).toEqual({ uid: "L1.103", name: "Living Room" });
+  });
+
+  it("returns null for a line with no UID, or a UID with nothing after it", () => {
+    expect(parsePropsLine("not-a-uid Sample room")).toBeNull();
+    expect(parsePropsLine("L1.104")).toBeNull();
+    expect(parsePropsLine("")).toBeNull();
+  });
+
+  it("parses a full props listing into a UID -> name map, one entry per resolvable line", () => {
+    const map = parsePropsBlock(["L1.101 name Sample room", "L1.102 name Kitchen", "L1.103 name Living Room", "not-a-uid line", ""]);
+    expect(map).toEqual(
+      new Map([
+        ["L1.101", "Sample room"],
+        ["L1.102", "Kitchen"],
+        ["L1.103", "Living Room"],
+      ]),
+    );
+  });
+
+  it("a UID with no resolvable name line is simply absent from the map — never a fabricated entry", () => {
+    const map = parsePropsBlock(["L1.101 name Sample room"]);
+    expect(map.has("L1.102")).toBe(false);
+  });
+
+  it("names containing normal punctuation are preserved verbatim (apostrophes, hyphens, slashes)", () => {
+    expect(parsePropsLine("L1.101 name Mom's Room")).toEqual({ uid: "L1.101", name: "Mom's Room" });
+    expect(parsePropsLine("L1.102 name A/C - Office")).toEqual({ uid: "L1.102", name: "A/C - Office" });
+  });
+
+  it("a 'name' token with nothing after it (empty name) resolves to null, never an empty-string name", () => {
+    expect(parsePropsLine("L1.101 name")).toBeNull();
+    expect(parsePropsLine("L1.101 name   ")).toBeNull();
+  });
+
+  it("two different UIDs may share the identical name value — duplicate names are allowed, not deduplicated or rejected", () => {
+    const map = parsePropsBlock(["L1.101 name Office", "L1.102 name Office"]);
+    expect(map.get("L1.101")).toBe("Office");
+    expect(map.get("L1.102")).toBe("Office");
   });
 });

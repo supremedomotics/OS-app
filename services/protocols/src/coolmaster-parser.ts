@@ -292,6 +292,41 @@ export function parseMainControllerLine(line: string): CoolMasterMainControllerS
   };
 }
 
+// ── Friendly names (§ Friendly Name Discovery) ──────────────────────────────────────
+//
+// LOW confidence (see coolmaster-commands.ts's cmdProps note): the reference docs name
+// `props` and its documented SET form (`props <uid> name <name>`) but not the bare
+// LIST response's line shape. Tolerates two layouts: `<uid> name <name...>` (echoing
+// the SET form's own "name" token) and a bare `<uid> <name...>` fallback for a gateway
+// that omits it — never invents a name for a UID that reports none.
+
+export function parsePropsLine(line: string): { uid: string; name: string } | null {
+  const t = line.trim().split(/\s+/).filter(Boolean);
+  if (t.length < 2) return null;
+  let idx = 0;
+  if (t[idx]?.toLowerCase() === "props") idx += 1;
+  const uid = t[idx];
+  if (!uid || !isCoolMasterUid(uid)) return null;
+  idx += 1;
+  if (idx >= t.length) return null;
+  const rest = t.slice(idx);
+  const nameTokens = rest[0]?.toLowerCase() === "name" ? rest.slice(1) : rest;
+  const name = nameTokens.join(" ").trim();
+  return name.length > 0 ? { uid, name } : null;
+}
+
+/** Parses a full `props` listing into a UID -> friendly-name map. A UID with no
+ * recognizable name line is simply absent — callers fall back to the UID itself, never
+ * an invented name (§ Friendly Name Discovery NAME RULES). */
+export function parsePropsBlock(lines: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const line of lines) {
+    const parsed = parsePropsLine(line);
+    if (parsed) out.set(parsed.uid, parsed.name);
+  }
+  return out;
+}
+
 /** `<groupId> <label?> <memberUid> [memberUid...]` — inferred shape; a gateway that puts
  * the label elsewhere or omits it entirely still yields a usable group (id + members). */
 export function parseGroupLine(line: string): CoolMasterGroupInfo | null {

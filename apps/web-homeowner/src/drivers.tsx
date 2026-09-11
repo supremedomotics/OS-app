@@ -8,8 +8,10 @@ import {
   type CasambiTestConnectionResult,
   type CasambiUdpPacketTrace,
   connectDriver,
+  type CoolMasterGateway,
   discoverCasambiDevicesFromCloud,
   discoverCasambiLocalGateway,
+  discoverCoolMasterGateways,
   discoverKnxGateways,
   type DriverConfigField,
   type DriverEntry,
@@ -172,6 +174,10 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   // network/gateway is a materially different operation from editing this instance's own config
   // below, so it gets its own explicit entry point rather than overloading Install/Save).
   const [showCasambiWizard, setShowCasambiWizard] = useState(false);
+  // § Multi-instance CoolMaster (REQUIREMENT 4) — same entry-point pattern as the Casambi
+  // wizard above: replaces plain Install for a not-yet-set-up CoolMaster row, and offers
+  // itself again as "Add" once at least one gateway is already configured.
+  const [showCoolMasterWizard, setShowCoolMasterWizard] = useState(false);
 
   useEffect(() => {
     if (!driver.installed || !driver.installedId) return;
@@ -202,6 +208,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const has = (op: string) => driver.operations.includes(op);
   const isProtocol = driver.protocols.length > 0;
   const isCasambi = driver.key === "supreme-casambi";
+  const isCoolMaster = driver.key === "supreme-coolmaster";
 
   return (
     <div className="drv-detail">
@@ -262,14 +269,31 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
         />
       )}
 
+      {isCoolMaster && showCoolMasterWizard && (
+        <CoolMasterSetupWizard
+          existingInstanceCount={driver.instanceCount ?? 0}
+          onCancel={() => setShowCoolMasterWizard(false)}
+          onDone={() => {
+            setShowCoolMasterWizard(false);
+            onChanged();
+          }}
+        />
+      )}
+
       {/* Lifecycle actions */}
       <div className="drv-actions">
         {!driver.installed && has("install") && isCasambi && (
           <button className="primary" disabled={busy} onClick={() => setShowCasambiWizard(true)}>Set up Casambi</button>
         )}
-        {!driver.installed && has("install") && !isCasambi && <button className="primary" disabled={busy} onClick={() => run(async () => { await installDriverByKey(driver.key); }, "Installed")}>Install</button>}
+        {!driver.installed && has("install") && isCoolMaster && (
+          <button className="primary" disabled={busy} onClick={() => setShowCoolMasterWizard(true)}>Set up CoolMaster</button>
+        )}
+        {!driver.installed && has("install") && !isCasambi && !isCoolMaster && <button className="primary" disabled={busy} onClick={() => run(async () => { await installDriverByKey(driver.key); }, "Installed")}>Install</button>}
         {driver.installed && isCasambi && !showCasambiWizard && (
           <button disabled={busy} onClick={() => setShowCasambiWizard(true)}>Add network / gateway</button>
+        )}
+        {driver.installed && isCoolMaster && !showCoolMasterWizard && (
+          <button disabled={busy} onClick={() => setShowCoolMasterWizard(true)}>Add gateway</button>
         )}
         {driver.installed && (
           <>
@@ -309,6 +333,16 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
                 ...cur,
                 host: gw.address,
                 port: gw.port,
+              }))}
+            />
+          )}
+          {driver.protocols.includes("coolmaster") && Boolean(values.autoDiscover) && (
+            <CoolMasterGatewayDiscoveryPanel
+              onSelect={(gw) => setValues((cur) => ({
+                ...cur,
+                host: gw.host,
+                gatewaySerial: gw.serial,
+                asciiPort: gw.asciiPort,
               }))}
             />
           )}
@@ -486,6 +520,87 @@ function KnxGatewayDiscoveryPanel({ onSelect }: { onSelect: (gw: KnxGateway) => 
                   {gw.address}:{gw.port} · {gw.individualAddress}
                   {gw.tunnellingCapable === true && " · Tunnelling"}
                   {gw.routingCapable === true && " · Routing"}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** § Gateway Auto-Discovery (REQUIREMENT 2) — the CoolMaster analogue of
+ * KnxGatewayDiscoveryPanel above: scans the LAN and lets the installer pick a real
+ * gateway instead of typing an IP. Selecting one fills `host` AND `gatewaySerial` (the
+ * stable identity — § Gateway Identity) and switches `autoDiscover` off, since a
+ * specific host was just chosen explicitly. */
+function CoolMasterGatewayDiscoveryPanel({ onSelect }: { onSelect: (gw: CoolMasterGateway) => void }) {
+  const [status, setStatus] = useState<"scanning" | "done" | "error">("scanning");
+  const [gateways, setGateways] = useState<CoolMasterGateway[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function scan() {
+    setStatus("scanning");
+    setError(null);
+    setSelectedId(null);
+    try {
+      const found = await discoverCoolMasterGateways();
+      setGateways(found);
+      setStatus("done");
+      if (found.length === 1) select(found[0]!);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gateway discovery failed.");
+      setStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    void scan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function select(gw: CoolMasterGateway) {
+    setSelectedId(gw.gatewayId);
+    onSelect(gw);
+  }
+
+  return (
+    <div className="drv-field" style={{ marginBottom: 14 }}>
+      <span className="lbl">Gateway discovery</span>
+      {status === "scanning" && <p className="muted" aria-busy="true">Searching for CoolMaster gateways… this can take a little while on a large network.</p>}
+      {status === "error" && (
+        <p className="err">
+          {error} Enter the gateway details manually below, or{" "}
+          <button type="button" className="link" onClick={() => void scan()}>try again</button>.
+        </p>
+      )}
+      {status === "done" && gateways.length === 0 && (
+        <p className="muted">
+          No CoolMaster gateways found on this network.{" "}
+          <button type="button" className="link" onClick={() => void scan()}>Scan again</button>, or enter the
+          gateway details manually below.
+        </p>
+      )}
+      {status === "done" && gateways.length > 0 && (
+        <>
+          <p className="muted">
+            {gateways.length === 1 ? "1 gateway found and selected below." : `${gateways.length} gateways found — select one.`}
+            {" "}<button type="button" className="link" onClick={() => void scan()}>Scan again</button>
+          </p>
+          <div className="knx-gw-list">
+            {gateways.map((gw) => (
+              <button
+                type="button"
+                key={gw.gatewayId}
+                className={`knx-gw-item${selectedId === gw.gatewayId ? " selected" : ""}`}
+                onClick={() => select(gw)}
+              >
+                <div className="knx-gw-name">CoolMasterNet</div>
+                <div className="knx-gw-meta">
+                  Serial: {gw.serial} · IP: {gw.host}
+                  {gw.firmwareVersion !== "unknown" && ` · Firmware: ${gw.firmwareVersion}`}
                 </div>
               </button>
             ))}
@@ -943,6 +1058,181 @@ function CasambiSetupWizard({ existingInstanceCount, onDone, onCancel }: { exist
       <div className="drv-actions">
         <button className="primary" disabled={busy || !validation.valid} onClick={() => void create()}>
           {busy ? "Creating…" : `Create ${count} ${mode === "cloud" ? (count === 1 ? "network" : "networks") : count === 1 ? "gateway" : "gateways"}`}
+        </button>
+        <button disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ── § Multi-instance CoolMaster (REQUIREMENT 4) — Driver Setup Wizard ──────────────────────
+// Mirrors CasambiSetupWizard's shape exactly: ask "how many gateways" first, then render that
+// many independent config blocks, each installed as its own driver instance.
+
+export interface CoolMasterWizardEntry {
+  autoDiscover: boolean;
+  host: string;
+  gatewaySerial: string;
+}
+
+export function emptyCoolMasterWizardEntry(): CoolMasterWizardEntry {
+  // § Gateway Auto-Discovery (REQUIREMENT 7) — defaults to automatic discovery, matching
+  // the original product requirement ("automatic gateway discovery" as the intended
+  // experience). The installer can still switch to manual IP entry per-gateway via the
+  // dropdown before submitting; this only sets the wizard's own initial state.
+  return { autoDiscover: true, host: "", gatewaySerial: "" };
+}
+
+export function validateCoolMasterWizard(entries: CoolMasterWizardEntry[]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  entries.forEach((e, i) => {
+    if (!e.autoDiscover && e.host.trim().length === 0) errors.push(`Gateway ${i + 1}: host is required unless automatic discovery is enabled.`);
+  });
+  // § Commissioning UI — "duplicate gateway selections" (§10/§11): two entries picked/typed
+  // to point at the SAME physical gateway is virtually always an installer mistake (either
+  // the same discovered result selected twice, or the same manual IP typed twice), not an
+  // intentional configuration this wizard needs to support — surfaced as a validation error
+  // rather than silently letting two instances collide on the identical target gateway.
+  const seenSerials = new Map<string, number>();
+  const seenHosts = new Map<string, number>();
+  entries.forEach((e, i) => {
+    const serial = e.gatewaySerial.trim();
+    if (serial) {
+      const firstAt = seenSerials.get(serial);
+      if (firstAt !== undefined) errors.push(`Gateway ${i + 1}: the same gateway serial (${serial}) is already used by Gateway ${firstAt + 1}.`);
+      else seenSerials.set(serial, i);
+    }
+    const host = e.host.trim();
+    if (host) {
+      const firstAt = seenHosts.get(host);
+      if (firstAt !== undefined) errors.push(`Gateway ${i + 1}: the same host (${host}) is already used by Gateway ${firstAt + 1}.`);
+      else seenHosts.set(host, i);
+    }
+  });
+  return { valid: errors.length === 0, errors };
+}
+
+/** § Commissioning UI validation — clamps a raw count input to the supported 1-100 range and
+ * floors any fractional value, so the displayed count can never desync from the number of
+ * fieldsets actually rendered (`Array.from({length})` truncates a fractional length anyway).
+ * `NaN`/0/negative all resolve to 1, matching the existing "|| 1" fallback the input's own
+ * onChange already applies before calling this. */
+export function clampCoolMasterGatewayCount(n: number): number {
+  return Math.max(1, Math.min(100, Math.floor(n) || 1));
+}
+
+export function coolMasterWizardConfigs(entries: CoolMasterWizardEntry[]): Record<string, unknown>[] {
+  return entries.map((e) =>
+    e.autoDiscover
+      ? { autoDiscover: true, ...(e.gatewaySerial.trim() ? { gatewaySerial: e.gatewaySerial.trim() } : {}) }
+      : { autoDiscover: false, host: e.host.trim() },
+  );
+}
+
+function CoolMasterSetupWizard({ existingInstanceCount, onDone, onCancel }: { existingInstanceCount: number; onDone: () => void; onCancel: () => void }) {
+  const [count, setCount] = useState(1);
+  const [entries, setEntries] = useState<CoolMasterWizardEntry[]>([emptyCoolMasterWizardEntry()]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function setCountAndResize(n: number) {
+    const next = clampCoolMasterGatewayCount(n);
+    setCount(next);
+    setEntries((cur) => Array.from({ length: next }, (_, i) => cur[i] ?? emptyCoolMasterWizardEntry()));
+  }
+
+  const validation = validateCoolMasterWizard(entries);
+  const labels = entries.map((_, i) => (existingInstanceCount + i === 0 ? null : `Gateway ${existingInstanceCount + i + 1}`));
+
+  async function create() {
+    setErr(null);
+    if (!validation.valid) {
+      setErr(validation.errors[0] ?? "Fix the errors above before continuing.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const configs = coolMasterWizardConfigs(entries);
+      for (let i = 0; i < configs.length; i++) {
+        const label = labels[i];
+        const asNewInstance = existingInstanceCount > 0 || i > 0;
+        const { id } = await installDriverByKey("supreme-coolmaster", asNewInstance && label ? { asNewInstance, label } : asNewInstance ? { asNewInstance } : {});
+        await setDriverConfig(id, configs[i]!);
+      }
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Setup failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="drv-field casambi-wizard" style={{ marginBottom: 14 }}>
+      <span className="lbl">{existingInstanceCount > 0 ? "Add CoolMaster gateway" : "Set up CoolMaster"}</span>
+
+      <label className="drv-field">
+        <span className="lbl">How many CoolMaster gateways do you want to configure?</span>
+        <input type="number" min={1} max={100} value={count} onChange={(e) => setCountAndResize(Number(e.target.value) || 1)} />
+      </label>
+
+      {entries.map((entry, i) => (
+        <fieldset key={i} className="casambi-wizard-entry">
+          <legend>{labels[i] ?? `CoolMaster Gateway ${i + 1}`}</legend>
+
+          <label className="drv-field">
+            <span className="lbl">Gateway discovery</span>
+            <select
+              value={entry.autoDiscover ? "auto" : "manual"}
+              onChange={(e) => setEntries((cur) => cur.map((x, j) => (j === i ? { ...x, autoDiscover: e.target.value === "auto" } : x)))}
+            >
+              <option value="auto">Automatically discover gateway</option>
+              <option value="manual">Enter IP address manually</option>
+            </select>
+          </label>
+
+          {entry.autoDiscover ? (
+            <>
+              <CoolMasterGatewayDiscoveryPanel
+                onSelect={(gw) => setEntries((cur) => cur.map((x, j) => (j === i ? { ...x, host: gw.host, gatewaySerial: gw.serial } : x)))}
+              />
+              <label className="drv-field">
+                <span className="lbl">Gateway serial (optional — only needed to pick a specific gateway if more than one is found)</span>
+                <input
+                  type="text"
+                  value={entry.gatewaySerial}
+                  onChange={(e) => setEntries((cur) => cur.map((x, j) => (j === i ? { ...x, gatewaySerial: e.target.value } : x)))}
+                />
+              </label>
+            </>
+          ) : (
+            <label className="drv-field">
+              <span className="lbl">Gateway host / IP *</span>
+              <input
+                type="text"
+                placeholder="192.168.1.10"
+                value={entry.host}
+                onChange={(e) => setEntries((cur) => cur.map((x, j) => (j === i ? { ...x, host: e.target.value } : x)))}
+              />
+            </label>
+          )}
+        </fieldset>
+      ))}
+
+      {existingInstanceCount > 0 && count > 1 && (
+        <p className="help">This adds {count} new gateways alongside what's already configured.</p>
+      )}
+
+      {err && <p className="error">{err}</p>}
+      {!validation.valid && !err && validation.errors.length > 0 && (
+        <ul className="error" style={{ margin: 0, paddingLeft: 18 }}>
+          {validation.errors.map((m) => <li key={m}>{m}</li>)}
+        </ul>
+      )}
+
+      <div className="drv-actions">
+        <button className="primary" disabled={busy || !validation.valid} onClick={() => void create()}>
+          {busy ? "Creating…" : `Create ${count} ${count === 1 ? "gateway" : "gateways"}`}
         </button>
         <button disabled={busy} onClick={onCancel}>Cancel</button>
       </div>

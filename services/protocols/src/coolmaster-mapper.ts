@@ -133,37 +133,46 @@ export function indoorUnitCapabilityConfig(
   };
 }
 
-export function indoorUnitDiscoveredDevice(unit: CoolMasterUnitStatus, gateway: CoolMasterGatewayInfo): DiscoveredDevice {
+/** § Friendly Name Discovery NAME RULES — the installer-assigned `props` name is the
+ * primary display name when set; otherwise the UID itself (never a synthesized label,
+ * never invented from assumptions). The UID stays `backendId` (identity) regardless —
+ * this only ever affects `suggestedName` (metadata). */
+function friendlyNameOrUid(uid: string, propNames?: Map<string, string>): string {
+  const name = propNames?.get(uid)?.trim();
+  return name && name.length > 0 ? name : uid;
+}
+
+export function indoorUnitDiscoveredDevice(unit: CoolMasterUnitStatus, gateway: CoolMasterGatewayInfo, propNames?: Map<string, string>): DiscoveredDevice {
   return {
     backendId: unit.uid,
-    suggestedName: `HVAC ${unit.line} · ${unit.uid}`,
+    suggestedName: friendlyNameOrUid(unit.uid, propNames),
     capabilities: ["onoff", "temperature"],
     raw: { coolmaster: { uid: unit.uid, line: unit.line, gatewaySerial: gateway.serial, deviceKind: "indoor_unit" } },
   };
 }
 
-export function waterHeaterDiscoveredDevice(wh: CoolMasterWaterHeaterStatus, gateway: CoolMasterGatewayInfo): DiscoveredDevice {
+export function waterHeaterDiscoveredDevice(wh: CoolMasterWaterHeaterStatus, gateway: CoolMasterGatewayInfo, propNames?: Map<string, string>): DiscoveredDevice {
   return {
     backendId: wh.uid,
-    suggestedName: `Water Heater ${wh.uid}`,
+    suggestedName: friendlyNameOrUid(wh.uid, propNames),
     capabilities: ["onoff", "temperature"],
     raw: { coolmaster: { uid: wh.uid, gatewaySerial: gateway.serial, deviceKind: "water_heater" } },
   };
 }
 
-export function ventilationDiscoveredDevice(vam: CoolMasterVentilationStatus, gateway: CoolMasterGatewayInfo): DiscoveredDevice {
+export function ventilationDiscoveredDevice(vam: CoolMasterVentilationStatus, gateway: CoolMasterGatewayInfo, propNames?: Map<string, string>): DiscoveredDevice {
   return {
     backendId: vam.uid,
-    suggestedName: `Ventilation ${vam.uid}`,
+    suggestedName: friendlyNameOrUid(vam.uid, propNames),
     capabilities: ["fan"],
     raw: { coolmaster: { uid: vam.uid, gatewaySerial: gateway.serial, deviceKind: "ventilation" } },
   };
 }
 
-export function mainControllerDiscoveredDevice(main: CoolMasterMainControllerStatus, gateway: CoolMasterGatewayInfo): DiscoveredDevice {
+export function mainControllerDiscoveredDevice(main: CoolMasterMainControllerStatus, gateway: CoolMasterGatewayInfo, propNames?: Map<string, string>): DiscoveredDevice {
   return {
     backendId: main.uid,
-    suggestedName: `HVAC Controller ${main.uid}`,
+    suggestedName: friendlyNameOrUid(main.uid, propNames),
     capabilities: ["onoff"],
     raw: { coolmaster: { uid: main.uid, gatewaySerial: gateway.serial, deviceKind: "main_controller" } },
   };

@@ -4,13 +4,16 @@ import {
   casambiUnitIdFromBackendId,
   hasNativeFactory,
   scopeCasambiBackendId,
+  scopeCoolMasterBackendId,
   unscopeCasambiBackendId,
+  unscopeCoolMasterBackendId,
   withCasambiInstanceAddressing,
+  withCoolMasterInstanceAddressing,
   withRuntimeProtocol,
 } from "./native-driver-factory.js";
 import type { DeviceId } from "@supreme/domain-model";
 import type { DiscoveredDevice, INativeProtocolDriver, ProtocolBinding } from "@supreme/integration-layer";
-import { CasambiProtocolDriver } from "@supreme/protocols";
+import { CasambiProtocolDriver, CoolMasterProtocolDriver } from "@supreme/protocols";
 import type { UdpBindOptions, UdpTransport } from "@supreme/lan";
 
 /**
@@ -432,5 +435,118 @@ describe("withCasambiInstanceAddressing — against a REAL CasambiProtocolDriver
     await expect(
       wrapped.bind({ deviceId: "dev-x" as DeviceId, capability: "onoff", address: "casambi:drv_net3:45" }),
     ).rejects.toThrow(/no numeric unit id/);
+  });
+});
+
+// § Multi-instance CoolMaster (REQUIREMENT 3) — CoolMaster's own UIDs (`L1.100`) are
+// gateway-local, not globally unique across two installed gateways, so it needs the same
+// address-scoping wrapper Casambi's Stage 4 introduced — mirrors that suite exactly.
+describe("withCoolMasterInstanceAddressing", () => {
+  function fakeCoolMasterDriver(overrides: Partial<INativeProtocolDriver> = {}): INativeProtocolDriver {
+    return {
+      protocol: "coolmaster",
+      async connect() {},
+      async disconnect() {},
+      isConnected: () => true,
+      async bind() {},
+      manages: () => false,
+      async command() {},
+      getState: () => null,
+      async discover(): Promise<DiscoveredDevice[]> {
+        return [
+          { backendId: "L1.100", suggestedName: "Living Room", capabilities: ["onoff", "temperature"], raw: {} },
+          { backendId: "L1.101", suggestedName: "Kitchen", capabilities: ["onoff", "temperature"], raw: {} },
+        ];
+      },
+      onState: () => () => {},
+      ...overrides,
+    };
+  }
+
+  it("a null instanceId (primary instance) returns the driver COMPLETELY UNWRAPPED — no address change at all", async () => {
+    const driver = fakeCoolMasterDriver();
+    const wrapped = withCoolMasterInstanceAddressing(driver, null);
+    expect(wrapped).toBe(driver);
+    const found = await wrapped.discover();
+    expect(found.map((d) => d.backendId)).toEqual(["L1.100", "L1.101"]);
+  });
+
+  it("scopes every discovered backendId for a non-primary instance", async () => {
+    const wrapped = withCoolMasterInstanceAddressing(fakeCoolMasterDriver(), "drv_gw2");
+    const found = await wrapped.discover();
+    expect(found.map((d) => d.backendId)).toEqual(["coolmaster:drv_gw2:L1.100", "coolmaster:drv_gw2:L1.101"]);
+    expect(found[0]!.suggestedName).toBe("Living Room");
+    expect(found[0]!.capabilities).toEqual(["onoff", "temperature"]);
+  });
+
+  it("two DIFFERENT gateway instances that both report L1.101 produce DIFFERENT backendIds — the exact collision REQUIREMENT 3 exists to prevent", async () => {
+    const wrappedGwA = withCoolMasterInstanceAddressing(fakeCoolMasterDriver(), "drv_gwA");
+    const wrappedGwB = withCoolMasterInstanceAddressing(fakeCoolMasterDriver(), "drv_gwB");
+    const [, fromA] = await wrappedGwA.discover(); // L1.101 is the second entry
+    const [, fromB] = await wrappedGwB.discover();
+    expect(fromA!.backendId).not.toBe(fromB!.backendId);
+    expect(fromA!.backendId).toBe("coolmaster:drv_gwA:L1.101");
+    expect(fromB!.backendId).toBe("coolmaster:drv_gwB:L1.101");
+  });
+
+  it("strips the instance segment back to the bare UID before forwarding a bind() to the real driver", async () => {
+    const received: ProtocolBinding[] = [];
+    const driver = fakeCoolMasterDriver({
+      async bind(binding: ProtocolBinding) {
+        received.push(binding);
+      },
+    });
+    const wrapped = withCoolMasterInstanceAddressing(driver, "drv_gw2");
+    await wrapped.bind({ deviceId: "dev-1" as DeviceId, capability: "onoff", address: "coolmaster:drv_gw2:L1.100" });
+    expect(received).toHaveLength(1);
+    expect(received[0]!.address).toBe("L1.100"); // the REAL driver only ever sees the bare UID
+  });
+
+  it("command/manages/getState/isConnected are untouched — they're keyed by Supreme deviceId, never by address", async () => {
+    const managedDevice = "dev-managed" as DeviceId;
+    const driver = fakeCoolMasterDriver({ manages: (id) => id === managedDevice });
+    const wrapped = withCoolMasterInstanceAddressing(driver, "drv_gw2");
+    expect(wrapped.manages(managedDevice)).toBe(true);
+    expect(wrapped.manages("dev-other" as DeviceId)).toBe(false);
+    expect(wrapped.isConnected()).toBe(true);
+  });
+
+  it("scopeCoolMasterBackendId / unscopeCoolMasterBackendId are exact inverses", () => {
+    const scoped = scopeCoolMasterBackendId("L1.100", "drv_gw2");
+    expect(scoped).toBe("coolmaster:drv_gw2:L1.100");
+    expect(unscopeCoolMasterBackendId(scoped, "drv_gw2")).toBe("L1.100");
+  });
+
+  it("unscopeCoolMasterBackendId passes an address scoped to a DIFFERENT instance through unchanged, rather than guessing", () => {
+    expect(unscopeCoolMasterBackendId("coolmaster:drv_gw3:L1.100", "drv_gw2")).toBe("coolmaster:drv_gw3:L1.100");
+  });
+});
+
+// § Multi-instance CoolMaster — proves the wrapper composes correctly against a REAL
+// `CoolMasterProtocolDriver.bind()`, not a fake stand-in: bind() stores whatever address it's
+// given as the device's UID, so a bind that manages the device with the CORRECT bare UID
+// afterward (never the still-scoped form) is direct proof the translation happened before
+// the real driver ever saw the address.
+describe("withCoolMasterInstanceAddressing — against a REAL CoolMasterProtocolDriver", () => {
+  function realDriver(): CoolMasterProtocolDriver {
+    return buildNativeDriver("coolmaster", { host: "192.168.1.50" }) as CoolMasterProtocolDriver;
+  }
+
+  it("binding a scoped address to a wrapped real driver manages the device using the unscoped bare UID", async () => {
+    const wrapped = withCoolMasterInstanceAddressing(realDriver(), "drv_gw2");
+    const deviceId = "dev-gw2-unit100" as DeviceId;
+    await wrapped.bind({ deviceId, capability: "onoff", address: "coolmaster:drv_gw2:L1.100" });
+    expect(wrapped.manages(deviceId)).toBe(true);
+    // No state yet (nothing has connected/polled, so the unit cache is empty) — `null`,
+    // never an error, proving the bind reached the real driver's own binding path
+    // successfully rather than throwing on the (correctly unscoped) address.
+    expect(wrapped.getState(deviceId, "onoff")).toBeNull();
+  });
+
+  it("binding an UNSCOPED (legacy) address to the PRIMARY (unwrapped) instance still works exactly as before — the backward-compat case", async () => {
+    const driver = realDriver(); // instanceId = null path never wraps at all
+    const deviceId = "dev-legacy-unit100" as DeviceId;
+    await expect(driver.bind({ deviceId, capability: "onoff", address: "L1.100" })).resolves.not.toThrow();
+    expect(driver.manages(deviceId)).toBe(true);
   });
 });

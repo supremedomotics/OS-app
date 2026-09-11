@@ -1,5 +1,5 @@
 import type { CoolMasterConnection } from "./coolmaster-connection.js";
-import { cmdLine, cmdQuery } from "./coolmaster-commands.js";
+import { cmdLine, cmdProps, cmdQuery } from "./coolmaster-commands.js";
 import { CoolMasterDiscoveryError } from "./coolmaster-errors.js";
 import type { CoolMasterScopedLogger } from "./coolmaster-logger.js";
 import {
@@ -7,6 +7,7 @@ import {
   parseGroupLine,
   parseLineInfo,
   parseMainControllerLine,
+  parsePropsBlock,
   parseVentilationLine,
   parseWaterHeaterLine,
 } from "./coolmaster-parser.js";
@@ -30,7 +31,7 @@ const commandNames = { info: "info", line: cmdLine(), wh: "wh", vam: "vam", main
 export async function discoverAll(
   connection: CoolMasterConnection,
   logger: CoolMasterScopedLogger | undefined,
-  opts: { enrichWithQuery?: boolean } = {},
+  opts: { enrichWithQuery?: boolean; includeNames?: boolean } = {},
 ): Promise<CoolMasterDiscoveryResult> {
   const gateway = connection.gatewayInfo();
   if (!gateway) {
@@ -42,14 +43,15 @@ export async function discoverAll(
   if (opts.enrichWithQuery !== false) {
     units = await enrichUnitsWithQuery(connection, logger, units);
   }
-  const [groups, waterHeaters, ventilation, mainControllers] = await Promise.all([
+  const [groups, waterHeaters, ventilation, mainControllers, propNames] = await Promise.all([
     discoverGroups(connection, logger),
     discoverWaterHeaters(connection, logger),
     discoverVentilation(connection, logger),
     discoverMainControllers(connection, logger),
+    opts.includeNames !== false ? discoverPropNames(connection, logger) : Promise.resolve(new Map<string, string>()),
   ]);
 
-  const result: CoolMasterDiscoveryResult = { gateway, lines, units, groups, waterHeaters, ventilation, mainControllers };
+  const result: CoolMasterDiscoveryResult = { gateway, lines, units, groups, waterHeaters, ventilation, mainControllers, propNames };
   logger?.info("discovery complete", {
     units: units.length,
     lines: lines.length,
@@ -57,6 +59,7 @@ export async function discoverAll(
     waterHeaters: waterHeaters.length,
     ventilation: ventilation.length,
     mainControllers: mainControllers.length,
+    friendlyNames: propNames.size,
   });
   return result;
 }
@@ -132,5 +135,22 @@ async function discoverMainControllers(connection: CoolMasterConnection, logger:
   } catch (err) {
     logger?.debug("main controller discovery unavailable on this gateway", { error: (err as Error).message });
     return [];
+  }
+}
+
+/** § Friendly Name Discovery. Run ONCE per FULL discovery pass — initial discovery, the
+ * periodic full re-discovery interval, explicit rediscovery, and gateway reconnect (all
+ * of which route through `discoverAll` with the default `includeNames: true`) — never on
+ * every fast poll cycle, and explicitly skipped by `refreshSecondaryDevices`' targeted
+ * post-command refresh (`includeNames: false`), which isn't one of the allowed cadences.
+ * Fails independently like every other secondary discovery call: a gateway with no `props`
+ * support simply yields an empty map, never a driver error. */
+async function discoverPropNames(connection: CoolMasterConnection, logger: CoolMasterScopedLogger | undefined): Promise<Map<string, string>> {
+  try {
+    const lines = await connection.executeAscii(cmdProps());
+    return parsePropsBlock(lines);
+  } catch (err) {
+    logger?.debug("friendly-name (props) discovery unavailable on this gateway", { error: (err as Error).message });
+    return new Map();
   }
 }

@@ -1221,6 +1221,18 @@ export function registerInstallerRoutes(app: FastifyInstance, ctx: AppContext): 
     }
   });
 
+  // § Gateway Auto-Discovery (REQUIREMENT 2) — same "discovery panel" pattern as KNX above:
+  // find CoolMaster gateways on the LAN so the installer can pick one instead of typing an IP.
+  app.get("/v1/commissioning/coolmaster/gateways", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "device", null, "create");
+      reply.send({ gateways: await i().discoverCoolMasterGateways() });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   // ── Native protocol bindings (§3) ────────────────────────────────────────────
   app.post("/v1/commissioning/bind", async (req, reply) => {
     try {

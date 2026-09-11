@@ -141,13 +141,37 @@ export interface CoolMasterDiscoveryResult {
   waterHeaters: CoolMasterWaterHeaterStatus[];
   ventilation: CoolMasterVentilationStatus[];
   mainControllers: CoolMasterMainControllerStatus[];
+  /** UID -> installer-assigned friendly name from `props` (§ Friendly Name Discovery).
+   * Populated once per FULL discovery pass — never on fast polling (see coolmaster-
+   * discovery.ts's discoverPropNames doc comment). A UID absent from this map has no
+   * friendly name set; the UID itself remains its display name, never a fabricated one. */
+  propNames: Map<CoolMasterUid, string>;
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────────────
 
 export interface CoolMasterDriverConfig {
-  /** Gateway IP/hostname on the local network. Required. */
-  host: string;
+  /** Gateway IP/hostname on the local network. Required unless `autoDiscover` is true,
+   * in which case `connect()` resolves it via LAN gateway discovery instead (§ Gateway
+   * Auto-Discovery) — see coolmaster-gateway-discovery.ts. */
+  host?: string;
+  /** When true, `host` may be omitted: `connect()` runs a LAN discovery pass
+   * (coolmaster-gateway-discovery.ts) and picks the discovered gateway, using
+   * `gatewaySerial` to disambiguate when more than one is found. Default false —
+   * every driver instance created before this field existed keeps requiring `host`
+   * exactly as before, unchanged. */
+  autoDiscover?: boolean;
+  /** Stable gateway identity (§ Gateway Identity — "prefer serial number over IP
+   * address, since IP addresses can change"). Optional even with `autoDiscover: true`
+   * when exactly one gateway is ever found on the LAN; required to disambiguate when
+   * more than one is discovered, and used to re-find the SAME physical gateway after
+   * its IP changes (DHCP reassignment) on a later auto-discovery pass. */
+  gatewaySerial?: string;
+  /** Test/advanced-only: explicit hosts to probe instead of scanning the local IPv4
+   * subnets. Production installer configuration never sets this — it exists so tests
+   * (and an advanced "scan this subnet only" installer option) can bound the probe set
+   * instead of a full local-network sweep. */
+  discoveryCandidateHosts?: string[];
   /** Which transport to use. Default "auto" (prefer REST, fall back to ASCII_IF). */
   protocol?: CoolMasterProtocolMode;
   /** ASCII_IF TCP port. CoolMasterNet default 10102. */
@@ -176,8 +200,12 @@ export interface CoolMasterDriverConfig {
   fetchImpl?: typeof fetch;
 }
 
-/** Fully-defaulted config after validation — see coolmaster-constants.ts DEFAULT_CONFIG. */
+/** Fully-defaulted config after validation — see coolmaster-constants.ts DEFAULT_CONFIG.
+ * `gatewaySerial`/`discoveryCandidateHosts` stay genuinely optional even after
+ * defaulting (unlike `host`, which resolveConfig always fills — possibly with "" when
+ * `autoDiscover` defers it to connect()-time discovery) — a manually-configured
+ * instance simply never has these. */
 export type ResolvedCoolMasterConfig = Required<
-  Omit<CoolMasterDriverConfig, "createSocket" | "fetchImpl">
+  Omit<CoolMasterDriverConfig, "createSocket" | "fetchImpl" | "gatewaySerial" | "discoveryCandidateHosts">
 > &
-  Pick<CoolMasterDriverConfig, "createSocket" | "fetchImpl">;
+  Pick<CoolMasterDriverConfig, "createSocket" | "fetchImpl" | "gatewaySerial" | "discoveryCandidateHosts">;
