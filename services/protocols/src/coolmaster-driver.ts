@@ -15,9 +15,10 @@ import { CoolMasterConnection } from "./coolmaster-connection.js";
 import { CoolMasterStateCache } from "./coolmaster-cache.js";
 import { DEFAULT_CONFIG } from "./coolmaster-constants.js";
 import { discoverCoolMasterGateways } from "./coolmaster-gateway-discovery.js";
-import { cmdGroupPower, cmdMainControllerPower, cmdVentilationPower, cmdWaterHeaterPower, cmdWaterHeaterTemp } from "./coolmaster-commands.js";
+import { cmdGroupPower, cmdMainControllerPower, cmdPropsSetName, cmdVentilationPower, cmdWaterHeaterPower, cmdWaterHeaterTemp } from "./coolmaster-commands.js";
 import { discoverAll } from "./coolmaster-discovery.js";
-import { CoolMasterConfigError, CoolMasterUnsupportedCommandError } from "./coolmaster-errors.js";
+import { CoolMasterConfigError, CoolMasterUnsupportedCommandError, CoolMasterValidationError } from "./coolmaster-errors.js";
+import { isPropsSetAck } from "./coolmaster-parser.js";
 import { CoolMasterEventBus, type CoolMasterDriverEvent } from "./coolmaster-events.js";
 import { CoolMasterLogger, type CoolMasterScopedLogger } from "./coolmaster-logger.js";
 import {
@@ -40,6 +41,8 @@ import type {
   CoolMasterDeviceKind,
   CoolMasterDiscoveryResult,
   CoolMasterDriverConfig,
+  CoolMasterNameSyncResult,
+  CoolMasterNameSyncState,
   CoolMasterUnitStatus,
   ResolvedCoolMasterConfig,
 } from "./coolmaster-types.js";
@@ -102,6 +105,12 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
   private readonly listeners = new Set<StateListener>();
   private discoveryResult: CoolMasterDiscoveryResult | null = null;
   private unsubscribeEvents: (() => void) | null = null;
+  /** § Indoor-Unit Name Synchronization — last-known sync outcome per UID, for THIS
+   * running session only (the durable copy lives in the Supreme device's own metadata,
+   * written by the caller after each {@link syncIndoorUnitName} call — see that method's
+   * doc comment). Keyed by UID, not DeviceId, since multiple capabilities of one device
+   * share a single UID and therefore a single name. */
+  private readonly nameSyncState = new Map<string, CoolMasterNameSyncState>();
 
   constructor(opts: CoolMasterDriverOptions) {
     this.config = resolveConfig(opts);
@@ -217,6 +226,121 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
 
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
+  }
+
+  // ── § Indoor-Unit Name Synchronization ──────────────────────────────────────────
+
+  /** The CoolMaster UID a Supreme device is bound to, or `null` if this driver doesn't
+   * manage it. Any capability's binding works — a device's UID is the same across all of
+   * its bound capabilities. Public so the gateway layer (which owns the Supreme `Device`
+   * model this driver package never imports — `coolmaster-mapper.ts` is the ONLY file
+   * that does) can resolve "which physical unit does this rename apply to" without
+   * reaching into the driver's private bindings. */
+  uidFor(deviceId: DeviceId): string | null {
+    return this.bindings.find((x) => x.deviceId === deviceId)?.uid ?? null;
+  }
+
+  /** The name CoolMaster itself currently reports for a device's UID (from the most
+   * recent `props` LIST during discovery), or `null` when unbound or when `props`
+   * reported no name for that UID. Used by the caller to decide whether a write is even
+   * needed (§ Name Synchronization "Do NOT blindly write every name on every
+   * connection") — comparing this against the Supreme device's own desired name. */
+  getCoolMasterName(deviceId: DeviceId): string | null {
+    const uid = this.uidFor(deviceId);
+    if (!uid) return null;
+    return this.discoveryResult?.propNames.get(uid) ?? null;
+  }
+
+  /** Diagnostics: the last-known sync outcome for a device's UID within this running
+   * session (§ Logging/Diagnostics). `null` if never attempted this session. */
+  getNameSyncState(deviceId: DeviceId): CoolMasterNameSyncState | null {
+    const uid = this.uidFor(deviceId);
+    if (!uid) return null;
+    return this.nameSyncState.get(uid) ?? null;
+  }
+
+  /**
+   * Writes a Supreme device's desired display name to the CoolMaster gateway via the
+   * live-confirmed `props <uid> name <name>` command, and reports whether the gateway
+   * actually acknowledged it — never "sent" alone.
+   *
+   * Reuses the SAME serialized command queue and connection every other CoolMaster
+   * command goes through (`commandQueue.enqueue`, `connection.executeAscii`) — no second
+   * networking path, no raw Telnet shell-out. A rapid sequence of renames for the SAME
+   * uid coalesces to the latest desired name via the queue's existing dedupe-by-key
+   * mechanism (§ Name Synchronization "do not queue three obsolete writes") — an
+   * in-flight write for an OLDER name is superseded, not sent, the moment a newer one is
+   * enqueued for the same uid.
+   *
+   * Never throws for a validation or gateway-level failure — those are reported as
+   * `{ status: "failed", error }` so the caller (the gateway layer) can persist the
+   * outcome onto the device's own metadata for the UI to show, exactly like every other
+   * "did this actually work" surface in this codebase. A thrown error here would mean
+   * something outside this method's own control (the device isn't managed by this
+   * driver instance at all) rather than an ordinary sync failure.
+   */
+  async syncIndoorUnitName(deviceId: DeviceId, desiredName: string): Promise<CoolMasterNameSyncResult> {
+    const uid = this.uidFor(deviceId);
+    if (!uid) throw new Error(`coolmaster: ${deviceId} is not managed by this driver instance`);
+
+    const record = (result: CoolMasterNameSyncResult): CoolMasterNameSyncResult => {
+      this.nameSyncState.set(uid, { desiredName, status: result.status, lastSyncAt: new Date().toISOString(), error: result.error ?? null });
+      if (result.status === "synced" && this.discoveryResult) {
+        // Reflects immediately in getCoolMasterName()/discover() without waiting for the
+        // next full discovery pass to re-run `props`.
+        this.discoveryResult.propNames.set(uid, desiredName);
+      }
+      return result;
+    };
+
+    let command: string;
+    try {
+      command = cmdPropsSetName(uid, desiredName);
+    } catch (err) {
+      const message = err instanceof CoolMasterValidationError ? err.message : `coolmaster: invalid name for ${uid}`;
+      this.log.warn("name sync rejected: invalid name", { uid, error: message });
+      return record({ status: "failed", error: message });
+    }
+
+    // § CoolMasterCommandQueue.enqueue() resolves to plain `void` — it never forwards a
+    // queued callback's return value (see coolmaster-polling.ts's `drain()`: `item.
+    // resolve()` takes no argument). The queued callback below therefore reports its
+    // outcome purely as a SIDE EFFECT via `record()` (into `this.nameSyncState`), and
+    // this method reads that state back out once the queue has settled, rather than
+    // relying on a return value the queue was never built to carry.
+    await this.commandQueue.enqueue(
+      async () => {
+        try {
+          const lines = await this.connection.executeAscii(command);
+          if (!isPropsSetAck(lines)) {
+            const raw = lines.join(" / ") || "(empty response)";
+            const message = `coolmaster: gateway did not confirm name sync for ${uid} (response: ${raw})`;
+            this.log.warn("name sync failed: gateway did not confirm", { uid, response: raw });
+            record({ status: "failed", error: message });
+            return;
+          }
+          this.log.info("name sync succeeded", { uid, name: desiredName });
+          record({ status: "synced" });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.log.warn("name sync failed", { uid, error: message });
+          record({ status: "failed", error: message });
+        }
+      },
+      { dedupeKey: `${uid}:name-sync`, priority: 0 },
+    );
+
+    // If a NEWER rename for the same uid was enqueued before this one got to run, the
+    // queue's own dedupe resolved THIS call the moment the newer one superseded it —
+    // `nameSyncState` was never touched by our own `record()` call above in that case
+    // (a different desiredName is recorded instead). Reported distinctly rather than as
+    // an ordinary failure: the desired end state is still correct, just achieved by a
+    // later call this one's caller doesn't know about.
+    const state = this.nameSyncState.get(uid);
+    if (state && state.desiredName === desiredName) {
+      return { status: state.status, error: state.error ?? undefined };
+    }
+    return { status: "failed", error: `superseded by a newer name sync request for ${uid}` };
   }
 
   /** § Driver Lifecycle Completion — releases this one device's bindings/cached state

@@ -243,14 +243,157 @@ correct command** — this is the single highest-priority open item before frien
 work on real hardware; everything else in this driver (control, discovery, multi-instance,
 gateway auto-discovery) is functioning correctly on this same real unit.
 
-**Name synchronization**: like every other driver in this codebase, `suggestedName` is a
-discovery-time *suggestion* — it is what a not-yet-commissioned device is offered as by
-default, and what a Cloud-name-sync-style rescan (`driver.refreshDiscovery()`) updates for
-still-uncommissioned or re-scanned devices. It does not reach into an already-commissioned
-device's installer-set SupremeOS name and silently overwrite it (matching the same
-established precedent as Casambi's `syncNamesFromCloud`, which behaves identically for the
-same reason). A CoolMaster rename in the gateway's own configuration never creates a
-duplicate device and never changes a device's immutable UID-derived identity.
+**Discovery-time naming**: `suggestedName` is a discovery-time *suggestion* — what a
+not-yet-commissioned device is offered as by default, and what a rescan
+(`driver.refreshDiscovery()`) updates for still-uncommissioned devices. It does not reach
+into an already-commissioned device's installer-set SupremeOS name and silently overwrite
+it. A CoolMaster-side rename never creates a duplicate device and never changes a device's
+immutable UID-derived identity.
+
+**SupremeOS → CoolMaster name synchronization** is the OTHER direction — see the dedicated
+section below.
+
+## Indoor-Unit Name Synchronization (SupremeOS → CoolMaster)
+
+Whenever an installer renames an indoor-unit device in the SupremeOS UI, that name is
+written to the CoolMaster gateway itself, live-confirmed via:
+```
+props L1.101 name Test
+OK
+```
+The Supreme device's own `name` field is the single source of desired truth — there is no
+separate "desired name" field to keep in sync with it; renaming a device in the UI IS
+setting the desired CoolMaster name. This is a deliberate simplification: the task's own
+model names `supremeName` and `coolMasterName` as conceptually distinct, but architecturally
+`device.name` already IS `supremeName`, so introducing a second field would just be two
+copies of the same value to keep consistent for no benefit.
+
+### Command encoder (`coolmaster-commands.ts`)
+
+`cmdPropsSetName(uid, name)` builds the command through a dedicated encoder,
+`encodePropsName`, which NEVER concatenates untrusted UI text directly into the wire
+command. It throws `CoolMasterValidationError` for:
+- an empty name (after trimming leading/trailing whitespace — internal spaces like
+  "Living Room" are preserved verbatim)
+- a name containing CR or LF (would terminate the ASCII_IF command early and let the rest
+  of the string be interpreted as a second command — the actual injection this prevents)
+- a name containing `|` (reserved by this same gateway's own `props` LIST table format —
+  see **Friendly Names** above; a name containing one would corrupt that table)
+- a name longer than `PROPS_NAME_MAX_LENGTH` (currently 20) — **this limit is ASSUMED, not
+  documented anywhere or confirmed against real hardware**; it's the one constant to revise
+  if a real gateway accepts a different length.
+
+### Response validation (`coolmaster-parser.ts`'s `isPropsSetAck`)
+
+A write is only ever reported as `"synced"` after the gateway's own reply is inspected and
+confirmed to contain a bare `OK` line (case-insensitive) — matching the live-confirmed
+behavior exactly. `Bad Format`, `Unknown Command`, an empty response, or a thrown
+timeout/connection error are ALL treated as failure; a successful wire round-trip alone
+(no thrown error) is never enough to claim success.
+
+### Driver API (`CoolMasterProtocolDriver`)
+
+- `uidFor(deviceId)` — the CoolMaster UID a device is bound to, or `null`.
+- `getCoolMasterName(deviceId)` — the name CoolMaster's `props` LIST currently reports for
+  that device's UID (from the last full discovery pass), or `null`.
+- `syncIndoorUnitName(deviceId, name)` — writes the name and returns
+  `{ status: "synced" | "failed", error? }`. Reuses the SAME serialized command queue and
+  connection every other CoolMaster command goes through (`CoolMasterCommandQueue.
+  enqueue` + `CoolMasterConnection.executeAscii`) — no second networking path, no shelling
+  out to `telnet`. Rapid renames for the same UID coalesce via the queue's existing
+  dedupe-by-key mechanism: a queued-but-not-yet-started write for an older name is
+  superseded by a newer one for the same UID and never reaches the wire. (A write already
+  "in flight" — shifted off the queue and executing — cannot be cancelled this way, since
+  a serialized queue has no way to abort in-progress work; it completes normally and the
+  LATEST desired state is guaranteed to be applied by whichever write runs last.)
+- `getNameSyncState(deviceId)` — the last-known sync outcome for this running session
+  (diagnostics only; the durable record lives in the Supreme device's own metadata).
+
+### Gateway-layer wiring (`installer-context.ts`, `routes/devices.ts`)
+
+`PATCH /v1/devices/:id` — when the request includes a new `name` — calls
+`InstallerServices.syncCoolMasterDeviceName(deviceId, name)` **fire-and-forget**, after the
+local rename has already been persisted and the HTTP response is about to go out. The local
+rename is never blocked on the gateway (§ "Do not block the UI waiting indefinitely for the
+gateway") — the CoolMaster write happens in the background, bounded by the driver's own
+existing per-command timeout/retry configuration.
+
+`syncCoolMasterDeviceName`:
+1. Finds the specific CoolMaster driver INSTANCE that manages this device (§ Multiple
+   Gateways below) — a true no-op, not an error, for any device no CoolMaster driver
+   manages at all (the overwhelming majority of renames).
+2. Calls `driver.syncIndoorUnitName(deviceId, name)`.
+3. Persists the outcome onto the device's own `metadata` bag (§ Local DB vs CoolMaster DB
+   below) and appends a structured log line.
+
+### Local DB vs CoolMaster DB
+
+The Supreme device's own `metadata` (already a generic `Record<string, unknown>` bag every
+driver stashes its own per-device state in — no new DB column, no migration) gains three
+fields after every sync attempt:
+```
+metadata.coolMasterNameSyncStatus: "synced" | "failed"
+metadata.coolMasterNameLastSync:   ISO-8601 timestamp
+metadata.coolMasterNameSyncError:  string | null
+```
+
+### Startup/reconnect reconciliation (§ requirement 8)
+
+After a CoolMaster driver instance reaches the "ready" lifecycle stage (initial connect,
+reconnect, or a config-change re-registration — the exact same hook point every other
+protocol's lifecycle already reaches), the gateway layer compares each already-bound
+indoor unit's CURRENT CoolMaster name (`driver.getCoolMasterName`, from the `props` read
+that same connect just did) against the Supreme device's own desired name
+(`device.name`) and writes ONLY where they differ:
+
+- **Already matching** → no write at all (never "blindly write every name on every
+  connection").
+- **CoolMaster reports something different** (a stale name, or an installer renamed it
+  directly on the gateway) → SupremeOS's name is authoritative; CoolMaster is corrected to
+  match it, never the other way around (§ "Do not overwrite names unexpectedly" — a
+  CoolMaster-side alias never silently overwrites the SupremeOS name).
+- **CoolMaster reports no name at all** (a factory reset / property-database wipe) →
+  restored from the Supreme device's own `name`, exactly the same write path.
+
+This reconciliation runs fire-and-forget and never delays the driver's own "ready"
+transition or any other protocol's lifecycle; a failure is logged, never thrown back into
+the shared lifecycle pipeline.
+
+### Multiple CoolMaster Gateways
+
+A bare UID like `L1.101` is NEVER used alone to identify a device for name sync — two
+different installed gateways can legitimately both report an `L1.101`, and (per §
+Multi-instance CoolMaster above) they already resolve to two completely independent
+Supreme devices via `coolmaster:<installedId>:L1.101` addressing. `syncCoolMasterDeviceName`
+resolves the OWNING driver instance first (enumerating every installed `coolmaster` catalog
+entry and asking each one's live driver whether it manages the device), so a rename for
+Gateway A's `L1.101` can never be misapplied to Gateway B's `L1.101`.
+
+### Restart persistence
+
+Because the desired name is simply `device.name` (already durably persisted, not a new
+field), a SupremeOS restart needs no special handling at all: on the next connect, the
+same startup reconciliation pass described above runs again, compares the persisted
+`device.name` against whatever CoolMaster currently reports, and writes only if they've
+drifted — covering both "SupremeOS restarted, nothing changed" (no write) and "CoolMaster
+lost its property database while SupremeOS was down" (restored automatically) with the
+exact same code path.
+
+### Limitations
+
+- `PROPS_NAME_MAX_LENGTH` (20) is an assumed, unconfirmed maximum — see the encoder section
+  above.
+- The write path (`props <uid> name <name>`) is live-confirmed; a per-unit READ
+  (`props <uid>`) is confirmed NOT to work on the same hardware (`Bad Format`) — see
+  **Friendly Names** above. Reconciliation therefore always relies on the bulk `props` LIST
+  read (already the only working read path), never a per-unit query.
+- Name-sync failures are retried only via the existing per-command retry already built into
+  `CoolMasterConnection.executeAscii` (transient errors, bounded by `retryCount`/
+  `backoffBaseMs`/`backoffMaxMs`) — there is no separate, persistent "keep retrying a failed
+  rename until the gateway comes back" queue. A gateway that's offline when a rename happens
+  will pick up the (latest) desired name on its next successful reconnect via the startup
+  reconciliation pass instead, which is simpler and reuses an existing, already-tested
+  mechanism rather than adding a second retry system.
 
 ## Discovery
 

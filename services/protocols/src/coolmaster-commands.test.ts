@@ -15,6 +15,7 @@ import {
   cmdMode,
   cmdOff,
   cmdOn,
+  cmdPropsSetName,
   cmdQuery,
   cmdStat,
   cmdSwing,
@@ -24,8 +25,10 @@ import {
   cmdVirtualAddress,
   cmdWaterHeaterPower,
   cmdWaterHeaterTemp,
+  encodePropsName,
+  PROPS_NAME_MAX_LENGTH,
 } from "./coolmaster-commands.js";
-import { CoolMasterUnsupportedCommandError } from "./coolmaster-errors.js";
+import { CoolMasterUnsupportedCommandError, CoolMasterValidationError } from "./coolmaster-errors.js";
 
 describe("core on/off/mode/temp commands (high confidence)", () => {
   it("builds on/off", () => {
@@ -96,5 +99,45 @@ describe("secondary device commands (low confidence, inferred grammar)", () => {
 describe("unimplemented commands", () => {
   it("va (Virtual Address) throws explicitly rather than fabricating a command", () => {
     expect(() => cmdVirtualAddress()).toThrow(CoolMasterUnsupportedCommandError);
+  });
+});
+
+// § Indoor-Unit Name Synchronization — the ONE `props` form with real hardware evidence.
+describe("cmdPropsSetName / encodePropsName (§ Indoor-Unit Name Synchronization, live-confirmed)", () => {
+  it("builds the live-confirmed 'props <uid> name <name>' command", () => {
+    expect(cmdPropsSetName("L1.101", "Living Room")).toBe("props L1.101 name Living Room");
+  });
+
+  it("trims leading/trailing whitespace but preserves internal spaces", () => {
+    expect(encodePropsName("  Living Room  ")).toBe("Living Room");
+    expect(cmdPropsSetName("L1.101", "  Master Bedroom  ")).toBe("props L1.101 name Master Bedroom");
+  });
+
+  it("rejects an empty name (after trimming)", () => {
+    expect(() => encodePropsName("")).toThrow(CoolMasterValidationError);
+    expect(() => encodePropsName("   ")).toThrow(CoolMasterValidationError);
+  });
+
+  it("rejects CR/LF — never lets a name inject or terminate the ASCII_IF command line", () => {
+    expect(() => encodePropsName("Living Room\r\noff L1.101")).toThrow(CoolMasterValidationError);
+    expect(() => encodePropsName("Living\nRoom")).toThrow(CoolMasterValidationError);
+  });
+
+  it('rejects "|" — reserved by the gateway\'s own props table column delimiter', () => {
+    expect(() => encodePropsName("Living | Room")).toThrow(CoolMasterValidationError);
+  });
+
+  it("accepts a name exactly at the assumed maximum length", () => {
+    const exact = "A".repeat(PROPS_NAME_MAX_LENGTH);
+    expect(encodePropsName(exact)).toBe(exact);
+  });
+
+  it("rejects a name one character over the assumed maximum length", () => {
+    const tooLong = "A".repeat(PROPS_NAME_MAX_LENGTH + 1);
+    expect(() => encodePropsName(tooLong)).toThrow(CoolMasterValidationError);
+  });
+
+  it("rejects an empty uid, matching every other command builder's guard", () => {
+    expect(() => cmdPropsSetName("", "Living Room")).toThrow(CoolMasterUnsupportedCommandError);
   });
 });

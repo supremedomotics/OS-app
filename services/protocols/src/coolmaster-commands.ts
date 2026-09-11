@@ -1,4 +1,4 @@
-import { CoolMasterUnsupportedCommandError } from "./coolmaster-errors.js";
+import { CoolMasterUnsupportedCommandError, CoolMasterValidationError } from "./coolmaster-errors.js";
 import type { CoolMasterModeWord, CoolMasterUid } from "./coolmaster-types.js";
 
 /**
@@ -204,6 +204,70 @@ export const CMD_PROPS: CoolMasterCommandSpec = { name: "props", confidence: "lo
  * see coolmaster-discovery.ts's discoverPropNames doc comment for the allowed cadence. */
 export function cmdProps(): string {
   return "props";
+}
+
+// ── § Indoor-Unit Name Synchronization ──────────────────────────────────────────────
+//
+// Live-confirmed against real hardware (unlike almost everything else `props`-related in
+// this file): `props L1.101 name Test` -> `OK`, and a subsequent bare `props` then shows
+// the configured name. This is the ONE `props` form with real, verified wire evidence —
+// see docs/coolmaster/README.md's "Indoor-Unit Name Synchronization" section. `props
+// L1.101` (querying a single UID with no further args) was ALSO tested and returns "Bad
+// Format" on this same firmware — never implement that form.
+
+export const CMD_PROPS_SET_NAME: CoolMasterCommandSpec = { name: "props", confidence: "high", retryable: false };
+
+/** ASSUMED maximum name length CoolMaster's `props ... name` field supports — NOT
+ * documented anywhere in the available reference material, and not yet confirmed against
+ * real hardware either (only that names UP TO this driver's own test strings work). A
+ * conservative bound for an embedded gateway's own property/display field. If a real
+ * gateway rejects a shorter name, or accepts a longer one, this is the one constant to
+ * revise — see docs/coolmaster/README.md's Limitations entry for this command. */
+export const PROPS_NAME_MAX_LENGTH = 20;
+
+/**
+ * Encodes a display name for the `props <uid> name <name>` SET command — a dedicated
+ * encoder, never a raw concatenation of untrusted UI text into the wire command (§ Name
+ * Synchronization "Do not blindly concatenate untrusted UI text into the TCP command").
+ * Throws {@link CoolMasterValidationError} (never silently truncates/mutates and sends
+ * something the caller didn't ask for) for:
+ *  - an empty name (after trimming leading/trailing whitespace)
+ *  - a name containing CR or LF — the ASCII_IF wire protocol is CR-terminated
+ *    (`coolmaster-constants.ts`'s `ASCII_COMMAND_TERMINATOR`); an embedded CR/LF would
+ *    terminate the command early and let the remainder of the string be interpreted as a
+ *    SECOND command — exactly the injection this function exists to prevent.
+ *  - a name containing `|` — reserved by this same gateway's own `props` LIST output,
+ *    which uses `|` as a column delimiter (live-confirmed table format); a name
+ *    containing one would corrupt that table when later read back.
+ *  - a name longer than {@link PROPS_NAME_MAX_LENGTH}.
+ * Internal whitespace (e.g. "Living Room") is preserved verbatim — only the leading/
+ * trailing edges are trimmed.
+ */
+export function encodePropsName(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    throw new CoolMasterValidationError("coolmaster: indoor-unit name cannot be empty");
+  }
+  if (/[\r\n]/.test(trimmed)) {
+    throw new CoolMasterValidationError("coolmaster: indoor-unit name cannot contain line breaks");
+  }
+  if (trimmed.includes("|")) {
+    throw new CoolMasterValidationError('coolmaster: indoor-unit name cannot contain "|" (reserved by the gateway\'s own props table format)');
+  }
+  if (trimmed.length > PROPS_NAME_MAX_LENGTH) {
+    throw new CoolMasterValidationError(
+      `coolmaster: indoor-unit name "${trimmed}" is ${trimmed.length} characters, exceeding the assumed ${PROPS_NAME_MAX_LENGTH}-character limit (unconfirmed against real hardware — see docs/coolmaster/README.md)`,
+    );
+  }
+  return trimmed;
+}
+
+/** Builds the live-confirmed `props <uid> name <name>` SET command. `name` is validated
+ * and trimmed by {@link encodePropsName} first — this function never sends untrusted text
+ * verbatim. */
+export function cmdPropsSetName(uid: CoolMasterUid, name: string): string {
+  assertUid(uid);
+  return `props ${uid} name ${encodePropsName(name)}`;
 }
 
 /**

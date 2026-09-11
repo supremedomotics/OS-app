@@ -327,6 +327,15 @@ export function parsePropsBlock(lines: string[]): Map<string, string> {
   return out;
 }
 
+/** § Indoor-Unit Name Synchronization — whether a `props <uid> name <name>` SET response
+ * indicates success. Live-confirmed: a real gateway replies with a bare `OK` line. Any
+ * other content ("Bad Format", "Unknown Command", "ERROR", or anything else) is treated
+ * as failure — a successful wire round-trip (no thrown timeout/connection error) is NOT
+ * by itself treated as a successful write; the gateway's own reply must say so. */
+export function isPropsSetAck(lines: string[]): boolean {
+  return lines.some((l) => l.trim().toUpperCase() === "OK");
+}
+
 /** `<groupId> <label?> <memberUid> [memberUid...]` — inferred shape; a gateway that puts
  * the label elsewhere or omits it entirely still yields a usable group (id + members). */
 export function parseGroupLine(line: string): CoolMasterGroupInfo | null {
