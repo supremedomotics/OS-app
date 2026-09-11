@@ -145,10 +145,18 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   },
   coolmaster: (c) => {
     const host = str(c.host);
-    if (!host) return null;
+    const autoDiscover = c.autoDiscover === true;
+    // § Gateway Auto-Discovery — a host is required UNLESS the installer chose auto
+    // discovery (CoolMasterProtocolDriver resolves it at connect() time instead); every
+    // manually-configured instance created before this field existed behaves exactly as
+    // before (host still required, factory still returns null without one).
+    if (!host && !autoDiscover) return null;
     const protocol = str(c.protocol);
+    const gatewaySerial = str(c.gatewaySerial);
     return new CoolMasterProtocolDriver({
-      host,
+      ...(host ? { host } : {}),
+      autoDiscover,
+      ...(gatewaySerial ? { gatewaySerial } : {}),
       ...(protocol === "auto" || protocol === "ascii" || protocol === "rest" ? { protocol } : {}),
       asciiPort: int(c.asciiPort, 10102),
       restPort: int(c.restPort, 10103),
@@ -274,6 +282,56 @@ export function withCasambiInstanceAddressing<T extends INativeProtocolDriver>(d
       if (prop === "bind") {
         return async (binding: ProtocolBinding): Promise<void> =>
           target.bind({ ...binding, address: unscopeCasambiBackendId(binding.address, instanceId) });
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * § Multi-instance CoolMaster (REQUIREMENT 3) — the CoolMaster analogue of
+ * {@link withCasambiInstanceAddressing}, needed for the SAME reason: CoolMaster's own
+ * UIDs (`L1.100`) are gateway-LOCAL addresses, not globally unique — two independently
+ * installed CoolMaster gateways can both report an `L1.100`, and without this wrapper
+ * they would collide at every layer keyed off backendId (discovery dedup, the SIL's
+ * global reverseLookup index), silently merging two different physical indoor units
+ * into one Supreme device. `coolmaster:<installedId>:<uid>` cannot collide with a
+ * sibling instance's address for the identical UID, because installed ids are globally
+ * unique and permanent — mirroring Casambi's Stage 4 design exactly, down to unwrapping
+ * the FIRST/primary instance completely (`instanceId === null`) so a single-gateway
+ * install (still the default case) needs no migration and keeps its bare `L1.100`
+ * addresses forever. Unlike Casambi, EVERY CoolMaster backendId gets scoped
+ * unconditionally (no prefix gate) — this driver's `discover()` only ever returns its
+ * own addresses, so there's no other address shape to leave alone.
+ */
+export function scopeCoolMasterBackendId(bareBackendId: string, instanceId: string): string {
+  return `coolmaster:${instanceId}:${bareBackendId}`;
+}
+
+/** The inverse: strips a scoped address back to the bare UID the REAL
+ * `CoolMasterProtocolDriver` understands. An address already bare, or scoped to some
+ * OTHER instance (shouldn't happen — routing already picked this driver instance via
+ * its own scoped runtime protocol string before this is ever called), passes through
+ * unchanged rather than guessing. */
+export function unscopeCoolMasterBackendId(address: string, instanceId: string): string {
+  const scopedPrefix = `coolmaster:${instanceId}:`;
+  return address.startsWith(scopedPrefix) ? address.slice(scopedPrefix.length) : address;
+}
+
+export function withCoolMasterInstanceAddressing<T extends INativeProtocolDriver>(driver: T, instanceId: string | null): T {
+  if (!instanceId) return driver;
+  return new Proxy(driver, {
+    get(target, prop, receiver) {
+      if (prop === "discover") {
+        return async (): Promise<DiscoveredDevice[]> => {
+          const found = await target.discover();
+          return found.map((d) => ({ ...d, backendId: scopeCoolMasterBackendId(d.backendId, instanceId) }));
+        };
+      }
+      if (prop === "bind") {
+        return async (binding: ProtocolBinding): Promise<void> =>
+          target.bind({ ...binding, address: unscopeCoolMasterBackendId(binding.address, instanceId) });
       }
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;

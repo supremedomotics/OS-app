@@ -9,8 +9,13 @@ import {
   validateCasambiWizardLocal,
   emptyCasambiWizardLocalGateway,
   casambiWizardLabels,
+  clampCoolMasterGatewayCount,
+  coolMasterWizardConfigs,
+  emptyCoolMasterWizardEntry,
+  validateCoolMasterWizard,
   type CasambiWizardCloudEntry,
   type CasambiWizardLocalGateway,
+  type CoolMasterWizardEntry,
 } from "./drivers.js";
 import type { DriverEntry, DriverConfigField } from "./api.js";
 
@@ -332,5 +337,110 @@ describe("casambiWizardLabels", () => {
   it("adding to an existing install labels even a SINGLE new instance, continuing the numbering", () => {
     expect(casambiWizardLabels("cloud", 1, 1)).toEqual(["Network 2"]);
     expect(casambiWizardLabels("local", 2, 1)).toEqual(["Gateway 2", "Gateway 3"]);
+  });
+});
+
+// § Multi-instance CoolMaster (REQUIREMENT 4) — mirrors the Casambi wizard helper tests above.
+describe("validateCoolMasterWizard / coolMasterWizardConfigs", () => {
+  function entry(overrides: Partial<CoolMasterWizardEntry> = {}): CoolMasterWizardEntry {
+    return { ...emptyCoolMasterWizardEntry(), ...overrides };
+  }
+
+  it("§ REQUIREMENT 7 — a fresh wizard entry defaults to automatic discovery, not manual IP entry", () => {
+    expect(emptyCoolMasterWizardEntry().autoDiscover).toBe(true);
+  });
+
+  it("a manual entry (autoDiscover explicitly off) with no host is invalid", () => {
+    const v = validateCoolMasterWizard([entry({ autoDiscover: false })]);
+    expect(v.valid).toBe(false);
+    expect(v.errors[0]).toMatch(/host is required/);
+  });
+
+  it("a manual entry with a host is valid", () => {
+    expect(validateCoolMasterWizard([entry({ autoDiscover: false, host: "192.168.1.50" })]).valid).toBe(true);
+  });
+
+  it("an autoDiscover entry (the default) needs no host at all", () => {
+    expect(validateCoolMasterWizard([entry()]).valid).toBe(true);
+  });
+
+  it("validates each entry independently — one bad entry doesn't hide behind a valid sibling", () => {
+    const v = validateCoolMasterWizard([entry({ autoDiscover: false, host: "192.168.1.50" }), entry({ autoDiscover: false })]);
+    expect(v.valid).toBe(false);
+    expect(v.errors[0]).toMatch(/Gateway 2/);
+  });
+
+  it("builds a manual config with autoDiscover: false and the trimmed host", () => {
+    expect(coolMasterWizardConfigs([entry({ autoDiscover: false, host: "  192.168.1.50  " })])).toEqual([{ autoDiscover: false, host: "192.168.1.50" }]);
+  });
+
+  it("builds an autoDiscover config (the default) with no host key at all", () => {
+    const [config] = coolMasterWizardConfigs([entry()]);
+    expect(config).toEqual({ autoDiscover: true });
+    expect(config).not.toHaveProperty("host");
+  });
+
+  it("includes a trimmed gatewaySerial only when one was entered", () => {
+    expect(coolMasterWizardConfigs([entry({ gatewaySerial: " GW-123 " })])).toEqual([{ autoDiscover: true, gatewaySerial: "GW-123" }]);
+    expect(coolMasterWizardConfigs([entry({ gatewaySerial: "" })])[0]).not.toHaveProperty("gatewaySerial");
+  });
+
+  it("builds independent configs for multiple gateways, mixing manual and auto-discover", () => {
+    const configs = coolMasterWizardConfigs([entry({ autoDiscover: false, host: "192.168.1.50" }), entry({ gatewaySerial: "GW-B" })]);
+    expect(configs).toEqual([{ autoDiscover: false, host: "192.168.1.50" }, { autoDiscover: true, gatewaySerial: "GW-B" }]);
+  });
+
+  describe("clampCoolMasterGatewayCount (§ Commissioning UI validation — count field)", () => {
+    it("passes through valid counts unchanged", () => {
+      expect(clampCoolMasterGatewayCount(1)).toBe(1);
+      expect(clampCoolMasterGatewayCount(50)).toBe(50);
+      expect(clampCoolMasterGatewayCount(100)).toBe(100);
+    });
+
+    it("clamps 0 and negative counts up to 1", () => {
+      expect(clampCoolMasterGatewayCount(0)).toBe(1);
+      expect(clampCoolMasterGatewayCount(-5)).toBe(1);
+    });
+
+    it("clamps a count above 100 down to 100", () => {
+      expect(clampCoolMasterGatewayCount(101)).toBe(100);
+      expect(clampCoolMasterGatewayCount(9999)).toBe(100);
+    });
+
+    it("floors a non-integer count instead of leaving it fractional", () => {
+      expect(clampCoolMasterGatewayCount(3.7)).toBe(3);
+      expect(clampCoolMasterGatewayCount(99.9)).toBe(99);
+    });
+
+    it("resolves NaN to 1, never propagating a NaN gateway count", () => {
+      expect(clampCoolMasterGatewayCount(NaN)).toBe(1);
+    });
+  });
+
+  describe("duplicate gateway selections (§ Commissioning UI validation)", () => {
+    it("rejects two entries with the identical gatewaySerial", () => {
+      const v = validateCoolMasterWizard([entry({ gatewaySerial: "GW-1" }), entry({ gatewaySerial: "GW-1" })]);
+      expect(v.valid).toBe(false);
+      expect(v.errors[0]).toMatch(/same gateway serial.*already used by Gateway 1/);
+    });
+
+    it("rejects two entries with the identical manual host", () => {
+      const v = validateCoolMasterWizard([entry({ autoDiscover: false, host: "192.168.1.50" }), entry({ autoDiscover: false, host: "192.168.1.50" })]);
+      expect(v.valid).toBe(false);
+      expect(v.errors[0]).toMatch(/same host.*already used by Gateway 1/);
+    });
+
+    it("allows the same gateway serial to appear only once — no false positive against itself", () => {
+      expect(validateCoolMasterWizard([entry({ gatewaySerial: "GW-1" })]).valid).toBe(true);
+    });
+
+    it("does not flag two entries that are both auto-discover with NO serial picked yet — nothing to compare", () => {
+      expect(validateCoolMasterWizard([entry(), entry()]).valid).toBe(true);
+    });
+
+    it("does not flag two DIFFERENT hosts or serials", () => {
+      const v = validateCoolMasterWizard([entry({ autoDiscover: false, host: "192.168.1.50" }), entry({ autoDiscover: false, host: "192.168.1.51" })]);
+      expect(v.valid).toBe(true);
+    });
   });
 });

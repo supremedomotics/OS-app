@@ -31,7 +31,7 @@ interface FakeGateway {
 
 function startFakeGateway(): Promise<FakeGateway> {
   const received: string[] = [];
-  const unit: UnitFixture = { on: false, setC: 24, roomC: 22.5, fanSpeed: "Low", mode: "Cool" };
+  const unit: UnitFixture = { on: false, setC: 24, roomC: 22.5, fanSpeed: "Low", mode: "Cool", propName: "Sample room" };
   const gateway: FakeGateway = { server: null as unknown as Server, port: 0, received, unit, currentSocket: null };
   return new Promise((resolve) => {
     const server = createServer((sock: Socket) => {
@@ -64,6 +64,8 @@ interface UnitFixture {
   roomC: number;
   fanSpeed: string;
   mode: string;
+  /** § Friendly Name Discovery — the CoolMaster `props` name for L1.100. */
+  propName: string;
 }
 
 function handleCommand(sock: Socket, cmd: string, unit: UnitFixture): void {
@@ -78,6 +80,7 @@ function handleCommand(sock: Socket, cmd: string, unit: UnitFixture): void {
   if (cmd.startsWith("temp L1.100 ")) { unit.setC = Number(cmd.split(" ")[2]); return void sock.write("OK\r\n>"); }
   if (cmd.startsWith("fspeed L1.100 ")) { unit.fanSpeed = cmd.split(" ")[2]!; return void sock.write("OK\r\n>"); }
   if (cmd === "wh" || cmd === "vam" || cmd === "main" || cmd === "group") return void sock.write(">"); // none present
+  if (cmd === "props") return void sock.write(`L1.100 name ${unit.propName}\r\n>`);
   return void sock.write("OK\r\n>");
 }
 
@@ -124,6 +127,59 @@ describe("CoolMasterProtocolDriver", () => {
     expect(devices[0]).toMatchObject({ backendId: "L1.100", capabilities: ["onoff", "temperature"] });
     expect(gateway.received).toContain("info");
     expect(gateway.received).toContain("ls2");
+  });
+
+  describe("friendly names (§ Friendly Name Discovery)", () => {
+    it("uses the CoolMaster props name as the discovered device's display name, UID unaffected", async () => {
+      await driver.connect();
+      const devices = await driver.discover();
+      expect(devices).toHaveLength(1);
+      expect(devices[0]).toMatchObject({ backendId: "L1.100", suggestedName: "Sample room" });
+      expect(gateway.received).toContain("props");
+    });
+
+    it("a later props name change is reflected on explicit rediscovery, using the SAME backendId — never a duplicate device", async () => {
+      await driver.connect();
+      const before = await driver.discover();
+      expect(before).toHaveLength(1);
+      expect(before[0]).toMatchObject({ backendId: "L1.100", suggestedName: "Sample room" });
+
+      gateway.unit.propName = "Master Bedroom";
+      await driver.refreshDiscovery();
+      const after = await driver.discover();
+
+      expect(after).toHaveLength(1); // same single entity, not a second one
+      expect(after[0]).toMatchObject({ backendId: "L1.100", suggestedName: "Master Bedroom" });
+    });
+
+    it("props is NOT re-sent on ordinary fast polling — only once, at discovery time", async () => {
+      const fastDriver = new CoolMasterProtocolDriver({
+        host: "127.0.0.1",
+        asciiPort: gateway.port,
+        protocol: "ascii",
+        pollMs: 50,
+        slowPollMs: 100_000,
+        discoveryIntervalMs: 100_000,
+        timeoutMs: 2_000,
+        retryCount: 1,
+      });
+      try {
+        await fastDriver.connect();
+        expect(gateway.received.filter((c) => c === "props")).toHaveLength(1); // the one connect-time discovery pass
+        await new Promise((r) => setTimeout(r, 220)); // several fast-poll cycles at 50ms
+        expect(gateway.received.filter((c) => c === "props")).toHaveLength(1); // still just the one
+      } finally {
+        await fastDriver.disconnect();
+      }
+    });
+
+    it("props is NOT re-sent as part of a per-command secondary-device refresh", async () => {
+      await driver.connect();
+      const before = gateway.received.filter((c) => c === "props").length;
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+      await driver.command(dev, { capability: "onoff", action: "on" }); // an indoor-unit command, not a secondary device, but exercises the same connection/queue
+      expect(gateway.received.filter((c) => c === "props")).toHaveLength(before);
+    });
   });
 
   it("binds a device and seeds its initial state from discovery", async () => {
@@ -219,5 +275,56 @@ describe("CoolMasterProtocolDriver", () => {
     // a command sent after reconnecting must actually reach the (new) gateway session.
     await driver.command(dev, { capability: "onoff", action: "on" });
     expect(gateway.received.filter((c) => c === "on L1.100")).toHaveLength(1);
+  });
+
+  describe("gateway auto-discovery (§ REQUIREMENT 2)", () => {
+    it("throws a clear config error when host is omitted and autoDiscover is not set — no behavior change for existing manual configs", () => {
+      expect(() => new CoolMasterProtocolDriver({} as never)).toThrow(/host is required/);
+    });
+
+    it("with autoDiscover: true and no gatewaySerial, connect() resolves the host from the ONE gateway a LAN scan finds", async () => {
+      const autoDriver = new CoolMasterProtocolDriver({
+        autoDiscover: true,
+        discoveryCandidateHosts: ["127.0.0.1"],
+        asciiPort: gateway.port,
+        protocol: "ascii",
+        pollMs: 100_000,
+        slowPollMs: 100_000,
+        discoveryIntervalMs: 100_000,
+        timeoutMs: 2_000,
+        retryCount: 1,
+      });
+      try {
+        await autoDriver.connect();
+        expect(autoDriver.isConnected()).toBe(true);
+        const devices = await autoDriver.discover();
+        expect(devices[0]).toMatchObject({ backendId: "L1.100" });
+      } finally {
+        await autoDriver.disconnect();
+      }
+    });
+
+    it("with autoDiscover: true and a gatewaySerial that matches nothing found, connect() rejects rather than silently picking a different gateway", async () => {
+      const autoDriver = new CoolMasterProtocolDriver({
+        autoDiscover: true,
+        gatewaySerial: "NOT-THE-REAL-SERIAL",
+        discoveryCandidateHosts: ["127.0.0.1"],
+        asciiPort: gateway.port,
+        protocol: "ascii",
+        timeoutMs: 500,
+      });
+      await expect(autoDriver.connect()).rejects.toThrow(/no gateway with serial/);
+    });
+
+    it("with autoDiscover: true and no gatewaySerial, connect() rejects when zero gateways are found — never proceeds with a blank host", async () => {
+      const autoDriver = new CoolMasterProtocolDriver({
+        autoDiscover: true,
+        discoveryCandidateHosts: ["127.0.0.1"],
+        asciiPort: 1, // nothing listens there
+        protocol: "ascii",
+        timeoutMs: 300,
+      });
+      await expect(autoDriver.connect()).rejects.toThrow(/found no CoolMaster gateways/);
+    });
   });
 });

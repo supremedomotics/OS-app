@@ -3,10 +3,13 @@ import {
   indoorUnitCapabilityConfig,
   indoorUnitCommandLines,
   indoorUnitDiscoveredDevice,
+  mainControllerDiscoveredDevice,
   mainControllerOnOffState,
   unitOnOffState,
   unitTemperatureState,
+  ventilationDiscoveredDevice,
   ventilationFanState,
+  waterHeaterDiscoveredDevice,
   waterHeaterOnOffState,
   waterHeaterTemperatureState,
 } from "./coolmaster-mapper.js";
@@ -83,6 +86,41 @@ describe("DiscoveredDevice construction", () => {
     expect(device.capabilities).toEqual(["onoff", "temperature"]);
     expect(device.backendId).toBe("L1.100");
     expect(device.raw.coolmaster).toMatchObject({ uid: "L1.100", line: "L1", gatewaySerial: "ABC123", deviceKind: "indoor_unit" });
+  });
+
+  describe("friendly names (§ Friendly Name Discovery NAME RULES)", () => {
+    const unit = parseLs2Line("L1.100 ON 24.0C 22.5C Low Cool OK - 0")!;
+
+    it("uses the props-sourced friendly name as suggestedName when one exists — UID stays the identity (backendId)", () => {
+      const propNames = new Map([["L1.100", "Sample room"]]);
+      const device = indoorUnitDiscoveredDevice(unit, gateway, propNames);
+      expect(device.suggestedName).toBe("Sample room");
+      expect(device.backendId).toBe("L1.100"); // identity is unaffected by naming
+    });
+
+    it("falls back to the bare UID when no props name exists — never a synthesized label", () => {
+      expect(indoorUnitDiscoveredDevice(unit, gateway).suggestedName).toBe("L1.100");
+      expect(indoorUnitDiscoveredDevice(unit, gateway, new Map()).suggestedName).toBe("L1.100");
+    });
+
+    it("a changed props name changes suggestedName while backendId (identity) stays identical — same entity, new display name", () => {
+      const before = indoorUnitDiscoveredDevice(unit, gateway, new Map([["L1.100", "Sample room"]]));
+      const after = indoorUnitDiscoveredDevice(unit, gateway, new Map([["L1.100", "Master Bedroom"]]));
+      expect(before.backendId).toBe(after.backendId);
+      expect(before.suggestedName).toBe("Sample room");
+      expect(after.suggestedName).toBe("Master Bedroom");
+    });
+
+    it("applies the same rule to water heaters, ventilation, and main controllers", () => {
+      const wh: CoolMasterWaterHeaterStatus = { uid: "W1.001", on: true, setpointC: 55, roomC: 48, faultCode: null };
+      const vam: CoolMasterVentilationStatus = { uid: "V1.001", on: true, fanSpeed: "High", faultCode: null };
+      const main: CoolMasterMainControllerStatus = { uid: "M1.001", on: false, faultCode: null };
+      const propNames = new Map([["W1.001", "Pool Heater"], ["V1.001", "Attic Fan"], ["M1.001", "Main Panel"]]);
+      expect(waterHeaterDiscoveredDevice(wh, gateway, propNames).suggestedName).toBe("Pool Heater");
+      expect(ventilationDiscoveredDevice(vam, gateway, propNames).suggestedName).toBe("Attic Fan");
+      expect(mainControllerDiscoveredDevice(main, gateway, propNames).suggestedName).toBe("Main Panel");
+      expect(waterHeaterDiscoveredDevice(wh, gateway).suggestedName).toBe("W1.001");
+    });
   });
 });
 

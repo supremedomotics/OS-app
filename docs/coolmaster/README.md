@@ -40,7 +40,8 @@ repo's convention for every other protocol driver (no nested per-driver folders)
 | `coolmaster-parser.ts` | Parses both wire formats into typed models |
 | `coolmaster-commands.ts` | Builds outgoing ASCII_IF command strings, one function per documented command |
 | `coolmaster-mapper.ts` | The **only** file that imports `@supreme/domain-model` — translates wire models ↔ Supreme capabilities |
-| `coolmaster-discovery.ts` | Full discovery pass: gateway, lines, units, groups, water heaters, ventilation |
+| `coolmaster-discovery.ts` | Full discovery pass: gateway, lines, units, groups, water heaters, ventilation, `props` friendly names |
+| `coolmaster-gateway-discovery.ts` | **Gateway** discovery — finds CoolMaster gateways ON THE LAN, before any host is known (separate concern from the file above, which discovers what's *behind* an already-connected gateway) |
 | `coolmaster-cache.ts` | Per-unit state cache with change detection + missed-poll → offline tracking |
 | `coolmaster-events.ts` | Internal pub/sub, decoupled from Supreme's `StateListener` |
 | `coolmaster-polling.ts` | Fast/slow/discovery poll scheduler + priority/dedup command queue |
@@ -84,7 +85,9 @@ v2's URL scheme is serial-scoped and there's no documented serial-less way to le
 
 | Field | Env var | Default |
 |---|---|---|
-| `host` | `SUPREME_COOLMASTER_HOST` | *(required)* |
+| `host` | `SUPREME_COOLMASTER_HOST` | *(required unless `autoDiscover: true`)* |
+| `autoDiscover` | — | `false` — see **Gateway Auto-Discovery** below |
+| `gatewaySerial` | — | *(optional)* disambiguates multiple discovered gateways, and re-finds THIS gateway after a DHCP IP change |
 | `protocol` | `SUPREME_COOLMASTER_PROTOCOL` | `auto` (`auto` \| `ascii` \| `rest`) |
 | `asciiPort` | `SUPREME_COOLMASTER_ASCII_PORT` | `10102` |
 | `restPort` | `SUPREME_COOLMASTER_REST_PORT` | `10103` |
@@ -95,33 +98,144 @@ v2's URL scheme is serial-scoped and there's no documented serial-less way to le
 | `retryCount` | `SUPREME_COOLMASTER_RETRY_COUNT` | `3` |
 | `debug` | `SUPREME_COOLMASTER_DEBUG` | `false` |
 
-Configuration is validated at startup (`host` is required; a missing host throws
-`CoolMasterConfigError` before any connection is attempted). The Driver Manager UI
-generates a matching config page automatically from the manifest in
-`services/drivers/src/manifests.ts` (`supreme-coolmaster`, v2.0.0).
+Configuration is validated at startup (`host` is required UNLESS `autoDiscover` is true, in
+which case `connect()` resolves it via a LAN scan instead — see below; a missing host with
+`autoDiscover` unset throws `CoolMasterConfigError` before any connection is attempted). The
+Driver Manager UI generates a matching config page automatically from the manifest in
+`services/drivers/src/manifests.ts` (`supreme-coolmaster`, v2.0.0), plus a dedicated
+multi-gateway setup wizard (see **Multiple Gateways** below).
 
 ## Installation
 
-1. Set `SUPREME_COOLMASTER_HOST` (and optionally the other `SUPREME_COOLMASTER_*`
-   variables — see `infra/hub-compose/.env.example`) to the gateway's LAN IP.
-2. Boot the gateway (`createHubContext` wires the driver in automatically when
-   `config.coolMasterHost` is set — see `services/gateway/src/bootstrap.ts`).
+1. Either enable **automatic gateway discovery** (default in the setup wizard) or set
+   `SUPREME_COOLMASTER_HOST` (and optionally the other `SUPREME_COOLMASTER_*` variables —
+   see `infra/hub-compose/.env.example`) to the gateway's LAN IP manually.
+2. Boot the gateway (`createHubContext` wires the driver in automatically when configured —
+   see `services/gateway/src/bootstrap.ts`).
 3. On connect, discovery runs automatically: gateway identity, HVAC lines, every indoor
-   unit, and (if present) groups/water heaters/ventilation. **No manual unit mapping is
-   required or possible** — units simply appear as Supreme devices.
+   unit, friendly names (`props`), and (if present) groups/water heaters/ventilation.
+   **No manual unit mapping is required or possible** — units simply appear as Supreme
+   devices, named from the gateway's own `props` configuration when set.
+
+## Gateway Auto-Discovery
+
+`coolmaster-gateway-discovery.ts` finds CoolMaster gateways on the LAN so an installer never
+has to type an IP address — a genuinely separate concern from indoor-unit discovery above
+(which requires an already-connected gateway).
+
+**This is NOT SDDP.** The CoolMaster PRM (`CoolMaster_Core_Reference_Part3_v1.0.txt` §5)
+names an `sddp` command, but only as a gateway-side toggle ("Control4 discovery. Functions:
+Enable - Disable - Identify - Offline - Alive") — it documents how an installer turns SDDP
+on/off *on the gateway*, never what a CoolMaster SDDP reply actually contains on the wire
+(no packet format, no port, no field names anywhere in the available reference material).
+SDDP itself (Control4's multicast discovery protocol) is publicly documented in the
+abstract, but CoolMaster's specific reply payload is not — implementing a client against a
+guessed reply shape would be fabricating protocol behavior this driver has never verified,
+so **no SDDP client is implemented**, and none of this driver's discovery, logs, or UI ever
+describes what it does as SDDP.
+
+Instead, gateway discovery uses **verified ASCII_IF identification**: it opens the same real
+ASCII_IF TCP connection and prompt handshake (`CoolMasterAsciiTransport.connect()`) every
+normal connection already uses, on each candidate LAN host, then reads `info` for the
+gateway's serial/firmware. A host that isn't a CoolMaster gateway either refuses the
+connection or never produces the real `>` prompt within a bounded timeout, and is rejected —
+never guessed at. A response that DOES complete the handshake but reports no serial-shaped
+field at all (§ Discovery Safety) is also rejected as inconclusive, not treated as a match.
+Candidate hosts are the full `.1`-`.254` range of every non-internal IPv4 /24 subnet the hub
+is directly attached to, probed with bounded concurrency (default 32 at a time) and a
+per-host timeout (default 800ms) so one non-responsive host can never stall the whole scan.
+Results are deduplicated by serial, so the same physical gateway answering through more than
+one path still yields exactly one entry.
+
+This module is a stage-agnostic building block on purpose (`DiscoveredCoolMasterGateway` is
+just `{gatewayId, serial, host, asciiPort, firmwareVersion, application}`) — if CoolMaster's
+real SDDP reply format is ever obtained and verified, an SDDP probe can be added as a faster
+first stage ahead of the ASCII_IF fallback without changing this module's public shape or
+anything downstream of it (the driver, the installer route, or the UI panel).
+
+Discovery never sends anything beyond the connection handshake and a single read-only `info`
+command — it cannot issue a control command or otherwise change gateway state.
+
+**Gateway identity** is `coolmaster:<serial>` — the serial number, never the IP, which is
+only ever current configuration/state and can change on a DHCP lease renewal. Set
+`gatewaySerial` in config to re-find the SAME physical gateway automatically after its IP
+changes, or to pick a specific one when a scan finds more than one.
+
+## Friendly Names (`props`)
+
+Every full discovery pass also runs the bare `props` command and parses it into a
+`UID -> name` map (`coolmaster-parser.ts`'s `parsePropsBlock`). A discovered device's
+display name (`suggestedName`) is the CoolMaster-configured name when one exists, falling
+back to the bare UID (e.g. `L1.101`) when it doesn't — the UID itself is NEVER replaced as
+the device's actual identity (`backendId`); the name is display metadata only.
+
+**Cadence**: `props` runs once per FULL discovery pass (initial connect, automatic
+reconnect, the periodic `discoveryIntervalMs` timer, and the explicit
+`driver.refreshDiscovery()` rescan action) — never on fast polling, and never as part of the
+lightweight per-command secondary-device refresh water heater/ventilation/main-controller
+commands trigger. A gateway with no `props` support, or a transient failure reading it,
+never fails the rest of discovery — indoor units, lines, and every other device type are
+unaffected; only the friendly-name map comes back empty for that pass.
+
+**Format confidence — LOW, unverified against real hardware.** The reference material
+(`CoolMaster_Core_Reference_Part3_v1.0.txt` §7) names `props` and its documented SET form
+(`props <uid> name <name>`) but gives no LIST response line syntax at all. No real captured
+`props` output exists anywhere in this repository or its documentation set. The parser
+tolerates the two most plausible layouts — `<uid> name <name...>` (echoing the SET form's
+own "name" token) and a bare `<uid> <name...>` fallback — and degrades safely for anything
+else (a UID with no resolvable name line is simply absent from the map, never a fabricated
+or corrupted entry, and one malformed line never affects any other line or unit). **This
+still requires validation against a real CoolMasterNet's actual `props` list output before
+being trusted as protocol truth.**
+
+**Name synchronization**: like every other driver in this codebase, `suggestedName` is a
+discovery-time *suggestion* — it is what a not-yet-commissioned device is offered as by
+default, and what a Cloud-name-sync-style rescan (`driver.refreshDiscovery()`) updates for
+still-uncommissioned or re-scanned devices. It does not reach into an already-commissioned
+device's installer-set SupremeOS name and silently overwrite it (matching the same
+established precedent as Casambi's `syncNamesFromCloud`, which behaves identically for the
+same reason). A CoolMaster rename in the gateway's own configuration never creates a
+duplicate device and never changes a device's immutable UID-derived identity.
 
 ## Discovery
 
 Runs on: initial connect, automatic reconnect, the configured `discoveryIntervalMs`, and
-on-demand (`driver.discover()`). Indoor-unit discovery is bulk (one `ls2` request covers
-every unit) plus one `query <uid>` per unit **only during discovery, never during routine
-polling** — querying hundreds of units individually on every 10-second poll would violate
-the "avoid unnecessary API traffic" requirement at real-world VRF fleet scale.
+on-demand (`driver.discover()` triggers it once if nothing has been discovered yet;
+`driver.refreshDiscovery()` always forces a fresh full pass). Indoor-unit discovery is bulk
+(one `ls2` request covers every unit) plus one `query <uid>` per unit **only during
+discovery, never during routine polling** — querying hundreds of units individually on
+every 10-second poll would violate the "avoid unnecessary API traffic" requirement at
+real-world VRF fleet scale.
 
-Water heater / ventilation / main controller / group discovery each run independently and
-fail *gracefully*: an installation with none of a given type is normal, not a driver error
-— one type's "unsupported command" response never blocks indoor-unit discovery (the type
-every installation has) or the other optional types.
+Water heater / ventilation / main controller / group / friendly-name (`props`) discovery
+each run independently and fail *gracefully*: an installation with none of a given type is
+normal, not a driver error — one type's "unsupported command" response never blocks
+indoor-unit discovery (the type every installation has) or any other optional type.
+
+## Multiple Gateways
+
+CoolMaster supports installing more than one gateway instance — mirroring the exact
+multi-instance architecture already established for Casambi (`native-driver-factory.ts`'s
+`withCasambiInstanceAddressing`), reusing the SAME generic install/registry/runtime-protocol
+plumbing with zero core changes. The one CoolMaster-specific addition is
+`withCoolMasterInstanceAddressing`: since CoolMaster UIDs (`L1.100`) are gateway-LOCAL, not
+globally unique, every instance but the first gets its device addresses scoped as
+`coolmaster:<installedId>:L1.100` — so Gateway A's `L1.101` and Gateway B's `L1.101` always
+become two distinct Supreme devices, never a collision. The first/primary instance is
+returned completely unwrapped (bare `L1.100` addressing, unchanged), so a single-gateway
+install — still the default, common case, and every already-deployed hub — needs no
+migration and behaves exactly as before.
+
+Each installed instance gets its own independent connection, transport, discovery pass,
+poller, command queue, state cache, reconnect/backoff state, and log scope — there is no
+shared or global mutable state between gateway instances anywhere in this driver (every
+piece of state lives on a `CoolMasterProtocolDriver`/`CoolMasterConnection` instance field,
+never a module-level variable).
+
+The Driver Manager's "Set up CoolMaster" / "Add gateway" wizard (`CoolMasterSetupWizard` in
+`apps/web-homeowner/src/drivers.tsx`) asks how many gateways to configure (1-100) up front,
+then renders that many independent config blocks — each with its own choice of automatic
+discovery (with a live LAN scan panel, `CoolMasterGatewayDiscoveryPanel`) or manual IP entry.
 
 ## Supported HVAC commands
 
@@ -200,20 +314,50 @@ than silently omit it:
    as Celsius (Supreme's domain model is Celsius-only). A Fahrenheit-configured gateway
    whose responses never include an explicit suffix would need this cross-checked against
    its `set` output.
+8. **SDDP gateway discovery is not implemented.** The reference material documents `sddp`
+   only as a gateway-side enable/disable toggle, never the actual multicast reply payload a
+   client would need to parse. Gateway auto-discovery instead uses a verified ASCII_IF
+   connect+`info` handshake (see **Gateway Auto-Discovery** above) — this is a deliberate,
+   documented choice, not an oversight, and the architecture is built to accept a real SDDP
+   prober later without a rewrite if the wire format is ever obtained and verified.
+9. **The `props` LIST response line format is inferred, not verified (Low confidence).**
+   No real captured `props` output exists anywhere in this repository's documentation or
+   test fixtures; only the SET form's syntax is documented. The parser degrades safely for
+   an unrecognized layout (absent name, never a fabricated one) but genuinely requires
+   validation against a real CoolMasterNet gateway before this format can be trusted.
 
 ## Testing
 
-- `coolmaster-parser.test.ts` (25 tests), `coolmaster-commands.test.ts` (14),
-  `coolmaster-mapper.test.ts` (18) — pure-logic unit tests for every parsing/building/
-  mapping function.
-- `coolmaster-driver.test.ts` (9) — full integration tests against a fake in-process
+- `coolmaster-parser.test.ts` (34 tests), `coolmaster-commands.test.ts` (14),
+  `coolmaster-mapper.test.ts` (22) — pure-logic unit tests for every parsing/building/
+  mapping function, including friendly-name parsing edge cases (punctuation, empty names,
+  duplicate name values, malformed lines).
+- `coolmaster-discovery.test.ts` (6) — isolated tests for `discoverAll`'s own orchestration
+  against a fake `CoolMasterConnection`: a `props` failure never fails the rest of
+  discovery, an unnamed unit stays discoverable, duplicate name values are allowed, and
+  `includeNames` correctly gates whether `props` is called at all.
+- `coolmaster-gateway-discovery.test.ts` (16) — LAN gateway discovery against real
+  in-process TCP fixtures: 0/1/N gateways, duplicate-reply collapsing, a non-CoolMaster
+  device correctly rejected, a response with no serial-shaped field rejected as
+  inconclusive, bounded timeouts (both "no listener" and "accepts TCP but never greets"),
+  and bounded concurrency never dropping a reachable gateway.
+- `coolmaster-driver.test.ts` (17) — full integration tests against a fake in-process
   ASCII_IF gateway with real greeting/prompt/CR framing (not a mocked transport): connect,
   discovery, bind + initial state seeding, every command category, toggle resolution,
-  unbound-device errors, poll-driven feedback, and functional automatic reconnect
-  (verified by sending a real command after the simulated drop, not just checking a
-  connected flag).
+  unbound-device errors, poll-driven feedback, functional automatic reconnect (verified by
+  sending a real command after the simulated drop, not just checking a connected flag),
+  friendly names (display name from `props`, rediscovery updating the same device),
+  `props` frequency (not on fast polls, not on per-command refreshes), and `autoDiscover`
+  resolution (single gateway found, `gatewaySerial` mismatch, zero gateways found).
+- `services/gateway/src/native-driver-factory.test.ts` — `withCoolMasterInstanceAddressing`
+  unit tests (scoping/unscoping, two instances with the identical UID never colliding) plus
+  a real-`CoolMasterProtocolDriver` bind proof.
+- `services/gateway/src/coolmaster-multi-instance.e2e.test.ts` — install/config/registry
+  over real HTTP: independent per-gateway config, `autoDiscover` config independent of a
+  manual sibling, uninstall isolation, and label/config survival across a genuine
+  `AppContext` restart.
 
-Run: `pnpm --filter @supreme/protocols test`.
+Run: `pnpm --filter @supreme/protocols test` and `pnpm --filter @supreme/gateway test`.
 
 ## Troubleshooting
 

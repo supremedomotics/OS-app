@@ -195,6 +195,17 @@ export function cmdGroupPower(groupId: string, on: boolean): string {
   return `group ${groupId} ${on ? "on" : "off"}`;
 }
 
+export const CMD_PROPS: CoolMasterCommandSpec = { name: "props", confidence: "low", retryable: true };
+/** Lists every stored Indoor-Unit property, including the installer-assigned friendly
+ * name (§ Friendly Name Discovery). docs/coolmaster Part 3 §7 ("props — Property
+ * management. Document every supported property.") names this command and its SET form
+ * (`props <uid> name <name>`) but gives no LIST response syntax — same LOW-confidence
+ * inferred-grammar situation as wh/main/vam/group above. Never run on every fast poll;
+ * see coolmaster-discovery.ts's discoverPropNames doc comment for the allowed cadence. */
+export function cmdProps(): string {
+  return "props";
+}
+
 /**
  * "va" (Virtual Address support, docs/coolmaster Part 4 §25) is UNIMPLEMENTED. The
  * reference docs name it and say only "Maintain persistent mapping" — not a command

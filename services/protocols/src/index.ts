@@ -277,6 +277,11 @@ export {
 } from "./yamaha-codec.js";
 export { CoolMasterProtocolDriver, type CoolMasterDriverOptions } from "./coolmaster-driver.js";
 export {
+  discoverCoolMasterGateways,
+  type CoolMasterGatewayDiscoveryOptions,
+  type DiscoveredCoolMasterGateway,
+} from "./coolmaster-gateway-discovery.js";
+export {
   isCoolMasterUid,
   parseLs2Line,
   parseLs2Block,

@@ -285,7 +285,28 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       { version: "2.0.0", date: "2026-07-11", notes: "Ground-up rewrite covering the full documented command surface, dual-transport (ASCII_IF + REST v2), auto-discovery of lines/units/groups/water-heaters/ventilation, and structured logging/reconnect. Replaces the prior ASCII_IF-only, onoff+temperature-only driver." },
     ],
     configSchema: [
-      hostField,
+      // § Gateway Auto-Discovery (REQUIREMENT 2/7) — the discriminator: when true, `host`
+      // is no longer required (connect() resolves it via a LAN scan instead) and
+      // `gatewaySerial` becomes the meaningful identity field. `default: true` here ONLY
+      // affects a BRAND NEW driver instance's seeded config — this schema default is never
+      // retroactively applied to an already-installed instance's persisted config (see
+      // DriverManager.install()'s `config: existing?.config ?? defaultDriverConfig(...)`),
+      // and the native-driver-factory reads a missing/undefined `autoDiscover` as `false`
+      // regardless of this schema default — so every gateway configured before this field
+      // existed keeps requiring its manually-entered host, byte-for-byte unchanged. Only a
+      // genuinely new install (or the setup wizard, which always sets this explicitly
+      // per-gateway anyway) is affected, matching the original product requirement that
+      // automatic discovery — not manual IP entry — is the intended default experience.
+      { key: "autoDiscover", label: "Automatically discover gateway", type: "boolean", required: false, default: true, secret: false },
+      { ...hostField, required: false, requiredIf: { key: "autoDiscover", equals: "false" }, help: "Required unless automatic discovery is enabled above." },
+      {
+        key: "gatewaySerial",
+        label: "Gateway serial (auto-discovery)",
+        type: "text",
+        required: false,
+        secret: false,
+        help: "Only needed when automatic discovery finds more than one CoolMaster gateway on the LAN, or to re-find THIS specific gateway if its IP changes later (§ Gateway Identity — the serial, not the IP, is this gateway's permanent identity).",
+      },
       {
         key: "protocol",
         label: "Transport",
