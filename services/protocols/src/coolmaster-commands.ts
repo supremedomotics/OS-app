@@ -217,13 +217,18 @@ export function cmdProps(): string {
 
 export const CMD_PROPS_SET_NAME: CoolMasterCommandSpec = { name: "props", confidence: "high", retryable: false };
 
-/** ASSUMED maximum name length CoolMaster's `props ... name` field supports — NOT
- * documented anywhere in the available reference material, and not yet confirmed against
- * real hardware either (only that names UP TO this driver's own test strings work). A
- * conservative bound for an embedded gateway's own property/display field. If a real
- * gateway rejects a shorter name, or accepts a longer one, this is the one constant to
- * revise — see docs/coolmaster/README.md's Limitations entry for this command. */
-export const PROPS_NAME_MAX_LENGTH = 20;
+/** § live-confirmed fix — this is a pure SANITY bound (guards against a pathological,
+ * absurd input; NOT a claim about what CoolMaster's own field actually holds), not a
+ * fabricated hardware limit. An earlier revision set this to 20 as a "conservative guess"
+ * at an embedded gateway's display field — live usage immediately hit a real, ordinary
+ * 22-character name ("Sample room for L1.101") silently rejected by that invented number
+ * before the write ever reached the gateway. No documented or hardware-confirmed maximum
+ * exists anywhere in this driver's reference material, so this driver no longer pretends
+ * to know one: the gateway's OWN response is the real arbiter of whether a name is
+ * accepted (`isPropsSetAck` — a non-`OK` reply is surfaced as a genuine sync failure, which
+ * is the honest way to discover a real limit if one exists, rather than guessing at it
+ * client-side and silently blocking valid names). */
+export const PROPS_NAME_MAX_LENGTH = 100;
 
 /**
  * Encodes a display name for the `props <uid> name <name>` SET command — a dedicated
@@ -256,7 +261,7 @@ export function encodePropsName(name: string): string {
   }
   if (trimmed.length > PROPS_NAME_MAX_LENGTH) {
     throw new CoolMasterValidationError(
-      `coolmaster: indoor-unit name "${trimmed}" is ${trimmed.length} characters, exceeding the assumed ${PROPS_NAME_MAX_LENGTH}-character limit (unconfirmed against real hardware — see docs/coolmaster/README.md)`,
+      `coolmaster: indoor-unit name "${trimmed}" is ${trimmed.length} characters, exceeding this driver's ${PROPS_NAME_MAX_LENGTH}-character sanity bound (not a real hardware limit — see docs/coolmaster/README.md)`,
     );
   }
   return trimmed;
