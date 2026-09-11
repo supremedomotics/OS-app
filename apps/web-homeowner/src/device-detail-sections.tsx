@@ -334,9 +334,23 @@ export function HistorySection({ device }: { device: Device }) {
 // on its own inside a page that already has its own "Advanced Settings" surface (ClimateConsole's
 // existing modal); `AdvancedSettingsSection` wraps it in the shared collapsible for pages that
 // don't. ───────────────────────────────────────────────────────────────────────────────────────
+/** § Indoor-Unit Name Synchronization — reads the CoolMaster sync status the gateway
+ * layer writes into `device.metadata` after each `props <uid> name <name>` attempt
+ * (fire-and-forget, so this reflects the LAST time this device object was fetched, not
+ * necessarily the very latest attempt — an eventual, not live-pushed, status). `null` for
+ * any device with no CoolMaster sync history at all (every non-CoolMaster device, and a
+ * CoolMaster device that's never been renamed since this feature shipped). */
+function coolMasterSyncBadge(device: Device): { text: string; tone: "good" | "critical" } | null {
+  const status = device.metadata?.coolMasterNameSyncStatus;
+  if (status === "synced") return { text: "✓ CoolMaster synchronized", tone: "good" };
+  if (status === "failed") return { text: "⚠ CoolMaster sync failed", tone: "critical" };
+  return null;
+}
+
 export function DeviceManageActions({ device, onRemoved, onRenamed }: { device: Device; onRemoved?: () => void; onRenamed?: (device: Device) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const syncBadge = coolMasterSyncBadge(device);
 
   async function rename() {
     const name = window.prompt("Rename device", device.name);
@@ -372,6 +386,11 @@ export function DeviceManageActions({ device, onRemoved, onRenamed }: { device: 
         <button disabled={busy} onClick={() => void rename()}>Rename</button>
         <button className="danger" disabled={busy} onClick={() => void remove()}>Remove device</button>
       </div>
+      {syncBadge && (
+        <p className={syncBadge.tone === "good" ? "muted" : "err"} style={{ marginTop: 4 }}>
+          {syncBadge.text}
+        </p>
+      )}
       {err && <p className="err">{err}</p>}
     </>
   );

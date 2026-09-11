@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isCoolMasterUid,
+  isPropsSetAck,
   lineOfUid,
   mergeQueryDetail,
   parseGatewayInfo,
@@ -221,5 +222,27 @@ describe("friendly names (§ Friendly Name Discovery)", () => {
       "OK",
     ]);
     expect(map.size).toBe(0);
+  });
+});
+
+describe("isPropsSetAck (§ Indoor-Unit Name Synchronization, live-confirmed)", () => {
+  it("recognizes the live-confirmed bare 'OK' response as success", () => {
+    expect(isPropsSetAck(["OK"])).toBe(true);
+  });
+
+  it("recognizes OK regardless of case or surrounding whitespace", () => {
+    expect(isPropsSetAck(["  ok  "])).toBe(true);
+    expect(isPropsSetAck(["Ok"])).toBe(true);
+  });
+
+  it("treats every other real-world gateway response as failure — never assumes success just because the wire call didn't throw", () => {
+    expect(isPropsSetAck(["Bad Format"])).toBe(false);
+    expect(isPropsSetAck(["Unknown Command"])).toBe(false);
+    expect(isPropsSetAck(["ERROR"])).toBe(false);
+    expect(isPropsSetAck([])).toBe(false);
+  });
+
+  it("recognizes OK even alongside other lines in the same response", () => {
+    expect(isPropsSetAck(["some banner text", "OK"])).toBe(true);
   });
 });

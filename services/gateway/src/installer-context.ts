@@ -51,6 +51,7 @@ import {
   type NativeDriverFactoryContext,
 } from "./native-driver-factory.js";
 import {
+  CoolMasterProtocolDriver,
   discoverCoolMasterGateways as scanForCoolMasterGateways,
   type DiscoveredCoolMasterGateway,
   knxSearch,
@@ -1348,6 +1349,115 @@ export class InstallerServices {
     return scanForCoolMasterGateways();
   }
 
+  // ── § Indoor-Unit Name Synchronization ──────────────────────────────────────────
+
+  /**
+   * Finds the specific CoolMaster driver INSTANCE that owns a device, across however
+   * many gateways are installed (§ Multiple CoolMaster Gateways — never assume a bare
+   * UID alone identifies a device; the owning driver instance is what disambiguates it).
+   * There is no reverse "deviceId -> installedId" index anywhere in this codebase, so this
+   * mirrors the smallest correct approach already used for the single-instance case
+   * ({@link runtimeDriverFor}): enumerate every installed `coolmaster` catalog entry,
+   * resolve each one's live runtime-scoped driver, and ask it directly whether it
+   * manages this device. Real installations rarely have more than a handful of gateway
+   * instances, so this linear scan is cheap in practice.
+   */
+  private async coolMasterDriverFor(deviceId: DeviceId): Promise<CoolMasterProtocolDriver | null> {
+    const entries = (await this.drivers.registry()).filter((e) => e.protocols.includes("coolmaster") && e.installedId);
+    for (const entry of entries) {
+      const driver = await this.runtimeDriverFor(entry.installedId!);
+      if (driver instanceof CoolMasterProtocolDriver && driver.manages(deviceId)) return driver;
+    }
+    return null;
+  }
+
+  /**
+   * Writes a Supreme device's desired name to the CoolMaster gateway that owns it, and
+   * persists the outcome onto the device's own `metadata` (§ Local DB vs CoolMaster DB —
+   * `coolMasterNameSyncStatus`/`coolMasterNameLastSync`/`coolMasterNameSyncError`) so the
+   * UI can show real sync status, not just the local rename. A no-op (not an error) for a
+   * device this hub has no CoolMaster driver managing at all — most renames are for
+   * devices on other protocols entirely, and this must never throw for the ordinary case.
+   *
+   * Called fire-and-forget from the device-rename route (§ "Do not block the UI waiting
+   * indefinitely for the gateway") — the local rename has already completed and returned
+   * to the caller by the time this resolves; the gateway write happens in the background,
+   * bounded by the driver's own existing per-command timeout/retry configuration (no new,
+   * unbounded retry loop is introduced here — {@link CoolMasterProtocolDriver.
+   * syncIndoorUnitName} already reuses the existing serialized command queue and
+   * connection, which already retries transient failures internally).
+   */
+  async syncCoolMasterDeviceName(deviceId: DeviceId, name: string): Promise<void> {
+    const driver = await this.coolMasterDriverFor(deviceId);
+    if (!driver) return; // not a CoolMaster-bound device — nothing to do, not an error
+    const uid = driver.uidFor(deviceId) ?? "(unknown)";
+    try {
+      const result = await driver.syncIndoorUnitName(deviceId, name);
+      await this.d.home.updateDevice(deviceId, {
+        metadata: {
+          coolMasterNameSyncStatus: result.status,
+          coolMasterNameLastSync: new Date().toISOString(),
+          coolMasterNameSyncError: result.error ?? null,
+        },
+      });
+      this.appendLog(
+        "supreme-coolmaster",
+        result.status === "synced" ? "info" : "warn",
+        `CoolMaster name sync ${result.status} for uid ${uid}${result.error ? `: ${result.error}` : ""}`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.d.home.updateDevice(deviceId, {
+        metadata: { coolMasterNameSyncStatus: "failed", coolMasterNameLastSync: new Date().toISOString(), coolMasterNameSyncError: message },
+      });
+      this.appendLog("supreme-coolmaster", "error", `CoolMaster name sync failed for uid ${uid}: ${message}`);
+    }
+  }
+
+  /**
+   * § Name Synchronization, startup/reconnect (requirement 8) — after a CoolMaster
+   * gateway (re)connects, compares each already-bound indoor unit's CURRENT CoolMaster
+   * name (from the fresh `props` read discovery just did) against the Supreme device's
+   * own desired name, and writes only where they genuinely differ — restoring a name
+   * CoolMaster lost (factory reset, property-database wipe) exactly the same way as
+   * fixing a stale one, and writing nothing at all when they already match (§ "Do NOT
+   * blindly write every name on every connection").
+   *
+   * Never overwrites the Supreme-side desired name with whatever CoolMaster reports
+   * (§ "Do not overwrite names unexpectedly") — Supreme's name is always authoritative;
+   * only the CoolMaster-side value is ever pushed to match it.
+   */
+  private async reconcileCoolMasterNames(driver: CoolMasterProtocolDriver): Promise<void> {
+    const deviceIds = this.d.sil.providers.devicesByProvider(driver.protocol);
+    for (const deviceId of deviceIds) {
+      const uid = driver.uidFor(deviceId);
+      if (!uid) continue; // not an indoor unit this driver tracks a props name for
+      const device = await this.d.home.getDevice(deviceId).catch(() => null);
+      if (!device) continue;
+      const desired = device.name;
+      const actual = driver.getCoolMasterName(deviceId);
+      if (actual === desired) continue; // already in sync — no write
+      try {
+        const result = await driver.syncIndoorUnitName(deviceId, desired);
+        await this.d.home.updateDevice(deviceId, {
+          metadata: {
+            coolMasterNameSyncStatus: result.status,
+            coolMasterNameLastSync: new Date().toISOString(),
+            coolMasterNameSyncError: result.error ?? null,
+          },
+        });
+        this.appendLog(
+          "supreme-coolmaster",
+          result.status === "synced" ? "info" : "warn",
+          `CoolMaster name reconciliation ${result.status} for uid ${uid} (CoolMaster had "${actual ?? "(none)"}", restored to "${desired}")${result.error ? `: ${result.error}` : ""}`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.appendLog("supreme-coolmaster", "error", `CoolMaster name reconciliation failed for uid ${uid}: ${message}`);
+      }
+    }
+  }
+
   /**
    * Generic Room Assignment Engine — find-or-create (§ Automatic Room Creation): the ONE
    * place in the codebase that turns a room NAME (from any source — ETS Function/Space
@@ -1999,6 +2109,18 @@ export class InstallerServices {
     this.appendLog(key, failures.length ? "warn" : "info", `${bound}/${bindings.length} device binding(s) restored for ${protocol} (${trigger})`);
 
     this.setStage(protocol, { stage: "ready", healthy: !connStatus?.error, lastError: connStatus?.error ?? null });
+
+    // § Indoor-Unit Name Synchronization, startup/reconnect (requirement 8) — runs AFTER
+    // bindings are restored (so `devicesByProvider`/`uidFor` actually resolve real
+    // devices) and only when the connection genuinely succeeded. Fire-and-forget: name
+    // reconciliation must never delay this driver's own "ready" transition or any other
+    // protocol's lifecycle, and a failure here is logged, never thrown back into the
+    // shared lifecycle pipeline every other protocol also runs through.
+    if (driver instanceof CoolMasterProtocolDriver && !connStatus?.error) {
+      void this.reconcileCoolMasterNames(driver).catch((err) =>
+        this.appendLog(key, "warn", `CoolMaster name reconciliation failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    }
   }
 
   /** Driver Diagnostics (§ Diagnostics): every driver's full lifecycle picture in one

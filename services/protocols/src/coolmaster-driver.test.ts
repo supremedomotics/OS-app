@@ -31,7 +31,7 @@ interface FakeGateway {
 
 function startFakeGateway(): Promise<FakeGateway> {
   const received: string[] = [];
-  const unit: UnitFixture = { on: false, setC: 24, roomC: 22.5, fanSpeed: "Low", mode: "Cool", propName: "Sample room" };
+  const unit: UnitFixture = { on: false, setC: 24, roomC: 22.5, fanSpeed: "Low", mode: "Cool", propName: "Sample room", rejectNameSync: false };
   const gateway: FakeGateway = { server: null as unknown as Server, port: 0, received, unit, currentSocket: null };
   return new Promise((resolve) => {
     const server = createServer((sock: Socket) => {
@@ -66,6 +66,11 @@ interface UnitFixture {
   mode: string;
   /** § Friendly Name Discovery — the CoolMaster `props` name for L1.100. */
   propName: string;
+  /** § Indoor-Unit Name Synchronization — when true, the fake gateway rejects the next
+   * `props <uid> name <name>` SET command with "Bad Format" instead of applying it, so
+   * tests can exercise the gateway-rejected failure path against a real (fake) TCP
+   * round-trip, not a mocked function. */
+  rejectNameSync: boolean;
 }
 
 function handleCommand(sock: Socket, cmd: string, unit: UnitFixture): void {
@@ -81,6 +86,12 @@ function handleCommand(sock: Socket, cmd: string, unit: UnitFixture): void {
   if (cmd.startsWith("fspeed L1.100 ")) { unit.fanSpeed = cmd.split(" ")[2]!; return void sock.write("OK\r\n>"); }
   if (cmd === "wh" || cmd === "vam" || cmd === "main" || cmd === "group") return void sock.write(">"); // none present
   if (cmd === "props") return void sock.write(`L1.100 name ${unit.propName}\r\n>`);
+  if (cmd.startsWith("props ") && cmd.includes(" name ")) {
+    // § Indoor-Unit Name Synchronization — live-confirmed grammar: "props <uid> name <name>".
+    if (unit.rejectNameSync) return void sock.write("Bad Format\r\n>");
+    unit.propName = cmd.slice(cmd.indexOf(" name ") + " name ".length);
+    return void sock.write("OK\r\n>");
+  }
   return void sock.write("OK\r\n>");
 }
 
@@ -375,6 +386,128 @@ describe("CoolMasterProtocolDriver", () => {
       } finally {
         await autoDriver.disconnect();
       }
+    });
+  });
+
+  describe("§ Indoor-Unit Name Synchronization (live-confirmed: 'props <uid> name <name>' -> OK)", () => {
+    it("basic rename: sends the live-confirmed command, gets OK, and reports synced", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+
+      const result = await driver.syncIndoorUnitName(dev, "Living Room");
+
+      expect(gateway.received).toContain("props L1.100 name Living Room");
+      expect(result).toEqual({ status: "synced" });
+      expect(driver.getCoolMasterName(dev)).toBe("Living Room"); // reflected immediately, no rediscovery needed
+      expect(driver.getNameSyncState(dev)).toMatchObject({ desiredName: "Living Room", status: "synced", error: null });
+    });
+
+    it("rename with spaces sends the name verbatim (internal whitespace preserved)", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+
+      await driver.syncIndoorUnitName(dev, "Master Bedroom");
+
+      expect(gateway.received).toContain("props L1.100 name Master Bedroom");
+    });
+
+    it("a too-long name is rejected by validation and never reaches the wire", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+
+      const tooLong = "A".repeat(64);
+      const result = await driver.syncIndoorUnitName(dev, tooLong);
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toMatch(/exceeding/);
+      expect(gateway.received.some((c) => c.startsWith("props L1.100 name"))).toBe(false);
+    });
+
+    it("an empty name is rejected by validation and never reaches the wire", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+
+      const result = await driver.syncIndoorUnitName(dev, "   ");
+
+      expect(result.status).toBe("failed");
+      expect(gateway.received.some((c) => c.startsWith("props L1.100 name"))).toBe(false);
+    });
+
+    it("a gateway rejection ('Bad Format') is reported as a failed sync, never mistaken for success", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+      gateway.unit.rejectNameSync = true;
+
+      const result = await driver.syncIndoorUnitName(dev, "Living Room");
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toMatch(/did not confirm/);
+      expect(driver.getNameSyncState(dev)).toMatchObject({ status: "failed" });
+    });
+
+    it("throws for a device this driver instance does not manage", async () => {
+      await driver.connect();
+      await expect(driver.syncIndoorUnitName(dev, "Living Room")).rejects.toThrow(/not managed/);
+    });
+
+    it("rapid renames coalesce to the LATEST desired name — an in-between value is never written, and the final state is always correct", async () => {
+      // § dedupe realism — the queue's coalesce-to-latest can only supersede a QUEUED item,
+      // not one already shifted out and executing ("in flight"). Issuing all three calls in
+      // the exact same microtask tick (Promise.all with no real elapsed time between them)
+      // means the FIRST one ("Lounge") is already in flight the instant "Family Room" is
+      // enqueued, so it can't be superseded and genuinely reaches the wire too — a real,
+      // correct property of a serialized queue that can't cancel in-flight work, not a bug.
+      // The middle value ("Family Room") is still queued when "Great Room" arrives, so THAT
+      // one is guaranteed to be superseded and never sent — the actual guarantee this test
+      // proves, plus that the driver's final state always converges on the last desired name.
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+
+      const before = gateway.received.length;
+      const [, second, third] = await Promise.all([
+        driver.syncIndoorUnitName(dev, "Lounge"),
+        driver.syncIndoorUnitName(dev, "Family Room"),
+        driver.syncIndoorUnitName(dev, "Great Room"),
+      ]);
+      const propsSent = gateway.received.slice(before).filter((c) => c.startsWith("props L1.100 name"));
+
+      expect(propsSent).not.toContain("props L1.100 name Family Room"); // superseded before it ever ran
+      expect(propsSent[propsSent.length - 1]).toBe("props L1.100 name Great Room"); // the final write is always the latest desired name
+      expect(driver.getCoolMasterName(dev)).toBe("Great Room");
+      // The superseded caller is told so, honestly, rather than a fabricated success.
+      expect(second!.status).toBe("failed");
+      expect(second!.error).toMatch(/superseded/);
+      expect(third).toEqual({ status: "synced" });
+    });
+
+    it("a duplicate rename (identical desired name) still performs a real write when called directly — 'no unnecessary write' is a RECONCILIATION policy, not a guard on every explicit call", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+      await driver.syncIndoorUnitName(dev, "Living Room");
+      const before = gateway.received.filter((c) => c === "props L1.100 name Living Room").length;
+
+      await driver.syncIndoorUnitName(dev, "Living Room");
+
+      expect(gateway.received.filter((c) => c === "props L1.100 name Living Room")).toHaveLength(before + 1);
+    });
+
+    it("uidFor/getCoolMasterName return null for an unmanaged or unbound device", () => {
+      const unmanaged = "device-not-bound" as DeviceId;
+      expect(driver.uidFor(unmanaged)).toBeNull();
+      expect(driver.getCoolMasterName(unmanaged)).toBeNull();
+      expect(driver.getNameSyncState(unmanaged)).toBeNull();
+    });
+
+    it("uses the existing serialized command queue and connection — no second TCP connection is opened", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+      const connectionsBefore = gateway.received.filter((c) => c === "info").length;
+
+      await driver.syncIndoorUnitName(dev, "Living Room");
+
+      // "info" only runs once, at the original connect() — a second networking path would
+      // show up as another connection handshake (another "info"), which never happens.
+      expect(gateway.received.filter((c) => c === "info")).toHaveLength(connectionsBefore);
     });
   });
 });

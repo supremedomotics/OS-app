@@ -112,6 +112,12 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
         resourceId: deviceId,
         metadata: { name: patch.name, roomId: patch.roomId, metadataKeys: patch.metadata ? Object.keys(patch.metadata) : undefined },
       });
+      // § Indoor-Unit Name Synchronization — fire-and-forget: the local rename above has
+      // already completed and this response is about to go out regardless of how long (or
+      // whether) the CoolMaster gateway takes to confirm it (§ "Do not block the UI waiting
+      // indefinitely for the gateway"). A no-op for every device not bound to CoolMaster —
+      // see `syncCoolMasterDeviceName`'s own doc comment for why it never throws here.
+      if (patch.name !== undefined) void ctx.installer.syncCoolMasterDeviceName(deviceId, patch.name);
       reply.send({ device } satisfies DeviceResponse);
     } catch (err) {
       sendError(reply, err);

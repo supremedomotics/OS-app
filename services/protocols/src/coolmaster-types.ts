@@ -209,3 +209,28 @@ export type ResolvedCoolMasterConfig = Required<
   Omit<CoolMasterDriverConfig, "createSocket" | "fetchImpl" | "gatewaySerial" | "discoveryCandidateHosts">
 > &
   Pick<CoolMasterDriverConfig, "createSocket" | "fetchImpl" | "gatewaySerial" | "discoveryCandidateHosts">;
+
+// ── § Indoor-Unit Name Synchronization ──────────────────────────────────────────────
+
+/** Outcome of one `props <uid> name <name>` write attempt. `"synced"` only after the
+ * gateway's own reply confirms it (never merely "the socket write didn't throw"). */
+export type CoolMasterNameSyncStatus = "synced" | "failed";
+
+export interface CoolMasterNameSyncResult {
+  status: CoolMasterNameSyncStatus;
+  /** Present only when `status === "failed"` — human-readable reason (validation error,
+   * gateway rejection text, or the underlying transport error's message). */
+  error?: string;
+}
+
+/** Last-known name-sync bookkeeping for one indoor unit, kept in the driver instance's
+ * own memory — the durable copy (for UI/diagnostics across restarts) lives in the
+ * Supreme device's `metadata.coolMasterName*` fields, written by the gateway layer after
+ * each {@link CoolMasterNameSyncResult}; this in-memory copy is only what the driver
+ * itself needs to decide "does this uid still need writing" within one running session. */
+export interface CoolMasterNameSyncState {
+  desiredName: string;
+  status: CoolMasterNameSyncStatus;
+  lastSyncAt: string;
+  error: string | null;
+}

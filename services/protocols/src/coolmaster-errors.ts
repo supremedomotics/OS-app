@@ -76,6 +76,18 @@ export class CoolMasterConfigError extends CoolMasterError {
   }
 }
 
+/** § Indoor-Unit Name Synchronization — a name failed input validation (empty, too long,
+ * or contains a character that could corrupt/terminate the ASCII_IF command line) BEFORE
+ * anything was sent to the gateway. Never retryable — retrying an invalid name sends the
+ * exact same invalid name again. */
+export class CoolMasterValidationError extends CoolMasterError {
+  readonly code = "validation_error";
+  readonly retryable = false;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
 /** True for errors worth an automatic retry (per coolmaster-polling's command queue and
  * coolmaster-connection's reconnect logic); false for anything a retry can't fix. */
 export function isRetryable(err: unknown): boolean {

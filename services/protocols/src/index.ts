@@ -296,6 +296,9 @@ export type {
   CoolMasterGatewayInfo,
   CoolMasterDiscoveryResult,
   CoolMasterProtocolMode,
+  CoolMasterNameSyncResult,
+  CoolMasterNameSyncState,
+  CoolMasterNameSyncStatus,
 } from "./coolmaster-types.js";
 export {
   SipProtocolDriver,
