@@ -172,6 +172,13 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
     capability: z.literal("brightness"),
     action: z.enum(["set", "on", "off"]),
     level: Percent.optional(),
+    /** § Keypad dim-speed — ramp duration for this level change, in milliseconds. Optional
+     * and additive: omitted (as every existing caller does) means instant, exactly today's
+     * behavior. Only ever honored by a driver that genuinely supports a native fade/ramp
+     * concept (Casambi Local UDP today — see `local-command-mapper.ts`'s already-real
+     * `fadeMs` plumbing); every other driver silently ignores it rather than fabricating a
+     * software-timed ramp this codebase hasn't built. */
+    fadeMs: z.number().int().min(0).max(60_000).optional(),
   }),
   z.object({
     capability: z.literal("color"),
@@ -179,6 +186,8 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
     saturation: Percent.optional(),
     kelvin: z.number().int().min(1000).max(10000).optional(),
     level: Percent.optional(),
+    /** § Keypad dim-speed — same contract as `brightness.fadeMs` above. */
+    fadeMs: z.number().int().min(0).max(60_000).optional(),
   }),
   z.object({
     capability: z.literal("temperature"),

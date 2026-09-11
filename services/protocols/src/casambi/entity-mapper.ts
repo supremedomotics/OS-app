@@ -223,6 +223,13 @@ function firstSensor(u: CasambiUnit): { measure: string; value: number; unit: st
  * hue/sat are normalized to 0..1; ColorTemperature is in Kelvin (with Colorsource "TW"). A
  * non-dimmable unit surfaces as `onoff` and is driven via the documented `OnOff` control; a
  * dimmable luminaire surfaces as `brightness` and is driven via `Dimmer`.
+ *
+ * § Keypad dim-speed — `command.fadeMs` (brightness/color) is deliberately NOT threaded into the
+ * `controlUnit` body here. Casambi's Cloud WebSocket `controlUnit` message body has no duration/
+ * fade field documented anywhere this codebase's existing Cloud transport code references — never
+ * guessing at an unverified param. Local UDP mode's `local-command-mapper.ts` DOES honor `fadeMs`
+ * (its own 0x20 Duration field is explicitly documented, byte-level) — Cloud-mode dimming stays
+ * instant until a real, documented Cloud fade mechanism is confirmed.
  */
 export function commandToTargetControls(
   command: CapabilityCommand,

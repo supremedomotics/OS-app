@@ -124,3 +124,72 @@ describe("resolveBehaviorCommand — increment / decrement", () => {
     expect(r.command).toEqual({ capability: "position", action: "set", position: 30 });
   });
 });
+
+describe("resolveBehaviorCommand — dim speed (§ Keypad dim-speed)", () => {
+  it("increment merges target.fadeMs onto the resolved brightness command", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 15, fadeMs: 10_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 20 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "increment", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 35, fadeMs: 10_000 });
+  });
+
+  it("decrement merges target.fadeMs too", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 15, fadeMs: 5_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 50 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "decrement", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 35, fadeMs: 5_000 });
+  });
+
+  it("alternate merges target.fadeMs too", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 10, fadeMs: 2_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 50 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "alternate", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 60, fadeMs: 2_000 });
+  });
+
+  it("no fadeMs on target -> no fadeMs field on the command at all (not even undefined) — instant, unchanged from every mapping created before this field existed", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "brightness", step: 15 };
+    const ex = executors(vi.fn(async () => ({ kind: "brightness", on: true, level: 20 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "increment", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "brightness", action: "set", level: 35 });
+    expect(r.command).not.toHaveProperty("fadeMs");
+  });
+
+  it("fadeMs is meaningless (simply unused) for position — no fadeMs field ever appears on a position command", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "position", step: 20, fadeMs: 10_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "position", position: 50, moving: false }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "decrement", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "position", action: "set", position: 30 });
+  });
+});
+
+describe("resolveBehaviorCommand — color-alternate (§ Keypad color-alternate)", () => {
+  it("alternate steps kelvin up via the same percent-of-range step as brightness, merging fadeMs", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "color", step: 25, fadeMs: 3_000 };
+    const ex = executors(vi.fn(async () => ({ kind: "color", on: true, level: 100, hue: null, saturation: null, kelvin: 2700 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "alternate", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "color", kelvin: 3650, fadeMs: 3_000 }); // 0% + 25% of (6500-2700)
+  });
+
+  it("alternate flips direction on the second firing, same as brightness", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "color", step: 25 };
+    const ex = executors(vi.fn(async () => ({ kind: "color", on: true, level: 100, hue: null, saturation: null, kelvin: 6500 }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "alternate", target, behaviorState: { lastDirection: "up", cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "color", kelvin: 5550 }); // 100% - 25%
+    expect(r.nextBehaviorState).toEqual({ lastDirection: "down", cycleIndex: 0 });
+  });
+
+  it("increment/decrement step kelvin the same direction every time, no alternation", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "color", step: 10 };
+    const ex = executors(vi.fn(async () => ({ kind: "color", on: true, level: 100, hue: null, saturation: null, kelvin: 4600 }) as CapabilityState)); // 50%
+    const r = await resolveBehaviorCommand(ex, { behavior: "increment", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "color", kelvin: 4980 }); // 60%
+  });
+
+  it("a color state with no kelvin (RGB/hue-sat mode) falls back to 0% — the same honest 'nothing known yet' convention brightness/position use", async () => {
+    const target: KeypadMappingTarget = { deviceId: devId(), capability: "color", step: 20 };
+    const ex = executors(vi.fn(async () => ({ kind: "color", on: true, level: 100, hue: 180, saturation: 50, kelvin: null }) as CapabilityState));
+    const r = await resolveBehaviorCommand(ex, { behavior: "increment", target, behaviorState: { lastDirection: null, cycleIndex: 0 } });
+    expect(r.command).toEqual({ capability: "color", kelvin: 3460 }); // 0% + 20% of 3800
+  });
+});

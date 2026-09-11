@@ -75,7 +75,13 @@ export type KeypadMappingBehavior = z.infer<typeof KeypadMappingBehavior>;
  * driver/brand distinction.
  */
 export const TOGGLE_CAPABLE_CAPABILITIES: readonly CapabilityKind[] = ["onoff", "brightness", "fan", "lock", "vacuum"];
-export const LEVEL_STEP_CAPABLE_CAPABILITIES: readonly CapabilityKind[] = ["brightness", "position"];
+/** § Keypad color-alternate — `color` is level-shaped too: `step`/`alternate`/`increment`/
+ * `decrement` treat its Kelvin range (2700-6500K, the same range this app's own "Set color"
+ * action UI already uses) as a 0-100 level, exactly like `brightness`'s percent — see
+ * `behavior.ts`'s `readLevel`/`levelCommand` for the Kelvin<->percent conversion. `color` still
+ * stays OUT of `TOGGLE_CAPABLE_CAPABILITIES` above — a color has no on/off state to toggle
+ * between, only a warmer/cooler direction to step in. */
+export const LEVEL_STEP_CAPABLE_CAPABILITIES: readonly CapabilityKind[] = ["brightness", "position", "color"];
 
 /** The single device+capability a non-`"direct"` behavior resolves its command against.
  * `step` is the level delta `alternate`/`increment`/`decrement` apply to a level-shaped
@@ -84,6 +90,11 @@ export const KeypadMappingTarget = z.object({
   deviceId: DeviceId,
   capability: CapabilityKind,
   step: z.number().min(1).max(100).default(10),
+  /** § Keypad dim-speed — ramp duration (ms) for a resolved brightness/color level command,
+   * same shape/contract as `CapabilityCommand.brightness.fadeMs`. Meaningless (simply unused)
+   * for `onoff`/any non-level capability, exactly like `step` already is. Optional: omitted
+   * means instant, unchanged from every mapping created before this field existed. */
+  fadeMs: z.number().int().min(0).max(60_000).optional(),
 });
 export type KeypadMappingTarget = z.infer<typeof KeypadMappingTarget>;
 

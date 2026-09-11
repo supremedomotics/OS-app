@@ -11,6 +11,8 @@ import {
   behaviorUsesStep,
   buildCreateKeypadMappingRequest,
   buildUpdateKeypadMappingRequest,
+  alternatePreview,
+  deviceSupportsDimSpeed,
   emptyKeypadMappingForm,
   groupKeypadsByRoom,
   mappingToFormState,
@@ -133,6 +135,78 @@ describe("Universal Keypad — target selection (§6)", () => {
   });
 });
 
+describe("Universal Keypad — dim speed (§ Keypad dim-speed)", () => {
+  const casambiLight: Device = { ...light("dl1", "Dimmer", "r1"), metadata: { protocol: "casambi" } };
+  const knxLight: Device = { ...light("dl2", "Dimmer", "r1"), metadata: { protocol: "knx" } };
+
+  it("deviceSupportsDimSpeed is true for brightness or color on a Casambi-owned device (§ Keypad color-alternate)", () => {
+    expect(deviceSupportsDimSpeed(casambiLight, "brightness")).toBe(true);
+    expect(deviceSupportsDimSpeed(casambiLight, "color")).toBe(true);
+  });
+
+  it("deviceSupportsDimSpeed is false for any other protocol — the field must not be offered where no driver actually honors it", () => {
+    expect(deviceSupportsDimSpeed(knxLight, "brightness")).toBe(false);
+    expect(deviceSupportsDimSpeed(knxLight, "color")).toBe(false);
+  });
+
+  it("deviceSupportsDimSpeed is false for a capability with no fade concept at all, even on Casambi", () => {
+    expect(deviceSupportsDimSpeed(casambiLight, "onoff")).toBe(false);
+    expect(deviceSupportsDimSpeed(casambiLight, "position")).toBe(false);
+  });
+
+  it("deviceSupportsDimSpeed is false with no device selected yet", () => {
+    expect(deviceSupportsDimSpeed(null, "brightness")).toBe(false);
+  });
+
+  it("a set fadeSeconds round-trips to KeypadMappingTarget.fadeMs (seconds -> ms) through buildCreateKeypadMappingRequest", () => {
+    const form: KeypadMappingFormState = {
+      ...emptyKeypadMappingForm(KP1, "1", "short_press"),
+      name: "Dim speed test", behavior: "increment", targetDeviceId: L1, targetCapability: "brightness", fadeSeconds: 2.5,
+    };
+    const req = buildCreateKeypadMappingRequest(form);
+    expect(req.target).toEqual({ deviceId: L1, capability: "brightness", step: 10, fadeMs: 2500 });
+  });
+
+  it("no fadeSeconds set (null) means no fadeMs field at all on the built target — instant, unchanged from before this field existed", () => {
+    const form: KeypadMappingFormState = {
+      ...emptyKeypadMappingForm(KP1, "1", "short_press"),
+      name: "No dim speed", behavior: "increment", targetDeviceId: L1, targetCapability: "brightness",
+    };
+    const req = buildCreateKeypadMappingRequest(form);
+    expect(req.target).toEqual({ deviceId: L1, capability: "brightness", step: 10 });
+    expect(req.target).not.toHaveProperty("fadeMs");
+  });
+
+  it("mappingToFormState reads a stored fadeMs back as fadeSeconds (ms -> seconds)", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "Stored dim", input: { keypadId: KP1, control: "1", event: "short_press" },
+      behavior: "increment", target: { deviceId: L1, capability: "brightness", step: 10, fadeMs: 7_000 },
+    });
+    expect(mappingToFormState(stored).fadeSeconds).toBe(7);
+  });
+
+  it("mappingToFormState reads no fadeMs as fadeSeconds: null, never a fabricated 0", () => {
+    const stored = KeypadMapping.parse({
+      id: newId("keypadMapping"), homeId: HOME, name: "No dim", input: { keypadId: KP1, control: "1", event: "short_press" },
+      behavior: "increment", target: { deviceId: L1, capability: "brightness", step: 10 },
+    });
+    expect(mappingToFormState(stored).fadeSeconds).toBeNull();
+  });
+
+  it("alternatePreview describes a warm<->cool ramp for color, not fixed dim-up/dim-down text", () => {
+    expect(alternatePreview("color")).toEqual({ first: "First activation: Warmer", next: "Next activation: Cooler" });
+  });
+
+  it("a set fadeSeconds round-trips through a color target too", () => {
+    const form: KeypadMappingFormState = {
+      ...emptyKeypadMappingForm(KP1, "1", "hold_start"),
+      name: "Color ramp", behavior: "alternate", targetDeviceId: L1, targetCapability: "color", fadeSeconds: 4,
+    };
+    const req = buildCreateKeypadMappingRequest(form);
+    expect(req.target).toEqual({ deviceId: L1, capability: "color", step: 10, fadeMs: 4_000 });
+  });
+});
+
 describe("Universal Keypad — behavior/capability compatibility filtering (§ live-confirmed fix: Toggle + Color threw 'request validation failed')", () => {
   const colorLight: Device = { ...light("cl1", "Color Light", "r1"), capabilities: [{ kind: "onoff", config: {} }, { kind: "brightness", config: {} }, { kind: "color", config: {} }] };
 
@@ -141,10 +215,10 @@ describe("Universal Keypad — behavior/capability compatibility filtering (§ l
     expect(targetCapabilitiesForBehavior(colorLight, "toggle")).not.toContain("color");
   });
 
-  it("'alternate'/'increment'/'decrement' only offer level-shaped capabilities (brightness/position), excluding onoff and color", () => {
-    expect(targetCapabilitiesForBehavior(colorLight, "alternate")).toEqual(["brightness"]);
-    expect(targetCapabilitiesForBehavior(colorLight, "increment")).toEqual(["brightness"]);
-    expect(targetCapabilitiesForBehavior(colorLight, "decrement")).toEqual(["brightness"]);
+  it("'alternate'/'increment'/'decrement' only offer level-shaped capabilities (brightness/position/color — § Keypad color-alternate), excluding onoff", () => {
+    expect(targetCapabilitiesForBehavior(colorLight, "alternate")).toEqual(["brightness", "color"]);
+    expect(targetCapabilitiesForBehavior(colorLight, "increment")).toEqual(["brightness", "color"]);
+    expect(targetCapabilitiesForBehavior(colorLight, "decrement")).toEqual(["brightness", "color"]);
   });
 
   it("'direct'/'cycle' have no target.capability restriction — every commandable capability stays offered", () => {

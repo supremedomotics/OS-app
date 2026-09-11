@@ -70,4 +70,19 @@ describe("LocalCommandEngine", () => {
     // open/close/set all map onto the position slider element now; "stop" has no element at all.
     await expect(engine.send(5, { capability: "position", action: "stop" }, null)).rejects.toThrow(/unsupported command/);
   });
+
+  it("§ Keypad dim-speed — a real CapabilityCommand.fadeMs reaches the ENCODED wire packet's Duration bytes, not just an intermediate object shape", async () => {
+    const udp = fakeUdp();
+    const engine = new LocalCommandEngine(udp, 0);
+    await engine.send(5, { capability: "brightness", action: "set", level: 50, fadeMs: 10_000 }, null);
+    // 10000ms -> 1000 duration units (§ encodeFadeMs, ms/10) -> 0x03E8 -> little-endian [0xe8, 0x03].
+    expect(udp.sent).toEqual([{ netId: 0, direction: "toCasambi", opcode: 0x20, args: [128, 232, 3, CASAMBI_TARGET_TYPE.device, 5] }]);
+  });
+
+  it("§ Keypad dim-speed — omitting fadeMs stays instant (Duration 0,0), exactly like every command sent before this field existed", async () => {
+    const udp = fakeUdp();
+    const engine = new LocalCommandEngine(udp, 0);
+    await engine.send(5, { capability: "brightness", action: "set", level: 50 }, null);
+    expect(udp.sent[0]!.args.slice(1, 3)).toEqual([0, 0]);
+  });
 });
