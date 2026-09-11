@@ -102,6 +102,52 @@ describe("Phase-1 homeowner MVP", () => {
     ws.close();
   });
 
+  /**
+   * § Live diagnostic — reproduces the browser's EXACT App.tsx flow for a real device
+   * command (not a scene activation, which the test above already covers): open the
+   * stream, subscribe(["*"]) exactly like `onOpen` does, then issue a plain
+   * `POST /v1/devices/:id/command` (the same call every device detail page's control
+   * makes) and confirm the resulting state delta arrives as a `state` frame — proving
+   * the full pipeline (SIL command -> onBackendState -> bus publish -> WSS `onState`
+   * subscription -> room/permission-scoped send) works for a real command, end to end,
+   * with no scene/automation layer involved.
+   */
+  it("a direct device command (the same call every device page's control makes) drives a live WSS state frame", async () => {
+    const token = await login();
+    const deviceId = await firstLivingRoomDevice(token);
+
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${token}`);
+    await new Promise((r) => ws.once("open", r));
+    const state = new Promise<ServerFrame>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("no state delta")), 4000);
+      ws.on("message", (raw: Buffer) => {
+        const f = JSON.parse(raw.toString()) as ServerFrame;
+        if (f.type === "state" && f.deviceId === deviceId) {
+          clearTimeout(t);
+          resolve(f);
+        }
+      });
+    });
+    ws.send(JSON.stringify({ type: "subscribe", rooms: ["*"] }));
+    // Give the server a moment to process the subscribe frame before the command
+    // fires — exactly like the browser's own subscribe-then-act ordering, but this
+    // closes the one real race the browser doesn't have to think about (send() over a
+    // real socket returns before the server has necessarily processed it).
+    await new Promise((r) => setTimeout(r, 50));
+
+    const cmd = await fetch(`${baseUrl}/v1/devices/${deviceId}/command`, {
+      method: "POST",
+      headers: auth(token),
+      body: JSON.stringify({ command: { capability: "brightness", action: "set", level: 42 } }),
+    });
+    expect(cmd.status).toBeLessThan(300);
+
+    const frame = await state;
+    if (frame.type !== "state") throw new Error("unreachable");
+    expect(frame.state).toMatchObject({ kind: "brightness", level: 42 });
+    ws.close();
+  });
+
   it("adds and lists favorites", async () => {
     const token = await login();
     const deviceId = await firstLivingRoomDevice(token);
