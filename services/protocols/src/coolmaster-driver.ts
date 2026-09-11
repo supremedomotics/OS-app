@@ -124,14 +124,40 @@ export class CoolMasterProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     this.unsubscribeEvents = this.events.on((e) => this.onDriverEvent(e));
     if (!this.connection) {
-      const gateway = await this.resolveGatewayViaDiscovery();
-      this.config.host = gateway.host;
-      this.connection = new CoolMasterConnection(this.config, this.events, this.logger.child("connection"));
-      this.log.info("auto-discovery resolved gateway", { host: gateway.host, serial: gateway.serial });
+      // No host known at all — the only path is a full LAN scan (§ Gateway Auto-Discovery).
+      await this.discoverAndConnect();
+    } else {
+      // § live-confirmed fix — a KNOWN host (even under autoDiscover: true) always tries
+      // the fast, direct path first: a single connect, never a full /24 scan. Re-running
+      // the LAN scan on every connect (the previous behavior whenever `host` had been
+      // deliberately omitted from config) made even a routine reconnect take several
+      // seconds to tens of seconds — long enough to blow past a client HTTP timeout on
+      // the config-save request that triggers this same connect() synchronously.
+      await this.connection.connect();
+      // CoolMasterConnection.connect() never rejects — a failed attempt is swallowed and
+      // silently retried on its own internal backoff (correct for an ordinary drop, where
+      // re-discovering would be pointless). Under autoDiscover, a host that's unreachable
+      // on the very FIRST attempt is instead the actual DHCP-change recovery case
+      // `gatewaySerial` exists for — fall back to a fresh scan now, rather than retrying a
+      // possibly-stale IP forever with no path back to the gateway's real one.
+      if (!this.connection.isConnected() && this.config.autoDiscover) {
+        this.log.warn("configured host did not answer; falling back to gateway re-discovery", { host: this.config.host });
+        this.connection.disconnect(); // stop its background reconnect loop against the stale host before replacing it
+        await this.discoverAndConnect();
+      }
     }
-    await this.connection.connect();
     await this.runDiscovery();
     this.poller.start();
+  }
+
+  /** Resolves the gateway via a full LAN scan and connects to it — the slow path, used
+   * only when no host is known yet or a previously-known host has stopped answering. */
+  private async discoverAndConnect(): Promise<void> {
+    const gateway = await this.resolveGatewayViaDiscovery();
+    this.config.host = gateway.host;
+    this.connection = new CoolMasterConnection(this.config, this.events, this.logger.child("connection"));
+    this.log.info("auto-discovery resolved gateway", { host: gateway.host, serial: gateway.serial });
+    await this.connection.connect();
   }
 
   /** § Gateway Auto-Discovery — resolves `config.host` from a LAN scan instead of

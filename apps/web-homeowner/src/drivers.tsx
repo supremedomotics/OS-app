@@ -1124,7 +1124,16 @@ export function clampCoolMasterGatewayCount(n: number): number {
 export function coolMasterWizardConfigs(entries: CoolMasterWizardEntry[]): Record<string, unknown>[] {
   return entries.map((e) =>
     e.autoDiscover
-      ? { autoDiscover: true, ...(e.gatewaySerial.trim() ? { gatewaySerial: e.gatewaySerial.trim() } : {}) }
+      ? {
+          autoDiscover: true,
+          // § live-confirmed fix — a host the discovery panel already found is saved
+          // alongside autoDiscover so the driver's fast direct-connect path is used
+          // immediately, instead of re-running a full LAN scan on every single connect.
+          // autoDiscover stays true so a later DHCP change still self-heals via
+          // gatewaySerial (see CoolMasterProtocolDriver.connect()'s fallback).
+          ...(e.host.trim() ? { host: e.host.trim() } : {}),
+          ...(e.gatewaySerial.trim() ? { gatewaySerial: e.gatewaySerial.trim() } : {}),
+        }
       : { autoDiscover: false, host: e.host.trim() },
   );
 }

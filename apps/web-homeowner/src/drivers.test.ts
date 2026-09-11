@@ -385,6 +385,11 @@ describe("validateCoolMasterWizard / coolMasterWizardConfigs", () => {
     expect(coolMasterWizardConfigs([entry({ gatewaySerial: "" })])[0]).not.toHaveProperty("gatewaySerial");
   });
 
+  it("§ live-confirmed fix — an autoDiscover entry with a host already found by the discovery panel saves BOTH host and gatewaySerial, so the driver's fast direct-connect path is used instead of re-scanning the LAN on every connect", () => {
+    const [config] = coolMasterWizardConfigs([entry({ host: "192.168.0.25", gatewaySerial: "192.168.0.25" })]);
+    expect(config).toEqual({ autoDiscover: true, host: "192.168.0.25", gatewaySerial: "192.168.0.25" });
+  });
+
   it("builds independent configs for multiple gateways, mixing manual and auto-discover", () => {
     const configs = coolMasterWizardConfigs([entry({ autoDiscover: false, host: "192.168.1.50" }), entry({ gatewaySerial: "GW-B" })]);
     expect(configs).toEqual([{ autoDiscover: false, host: "192.168.1.50" }, { autoDiscover: true, gatewaySerial: "GW-B" }]);
