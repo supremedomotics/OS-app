@@ -136,11 +136,30 @@ describes what it does as SDDP.
 
 Instead, gateway discovery uses **verified ASCII_IF identification**: it opens the same real
 ASCII_IF TCP connection and prompt handshake (`CoolMasterAsciiTransport.connect()`) every
-normal connection already uses, on each candidate LAN host, then reads `info` for the
-gateway's serial/firmware. A host that isn't a CoolMaster gateway either refuses the
-connection or never produces the real `>` prompt within a bounded timeout, and is rejected —
-never guessed at. A response that DOES complete the handshake but reports no serial-shaped
-field at all (§ Discovery Safety) is also rejected as inconclusive, not treated as a match.
+normal connection already uses, on each candidate LAN host, then reads `info` to confirm the
+gateway actually responds to a real ASCII_IF command. A host that isn't a CoolMaster gateway
+either refuses the connection, never produces the real `>` prompt within a bounded timeout, or
+produces literally no response text to `info` — all three are rejected, never guessed at.
+
+**Live-confirmed fix**: an earlier revision additionally required `info`'s response to contain
+a recognizable serial-number field, on the (documentation-only, never hardware-verified)
+assumption that a real gateway always reports one there. A real CoolMasterNet's actual `info`
+output reports DIP-switch settings and per-line DC voltage/status instead — **no serial number
+anywhere**:
+```
+DIP P: | X |ON | X | X |
+DIP Q: |ON | X |ON | X | (Q2 or Q4 is OFF)
+DIP R: | X | X | X | X | (R1 or R3 is OFF) (R2 or R4 is OFF)
+DIP S: | X |OFF|OFF| X |
+L1 DC- OFF 16V
+L2 DC- OFF  0V
+OK
+```
+That check silently rejected every real gateway from discovery. Confirmed against real
+hardware and reverted — see `coolmaster-gateway-discovery.test.ts`'s live-confirmed-fix test,
+which uses this exact captured output as its fixture. `info`'s content should NOT be assumed
+to carry gateway identity; see **Gateway identity** below for what actually does.
+
 Candidate hosts are the full `.1`-`.254` range of every non-internal IPv4 /24 subnet the hub
 is directly attached to, probed with bounded concurrency (default 32 at a time) and a
 per-host timeout (default 800ms) so one non-responsive host can never stall the whole scan.
@@ -156,10 +175,18 @@ anything downstream of it (the driver, the installer route, or the UI panel).
 Discovery never sends anything beyond the connection handshake and a single read-only `info`
 command — it cannot issue a control command or otherwise change gateway state.
 
-**Gateway identity** is `coolmaster:<serial>` — the serial number, never the IP, which is
-only ever current configuration/state and can change on a DHCP lease renewal. Set
-`gatewaySerial` in config to re-find the SAME physical gateway automatically after its IP
-changes, or to pick a specific one when a scan finds more than one.
+**Gateway identity** is `coolmaster:<serial>` in principle — the serial number, never the IP,
+which is only ever current configuration/state and can change on a DHCP lease renewal. In
+practice, since `info` (the only bootstrap command run before a host is even known to be a
+real gateway) doesn't report one, `serial` today falls back to the probed IP address itself
+(`parseGatewayInfo`'s existing, honest "nothing recognizable, use what we have" behavior) —
+so gateway identity is **effectively IP-based until a real serial-bearing command is found and
+wired in** (`set`, per `CoolMaster_Core_Reference_Part3_v1.0.txt` §1, is the one other
+documented command that names "Serial number" among its fields — not yet queried during
+discovery, and its own response format is equally unverified against real hardware). Set
+`gatewaySerial` in config to pin a specific gateway by whatever value discovery actually
+returned for it (today, its IP) — reconnecting after a DHCP change requires re-discovering
+with the new IP until real serial support is added.
 
 ## Friendly Names (`props`)
 
@@ -325,6 +352,14 @@ than silently omit it:
    test fixtures; only the SET form's syntax is documented. The parser degrades safely for
    an unrecognized layout (absent name, never a fabricated one) but genuinely requires
    validation against a real CoolMasterNet gateway before this format can be trusted.
+10. **Gateway identity is effectively IP-based today, not serial-based (live-confirmed).**
+    `info` — the only command run before a candidate host is even confirmed to be a real
+    gateway — does not report a serial number on real hardware (see **Gateway
+    Auto-Discovery** above); discovery's `serial` field falls back to the probed IP. `set`
+    is the one other documented command naming "Serial number" among its fields
+    (`CoolMaster_Core_Reference_Part3_v1.0.txt` §1) but its response format is equally
+    unverified — querying it during discovery to recover a real serial is a real
+    improvement opportunity, not yet implemented, pending a real captured `set` response.
 
 ## Testing
 

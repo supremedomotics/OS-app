@@ -115,17 +115,25 @@ async function probeHost(
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("coolmaster: gateway probe timed out")), opts.timeoutMs)),
     ]);
     const lines = await transport.execute(cmdInfo());
+    // § Discovery Safety — live-confirmed fix: a REAL CoolMasterNet's `info` response does
+    // NOT report a serial number at all — it reports DIP-switch settings and per-line DC
+    // voltage/status, e.g.:
+    //   DIP P: | X |ON | X | X |
+    //   ...
+    //   L1 DC- OFF 16V
+    //   OK
+    // (live-captured from a real gateway; no "Serial:"/"SN:"/"ID:" field anywhere). An
+    // earlier revision of this module rejected exactly this shape as "inconclusive",
+    // silently excluding every real gateway from discovery — confirmed and reverted. The
+    // real, hardware-verified identification signal is simply: the ASCII_IF prompt
+    // handshake completed AND `info` produced a non-empty response — nothing more specific
+    // about `info`'s content is safely assertable today (a stricter check, e.g. requiring a
+    // trailing "OK" exit code, would risk the exact same false-negative this fix corrects
+    // if some other real gateway/firmware formats it differently — unconfirmed, so not
+    // assumed). `parseGatewayInfo`'s host-as-serial fallback is therefore the CORRECT
+    // behavior here too, not a lenient special case for post-connect callers only.
+    if (lines.length === 0) return null;
     const info = parseGatewayInfo(lines, host);
-    // § Discovery Safety — a genuine CoolMaster `info` response is documented to report a
-    // real serial (Core Reference Part3 §1). `parseGatewayInfo`'s own host-as-serial
-    // fallback exists for an ALREADY-CONNECTED, already-proven-real gateway that merely
-    // uses different `info` field labels (see that function's own doc comment) — it is
-    // deliberately too lenient to reuse here, where the open question is still "is this a
-    // CoolMaster gateway at all." A response carrying NO serial-shaped field is treated as
-    // inconclusive (rejected), not a positive match — raises the bar beyond "something
-    // answered on this port with a prompt-shaped byte stream," without requiring an exact
-    // wire format this driver hasn't verified.
-    if (info.serial === host) return null;
     return { gatewayId: `coolmaster:${info.serial}`, serial: info.serial, host, asciiPort: opts.asciiPort, firmwareVersion: info.firmwareVersion, application: info.application };
   } catch {
     return null;
