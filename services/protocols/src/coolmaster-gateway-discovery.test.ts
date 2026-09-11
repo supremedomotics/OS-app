@@ -130,16 +130,50 @@ describe("discoverCoolMasterGateways", () => {
     expect(Date.now() - start).toBeLessThan(3000);
   });
 
-  it("§ Discovery Safety — an info response whose 'Serial:' line has no value at all is rejected as inconclusive, not accepted with a fallback serial", async () => {
-    // "Serial: " (trailing space, nothing after it) doesn't even match parseKeyValueLines'
-    // key/value pattern (which requires a non-empty value) — so this response carries NO
-    // serial-shaped field at all, exactly the case the discovery-time (info.serial===host)
-    // check exists to catch. Never crashes, never silently drops the OTHER real gateways in
-    // the same scan — just correctly excludes this one candidate from the result.
-    const gw = await startFakeCoolMaster(""); // "Serial: " with nothing after it
+  it("§ live-confirmed fix — a REAL gateway's info response, which reports NO serial field at all, is still correctly discovered (falls back to host as identity)", async () => {
+    // Live-captured from a real CoolMasterNet unit: `info` reports DIP-switch settings and
+    // per-line DC voltage/status, never a serial number:
+    //   DIP P: | X |ON | X | X |
+    //   DIP Q: |ON | X |ON | X | (Q2 or Q4 is OFF)
+    //   DIP R: | X | X | X | X | (R1 or R3 is OFF) (R2 or R4 is OFF)
+    //   DIP S: | X |OFF|OFF| X |
+    //   L1 DC- OFF 16V
+    //   L2 DC- OFF  0V
+    //   OK
+    // An earlier revision of this module rejected exactly this shape as "inconclusive",
+    // silently excluding every real gateway from discovery. Confirmed and fixed.
+    const realInfoLines = [
+      "DIP P: | X |ON | X | X |",
+      "DIP Q: |ON | X |ON | X | (Q2 or Q4 is OFF)",
+      "DIP R: | X | X | X | X | (R1 or R3 is OFF) (R2 or R4 is OFF)",
+      "DIP S: | X |OFF|OFF| X |",
+      "L1 DC- OFF 16V",
+      "L2 DC- OFF  0V",
+      "OK",
+    ];
+    const gw = await new Promise<{ server: Server; port: number }>((resolve) => {
+      const server = createServer((sock: Socket) => {
+        sock.setEncoding("utf8");
+        sock.write("CoolMasterNet v1.0\r\n>");
+        let buf = "";
+        sock.on("data", (chunk: string) => {
+          buf += chunk;
+          const parts = buf.split("\r");
+          buf = parts.pop() ?? "";
+          for (const cmd of parts.map((c) => c.trim()).filter(Boolean)) {
+            if (cmd === "info") sock.write(`${realInfoLines.join("\r\n")}\r\n>`);
+          }
+        });
+      });
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address();
+        resolve({ server, port: typeof addr === "object" && addr ? addr.port : 0 });
+      });
+    });
     openServers.push(gw.server);
     const results = await discoverCoolMasterGateways({ candidateHosts: ["127.0.0.1"], asciiPort: gw.port, timeoutMs: 1000 });
-    expect(results).toEqual([]);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ host: "127.0.0.1", serial: "127.0.0.1" }); // host-as-identity fallback, honest since no real serial was reported
   });
 
   it("still identifies a gateway whose info response has a real, if unusually formatted, serial value — never a crash, never a dropped candidate", async () => {
@@ -151,12 +185,8 @@ describe("discoverCoolMasterGateways", () => {
     expect(results[0]!.serial).toBe("SN/with-punctuation_01");
   });
 
-  it("§ Discovery Safety — rejects a response with NO serial-shaped field at all as inconclusive, never a false-positive gateway match", async () => {
-    // A listener that completes the ASCII_IF greeting handshake (so it isn't rejected by
-    // the prompt check alone) but replies to "info" with something that carries no
-    // Serial/SN/ID field whatsoever — exactly the "some other prompt-driven text protocol
-    // happened to be listening on this port" case discovery must not misidentify.
-    const malformed = await new Promise<{ server: Server; port: number }>((resolve) => {
+  it("rejects a handshake-only false positive: the prompt completes but 'info' produces literally no response text", async () => {
+    const silent = await new Promise<{ server: Server; port: number }>((resolve) => {
       const server = createServer((sock: Socket) => {
         sock.setEncoding("utf8");
         sock.write("Welcome\r\n>");
@@ -166,7 +196,7 @@ describe("discoverCoolMasterGateways", () => {
           const parts = buf.split("\r");
           buf = parts.pop() ?? "";
           for (const cmd of parts.map((c) => c.trim()).filter(Boolean)) {
-            if (cmd === "info") sock.write("Nothing recognizable here\r\n>");
+            if (cmd === "info") sock.write(">"); // prompt cycles immediately, zero response lines
           }
         });
       });
@@ -175,8 +205,8 @@ describe("discoverCoolMasterGateways", () => {
         resolve({ server, port: typeof addr === "object" && addr ? addr.port : 0 });
       });
     });
-    openServers.push(malformed.server);
-    const results = await discoverCoolMasterGateways({ candidateHosts: ["127.0.0.1"], asciiPort: malformed.port, timeoutMs: 1000 });
+    openServers.push(silent.server);
+    const results = await discoverCoolMasterGateways({ candidateHosts: ["127.0.0.1"], asciiPort: silent.port, timeoutMs: 1000 });
     expect(results).toEqual([]);
   });
 
