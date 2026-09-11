@@ -7,6 +7,23 @@
 
 ## Critical
 
+### Aureon MVP implementation — not started, design only
+- **Description:** `docs/architecture/aureon/AUREON-ARCHITECTURE.md` and
+  `aureon-use-cases.md` (this session) define the full Aureon design (Home Graph, Context
+  Engine, Intent/Planning/Policy/Action/Verification/Transaction engines, Memory,
+  Conversation) as an extension of the existing `services/ai`/`services/ai-py` assistant.
+  No implementation code exists yet — this is intentional per the task brief (design review
+  required before code).
+- **Next step:** implement §9's MVP implementation plan, starting with
+  `packages/domain-model/src/aureon/*` schemas, then persistence migrations/repositories,
+  then the Home Graph/Context Engine, then extending `services/ai` with the Planning/Policy/
+  Action/Verification/Transaction engines, then the gateway route and minimal chat UI.
+- **Open questions before starting V2 work:** verify `services/analytics` actually persists
+  an energy time-series before promising trend-based anomaly detection; confirm whether any
+  driver reports battery level today before building predictive-maintenance use cases that
+  assume it.
+
+
 ### ~~`SupremeNativeAdapter` simulates unbound devices — and `migrateDomainToNative` creates them~~ — RESOLVED by ADR-0023
 - **Description:** found by the HA Dependency Audit addendum
   (`docs/architecture/Home-Assistant-Dependency-Audit.md`, item **A-1**).

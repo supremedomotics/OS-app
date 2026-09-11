@@ -4,6 +4,51 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Aureon architecture design review (no code yet)
+
+**Branch:** `claude/aureon-architecture-design-t30fqz`. Task was explicitly design-first: produce
+an engineering-grade architecture/specification for Aureon (SupremeOS's planned AI intelligence
+layer) before writing any implementation code. No runtime code was changed this session — only
+two new documentation files.
+
+Before designing anything, ran three parallel repo-inspection passes (device/driver/gateway
+identity; automation/scenes/permissions/rooms/persistence; UI/diagnostics) to verify actual
+architecture rather than assume it. Key correction to the task's own framing: **an AI/LLM
+assistant already exists** — `services/ai` (Node, deterministic NL planner + optional delegation)
++ `services/ai-py` (Python/FastAPI, on-box `llama-cpp-python` model with strict output
+validation), exposed at `POST /v1/ai/assistant` (`services/gateway/src/routes/phase3.ts`),
+documented in `docs/architecture/adr/0006-native-migration-and-local-llm.md`. Aureon is designed
+as the next major version of this existing pair, not a parallel system — per CLAUDE.md's
+"extend, don't fork" rule.
+
+Deliverables (both under `docs/architecture/aureon/`):
+- `AUREON-ARCHITECTURE.md` — full design review: current-architecture map (device model,
+  capability vocabulary — a closed 10-member enum, driver architecture, multi-network device
+  identity scoping, discovery/binding, event bus, automation/scene engine, rooms, permissions
+  (RBAC+ABAC), persistence, APIs — plus confirmed gaps: no cross-provider state-arbitration
+  engine, no hub-wide command queue, no Android TV driver, no chat UI, no unified activity
+  timeline); the new Aureon component architecture (Home Graph, Context Engine, Intent/Planning/
+  Policy/Action/Verification/Transaction engines, Memory, Conversation) layered strictly as
+  *consumers* of existing SIL/permission/automation services, never a second source of truth;
+  full data model (intent/context/plan/transaction/memory/conversation schemas, deliberately
+  reusing the existing `CapabilityCommand`/`AutomationCondition` types rather than inventing
+  parallel ones); execution flow (Sense→Understand→Reason→Verify→Explain→Learn); security/
+  privacy sections; MVP/V1/V2/V3 roadmap; implementation plan; files-to-create list; test
+  strategy; risks/open questions.
+- `aureon-use-cases.md` — 150+ concrete use cases across the requested 40 categories, each
+  capability-checked against the real 10-capability vocabulary and explicitly flagging any that
+  need a **[future capability]** not currently in the codebase (e.g. vision/voice, calendar/
+  geofence-based ETA, carbon-intensity data, pool-device modeling).
+
+**Known gaps flagged for future verification, not yet resolved:** whether `services/analytics`
+holds a real persisted energy time-series (needed before V2 anomaly/predictive-maintenance work
+promises trend-based reasoning); confirmation of what, if anything, reports device battery level
+today.
+
+**Next steps:** get sign-off on the MVP slice in §8 of the architecture doc, then start with
+§9's implementation plan step 1 (new `packages/domain-model/src/aureon/*` schemas) — schemas
+before any runtime code, per that plan.
+
 ## Session: Home Assistant fully removed
 
 SupremeOS no longer depends on Home Assistant in any form — not optional, fully removed.
