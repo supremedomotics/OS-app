@@ -3,6 +3,7 @@ import type { DeviceId } from "@supreme/domain-model";
 import type { BackendStateEvent } from "@supreme/integration-layer";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CoolMasterProtocolDriver } from "./coolmaster-driver.js";
+import { PROPS_NAME_MAX_LENGTH } from "./coolmaster-commands.js";
 
 async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
@@ -411,11 +412,22 @@ describe("CoolMasterProtocolDriver", () => {
       expect(gateway.received).toContain("props L1.100 name Master Bedroom");
     });
 
+    it("§ live-confirmed fix — a real 22-character name is NOT rejected by an invented length limit (regression: an earlier revision's assumed 20-character cap silently blocked this exact name)", async () => {
+      await driver.connect();
+      await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
+
+      const realWorldName = "Sample room for L1.101"; // 22 characters — live-confirmed to break with the old cap
+      const result = await driver.syncIndoorUnitName(dev, realWorldName);
+
+      expect(result).toEqual({ status: "synced" });
+      expect(gateway.received).toContain(`props L1.100 name ${realWorldName}`);
+    });
+
     it("a too-long name is rejected by validation and never reaches the wire", async () => {
       await driver.connect();
       await driver.bind({ deviceId: dev, capability: "onoff", address: "L1.100" });
 
-      const tooLong = "A".repeat(64);
+      const tooLong = "A".repeat(PROPS_NAME_MAX_LENGTH + 1);
       const result = await driver.syncIndoorUnitName(dev, tooLong);
 
       expect(result.status).toBe("failed");

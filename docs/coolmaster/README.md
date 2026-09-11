@@ -279,9 +279,14 @@ command. It throws `CoolMasterValidationError` for:
   of the string be interpreted as a second command — the actual injection this prevents)
 - a name containing `|` (reserved by this same gateway's own `props` LIST table format —
   see **Friendly Names** above; a name containing one would corrupt that table)
-- a name longer than `PROPS_NAME_MAX_LENGTH` (currently 20) — **this limit is ASSUMED, not
-  documented anywhere or confirmed against real hardware**; it's the one constant to revise
-  if a real gateway accepts a different length.
+- a name longer than `PROPS_NAME_MAX_LENGTH` (currently 100) — **live-confirmed fix**: an
+  earlier revision set this to 20 as a "conservative guess" at CoolMaster's own field size;
+  real usage immediately hit a genuine, ordinary 22-character name ("Sample room for
+  L1.101") silently blocked by that invented number before the write ever reached the
+  gateway. This is now a pure sanity bound (guards against a pathological input), not a
+  claim about hardware capacity — no documented or confirmed real maximum exists, so the
+  gateway's own reply (`isPropsSetAck`) is the actual arbiter of whether a name is accepted;
+  a real rejection surfaces as an honest sync failure instead of a silent client-side block.
 
 ### Response validation (`coolmaster-parser.ts`'s `isPropsSetAck`)
 
@@ -381,8 +386,9 @@ exact same code path.
 
 ### Limitations
 
-- `PROPS_NAME_MAX_LENGTH` (20) is an assumed, unconfirmed maximum — see the encoder section
-  above.
+- `PROPS_NAME_MAX_LENGTH` (100) is a defensive sanity bound, not a real hardware limit —
+  see the encoder section above for the live-confirmed fix that raised it from an invented
+  20-character guess that was silently blocking real names.
 - The write path (`props <uid> name <name>`) is live-confirmed; a per-unit READ
   (`props <uid>`) is confirmed NOT to work on the same hardware (`Bad Format`) — see
   **Friendly Names** above. Reconciliation therefore always relies on the bulk `props` LIST
