@@ -20,6 +20,7 @@ export * from "./media-topology.js";
 export * from "./condition-eval.js";
 export * from "./intents.js";
 export * from "./keypad-capabilities.js";
+export * from "./aureon.js";
 export * from "./keypad-events.js";
 export * from "./keypad-feedback.js";
 export * from "./keypad-mapping.js";

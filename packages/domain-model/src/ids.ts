@@ -36,6 +36,8 @@ export const BackupId = idPattern("bak").brand<"BackupId">();
 export const KeypadMappingId = idPattern("kpm").brand<"KeypadMappingId">();
 /** A Universal Keypad Framework feedback subscription (§ Universal Keypad Framework). */
 export const KeypadSubscriptionId = idPattern("kps").brand<"KeypadSubscriptionId">();
+/** An Aureon multi-action transaction (§ Aureon Architecture — Transaction/Undo Model). */
+export const AureonTransactionId = idPattern("atx").brand<"AureonTransactionId">();
 
 export type HomeId = z.infer<typeof HomeId>;
 export type RoomId = z.infer<typeof RoomId>;
@@ -51,6 +53,7 @@ export type LicenseId = z.infer<typeof LicenseId>;
 export type BackupId = z.infer<typeof BackupId>;
 export type KeypadMappingId = z.infer<typeof KeypadMappingId>;
 export type KeypadSubscriptionId = z.infer<typeof KeypadSubscriptionId>;
+export type AureonTransactionId = z.infer<typeof AureonTransactionId>;
 
 const PREFIXES = {
   home: "home",
@@ -70,6 +73,7 @@ const PREFIXES = {
   sie: "sie",
   keypadMapping: "kpm",
   keypadSubscription: "kps",
+  aureonTransaction: "atx",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;
