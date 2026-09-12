@@ -7,21 +7,25 @@
 
 ## Critical
 
-### Aureon MVP implementation — not started, design only
-- **Description:** `docs/architecture/aureon/AUREON-ARCHITECTURE.md` and
-  `aureon-use-cases.md` (this session) define the full Aureon design (Home Graph, Context
-  Engine, Intent/Planning/Policy/Action/Verification/Transaction engines, Memory,
-  Conversation) as an extension of the existing `services/ai`/`services/ai-py` assistant.
-  No implementation code exists yet — this is intentional per the task brief (design review
-  required before code).
-- **Next step:** implement §9's MVP implementation plan, starting with
-  `packages/domain-model/src/aureon/*` schemas, then persistence migrations/repositories,
-  then the Home Graph/Context Engine, then extending `services/ai` with the Planning/Policy/
-  Action/Verification/Transaction engines, then the gateway route and minimal chat UI.
-- **Open questions before starting V2 work:** verify `services/analytics` actually persists
-  an energy time-series before promising trend-based anomaly detection; confirm whether any
-  driver reports battery level today before building predictive-maintenance use cases that
-  assume it.
+### Aureon Phase 1 foundation — IMPLEMENTED (Home Graph, Risk, Action/Verification, Undo)
+- **Description:** `docs/architecture/aureon/AUREON-ARCHITECTURE.md` §0.1 lists exactly what
+  shipped: `packages/domain-model/src/aureon.ts` schemas; `services/gateway/src/aureon/*`
+  (Home Graph, static risk-tier table, Action Engine with real post-command verification via
+  SIL, undo-by-replaying-real-prior-state, plain-language explanation); `AureonService`
+  orchestrator reusing the existing `AssistantService` (NL planner) and `PolicyEngine`
+  (RBAC+ABAC, `ResourceType: "intent"`) unmodified; 3 new gateway routes
+  (`/v1/aureon/converse`, `/v1/aureon/transactions/:id`, `/v1/aureon/transactions/:id/undo`).
+  16 new tests, 502 existing gateway tests still passing (`/v1/ai/assistant` unaffected).
+- **Next step (Phase 2):** persist `AureonTransaction` to Postgres (currently in-memory only
+  — undo doesn't survive a gateway restart) via a new `aureon-transaction-repo.ts` +
+  migration mirroring `notification-repo.ts`'s pattern. Then richer per-capability
+  verification (color/temperature/media/fan/vacuum currently report `unverified` rather than
+  a checked match). Then Context Engine v1 and conversational reference resolution
+  ("it"/"that").
+- **Open questions before starting V2 work (unchanged from the design review):** verify
+  `services/analytics` actually persists an energy time-series before promising
+  trend-based anomaly detection; confirm whether any driver reports battery level today
+  before building predictive-maintenance use cases that assume it.
 
 
 ### ~~`SupremeNativeAdapter` simulates unbound devices — and `migrateDomainToNative` creates them~~ — RESOLVED by ADR-0023

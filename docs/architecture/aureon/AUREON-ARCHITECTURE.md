@@ -42,6 +42,64 @@ Aureon grows from, keeping the file layout mostly stable and adding new modules 
 
 ---
 
+## 0.1 Implementation status (updated as Phase 1 progresses)
+
+**IMPLEMENTED** (branch `claude/aureon-architecture-design-t30fqz`, additive — `/v1/ai/assistant`
+unchanged and regression-tested):
+- `packages/domain-model/src/aureon.ts` — `AureonRiskLevel`, `AureonVerificationStatus`,
+  `AureonTransactionEntry`, `AureonTransaction` schemas; `AureonTransactionId`.
+- `services/gateway/src/aureon/home-graph.ts` — `AureonHomeGraph`: room/device resolution and
+  capability search over the live `HomeService`, plus `assistantContext()` (extracted from, and
+  now shared with, the existing `/v1/ai/assistant` route — zero behavior change there).
+- `services/gateway/src/aureon/risk.ts` — static risk-tier table (§3.7): `lock`→3, `position`→2,
+  everything else →1; `sensor` excluded (read-only at the SIL boundary already).
+- `services/gateway/src/aureon/action-engine.ts` — `AureonActionEngine`: dispatches through the
+  **existing** `SupremeIntegrationLayer.command()`, always re-reads via `getState()` after a
+  verification delay, classifies `verified_success | verified_failure | unverified | timeout |
+  not_supported | denied` per-entry (only `onoff`/`brightness`/`lock`/`position` have a defined
+  equality check in this phase — `color`/`temperature`/`media`/`fan`/`vacuum` are honestly
+  `unverified` rather than guessed), records every transaction to the **existing** hash-chained
+  `AuditService`, and implements `undo()` by replaying each entry's real captured `priorState`
+  (never a guessed inverse) — only for the same 4 capabilities; other capabilities' undo is
+  reported `not_supported`, not silently skipped.
+- `services/gateway/src/aureon/aureon-service.ts` — `AureonService`: calls the **existing,
+  unmodified** `AssistantService.assist()` for NL→draft, risk-classifies the result, authorizes
+  via the **existing** `PolicyEngine`/RBAC+ABAC (`ResourceType: "intent"`, already present in the
+  domain model for exactly this purpose), gates LEVEL 2/3 actions behind explicit confirmation,
+  and delegates to the Action Engine. `scene`/`automation` drafts from the assistant are
+  surfaced as a `draft` result, not auto-created (brief Step 19).
+- `services/gateway/src/aureon/explain.ts` — turns real per-entry verification counts into a
+  plain-language, never-oversold summary (the brief's "47 verified OFF, 2 unavailable" example).
+- `services/gateway/src/routes/aureon.ts` + `packages/supreme-contracts/src/aureon.ts` —
+  `POST /v1/aureon/converse`, `GET /v1/aureon/transactions/:id`, `POST
+  /v1/aureon/transactions/:id/undo`. Registered in `server.ts` alongside, not replacing, the
+  Phase-3 routes.
+- Wired into `services/gateway/src/context.ts` (`ctx.aureon`), constructed last in `init()` so
+  the (Postgres-only) `AuditService` is already resolved.
+- Tests: `services/gateway/src/aureon/risk.test.ts` (5), `action-engine.test.ts` (7, including
+  the partial-failure and never-guess-undo cases), `aureon.e2e.test.ts` (4, real HTTP + Pglite —
+  low-risk auto-execute, high-risk propose-then-confirm, transaction lookup, undo, and an
+  explicit `/v1/ai/assistant` regression check). Full existing gateway suite (502 tests total
+  after these additions) passes; `@supreme/ai`'s own planner tests (7) untouched and passing.
+
+**PLANNED, not yet built** (tracked in `TODO.md`):
+- Durable transaction persistence (currently `InMemoryAureonTransactionStore` — undo only
+  survives within a gateway process's lifetime; the audit log entry is durable, the transaction
+  detail needed for undo is not yet).
+- Home Graph `function_zone` semantic layer (§3.3) — only structural room/device/capability
+  queries exist so far, no cross-protocol "living-room ambient lighting" grouping yet.
+- Context Engine (§3.2), Memory (§3.4), Learning Engine, Conversation/reference resolution
+  (pronoun "it"/"that"), proactive/anomaly detection — none implemented this phase per the
+  brief's own Step 19/MVP scope.
+- Verification for `color`/`temperature`/`media`/`fan`/`vacuum` beyond "dispatched, unverified."
+- Confirmation-skipping "trust" preference for repeated LEVEL 1/2 actions.
+
+**OPEN QUESTIONS** carried over from the design review (§12), unchanged by this phase:
+`services/analytics` energy time-series depth; whether any driver reports battery level;
+Home Graph inference-confidence UX for `derivedFrom: "aureon-inference"` edges.
+
+---
+
 ## 1. CURRENT SUPREMEOS ARCHITECTURE (verified)
 
 ### 1.1 Device model

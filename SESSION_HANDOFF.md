@@ -4,6 +4,39 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Aureon Phase 1 foundation — first real implementation
+
+**Branch:** `claude/aureon-architecture-design-t30fqz`. Follow-up to the design-review session
+below. Implemented the MVP slice of Aureon (Home Graph, risk classification, Action/Verification
+Engine, Conversation/Policy orchestrator, undo, explanation) as an extension of the **existing**
+`@supreme/ai` assistant — `/v1/ai/assistant` is untouched and regression-tested (its `context`
+-building logic was extracted into `AureonHomeGraph.assistantContext()` and both routes now call
+that same function — pure extraction, zero behavior change).
+
+Re-inspected the actual repository before writing anything (per the brief's Step 1): confirmed
+`ResourceType` already had an `"intent"` value with a comment anticipating "a future AI
+assistant" — used it directly rather than inventing a new resource type or a second permission
+system. Confirmed the real `CapabilityCommand`/`CapabilityState` field shapes (there is no
+generic `action` field on `color`/`temperature` commands) before writing the risk table and
+verification matcher, and confirmed a `lock`-capable "Front Door" device exists in the demo seed
+before writing the e2e high-risk test.
+
+New: `packages/domain-model/src/aureon.ts` (schemas), `services/gateway/src/aureon/*` (home
+graph, risk table, action+verification engine, orchestrator, explain, in-memory transaction
+store), `services/gateway/src/routes/aureon.ts` (3 new endpoints), `packages/supreme-contracts/
+src/aureon.ts`. Wired into `context.ts`/`server.ts`. 16 new tests, all passing; full existing
+gateway suite (502 tests) still green; `@supreme/ai` planner tests (7) untouched and green.
+
+Deliberately NOT built this phase (see `docs/architecture/aureon/AUREON-ARCHITECTURE.md` §0.1
+for the full IMPLEMENTED/PLANNED/OPEN breakdown): durable transaction persistence (undo is
+in-memory-only, process-lifetime; the audit trail itself IS durable), Context Engine, Memory,
+Learning Engine, conversational reference resolution, proactive/anomaly detection, and
+verification for capabilities beyond onoff/brightness/lock/position (color/temperature/media/
+fan/vacuum honestly report `unverified` rather than a guessed match).
+
+**Next steps:** Phase 2 — durable transaction repo/migration (mirrors `notification-repo.ts`),
+richer per-capability verification, then Context Engine v1 (§ architecture doc §8 V1 scope).
+
 ## Session: Aureon architecture design review (no code yet)
 
 **Branch:** `claude/aureon-architecture-design-t30fqz`. Task was explicitly design-first: produce
