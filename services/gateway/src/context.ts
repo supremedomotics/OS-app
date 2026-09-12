@@ -61,6 +61,10 @@ import {
 import { AnalyticsService } from "@supreme/analytics";
 import { AuditService } from "@supreme/audit";
 import { AssistantService } from "@supreme/ai";
+import { AureonHomeGraph } from "./aureon/home-graph.js";
+import { AureonActionEngine } from "./aureon/action-engine.js";
+import { InMemoryAureonTransactionStore } from "./aureon/transaction-store.js";
+import { AureonService } from "./aureon/aureon-service.js";
 import { SecurityService, type ISecurityStore } from "@supreme/security";
 import { StreamGateway, NullStreamGateway, type ICameraStreamGateway } from "@supreme/cameras";
 import { CameraService } from "./camera-service.js";
@@ -291,6 +295,10 @@ export class AppContext {
   private readonly lastPersistedState = new Map<DeviceId, FeedbackHopSnapshot>();
   private readonly lastWebSocketBroadcast = new Map<DeviceId, FeedbackHopSnapshot>();
   readonly ai: AssistantService;
+  /** Aureon (§ docs/architecture/aureon/AUREON-ARCHITECTURE.md), MVP slice — a
+   * consumer of `ai`/`sil`/`policy`/`audit`, never a parallel path into hardware.
+   * Assigned at the end of {@link init} once `audit` (Postgres-only) is settled. */
+  aureon!: AureonService;
   readonly security: SecurityService;
   /** Camera registry + RTSP→HLS/WebRTC stream resolution (§11.1). */
   cameras!: CameraService;
@@ -849,6 +857,20 @@ export class AppContext {
     if (initialEnabled) {
       await this.enableMatterBridge({ persist: false }); // already the persisted/default value
     }
+
+    // Aureon (§ docs/architecture/aureon/AUREON-ARCHITECTURE.md), MVP slice. Built last
+    // in init() specifically so `this.audit` (Postgres-only, set above) is already
+    // resolved — Aureon's action engine records to the SAME hash-chained audit log
+    // every other domain service uses, never a separate trail.
+    this.aureon = new AureonService(
+      this.ai,
+      new AureonHomeGraph(this.home),
+      this.policy,
+      (userId) => this.grantsFor(userId),
+      new AureonActionEngine(this.sil, this.audit),
+      new InMemoryAureonTransactionStore(),
+      this.homeId,
+    );
 
     this.ready = true;
   }

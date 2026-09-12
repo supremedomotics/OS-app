@@ -24,6 +24,7 @@ import { registerSystemUpdateRoutes } from "./routes/system-update.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
 import { registerMatterRoutes, registerMatterBridgeRoutes } from "./routes/matter.js";
 import { registerIntelligenceRoutes } from "./routes/intelligence.js";
+import { registerAureonRoutes } from "./routes/aureon.js";
 import { attachObservability } from "./observability.js";
 import { attachStream } from "./stream.js";
 
@@ -154,6 +155,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerMatterRoutes(app, ctx);
   registerMatterBridgeRoutes(app, ctx);
   registerIntelligenceRoutes(app, ctx);
+  registerAureonRoutes(app, ctx);
   attachStream(app, ctx);
 
   return app;

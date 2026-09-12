@@ -24,6 +24,7 @@ import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+import { AureonHomeGraph } from "../aureon/home-graph.js";
 
 /**
  * Phase-3 routes (§16): automations (visual Builder DSL), energy analytics, the
@@ -675,16 +676,11 @@ export function registerPhase3Routes(app: FastifyInstance, ctx: AppContext): voi
       await enforce(ctx, user, "home", null, "view");
       const { utterance } = AiAssistRequest.parse(req.body);
 
-      // Build the assistant's home context from the Supreme domain (no HA).
-      const rooms = (await ctx.home.listRooms()).map((r) => ({ id: r.id, name: r.name }));
-      const devices = (await ctx.home.listDevices()).map((d) => ({
-        id: d.id,
-        name: d.name,
-        roomId: d.roomId,
-        supremeType: d.supremeType,
-        capabilities: d.capabilities.map((c) => c.kind),
-      }));
-      const result = await ctx.ai.assist({ utterance, context: { rooms, devices } });
+      // Build the assistant's home context from the Supreme domain (no HA). Shared
+      // with the newer /v1/aureon/converse route (§ AureonHomeGraph.assistantContext) —
+      // pure extraction, this endpoint's own behavior is unchanged.
+      const context = await new AureonHomeGraph(ctx.home).assistantContext();
+      const result = await ctx.ai.assist({ utterance, context });
       reply.send({ result });
     } catch (err) {
       sendError(reply, err);
