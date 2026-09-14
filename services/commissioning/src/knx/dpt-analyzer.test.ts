@@ -19,7 +19,21 @@ describe("DPT analyzer", () => {
     expect(classifyDpt("14.019").category).toBe("float14_current");
     expect(classifyDpt("18.001").category).toBe("scene_control");
     expect(classifyDpt("20.102").category).toBe("hvac_mode");
-    expect(classifyDpt("20.105").category).toBe("hvac_fan_speed");
+    // § Phase 3.3C-2 fix — DPT 20.105 (DPT_HVACContrMode, "HVAC Controlling Mode" per the
+    // canonical KNX Association document) was PREVIOUSLY (wrongly) classified
+    // "hvac_fan_speed" — it has nothing to do with fan speed. Corrected to its own
+    // category, distinct from DPT 20.102's "hvac_mode".
+    expect(classifyDpt("20.105").category).toBe("hvac_contr_mode");
+    // § Phase 3.3C-3 — DPT 1.100 (DPT_Heat/Cool) must classify by its documented
+    // heat/cool semantic, never the major-1 "binary_generic" fallback (which would let a
+    // real HVAC heat/cool GA be silently treated as a plain switch).
+    expect(classifyDpt("1.100").category).toBe("hvac_heat_cool");
+    // § Phase 3.3C-4 — DPT 22.101 (DPT_StatusRHCC) must classify by its documented
+    // status/diagnostic semantic, never a generic binary/enum fallback.
+    expect(classifyDpt("22.101").category).toBe("hvac_status");
+    // § Phase 3.3C-5B — DPT 222.100 must classify by its documented named-setpoints
+    // semantic, never a generic float/temperature fallback.
+    expect(classifyDpt("222.100").category).toBe("hvac_setpoints");
     expect(classifyDpt("232.600").category).toBe("color_rgb");
     expect(classifyDpt("251.600").category).toBe("color_rgbw");
   });
@@ -42,5 +56,9 @@ describe("DPT analyzer", () => {
     expect(isReadonlyCategory("counter_energy")).toBe(true);
     expect(isReadonlyCategory("binary_switch")).toBe(false);
     expect(isReadonlyCategory("percentage")).toBe(false);
+    // § Phase 3.3C-4 — DPT 22.101 is status/feedback only, never writable.
+    expect(isReadonlyCategory("hvac_status")).toBe(true);
+    // § Phase 3.3C-5B — DPT 222.100 is status/feedback only, never writable this phase.
+    expect(isReadonlyCategory("hvac_setpoints")).toBe(true);
   });
 });

@@ -65,6 +65,16 @@ export function generateEntities(device: EntitySource): CommissionableDevice {
     const dpt = toDptConfigValue(b.dpt);
     if (dpt) config.dpt = dpt;
     if (b.statusAddress) config.statusAddress = b.statusAddress;
+    // § Phase 3.3B — KNX HVAC Multi-GA Entity/Binding Architecture. Threaded straight
+    // through as the runtime driver's `config.hvacRoles` — a plain `{semanticRole:
+    // {address, dpt}}` map, read by `KnxProtocolDriver.bind()` to subscribe/track each
+    // auxiliary GA independently, keyed by semantic role rather than DPT number (see
+    // that field's own doc comment on `RecognizedBinding` for the full rationale).
+    if (b.hvacRoles && b.hvacRoles.length > 0) {
+      config.hvacRoles = Object.fromEntries(
+        b.hvacRoles.map((r) => [r.semanticRole, { address: r.address, ...(r.dpt ? { dpt: toDptConfigValue(r.dpt) } : {}) }]),
+      );
+    }
     if (b.capability === "sensor") {
       const labeled = SENSOR_MEASURE_UNIT[b.role];
       if (labeled) {

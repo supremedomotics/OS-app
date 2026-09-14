@@ -96,6 +96,20 @@ function classifyRole(dptCategory: DptCategory, roleText: string, mainGroup: str
   if (dptCategory === "color_temperature_kelvin") return "color_temperature";
   if (dptCategory === "hvac_mode") return "hvac_mode";
   if (dptCategory === "hvac_fan_speed") return "hvac_fan_speed";
+  // § Phase 3.3C-2 — DPT-identification only, deliberately no keyword/proximity fallback
+  // (unlike "hvac_mode"/"hvac_fan_speed" below, which do have text fallbacks) — DPT
+  // 20.105's real DPT classification is unambiguous, so inferring it from a GA's name
+  // would only add a second, weaker signal for something the DPT already answers exactly.
+  if (dptCategory === "hvac_contr_mode") return "hvac_contr_mode";
+  // § Phase 3.3C-3 — DPT-identification only, same discipline as "hvac_contr_mode" above:
+  // DPT 1.100 unambiguously means Heat/Cool per the canonical document, so it is never
+  // inferred from a keyword and never falls through to a generic binary_switch/role.
+  if (dptCategory === "hvac_heat_cool") return "hvac_heat_cool";
+  // § Phase 3.3C-4 — same discipline: DPT 22.101 is unambiguous from its DPT alone, never
+  // inferred from a keyword, never falling through to a generic binary/enum role.
+  if (dptCategory === "hvac_status") return "hvac_status";
+  // § Phase 3.3C-5B — same discipline: DPT 222.100 is unambiguous from its DPT alone.
+  if (dptCategory === "hvac_setpoints") return "hvac_setpoints";
   if (dptCategory === "scene_control") return "scene";
 
   if (/\block\b|\bunlock\b/.test(t)) return /status|feedback|state/.test(t) ? "lock_status" : "lock";
@@ -424,7 +438,17 @@ function classifyDeviceType(roles: Set<string>, mainGroups: Set<string>, middleG
   if (roles.has("brightness") || roles.has("brightness_status")) return "light_dimmable";
 
   // HVAC
-  if (roles.has("temperature_setpoint") || roles.has("temperature_ambient") || roles.has("hvac_mode") || roles.has("hvac_fan_speed") || roles.has("hvac_swing")) {
+  if (
+    roles.has("temperature_setpoint") ||
+    roles.has("temperature_ambient") ||
+    roles.has("hvac_mode") ||
+    roles.has("hvac_contr_mode") ||
+    roles.has("hvac_heat_cool") ||
+    roles.has("hvac_status") ||
+    roles.has("hvac_setpoints") ||
+    roles.has("hvac_fan_speed") ||
+    roles.has("hvac_swing")
+  ) {
     if (/vrf/.test(context)) return "hvac_vrf";
     if (/cassette/.test(context)) return "hvac_cassette_ac";
     if (/duct/.test(context)) return "hvac_duct_ac";
@@ -648,7 +672,7 @@ function isStatusRole(role: string): boolean {
   return role.endsWith("_status") || role === "temperature_ambient";
 }
 
-function toBinding(sig: GaSignal, statusAddress: string | null = null): RecognizedBinding {
+function toBinding(sig: GaSignal, statusAddress: string | null = null, hvacRoles: RecognizedBinding["hvacRoles"] = undefined): RecognizedBinding {
   const capability = BINDABLE_CAPABILITY_BY_ROLE[sig.role]!;
   return {
     capability: capability as RecognizedBinding["capability"],
@@ -656,19 +680,64 @@ function toBinding(sig: GaSignal, statusAddress: string | null = null): Recogniz
     statusAddress: statusAddress && statusAddress !== sig.ga.address ? statusAddress : null,
     role: sig.role,
     dpt: sig.ga.dpt,
+    ...(hvacRoles && hvacRoles.length > 0 ? { hvacRoles } : {}),
   };
 }
+
+/** (§ Phase 3.3B — KNX HVAC Multi-GA Entity/Binding Architecture) Roles recognized as
+ * belonging to the SAME HVAC entity as a `temperature`-capability winner, rather than an
+ * independent measurement or an unrelated unbound object — mapped to the semantic-role
+ * key `RecognizedBinding.hvacRoles` carries forward (matching the universal
+ * `TemperatureState` field names added in Phase 3.3A). Deliberately NARROW: only roles
+ * the existing classifier (`classifyRole()`, above) already assigns are listed here.
+ * Currently covers operatingMode (20.102), controllingModeExtended (20.105), heatCool
+ * (1.100), status (22.101), and setpoints (222.100) — see each entry's own doc comment
+ * below for its originating phase. Named-shift/priority-demand roles (212.101/213.100/
+ * 205.x/209.101-family) still have NO producer (§ strict scope — those DPTs remain
+ * excluded, see the Phase 3.3C-5A/5C audits) and are intentionally absent from this map;
+ * adding a new classifier role for one of them later only ever requires adding one entry
+ * here, never touching the collapse logic itself. "hvac_fan_speed" is deliberately
+ * EXCLUDED — fan speed is out of scope for this universal HVAC model (Phase 2C/3.1
+ * decisions) and must not gain a semantic-role back door here. */
+const HVAC_AUX_SEMANTIC_ROLE: Record<string, string> = {
+  hvac_mode: "operatingMode",
+  // § Phase 3.3C-2 — DPT 20.105. Deliberately its OWN semantic key
+  // ("controllingModeExtended"), never merged with "operatingMode" — see
+  // `packages/domain-model/src/capabilities.ts`'s `TemperatureState.controllingModeExtended`
+  // doc comment for why these two KNX DPTs represent genuinely different HVAC concepts.
+  hvac_contr_mode: "controllingModeExtended",
+  // § Phase 3.3C-3 — DPT 1.100. Its own semantic key ("heatCool"), matching the
+  // already-frozen `TemperatureState.heatCool` universal field.
+  hvac_heat_cool: "heatCool",
+  // § Phase 3.3C-4 — DPT 22.101. Its own semantic key ("status"), matching the
+  // already-frozen `TemperatureState.status` universal field.
+  hvac_status: "status",
+  // § Phase 3.3C-5B — DPT 222.100. Its own semantic key ("setpoints"), matching the
+  // already-frozen `TemperatureState.setpoints` universal field. ONE GA carries all
+  // three (Comfort/Standby/Economy) fields — this is still exactly one hvacRoles entry,
+  // never three, since the underlying KNX Group Object is itself a single compound value.
+  hvac_setpoints: "setpoints",
+};
 
 /** One binding per capability: when two+ signals collide on the same capability,
  * {@link ROLE_PRIORITY} deterministically picks the write/primary winner; a status-role
  * signal among the rest becomes that binding's `statusAddress` rather than being
- * discarded. Any further collisions beyond one write + one status are reported excluded. */
+ * discarded. Any further collisions beyond one write + one status are reported excluded
+ * — EXCEPT for a `temperature`-capability winner, which additionally absorbs any signal
+ * whose role is a recognized {@link HVAC_AUX_SEMANTIC_ROLE} as an `hvacRoles` entry
+ * (§ Phase 3.3B) rather than reporting it as an unused/orphan object. Every other
+ * capability's collapse behavior is byte-for-byte unchanged. */
 function collapseToOneBindingPerCapability(sigs: GaSignal[]): { bindings: RecognizedBinding[]; excluded: GaSignal[] } {
   const bindings: RecognizedBinding[] = [];
   const excluded: GaSignal[] = [];
   const byCapability = new Map<string, GaSignal[]>();
+  const hvacAuxSigs: GaSignal[] = [];
 
   for (const sig of sigs) {
+    if (HVAC_AUX_SEMANTIC_ROLE[sig.role]) {
+      hvacAuxSigs.push(sig);
+      continue;
+    }
     const capability = BINDABLE_CAPABILITY_BY_ROLE[sig.role];
     if (!capability) {
       excluded.push(sig);
@@ -679,13 +748,24 @@ function collapseToOneBindingPerCapability(sigs: GaSignal[]): { bindings: Recogn
     else byCapability.set(capability, [sig]);
   }
 
-  for (const list of byCapability.values()) {
+  let hvacAuxAttached = false;
+  for (const [capability, list] of byCapability) {
     const sorted = [...list].sort((a, b) => (ROLE_PRIORITY[a.role] ?? 0) - (ROLE_PRIORITY[b.role] ?? 0));
     const winner = sorted[0]!;
     const statusCandidate = sorted.find((s) => s !== winner && isStatusRole(s.role)) ?? null;
-    bindings.push(toBinding(winner, statusCandidate?.ga.address ?? null));
+    const hvacRoles =
+      capability === "temperature" && hvacAuxSigs.length > 0
+        ? hvacAuxSigs.map((s) => ({ semanticRole: HVAC_AUX_SEMANTIC_ROLE[s.role]!, address: s.ga.address, dpt: s.ga.dpt }))
+        : undefined;
+    if (hvacRoles) hvacAuxAttached = true;
+    bindings.push(toBinding(winner, statusCandidate?.ga.address ?? null, hvacRoles));
     for (const s of sorted) if (s !== winner && s !== statusCandidate) excluded.push(s);
   }
+  // Auxiliary HVAC-role signals that found no temperature winner in this cluster (e.g. a
+  // bare HVAC-mode object with no setpoint/ambient GA nearby) are genuinely unbound —
+  // reported the same honest way any other orphaned object already is, never silently
+  // dropped.
+  if (!hvacAuxAttached) excluded.push(...hvacAuxSigs);
   return { bindings, excluded };
 }
 

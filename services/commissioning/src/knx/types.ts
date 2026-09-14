@@ -221,6 +221,17 @@ export interface RecognizedBinding {
    * "position_status" | "temperature_setpoint" — informational, not a capability of its own. */
   role: string;
   dpt: string | null;
+  /** (§ Phase 3.3B — KNX HVAC Multi-GA Entity/Binding Architecture) Additional group
+   * addresses belonging to the SAME semantic entity as this binding's primary
+   * `address`/`statusAddress`, tagged with a semantic role independent of DPT number
+   * (e.g. "operatingMode" for a KNX_HVACMode/20.102-classified GA). Populated only for
+   * the `temperature` capability today (see `collapseToOneBindingPerCapability`'s HVAC
+   * exception) — every other capability's bindings are unaffected, and a binding with no
+   * auxiliary roles simply omits this field (`undefined`), identical to before this
+   * change. This carries ONLY identity/addressing — it does NOT imply this driver
+   * decodes or interprets the DPT semantics of any of these addresses (that remains
+   * explicitly out of scope; see docs/architecture — Phase 3.3B). */
+  hvacRoles?: { semanticRole: string; address: string; dpt: string | null }[];
 }
 
 export interface RecognizedDevice {

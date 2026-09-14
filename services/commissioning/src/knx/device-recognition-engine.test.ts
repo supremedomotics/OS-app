@@ -107,17 +107,28 @@ describe("device recognition engine", () => {
     expect(new Set(devices[0]?.bindings.map((b) => b.capability))).toEqual(new Set(["onoff", "sensor"]));
   });
 
-  it("classifies a thermostat and binds its setpoint, warning about the unbound mode/fan addresses", () => {
+  it("classifies a thermostat and binds its setpoint, with the DPT20.102 and DPT20.105 objects absorbed as hvacRoles (§ Phase 3.3C-1/3.3C-2 — previously reported as unbound waste; both are now correctly recognized, not thrown away)", () => {
     const model = parseGaExport(`<x>
       <GroupAddress Name="Living Room Thermostat - Setpoint" Address="5/1/1" DPTs="9.001" />
       <GroupAddress Name="Living Room Thermostat - Mode" Address="5/1/2" DPTs="20.102" />
-      <GroupAddress Name="Living Room Thermostat - Fan" Address="5/1/3" DPTs="20.105" />
+      <GroupAddress Name="Living Room Thermostat - Actual Mode" Address="5/1/3" DPTs="20.105" />
     </x>`);
     const { devices, warnings } = recognizeDevices(model);
     expect(devices).toHaveLength(1);
     expect(devices[0]?.deviceType).toBe("thermostat");
-    expect(devices[0]?.bindings).toEqual([expect.objectContaining({ capability: "temperature", role: "temperature_setpoint" })]);
-    expect(warnings.some((w) => w.code === "unused_object" && w.message.includes("Thermostat"))).toBe(true);
+    expect(devices[0]?.bindings).toEqual([
+      expect.objectContaining({
+        capability: "temperature",
+        role: "temperature_setpoint",
+        hvacRoles: expect.arrayContaining([
+          { semanticRole: "operatingMode", address: "5/1/2", dpt: "20.102" },
+          { semanticRole: "controllingModeExtended", address: "5/1/3", dpt: "20.105" },
+        ]),
+      }),
+    ]);
+    // Neither DPT produces an unused/orphan warning anymore — both are real, recognized
+    // HVAC roles now, not discarded objects.
+    expect(warnings.some((w) => w.code === "unused_object" && w.message.includes("Thermostat"))).toBe(false);
   });
 
   it("prefers a writable address over a status/feedback address, keeping the feedback as statusAddress", () => {
@@ -244,5 +255,323 @@ describe("device recognition engine", () => {
     const { devices } = recognizeDevices(model, ["Living Room", "Dining Room"]);
     expect(devices).toHaveLength(2);
     expect(new Set(devices.map((d) => d.room))).toEqual(new Set([null])); // room assignment is a later stage
+  });
+});
+
+describe("§ Phase 3.3B — KNX HVAC Multi-GA Entity/Binding Architecture", () => {
+  it("one HVAC cluster (setpoint + ambient + mode GAs) becomes ONE entity with the mode GA attached as an hvacRoles entry, not discarded", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Living Room AC - Setpoint" Address="3/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Living Room AC - Current Temperature" Address="3/1/2" DPTs="DPST-9-1" />
+      <GroupAddress Name="Living Room AC - Mode" Address="3/1/3" DPTs="DPST-20-102" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Living Room"]);
+    const ac = devices.find((d) => d.name.includes("AC"));
+    expect(ac).toBeTruthy();
+    expect(devices).toHaveLength(1); // not split into a separate "unbound" device
+
+    const tempBinding = ac!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding).toBeTruthy();
+    expect(tempBinding.address).toBe("3/1/1"); // setpoint remains the primary write address
+    expect(tempBinding.statusAddress).toBe("3/1/2"); // ambient remains the status/feedback address — unchanged behavior
+
+    // The mode GA is preserved with its OWN semantic role, never silently dropped and
+    // never collapsed into the primary address/statusAddress pair.
+    expect(tempBinding.hvacRoles).toEqual([{ semanticRole: "operatingMode", address: "3/1/3", dpt: "20.102" }]);
+  });
+
+  it("existing single-GA temperature entities (no mode GA present) are completely unaffected — hvacRoles is absent, not an empty array with side effects", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Bathroom Floor Setpoint" Address="4/1/1" DPTs="DPST-9-1" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Bathroom"]);
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toBeUndefined();
+  });
+
+  it("an HVAC mode GA with NO nearby setpoint/ambient GA is reported unbound, same honest treatment as any other orphaned object — never silently dropped, never fabricated into its own device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Server Room Mode" Address="5/1/1" DPTs="DPST-20-102" />
+    </x>`);
+    const { devices, warnings } = recognizeDevices(model, ["Server Room"]);
+    expect(devices).toHaveLength(0);
+    expect(warnings.some((w) => w.context?.addresses?.includes("5/1/1"))).toBe(true);
+  });
+
+  it("hvac_fan_speed is NOT absorbed as an hvacRoles entry — fan speed stays out of scope for the universal HVAC model", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="6/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Fan Speed" Address="6/1/2" DPTs="DPST-5-1" />
+    </x>`);
+    const { devices, warnings } = recognizeDevices(model, ["Office"]);
+    const ac = devices.find((d) => d.name.includes("AC"))!;
+    const tempBinding = ac.bindings.find((b) => b.capability === "temperature")!;
+    // Either absent, or (if the fan-speed GA collided on a different capability entirely)
+    // certainly never present as an hvacRoles entry.
+    expect(tempBinding.hvacRoles?.some((r) => r.semanticRole !== "operatingMode")).toBeFalsy();
+    void warnings;
+  });
+
+  it("§ Phase 3.3C-2 A/B — DPT 20.105 is recognized as hvacRoles.controllingModeExtended and joins the SAME HVAC entity as the setpoint/ambient/operatingMode GAs", () => {
+    // § Naming note: "Actual Mode" (not "Controlling Mode") — both words are in this
+    // engine's FUNCTION_WORDS strip-list, so the cluster still collapses to base name
+    // "Office AC" alongside the other three GAs; an unrecognized word here (e.g. a raw
+    // "Contr") would split this GA into its own device BEFORE role/DPT classification
+    // ever runs — a naming-fixture concern, not a signal this architecture is DPT-driven
+    // (confirmed: `classifyRole` resolves "hvac_contr_mode" from the DPT alone, §4).
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="8/2/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Current Temperature" Address="8/2/2" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Mode" Address="8/2/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Office AC - Actual Mode" Address="8/2/4" DPTs="DPST-20-105" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    expect(devices).toHaveLength(1); // one entity, not split
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.address).toBe("8/2/1");
+    expect(tempBinding.statusAddress).toBe("8/2/2");
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "operatingMode", address: "8/2/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "8/2/4", dpt: "20.105" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(2); // both coexist, neither collapses the other
+  });
+
+  it("§ Phase 3.3C-2 — a standalone DPT 20.105 GA with no primary temperature GA nearby is reported unbound, never fabricated into its own HVAC device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Server Room Controlling Mode" Address="9/1/1" DPTs="DPST-20-105" />
+    </x>`);
+    const { devices, warnings } = recognizeDevices(model, ["Server Room"]);
+    expect(devices).toHaveLength(0);
+    expect(warnings.some((w) => w.context?.addresses?.includes("9/1/1"))).toBe(true);
+  });
+
+  it("§ Phase 3.3C-2 fix regression — DPT 20.105 is no longer classified 'hvac_fan_speed'; a real fan-speed-labeled percentage GA is unaffected by this fix", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="10/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Fan Speed" Address="10/1/2" DPTs="DPST-5-1" />
+      <GroupAddress Name="Office AC - Actual Mode" Address="10/1/3" DPTs="DPST-20-105" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    const tempBinding = devices.find((d) => d.name.includes("AC"))!.bindings.find((b) => b.capability === "temperature")!;
+    // The real DPT5.001 "Fan Speed" GA never becomes an hvacRoles entry (unrelated DPT);
+    // the DPT20.105 GA correctly does.
+    expect(tempBinding.hvacRoles).toEqual([{ semanticRole: "controllingModeExtended", address: "10/1/3", dpt: "20.105" }]);
+  });
+
+  it("two independent HVAC clusters in the same import keep fully independent hvacRoles bindings — no cross-talk", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Bedroom A AC - Setpoint" Address="7/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Bedroom A AC - Mode" Address="7/1/2" DPTs="DPST-20-102" />
+      <GroupAddress Name="Bedroom B AC - Setpoint" Address="7/2/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Bedroom B AC - Mode" Address="7/2/2" DPTs="DPST-20-102" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Bedroom A", "Bedroom B"]);
+    const a = devices.find((d) => d.name.includes("Bedroom A"))!.bindings.find((b) => b.capability === "temperature")!;
+    const b = devices.find((d) => d.name.includes("Bedroom B"))!.bindings.find((b) => b.capability === "temperature")!;
+    expect(a.hvacRoles).toEqual([{ semanticRole: "operatingMode", address: "7/1/2", dpt: "20.102" }]);
+    expect(b.hvacRoles).toEqual([{ semanticRole: "operatingMode", address: "7/2/2", dpt: "20.102" }]);
+  });
+
+  it("§ Phase 3.3C-3 A — DPT 1.100 is recognized as hvacRoles.heatCool and joins the SAME HVAC entity as the setpoint/ambient/operatingMode/controllingModeExtended GAs", () => {
+    // § Naming note: "Status" is a FUNCTION_WORDS strip word (unlike "Heat/Cool" itself),
+    // so this GA still clusters into base name "Office AC" alongside the other three —
+    // recognition is DPT-driven (§4), this is purely a test-fixture clustering concern,
+    // same as the 3.3C-2 "Actual Mode" naming note above.
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="11/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Current Temperature" Address="11/1/2" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Mode" Address="11/1/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Office AC - Actual Mode" Address="11/1/4" DPTs="DPST-20-105" />
+      <GroupAddress Name="Office AC - Status" Address="11/1/5" DPTs="DPST-1-100" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    expect(devices).toHaveLength(1); // one entity, not split
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.address).toBe("11/1/1");
+    expect(tempBinding.statusAddress).toBe("11/1/2");
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "operatingMode", address: "11/1/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "11/1/4", dpt: "20.105" },
+        { semanticRole: "heatCool", address: "11/1/5", dpt: "1.100" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(3); // all three coexist, none collapses another
+  });
+
+  it("§ Phase 3.3C-3 — a standalone DPT 1.100 GA with no primary temperature GA nearby is reported unbound, never fabricated into its own HVAC device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Server Room Status" Address="12/1/1" DPTs="DPST-1-100" />
+    </x>`);
+    const { devices, warnings } = recognizeDevices(model, ["Server Room"]);
+    expect(devices).toHaveLength(0);
+    expect(warnings.some((w) => w.context?.addresses?.includes("12/1/1"))).toBe(true);
+  });
+
+  it("§ Phase 3.3C-3 — DPT 1.100 is never classified as a generic binary switch, even though its encoding is one bit", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="13/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Status" Address="13/1/2" DPTs="DPST-1-100" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    const tempBinding = devices.find((d) => d.name.includes("AC"))!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toEqual([{ semanticRole: "heatCool", address: "13/1/2", dpt: "1.100" }]);
+    // And it must not ALSO show up as a separate onoff device (would prove it was
+    // misclassified as a plain switch rather than absorbed as an hvacRoles entry).
+    expect(devices.some((d) => d.bindings.some((b) => b.capability === "onoff"))).toBe(false);
+  });
+
+  it("three independent HVAC semantic roles (operatingMode/controllingModeExtended/heatCool) fully coexist without cross-clobbering, in either telegram/declaration order", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Loft AC - Setpoint" Address="14/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Loft AC - Status" Address="14/1/2" DPTs="DPST-1-100" />
+      <GroupAddress Name="Loft AC - Mode" Address="14/1/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Loft AC - Actual Mode" Address="14/1/4" DPTs="DPST-20-105" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Loft"]);
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "heatCool", address: "14/1/2", dpt: "1.100" },
+        { semanticRole: "operatingMode", address: "14/1/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "14/1/4", dpt: "20.105" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(3);
+  });
+
+  it("§ Phase 3.3C-4 A/B — DPT 22.101 is recognized as hvacRoles.status and joins the SAME HVAC entity as the setpoint/ambient/operatingMode/controllingModeExtended/heatCool GAs", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="15/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Current Temperature" Address="15/1/2" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Mode" Address="15/1/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Office AC - Actual Mode" Address="15/1/4" DPTs="DPST-20-105" />
+      <GroupAddress Name="Office AC - Status" Address="15/1/5" DPTs="DPST-22-101" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    expect(devices).toHaveLength(1); // one entity, not split
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.address).toBe("15/1/1");
+    expect(tempBinding.statusAddress).toBe("15/1/2");
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "operatingMode", address: "15/1/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "15/1/4", dpt: "20.105" },
+        { semanticRole: "status", address: "15/1/5", dpt: "22.101" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(3);
+  });
+
+  it("§ Phase 3.3C-4 — a standalone DPT 22.101 GA with no primary temperature GA nearby is reported unbound, never fabricated into its own HVAC device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Server Room Status" Address="16/1/1" DPTs="DPST-22-101" />
+    </x>`);
+    const { devices, warnings } = recognizeDevices(model, ["Server Room"]);
+    expect(devices).toHaveLength(0);
+    expect(warnings.some((w) => w.context?.addresses?.includes("16/1/1"))).toBe(true);
+  });
+
+  it("§ Phase 3.3C-4 — DPT 22.101 is never classified as a generic status boolean/onoff device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="17/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Status" Address="17/1/2" DPTs="DPST-22-101" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    const tempBinding = devices.find((d) => d.name.includes("AC"))!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toEqual([{ semanticRole: "status", address: "17/1/2", dpt: "22.101" }]);
+    expect(devices.some((d) => d.bindings.some((b) => b.capability === "onoff"))).toBe(false);
+  });
+
+  it("four independent HVAC semantic roles (operatingMode/controllingModeExtended/heatCool/status) fully coexist without cross-clobbering", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Loft AC - Setpoint" Address="18/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Loft AC - Status" Address="18/1/2" DPTs="DPST-1-100" />
+      <GroupAddress Name="Loft AC - Mode" Address="18/1/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Loft AC - Actual Mode" Address="18/1/4" DPTs="DPST-20-105" />
+      <GroupAddress Name="Loft AC - State" Address="18/1/5" DPTs="DPST-22-101" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Loft"]);
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "heatCool", address: "18/1/2", dpt: "1.100" },
+        { semanticRole: "operatingMode", address: "18/1/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "18/1/4", dpt: "20.105" },
+        { semanticRole: "status", address: "18/1/5", dpt: "22.101" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(4);
+  });
+
+  it("§ Phase 3.3C-5B A/C — DPT 222.100 is recognized as ONE hvacRoles.setpoints entry (not three), joining the SAME HVAC entity as the other roles", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="19/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Current Temperature" Address="19/1/2" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - Mode" Address="19/1/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Office AC - Actual Mode" Address="19/1/4" DPTs="DPST-20-105" />
+      <GroupAddress Name="Office AC - Status" Address="19/1/5" DPTs="DPST-22-101" />
+      <GroupAddress Name="Office AC - State" Address="19/1/6" DPTs="DPST-222-100" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    expect(devices).toHaveLength(1); // one entity, not split
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.address).toBe("19/1/1");
+    expect(tempBinding.statusAddress).toBe("19/1/2");
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "operatingMode", address: "19/1/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "19/1/4", dpt: "20.105" },
+        { semanticRole: "status", address: "19/1/5", dpt: "22.101" },
+        { semanticRole: "setpoints", address: "19/1/6", dpt: "222.100" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(4); // one entry per GA, not three for setpoints
+  });
+
+  it("§ Phase 3.3C-5B — a standalone DPT 222.100 GA with no primary temperature GA nearby is reported unbound, never fabricated into its own HVAC device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Server Room State" Address="20/1/1" DPTs="DPST-222-100" />
+    </x>`);
+    const { devices, warnings } = recognizeDevices(model, ["Server Room"]);
+    expect(devices).toHaveLength(0);
+    expect(warnings.some((w) => w.context?.addresses?.includes("20/1/1"))).toBe(true);
+  });
+
+  it("§ Phase 3.3C-5B — DPT 222.100 is never classified as a generic float/temperature device", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Office AC - Setpoint" Address="21/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Office AC - State" Address="21/1/2" DPTs="DPST-222-100" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Office"]);
+    const tempBinding = devices.find((d) => d.name.includes("AC"))!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toEqual([{ semanticRole: "setpoints", address: "21/1/2", dpt: "222.100" }]);
+    expect(devices).toHaveLength(1); // never split into a second "float" device
+  });
+
+  it("five independent HVAC semantic roles (operatingMode/controllingModeExtended/heatCool/status/setpoints) fully coexist without cross-clobbering", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Loft AC - Setpoint" Address="22/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Loft AC - Status" Address="22/1/2" DPTs="DPST-1-100" />
+      <GroupAddress Name="Loft AC - Mode" Address="22/1/3" DPTs="DPST-20-102" />
+      <GroupAddress Name="Loft AC - Actual Mode" Address="22/1/4" DPTs="DPST-20-105" />
+      <GroupAddress Name="Loft AC - State" Address="22/1/5" DPTs="DPST-22-101" />
+      <GroupAddress Name="Loft AC - Value" Address="22/1/6" DPTs="DPST-222-100" />
+    </x>`);
+    const { devices } = recognizeDevices(model, ["Loft"]);
+    const tempBinding = devices[0]!.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.hvacRoles).toEqual(
+      expect.arrayContaining([
+        { semanticRole: "heatCool", address: "22/1/2", dpt: "1.100" },
+        { semanticRole: "operatingMode", address: "22/1/3", dpt: "20.102" },
+        { semanticRole: "controllingModeExtended", address: "22/1/4", dpt: "20.105" },
+        { semanticRole: "status", address: "22/1/5", dpt: "22.101" },
+        { semanticRole: "setpoints", address: "22/1/6", dpt: "222.100" },
+      ]),
+    );
+    expect(tempBinding.hvacRoles).toHaveLength(5);
   });
 });

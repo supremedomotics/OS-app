@@ -78,13 +78,121 @@ export const ColorState = z.object({
   kelvin: z.number().int().min(1000).max(10000).nullable(),
 });
 
+/**
+ * (§ HVAC Domain-Model Correction) Structured, protocol-neutral HVAC status/fault
+ * information — the universal counterpart to KNX `DPT_StatusRHCC` (22.101)'s 15 named
+ * status bits (KNX Association "KNX Standard Interworking Datapoint Types" v02.02.01
+ * §4.5.2), generalized so any HVAC driver (KNX, CoolMaster, a future protocol) can
+ * populate whichever fields it has real, authoritative feedback for. Every field is
+ * optional — a driver with no status feedback at all simply omits the whole object
+ * (`TemperatureState.status` stays `null`/absent), never a fabricated `false`.
+ * Field names follow DPT_StatusRHCC's own bit names (translated to camelCase) since that
+ * is the richest real-world source of HVAC status semantics reviewed for this model —
+ * not because this type is KNX-specific (a CoolMaster-style `faultCode`/`filterWarning`
+ * flag set could map onto `fault`/`heatingDisabled` etc. equally well if a future driver
+ * chooses to).
+ */
+export const HvacStatus = z.object({
+  /** DPT_StatusRHCC bit 0 (mandatory in KNX) — the controller itself reports a failure. */
+  fault: z.boolean().optional(),
+  /** Bit 13 — room temperature dropped below a critical threshold. */
+  frostAlarm: z.boolean().optional(),
+  /** Bit 14 — room temperature exceeded a critical threshold. */
+  overheatAlarm: z.boolean().optional(),
+  /** Bit 12 — dew-point condition alarm. */
+  dewPointAlarm: z.boolean().optional(),
+  /** Bit 7 — heating disabled (e.g. summer mode / calendar). */
+  heatingDisabled: z.boolean().optional(),
+  /** Bit 11 — cooling disabled (e.g. calendar / outside-temperature threshold). */
+  coolingDisabled: z.boolean().optional(),
+  /** Bit 2 — flow-temperature limitation active (e.g. floor-heating protection). */
+  flowTempLimitActive: z.boolean().optional(),
+  /** Bit 3 — return-temperature limitation active (e.g. boiler protection). */
+  returnTempLimitActive: z.boolean().optional(),
+  /** Bit 1 — heating controller temporarily in energy-saving mode, no real heat demand. */
+  ecoHeatingActive: z.boolean().optional(),
+  /** Bit 9 — cooling controller temporarily in energy-saving mode, no real cool demand. */
+  ecoCoolingActive: z.boolean().optional(),
+});
+export type HvacStatus = z.infer<typeof HvacStatus>;
+
 export const TemperatureState = z.object({
   ambientC: z.number(),
   targetC: z.number().nullable(),
   /** Optional dual setpoints for heat/cool ranges. */
   targetLowC: z.number().nullable().optional(),
   targetHighC: z.number().nullable().optional(),
+  /**
+   * (§ HVAC Domain-Model Correction) Baseline controlling-mode value — UNCHANGED from
+   * before this correction, kept exactly as-is for backward compatibility with every
+   * existing consumer (CoolMaster, KNX, Matter Thermostat adapter, UI, automation). This
+   * is the narrow (5-value) approximation of KNX `DPT_HVACContrMode` (20.105)'s much
+   * richer enumeration — see `controllingModeExtended` below for the cases where this
+   * enum alone would lose real information.
+   */
   mode: z.enum(["off", "heat", "cool", "auto", "fan_only"]),
+  /**
+   * (§ HVAC Domain-Model Correction) The full KNX `DPT_HVACContrMode`/`DPT_HVACContrMode_Z`
+   * (20.105/201.104) value, for the cases where it carries a real, distinct state
+   * `mode`'s 5-value enum cannot represent losslessly (e.g. "morning_warmup",
+   * "night_purge", "precool", "emergency_heat", "emergency_cool", "emergency_steam",
+   * "free_cool", "ice", "maximum_heating", "economic_heat_cool", "dehumidification",
+   * "calibration", "test", "no_demand"). Deliberately a free-form, driver/protocol-
+   * declared string rather than a fixed enum (KNX Association "KNX Standard
+   * Interworking Datapoint Types" v02.02.01 §4.3, DPT 20.105's 18-value table) — an
+   * enum here would just relocate the same "can't represent everything" problem one
+   * level down. Set ONLY as an enrichment alongside `mode` (never instead of it) when a
+   * driver has a real, richer value; `null`/absent means "no richer value than `mode`
+   * already carries," never a claim that the device has no controlling-mode concept at
+   * all. Never populated by inventing a plausible-sounding string — only ever the
+   * driver's own real, protocol-native mode name.
+   */
+  controllingModeExtended: z.string().nullable().optional(),
+  /**
+   * (§ HVAC Domain-Model Correction) KNX `DPT_HVACMode`/`DPT_HVACMode_Z` (20.102/201.100)
+   * — a genuinely DIFFERENT concept from `mode`/`controllingModeExtended`: a
+   * comfort/energy PRESET the installer or occupant selects, not a heat/cool/fan
+   * operating state (KNX Association "KNX Standard Interworking Datapoint Types"
+   * v02.02.01 §4.3, DPT 20.102's 5-value table: Auto/Comfort/Standby/Economy/Building
+   * Protection). Named `operatingMode` (matching the KNX document's own "HVAC Operating
+   * Mode" heading for this DPT) rather than the more generic "preset", since "preset"
+   * does not by itself convey that this is specifically an HVAC comfort-level concept
+   * distinct from `mode`'s heat/cool/fan operating state. `null`/absent when a driver
+   * has no such concept (e.g. CoolMaster, which has no equivalent) — never fabricated.
+   */
+  operatingMode: z.enum(["auto", "comfort", "standby", "economy", "building_protection"]).nullable().optional(),
+  /**
+   * (§ HVAC Domain-Model Correction) KNX `DPT_Heat/Cool`/`DPT_Heat/Cool_Z` (1.100/200.100)
+   * — a separate, simple heat-vs-cool selector distinct from `mode`/`controllingModeExtended`.
+   * Some KNX installations expose this as its OWN group object rather than folding it into
+   * the controlling-mode enum (KNX Association "KNX Standard Interworking Datapoint
+   * Types" v02.02.01 §4.3/§4.8.1: "0 = cooling, 1 = heating"). `null`/absent when a
+   * driver has no separate signal for this (the common case — most drivers only ever
+   * report a single combined mode via `mode`).
+   */
+  heatCool: z.enum(["heat", "cool"]).nullable().optional(),
+  /**
+   * (§ HVAC Domain-Model Correction) Structured HVAC status/fault information — see
+   * {@link HvacStatus}. `null`/absent when a driver has no status/fault feedback at all.
+   */
+  status: HvacStatus.nullable().optional(),
+  /**
+   * (§ HVAC Domain-Model Correction) Named preset setpoints — KNX `DPT_TempRoomSetpSet[3]`/
+   * `[4]`/`DPT_TempRoomSetpSetF16[3]` (212.101/213.100/222.100)'s Comfort/Standby/Economy/
+   * [Building Protection] values, for installations that expose all of them as distinct,
+   * simultaneously-known setpoints rather than one active `targetC`. `null`/absent (the
+   * common case) means the driver only ever reports the single currently-active setpoint
+   * via `targetC` — never fabricated by splitting `targetC` three ways.
+   */
+  setpoints: z
+    .object({
+      comfortC: z.number().nullable().optional(),
+      standbyC: z.number().nullable().optional(),
+      economyC: z.number().nullable().optional(),
+      buildingProtectionC: z.number().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
   humidity: Percent.nullable().optional(),
   /** Current value of whichever "advanced" (installer/brand-specific) HVAC parameters
    * this specific device supports — fan speed, swing position, filter/demand/fault
@@ -195,6 +303,18 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
     targetLowC: z.number().optional(),
     targetHighC: z.number().optional(),
     mode: z.enum(["off", "heat", "cool", "auto", "fan_only"]).optional(),
+    /** (§ HVAC Domain-Model Correction) Command mirror of `TemperatureState.operatingMode`
+     * — only meaningful for a driver that has a real, writable KNX-DPT_HVACMode-style
+     * comfort/economy preset concept (KNX 20.102) distinct from `mode`. A driver with no
+     * such concept simply never reads this field off an incoming command. */
+    operatingMode: z.enum(["auto", "comfort", "standby", "economy", "building_protection"]).optional(),
+    /** (§ HVAC Domain-Model Correction) Command mirror of `TemperatureState.heatCool` —
+     * only meaningful for a driver with a real, separately-writable KNX-DPT_Heat/Cool-style
+     * (1.100) heat/cool selector distinct from `mode`. `controllingModeExtended` and
+     * `status` are intentionally NOT commandable here: the extended controlling-mode
+     * values have no driver that can safely execute an arbitrary one yet, and status is
+     * inherently read-only feedback, never something a client writes. */
+    heatCool: z.enum(["heat", "cool"]).optional(),
     /** Set one or more device-declared "advanced" parameters (fan speed, swing, remote
      * lock, installer inhibit, …) — see TemperatureState.advanced and
      * ClimateCapabilityConfig.advancedControls for which keys a device actually accepts. */
