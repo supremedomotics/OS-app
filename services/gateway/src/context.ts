@@ -25,6 +25,14 @@ import { newId } from "@supreme/domain-model";
 import type { IInstalledDriverStore, DriverSecretCrypto } from "@supreme/drivers";
 import type { IProtocolScanner } from "@supreme/commissioning";
 import type { SqlDb } from "@supreme/persistence";
+import type { HubIdentity } from "@supreme/hub-identity";
+import { loadOrCreateHubIdentity } from "./hub-agent.js";
+import { createSecretStore, type SecretStore } from "./secrets.js";
+import {
+  MobileAuthorizationRegistry,
+  PairingChallengeStore,
+  PairingCodeStore,
+} from "./mobile-pairing.js";
 import {
   InMemoryPresenceStore,
   InProcessEventBus,
@@ -167,6 +175,15 @@ export interface AppDeps {
   pushProviders?: IPushProvider[];
   /** The underlying SQL database (when persistence is enabled) — for backup/restore, analytics, audit. */
   db?: SqlDb;
+  /** Sealed 0600-file secrets store (§Phase12) — backs the Hub's device identity and the
+   * Mobile authorization registry, same convention as `hub_identity`/`hub_credential`. */
+  secrets?: SecretStore;
+  /** The Hub's own Ed25519 device identity (§Phase12) — same key ADR 0009's tunnel handshake
+   * uses, reused to sign Mobile authorization tokens the broker can verify without a
+   * synchronous call back to the Hub. Loaded/generated once and persisted via `secrets`. */
+  hubIdentity?: HubIdentity;
+  /** Hub-side authoritative registry of paired Mobile devices (§Phase12 §4/§9/§26). */
+  mobileAuthorizationStore?: MobileAuthorizationRegistry;
   /** Protocol scanners for commissioning (KNX/DALI/Modbus tooling). */
   scanners?: IProtocolScanner[];
   /** Env-configured native driver instances (bootstrap.ts), fed into the unified
@@ -336,6 +353,13 @@ export class AppContext {
   /** Local SIE learning/action history store (present only with the Postgres persistence layer). */
   intelligence: IntelligenceRepo | null = null;
   homeId!: HomeId;
+  /** §Phase12 — this Hub's own Ed25519 device identity, the Mobile-authorization registry,
+   * and the ephemeral pairing-code/challenge stores. Real (persisted, cryptographic), not a
+   * stand-in — see `mobile-pairing.ts`. */
+  readonly hubIdentity: HubIdentity;
+  readonly mobileAuthorizations: MobileAuthorizationRegistry;
+  readonly pairingCodes: PairingCodeStore;
+  readonly pairingChallenges: PairingChallengeStore;
   /** True on production first boot until the Setup Wizard creates the administrator.
    * While true, only /healthz and /v1/setup are functional (no demo home is seeded). */
   setupRequired = false;
@@ -355,6 +379,11 @@ export class AppContext {
     this.presence = deps.presence ?? new InMemoryPresenceStore();
     this.matter = deps.matter ?? null;
     this.voicePublisher = deps.voicePublisher ?? null;
+    const secretStore = deps.secrets ?? createSecretStore(undefined);
+    this.hubIdentity = deps.hubIdentity ?? loadOrCreateHubIdentity(secretStore);
+    this.mobileAuthorizations = deps.mobileAuthorizationStore ?? new MobileAuthorizationRegistry(secretStore);
+    this.pairingCodes = new PairingCodeStore();
+    this.pairingChallenges = new PairingChallengeStore();
     this.rateFetcher = deps.rateFetcher ?? null;
     this.occupancy = new OccupancyRunner({
       command: (deviceId, on) => this.sil.command(deviceId as DeviceId, { capability: "onoff", action: on ? "on" : "off" }),
@@ -1017,6 +1046,13 @@ export class AppContext {
     const grant = buildGrant(input);
     await this.grants.add(grant);
     return grant;
+  }
+
+  /** §Phase12.6 — observable subscriber-lifecycle count, so a WS-disconnect-cleanup test can
+   * prove `unsubState()` actually ran (real leak detection) rather than merely asserting the
+   * socket closed without erroring. */
+  get stateSubscriberCount(): number {
+    return this.stateSubs.size;
   }
 
   onState(sub: StateSubscriber): () => void {

@@ -1,0 +1,22 @@
+name: supreme_os_core
+description: >
+  SupremeOS semantic model, capability vocabulary, connection abstraction, and
+  Touch Panel provisioning contracts shared by apps/new/mobile and
+  apps/new/touchpanel. Pure Dart — no Flutter dependency, so it is also usable
+  from a future Web Homeowner app or CLI tooling.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  cryptography: ^2.9.0
+  http: ^1.6.0
+  meta: ^1.15.0
+  multicast_dns: ^0.3.3+1
+  web_socket_channel: ^3.0.1
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.0.0

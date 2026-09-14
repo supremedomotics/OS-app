@@ -8,6 +8,7 @@ import {
 import { FavoriteRef, newId, Room, type RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate, canViewDevice, enforce } from "../auth.js";
+import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 import {
@@ -34,7 +35,10 @@ function parseRoom(input: Record<string, unknown>): Room {
 export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get("/v1/home", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      // §Phase12.4 — a paired SupremeOS Mobile, not just an existing session, may read the
+      // home it's authorized for (bridged to the home's master account; see the bridge's own
+      // doc for exactly what this does and does not cover).
+      const user = await authenticateMobileOrUser(ctx, req);
       await enforce(ctx, user, "home", null, "view");
       const home = await ctx.home.getHome();
       if (!home) throw new SupremeError("not_found", "home not commissioned");
@@ -49,7 +53,7 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
   // enumerates the home in one call; clients that want room grouping use /v1/rooms/:id/devices.
   app.get("/v1/devices", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      const user = await authenticateMobileOrUser(ctx, req);
       const all = await ctx.home.listDevices();
       const visible = [];
       for (const d of all) if (await canViewDevice(ctx, user, d)) visible.push(d);
@@ -206,7 +210,7 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
 
   app.get<{ Params: { id: string } }>("/v1/rooms/:id/devices", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      const user = await authenticateMobileOrUser(ctx, req);
       const roomId = req.params.id as RoomId;
       await ctx.home.requireRoom(roomId);
       await enforce(ctx, user, "room", roomId, "view");

@@ -282,6 +282,10 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
     deps.voicePublisher = new VoiceStatePublisher({ baseUrl: config.voiceCloudUrl, hubKey: config.voiceHubKey });
   }
 
+  // Same sealed 0600-file secrets store `resolveDriverSecretEncryptionKey` already uses —
+  // also backs the Hub's device identity + Mobile authorization registry (§Phase12).
+  deps.secrets ??= createSecretStore(config.secretsDir || undefined);
+
   const ctx = await AppContext.create(config, deps);
 
   return ctx;
