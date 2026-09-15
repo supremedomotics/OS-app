@@ -7,6 +7,35 @@
 
 ## Critical
 
+### Connectivity & security acceptance closure — 12.x architecture frozen (Phase 12.11)
+- **Description:** closed every remaining gap Phase 12.10's final report flagged, with real
+  automated proof: (1) remote reconnect proven with a real socket disconnect (code 1001) and a
+  real second connection, plus proof that reconnect always triggers a fresh snapshot; (2/3)
+  LAN→remote and remote→LAN transitions proven with a flip-able fake discovery driving real
+  `ConnectionManager.notifyNetworkChanged()` transitions; (4) Remote Access OFF confirmed to stay
+  offline, never silently falling back; (5) stream revocation proven AND corrected — the Hub's
+  own live `mobileAuthorizations` registry check (not just the broker's coarse signature/exp
+  check) means revocation is immediately effective for new stream connections, contradicting a
+  stale doc comment that has now been corrected by the test itself; (6) expired-but-validly-
+  signed token rejected on the remote stream; (7) a real Hub-A token rejected on a real,
+  broker-attached Hub B's stream; (8) the mandatory Home-switch stale-response race proven
+  deterministically with a delayed-response fake transport, for both reads and commands; (9)
+  multi-Home isolation extended with a real reconnect step; (10) the broker URL is now
+  deployment-configurable via `--dart-define=SUPREME_BROKER_URL`, with the exact future
+  provisioning interface documented (a `brokerUrl` field on the pairing-verify response). Gate:
+  shared 162/162, mobile 24/24, shared_ui 7/7, touchpanel 23/23 = 216; tunnel-broker 24/24;
+  hub-identity 18/18; gateway 529/531 (2 pre-existing environment-flake failures, confirmed via
+  the same 37-accumulated-node-process signature seen in every prior occurrence). See
+  `SESSION_HANDOFF.md` "Phase 12.11" for full detail and the corrected revocation finding.
+- **12.x connectivity/security architecture is now FROZEN.** Next work is Phase 13: native
+  Android/iOS background execution, SIP doorphone, voice/video calls, push notification
+  delivery, continuous live feedback.
+- **Explicitly not built (next up, Phase 13 prerequisites):** real broker URL provisioning
+  (BACKEND/PROVISIONING CONTRACT MISSING — interface documented, nothing populates it);
+  malformed-token stream-route-specific test (reasoned identical to the proven HTTP case, not
+  separately tested); physical device/hardware acceptance testing (REAL-WORLD ACCEPTANCE TEST
+  REQUIRED, no hardware in this environment).
+
 ### Mobile remote activation, real remote command→feedback, two real Hubs (Phase 12.10)
 - **Description:** (1) Added a homeowner-facing Remote Access toggle per Home
   (`PairedHome.remoteAccessEnabled`, default OFF, `HomeSettingsScreen` `SwitchListTile`, no

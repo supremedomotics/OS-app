@@ -3,6 +3,8 @@ import {
   buildEnrollmentRequest,
   DevHubCA,
   generateHubIdentity,
+  issueMobileAuthorizationToken,
+  type HubIdentity,
 } from "@supreme/hub-identity";
 import { buildTunnelBrokerServer } from "@supreme/tunnel-broker";
 import type { FastifyInstance } from "fastify";
@@ -121,10 +123,12 @@ describe("§Phase12 end-to-end: Mobile identity -> pairing -> Hub authorization 
   let brokerBase: string;
   let hubBase: string;
   let hubId: string;
+  let hubIdentity: HubIdentity;
 
   beforeAll(async () => {
     const ca = DevHubCA.generate();
     const identity = generateHubIdentity();
+    hubIdentity = identity;
     const credential = ca.issue(buildEnrollmentRequest(identity, { model: "Hub Pro", fwVersion: "0.4.0" }, { kind: "factory", evidence: "sig" }));
     hubId = identity.hubUuid;
 
@@ -542,6 +546,111 @@ describe("§Phase12 end-to-end: Mobile identity -> pairing -> Hub authorization 
     });
     expect(closeCode).toBe(1008); // no public key on file for an unattached hub — fails at authorize()
   });
+
+  /** §Phase12.11 §6 — a genuinely, correctly signed token (this Hub's real device key) whose
+   * `exp` has already passed. Crafted directly via `issueMobileAuthorizationToken` with a past
+   * `now` rather than waiting out the real 5-minute TTL — the signature is real, only the
+   * clock is simulated, so this proves the broker's OWN expiry check, not just signature
+   * verification. */
+  it("rejects an expired (but validly signed) token on the remote stream — fail closed (§6)", async () => {
+    const expiredToken = issueMobileAuthorizationToken(
+      hubIdentity,
+      { mobileId: "m-expired", hubId, projectId: "p" },
+      Date.now() - 10 * 60_000, // issued 10 minutes ago; TTL is 5 minutes
+    );
+    const wsUrl = `${brokerBase.replace(/^http/, "ws")}/v1/route/${hubId}/stream`;
+    const ws = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${expiredToken}` } });
+    const closeCode = await new Promise<number>((resolve, reject) => {
+      ws.on("close", (code) => resolve(code));
+      ws.on("error", reject);
+      setTimeout(() => reject(new Error("never closed")), 5000);
+    });
+    expect(closeCode).toBe(1008);
+  });
+
+  /** §Phase12.11 §5 — REAL FINDING, corrects an assumption carried from `mobile-authorization.ts`'s
+   * own doc comment ("a revoked Mobile's already-issued token still works until it expires").
+   * That comment describes the BROKER's own pre-forward check (`authorizeClient`), which only
+   * verifies the token's signature + `exp` — it has no access to the Hub's live
+   * `mobileAuthorizations` registry, so it cannot see a revocation. But every request the
+   * broker forwards still reaches the REAL Hub, whose own `stream.ts`/route handlers call
+   * `resolveMobileOrSessionUser` → `ctx.mobileAuthorizations.isAuthorized(...)` — a LIVE check
+   * against the Hub's registry, on every single request. So end-to-end, through the broker,
+   * revocation IS immediately effective for both the stream and HTTP routes: the broker's
+   * pre-check is a coarse, stateless filter; the Hub's own check is the real, live-authoritative
+   * one, and it always runs. The only thing revocation does NOT retroactively undo is a
+   * connection that is already open and was never re-authenticated (see the next assertion) —
+   * a NEW connection attempt with the revoked token is refused immediately. */
+  it(
+    "revoking a Mobile immediately closes its ability to open a NEW remote stream — the Hub's own live " +
+      "registry check runs on every request, not just the broker's coarse pre-check (§5)",
+    async () => {
+      const mobile = realMobileKeypair();
+      const login = await fetch(`${hubBase}/v1/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+      });
+      const { accessToken } = (await login.json()) as { accessToken: string };
+      const codeRes = await fetch(`${hubBase}/v1/pairing/codes`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      const { code } = (await codeRes.json()) as { code: string };
+      const challengeRes = await fetch(`${hubBase}/v1/pairing/challenge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pairingCode: code, mobilePublicKeyBase64: mobile.publicKeyBase64 }),
+      });
+      const challenge = (await challengeRes.json()) as { challengeId: string; challengeBytes: string };
+      const signature = mobile.sign(Buffer.from(challenge.challengeBytes, "base64"));
+      const verifyRes = await fetch(`${hubBase}/v1/pairing/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ challengeId: challenge.challengeId, signatureBase64: signature }),
+      });
+      const authorization = (await verifyRes.json()) as { mobileId: string; token: string };
+
+      // Real revoke, at the Hub, using the Hub's own admin session.
+      const revokeRes = await fetch(`${hubBase}/v1/pairing/mobiles/${authorization.mobileId}/revoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      expect(revokeRes.status).toBe(200);
+
+      // A NEW stream connection with the already-issued (still-unexpired) token is refused
+      // immediately — the Hub's OWN `resolveMobileOrSessionUser` rejects it via the live
+      // `mobileAuthorizations` registry, even though the token's signature+exp are still valid
+      // and the BROKER's own pre-check would have let it through.
+      const wsUrl = `${brokerBase.replace(/^http/, "ws")}/v1/route/${hubId}/stream`;
+      const ws = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${authorization.token}` } });
+      const outcome = await new Promise<{ frame?: unknown; closeCode?: number }>((resolve, reject) => {
+        ws.on("open", () => ws.send(JSON.stringify({ type: "ping" })));
+        ws.on("message", (raw) => resolve({ frame: JSON.parse(raw.toString()) }));
+        ws.on("close", (code) => resolve({ closeCode: code }));
+        ws.on("error", reject);
+        setTimeout(() => reject(new Error("neither a frame nor a close arrived")), 5000);
+      });
+      // The Hub's stream.ts sends an {type:"error", code:"unauthorized"} frame and then closes
+      // 1008 — assert on whichever this promise observed first (frame arrives before close).
+      if (outcome.frame) {
+        expect(outcome.frame).toMatchObject({ type: "error" });
+      } else {
+        expect(outcome.closeCode).toBe(1008);
+      }
+      ws.close();
+
+      // A REFRESH (new token issuance) for the revoked Mobile is also refused — belt-and-braces,
+      // stops it from ever obtaining a fresh token too.
+      const refreshRes = await fetch(`${brokerBase}/v1/route/${hubId}/v1/pairing/refresh`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorization.token}` },
+        body: JSON.stringify({ mobileId: authorization.mobileId }),
+      });
+      expect(refreshRes.status).toBe(401);
+    },
+  );
+
 });
 
 /** §Phase12.10 §8 — TWO real Hub processes (two real `AppContext`s, two real gateway
@@ -715,7 +824,36 @@ describe("§Phase12.10 §8: two independent real Hub processes on one broker", (
         await new Promise((r) => setTimeout(r, 300));
         expect(framesB.some((f) => (f as { deviceId?: string }).deviceId === dimmerA.id)).toBe(false);
 
+        // §Phase12.11 §7 — a real, validly-signed-for-A token rejected on B's REMOTE STREAM
+        // (both hubs genuinely attached to this same broker — a stronger proof than an
+        // "unknown hub" rejection, since B's public key IS on file here).
+        const wsCrossAonB = new WebSocket(`${brokerBase.replace(/^http/, "ws")}/v1/route/${hubB.hubId}/stream`, {
+          headers: { authorization: bearerA },
+        });
+        const crossCloseCode = await new Promise<number>((resolve, reject) => {
+          wsCrossAonB.on("close", (code) => resolve(code));
+          wsCrossAonB.on("error", reject);
+          setTimeout(() => reject(new Error("cross-hub stream never closed")), 5000);
+        });
+        expect(crossCloseCode).toBe(1008);
+
+        // §Phase12.11 §9 — "reconnect A": close A's stream and open a fresh one for the SAME
+        // Home, proving it recovers its own snapshot/live-stream independently of B, which was
+        // never touched.
         wsA.close();
+        await new Promise((r) => setTimeout(r, 100));
+        const wsA2 = new WebSocket(`${brokerBase.replace(/^http/, "ws")}/v1/route/${hubA.hubId}/stream`, {
+          headers: { authorization: bearerA },
+        });
+        const reconnectPong = await new Promise<unknown>((resolve, reject) => {
+          wsA2.on("open", () => wsA2.send(JSON.stringify({ type: "ping" })));
+          wsA2.on("message", (raw) => resolve(JSON.parse(raw.toString())));
+          wsA2.on("error", reject);
+          setTimeout(() => reject(new Error("no pong on A reconnect")), 5000);
+        });
+        expect(reconnectPong).toMatchObject({ type: "pong" });
+
+        wsA2.close();
         wsB.close();
       } finally {
         hubA.tunnel.stop();

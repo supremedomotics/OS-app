@@ -74,22 +74,41 @@ Future<Uri?> resolveHomeBaseUrl(HubDiscovery discovery, String hubId) async {
   return Uri(scheme: 'https', host: hubs.first.address);
 }
 
+/// §Phase12.11 §10 — the Tunnel Broker base URL, as a DEPLOYMENT configuration value, never a
+/// value the homeowner sees or edits (§10: "do NOT expose the broker URL to homeowner UI").
+/// Sourced from a build-time `--dart-define=SUPREME_BROKER_URL=...`, which is the standard
+/// Flutter mechanism for "the same compiled app, pointed at a different deployment" — this is
+/// the correct SHAPE for the value to arrive in (a deployment/build config), which is what §10
+/// asks this phase to fix regardless of what actually supplies the value yet.
+///
+/// HONEST STATUS — BACKEND/PROVISIONING CONTRACT MISSING: no signed Hub/project provisioning,
+/// account/fleet config service, or installer-provisioning flow exists ANYWHERE in this
+/// repository that could supply a real, per-deployment broker URL at build or install time —
+/// this `--dart-define` is deployment-configurable (satisfies "the transport itself must remain
+/// deployment-configurable"), but nothing today actually sets it, so it silently falls back to
+/// an unreachable placeholder. The correct future source is almost certainly signed Hub/project
+/// provisioning data returned by the SAME real pairing ceremony (`/v1/pairing/verify`,
+/// `services/gateway/src/routes/pairing.ts`) that already issues the Mobile-authorization
+/// token — the Hub already knows which broker it dials out to (its own `BrokerTunnelClient`
+/// config, `services/gateway/src/tunnel-client.ts`'s `brokerUrl`), so the missing piece is a
+/// field on the pairing-verify response carrying that same URL back to Mobile, not a new
+/// authority. Required future interface (not built here):
+///   `PairHomeResult` gains `brokerUrl: Uri?` (null when the Hub has no remote access
+///   configured at all), sourced from the Hub's own `BrokerTunnelClient` config and returned by
+///   `/v1/pairing/verify`; `PairedHome` would then persist it exactly like `hubId`/`projectId`
+///   (non-sensitive, canonical) instead of this global compile-time default.
+final brokerUrlProvider = Provider<Uri>((ref) => Uri.parse(
+    const String.fromEnvironment('SUPREME_BROKER_URL',
+        defaultValue: 'https://broker.supremeos.invalid')));
+
 /// §Phase12.10 §4 — the ONE place a Home's `RemoteHubConfig` is built, reused by both
 /// `connectionManagerProvider` (HTTP) and `runtimeControllerProvider` (event stream, via
 /// `RemoteHubConfig.streamUri()`) so remote routing/auth logic is never duplicated between the
 /// two (§4: "do not duplicate business logic between local and remote transports").
-///
-/// HONEST STATUS — PRODUCTION HARDENING REQUIRED: the broker base URL is still a placeholder.
-/// No installer/account-provisioning flow in this repository yet tells a Mobile app which
-/// Tunnel Broker instance its paired Hub dials out to (that's cloud account/fleet config, out
-/// of `apps/new`'s scope) — this is the same gap `RemoteHubTransport`'s own class doc has
-/// documented since Phase 10, unchanged by this phase. What Phase 12.10 DOES fix: the broker
-/// URL is no longer duplicated inline at each call site, and Remote Access is never used unless
-/// the homeowner's own per-Home switch (§3) is on.
 RemoteHubConfig remoteHubConfigFor(
-    String hubId, PairedHomeAuthorizationStore authStore) {
+    String hubId, PairedHomeAuthorizationStore authStore, Uri brokerUrl) {
   return RemoteHubConfig(
-    brokerUrl: Uri.parse('https://broker.supremeos.invalid'),
+    brokerUrl: brokerUrl,
     hubId: hubId,
     bearerToken: () {
       final session = authStore.sessionFor(hubId);
@@ -128,6 +147,7 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   // §Phase12.10 §3/§4 — the homeowner's own explicit per-Home choice, OFF by default. Watched
   // (not read-once) so flipping the Settings → Home switch actually takes effect immediately.
   final remoteAccessEnabled = ref.watch(activeHomeRemoteAccessEnabledProvider);
+  final brokerUrl = ref.watch(brokerUrlProvider);
   final scopedHubId = hubId ?? '__no_home_selected__';
 
   final manager = ConnectionManager(
@@ -148,7 +168,7 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     makeRemoteTransport: hubId == null
         ? null
         : () => RemoteHubTransport(
-              config: remoteHubConfigFor(hubId, authStore),
+              config: remoteHubConfigFor(hubId, authStore, brokerUrl),
             ),
     remoteAccessEnabled: remoteAccessEnabled,
   );
@@ -234,6 +254,7 @@ Future<void> _refreshSnapshot({
   required HubDiscovery discovery,
   required PairedHomeAuthorizationStore authStore,
   required PairedHomeController homeController,
+  required Uri brokerUrl,
   required String hubId,
 }) async {
   final session = authStore.sessionFor(hubId);
@@ -246,7 +267,8 @@ Future<void> _refreshSnapshot({
       bearerToken: session.bearerToken,
     ),
     makeRemoteTransport: remoteEnabled
-        ? () => RemoteHubTransport(config: remoteHubConfigFor(hubId, authStore))
+        ? () => RemoteHubTransport(
+            config: remoteHubConfigFor(hubId, authStore, brokerUrl))
         : null,
     remoteAccessEnabled: remoteEnabled,
   );
@@ -264,6 +286,7 @@ final runtimeControllerProvider = Provider<RuntimeController>((ref) {
   final discovery = ref.watch(platformDiscoveryProvider);
   final homeController = ref.watch(pairedHomeControllerProvider);
   final authStore = ref.watch(pairedHomeAuthStoreProvider);
+  final brokerUrl = ref.watch(brokerUrlProvider);
   final controller = RuntimeController(
     homeController: homeController,
     authStore: authStore,
@@ -278,7 +301,7 @@ final runtimeControllerProvider = Provider<RuntimeController>((ref) {
       final lan = await resolveHomeBaseUrl(discovery, hubId);
       if (lan != null) return lan.replace(scheme: 'wss', path: '/v1/stream');
       if (!_remoteAccessEnabledFor(homeController, hubId)) return null;
-      return remoteHubConfigFor(hubId, authStore).streamUri();
+      return remoteHubConfigFor(hubId, authStore, brokerUrl).streamUri();
     },
     // PLATFORM STUB — no PlatformPushTokenSource wired yet; see its own doc comment for why
     // (no Firebase project configuration exists in this repository).
@@ -299,6 +322,7 @@ final runtimeControllerProvider = Provider<RuntimeController>((ref) {
       discovery: discovery,
       authStore: authStore,
       homeController: homeController,
+      brokerUrl: brokerUrl,
       hubId: hubId,
     ),
   ));

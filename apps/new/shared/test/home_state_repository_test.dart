@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:supreme_os_core/supreme_os_core.dart';
 
@@ -293,4 +295,123 @@ void main() {
       await managerB.dispose();
     });
   });
+
+  group('Home-switch stale-response race (§Phase12.11 §8)', () {
+    test(
+        'a delayed read started on Home A, released AFTER Home B is already in use, resolves '
+        'with Home A\'s own data and never touches Home B\'s transport',
+        () async {
+      final gate = Completer<void>();
+      final transportA = _DelayedFakeHubTransport(
+        gate: gate.future,
+        responses: {
+          'v1/rooms/living-room/devices': {
+            'devices': [_deviceWithOnoff('dev-1', 'living-room', on: true)],
+          },
+        },
+      );
+      final transportB = _FakeHubTransport({
+        'v1/rooms/living-room/devices': {
+          'devices': [_deviceWithOnoff('dev-2', 'living-room', on: false)],
+        },
+      });
+      final managerA = _managerFor(transportA);
+      final managerB = _managerFor(transportB);
+      await managerA.start();
+      await managerB.start();
+      final repoA = HubHomeStateRepository(managerA);
+      final repoB = HubHomeStateRepository(managerB);
+
+      // 1. Start a Home A read — it blocks on `gate` before returning, exactly like a real
+      //    slow/in-flight network call still pending when the homeowner switches Homes.
+      final pendingA = repoA.lighting('living-room');
+
+      // 2. "Switch active Home to B" — a completely independent repository/transport is used
+      //    immediately, with no dependency on A's outstanding call. The canonical identity
+      //    (which ConnectionManager/transport each repo is bound to) traveled with each
+      //    repository at construction time, never re-derived from "whichever Home is active
+      //    right now."
+      final stateB = await repoB.lighting('living-room');
+      expect(stateB!.value.on, isFalse); // Home B's own real state
+
+      // 3. Release Home A's delayed response only AFTER Home B has already been read.
+      gate.complete();
+      final stateA = await pendingA;
+
+      // 4. The stale-but-now-resolved A response carries ONLY Home A's data — never B's —
+      //    and never touched B's transport.
+      expect(stateA!.value.on, isTrue);
+      expect(transportB.commandsReceived, isEmpty);
+
+      await managerA.dispose();
+      await managerB.dispose();
+    });
+
+    test(
+        'a delayed command on Home A, released after Home B issues its own command, never '
+        'reaches Home B\'s transport and Home B\'s command never reaches Home A\'s',
+        () async {
+      final gate = Completer<void>();
+      final transportA = _DelayedFakeHubTransport(
+        gate: gate.future,
+        responses: {
+          'v1/rooms/living-room/devices': {
+            'devices': [_deviceWithOnoff('dev-1', 'living-room')],
+          },
+        },
+      );
+      final transportB = _FakeHubTransport({
+        'v1/rooms/living-room/devices': {
+          'devices': [_deviceWithOnoff('dev-2', 'living-room')],
+        },
+      });
+      final managerA = _managerFor(transportA);
+      final managerB = _managerFor(transportB);
+      await managerA.start();
+      await managerB.start();
+      final repoA = HubHomeStateRepository(managerA);
+      final repoB = HubHomeStateRepository(managerB);
+
+      // Home A's command is in flight (delayed) when the homeowner switches to Home B and
+      // issues a real command there.
+      final pendingSetA = repoA.setLighting('living-room', on: true);
+      await repoB.setLighting('living-room', on: true);
+
+      expect(transportB.commandsReceived, hasLength(1));
+      expect(transportB.commandsReceived.single.key, 'v1/devices/dev-2/command');
+      expect(transportA.commandsReceived, isEmpty); // A's command hasn't landed yet — still gated
+
+      gate.complete();
+      await pendingSetA;
+
+      expect(transportA.commandsReceived, hasLength(1));
+      expect(transportA.commandsReceived.single.key, 'v1/devices/dev-1/command');
+      // B's transport never saw a trace of A's delayed command.
+      expect(transportB.commandsReceived, hasLength(1));
+
+      await managerA.dispose();
+      await managerB.dispose();
+    });
+  });
+}
+
+/// A `_FakeHubTransport` whose every real response is held behind [gate] before resolving —
+/// models a genuinely slow/in-flight network call still pending when the homeowner switches
+/// Homes (§Phase12.11 §8), rather than an instantaneous fake that could never race in practice.
+class _DelayedFakeHubTransport extends _FakeHubTransport {
+  final Future<void> gate;
+  _DelayedFakeHubTransport({required this.gate, required Map<String, Map<String, dynamic>> responses})
+      : super(responses);
+
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    await gate;
+    return super.get(path);
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendCommand(String path, Map<String, dynamic> body) async {
+    await gate;
+    return super.sendCommand(path, body);
+  }
 }

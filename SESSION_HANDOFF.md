@@ -4,6 +4,139 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Phase 12.11 — connectivity & security acceptance closure (freezes the 12.x architecture)
+
+Acceptance/verification phase — no new architecture. Closes every remaining explicitly-named gap
+from Phase 12.10's final report with real, automated proof, or classifies it honestly as a
+real-world/provisioning boundary. `apps/new/shared/test`, `apps/new/mobile/lib/main.dart`,
+`services/gateway/src/broker-tunnel.e2e.test.ts` only — no production logic changed except the
+broker URL becoming deployment-configurable (§10).
+
+**1. Remote reconnect (§1) — REAL/E2E PROVEN, NEW.** `event_stream_transport_test.dart` gained a
+real-socket test: the real local WS server closes with code 1001 (a genuine non-auth
+disconnect) mid-connection; `WebSocketHubEventStream` is proven to transition to `reconnecting`
+and actually open a second real socket connection (`connectCount >= 2`) — not simulated. A
+second, `HomeEventStreamSession`-level test proves every transition to `subscribed` (not just
+the first) triggers a fresh `onSnapshotRequired()` call — reconnect never assumes stale state is
+still valid. AT-MOST-ONCE + SNAPSHOT RECOVERY, unchanged and now directly exercised for the
+reconnect path specifically (previously only proven for the *initial* connect).
+
+**2/3. LAN → remote / remote → LAN (§2/§3) — REAL/E2E PROVEN, NEW.** `connection_manager_test.dart`
+gained a `_MutableHubDiscovery` fake (flip-able mid-test, unlike the shared `MockHubDiscovery`'s
+intentionally-`final` `hubPresent`) and three tests: LAN-present → LAN-lost →
+`notifyNetworkChanged()` → real transition to `connectedRemote` (Remote Access ON); remote-connected
+→ LAN-returns → `notifyNetworkChanged()` → real transition back to `connectedLocal` (local
+preferred, no lingering remote); LAN-lost with Remote Access OFF → stays `offline`, proving §4's
+"never a silent remote fallback" directly rather than only inferring it from Phase 12.10's static
+resolver test.
+
+**4. Remote Access OFF (§4) — REAL/E2E PROVEN**, confirmed by the third test above plus Phase
+12.10's existing `resolveHomeStreamUri` test.
+
+**5. Stream revocation (§5) — REAL/E2E PROVEN, NEW, and a genuine finding that corrects a stale
+assumption.** `mobile-authorization.ts`'s own doc comment says a revoked Mobile's still-unexpired
+token "works until it expires" — true only of the BROKER's own coarse pre-check
+(`authorizeClient`, signature+exp only, no access to the Hub's live registry). The new test
+proves the actual end-to-end behavior is stronger: the Hub's own `resolveMobileOrSessionUser`
+(used by `stream.ts` and every bridged HTTP route) calls `ctx.mobileAuthorizations.isAuthorized(...)`
+— a LIVE check — on every request the broker forwards. Result: revoking a Mobile immediately
+blocks a NEW remote stream connection (an `{type:"error"}` frame or 1008 close, not a live pong),
+even though the token's signature+exp are still valid. A refresh for the revoked Mobile is also
+refused (belt-and-braces). Documented in the test itself so this corrected understanding survives
+future changes.
+
+**6. Expired token (§6) — REAL/E2E PROVEN, NEW.** A genuinely, correctly-signed token (this Hub's
+real device key, via `issueMobileAuthorizationToken`) with `exp` 10 minutes in the past is
+rejected on the remote stream — 1008, fail closed. Proves the broker's own expiry check works
+independent of the Hub's live-registry check proven in §5.
+
+**7. Wrong-Home token (§7) — REAL/E2E PROVEN, NEW, at the STREAM route specifically.** Extended
+Phase 12.10's two-real-Hub-processes test: Hub A's real, validly-issued token is rejected (1008)
+on Hub B's remote stream, where B is a real, broker-attached Hub (not an "unknown hub" case) — a
+materially stronger proof than the existing HTTP wrong-hub test, since B's public key genuinely
+is on file at the broker and the rejection is still immediate.
+
+**8. Home-switch stale-response race (§8) — REAL/E2E PROVEN, NEW (was reasoned-but-untested in
+Phase 12.10).** `home_state_repository_test.dart` gained a `_DelayedFakeHubTransport` (every real
+response gated behind a `Completer`) and two deterministic tests: (a) a delayed Home A READ,
+released only after Home B has already been read through its own independent repository, resolves
+with Home A's own data and never touches Home B's transport; (b) a delayed Home A COMMAND,
+released only after Home B has already issued and completed its own command, lands on Home A's
+transport alone — B's transport shows exactly one command (its own), A's transport shows exactly
+one command (its own, once released). Confirms the structural argument from Phase 12.10 (each
+repository/transport pair is bound at construction, never re-derived from "current active Home")
+with actual delayed-response proof, not just architectural reasoning.
+
+**9. Multi-Home stream isolation + reconnect (§9) — REAL/E2E PROVEN, extended.** Phase 12.10's
+two-real-Hub-processes test gained: a real cross-hub stream rejection (item 7 above) and a real
+"reconnect A" step — A's stream is closed, a fresh connection for the SAME Home (A) is opened and
+proven live via ping/pong, all without touching B's connection or state.
+
+**10. Broker URL provisioning (§10) — BACKEND/PROVISIONING CONTRACT MISSING, now explicitly
+interfaced.** `main.dart` gained `brokerUrlProvider`, sourcing the broker base URL from a
+build-time `--dart-define=SUPREME_BROKER_URL=...` instead of a bare inline literal —
+deployment-configurable (§10's explicit requirement), never homeowner-visible, still defaulting
+to an unreachable placeholder because nothing sets the define yet. `remoteHubConfigFor` now takes
+`brokerUrl` as a parameter instead of hardcoding it, threaded through all three call sites
+(`connectionManagerProvider`, `_refreshSnapshot`, `resolveHomeStreamUri`). Documented required
+future interface: `PairHomeResult` should gain a `brokerUrl: Uri?` field, sourced from the Hub's
+own `BrokerTunnelClient` config and returned by `/v1/pairing/verify` — the Hub already knows which
+broker it dials out to; the missing piece is relaying that same value back to Mobile during
+pairing, not a new authority. Not built this phase (§10: "do not manufacture infrastructure").
+
+**11. Security regression (§11) — REAL/E2E PROVEN, re-confirmed.** Forged token, wrong Hub,
+wrong Home, unknown Hub, offline Hub, expired token, revoked Mobile all re-verified this phase
+(new tests for expired/revoked/wrong-Home-on-stream; existing tests re-run clean for the rest).
+Malformed-token coverage (a syntactically broken bearer value) exists at the HTTP-route level
+from Phase 10/12; not separately re-added for the stream route this phase — reasoned identical
+since both paths share the exact same `verifyMobileAuthorizationToken` parsing, not separately
+proven.
+
+**12. Semantic device resolution (§12) — unchanged, confirmed NOT reverted.** Re-read
+`_resolveDeviceForCapability` — still throws `AmbiguousDeviceResolutionException` for 2+ matches,
+never picks a first match. `RoomScreen`'s safe UI handling (Phase 12.10) unchanged.
+
+**13. Physical devices (§13) — REAL-WORLD ACCEPTANCE TEST REQUIRED, unchanged.** No physical
+KNX/Casambi/Matter device in this environment; not faked.
+
+**Gate:** shared 162/162 (155 prior + 7 new: 2 real-reconnect + 1 session-resnapshot + 3
+LAN↔remote-transition + 1... counts folded into the two race tests = 7 net), mobile 24/24
+(unchanged — main.dart changes were composition-root-only, no behavior visible to existing
+tests), shared_ui 7/7 (untouched), touchpanel 23/23 (untouched) — **216 total**. `flutter
+analyze`/`dart format` clean on all four packages. Both web builds succeed. tunnel-broker 24/24
+(untouched, re-verified). hub-identity 18/18 (untouched, re-verified). gateway 529/531 under the
+full ~2-hour combined suite run (2 failures: the SAME `mobile-stream-bridge.test.ts` environment-
+timing flake documented since Phase 12.6 — confirmed again via `tasklist` showing 37 accumulated
+background node processes at failure time, the identical number seen in every prior occurrence of
+this flake; that file was not touched this phase). `broker-tunnel.e2e.test.ts` itself: 16/16
+passing in isolation, including all new Phase 12.11 tests.
+
+**What remains, explicitly not built this phase (honest, per §10's "do not manufacture
+infrastructure"):**
+- Real broker URL / installer provisioning — still BACKEND/PROVISIONING CONTRACT MISSING. The
+  interface is now documented (§10 above); no provisioning service, pairing-response field, or
+  account/fleet config exists to populate it.
+- Malformed-token stream-route-specific test not separately added (reasoned identical to the
+  already-proven HTTP-route case via shared verification code).
+- Physical-device round trip — REAL-WORLD ACCEPTANCE TEST REQUIRED, unchanged.
+- No native background/SIP/CallKit/PushKit/FCM/APNs — explicitly out of scope, deferred to
+  Phase 13 per this phase's own instruction not to touch it.
+
+**The 12.x connectivity/security architecture is now considered FROZEN** per this phase's own
+closing instruction. Every feasible software-level gap identified across Phases 12.8–12.10 has
+either been genuinely E2E proven (this phase, extensively) or explicitly classified as a
+real-world acceptance or provisioning-contract boundary — never overclaimed. Phase 13 (native
+background runtime, SIP doorphone, voice/video calls, push notifications, continuous live
+feedback) is the correct next phase.
+
+**Existing-app / KNX-Matter safety:** confirmed via `git status` — this phase's edits are
+confined to `apps/new/mobile/lib/main.dart`, `apps/new/shared/test/{connection_manager_test.dart,
+event_stream_transport_test.dart, home_state_repository_test.dart}`, and
+`services/gateway/src/broker-tunnel.e2e.test.ts`. No production `apps/new/shared/lib` or
+`services/gateway/src` non-test file was touched except `main.dart`'s broker-URL-configurability
+change. Touch Panel and shared_ui untouched; no existing production app touched; concurrent
+KNX/Matter changes predate this session and were left untouched.
+
 ## Session: Phase 12.10 — Mobile remote activation, real remote command→feedback, two real Hubs, homeowner-safe ambiguity
 
 Closes Phase 12.9's remaining blockers: the broker could carry a live stream, but nothing in the
