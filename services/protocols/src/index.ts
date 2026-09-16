@@ -382,6 +382,21 @@ export {
   type DevialetDiscoveryCandidate,
 } from "./devialet-discovery.js";
 export {
+  DevialetTopologyRegistry,
+  buildDevialetTopologySnapshot,
+  diffDevialetTopology,
+  removeDeviceFromTopology,
+  isTopologyChangeEmpty,
+  EMPTY_DEVIALET_TOPOLOGY,
+  type DevialetDeviceTopology,
+  type DevialetSystemTopology,
+  type DevialetGroupTopology,
+  type DevialetTopologySnapshot,
+  type DevialetFreshDeviceTopology,
+  type DevialetTopologyChange,
+  type DevialetTopologyChangeResult,
+} from "./devialet-topology.js";
+export {
   SonosProtocolDriver,
   type SonosDriverOptions,
   type SonosPlayer,

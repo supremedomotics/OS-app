@@ -25,6 +25,13 @@ import {
 } from "./devialet-cisettings-client.js";
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
 import { DEVIALET_MDNS_SERVICE, parseDevialetCandidate, transportHostFor, type DevialetDiscoveryCandidate } from "./devialet-discovery.js";
+import {
+  DevialetTopologyRegistry,
+  type DevialetFreshDeviceTopology,
+  type DevialetDeviceTopology,
+  type DevialetTopologySnapshot,
+  type DevialetTopologyChangeResult,
+} from "./devialet-topology.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
@@ -33,7 +40,7 @@ import { bestEffortMacForIp } from "./arp-lookup.js";
 
 /** Kept independent of `supreme-avr`'s own version counter — bumped when this driver's
  * own architecture/behavior changes materially. Surfaced in Diagnostics only. */
-const DRIVER_VERSION = "4.0.0-fusion-d4";
+const DRIVER_VERSION = "6.0.0-fusion-d6";
 
 /**
  * § D3 — the literal example path from the R1 doc's own "The global prefix" section
@@ -77,9 +84,14 @@ export interface DevialetDriverOptions {
  *
  * `host` is TRANSPORT information only. `path` is the IP Control API path this
  * specific binding was told to use (§ D3 — from `binding.config.path`, else the
- * driver's interim default; D5 replaces both with the real discovered value).
- * `devialetId`/`systemId`/`groupId` remain `null` until D5/D6 — nothing in D3
- * populates or branches on them either.
+ * driver's interim default; D5 threads the real discovered value through
+ * `discover()`'s results). `devialetId`/`systemId`/`groupId` are `null` until
+ * `refreshTopology()` (§ D6) successfully queries this device at least once — bind()
+ * itself never populates them (§3 of the D6 brief: topology is discovered AFTER
+ * physical binding, never required BY it). Once populated, `systemId`/`groupId`
+ * mirror `this.topology.get().devices[devialetId]`'s own values purely as a
+ * convenience — `this.topology` remains the single source of truth for anything
+ * beyond this one device (system/group membership, other devices' topology).
  */
 interface DevialetBinding {
   deviceId: DeviceId;
@@ -137,6 +149,11 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
    * label prefix ("R1 " vs "CISettings "), matching §18's "one tracker, distinguishable
    * traces" requirement rather than a second diagnostics system. */
   private readonly diagnostics = new Map<string, DriverDiagnosticsTracker>();
+  /** § D6 — this driver instance's own Device→System→Group topology state. One
+   * registry per driver instance (a plain instance field, exactly like `bindings`/
+   * `states`) — never a module-level singleton (§16 of the D6 brief). */
+  private readonly topology = new DevialetTopologyRegistry();
+  private readonly topologyListeners = new Set<(result: DevialetTopologyChangeResult) => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: DevialetDriverOptions = {}) {
@@ -215,9 +232,10 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
 
   /** Idempotent, mirroring `AvrProtocolDriver.bind()`: a repeat bind for the same
    * device+capability replaces the existing entry rather than duplicating it.
-   * `path` comes from `binding.config.path` (a real, discovered value once D5 lands)
-   * or the driver's interim default (§ `INTERIM_DEFAULT_PATH`). `devialetId`/
-   * `systemId`/`groupId` stay `null` — D5/D6. */
+   * `path` comes from `binding.config.path` (a real, discovered value from D5's
+   * `discover()`) or the driver's interim default (§ `INTERIM_DEFAULT_PATH`).
+   * `devialetId`/`systemId`/`groupId` stay `null` until `refreshTopology()` (§ D6)
+   * runs at least once for this device. */
   async bind(binding: ProtocolBinding): Promise<void> {
     const existingIdx = this.bindings.findIndex((b) => b.deviceId === binding.deviceId && b.capability === binding.capability);
     const configPath = typeof binding.config?.path === "string" ? binding.config.path : undefined;
@@ -252,6 +270,13 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     for (const host of new Set(removed.map((b) => b.host))) {
       if (this.bindings.some((b) => b.host === host)) continue;
       this.diagnostics.delete(host);
+    }
+    // § D6 — a genuine unbind (this Supreme device is gone, not a transient query
+    // failure) removes it from topology entirely, so it doesn't linger as a "last
+    // known" system/group member forever. Distinct from a failed refreshTopology()
+    // query, which deliberately KEEPS the last-known entry (see devialet-topology.ts).
+    for (const b of removed) {
+      if (b.devialetId) this.notifyTopologyChange(this.topology.remove(b.devialetId));
     }
   }
 
@@ -310,12 +335,106 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
   }
 
-  /** § D3/D4 — still an honest no-op: the real capability surface this could refresh
-   * (CISettings-derived feature detection, topology-derived capability changes) isn't
-   * implemented until D6. */
+  /** § D3/D4/D6 — still an honest no-op for CAPABILITY detection specifically
+   * (CISettings-derived feature detection isn't implemented until a later phase).
+   * Topology refresh is a SEPARATE, real operation — see `refreshTopology()` — not
+   * folded into this method, since `refreshCapabilities()`'s documented contract
+   * (§ `INativeProtocolDriver`) is about re-querying a device's CAPABILITIES, not its
+   * System/Group relationships. */
   async refreshCapabilities(deviceId: DeviceId): Promise<void> {
     if (!this.manages(deviceId)) return;
-    this.tracer.event(`refreshCapabilities ${deviceId} — no-op (D4 skeleton; real behavior lands in D6)`);
+    this.tracer.event(`refreshCapabilities ${deviceId} — no-op (capability detection lands in a later phase)`);
+  }
+
+  private notifyTopologyChange(result: DevialetTopologyChangeResult): DevialetTopologyChangeResult {
+    if (result.changed) {
+      for (const listener of this.topologyListeners) listener(result);
+    }
+    return result;
+  }
+
+  /** Subscribe to real topology changes (§14 of the D6 brief) — same shape as
+   * `onState()`: a `Set`-backed listener registry with an unsubscribe closure, no new
+   * event bus. Only fires for an ACTUAL change (`result.changed`), mirroring
+   * `onState()`'s own dedupe-before-dispatch discipline via `recordCapabilityState()`. */
+  onTopologyChange(listener: (result: DevialetTopologyChangeResult) => void): () => void {
+    this.topologyListeners.add(listener);
+    return () => this.topologyListeners.delete(listener);
+  }
+
+  /** The current topology snapshot, read-only — no network call. */
+  getTopologySnapshot(): DevialetTopologySnapshot {
+    return this.topology.get();
+  }
+
+  /** This SupremeOS device's current Devialet topology, or `null` if unmanaged or if
+   * `refreshTopology()` has never successfully resolved this device's identity yet
+   * (never a fabricated placeholder). */
+  getDeviceTopology(deviceId: DeviceId): DevialetDeviceTopology | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b || !b.devialetId) return null;
+    return this.topology.get().devices[b.devialetId] ?? null;
+  }
+
+  /**
+   * § D6 — the real Device→System→Group reconciliation pass. For every currently
+   * media-bound device: queries `GET /devices/current` (establishing/confirming this
+   * device's real `deviceId` — the one place this driver finally populates
+   * `DevialetBinding.devialetId`, deliberately deferred since D1), and, for each
+   * DISTINCT `systemId` encountered, one best-effort `GET /systems/current` call for
+   * its display name (deduped — never once per device sharing that system). Every
+   * per-device query result feeds `DevialetTopologyRegistry.merge()`, which performs
+   * the actual reconciliation (see `devialet-topology.ts` for the merge/idempotency
+   * rules). A device whose query fails this round is simply skipped — its last-known
+   * topology (if any) is preserved untouched by the registry's own merge rule, never
+   * treated as "left the system." `onTopologyChange()` listeners fire only if the
+   * resulting snapshot actually differs from the previous one.
+   *
+   * No timer here — an explicit, caller-invoked operation, per §13 of the D6 brief
+   * ("Do NOT introduce an aggressive timer yet... a later phase will decide how
+   * frequently topology should be refreshed").
+   */
+  async refreshTopology(): Promise<DevialetTopologyChangeResult> {
+    this.tracer.event("topology: refresh started");
+    const mediaBindings = this.bindings.filter((b) => b.capability === "media");
+    const systemNames = new Map<string, string | null>();
+    const fresh: DevialetFreshDeviceTopology[] = [];
+    for (const b of mediaBindings) {
+      const endpoint = this.endpointFor(b);
+      let info;
+      try {
+        info = await this.tracked(b.host, "R1 GET devices/current (topology)", () => this.client.getDevice(endpoint));
+      } catch (err) {
+        this.tracer.event(`topology: device query failed for ${b.deviceId} — ${err instanceof Error ? err.message : String(err)} (keeping last-known topology)`);
+        continue;
+      }
+      b.devialetId = info.deviceId;
+      b.systemId = info.systemId ?? null;
+      b.groupId = info.groupId ?? null;
+      const systemId = info.systemId ?? null;
+      if (systemId && !systemNames.has(systemId)) {
+        try {
+          const system = await this.tracked(b.host, "R1 GET systems/current (topology)", () => this.client.getSystem(endpoint));
+          systemNames.set(systemId, system.systemName);
+        } catch (err) {
+          this.tracer.event(`topology: system name query failed for ${systemId} — ${err instanceof Error ? err.message : String(err)} (device/system membership unaffected)`);
+          systemNames.set(systemId, null);
+        }
+      }
+      fresh.push({
+        deviceId: info.deviceId,
+        supremeDeviceId: b.deviceId,
+        host: b.host,
+        systemId,
+        groupId: info.groupId ?? null,
+        role: info.role ?? null,
+        systemName: systemId ? systemNames.get(systemId) : undefined,
+      });
+      this.tracer.event(`topology: device ${info.deviceId} system=${systemId ?? "none"} group=${info.groupId ?? "none"} role=${info.role ?? "none"}`);
+    }
+    const result = this.notifyTopologyChange(this.topology.merge(fresh));
+    this.tracer.event(result.changed ? "topology: changed" : "topology: unchanged");
+    return result;
   }
 
   /**
