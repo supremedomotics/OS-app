@@ -4,8 +4,6 @@ import type { BackendStateEvent } from "@supreme/integration-layer";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WiimProtocolDriver } from "./wiim-driver.js";
 import { decodeHex, commandToLinkPlay } from "./wiim-codec.js";
-import { DevialetProtocolDriver } from "./devialet-driver.js";
-import { commandToDevialet } from "./devialet-codec.js";
 import { SonosProtocolDriver, type SonosPlayer, type SonosPlayerState } from "./sonos-driver.js";
 import { AjaxProtocolDriver, type AjaxClient, type AjaxEvent } from "./ajax-driver.js";
 
@@ -68,38 +66,12 @@ describe("WiiM / LinkPlay driver (in-process HTTP)", () => {
   });
 });
 
-describe("Devialet driver (in-process HTTP)", () => {
-  let srv: Awaited<ReturnType<typeof startHttp>>;
-  let driver: DevialetProtocolDriver;
-  const dev = "device-phantom" as DeviceId;
-
-  beforeAll(async () => {
-    srv = await startHttp((url) => {
-      if (url.endsWith("/soundControl/volume")) return { body: JSON.stringify({ volume: 55, mute: false }) };
-      if (url.endsWith("/playback")) return { body: JSON.stringify({ state: "playing", title: "Time", artist: "Hans Zimmer" }) };
-      return { body: "{}" };
-    });
-    driver = new DevialetProtocolDriver({ pollMs: 1_000_000 });
-    await driver.connect();
-    await driver.bind({ deviceId: dev, capability: "media", address: srv.base });
-  });
-  afterAll(async () => {
-    await driver.disconnect();
-    await new Promise<void>((r) => srv.server.close(() => r()));
-  });
-
-  it("maps a volume command and polls volume+playback into media state", async () => {
-    expect(commandToDevialet({ capability: "media", action: "play" })?.path).toContain("/playback/play");
-    await driver.command(dev, { capability: "media", action: "volume", volume: 60 });
-    expect(srv.hits.some((h) => h.startsWith("POST") && h.includes("/soundControl/volume"))).toBe(true);
-
-    await driver.poll();
-    const s = driver.getState(dev, "media") as { volume: number; playback: string; artist: string | null };
-    expect(s.volume).toBe(55);
-    expect(s.playback).toBe("playing");
-    expect(s.artist).toBe("Hans Zimmer");
-  });
-});
+// Devialet driver regression coverage moved to devialet-driver.test.ts and
+// devialet-ip-control-client.test.ts (§ D3) — the old fixtures here targeted a
+// factually incorrect endpoint shape (`/ipcontrol/v1/groups/.../soundControl/volume`)
+// that the real R1 documentation, read directly in D3, contradicts: volume is
+// SYSTEM-level (`/systems/{systemId}/sources/current/soundControl/volume`), never
+// group-level.
 
 describe("Sonos driver (fake UPnP transport)", () => {
   it("maps media commands to the player and surfaces its state", async () => {

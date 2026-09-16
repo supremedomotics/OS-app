@@ -307,9 +307,80 @@ export {
   type SipRingEvent,
 } from "./sip-driver.js";
 export { WiimProtocolDriver, type WiimDriverOptions } from "./wiim-driver.js";
+// § TV SDK Core (Phase 1) — reusable session/queue/reconnect/state-cache/event
+// infrastructure for Android TV / Google TV / Fire OS / Vega OS platform drivers. No
+// platform driver (AndroidTvDriver etc.) exists yet — see docs/architecture/tv-driver-sdk.md.
+export { TvDeviceSession, DEFAULT_MEDIA_SOURCE_PRIORITY, DEFAULT_FOREGROUND_SOURCE_PRIORITY, DEFAULT_MEDIA_POSITION_COALESCING_MS } from "./tv-sdk/tv-device-session.js";
+export { TvDeviceSessionManager } from "./tv-sdk/tv-device-session-manager.js";
+export { TvCommandQueue, type TvCommandType } from "./tv-sdk/tv-command-queue.js";
+export { TvReconnectScheduler, type TvReconnectOptions } from "./tv-sdk/tv-reconnect.js";
+export { TvStateCache, type SourcedUpdate } from "./tv-sdk/tv-state-cache.js";
+export { TvSessionEventBus, type TvSessionEvent, type TvSessionEventListener } from "./tv-sdk/tv-events.js";
+export {
+  TvError,
+  TvConnectionError,
+  TvTimeoutError,
+  TvPairingRequiredError,
+  TvAuthenticationError,
+  TvUnsupportedCommandError,
+  TvConfigError,
+  isTvErrorRetryable,
+} from "./tv-sdk/tv-errors.js";
+export type {
+  TvSessionState,
+  TvRemoteKey,
+  TvForegroundAppConfidence,
+  TvForegroundApp,
+  TvAppRegistryEntry,
+  TvIdentity,
+  TvTransport,
+  TvTransportEvent,
+  TvDeviceConfig,
+  TvSessionDiagnostics,
+} from "./tv-sdk/tv-types.js";
+export { FakeTvTransport } from "./tv-sdk/transports/fake-tv-transport.js";
 export { commandToLinkPlay, stateFromLinkPlay, decodeHex } from "./wiim-codec.js";
-export { DevialetProtocolDriver, type DevialetDriverOptions } from "./devialet-driver.js";
-export { commandToDevialet, stateFromDevialet, DEVIALET_STATE_PATHS } from "./devialet-codec.js";
+export { DevialetProtocolDriver, DevialetApiError, DevialetCiSettingsError, type DevialetDriverOptions } from "./devialet-driver.js";
+export { mediaStateFromDevialet } from "./devialet-codec.js";
+export {
+  DevialetIpControlClient,
+  KNOWN_DEVIALET_ERROR_CODES,
+  type DevialetEndpoint,
+  type DevialetDeviceInfo,
+  type DevialetSystemInfo,
+  type DevialetSourceRef,
+  type DevialetSourceType,
+  type DevialetGroupSources,
+  type DevialetCurrentSource,
+  type DevialetMetadata,
+  type DevialetPlayingState,
+  type DevialetMuteState,
+  type DevialetPlaybackOperation,
+  type DevialetLogicalErrorBody,
+  type DevialetErrorKind,
+} from "./devialet-ip-control-client.js";
+export {
+  DevialetCiSettingsClient,
+  classifyOpcode as classifyDevialetCiSettingsOpcode,
+  DEVIALET_CISETTINGS_OPCODES,
+  type DevialetCiSettingsEndpoint,
+  type DevialetCiSettingsProvenance,
+  type DevialetCiSettingsAccess,
+  type DevialetCiSettingsOpcodeInfo,
+  type DevialetCiSettingsPowerState,
+  type DevialetCiSettingsSourceLockState,
+  type DevialetCiSettingsStreamType,
+  type DevialetCiSettingsLedMode,
+  type DevialetCiSettingsMix,
+  type DevialetCiSettingsLeanState,
+  type DevialetCiSettingsErrorKind,
+} from "./devialet-cisettings-client.js";
+export {
+  DEVIALET_MDNS_SERVICE,
+  parseDevialetCandidate,
+  transportHostFor,
+  type DevialetDiscoveryCandidate,
+} from "./devialet-discovery.js";
 export {
   SonosProtocolDriver,
   type SonosDriverOptions,
