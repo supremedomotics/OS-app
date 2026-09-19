@@ -75,7 +75,11 @@ export class SupremeStream {
   }
 
   private openSocket(): void {
-    const url = `${this.wsBaseUrl.replace(/\/$/, "")}/v1/stream?access_token=${this.accessToken}`;
+    // § the access token must be percent-encoded — a session/Mobile-authorization token's
+    // raw base64 signature can contain "+", which standard query-string parsing (the
+    // server's URLSearchParams) silently decodes as a space, corrupting the token and
+    // failing signature verification.
+    const url = `${this.wsBaseUrl.replace(/\/$/, "")}/v1/stream?access_token=${encodeURIComponent(this.accessToken)}`;
     const ws = new this.ctor(url);
     this.ws = ws;
     ws.addEventListener("open", () => {

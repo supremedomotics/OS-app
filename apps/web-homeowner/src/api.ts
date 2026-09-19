@@ -121,7 +121,11 @@ export async function apiRequest(method: string, path: string, body?: string): P
 }
 /** The authenticated WebSocket stream URL (for the developer WS inspector). */
 export function streamUrl(): string | null {
-  return client.accessToken ? `${wsBaseUrl}/v1/stream?access_token=${client.accessToken}` : null;
+  // § the access token must be percent-encoded — a session/Mobile-authorization token's
+  // raw base64 signature can contain "+", which standard query-string parsing (the
+  // server's URLSearchParams) silently decodes as a space, corrupting the token and
+  // failing signature verification. Same fix as tunnel-broker's own openStream() call.
+  return client.accessToken ? `${wsBaseUrl}/v1/stream?access_token=${encodeURIComponent(client.accessToken)}` : null;
 }
 
 // ── Driver Framework (authenticated) ──────────────────────────────────────────────

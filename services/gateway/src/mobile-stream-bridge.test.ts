@@ -53,7 +53,7 @@ describe("Mobile-authorization bridge on the real /v1/stream event channel", () 
   }
 
   it("a valid Mobile token opens the real event stream (no error frame, no close)", async () => {
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${tokenFor("m1")}`);
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${encodeURIComponent(tokenFor("m1"))}`);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("did not open in time")), 3000);
       ws.on("open", () => {
@@ -82,7 +82,7 @@ describe("Mobile-authorization bridge on the real /v1/stream event channel", () 
     expect(onoffDevice).toBeTruthy();
     const deviceId = onoffDevice!.id;
 
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${token}`);
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${encodeURIComponent(token)}`);
     const stateFrame = new Promise<ServerFrame>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("no state delta received")), 25000);
       // Subscribe to every room ("*") rather than one room id, so this test never depends on
@@ -123,7 +123,7 @@ describe("Mobile-authorization bridge on the real /v1/stream event channel", () 
       hubId: otherHub.hubUuid,
       projectId: ctx.homeId,
     });
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${forged}`);
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${encodeURIComponent(forged)}`);
     const closeCode = await new Promise<number>((resolve) => {
       ws.on("close", (code) => resolve(code));
     });
@@ -132,7 +132,7 @@ describe("Mobile-authorization bridge on the real /v1/stream event channel", () 
 
   it("rejects a token claiming the wrong project id", async () => {
     const wrongProject = tokenFor("m1", ctx.hubIdentity.hubUuid, "some-other-project");
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${wrongProject}`);
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${encodeURIComponent(wrongProject)}`);
     const closeCode = await new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
     expect(closeCode).toBe(1008);
   });
@@ -152,7 +152,7 @@ describe("Mobile-authorization bridge on the real /v1/stream event channel", () 
     });
     ctx.mobileAuthorizations.revoke("revoked-mobile", new Date().toISOString());
 
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${tokenFor("revoked-mobile")}`);
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${encodeURIComponent(tokenFor("revoked-mobile"))}`);
     const closeCode = await new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
     expect(closeCode).toBe(1008);
   });
@@ -186,7 +186,7 @@ describe("Mobile-authorization bridge on the real /v1/stream event channel", () 
     "disconnecting a Mobile-authenticated socket cleans up its subscriptions (no leaked listener)",
     async () => {
     const token = tokenFor("m1");
-    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${token}`);
+    const ws = new WebSocket(`${wsBase}/v1/stream?access_token=${encodeURIComponent(token)}`);
     await new Promise((r) => ws.once("open", r));
     ws.send(JSON.stringify({ type: "subscribe", rooms: ["*"] }));
     await new Promise((r) => setTimeout(r, 50));

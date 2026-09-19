@@ -144,7 +144,9 @@ export async function connectionStorm(opts: {
     send(d: string): void;
     close(): void;
   };
-  const url = `${opts.wsBaseUrl}/v1/stream?access_token=${opts.session.token}`;
+  // § the access token must be percent-encoded — a raw base64 signature can contain "+",
+  // which standard query-string parsing silently decodes as a space, corrupting the token.
+  const url = `${opts.wsBaseUrl}/v1/stream?access_token=${encodeURIComponent(opts.session.token)}`;
   const results = await Promise.all(
     Array.from({ length: opts.count }, () =>
       new Promise<boolean>((resolve) => {
