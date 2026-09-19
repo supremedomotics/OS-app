@@ -101,6 +101,12 @@ class CallSession {
   final DateTime startedAt;
   final String? doorStationLabel;
 
+  /// §Phase13.5 — stable door-station identity (from the Home's configured door-station list,
+  /// never inferred from display name) — present once `SipService` has matched the incoming
+  /// call's remote SIP identity to a configured door station; null if the call came from an
+  /// unmapped/unknown remote identity (never fabricated).
+  final String? doorStationId;
+
   const CallSession({
     required this.callId,
     required this.hubId,
@@ -109,6 +115,7 @@ class CallSession {
     required this.state,
     required this.startedAt,
     this.doorStationLabel,
+    this.doorStationId,
   });
 
   CallSession copyWith({CallState? state}) => CallSession(
@@ -119,6 +126,7 @@ class CallSession {
         state: state ?? this.state,
         startedAt: startedAt,
         doorStationLabel: doorStationLabel,
+        doorStationId: doorStationId,
       );
 }
 

@@ -10,6 +10,16 @@ describe("MatterDeviceTypeRegistry — § Matter Bridge Phase 1 foundation", () 
     expect(matterDeviceTypeRegistry.byId(0x0202)?.name).toBe("Window Covering");
     expect(matterDeviceTypeRegistry.byId(0x010a)?.name).toBe("On/Off Plug-in Unit");
     expect(matterDeviceTypeRegistry.byId(0x000f)?.name).toBe("Generic Switch");
+    expect(matterDeviceTypeRegistry.byId(0x0301)?.name).toBe("Thermostat");
+  });
+
+  it("§ Matter Bridge Phase 3.2 — Thermostat requires exactly Identify + Thermostat (per @matter/node's own thermostat.ts), no optional server clusters, primaryCapability 'temperature'", () => {
+    const thermostat = matterDeviceTypeRegistry.byId(0x0301)!;
+    const names = thermostat.requiredServerClusters.map((c) => c.clusterName).sort();
+    expect(names).toEqual(["Identify", "Thermostat"]);
+    expect(thermostat.optionalServerClusters).toEqual([]);
+    expect(thermostat.primaryCapability).toBe("temperature");
+    expect(thermostat.revision).toBe(6);
   });
 
   it("§ Matter Bridge Phase 2B — Generic Switch requires exactly Identify + Switch (per @matter/node's own generic-switch.js), and has no primaryCapability (it's an input device, not a capability-state device)", () => {

@@ -51,7 +51,7 @@ export interface MatterDeviceTypeDefinition {
   primaryCapability: CapabilityCommand["capability"] | null;
 }
 
-const { Identify, Groups, OnOff, LevelControl, ScenesManagement, ColorControl, WindowCovering, OccupancySensing, Switch } =
+const { Identify, Groups, OnOff, LevelControl, ScenesManagement, ColorControl, WindowCovering, OccupancySensing, Switch, Thermostat } =
   Object.fromEntries(Object.entries(MatterClusterId).map(([k, v]) => [k, cluster(v)])) as Record<
     keyof typeof MatterClusterId,
     MatterClusterRequirement
@@ -141,5 +141,24 @@ export const MATTER_DEVICE_TYPES: MatterDeviceTypeDefinition[] = [
     requiredServerClusters: [Identify, Switch],
     optionalServerClusters: [],
     primaryCapability: null,
+  },
+  {
+    // § Matter Bridge Phase 3.2 — Thermostat (0x0301 / 769), transcribed directly from
+    // `@matter/node`'s generated `devices/thermostat.ts`: mandatory server clusters are only
+    // Identify + Thermostat (verified via a live reproduction against the real installed
+    // @matter/main@0.17.9 runtime, not guessed — see docs/architecture ADR / Phase 3.1.1 record
+    // for the full audit trail). Deliberately NO optional server clusters composed: `Groups`,
+    // `EnergyPreference`, `ThermostatUserInterfaceConfiguration` are all Matter-spec-optional and
+    // have no SupremeOS/CoolMaster data source (Phase 3.1 §12 — "do not enable a feature merely
+    // because the SDK supports it"). `FanControl`/`RelativeHumidityMeasurement`/
+    // `OccupancySensing` are CLIENT-role optional clusters on this device type (the bridge would
+    // need to act as a Matter CONTROLLER pointing at a separate endpoint), not composable as
+    // servers here at all — irrelevant to this table, which only lists server clusters.
+    id: 0x0301,
+    name: "Thermostat",
+    revision: 6,
+    requiredServerClusters: [Identify, Thermostat],
+    optionalServerClusters: [],
+    primaryCapability: "temperature",
   },
 ];

@@ -3,6 +3,8 @@ import type { BackendStateEvent } from "@supreme/integration-layer";
 import { describe, expect, it } from "vitest";
 import { KnxProtocolDriver, type KnxConnection, type KnxValue } from "./knx-driver.js";
 import { decodeHeatCool, decodeHvacControllingMode, decodeHvacOperatingMode, decodeHvacSetpoints, decodeHvacStatus, encodeHeatCool, encodeHvacOperatingMode, encodeHvacSetpoints, stateFromValue, valueFromCommand } from "./knx-codec.js";
+import { Thermostat } from "@matter/main/clusters/thermostat";
+import { temperatureCommandForSystemMode } from "./matter-bridge/clusters/thermostat-control-adapter.js";
 
 /** A fake KNX bus: records group-writes and lets a test push status telegrams. */
 class FakeKnxBus implements KnxConnection {
@@ -2281,5 +2283,103 @@ describe("§ Phase 3.3D-FIX — duplicate HVAC GA assignment regression", () => 
       heatCool: "heat",
       // "operatingMode" is absent — its subscriber was overwritten before ever firing.
     });
+  });
+});
+
+describe("§ Phase 3.4B — Matter SystemMode Heat/Cool commands route through the real KNX heatCool role", () => {
+  function bindHvacHeatCool(driver: KnxProtocolDriver, dev: DeviceId, gas: { setpoint: string; ambient: string; heatCool: string }) {
+    return driver.bind({
+      deviceId: dev,
+      capability: "temperature",
+      address: gas.setpoint,
+      config: {
+        statusAddress: gas.ambient,
+        dpt: "DPT9.001",
+        hvacRoles: { heatCool: { address: gas.heatCool, dpt: "DPT1.100" } },
+      },
+    });
+  }
+
+  it("3 — a Matter SystemMode.Heat command, unmodified, reaches the existing KNX heatCool role GA with the correct DPT 1.100 value", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+    const dev = "device-matter-heat" as DeviceId;
+    await bindHvacHeatCool(driver, dev, { setpoint: "130/1/1", ambient: "130/1/2", heatCool: "130/1/3" });
+
+    const command = temperatureCommandForSystemMode(Thermostat.SystemMode.Heat)!;
+    await driver.command(dev, command);
+    expect(bus.writes).toEqual([{ ga: "130/1/3", value: 1, dpt: "DPT1.100" }]);
+  });
+
+  it("3 — a Matter SystemMode.Cool command, unmodified, reaches the existing KNX heatCool role GA with the correct DPT 1.100 value", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+    const dev = "device-matter-cool" as DeviceId;
+    await bindHvacHeatCool(driver, dev, { setpoint: "131/1/1", ambient: "131/1/2", heatCool: "131/1/3" });
+
+    const command = temperatureCommandForSystemMode(Thermostat.SystemMode.Cool)!;
+    await driver.command(dev, command);
+    expect(bus.writes).toEqual([{ ga: "131/1/3", value: 0, dpt: "DPT1.100" }]);
+  });
+
+  it("4 — a Matter Heat/Cool command against a device with no heatCool role bound fails descriptively — no fabricated fallback GA", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+    const dev = "device-matter-heat-nobinding" as DeviceId;
+    await driver.bind({ deviceId: dev, capability: "temperature", address: "132/1/1" }); // no hvacRoles at all
+
+    const command = temperatureCommandForSystemMode(Thermostat.SystemMode.Heat)!;
+    await expect(driver.command(dev, command)).rejects.toThrow(/no "heatCool" HVAC role/);
+    expect(bus.writes).toEqual([]);
+  });
+
+  it("5 — a Matter Heat/Cool command never writes the primary temperature GA, only the heatCool role GA", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+    const dev = "device-matter-heat-no-primary-write" as DeviceId;
+    await bindHvacHeatCool(driver, dev, { setpoint: "133/1/1", ambient: "133/1/2", heatCool: "133/1/3" });
+    bus.push("133/1/2", 21); // establish a cached ambient/target — proves it's never redundantly re-sent
+
+    const command = temperatureCommandForSystemMode(Thermostat.SystemMode.Heat)!;
+    await driver.command(dev, command);
+    expect(bus.writes.some((w) => w.ga === "133/1/1")).toBe(false); // primary GA never touched
+    expect(bus.writes).toEqual([{ ga: "133/1/3", value: 1, dpt: "DPT1.100" }]);
+  });
+
+  it("Off/FanOnly Matter commands, unmodified, still fail via the existing 3.3D-FIX rejection — not silently swallowed, no invented KNX mapping", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+    const dev = "device-matter-off" as DeviceId;
+    await bindHvacHeatCool(driver, dev, { setpoint: "134/1/1", ambient: "134/1/2", heatCool: "134/1/3" });
+
+    const offCommand = temperatureCommandForSystemMode(Thermostat.SystemMode.Off)!;
+    await expect(driver.command(dev, offCommand)).rejects.toThrow(/no writable payload/);
+
+    const fanOnlyCommand = temperatureCommandForSystemMode(Thermostat.SystemMode.FanOnly)!;
+    await expect(driver.command(dev, fanOnlyCommand)).rejects.toThrow(/no writable payload/);
+    expect(bus.writes).toEqual([]);
+  });
+
+  it("state authority: feedback disagreeing with the requested Matter mode wins — no optimistic heatCool state", async () => {
+    const bus = new FakeKnxBus();
+    const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });
+    await driver.connect();
+    const dev = "device-matter-heat-confirm" as DeviceId;
+    await bindHvacHeatCool(driver, dev, { setpoint: "135/1/1", ambient: "135/1/2", heatCool: "135/1/3" });
+    bus.push("135/1/2", 21);
+
+    const command = temperatureCommandForSystemMode(Thermostat.SystemMode.Heat)!;
+    await driver.command(dev, command);
+    // Not yet reflected — no real feedback has arrived.
+    const before = driver.getState(dev, "temperature");
+    expect(before?.kind === "temperature" ? before.heatCool : "wrong-kind").toBeUndefined();
+
+    bus.push("135/1/3", 0); // the real device actually settled on cool, not the requested heat
+    expect(driver.getState(dev, "temperature")).toMatchObject({ heatCool: "cool" });
   });
 });

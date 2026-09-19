@@ -95,6 +95,35 @@ export function resolveMatterDeviceType(
     return { outcome: "SUPPORTED", deviceType, reason: null };
   }
 
+  // § Matter Bridge Phase 3.2 — CoolMaster Thermostat. Checked BEFORE the `onoff` fallback
+  // below (most-specific-first, same convention as `position`/`color`/`brightness` above): a
+  // real HVAC indoor unit carries BOTH `onoff` and `temperature` capabilities (see
+  // `coolmaster-mapper.ts`'s `indoorUnitDiscoveredDevice`), and without this branch it would
+  // silently fall through to the generic `onoff` case and resolve as a plain On/Off Light —
+  // exactly the kind of silent misclassification this resolver exists to prevent.
+  //
+  // `deviceKind === "thermostat"` is the SAME existing, already-used signal
+  // (`device.supremeType`, `SupremeDeviceType` enum, `packages/domain-model/src/entities.ts`)
+  // this resolver already relies on to disambiguate On/Off Light vs. Plug-in Unit — never a
+  // new capability, never a protocol-specific check. `services/commissioning/src/index.ts`'s
+  // `inferType()` already assigns `supremeType: "thermostat"` to any device whose discovered
+  // capabilities include `temperature` (confirmed: CoolMaster and KNX are the only two drivers
+  // in this codebase that ever produce a `temperature` capability at all — every other
+  // temperature-reporting source, e.g. Matter/Zigbee, models it as a read-only `sensor`
+  // capability instead, never `temperature` — see Phase 3.1 audit) — so this signal is, in
+  // practice, already reliably "this is a real HVAC device," not a guess.
+  //
+  // A `temperature`-capable device whose `deviceKind` is anything else (e.g. an installer
+  // explicitly re-typed it, or a future generic temperature-only capability appears) falls
+  // through unchanged to the existing `onoff`/UNSUPPORTED logic below — this branch only ever
+  // ADDS a new resolution path, it never removes or narrows an existing one.
+  const temperature = has(capabilities, "temperature");
+  if (temperature && deviceKind === "thermostat") {
+    const deviceType = registry.byId(0x0301);
+    if (!deviceType) return unsupportedRegistryGap(0x0301);
+    return { outcome: "SUPPORTED", deviceType, reason: null };
+  }
+
   const onoff = has(capabilities, "onoff");
   if (onoff) {
     const id = deviceKind === "switch" ? 0x010a : 0x0100;
@@ -108,8 +137,8 @@ export function resolveMatterDeviceType(
     deviceType: null,
     reason:
       "No SupremeOS capability on this device maps to a Matter Bridge device type supported in " +
-      "this phase (onoff, brightness, color, position) — sensors, locks, thermostats, fans, " +
-      "media, and energy devices are not yet bridgeable (§ Phase 2-4).",
+      "this phase (onoff, brightness, color, position, HVAC temperature) — sensors, locks, " +
+      "fans, media, and energy devices are not yet bridgeable (§ Phase 2-4/3.3+).",
   };
 }
 

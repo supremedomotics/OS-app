@@ -4,6 +4,469 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Phase 13.4 — iOS Runtime / VoIP Wake Foundation
+
+Implements the real iOS PushKit VoIP-wake + CallKit foundation, reusing Phase 12.5's already-built
+(but previously unused) `MobileRuntime` call-state machine exactly as designed. No SIP media, no
+video, no door release, no Android changes. `apps/new/mobile` only (iOS + shared Dart runtime
+boundary code).
+
+**1. Audit:** re-inspected `AppDelegate.swift`, `PushStreamHandler`, `MobileRuntimePlatform`,
+`NativeRuntimeBridge`, `RuntimeController`, `lifecycle.dart`, `mapPushEnvelopeToHomeEvent`, and
+`MobileRuntime`'s own call-state API AS THEY EXIST NOW. Key finding: Phase 12.5 already built a
+complete, tested, 8-state (`idle/incoming/ringing/connecting/connected/ending/ended/failed`)
+call-state machine (`MobileRuntime.ingestIncomingCall`/`transitionCall`) with hub-authorization
+isolation already enforced — matching the phase's own example transition list almost exactly.
+This phase's entire Dart-side job was WIRING existing infrastructure to a real event source, not
+building a new state machine (confirming the phase's own "call remains its own state machine,
+only if actually required" instruction — it was already built, just unused).
+
+**2. No new iOS-specific lifecycle enum.** Per the phase's explicit instruction, `ProcessState`/
+`UiState` (Phase 13.1, unchanged) remain the only process/UI dimensions on iOS — no
+`IOSState`/combined enum was created. `AndroidServiceState` (Phase 13.3) stays Android-only,
+correctly.
+
+**3. `MobileRuntimePlatform` extended** with 4 new `NativeRuntimeEvent` subtypes (added, not
+repurposing existing ones, per Phase 13.1's own extensibility contract): `VoipTokenRefreshed`,
+`IncomingCallEvent`, `CallStateChangedFromNative`, `IncomingCallFailed`. All flow over the
+EXISTING `com.supremeos/runtime`/`com.supremeos/runtime/events` channel pair — no new channel,
+per the phase's own "through the stable com.supremeos/runtime boundary" instruction.
+`NativeRuntimeBridge` parses all four with the same drop-malformed-never-throw policy as every
+prior event type; `RuntimeController` gained `handleIncomingCall`/`handleNativeCallStateChange`
+bridging into the existing `MobileRuntime` call API — with a real, deliberate boundary hardening
+difference from `MobileRuntime.transitionCall`'s own contract: a DIRECT caller gets a thrown
+`StateError` on an illegal/unknown transition (a real bug should surface loudly), but the NATIVE
+BRIDGE catches and drops it (a version-skewed or duplicate native callback must never crash the
+app) — documented explicitly in both places so the difference is intentional, not an oversight.
+
+**4. `VoipCallManager.swift` (NEW):** the real native implementation — `PKPushRegistry`
+registered for `.voIP` ONLY (never generic background execution, per the phase's explicit
+prohibition), `CXProvider`/`CXProviderDelegate` for OS-level call presentation. On
+`didReceiveIncomingPushWith`, reports to CallKit SYNCHRONOUSLY before anything else (the real
+Apple requirement — failing this risks entitlement revocation), using ONLY `hubId` + `callId`
+from the payload (never a bearer token/secret — verified by code review of every payload field
+read). A `callHomeMap: [UUID: String]` is the ONLY place Call-UUID→Home identity lives, holding
+just the canonical `hubId` (§"MULTI-HOME": "a CallKit UUID is not sufficient as the Home
+identity" — now solved). `CXAnswerCallAction`/`CXEndCallAction` handlers forward ONLY a state
+transition to Dart — reviewed and confirmed to touch no HTTP client, no command path, no
+door-release API (§"ANSWERING A CALL": verified structurally AND by a new Dart test using a
+`MockClient` that asserts zero HTTP calls across a full answer→connect→end sequence).
+`provider(_:didActivate:)`/`didDeactivate:` are real, empty audio-session HOOKS — no RTP/media
+started, explicitly documented as a future-phase consumer point, never faked as working audio.
+
+**5. Real finding, fixed during testing:** `MobileRuntime`'s own legal-transition table requires
+`incoming → ringing` before `ringing → connecting` — a direct `incoming → connecting` jump (what
+an initial, naive "answer" implementation assumed) is illegal. Fixed by having
+`VoipCallManager`'s CallKit-report success handler ALSO emit a `ringing` transition immediately
+(CallKit's successful report IS the real "the OS is now presenting/ringing this call" moment) —
+a correct architectural finding, not a workaround, caught by the new deterministic test suite
+before being reported as done.
+
+**6. Runtime reactivation contract (documented, not invented):** CallKit's `reportNewIncomingCall`
+happens natively, independent of any Flutter engine state — Apple guarantees this. Forwarding
+the resulting event into Dart (`emitEvent`) is buffered (`pendingEvents`) whenever no
+EventChannel listener has attached yet (e.g., a VoIP push cold-launching a terminated app before
+Dart's own `onListen` fires) and flushed the moment it does. **HONEST LIMITATION, not solved
+this phase:** the exact TIMING between a cold VoIP-triggered launch and the Flutter engine's
+EventChannel actually attaching is real iOS behavior this environment cannot measure (no
+macOS/Xcode/device) — classified REAL-WORLD ACCEPTANCE TEST REQUIRED, not claimed as instant or
+guaranteed.
+
+**7. `UIBackgroundModes: [voip]` added to Info.plist** — the first background mode this project
+has declared, and the ONLY one a real, implemented mechanism (`VoipCallManager`) actually needs;
+consistent with the project's standing "never declare a capability speculatively" convention
+established in Phase 13.1/13.2's own Info.plist decisions.
+
+**8. Security:** verified by code review — no bearer token, private key, or Home secret appears
+in any `PKPushPayload` field read, any `CXCallUpdate` property set, or any native log statement
+in the new file. No second authentication mechanism introduced.
+
+**Gate:** mobile 74/74 (61 prior + 13 new: 6 `RuntimeController` call-lifecycle tests, 5
+`NativeRuntimeBridge` VoIP/CallKit event-parsing tests, 2 exhaustive-switch/interface-contract
+updates). `flutter analyze` clean. Mobile + Touchpanel web builds succeed. shared 172/172,
+shared_ui 7/7, touchpanel 23/23 (all three untouched, re-verified). Android APK build re-attempted
+and fails at the SAME identical pre-existing Gradle loopback-socket error (~4s, unchanged from
+Phase 13.3) — confirms zero Android regression from this iOS-only phase.
+
+**What remains, explicitly not built this phase (§"PROHIBITED IN THIS PHASE," honest):**
+- SIP stack, SIP registration, INVITE, RTP, SRTP, codecs, STUN/TURN, WebRTC media, video, door
+  release, unlock command, Android ConnectionService — NONE implemented, confirmed by review of
+  every file changed this phase.
+- Real APNs/PushKit/CallKit exercise against a real device — impossible in this environment (no
+  macOS, no Xcode, no physical iPhone, no real Apple Developer/VoIP-certificate credentials).
+  Classified REAL-WORLD ACCEPTANCE TEST REQUIRED throughout, never claimed as proven.
+- No server-side VoIP-token registration route exists yet (the Hub has no way to actually SEND a
+  VoIP push today) — `VoipTokenRefreshed` reaches Dart but nothing registers it anywhere; this is
+  the real, current ceiling of "foundation," not a gap hidden from this report.
+- Home-context restoration after a cold VoIP wake (re-authenticating, fetching an authoritative
+  Hub snapshot) is NOT built this phase — `handleIncomingCall` only records the call's existence
+  in `MobileRuntime`; wiring it to actually re-establish a `HomeEventStreamSession`/snapshot for
+  that Home on wake is a future phase's job.
+
+**Existing-app / KNX-Matter / Android safety:** confirmed via `git status` — every change this
+phase is under `apps/new/mobile/{ios/Runner/{AppDelegate.swift, VoipCallManager.swift [new],
+Info.plist}, lib/{main.dart, runtime/{lifecycle.dart [untouched this phase], mobile_runtime_platform.dart,
+native_runtime_bridge.dart, runtime_controller.dart}}, test/{runtime_controller_test.dart,
+mobile_runtime_platform_test.dart, native_runtime_bridge_test.dart}}`. No `apps/new/shared`,
+`services/*`, Tunnel Broker, KNX/Matter, Touch Panel, or Android Kotlin file touched — confirmed
+by an identical, unchanged Android build failure signature before and after this phase's changes.
+
+## Session: Phase 13.3 — Android Runtime / Background Execution
+
+Implements real Android foreground-service background execution, extending Phase 13.1's native
+boundary and Phase 13.2's push foundation. No SIP, no CallKit/PushKit, no iOS background runtime,
+no video, no door release — per this phase's own stop condition. `apps/new/mobile` only.
+
+**1. Audit:** re-inspected `MainActivity.kt`, `SupremeFirebaseMessagingService.kt`,
+`PushChannelBridge.kt`, `RuntimeController`, `MobileRuntimePlatform`, `NativeRuntimeBridge`,
+`AndroidManifest.xml`, and Gradle config as they exist NOW (not from the prior report's memory).
+Confirmed: `MainActivity` created a fresh `FlutterEngine` per Activity lifecycle (destroyed with
+the Activity — no persistence across backgrounding), no foreground service existed, `ProcessState`
+had only two dimensions (`ProcessState`/`UiState`) alongside the unrelated
+`HubEventStreamState`/call-state machine.
+
+**2. Third orthogonal lifecycle dimension — `AndroidServiceState`** (`lifecycle.dart`):
+`stopped/starting/running/stopping/failed`. Deliberately NOT folded into `ProcessState` (the
+phase's own explicit instruction) — a device can be `background` (process) with the service
+`running` (normal case) or `stopped` (before the homeowner ever backgrounds the app), two
+genuinely different situations one enum value couldn't express. Permanently `stopped` on iOS/web
+— no equivalent construct exists there this phase. `RuntimeController` gained
+`androidServiceState`/`updateAndroidServiceState` (recording only, same no-duplicate-event policy
+as the other two dimensions, proven by test to never touch Home authorization/event-stream state).
+
+**3. `MobileRuntimePlatform` extended** with `startBackgroundService()`/`stopBackgroundService()`
+(capability-shaped — no "ForegroundService" concept leaks into the interface) and a new
+`ServiceStateChanged` event subtype on the existing sealed `NativeRuntimeEvent` hierarchy — added
+without breaking any existing `switch`, per Phase 13.1's own extensibility design.
+`NativeRuntimeBridge` implements both against the EXISTING `com.supremeos/runtime` channel pair
+(no new channel — service lifecycle is a runtime-lifecycle concern, unlike push's dedicated
+channel). `NoOpMobileRuntimePlatform` implements both as safe no-ops (web/iOS).
+
+**4. One authoritative runtime — real engine persistence, not two competing runtimes.**
+`MainActivity` now overrides `provideFlutterEngine()` (returns a `FlutterEngineCache`-cached
+engine, creating one only if none exists) and `shouldDestroyEngineWithHost()` (`false`) — the
+SAME Dart isolate, and therefore the SAME `RuntimeController`/`MobileRuntime` instance, survives
+Activity destruction/recreation. `SupremeForegroundService` (NEW) holds NO FlutterEngine, NO Dart
+isolate, and NO SupremeOS semantic state whatsoever — it is a pure native Android construct
+whose only job is raising process priority/exempting it from Doze while backgrounded, so the ONE
+existing engine keeps running uninterrupted. This directly satisfies the phase's "do not
+accidentally create two competing MobileRuntime instances" requirement by construction, not by
+convention.
+
+**5. `SupremeForegroundService` (NEW, real):** explicit start/stop via `Intent` actions
+(`ACTION_START`/`ACTION_STOP`) sent ONLY by `MainActivity`'s MethodChannel handler in response to
+an explicit Dart call — never self-started, never boot-started. `onStartCommand` returns
+`START_NOT_STICKY` (Android never silently resurrects it). Real Android 14+ (API 34)
+`ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC` declared both at `startForeground()` call time and
+in `AndroidManifest.xml`'s `<service android:foregroundServiceType="dataSync">` — chosen because
+"maintain the existing authenticated Home event-stream connection while backgrounded" matches
+`dataSync`'s stated purpose. Calm, protocol-free notification ("SupremeOS — Keeping your Home
+connected"), `IMPORTANCE_LOW` channel (silent, never interrupts). Emits its own lifecycle via a new
+`RuntimeEventBridge` (NEW, mirrors Phase 13.2's `PushChannelBridge` pattern exactly) onto the
+existing runtime EventChannel as `serviceStateChanged` frames.
+
+**6. FCM → runtime handoff (§"FCM INTERACTION"):** unchanged from Phase 13.2's own honest scope
+limit — `SupremeFirebaseMessagingService.onMessageReceived` still forwards only when
+`PushChannelBridge` has a live sink attached (i.e., the cached engine is alive and listening),
+now MORE OFTEN true in practice since the engine persists across backgrounding per item 4 above.
+Push payload remains never-authoritative — `ingestPushPayload`'s existing Phase 13.2 behavior
+(parse → `mapPushEnvelopeToHomeEvent` → `MobileRuntime.ingestEvent`, same `(hubId, eventId)`
+dedup) is completely unchanged; no device command is ever executed from a push payload.
+
+**7. LAN/remote/background connection:** NO new WebSocket implementation, NO duplicated
+`ConnectionManager`/`HomeEventStreamSession` logic. The foreground service's entire contribution
+is keeping the process alive long enough for the EXISTING Phase 12 reconnect/LAN-preference logic
+to keep doing exactly what it already does — `ConnectionManager.notifyNetworkChanged()` and the
+existing LAN-first selection are completely untouched. `main.dart`'s `RootShell` now calls
+`platform.startBackgroundService()` from `paused`/`hidden` (the Android-sanctioned "still counts
+as foreground" window for starting a foreground service) and `stopBackgroundService()` on return
+to `uiActive` — explicit, Dart-driven, never automatic on native's own initiative.
+
+**8. Boot behavior — explicitly NOT implemented, documented rationale:** no `BOOT_COMPLETED`
+receiver, no `RECEIVE_BOOT_COMPLETED` permission. Rationale: no user-facing "keep connected after
+reboot" setting exists anywhere in Settings → Home yet to gate it — adding boot-start without an
+explicit opt-in would BE the "uncontrolled always-running service" the phase explicitly forbids.
+Documented in `MainActivity.kt`'s own FUTURE EXTENSION POINTS comment for a future phase with a
+real settings toggle.
+
+**9. Security:** no new authentication mechanism. No bearer token, private key, or Home secret
+ever crosses an Intent extra, notification, FCM payload, or the Service's IPC — verified by code
+review of every Intent/notification construction site in this phase's new files (the only Intent
+extras used are the service's own `ACTION_START`/`ACTION_STOP` action strings; the notification
+carries only a static title/body and a plain "reopen the app" `PendingIntent`).
+
+**10. Multi-Home:** the foreground service and engine-persistence mechanism are entirely
+Home-agnostic — no `currentHome` concept exists anywhere in the new native code. Isolation is
+unaffected because nothing about per-Home `HomeEventStreamSession`/authorization was touched;
+proven by the SAME kind of "lifecycle updates never touch Home state" test pattern Phase 13.1
+established, now covering the third dimension too.
+
+**11. Battery/OS restrictions (documented, not hacked around):** `FOREGROUND_SERVICE` (API 28+),
+`FOREGROUND_SERVICE_DATA_SYNC` (API 34+ granular permission matching the declared type),
+`POST_NOTIFICATIONS` (API 33+ runtime permission for the persistent notification — its absence
+degrades the notification's visibility only, never crashes the service). `startForegroundService()`
+(not plain `startService()`) used on API 26+ per Android's own requirement for services intending
+`startForeground()`. No battery-optimization-exemption request, no manufacturer-specific
+allowlisting — none of that was implemented, and none was faked.
+
+**Gate:** mobile 61/61 (49 prior + 12 new: 2 `parseAndroidServiceState`, 2
+`RuntimeController.androidServiceState`, 4 `NativeRuntimeBridge` service-method/event tests,
+signature-only changes elsewhere). `flutter analyze` clean. Mobile + Touchpanel web builds
+succeed. shared 172/172, shared_ui 7/7, touchpanel 23/23 (all three untouched, re-verified).
+
+**12. Native compilation status — REAL-WORLD/NATIVE BUILD ACCEPTANCE REQUIRED, re-confirmed
+unchanged:** `flutter build apk --debug` fails at the identical Gradle loopback-socket error
+(`java.io.IOException: Unable to establish loopback connection`, ~6s), now with the foreground
+service/engine-caching Kotlin present — the failure remains pre-project-evaluation, so this
+phase's `SupremeForegroundService.kt`/`RuntimeEventBridge.kt`/`MainActivity.kt` changes remain
+completely unverified by a real build. No workaround was attempted — the phase explicitly forbids
+weakening validation to route around this.
+
+**What remains, explicitly not built this phase (§"STOP CONDITION," honest):**
+- SIP, CallKit, PushKit, iOS background runtime, video, door release, incoming-call UI,
+  ConnectionService — none implemented, confirmed by code review of every file touched.
+- `BOOT_COMPLETED` restore — deliberately deferred pending a real user-facing setting (item 8).
+- Real Android compile/device verification — blocked by the same pre-existing Gradle
+  loopback-socket issue; a real device test of "does the process actually survive backgrounding
+  under Doze" is REAL-WORLD ACCEPTANCE TEST REQUIRED, unchanged classification.
+- Battery-optimization-exemption UX (e.g. prompting the homeowner to disable aggressive
+  manufacturer battery management) — not built, not researched beyond the standard AOSP
+  foreground-service permission model documented above.
+
+**Existing-app / KNX-Matter safety:** confirmed via `git status` — every change this phase is
+under `apps/new/mobile/{android/app/src/main/{kotlin/.../{MainActivity.kt, SupremeForegroundService.kt
+[new], RuntimeEventBridge.kt [new]}, AndroidManifest.xml}, lib/runtime/{lifecycle.dart,
+mobile_runtime_platform.dart, native_runtime_bridge.dart, noop_runtime_platform.dart,
+runtime_controller.dart}, lib/main.dart, test/*}`. No `apps/new/shared`, no `services/*`, no
+Tunnel Broker, no KNX/Matter/Casambi/DALI file touched. No Touch Panel file touched (gate + web
+build both green).
+
+## Session: Phase 13.2 — Mobile Push Foundation
+
+Establishes real FCM/APNs token-lifecycle plumbing (Android + iOS) and Home-scoped push-event
+ingestion, extending Phase 13.1's native boundary — no foreground service, no BOOT_COMPLETED, no
+ConnectionService/CallKit/PushKit/SIP/video/door-release, per this phase's own stop condition.
+`apps/new/mobile`, `apps/new/shared` (one new file), `services/notifications`, `services/gateway`
+(one-line wiring) only.
+
+**1. Audit (§1):** confirmed real, reusable architecture already existed — `PushRegistrationClient`
+(Dart, Home-scoped HTTP client for `POST/DELETE /v1/push/tokens`), the server route itself
+(`authenticateMobileOrUser`-gated, per-Hub-process token store — already cross-Home-isolated by
+construction since each Home is a separate Hub process), and `PushService`/`IPushProvider`/
+`RelayPushProvider` (real architecture, no concrete FCM/APNs provider, confirmed unchanged since
+Phase 13.0's audit). No duplicate push architecture was created — every new piece extends one of
+these.
+
+**2. Platform-neutral abstraction (§2):** extended (not replaced) the EXISTING
+`PlatformPushTokenSource` (Phase 12.5) with `initialize()`, `dispose()`, and
+`onPushReceived` — the full lifecycle the phase asked for, on the interface that already existed.
+`RuntimeController` gained `unregisterPushTokenForHome(hubId)` (symmetric with the existing
+`registerPushTokenForAllHomes`) and `ingestPushPayload(data)`.
+
+**3. Real implementation — `NativePushTokenSource`** (`apps/new/mobile/lib/push/
+native_push_token_source.dart`): speaks a NEW, dedicated `com.supremeos/push` MethodChannel +
+`com.supremeos/push/events` EventChannel (deliberately separate from Phase 13.1's
+`com.supremeos/runtime` pair — push token lifecycle is its own concern). Every native call is
+`MissingPluginException`-guarded, matching Phase 13.1's established degrade-honestly pattern.
+`platform` getter reports `fcm`/`apns` from `defaultTargetPlatform`.
+
+**4. Home-scoped registration + multi-Home isolation (§3/§4):** proven, not just asserted — new
+tests show `registerPushTokenForAllHomes` authenticates each Home's request with THAT Home's own
+bearer token (captured via `MockClient`, asserted per-host), `unregisterPushTokenForHome('hub-a')`
+never issues a single request to Home B's address, and a Home with no live session is a documented
+no-op that never even resolves an address (no guessing). Isolation for INCOMING push events is
+proven at the shared-package level: `mapPushEnvelopeToHomeEvent` + `MobileRuntime.ingestEvent`
+reject a push for an unauthorized `hubId`, and identical `eventId`s on two different authorized
+Homes never cross-suppress each other.
+
+**5. Android FCM foundation (real, uncompiled):** `MainActivity.kt` gained `configurePushChannel`
+(Firebase init + `FirebaseMessaging.getInstance().token`), a new `SupremeFirebaseMessagingService`
+(real `FirebaseMessagingService` subclass, `onNewToken`/`onMessageReceived`) registered in
+`AndroidManifest.xml`, and a `PushChannelBridge` singleton letting the service (an Android
+component Flutter doesn't own) forward events to whichever engine `MainActivity` currently holds.
+Gradle: `android/settings.gradle.kts` declares `com.google.gms.google-services` (applied in
+`android/app/build.gradle.kts`), plus the Firebase BOM + `firebase-messaging` dependency.
+**HONEST STATUS: this REQUIRES a real `google-services.json` from an actual Firebase project —
+none exists in this repository, none was fabricated.** Without one, Android Gradle sync itself
+will fail at this plugin's apply step (standard, correct Firebase behavior, not a defect
+introduced here) — moot in this environment since Android build was already blocked by the
+Phase 13.1-identified Gradle loopback-socket issue (confirmed still present, same ~3-4s failure,
+before and after this phase's Gradle changes — meaning the failure occurs before project
+evaluation even reaches our new plugin/dependency lines).
+
+**6. iOS APNs foundation (real, uncompiled):** `AppDelegate.swift` gained a `configurePushChannel`
+using plain `UIApplication.registerForRemoteNotifications()` (NOT PushKit) triggered only when
+Dart calls `initialize()` (never at launch, so no permission prompt before the app decides to
+ask), `didRegisterForRemoteNotificationsWithDeviceToken` (hex-encodes the real APNs token,
+forwards via a new dedicated `PushStreamHandler`), `didFailToRegisterForRemoteNotifications` (
+honestly reported, never faked as success), and `didReceiveRemoteNotification` (forwards a
+foreground/live-engine payload only — see scope-limit doc). No `UIBackgroundModes` entry was
+added to `Info.plist` — background delivery remains explicitly out of scope. **Cannot be
+compiled or verified — no macOS on this machine, unchanged from Phase 13.0/13.1's finding.**
+
+**7. Backend contract (§11) — smallest possible extension, not a new architecture:**
+`services/notifications/src/push.ts` gained `PushEnvelope` (v1: `hubId`, `eventId`, `ts`) and
+`PushService` now accepts an optional `hubId` constructor argument, stamping the envelope into
+every delivered message's `data` map (backward compatible — omitted entirely when no `hubId` is
+configured, proven by test). `services/gateway/src/context.ts` passes
+`this.hubIdentity.hubUuid` — one line. `POST/DELETE /v1/push/tokens` were NOT modified — already
+correctly Home-scoped by construction (§11: reused, not touched). 2 new gateway-side tests (envelope
+present with hubId configured; envelope absent without — existing fields unchanged either way).
+
+**8. Deduplication (§8) — reused, not duplicated:** `mapPushEnvelopeToHomeEvent` (NEW,
+`apps/new/shared/lib/src/runtime/push_envelope.dart`) parses a push payload into the SAME
+`HomeEvent` shape `HomeEventMapper` produces from `/v1/stream` frames, so `ingestPushPayload`
+routes through the EXACT SAME `MobileRuntime.ingestEvent` pipeline a live WebSocket event uses —
+same `(hubId, eventId)` dedup key, same hub-authorization filtering, no second dedup mechanism.
+Proven: the same push payload ingested twice is processed once; a WS-delivered event and a
+later push for the identical id are mutually suppressed regardless of transport order; a
+malformed payload (missing `hubId`/`eventId`) is dropped, never thrown.
+
+**9. Push priority (§9):** unchanged from Phase 13.0's model — this phase establishes the
+foundation only; the CRITICAL incoming-call OS-wake path is explicitly NOT built (Phase 13.4+).
+
+**10. Persistence (§10):** no new storage introduced. Documented as three separate concepts:
+device-level token (ephemeral, held only by the native platform/`NativePushTokenSource` at
+runtime, never persisted by this Dart code), Home-level registration (server-side, in that
+Home's own Hub process — the client holds no local copy), and runtime state (in-memory
+`MobileRuntime`/dedup set, unchanged). No token is ever written to `SharedPreferences` or any
+other plain store.
+
+**Gate:** shared 172/172 (162 prior + 10 new), mobile 49/49 (38 prior + 11 new: 9
+`RuntimeController` push-lifecycle + 5 `NativePushTokenSource` contract, minus overlap), shared_ui
+7/7 (untouched), touchpanel 23/23 (untouched) — **251 total**. `flutter analyze` clean on all
+four packages. Mobile + touchpanel web builds succeed. `services/notifications`: 6/6 (4 prior + 2
+new). `services/gateway`: 528/529 under full-suite load (1 pre-existing environment-timing
+flake in `mobile-stream-bridge.test.ts`, confirmed unrelated, unmodified this phase); `tsc
+--noEmit` clean. tunnel-broker 24/24, hub-identity 18/18 (both untouched, re-verified).
+
+**11. Native compilation status — REAL-WORLD/NATIVE BUILD ACCEPTANCE REQUIRED, unchanged
+classification from Phase 13.1, re-confirmed:** `flutter build apk --debug` fails at the same
+Gradle loopback-socket error (`java.io.IOException: Unable to establish loopback connection`),
+now in ~3-4 seconds even with the new Firebase Gradle plugin/dependencies present — confirming
+the failure occurs before Gradle even evaluates the project, so this phase's Kotlin/Gradle
+additions remain completely unverified by a real build. `flutter build ios` remains unavailable
+as a subcommand on Windows.
+
+**What remains, explicitly not built this phase (§16's own stop condition, honest):**
+- Android foreground service, `BOOT_COMPLETED` receiver — Phase 13.3 (also the piece needed for
+  `SupremeFirebaseMessagingService.onMessageReceived` to forward a payload when no engine is
+  currently alive — explicitly out of scope this phase, payloads are dropped in that case today).
+- iOS PushKit, CallKit, VoIP background mode — Phase 13.4.
+- Real Firebase project (`google-services.json`) / real APNs credentials — provisioning gap, not
+  a code gap; nothing was fabricated to paper over it.
+- SIP/voice/video, door-release-from-call — Phase 13.5/13.6/13.7, untouched.
+- Real-device/provider acceptance testing — impossible in this environment (no compiled native
+  build to test against, no physical device, no real Firebase/APNs project).
+
+**Existing-app / KNX-Matter safety:** confirmed via `git status` — every change this phase is
+under `apps/new/mobile/{android/**, ios/**, lib/push/**, lib/runtime/runtime_controller.dart,
+lib/main.dart, test/*}`, `apps/new/shared/{lib/src/runtime/push_envelope.dart,
+lib/supreme_os_core.dart, test/push_envelope_test.dart}`, `services/notifications/src/push.ts`
+(+test), and `services/gateway/src/context.ts` (one line). No Tunnel Broker, no Hub event
+architecture beyond the one-line `hubId` wiring, no KNX/Matter/Casambi/DALI/Lutron file touched,
+no Touch Panel file touched (gate + web build both green).
+
+## Session: Phase 13.1 — Mobile Runtime foundation & native platform boundary
+
+First implementation phase after the Phase 13.0 architecture/feasibility report. Generates the
+Android/iOS platform projects, establishes the native/Flutter runtime boundary, and wires OS
+lifecycle observation into the existing Dart runtime — deliberately no background execution, no
+FCM/APNs, no PushKit/CallKit, no SIP. `apps/new/mobile` only.
+
+**1. Platform projects generated via real Flutter tooling** (`flutter create --platforms=android,ios
+--org com.supremedomotics .`), not hand-written: `android/` (Kotlin, Gradle KTS, v2 embedding,
+`applicationId`/`namespace` = `com.supremedomotics.supreme_mobile_next`) and `ios/`
+(`PRODUCT_BUNDLE_IDENTIFIER` = `com.supremedomotics.supremeMobileNext`, deployment target 15.0)
+now exist. All existing Dart code (`lib/`, `test/`) was left untouched by the generator — verified
+via `git status` before and after (only `.metadata`/`analysis_options.yaml` changed, plus a
+default boilerplate `test/widget_test.dart` that was deleted since it references a counter demo
+app that doesn't exist here). `.metadata`'s dropped `web` platform entry was restored (informational
+only, used by `flutter migrate` — doesn't affect actual build capability, but correct is correct).
+App labels set to "SupremeOS" on both platforms (was the raw package name). No permissions,
+services, or background modes were added — the generated manifests/`Info.plist` are stock.
+
+**2. Native/Flutter runtime boundary — `MobileRuntimePlatform`** (`apps/new/mobile/lib/runtime/
+mobile_runtime_platform.dart`): a platform-NEUTRAL Dart interface (`initialize()`,
+`notifyUiLifecycleChanged(UiState)`, `requestRuntimeStatus()`, `events` stream of a `sealed
+NativeRuntimeEvent` hierarchy with only `ProcessStateChanged` implemented so far — new event
+types extend the hierarchy without breaking existing `switch` callers, per the phase's own
+extensibility requirement). Two implementations: `NativeRuntimeBridge` (real, speaks
+`com.supremeos/runtime` MethodChannel + `com.supremeos/runtime/events` EventChannel, catches
+`MissingPluginException` everywhere so a build/test target with no native handler degrades to an
+honest "unknown" status rather than crashing) and `NoOpMobileRuntimePlatform` (used on web via
+`kIsWeb` — web is a real, supported target here, not a degraded fallback).
+
+**3. Native foundations (structural only, per this phase's explicit scope limit):**
+`android/.../MainActivity.kt` registers both channels, answers `requestRuntimeStatus`, and
+forwards its own Activity `onStart`/`onStop` as `processStateChanged` events — no foreground
+service, no `BOOT_COMPLETED` receiver, no FCM. `ios/Runner/AppDelegate.swift` registers the same
+two channels and forwards `UIApplication.didBecomeActive`/`didEnterBackground` notifications the
+same way — no PushKit, no CallKit, no background modes declared. Both files carry a "FUTURE
+EXTENSION POINTS" comment naming exactly what Phase 13.2 (Android)/13.4 (iOS) add on the SAME
+channel, never a new one.
+
+**4. Lifecycle model** (`apps/new/mobile/lib/runtime/lifecycle.dart`): `ProcessState`
+(`starting/foreground/background/suspended/terminated/restarting`) and `UiState`
+(`noUi/uiActive/uiBackgrounded`) — two NEW orthogonal dimensions, deliberately not merged with
+each other or with the EXISTING, unchanged `HubEventStreamState` (Phase 12.7) and `MobileRuntime`
+call-state machine (Phase 12.5). `parseProcessState` is the one place the wire-format string is
+interpreted (used by both the bridge and directly testable).
+
+**5. Wired into `RuntimeController`** (existing Phase 12.5 class, extended not replaced):
+`processState`/`uiState` getters, `updateProcessState`/`updateUiState` (no-op on redundant calls
+— no duplicate `lifecycleChanges` events), and a `lifecycleChanges` broadcast stream for future
+diagnostics. Explicitly RECORDING ONLY — verified by a new test that drives the controller
+through background/suspended/no-UI and confirms Home authorization/event-stream state is
+completely unaffected (§7's own requirement). `main.dart`'s `RootShell` now mixes in
+`WidgetsBindingObserver`, forwards `didChangeAppLifecycleState` to both `updateUiState` and
+`platform.notifyUiLifecycleChanged`, and subscribes to `platform.events` forwarding
+`ProcessStateChanged` into `updateProcessState` — real wiring, not a stub, proven not to crash by
+the existing `root_shell_test.dart` (which pumps the real `SupremeMobileApp` and now exercises this
+exact path against `NativeRuntimeBridge`'s `MissingPluginException`-caught real-but-unhandled
+channel in the test harness).
+
+**6. Android build attempt — REAL-WORLD/NATIVE BUILD ACCEPTANCE REQUIRED, root cause identified.**
+`flutter build apk --debug` reaches Gradle (further than Phase 13.0's environment inspection
+predicted — a JDK/Android SDK/Gradle toolchain IS reachable from Flutter's own tooling on this
+machine) but fails immediately with `java.io.IOException: Unable to establish loopback connection`
+— Gradle's own worker-process IPC requires binding a local loopback socket, which this machine's
+network stack refuses. Confirmed NOT a tool-sandbox artifact: retried with the sandbox disabled
+and with `org.gradle.daemon=false` (reverted after, no effect) — same failure both times, in ~4
+seconds rather than timing out, consistent with the socket bind itself being refused at the OS/
+network-policy level. This is a local machine/network configuration issue outside this session's
+control, not a code defect — the generated Kotlin was never reached for compilation, so it remains
+unverified by a real build (per §14, not counted as tested). `flutter build ios` isn't even offered
+as a subcommand on Windows — confirms Phase 13.0's iOS-unavailability finding directly rather than
+inferring it.
+
+**Gate:** mobile 38/38 (24 prior + 14 new: 5 `parseProcessState`, 3 `MobileRuntimePlatform`
+contract/`NoOpMobileRuntimePlatform`, 4 `RuntimeController` lifecycle, plus signature-only changes
+to existing tests). `flutter analyze` clean. Mobile web build succeeds (confirms `kIsWeb` gating
+works — no attempt to load a native platform channel on web). shared 162/162 (untouched, unrelated
+to this phase). shared_ui 7/7, touchpanel 23/23 + web build (both untouched, confirmed unaffected
+per §16's explicit requirement).
+
+**What remains, explicitly not built this phase (§9/§10/§16's own scope limits, honest):**
+- Android foreground service, `BOOT_COMPLETED` receiver, FCM — Phase 13.2.
+- iOS PushKit, CallKit, VoIP background mode, APNs — Phase 13.4.
+- SIP/voice/video, door-release-from-call — Phase 13.5/13.6/13.7.
+- Real Android compile verification — blocked on the local loopback-socket issue above; needs
+  either this machine's network/firewall configuration fixed or a different build-capable
+  environment (CI, another machine).
+- Real iOS compile verification — impossible on this machine (no macOS), unchanged from Phase
+  13.0's finding.
+- SIP driver, push provider, Tunnel Broker, Hub event architecture, KNX, Matter, Touch Panel —
+  none touched, per this phase's own scope control (§16).
+
+**Existing-app / KNX-Matter safety:** confirmed via `git status` — every change this phase is
+under `apps/new/mobile/` (platform folders + `lib/runtime/{lifecycle.dart, mobile_runtime_platform.dart,
+native_runtime_bridge.dart, noop_runtime_platform.dart}` [new], `lib/main.dart` and `lib/runtime/
+runtime_controller.dart` [extended], `test/{lifecycle_test.dart, mobile_runtime_platform_test.dart}`
+[new], `test/runtime_controller_test.dart` [extended]). No other `apps/new` package, no
+`services/gateway`, no `cloud/tunnel-broker`, no KNX/Matter file touched. Touch Panel verified
+unaffected (gate + web build both green).
+
 ## Session: Phase 12.11 — connectivity & security acceptance closure (freezes the 12.x architecture)
 
 Acceptance/verification phase — no new architecture. Closes every remaining explicitly-named gap

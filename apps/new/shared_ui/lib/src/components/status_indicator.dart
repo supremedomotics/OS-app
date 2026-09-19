@@ -34,7 +34,14 @@ class StatusIndicator extends StatelessWidget {
 /// that shows connection health (§10, §Phase7-13).
 class ConnectionStateIndicator extends StatelessWidget {
   final ConnectionStatus status;
-  const ConnectionStateIndicator({super.key, required this.status});
+
+  /// §QA-07 — optional real retry action, shown only when offline/reconnecting AND a
+  /// caller actually wires one in (Touch Panel passes none, so its rendering is
+  /// unchanged). Never shown for `authenticationFailed` — that isn't a connectivity
+  /// problem a retry can fix.
+  final VoidCallback? onRetry;
+
+  const ConnectionStateIndicator({super.key, required this.status, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -65,7 +72,22 @@ class ConnectionStateIndicator extends StatelessWidget {
           SupremeColorScheme.statusCritical
         ),
     };
-    return StatusIndicator(color: color, label: label);
+    final indicator = StatusIndicator(color: color, label: label);
+    final showRetry = onRetry != null &&
+        (status == ConnectionStatus.offline ||
+            status == ConnectionStatus.reconnecting);
+    if (!showRetry) return indicator;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      indicator,
+      const SizedBox(width: 12),
+      GestureDetector(
+        onTap: onRetry,
+        child: const Text('Retry',
+            style: TextStyle(
+                color: SupremeColorScheme.textPrimary,
+                decoration: TextDecoration.underline)),
+      ),
+    ]);
   }
 }
 

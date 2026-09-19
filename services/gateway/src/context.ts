@@ -535,7 +535,7 @@ export class AppContext {
       (config.pushRelayUrl
         ? [new RelayPushProvider({ url: config.pushRelayUrl, authToken: config.pushRelayToken || undefined })]
         : []);
-    this.push = new PushService(this.pushTokens, pushProviders);
+    this.push = new PushService(this.pushTokens, pushProviders, this.hubIdentity.hubUuid);
     this.grants = deps.grantStore ?? new InMemoryGrantStore();
     this.ai = new AssistantService({ modelUrl: config.aiUrl || undefined });
     this.security = new SecurityService({

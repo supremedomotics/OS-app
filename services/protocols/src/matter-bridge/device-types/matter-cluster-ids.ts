@@ -16,6 +16,9 @@ export const MatterClusterId = {
   WindowCovering: 0x0102,
   OccupancySensing: 0x0406,
   Switch: 0x003b,
+  /** § Matter Bridge Phase 3.2 — CoolMaster Thermostat. Verified against `@matter/types`'s
+   * generated `clusters/thermostat.d.ts`. */
+  Thermostat: 0x0201,
 } as const;
 export type MatterClusterId = (typeof MatterClusterId)[keyof typeof MatterClusterId];
 

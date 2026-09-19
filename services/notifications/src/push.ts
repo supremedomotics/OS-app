@@ -43,6 +43,29 @@ export class InMemoryPushTokenStore implements IPushTokenStore {
   }
 }
 
+/**
+ * §Phase13.2 §7 — the minimal, non-authoritative routing envelope carried in every push
+ * message's `data` payload. Deliberately carries ONLY what a client needs to identify and
+ * de-duplicate an event and decide whether to wake/notify — never a credential, never
+ * authoritative device state (the Hub's own `/v1/stream`/REST routes remain the sole source of
+ * truth once the client acts on this). `hubId` is the canonical routing identifier (never a
+ * display name); `eventId` + `hubId` together are the SAME dedup key shape
+ * `HomeEvent.dedupKey` already uses client-side (`apps/new/shared/lib/src/runtime/home_event.dart`),
+ * so a push notification for an event the client already received over `/v1/stream` (or a
+ * duplicate push retry) is naturally suppressed by the EXISTING dedup mechanism — no second
+ * dedup system.
+ */
+export interface PushEnvelope {
+  /** Envelope schema version — bump only on a breaking shape change. */
+  v: 1;
+  /** Canonical Hub identity this event belongs to — never a display name (§3/§4). */
+  hubId: string;
+  /** Stable per-event id, paired with `hubId` for the client's existing dedup key. */
+  eventId: string;
+  /** ISO-8601 timestamp of the underlying event, for client-side ordering/display only. */
+  ts: string;
+}
+
 export interface PushMessage {
   title: string;
   body: string;
@@ -99,6 +122,10 @@ export class PushService {
   constructor(
     private readonly store: IPushTokenStore,
     private readonly providers: IPushProvider[] = [],
+    /** §Phase13.2 §7/§11 — this Hub's own canonical identity, stamped into every envelope's
+     * `hubId` so a Mobile with multiple paired Homes can route/dedup/authorize the notification
+     * correctly (never inferred from the notification content itself). */
+    private readonly hubId?: string,
   ) {}
 
   /** True when at least one push provider is configured (otherwise WSS-only). */
@@ -109,11 +136,20 @@ export class PushService {
   async deliver(n: Notification): Promise<number> {
     if (this.providers.length === 0) return 0;
     const tokens = n.userId ? await this.store.listForUser(n.userId) : await this.store.listAll();
+    const envelope: Partial<PushEnvelope> = this.hubId
+      ? { v: 1, hubId: this.hubId, eventId: n.id, ts: n.createdAt }
+      : {};
     const message: PushMessage = {
       title: n.title,
       body: n.body,
       level: n.level,
-      data: { notificationId: n.id, level: n.level },
+      data: {
+        notificationId: n.id,
+        level: n.level,
+        ...Object.fromEntries(
+          Object.entries(envelope).map(([k, v]) => [k, String(v)]),
+        ),
+      },
     };
     let sent = 0;
     for (const t of tokens) {

@@ -27,7 +27,14 @@ class HomeScreen extends ConsumerWidget {
               const SizedBox(height: 4),
               Text('Your home', style: text.title),
               const SizedBox(height: 32),
-              ConnectionStateIndicator(status: status),
+              // §QA-07 — a real action, not a promise: `start()` is the same
+              // discover-LAN/fall-back-to-remote/re-authenticate path ConnectionManager
+              // already runs on every reconnect (see its own doc comment); this just lets
+              // the homeowner trigger it now instead of waiting for backoff.
+              ConnectionStateIndicator(
+                status: status,
+                onRetry: () => manager.start(),
+              ),
             ],
           ),
         );

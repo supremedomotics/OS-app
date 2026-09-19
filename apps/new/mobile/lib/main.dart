@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -17,7 +18,24 @@ import 'features/now/now_screen.dart';
 import 'features/settings/home_settings_screen.dart';
 import 'features/settings/paired_home_controller.dart';
 import 'features/settings/settings_screen.dart';
+import 'push/native_push_token_source.dart';
+import 'runtime/lifecycle.dart';
+import 'runtime/mobile_runtime_platform.dart';
+import 'runtime/native_runtime_bridge.dart';
+import 'runtime/noop_runtime_platform.dart';
 import 'runtime/runtime_controller.dart';
+
+/// §Phase13.1 §4/§13 — the platform-neutral runtime-bridge boundary. Real
+/// [NativeRuntimeBridge] (speaks `com.supremeos/runtime`) on Android/iOS; [NoOpMobileRuntimePlatform]
+/// on web, where no native Android/iOS layer exists to talk to (a real, supported target, not a
+/// degraded one — see that class's own doc). `kIsWeb` is the correct, standard Flutter check
+/// here, not a platform-detection hack.
+final mobileRuntimePlatformProvider = Provider<MobileRuntimePlatform>((ref) {
+  final platform =
+      kIsWeb ? NoOpMobileRuntimePlatform() : NativeRuntimeBridge();
+  ref.onDispose(platform.dispose);
+  return platform;
+});
 
 /// §Phase12.1 §25: the ConnectionManager operates against whichever Home is currently active
 /// — no `MultiHubConnectionManager` exists. Watching `activeHomeIdProvider` means switching
@@ -282,11 +300,19 @@ Future<void> _refreshSnapshot({
   await manager.dispose();
 }
 
+/// §Phase13.2 §5/§6 — the real [PlatformPushTokenSource] on Android/iOS,
+/// [NoOpMobileRuntimePlatform]'s push counterpart on web (no native push channel exists there
+/// either — web push, if ever added, is a distinct browser-notification concern, out of scope
+/// here). Same `kIsWeb` gating pattern as `mobileRuntimePlatformProvider`.
+final pushTokenSourceProvider = Provider<PlatformPushTokenSource?>(
+    (ref) => kIsWeb ? null : NativePushTokenSource());
+
 final runtimeControllerProvider = Provider<RuntimeController>((ref) {
   final discovery = ref.watch(platformDiscoveryProvider);
   final homeController = ref.watch(pairedHomeControllerProvider);
   final authStore = ref.watch(pairedHomeAuthStoreProvider);
   final brokerUrl = ref.watch(brokerUrlProvider);
+  final pushTokenSource = ref.watch(pushTokenSourceProvider);
   final controller = RuntimeController(
     homeController: homeController,
     authStore: authStore,
@@ -303,10 +329,20 @@ final runtimeControllerProvider = Provider<RuntimeController>((ref) {
       if (!_remoteAccessEnabledFor(homeController, hubId)) return null;
       return remoteHubConfigFor(hubId, authStore, brokerUrl).streamUri();
     },
-    // PLATFORM STUB — no PlatformPushTokenSource wired yet; see its own doc comment for why
-    // (no Firebase project configuration exists in this repository).
+    // §Phase13.2 — real on Android/iOS (`NativePushTokenSource`); HONEST STATUS unchanged from
+    // that class's own doc: real client-side plumbing, never exercised against a real
+    // Firebase/APNs project or physical device in this environment.
+    pushTokenSource: pushTokenSource,
   );
   ref.onDispose(controller.dispose);
+
+  // §Phase13.2 §5/§6 — a push payload received while a Flutter engine is alive (see
+  // `NativePushTokenSource`'s HONEST SCOPE LIMIT doc) is routed through the EXACT SAME
+  // ingestion path a live WebSocket event uses — no second event pipeline.
+  final pushReceivedSub =
+      pushTokenSource?.onPushReceived.listen(controller.ingestPushPayload);
+  if (pushReceivedSub != null) ref.onDispose(pushReceivedSub.cancel);
+  unawaited(controller.registerPushTokenForAllHomes());
 
   // §Phase12.8/12.10 — real transport factory: the genuine `/v1/stream` WebSocket, dialed
   // either at the Home's real resolved LAN address or (§Phase12.9/12.10) the real Tunnel
@@ -390,7 +426,18 @@ class SupremeMobileApp extends StatelessWidget {
       title: 'SupremeOS',
       debugShowCheckedModeBanner: false,
       theme: buildSupremeTheme(),
-      home: const AdaptiveScope(child: RootShell()),
+      // §QA-05 root-cause fix: `AdaptiveScope` used to wrap only `home` (RootShell), so any
+      // screen reached via `Navigator.push` (Settings, Home Settings, and every future pushed
+      // route) built a NEW route subtree that is NOT a descendant of that `AdaptiveScope` —
+      // Flutter's Navigator/Overlay mechanism does not let a pushed route inherit
+      // InheritedWidgets from the previous route's tree. `AdaptiveScope.of(context)` then hit
+      // its own `profile!` null-check (the `assert` describing the real problem is stripped in
+      // release builds, which is why this surfaced as a bare "Null check operator used on a
+      // null value" rather than the assertion message). `MaterialApp.builder` wraps the
+      // Navigator's ENTIRE output — every route, every dialog, present and future — in exactly
+      // one `AdaptiveScope`, so this bug class cannot recur for a new screen either.
+      builder: (context, child) => AdaptiveScope(child: child!),
+      home: const RootShell(),
     );
   }
 }
@@ -403,9 +450,11 @@ class RootShell extends ConsumerStatefulWidget {
   ConsumerState<RootShell> createState() => _RootShellState();
 }
 
-class _RootShellState extends ConsumerState<RootShell> {
+class _RootShellState extends ConsumerState<RootShell>
+    with WidgetsBindingObserver {
   int _index = 0;
   Space? _openSpace;
+  StreamSubscription<NativeRuntimeEvent>? _nativeEventsSub;
 
   @override
   void initState() {
@@ -416,7 +465,71 @@ class _RootShellState extends ConsumerState<RootShell> {
     ref.read(networkChangeListenerProvider);
     // §Phase12.5 — same lifecycle reasoning: the Mobile Runtime must outlive any single
     // screen, so it is read here once, not lazily on first use from some deeper widget.
-    ref.read(runtimeControllerProvider);
+    final controller = ref.read(runtimeControllerProvider);
+
+    // §Phase13.1 §6/§7 — the native/Flutter lifecycle boundary: Flutter's OWN
+    // `WidgetsBindingObserver` reports UI visibility (Flutter → native has nothing to do with
+    // this direction; it's purely a Dart-side signal), while native `ProcessStateChanged`
+    // events (native → Flutter) report OS process lifecycle. Both are only RECORDED on
+    // `RuntimeController` — see that class's own doc for why they never touch connectivity.
+    WidgetsBinding.instance.addObserver(this);
+    controller.updateUiState(UiState.uiActive);
+    final platform = ref.read(mobileRuntimePlatformProvider);
+    unawaited(platform.initialize());
+    unawaited(platform.notifyUiLifecycleChanged(UiState.uiActive));
+    _nativeEventsSub = platform.events.listen((event) {
+      switch (event) {
+        case ProcessStateChanged(:final state):
+          controller.updateProcessState(state);
+        case ServiceStateChanged(:final state):
+          controller.updateAndroidServiceState(state);
+        case IncomingCallEvent(:final callId, :final hubId):
+          controller.handleIncomingCall(hubId: hubId, callId: callId);
+        case CallStateChangedFromNative(:final callId, :final state):
+          controller.handleNativeCallStateChange(callId: callId, state: state);
+        case IncomingCallFailed():
+        case VoipTokenRefreshed():
+          // §Phase13.4 — no Dart-side action needed yet: `IncomingCallFailed` has no UI this
+          // phase (no incoming-call screen exists), and no server route exists to register a
+          // VoIP token against (see `VoipTokenRefreshed`'s own doc) — both are real, received
+          // events with a documented "nothing to do yet," not a silent gap.
+          break;
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final controller = ref.read(runtimeControllerProvider);
+    final uiState = switch (state) {
+      AppLifecycleState.resumed => UiState.uiActive,
+      AppLifecycleState.inactive ||
+      AppLifecycleState.paused ||
+      AppLifecycleState.hidden =>
+        UiState.uiBackgrounded,
+      AppLifecycleState.detached => UiState.noUi,
+    };
+    controller.updateUiState(uiState);
+    final platform = ref.read(mobileRuntimePlatformProvider);
+    unawaited(platform.notifyUiLifecycleChanged(uiState));
+
+    // §Phase13.3 — an explicit, Dart-driven request (never native-initiated) to keep the
+    // existing Hub connection/event-stream alive while backgrounded. `startBackgroundService()`
+    // is called from `paused`/`hidden` (still "leaving foreground," the Android-sanctioned
+    // window for starting a foreground Service) rather than waiting for `detached`, matching
+    // real Android foreground-service-start restrictions. A no-op on iOS/web (§13's own doc).
+    if (uiState == UiState.uiBackgrounded) {
+      unawaited(platform.startBackgroundService());
+    } else if (uiState == UiState.uiActive) {
+      unawaited(platform.stopBackgroundService());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_nativeEventsSub?.cancel());
+    super.dispose();
   }
 
   static const _destinations = [
@@ -472,16 +585,39 @@ class _MoreScreen extends ConsumerWidget {
   const _MoreScreen();
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final text = SupremeTextStyles.resolve(AdaptiveScope.of(context).density);
+    final profile = AdaptiveScope.of(context);
+    final text = SupremeTextStyles.resolve(profile.density);
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
         Text('More', style: text.title),
         const SizedBox(height: 24),
-        ListTile(title: Text('Devices', style: text.body)),
-        ListTile(title: Text('Automations', style: text.body)),
-        ListTile(
-          title: Text('Settings', style: text.body),
+        // §QA-03/QA-04 — brought into the established SupremeOS design system
+        // (SupremeCard + Icon, same primitives Spaces already uses) and unimplemented
+        // items are visually inert/muted rather than looking identical to "Settings",
+        // the only item that actually does something.
+        _MoreRow(
+          icon: Icons.tune,
+          label: 'Devices',
+          enabled: false,
+          profile: profile,
+          text: text,
+        ),
+        const SizedBox(height: 12),
+        _MoreRow(
+          icon: Icons.auto_awesome_motion_outlined,
+          label: 'Automations',
+          enabled: false,
+          profile: profile,
+          text: text,
+        ),
+        const SizedBox(height: 12),
+        _MoreRow(
+          icon: Icons.settings_outlined,
+          label: 'Settings',
+          enabled: true,
+          profile: profile,
+          text: text,
           onTap: () => Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => SettingsScreen(
               homeController: ref.read(pairedHomeControllerProvider),
@@ -495,8 +631,69 @@ class _MoreScreen extends ConsumerWidget {
             ),
           )),
         ),
-        ListTile(title: Text('Professional Mode', style: text.body)),
+        const SizedBox(height: 12),
+        _MoreRow(
+          icon: Icons.workspace_premium_outlined,
+          label: 'Professional Mode',
+          enabled: false,
+          profile: profile,
+          text: text,
+        ),
       ],
+    );
+  }
+}
+
+class _MoreRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final AdaptiveProfile profile;
+  final SupremeTextStyles text;
+  final VoidCallback? onTap;
+
+  const _MoreRow({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.profile,
+    required this.text,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = enabled
+        ? SupremeColorScheme.textPrimary
+        : SupremeColorScheme.textSecondary;
+    final row = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: profile.minTouchTarget),
+      child: SupremeCard(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Row(
+            children: [
+              Icon(icon, color: color),
+              const SizedBox(width: 16),
+              Expanded(child: Text(label, style: text.body.copyWith(color: color))),
+              if (enabled)
+                const Icon(Icons.chevron_right,
+                    color: SupremeColorScheme.textSecondary)
+              else
+                Text('Not available yet',
+                    style: text.caption
+                        .copyWith(color: SupremeColorScheme.textSecondary)),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!enabled) return row;
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: InkWell(onTap: onTap, child: row),
     );
   }
 }

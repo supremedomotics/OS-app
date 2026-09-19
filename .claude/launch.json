@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-homeowner",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "web-homeowner", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "supreme-mobile-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "apps/new/mobile/build/web", "-l", "5548"],
+      "port": 5548
+    }
+  ]
+}

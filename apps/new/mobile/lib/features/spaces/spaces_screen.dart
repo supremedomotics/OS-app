@@ -16,17 +16,42 @@ class SpacesScreen extends ConsumerWidget {
     return FutureBuilder<List<Space>>(
       future: repo.spaces(),
       builder: (context, snap) {
+        final loading = snap.connectionState != ConnectionState.done;
         final spaces = snap.data ?? const [];
         return ListView(
           padding: const EdgeInsets.all(24),
           children: [
             Text('Spaces', style: text.title),
             const SizedBox(height: 24),
-            for (final space in spaces)
+            // §QA-01 — an honest state instead of a blank screen: while the first real read is
+            // in flight, say so; once it resolves to genuinely zero rooms (no Home connected,
+            // or a Home with no rooms configured), say that too — never fabricated room data,
+            // same restrained, centered, muted-text treatment `NowScreen`'s empty state uses.
+            if (loading)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _SpaceRow(space: space, onTap: () => onOpenSpace(space)),
-              ),
+                padding: const EdgeInsets.only(top: 48),
+                child: Center(
+                  child: Text('Loading your spaces…',
+                      style: text.body
+                          .copyWith(color: SupremeColorScheme.textSecondary)),
+                ),
+              )
+            else if (spaces.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 48),
+                child: Center(
+                  child: Text('No Spaces yet',
+                      style: text.body
+                          .copyWith(color: SupremeColorScheme.textSecondary)),
+                ),
+              )
+            else
+              for (final space in spaces)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child:
+                      _SpaceRow(space: space, onTap: () => onOpenSpace(space)),
+                ),
           ],
         );
       },

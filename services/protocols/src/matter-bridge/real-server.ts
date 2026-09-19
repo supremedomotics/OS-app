@@ -9,11 +9,13 @@ import { DimmableLightDevice } from "@matter/main/devices/dimmable-light";
 import { ColorTemperatureLightDevice, ColorTemperatureLightRequirements } from "@matter/main/devices/color-temperature-light";
 import { ExtendedColorLightDevice, ExtendedColorLightRequirements } from "@matter/main/devices/extended-color-light";
 import { WindowCoveringDevice } from "@matter/main/devices/window-covering";
+import { ThermostatDevice, ThermostatRequirements } from "@matter/main/devices/thermostat";
 import { OnOffServer } from "@matter/main/behaviors/on-off";
 import { LevelControlServer } from "@matter/main/behaviors/level-control";
 import { WindowCoveringServer, MovementType, MovementDirection } from "@matter/main/behaviors/window-covering";
 import { WindowCovering } from "@matter/main/clusters/window-covering";
 import { ColorControl } from "@matter/main/clusters/color-control";
+import { Thermostat } from "@matter/main/clusters/thermostat";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import type { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
 import type { MatterBridgeServer, MatterBridgeCommissioningState, MatterBridgeFabricInfo, MatterBridgeEndpointSpec } from "./server.js";
@@ -27,6 +29,12 @@ import {
   xyChannelFromMatter,
 } from "./clusters/color-control-adapter.js";
 import { positionToMatterPercent100ths, positionFromMatterPercent100ths } from "./clusters/window-covering-adapter.js";
+import {
+  celsiusToMatter,
+  systemModeFromSupremeMode,
+  temperatureCommandForSetpoint,
+  temperatureCommandForSystemMode,
+} from "./clusters/thermostat-control-adapter.js";
 
 /**
  * The real `@matter/main` implementation of {@link MatterBridgeServer} (§3, §26 — no manual
@@ -77,6 +85,7 @@ const COLOR_TEMPERATURE_LIGHT = 0x010c;
 const EXTENDED_COLOR_LIGHT = 0x010d;
 const WINDOW_COVERING = 0x0202;
 const GENERIC_SWITCH = 0x000f;
+const THERMOSTAT = 0x0301;
 
 /** § Matter Bridge Phase 2B — SupremeOS's Universal Input Engine has ALREADY classified the
  * press (short/long/double/triple, with its own timing state machine — see
@@ -248,6 +257,58 @@ function createWindowCoveringServerClass(onMovement: (endpointNumber: number, co
     override handleStopMovement(): void {
       const n = this.endpoint.number;
       if (n !== undefined) onMovement(n, { action: "stop" });
+    }
+  };
+}
+
+/**
+ * § Matter Bridge Phase 3.2 — CoolMaster Thermostat command routing. Per the approved Phase
+ * 3.1.1 decision record §6/§9: `Thermostat.with("Heating","Cooling")`'s own real, unforked SDK
+ * behavior (`ThermostatServer`) is what performs Matter-side constraint validation on every
+ * write (rejecting an absurd value like 9999 before it ever reaches this code, using the SDK's
+ * generic 700-3000/1600-3200 default envelope — NOT a claim about CoolMaster's real hardware
+ * range, which does not exist anywhere in this driver — see that record's §3/§4/§8). This class
+ * never overrides that validation and never forks/rewrites `ThermostatServer` — it only adds
+ * its OWN additional reactors (`reactTo`, the same wiring mechanism `ThermostatServer`'s own
+ * internal `#handleSystemModeChange` uses) that fire AFTER a write has already passed the SDK's
+ * validation, and simply forward the now-validated value onward as a SupremeOS capability
+ * command — the identical "SDK validates/passes through, SupremeOS/the physical device is the
+ * real authority" shape as every other routed cluster in this file.
+ *
+ * `setCapabilityState`'s own confirmed-state writes (below) also flow through `ep.set()`, which
+ * fires these SAME reactors — an accepted, explicitly-documented tradeoff (Phase 3.1.1 §6): the
+ * confirmed value gets re-sent to SupremeOS/CoolMaster as a redundant, idempotent command
+ * ("set target temp to the temp it's already at" / "set mode to the mode it's already in"),
+ * which CoolMaster's own command queue already coalesces via its existing dedupe-by-key
+ * mechanism and which produces no observable effect on the physical unit — never an infinite
+ * loop, since the redundant command cannot itself change the confirmed state again.
+ */
+function createRoutedThermostatServerClass(
+  onSystemMode: (endpointNumber: number, command: CapabilityCommand) => void,
+  onSetpoint: (endpointNumber: number, command: CapabilityCommand) => void,
+) {
+  const Featured = ThermostatRequirements.server.mandatory.Thermostat.with("Heating", "Cooling");
+  return class BridgedThermostatServer extends Featured {
+    override initialize() {
+      super.initialize();
+      this.reactTo(this.events.systemMode$Changed, (mode: Thermostat.SystemMode) => {
+        const n = this.endpoint.number;
+        if (n === undefined) return;
+        const command = temperatureCommandForSystemMode(mode);
+        // § Phase 3.1.1 §9 mode mapping — `null` means "auto" or another value this endpoint's
+        // feature set can't legally hold reached here anyway (defensive; the SDK's own
+        // conformance validation already rejects `SystemMode.Auto` before this fires — see the
+        // Phase 3.1.1 reproduction). Never forward a fabricated mode.
+        if (command) onSystemMode(n, command);
+      });
+      this.reactTo(this.events.occupiedHeatingSetpoint$Changed, (value: number) => {
+        const n = this.endpoint.number;
+        if (n !== undefined) onSetpoint(n, temperatureCommandForSetpoint(value));
+      });
+      this.reactTo(this.events.occupiedCoolingSetpoint$Changed, (value: number) => {
+        const n = this.endpoint.number;
+        if (n !== undefined) onSetpoint(n, temperatureCommandForSetpoint(value));
+      });
     }
   };
 }
@@ -526,6 +587,39 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
         });
         break;
       }
+      // § Matter Bridge Phase 3.2 — CoolMaster Thermostat. `Identify` + `Thermostat.with(
+      // "Heating","Cooling")` ONLY — no `AutoMode`/`Presets`/`MatterScheduleConfiguration`/
+      // `Events`/`FanControl`/OnOff (see the approved Phase 3.1.1 decision record and
+      // `matter-device-types.ts`'s doc comment for the full rationale). `thermostatRunningMode`
+      // does not exist as an attribute at all under this feature set (confirmed by the real
+      // SDK's own generated type — it's gated behind the `AutoMode` feature, deliberately never
+      // enabled here per Phase 3.1.1 §9), so `ThermostatServer`'s internal `systemMode`->
+      // `thermostatRunningMode` cascade simply never engages — correctly: there is no Matter-
+      // side derived running-mode state to seed or to mistake for real CoolMaster physical
+      // state (§ Phase 3.1.1 §11).
+      case THERMOSTAT: {
+        const initial = spec.initialState?.kind === "temperature" ? spec.initialState : null;
+        const ThermostatServerClass = createRoutedThermostatServerClass(
+          (n, command) => emit(n, command),
+          (n, command) => emit(n, command),
+        );
+        const systemMode = initial ? (systemModeFromSupremeMode(initial.mode) ?? Thermostat.SystemMode.Off) : Thermostat.SystemMode.Off;
+        const targetMatter = initial?.targetC != null ? celsiusToMatter(initial.targetC) : celsiusToMatter(21);
+        endpoint = new Endpoint(ThermostatDevice.with(BridgedDeviceBasicInformationServer, ThermostatServerClass), {
+          ...baseOptions,
+          thermostat: {
+            systemMode,
+            localTemperature: celsiusToMatter(initial?.ambientC ?? 21),
+            // § Phase 3.1.1 §10 — both setpoints seeded from the SAME single `targetC` (never
+            // separate heating/cooling targets); which one is ever meaningfully ACTIVE is
+            // determined by `systemMode`, not by which of these two attributes holds a value.
+            occupiedHeatingSetpoint: targetMatter,
+            occupiedCoolingSetpoint: targetMatter,
+            controlSequenceOfOperation: Thermostat.ControlSequenceOfOperation.CoolingAndHeating,
+          },
+        });
+        break;
+      }
       default:
         throw new Error(`matter-bridge: unsupported Matter Device Type id 0x${spec.deviceTypeId.toString(16)}`);
     }
@@ -582,6 +676,34 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
     const entry = this.endpoints.get(endpointNumber);
     if (!entry) throw new Error(`matter-bridge: no endpoint ${endpointNumber} to simulate a command against`);
     return entry.endpoint.act((agent) => actor(agent as unknown as { [key: string]: any }));
+  }
+
+  /** § Matter Bridge Phase 3.2 — test-only diagnostic accessor for clusters (Thermostat) whose
+   * controller-facing writes are plain ATTRIBUTE writes, not invokable commands (there is no
+   * `agent.thermostat.someCommand()` for "set systemMode" the way there is `agent.onOff.on()`)
+   * — so `simulateCommandForTest`'s `Endpoint.act()` entry point doesn't apply. This calls the
+   * SAME real `Endpoint.set()` path a genuine Matter controller's attribute-write interaction
+   * uses (confirmed live in the Phase 3.1.1 reproduction — real conformance/constraint
+   * validation runs on every `set()` call, exactly as it would for a real controller), so a test
+   * using it proves the SDK's own validation and this file's `reactTo` wiring both fire for
+   * real, not merely that our own method exists. Not part of the abstract `MatterBridgeServer`
+   * interface. */
+  async simulateAttributeWriteForTest(endpointNumber: number, values: Record<string, unknown>): Promise<void> {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry) throw new Error(`matter-bridge: no endpoint ${endpointNumber} to simulate an attribute write against`);
+    const ep = entry.endpoint as unknown as { set(values: Record<string, unknown>): Promise<void> };
+    await ep.set(values);
+  }
+
+  /** § Matter Bridge Phase 3.2 — test-only diagnostic accessor, same rationale as
+   * `getEndpointNodeLabel`: reads the endpoint's REAL, live `thermostat` cluster state directly
+   * off the `@matter/main` endpoint, not a SupremeOS-side copy. `null` if the endpoint doesn't
+   * exist or isn't a Thermostat. */
+  getThermostatStateForTest(endpointNumber: number): Record<string, unknown> | null {
+    const entry = this.endpoints.get(endpointNumber);
+    if (!entry || entry.deviceTypeId !== THERMOSTAT) return null;
+    const ep = entry.endpoint as unknown as { state: { thermostat?: Record<string, unknown> } };
+    return ep.state.thermostat ?? null;
   }
 
   /** § Matter Bridge Phase 2B — test-only diagnostic accessor, same rationale as
@@ -650,6 +772,28 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
         await ep.set({
           windowCovering: { currentPositionLiftPercent100ths: percent100ths, targetPositionLiftPercent100ths: percent100ths },
         });
+        return;
+      }
+      // § Matter Bridge Phase 3.2 — CoolMaster Thermostat confirmed-state report. This is the
+      // SOLE path that reports what CoolMaster's physical unit actually confirmed — a Matter
+      // controller's write is NEVER treated as physical truth on its own (Phase 3.1.1 §6/§9);
+      // only a real `onState` event (this method's caller) reaches here.
+      case "temperature": {
+        const thermostat: Record<string, unknown> = { localTemperature: celsiusToMatter(state.ambientC) };
+        const systemMode = systemModeFromSupremeMode(state.mode);
+        // `null` = "auto" — deliberately DO NOT write `systemMode` at all (Phase 3.1.1's
+        // documented, explicit degradation: leave the attribute at its last-reported value
+        // rather than fabricate which single Matter mode "auto" should look like).
+        if (systemMode !== null) thermostat.systemMode = systemMode;
+        if (state.targetC != null) {
+          const matterSetpoint = celsiusToMatter(state.targetC);
+          // § Phase 3.1.1 §9/§10 — only the setpoint matching the CONFIRMED mode is meaningful;
+          // `fan_only`/`off`/`auto` have no active target, so neither setpoint is touched
+          // (never invents a value for a setpoint that isn't the one actually driving the unit).
+          if (state.mode === "heat") thermostat.occupiedHeatingSetpoint = matterSetpoint;
+          else if (state.mode === "cool") thermostat.occupiedCoolingSetpoint = matterSetpoint;
+        }
+        await ep.set({ thermostat });
         return;
       }
       default:

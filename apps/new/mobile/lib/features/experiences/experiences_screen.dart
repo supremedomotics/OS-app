@@ -13,21 +13,52 @@ class ExperiencesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.watch(homeStateRepositoryProvider);
+    final text = SupremeTextStyles.resolve(AdaptiveScope.of(context).density);
     return FutureBuilder<List<Experience>>(
       future: repo.experiences(),
       builder: (context, snap) {
+        final loading = snap.connectionState != ConnectionState.done;
         final experiences = snap.data ?? const [];
-        return GridView.count(
+        return ListView(
           padding: const EdgeInsets.all(24),
-          crossAxisCount: 2,
-          mainAxisSpacing: 16,
-          crossAxisSpacing: 16,
-          childAspectRatio: 1.4,
           children: [
-            for (final experience in experiences)
-              ExperienceControl(
-                name: experience.name,
-                onActivate: () => repo.invokeExperience(experience.id),
+            Text('Experiences', style: text.title),
+            const SizedBox(height: 24),
+            // §QA-02 — restore the missing header/hierarchy and an honest empty state
+            // (no fabricated Experiences), matching Spaces/Now's established pattern.
+            if (loading)
+              Padding(
+                padding: const EdgeInsets.only(top: 48),
+                child: Center(
+                  child: Text('Loading your experiences…',
+                      style: text.body
+                          .copyWith(color: SupremeColorScheme.textSecondary)),
+                ),
+              )
+            else if (experiences.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 48),
+                child: Center(
+                  child: Text('No Experiences yet',
+                      style: text.body
+                          .copyWith(color: SupremeColorScheme.textSecondary)),
+                ),
+              )
+            else
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                childAspectRatio: 1.4,
+                children: [
+                  for (final experience in experiences)
+                    ExperienceControl(
+                      name: experience.name,
+                      onActivate: () => repo.invokeExperience(experience.id),
+                    ),
+                ],
               ),
           ],
         );

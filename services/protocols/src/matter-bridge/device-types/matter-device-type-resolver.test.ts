@@ -81,6 +81,42 @@ describe("resolveMatterDeviceType — § Matter Bridge Phase 1 foundation", () =
   });
 });
 
+describe("resolveMatterDeviceType — § Matter Bridge Phase 3.2 CoolMaster Thermostat (§24 regression matrix)", () => {
+  it("A — a real HVAC device (temperature + onoff, deviceKind 'thermostat') -> Thermostat (0x0301), not On/Off Light", () => {
+    const r = resolveMatterDeviceType([cap("onoff"), cap("temperature")], undefined, "thermostat");
+    expect(r.outcome).toBe("SUPPORTED");
+    expect(r.deviceType?.id).toBe(0x0301);
+    expect(r.deviceType?.name).toBe("Thermostat");
+  });
+
+  it("B — a generic temperature-only device with no HVAC deviceKind classification remains UNSUPPORTED, never becomes Thermostat", () => {
+    const r = resolveMatterDeviceType([cap("temperature")]);
+    expect(r.outcome).toBe("UNSUPPORTED");
+    expect(r.deviceType).toBeNull();
+  });
+
+  it("C — an onoff+brightness Light that happens to carry deviceKind 'thermostat' is NOT diverted to Thermostat — brightness is more specific and wins, per existing most-specific-first ordering", () => {
+    const r = resolveMatterDeviceType([cap("onoff"), cap("brightness")], undefined, "thermostat");
+    expect(r.deviceType?.id).toBe(0x0101);
+  });
+
+  it("D — a Plug (onoff, deviceKind 'switch') carrying an unrelated temperature capability without deviceKind 'thermostat' stays a Plug, never Thermostat", () => {
+    const r = resolveMatterDeviceType([cap("onoff"), cap("temperature")], undefined, "switch");
+    expect(r.deviceType?.id).toBe(0x010a);
+  });
+
+  it("E — a Curtain (position) is unaffected by the new Thermostat branch even with deviceKind 'thermostat' — position is checked first and wins", () => {
+    const r = resolveMatterDeviceType([cap("position"), cap("temperature")], undefined, "thermostat");
+    expect(r.deviceType?.id).toBe(0x0202);
+  });
+
+  it("F — temperature capability present, deviceKind 'thermostat', but the endpoint has NEITHER onoff nor position/color/brightness still resolves to Thermostat (Thermostat needs no onoff cluster — systemMode alone represents power)", () => {
+    const r = resolveMatterDeviceType([cap("temperature")], undefined, "thermostat");
+    expect(r.outcome).toBe("SUPPORTED");
+    expect(r.deviceType?.id).toBe(0x0301);
+  });
+});
+
 describe("resolveKeypadControlDeviceType — § Matter Bridge Phase 2B (Test B: resolver test)", () => {
   it("a 'button' control resolves to Generic Switch (0x000f)", () => {
     const r = resolveKeypadControlDeviceType("button");

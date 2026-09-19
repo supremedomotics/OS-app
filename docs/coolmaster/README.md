@@ -400,6 +400,12 @@ exact same code path.
   will pick up the (latest) desired name on its next successful reconnect via the startup
   reconciliation pass instead, which is simpler and reuses an existing, already-tested
   mechanism rather than adding a second retry system.
+- A "synced" result means the CoolMaster gateway's own property database accepted the name
+  (verifiable via `props` in telnet, the CoolRemote app, or the gateway's own web UI) — it
+  has no effect on, and no way to affect, the physical indoor unit's own wall
+  remote/display. That's a separate proprietary protocol between the remote and the indoor
+  unit (Daikin/Mitsubishi/etc.) that CoolMaster itself doesn't touch. "Synced but the wall
+  remote still shows the old name" is expected behavior, not a driver bug.
 
 ## Discovery
 
