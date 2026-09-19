@@ -8,13 +8,15 @@ import {
   bindingKey,
   type DiscoveredDevice,
   type INativeProtocolDriver,
+  type MediaArtwork,
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { mediaStateFromDevialet } from "./devialet-codec.js";
+import { buildDevialetMediaState, hasPublishableDevialetMedia, type DevialetMediaCacheEntry } from "./devialet-codec.js";
 import {
   DevialetApiError,
   DevialetIpControlClient,
+  type DevialetCurrentSource,
   type DevialetEndpoint,
 } from "./devialet-ip-control-client.js";
 import {
@@ -32,6 +34,12 @@ import {
   type DevialetTopologySnapshot,
   type DevialetTopologyChangeResult,
 } from "./devialet-topology.js";
+import {
+  devialetCommandLevelFor,
+  resolveDevialetCommandTarget,
+  DevialetCommandRoutingError,
+  DevialetOperationUnavailableError,
+} from "./devialet-command-routing.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 import { recordCapabilityState } from "./av-sdk/state-cache.js";
 import { createProtocolTracer, type ProtocolTracer } from "./av-sdk/protocol-tracer.js";
@@ -40,7 +48,7 @@ import { bestEffortMacForIp } from "./arp-lookup.js";
 
 /** Kept independent of `supreme-avr`'s own version counter — bumped when this driver's
  * own architecture/behavior changes materially. Surfaced in Diagnostics only. */
-const DRIVER_VERSION = "6.0.0-fusion-d6";
+const DRIVER_VERSION = "8.0.0-fusion-d8";
 
 /**
  * § D3 — the literal example path from the R1 doc's own "The global prefix" section
@@ -77,6 +85,12 @@ export interface DevialetDriverOptions {
   /** Per-request timeout (ms), forwarded to `DevialetIpControlClient`. See that
    * class's own doc for why the default (1000ms) is cited from the R1 spec itself. */
   timeoutMs?: number;
+  /** § D8 — builds the gateway's own artwork-proxy URL for a device
+   * (`/v1/devices/:id/media/artwork`), the SAME pattern `AvrProtocolDriver` already
+   * uses. `MediaState.artworkUrl` only ever carries this proxy URL, never R1's raw
+   * `coverArtUrl` directly. Absent (no artwork advertised) when the gateway has no
+   * public base URL configured — matches AVR's own documented behavior exactly. */
+  artworkUrlFor?: (deviceId: DeviceId) => string;
 }
 
 /**
@@ -154,10 +168,44 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
    * `states`) — never a module-level singleton (§16 of the D6 brief). */
   private readonly topology = new DevialetTopologyRegistry();
   private readonly topologyListeners = new Set<(result: DevialetTopologyChangeResult) => void>();
+  /** § D7 patch — coalesces concurrent on-demand topology refreshes for the SAME
+   * binding (see `ensureBindingTopology()`) onto one in-flight query. Instance-scoped
+   * (a plain field, like every other piece of driver state) — never module-level. */
+  private readonly inFlightTopologyRefresh = new Map<string, Promise<void>>();
+  /** § D8 — one physical device's last-known REAL media context, populated by
+   * `poll()`'s media refresh. `coverArtUrl` is R1's own raw URL (never the gateway
+   * proxy URL `MediaState.artworkUrl` advertises) — retained here specifically so
+   * `getArtwork()` can fetch real bytes later without re-querying R1 on every call.
+   * `groupId`/`sourceHostDeviceId` are kept for future phases (§23/§24 of the D8
+   * brief) — not exposed through the generic domain model. Instance-scoped, cleared
+   * per-device in `unbind()`, exactly like every other per-device map on this driver. */
+  private readonly mediaProjections = new Map<
+    DeviceId,
+    { groupId: string; sourceHostDeviceId: string | null; coverArtUrl: string | null }
+  >();
+  /** § D8 final fix — persistent, per-device, INCREMENTAL media cache, mirroring
+   * `AvrProtocolDriver`'s own `MediaCache`/`patchMedia()` precedent exactly (see
+   * `devialet-codec.ts`'s module doc for the detailed rationale). System-level volume
+   * and group-level playback/metadata are two independent R1 queries that can each
+   * succeed or fail on any given `refreshMediaState()` tick; whichever half succeeds
+   * patches this cache, and the merged result is published whenever
+   * `hasPublishableDevialetMedia()` says enough real data exists — never gated on
+   * BOTH halves succeeding in lockstep. Instance-scoped, cleared per-device in
+   * `unbind()`, exactly like `mediaProjections`. */
+  private readonly mediaCache = new Map<DeviceId, DevialetMediaCacheEntry>();
+  /** § D8 — coalesces concurrent `getArtwork()` fetches for the SAME raw R1 URL
+   * (§12/§13 of the brief: two physical devices sharing one Group's artwork must
+   * never trigger two independent downloads). Keyed by the raw URL, not by device —
+   * instance-scoped, not a second cache (no TTL/eviction; the gateway's own
+   * `ArtworkCache` still owns per-device caching/TTL above this driver — see the D8
+   * report for the documented boundary between the two). */
+  private readonly artworkInFlight = new Map<string, Promise<MediaArtwork | null>>();
+  private readonly fetchImpl: typeof fetch;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: DevialetDriverOptions = {}) {
     this.opts = opts;
+    this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.tracer = createProtocolTracer("devialet", opts.trace === true, opts.onLog);
     this.client = new DevialetIpControlClient({ fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs });
     this.ciSettings = new DevialetCiSettingsClient({ fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs });
@@ -271,6 +319,8 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
       if (this.bindings.some((b) => b.host === host)) continue;
       this.diagnostics.delete(host);
     }
+    this.mediaProjections.delete(deviceId);
+    this.mediaCache.delete(deviceId);
     // § D6 — a genuine unbind (this Supreme device is gone, not a transient query
     // failure) removes it from topology entirely, so it doesn't linger as a "last
     // known" system/group member forever. Distinct from a failed refreshTopology()
@@ -281,18 +331,68 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
   }
 
   /**
-   * Writes a command to the device via the real R1 client. Deliberately does NOT
-   * write to `this.states`/call `recordCapabilityState()` — confirmed state only ever
-   * flows through `poll()` (D9/D10 will formalize this as real command confirmation).
-   * An accepted request here means "the device accepted the request," never "the
-   * state is now this" — see `DevialetIpControlClient.pause()`'s doc for the concrete
-   * reason this matters (optical-input pause mutes instead of pausing).
+   * § D7 — Writes a command to the device via the real R1 client, topology-aware.
+   * Deliberately does NOT write to `this.states`/call `recordCapabilityState()` —
+   * confirmed state only ever flows through `poll()` (D9/D10 will formalize this as
+   * real command confirmation). An accepted request here means "the device accepted
+   * the request," never "the state is now this" — see
+   * `DevialetIpControlClient.pause()`'s doc for the concrete reason this matters
+   * (optical-input pause mutes instead of pausing).
+   *
+   * Every action is classified by `devialetCommandLevelFor()` into "system"
+   * (volume) or "group" (playback/mute/source) per the R1 doc, and
+   * `resolveDevialetCommandTarget()` confirms the REQUIRED level is actually known
+   * in this device's current topology before anything is sent — throwing a
+   * structured `DevialetCommandRoutingError` (never silently guessing) when it
+   * isn't. The resolved `systemId`/`groupId` is used ONLY for tracing — every real
+   * R1 request still addresses the literal `"current"` (see
+   * `devialet-command-routing.ts`'s module doc for why: R1 accepts no other value
+   * today, and always sends to `b.host`, the SAME device the command was invoked
+   * against — there is no fan-out to other system/group members to begin with, so
+   * no risk of duplicating a command across stereo members).
    */
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
     if (!this.connected) throw new Error(`devialet: driver is disconnected — cannot command ${deviceId}`);
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`devialet: ${deviceId} not bound for ${command.capability}`);
     if (command.capability !== "media") throw new Error(`devialet: unsupported command for ${command.capability}`);
+    this.tracer.event(`command requested ${deviceId} action=${command.action} devialetId=${b.devialetId ?? "unknown"}`);
+
+    const level = devialetCommandLevelFor(command.action);
+    if (level === "unsupported") {
+      this.tracer.event(`command unsupported: ${command.action}`);
+      throw new Error(`devialet: unsupported command for media (${command.action})`);
+    }
+
+    let topology = b.devialetId ? (this.topology.get().devices[b.devialetId] ?? null) : null;
+    let routing = resolveDevialetCommandTarget(level, b.devialetId, topology);
+    if (!routing.ok) {
+      // § D7 patch — the real SupremeOS call path (gateway → SIL → adapter →
+      // driver.command()) never invokes `refreshTopology()` automatically; nothing
+      // outside this driver knows it exists (verified directly against
+      // `installer-context.ts`/`native-adapter.ts`/`sil.ts` — see the D7 patch
+      // report). Rather than requiring an external caller to remember to call it,
+      // perform exactly ONE on-demand, single-binding topology resolution here —
+      // never a retry loop, never more than one attempt — then re-resolve. This
+      // mirrors `AvrProtocolDriver.bind()`'s own precedent of a driver performing
+      // its own protocol readiness work rather than depending on an external
+      // caller, adapted for Devialet's stronger requirement (routing, not just
+      // display data, depends on it).
+      this.tracer.event(`command target unknown, attempting one on-demand topology refresh: level=${level} reason=${routing.reason} devialetId=${b.devialetId ?? "unknown"}`);
+      await this.ensureBindingTopology(b);
+      topology = b.devialetId ? (this.topology.get().devices[b.devialetId] ?? null) : null;
+      routing = resolveDevialetCommandTarget(level, b.devialetId, topology);
+    }
+    if (!routing.ok) {
+      // Still unresolved after the one on-demand attempt (identity genuinely
+      // unreachable, or R1 genuinely doesn't report the required system/group for
+      // this device) — throw the same structured error D7 already defined. Never
+      // fabricated: `resolveDevialetCommandTarget()` itself is untouched.
+      this.tracer.event(`command target resolution failed: level=${level} reason=${routing.reason} devialetId=${b.devialetId ?? "unknown"}`);
+      throw new DevialetCommandRoutingError(level, routing.reason, deviceId);
+    }
+    this.tracer.event(`command target resolved: level=${level} targetId=${routing.targetId} devialetId=${routing.devialetId} systemId=${topology?.systemId ?? "unknown"} groupId=${topology?.groupId ?? "unknown"}`);
+
     const endpoint = this.endpointFor(b);
     switch (command.action) {
       case "play": {
@@ -307,16 +407,36 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
       case "pause":
       case "stop":
         // "stop" has no distinct R1 equivalent — mapped to pause, same as the
-        // pre-Fusion driver's own choice.
+        // pre-Fusion driver's own choice. Pause is documented as ALWAYS available
+        // ("All sources support the 'Pause' command") — no availableOperations gate.
         await this.tracked(b.host, "R1 POST pause", () => this.client.pause(endpoint));
         return;
-      case "next":
+      case "next": {
+        // § D7/§9 — "next"/"previous" are the only playback actions the R1 doc
+        // documents as conditionally unavailable via `availableOperations`
+        // (everything else either always works or fails with its own distinct
+        // logical error — see `devialet-command-routing.ts`). Checked with a fresh
+        // read rather than trusting a stale `poll()` snapshot.
+        const current = await this.tracked(b.host, "R1 GET current source (for next)", () => this.client.getCurrentSource(endpoint));
+        if (!current.availableOperations.includes("next")) {
+          this.tracer.event(`command unsupported: next not in current availableOperations`);
+          throw new DevialetOperationUnavailableError("next", deviceId);
+        }
         await this.tracked(b.host, "R1 POST next", () => this.client.next(endpoint));
         return;
-      case "previous":
+      }
+      case "previous": {
+        const current = await this.tracked(b.host, "R1 GET current source (for previous)", () => this.client.getCurrentSource(endpoint));
+        if (!current.availableOperations.includes("previous")) {
+          this.tracer.event(`command unsupported: previous not in current availableOperations`);
+          throw new DevialetOperationUnavailableError("previous", deviceId);
+        }
         await this.tracked(b.host, "R1 POST previous", () => this.client.previous(endpoint));
         return;
+      }
       case "mute":
+        // § D7/§10 — mute/unmute are documented as ALWAYS available and
+        // deliberately excluded from availableOperations — never gated on it.
         await this.tracked(b.host, "R1 POST mute", () => this.client.mute(endpoint));
         return;
       case "unmute":
@@ -326,7 +446,23 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
         if (typeof command.volume !== "number") throw new Error(`devialet: volume command missing a numeric volume`);
         await this.tracked(b.host, "R1 POST volume", () => this.client.setVolume(endpoint, command.volume as number));
         return;
+      case "source": {
+        // § D7/§7 — source selection has no dedicated R1 endpoint; the doc's own
+        // "play" semantics ARE source selection ("If the designated source is not
+        // the current source of the group, it will be selected first"). Matches
+        // `command.source` against the current GROUP's real source list by `type`
+        // (the doc's own closed, documented vocabulary — "spotifyconnect",
+        // "optical", …) — never a fabricated/guessed sourceId.
+        if (typeof command.source !== "string") throw new Error(`devialet: source command missing a source identifier`);
+        const sources = await this.tracked(b.host, "R1 GET group sources (for source select)", () => this.client.getGroupSources(endpoint));
+        const match = sources.sources.find((s) => s.type === command.source);
+        if (!match) throw new Error(`devialet: ${deviceId} — no current-group source matches "${command.source}"`);
+        await this.tracked(b.host, "R1 POST play (source select)", () => this.client.play(endpoint, match.sourceId));
+        return;
+      }
       default:
+        // Unreachable — devialetCommandLevelFor() already classified every other
+        // action as "unsupported" above. Kept for exhaustiveness/type-safety only.
         throw new Error(`devialet: unsupported command for media (${command.action})`);
     }
   }
@@ -400,41 +536,87 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     const systemNames = new Map<string, string | null>();
     const fresh: DevialetFreshDeviceTopology[] = [];
     for (const b of mediaBindings) {
-      const endpoint = this.endpointFor(b);
-      let info;
-      try {
-        info = await this.tracked(b.host, "R1 GET devices/current (topology)", () => this.client.getDevice(endpoint));
-      } catch (err) {
-        this.tracer.event(`topology: device query failed for ${b.deviceId} — ${err instanceof Error ? err.message : String(err)} (keeping last-known topology)`);
-        continue;
-      }
-      b.devialetId = info.deviceId;
-      b.systemId = info.systemId ?? null;
-      b.groupId = info.groupId ?? null;
-      const systemId = info.systemId ?? null;
-      if (systemId && !systemNames.has(systemId)) {
-        try {
-          const system = await this.tracked(b.host, "R1 GET systems/current (topology)", () => this.client.getSystem(endpoint));
-          systemNames.set(systemId, system.systemName);
-        } catch (err) {
-          this.tracer.event(`topology: system name query failed for ${systemId} — ${err instanceof Error ? err.message : String(err)} (device/system membership unaffected)`);
-          systemNames.set(systemId, null);
-        }
-      }
-      fresh.push({
-        deviceId: info.deviceId,
-        supremeDeviceId: b.deviceId,
-        host: b.host,
-        systemId,
-        groupId: info.groupId ?? null,
-        role: info.role ?? null,
-        systemName: systemId ? systemNames.get(systemId) : undefined,
-      });
-      this.tracer.event(`topology: device ${info.deviceId} system=${systemId ?? "none"} group=${info.groupId ?? "none"} role=${info.role ?? "none"}`);
+      const entry = await this.resolveDeviceTopology(b, systemNames);
+      if (entry) fresh.push(entry);
     }
     const result = this.notifyTopologyChange(this.topology.merge(fresh));
     this.tracer.event(result.changed ? "topology: changed" : "topology: unchanged");
     return result;
+  }
+
+  /**
+   * § D7 patch — the reusable per-binding query logic `refreshTopology()`'s loop and
+   * `ensureBindingTopology()`'s on-demand single-device path both call, so there is
+   * exactly ONE implementation of "ask R1 what this device's topology is" (§2/§3 of
+   * the patch brief — no second topology implementation). Queries `GET /devices/
+   * current` (establishing/confirming `devialetId`), then, for a not-yet-cached
+   * `systemId`, one best-effort `GET /systems/current` for its display name (the
+   * caller supplies/owns `systemNames` so a full `refreshTopology()` sweep still
+   * dedupes across every binding sharing a system — unchanged from D6). Returns
+   * `null` (never throws) on a failed device query — the caller decides what that
+   * means: `refreshTopology()` simply omits it (last-known topology preserved by the
+   * registry's own merge rule); `ensureBindingTopology()` treats it as "still
+   * unresolved," which surfaces as the existing `DevialetCommandRoutingError`.
+   */
+  private async resolveDeviceTopology(b: DevialetBinding, systemNames: Map<string, string | null>): Promise<DevialetFreshDeviceTopology | null> {
+    const endpoint = this.endpointFor(b);
+    let info;
+    try {
+      info = await this.tracked(b.host, "R1 GET devices/current (topology)", () => this.client.getDevice(endpoint));
+    } catch (err) {
+      this.tracer.event(`topology: device query failed for ${b.deviceId} — ${err instanceof Error ? err.message : String(err)} (keeping last-known topology)`);
+      return null;
+    }
+    b.devialetId = info.deviceId;
+    b.systemId = info.systemId ?? null;
+    b.groupId = info.groupId ?? null;
+    const systemId = info.systemId ?? null;
+    if (systemId && !systemNames.has(systemId)) {
+      try {
+        const system = await this.tracked(b.host, "R1 GET systems/current (topology)", () => this.client.getSystem(endpoint));
+        systemNames.set(systemId, system.systemName);
+      } catch (err) {
+        this.tracer.event(`topology: system name query failed for ${systemId} — ${err instanceof Error ? err.message : String(err)} (device/system membership unaffected)`);
+        systemNames.set(systemId, null);
+      }
+    }
+    this.tracer.event(`topology: device ${info.deviceId} system=${systemId ?? "none"} group=${info.groupId ?? "none"} role=${info.role ?? "none"}`);
+    return {
+      deviceId: info.deviceId,
+      supremeDeviceId: b.deviceId,
+      host: b.host,
+      systemId,
+      groupId: info.groupId ?? null,
+      role: info.role ?? null,
+      systemName: systemId ? systemNames.get(systemId) : undefined,
+    };
+  }
+
+  /**
+   * § D7 patch — on-demand, single-binding topology resolution, used ONLY by
+   * `command()` when routing target resolution fails (see `command()`'s doc). Merges
+   * its one observation into the SAME `DevialetTopologyRegistry` `refreshTopology()`
+   * uses — not a second topology mechanism. Concurrent calls for the SAME binding
+   * (e.g. two commands issued back-to-back before either resolves) coalesce onto one
+   * in-flight query via `inFlightTopologyRefresh`, keyed by `bindingKey()` — never a
+   * second real R1 query for the same binding at the same time. If the device was
+   * unbound while this refresh was in flight, its result is discarded rather than
+   * resurrecting a topology entry for a device this driver no longer manages.
+   */
+  private async ensureBindingTopology(b: DevialetBinding): Promise<void> {
+    const key = bindingKey(b.deviceId, b.capability);
+    const existing = this.inFlightTopologyRefresh.get(key);
+    if (existing) return existing;
+    const promise = (async () => {
+      const entry = await this.resolveDeviceTopology(b, new Map());
+      if (entry && this.bindings.includes(b)) {
+        this.notifyTopologyChange(this.topology.merge([entry]));
+      }
+    })().finally(() => {
+      this.inFlightTopologyRefresh.delete(key);
+    });
+    this.inFlightTopologyRefresh.set(key, promise);
+    return promise;
   }
 
   /**
@@ -575,33 +757,195 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
   }
 
   /** Poll-only feedback (unchanged cadence/mechanism from D2 — whether R1 offers a
-   * real push channel is unconfirmed by the doc). Reads real system volume + real
-   * group current-source state via the R1 client and projects them into Supreme
-   * `media` state via `mediaStateFromDevialet()`. A `NoCurrentSource` logical error
-   * (or any other failure) is tolerated silently per tick — real per-request
-   * diagnostics still capture it (`tracked()`), matching D2's tolerance posture. */
+   * real push channel is unconfirmed by the doc). Delegates to `refreshMediaState()`
+   * (§ D8) — kept as a separate method rather than inlined here per §21 of the D8
+   * brief ("do not combine this with command execution"; also keeps `poll()` a
+   * stable, minimal lifecycle hook `connect()`'s timer calls, unchanged in shape
+   * since D2). */
   async poll(): Promise<void> {
-    for (const b of this.bindings) {
-      if (b.capability !== "media") continue;
-      const endpoint = this.endpointFor(b);
-      try {
-        const [vol, current] = await Promise.all([
-          this.tracked(b.host, "R1 GET volume", () => this.client.getVolume(endpoint)),
-          this.tracked(b.host, "R1 GET current source", () => this.client.getCurrentSource(endpoint)),
-        ]);
-        this.record(b.deviceId, "media", mediaStateFromDevialet(current, vol.volume));
-      } catch {
-        // Tolerate transient errors (including a real, documented "NoCurrentSource"
-        // logical error) — `tracked()` already recorded the failure into this
-        // endpoint's own diagnostics tracker, so it remains visible to
-        // getDiagnostics()/getTrace() even though poll() itself stays silent.
+    await this.refreshMediaState();
+  }
+
+  /**
+   * § D8 final fix — Group-projected, INCREMENTALLY-merged media state refresh.
+   * R1's current-source/media response is dispatcher-relative (§ D7's
+   * `devialet-command-routing.ts` doc) — querying ANY member device's own host for
+   * `/groups/current/sources/current` already returns that Group's real, shared
+   * media state, so this method queries each DISTINCT `groupId` (and, for volume,
+   * each DISTINCT `systemId`) at most ONCE per refresh pass and projects the single
+   * result onto every bound device that currently belongs to it (§4/§22/§38) — never
+   * N redundant identical requests for N devices sharing one Group/System. This
+   * dedup logic is UNCHANGED from the original D8 pass.
+   *
+   * What changed: system-level volume and group-level playback/metadata are two
+   * INDEPENDENT queries, and this method now treats them that way — whichever half
+   * succeeds patches `mediaCache` (a persistent, per-device, incremental cache; see
+   * `devialet-codec.ts`'s module doc for the full rationale and its direct
+   * comparison to `AvrProtocolDriver`'s own `MediaCache`), and the merged result is
+   * published whenever `hasPublishableDevialetMedia()` says enough REAL data exists
+   * — never gated on both halves succeeding in the same tick. A failed half simply
+   * leaves that half of the cache untouched; nothing is ever erased or fabricated.
+   * If NEITHER half succeeds this tick, nothing changed, so nothing is re-published
+   * (the existing `this.states` entry, if any, is left exactly as it was).
+   *
+   * A device whose System OR Group isn't yet known in the current topology snapshot
+   * is skipped entirely for this tick (§17/§18: never fabricate group/system
+   * membership) — this is a topology-availability gate, unrelated to the
+   * volume/media independence described above.
+   *
+   * Retains each device's raw `coverArtUrl` in `mediaProjections` for `getArtwork()`
+   * whenever the group half succeeds (independent of whether the tick as a whole
+   * was publishable) — never published to `this.states` itself (`MediaState.
+   * artworkUrl` only ever carries the gateway's proxy URL, built via
+   * `artworkUrlFor`, never R1's raw URL). Artwork mechanics themselves are
+   * completely unchanged from the original D8 pass.
+   */
+  private async refreshMediaState(): Promise<void> {
+    this.tracer.event("media: refresh started");
+    const mediaBindings = this.bindings.filter((b) => b.capability === "media");
+    const volumeBySystem = new Map<string, Promise<{ volume: number } | null>>();
+    const mediaByGroup = new Map<string, Promise<DevialetCurrentSource | null>>();
+
+    for (const b of mediaBindings) {
+      let topology = b.devialetId ? (this.topology.get().devices[b.devialetId] ?? null) : null;
+      if (!topology?.systemId || !topology.groupId) {
+        // § D8/AH — the real SupremeOS lifecycle never calls `refreshTopology()`
+        // automatically (same gap the D7 patch closed for `command()`); `poll()`'s
+        // timer fires on its own once `connect()` runs, so media would otherwise
+        // never populate for a freshly-bound device. Reuses the SAME
+        // `ensureBindingTopology()` on-demand helper `command()` already uses — one
+        // attempt, coalesced, never a new mechanism/timer.
+        await this.ensureBindingTopology(b);
+        topology = b.devialetId ? (this.topology.get().devices[b.devialetId] ?? null) : null;
       }
+      if (!topology?.systemId || !topology.groupId) {
+        this.tracer.event(`media: topology unknown for ${b.deviceId} (system=${topology?.systemId ?? "unknown"} group=${topology?.groupId ?? "unknown"}) — media state unavailable`);
+        continue;
+      }
+      const endpoint = this.endpointFor(b);
+      const systemId = topology.systemId;
+      const groupId = topology.groupId;
+
+      if (!volumeBySystem.has(systemId)) {
+        this.tracer.event(`media: querying volume once for system ${systemId}`);
+        volumeBySystem.set(
+          systemId,
+          this.tracked(b.host, "R1 GET volume", () => this.client.getVolume(endpoint)).catch((err) => {
+            this.tracer.event(`media: volume query failed for system ${systemId} — ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          }),
+        );
+      }
+      const vol = await volumeBySystem.get(systemId)!;
+
+      if (!mediaByGroup.has(groupId)) {
+        this.tracer.event(`media: querying group ${groupId} once`);
+        mediaByGroup.set(
+          groupId,
+          this.tracked(b.host, "R1 GET current source", () => this.client.getCurrentSource(endpoint)).catch((err) => {
+            this.tracer.event(`media: group query failed for group ${groupId} — ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          }),
+        );
+      }
+      const current = await mediaByGroup.get(groupId)!;
+
+      if (vol === null && current === null) {
+        // Nothing new this tick — the existing cache/published state (if any)
+        // already reflects the last real data observed; no republish needed.
+        continue;
+      }
+
+      const prior = this.mediaCache.get(b.deviceId) ?? {};
+      const merged: DevialetMediaCacheEntry = { ...prior };
+      if (vol !== null) {
+        merged.volume = vol.volume;
+      }
+      if (current !== null) {
+        merged.muted = current.muteState === "muted";
+        merged.playback = current.playingState;
+        merged.title = current.metadata?.title ?? null;
+        merged.artist = current.metadata?.artist ?? null;
+        merged.album = current.metadata?.album ?? null;
+        merged.source = current.source?.type ?? null;
+        merged.availableOperations = current.availableOperations;
+        const coverArtUrl = current.metadata?.coverArtUrl ?? null;
+        this.mediaProjections.set(b.deviceId, { groupId, sourceHostDeviceId: current.source?.deviceId ?? null, coverArtUrl });
+      }
+      this.mediaCache.set(b.deviceId, merged);
+
+      if (!hasPublishableDevialetMedia(merged)) {
+        // One half is real and cached, but the OTHER has never been observed even
+        // once — volume/playback/muted have no honest "unknown" schema
+        // representation, so there is genuinely nothing valid to publish yet. Real
+        // data for this half is still saved above; the next successful tick for the
+        // other half will complete it.
+        this.tracer.event(`media: partial data cached for ${b.deviceId} — not yet publishable (volume=${merged.volume !== undefined} playback=${merged.playback !== undefined})`);
+        continue;
+      }
+
+      const artworkUrl = this.opts.artworkUrlFor ? this.opts.artworkUrlFor(b.deviceId) : null;
+      this.tracer.event(`media: state for ${b.deviceId} group=${groupId} playback=${merged.playback} mute=${merged.muted}${vol !== null ? " volume=fresh" : " volume=cached"}${current !== null ? " media=fresh" : " media=cached"}`);
+      this.record(b.deviceId, "media", buildDevialetMediaState(merged, artworkUrl));
     }
   }
 
+  /**
+   * § D8 — real album art bytes, fetched from R1's own raw `coverArtUrl` (retained in
+   * `mediaProjections` by `refreshMediaState()`), matching `AvrProtocolDriver.
+   * getArtwork()`'s exact shape (`MediaArtwork | null`, never fabricated). `null`
+   * when this device has no known media projection yet, or the current track/source
+   * reports no `coverArtUrl` at all. Never fetched eagerly during `poll()` — only on
+   * an actual caller request, per §13 of the D8 brief.
+   */
+  async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
+    const url = this.mediaProjections.get(deviceId)?.coverArtUrl;
+    if (!url) return null;
+    return this.fetchArtwork(url);
+  }
+
+  /** § D8 — coalesces concurrent fetches of the SAME raw artwork URL (§12/§15: two
+   * physical devices sharing one Group's `coverArtUrl` must trigger exactly one real
+   * download, never two) via `artworkInFlight`, keyed by URL — not device. This is
+   * NOT a second cache layer competing with the gateway's own device-keyed
+   * `ArtworkCache` (`services/gateway/src/artwork-cache.ts`, untouched by D8 — see
+   * the D8 report for why modifying it was out of scope): it only coalesces
+   * concurrent in-flight requests within this driver instance, the same pattern
+   * `HttpPollClient`/`DevialetIpControlClient`-adjacent code already uses elsewhere
+   * in this fleet for request coalescing. */
+  private async fetchArtwork(url: string): Promise<MediaArtwork | null> {
+    const existing = this.artworkInFlight.get(url);
+    if (existing) {
+      this.tracer.event(`media: artwork request coalesced (already in flight) for ${url}`);
+      return existing;
+    }
+    this.tracer.event(`media: artwork fetch started for ${url}`);
+    const promise = (async (): Promise<MediaArtwork | null> => {
+      try {
+        const res = await this.fetchImpl(url);
+        if (!res.ok) {
+          this.tracer.event(`media: artwork fetch failed for ${url} — HTTP ${res.status}`);
+          return null;
+        }
+        const contentType = res.headers.get("content-type") ?? "image/jpeg";
+        const data = new Uint8Array(await res.arrayBuffer());
+        this.tracer.event(`media: artwork fetch succeeded for ${url}`);
+        return { contentType, data };
+      } catch (err) {
+        this.tracer.event(`media: artwork fetch failed for ${url} — ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      }
+    })().finally(() => {
+      this.artworkInFlight.delete(url);
+    });
+    this.artworkInFlight.set(url, promise);
+    return promise;
+  }
+
   /** Records CONFIRMED state only — the one and only writer of `this.states`, reached
-   * exclusively from `poll()` (D3) / a real feedback path (D9/D10), never from
-   * `command()`. Delegates to the shared `recordCapabilityState()` helper. */
+   * exclusively from `poll()`/`refreshMediaState()` (D3/D8) / a real feedback path
+   * (D9/D10), never from `command()`. Delegates to the shared
+   * `recordCapabilityState()` helper. */
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {
     recordCapabilityState(this.states, this.listeners, deviceId, capability, state);
   }
@@ -636,6 +980,7 @@ function hostOnly(raw: string): string {
 }
 
 // Re-exported so callers/tests that only import from `devialet-driver.js` (the
-// pre-Fusion module path) can still observe a real logical/HTTP/transport failure
-// without a second import — the driver itself never needs to catch/rethrow either type.
-export { DevialetApiError, DevialetCiSettingsError };
+// pre-Fusion module path) can still observe a real logical/HTTP/transport/routing
+// failure without a second import — the driver itself never needs to catch/rethrow
+// any of these types.
+export { DevialetApiError, DevialetCiSettingsError, DevialetCommandRoutingError, DevialetOperationUnavailableError };

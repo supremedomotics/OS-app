@@ -59,8 +59,25 @@ function deviceInfoHandler(deviceId: string, extra: Record<string, unknown> = {}
 const IP_CONTROL_PATH = "/ipcontrol/v1";
 const SOURCE_ID = "213a3ed0-1fb9-4da2-bcf4-066da0f7b27e";
 
-function mediaHandler(volume: number, playingState: "playing" | "paused") {
+/** § D7/D8 — includes real `/devices/current` + `/systems/current` responses so a
+ * test can call `driver.refreshTopology()` before `command()` (§ D7) and
+ * `driver.poll()`/`refreshMediaState()` (§ D8) both now require known topology to do
+ * anything real. `devialetId` defaults to a fixed value — irrelevant to these
+ * pre-D7/D8 tests' own assertions, only needed to make routing/media resolution
+ * succeed. `systemId`/`groupId` default to values DERIVED from `devialetId` (not a
+ * shared constant) specifically so two different fake devices bound in the SAME test
+ * (e.g. "multiple simultaneously-bound physical devices") never accidentally collide
+ * into the same System/Group and get their media/volume queries deduped together —
+ * a real risk once §22/§38's group/system query dedup exists (§ D8). Pass explicit
+ * `systemId`/`groupId` when a test deliberately wants shared topology. */
+function mediaHandler(volume: number, playingState: "playing" | "paused", devialetId = "test-devialet-id", systemId = `S-${devialetId}`, groupId = `G-${devialetId}`) {
   return (url: string) => {
+    if (url.endsWith("/devices/current")) {
+      return { body: JSON.stringify({ deviceId: devialetId, model: "Phantom I", release: { version: "2.14.2" }, serial: "S1", deviceName: "Test Device", systemId, groupId, role: "Mono" }) };
+    }
+    if (url.endsWith("/systems/current")) {
+      return { body: JSON.stringify({ systemId, groupId, systemName: "Test Room" }) };
+    }
     if (url.endsWith("/systems/current/sources/current/soundControl/volume")) {
       return { body: JSON.stringify({ volume }) };
     }
@@ -106,8 +123,8 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
   });
 
   it("supports multiple simultaneously-bound physical devices", async () => {
-    const srvA = await startHttp(mediaHandler(10, "paused"));
-    const srvB = await startHttp(mediaHandler(90, "playing"));
+    const srvA = await startHttp(mediaHandler(10, "paused", "devialet-a"));
+    const srvB = await startHttp(mediaHandler(90, "playing", "devialet-b"));
     servers.push(srvA.server, srvB.server);
     const driver = new DevialetProtocolDriver({ pollMs: 1_000_000 });
     await driver.connect();
@@ -115,6 +132,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     const devB = "device-b" as DeviceId;
     await driver.bind({ deviceId: devA, capability: "media", ...bindAddress(srvA.base) });
     await driver.bind({ deviceId: devB, capability: "media", ...bindAddress(srvB.base) });
+    await driver.refreshTopology(); // § D8 — poll()'s media refresh now requires known topology
 
     expect(driver.manages(devA)).toBe(true);
     expect(driver.manages(devB)).toBe(true);
@@ -139,6 +157,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     const dev = "device-rebind" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srvOld.base) });
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srvNew.base) });
+    await driver.refreshTopology(); // § D7 — command() now requires known topology
 
     await driver.command(dev, { capability: "media", action: "next" });
     expect(srvNew.hits.some((h) => h.includes("/playback/next"))).toBe(true);
@@ -152,8 +171,8 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
   });
 
   it("unbind() releases a device's bindings/state without disturbing other devices", async () => {
-    const srvA = await startHttp(mediaHandler(5, "paused"));
-    const srvB = await startHttp(mediaHandler(6, "playing"));
+    const srvA = await startHttp(mediaHandler(5, "paused", "devialet-unbind-a"));
+    const srvB = await startHttp(mediaHandler(6, "playing", "devialet-unbind-b"));
     servers.push(srvA.server, srvB.server);
     const driver = new DevialetProtocolDriver({ pollMs: 1_000_000 });
     await driver.connect();
@@ -161,6 +180,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     const devB = "device-unbind-b" as DeviceId;
     await driver.bind({ deviceId: devA, capability: "media", ...bindAddress(srvA.base) });
     await driver.bind({ deviceId: devB, capability: "media", ...bindAddress(srvB.base) });
+    await driver.refreshTopology(); // § D8 — poll()'s media refresh now requires known topology
     await driver.poll();
 
     await driver.unbind(devA);
@@ -186,6 +206,8 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     await driver2.connect();
     await driver1.bind({ deviceId: dev, capability: "media", ...bindAddress(srv1.base) });
     await driver2.bind({ deviceId: dev, capability: "media", ...bindAddress(srv2.base) });
+    await driver1.refreshTopology(); // § D7 — command() now requires known topology
+    await driver2.refreshTopology();
 
     await driver1.command(dev, { capability: "media", action: "next" });
     expect(srv1.hits.some((h) => h.includes("/playback/next"))).toBe(true);
@@ -207,6 +229,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     await driver.connect();
     const dev = "device-dedupe" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srv.base) });
+    await driver.refreshTopology(); // § D8 — poll()'s media refresh now requires known topology
 
     const events: BackendStateEvent[] = [];
     driver.onState((e) => events.push(e));
@@ -226,6 +249,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     await driver.connect();
     const dev = "device-no-optimistic" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srv.base) });
+    await driver.refreshTopology(); // § D7 — command() now requires known topology
 
     expect(driver.getState(dev, "media")).toBeNull();
     await driver.command(dev, { capability: "media", action: "volume", volume: 77 });
@@ -245,6 +269,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     await driver.connect();
     const dev = "device-play" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srv.base) });
+    await driver.refreshTopology(); // § D7 — command() now requires known topology
 
     await driver.command(dev, { capability: "media", action: "play" });
     expect(srv.hits.some((h) => h.includes("/groups/current/sources/current"))).toBe(true);
@@ -271,6 +296,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
 
     await driver.connect();
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srv.base) });
+    await driver.refreshTopology(); // § D7 — command() now requires known topology
     await driver.command(dev, { capability: "media", action: "next" });
     await driver.poll();
 
@@ -298,6 +324,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     const dev = "device-trace" as DeviceId;
     await driver.connect();
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srv.base) });
+    await driver.refreshTopology(); // § D7 — command() now requires known topology
     await driver.command(dev, { capability: "media", action: "next" });
     await driver.poll();
 
@@ -323,6 +350,8 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     const srv = await startHttp((url) => {
       if (url === "/cisettings/getlean") return { body: JSON.stringify({ data: { powerstate: "running", mutemode: "OFF", volume: 88, source: "Bluetooth" } }) };
       if (url === "/cisettings/internalstate") return { body: JSON.stringify({ data: { internalstate: "OK" } }) };
+      if (url.endsWith("/devices/current")) return { body: JSON.stringify({ deviceId: "cisettings-device", model: "Phantom I", release: { version: "2.14.2" }, serial: "S1", deviceName: "A", systemId: "S1", groupId: "G1", role: "Mono" }) };
+      if (url.endsWith("/systems/current")) return { body: JSON.stringify({ systemId: "S1", groupId: "G1", systemName: "A" }) };
       if (url.endsWith("/systems/current/sources/current/soundControl/volume")) return { body: JSON.stringify({ volume: 33 }) };
       if (url.endsWith("/groups/current/sources/current")) return { body: JSON.stringify({ playingState: "paused", muteState: "unmuted", availableOperations: [] }) };
       return { status: 404 };
@@ -332,6 +361,7 @@ describe("DevialetProtocolDriver — D2/D3 architecture", () => {
     await driver.connect();
     const dev = "device-cisettings" as DeviceId;
     await driver.bind({ deviceId: dev, capability: "media", ...bindAddress(srv.base) });
+    await driver.refreshTopology(); // § D8 — poll()'s media refresh now requires known topology
 
     // Establish real R1-confirmed state first.
     await driver.poll();

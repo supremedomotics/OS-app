@@ -341,7 +341,11 @@ export type {
 export { FakeTvTransport } from "./tv-sdk/transports/fake-tv-transport.js";
 export { commandToLinkPlay, stateFromLinkPlay, decodeHex } from "./wiim-codec.js";
 export { DevialetProtocolDriver, DevialetApiError, DevialetCiSettingsError, type DevialetDriverOptions } from "./devialet-driver.js";
-export { mediaStateFromDevialet } from "./devialet-codec.js";
+export {
+  buildDevialetMediaState,
+  hasPublishableDevialetMedia,
+  type DevialetMediaCacheEntry,
+} from "./devialet-codec.js";
 export {
   DevialetIpControlClient,
   KNOWN_DEVIALET_ERROR_CODES,
@@ -396,6 +400,17 @@ export {
   type DevialetTopologyChange,
   type DevialetTopologyChangeResult,
 } from "./devialet-topology.js";
+export {
+  devialetCommandLevelFor,
+  resolveDevialetCommandTarget,
+  DevialetCommandRoutingError,
+  DevialetOperationUnavailableError,
+  type DevialetCommandLevel,
+  type DevialetCommandRoutingFailureReason,
+  type DevialetCommandRoutingFailure,
+  type DevialetCommandRoutingSuccess,
+  type DevialetCommandRoutingResult,
+} from "./devialet-command-routing.js";
 export {
   SonosProtocolDriver,
   type SonosDriverOptions,
