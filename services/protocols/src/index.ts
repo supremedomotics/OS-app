@@ -344,7 +344,9 @@ export { DevialetProtocolDriver, DevialetApiError, DevialetCiSettingsError, type
 export {
   buildDevialetMediaState,
   hasPublishableDevialetMedia,
+  reconcileDevialetCiSettings,
   type DevialetMediaCacheEntry,
+  type DevialetCiSettingsReconciliation,
 } from "./devialet-codec.js";
 export {
   DevialetIpControlClient,

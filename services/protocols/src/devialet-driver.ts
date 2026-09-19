@@ -12,7 +12,13 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { buildDevialetMediaState, hasPublishableDevialetMedia, type DevialetMediaCacheEntry } from "./devialet-codec.js";
+import {
+  buildDevialetMediaState,
+  hasPublishableDevialetMedia,
+  reconcileDevialetCiSettings,
+  type DevialetMediaCacheEntry,
+  type DevialetCiSettingsReconciliation,
+} from "./devialet-codec.js";
 import {
   DevialetApiError,
   DevialetIpControlClient,
@@ -24,6 +30,7 @@ import {
   DevialetCiSettingsError,
   type DevialetCiSettingsEndpoint,
   type DevialetCiSettingsLeanState,
+  type DevialetCiSettingsPowerState,
 } from "./devialet-cisettings-client.js";
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
 import { DEVIALET_MDNS_SERVICE, parseDevialetCandidate, transportHostFor, type DevialetDiscoveryCandidate } from "./devialet-discovery.js";
@@ -48,7 +55,7 @@ import { bestEffortMacForIp } from "./arp-lookup.js";
 
 /** Kept independent of `supreme-avr`'s own version counter — bumped when this driver's
  * own architecture/behavior changes materially. Surfaced in Diagnostics only. */
-const DRIVER_VERSION = "8.0.0-fusion-d8";
+const DRIVER_VERSION = "9.0.0-fusion-d9";
 
 /**
  * § D3 — the literal example path from the R1 doc's own "The global prefix" section
@@ -643,6 +650,56 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b) return null;
     return this.tracked(b.host, "CISettings GET internalstate", () => this.ciSettings.getInternalState(this.ciSettingsEndpointFor(b)));
+  }
+
+  /**
+   * § D9 — CISettings `powerstate`, kept STRICTLY diagnostic (see `devialet-codec.ts`'s
+   * precedence matrix). R1 has no power/on-off endpoint at all, so there is nothing
+   * for this to conflict with, but the 4-value semantics (`standby`/`starting`/
+   * `running`/`stopping`) do not collapse losslessly onto SupremeOS's boolean `onoff`
+   * capability, and the write-side `power` opcode has no confirmed read-back — so this
+   * is deliberately NEVER written into `this.states` and NEVER bound to a capability.
+   * Same posture as `getCiSettingsLean()`/`getCiSettingsInternalState()`: on-demand,
+   * enrichment-only, propagates a real `DevialetCiSettingsError` for a managed device.
+   */
+  async getCiSettingsPowerState(deviceId: DeviceId): Promise<DevialetCiSettingsPowerState | null> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return this.tracked(b.host, "CISettings GET powerstate", () => this.ciSettings.getPowerState(this.ciSettingsEndpointFor(b)));
+  }
+
+  /**
+   * § D9 — diagnostic-only comparison between R1's already-published media state and
+   * CISettings' own independently-fetched volume/mute/source. NEVER writes to
+   * `this.states`/`mediaCache` — R1 remains authoritative regardless of what this
+   * returns (see the precedence matrix in `devialet-codec.ts`). Each CISettings field
+   * is fetched independently (`Promise.allSettled`) so one field's transport/HTTP/
+   * malformed failure never blocks reporting the others (§ D9-G failure isolation) —
+   * a failed field simply reports `ciSettingsValue: null` for that row. Returns `null`
+   * only for an unmanaged device, matching every other lookup method on this driver.
+   */
+  async getCiSettingsReconciliation(deviceId: DeviceId): Promise<DevialetCiSettingsReconciliation[] | null> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    const endpoint = this.ciSettingsEndpointFor(b);
+    const [volume, muted, source] = await Promise.allSettled([
+      this.tracked(b.host, "CISettings GET volume", () => this.ciSettings.getVolume(endpoint)),
+      this.tracked(b.host, "CISettings GET mutemode", () => this.ciSettings.getMuteMode(endpoint)),
+      this.tracked(b.host, "CISettings GET source", () => this.ciSettings.getSource(endpoint)),
+    ]);
+    const cached = this.mediaCache.get(deviceId);
+    return reconcileDevialetCiSettings(
+      {
+        volume: cached?.volume ?? null,
+        muted: cached?.muted ?? null,
+        source: cached?.source ?? null,
+      },
+      {
+        volume: volume.status === "fulfilled" ? volume.value : null,
+        muted: muted.status === "fulfilled" ? muted.value : null,
+        source: source.status === "fulfilled" ? source.value : null,
+      },
+    );
   }
 
   /** Real, per-endpoint connection/traffic diagnostics — unchanged shape from D2.
