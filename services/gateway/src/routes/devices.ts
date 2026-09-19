@@ -15,6 +15,7 @@ import type { DeviceId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authenticate, enforce } from "../auth.js";
+import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
 import { ArtworkCache } from "../artwork-cache.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
@@ -52,7 +53,9 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
   const artworkCache = new ArtworkCache();
   app.post<{ Params: { id: string } }>("/v1/devices/:id/command", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      // §Phase12.4 — the real semantic command path for a paired SupremeOS Mobile too, not
+      // only an existing session; see mobile-auth-bridge.ts for exactly what this covers.
+      const user = await authenticateMobileOrUser(ctx, req);
       const deviceId = req.params.id as DeviceId;
       const device = await ctx.home.getDevice(deviceId);
       if (!device) throw new SupremeError("not_found", "device not found");

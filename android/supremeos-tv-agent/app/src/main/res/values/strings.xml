@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SupremeOS TV Agent</string>
+    <string name="accessibility_service_description">Lets SupremeOS report which app is currently on screen, so its dashboard reflects what you\'re actually watching. Optional — remote control keeps working without it.</string>
+</resources>

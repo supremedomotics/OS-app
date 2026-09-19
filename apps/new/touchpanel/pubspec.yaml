@@ -1,0 +1,28 @@
+name: supreme_touchpanel
+description: >
+  SupremeOS Touch Panel — dedicated architectural control-surface product.
+  Not a tablet build of the mobile app; a permanently-scoped endpoint with a
+  locked provisioning assignment (room/floor/whole home).
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.5.5
+  supreme_os_core:
+    path: ../shared
+  supreme_os_ui:
+    path: ../shared_ui
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

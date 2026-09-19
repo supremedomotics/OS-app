@@ -7,6 +7,7 @@ import {
 import { newId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate } from "../auth.js";
+import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 
@@ -34,10 +35,12 @@ export function registerNotificationRoutes(app: FastifyInstance, ctx: AppContext
     }
   });
 
-  // Register this client's push token (FCM/APNs/WebPush) for background delivery.
+  // Register this client's push token (FCM/APNs/WebPush) for background delivery. §Phase12.5 —
+  // a paired SupremeOS Mobile registers its own Home-scoped push token here too, not only an
+  // existing session (see mobile-auth-bridge.ts).
   app.post("/v1/push/tokens", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      const user = await authenticateMobileOrUser(ctx, req);
       const { platform, token } = RegisterPushTokenRequest.parse(req.body);
       const now = new Date().toISOString();
       await ctx.pushTokens.register({
@@ -56,7 +59,7 @@ export function registerNotificationRoutes(app: FastifyInstance, ctx: AppContext
 
   app.delete<{ Params: { token: string } }>("/v1/push/tokens/:token", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      const user = await authenticateMobileOrUser(ctx, req);
       await ctx.pushTokens.remove(user.id, decodeURIComponent(req.params.token));
       reply.code(204).send();
     } catch (err) {

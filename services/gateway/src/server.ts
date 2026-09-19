@@ -24,6 +24,7 @@ import { registerSystemUpdateRoutes } from "./routes/system-update.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
 import { registerMatterRoutes, registerMatterBridgeRoutes } from "./routes/matter.js";
 import { registerIntelligenceRoutes } from "./routes/intelligence.js";
+import { registerMobilePairingRoutes } from "./routes/pairing.js";
 import { attachObservability } from "./observability.js";
 import { attachStream } from "./stream.js";
 
@@ -139,6 +140,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerAuthRoutes(app, ctx);
   registerHomeRoutes(app, ctx);
   registerDeviceRoutes(app, ctx);
+  registerMobilePairingRoutes(app, ctx);
   registerSceneRoutes(app, ctx);
   registerClimateRoutes(app, ctx);
   registerUserRoutes(app, ctx);

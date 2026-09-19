@@ -3,6 +3,7 @@ import type { DeviceId, User } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { can, enforce } from "./auth.js";
+import { resolveMobileOrSessionUser } from "./mobile-auth-bridge.js";
 import type { AppContext } from "./context.js";
 
 /**
@@ -13,6 +14,16 @@ import type { AppContext } from "./context.js";
  *
  * Auth: the access token is passed as `?access_token=` because browsers cannot set
  * Authorization headers on a WebSocket handshake. It is validated once at connect.
+ *
+ * §Phase12.6 — THIS is the "Hub Event Bus + authenticated event stream" the phase asked to
+ * establish. Inspection found it already exists, in production, real: `ctx.onState`/
+ * `ctx.onNotification`/`ctx.onDriverState` are driven by `ctx.bus` (`IEventBus` —
+ * in-process by default, NATS-capable in prod), which every native driver's state change
+ * already publishes to via `onBackendState()` (`context.ts`) — the SIP driver's `record()`
+ * included, since it goes through the exact same `INativeProtocolDriver.onState` → SIL → bus
+ * path as KNX/Matter/Casambi/every other driver. No new event bus was built; this file's only
+ * change is authentication — the SAME `resolveMobileOrSessionUser` bridge Phase 12.4/12.5
+ * already extended to the REST/push routes, now covering the one remaining real-time surface.
  */
 export function attachStream(app: FastifyInstance, ctx: AppContext): void {
   app.get("/v1/stream", { websocket: true }, (socket, req) => {
@@ -24,7 +35,7 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
   const token = new URLSearchParams(url.split("?")[1] ?? "").get("access_token") ?? "";
   let user: User;
   try {
-    user = await ctx.identity.authenticate(token);
+    user = await resolveMobileOrSessionUser(ctx, token, (t) => ctx.identity.authenticate(t));
   } catch {
     send(socket, { type: "error", code: "unauthorized", message: "invalid stream token" });
     socket.close(1008, "unauthorized");

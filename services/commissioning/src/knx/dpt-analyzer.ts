@@ -37,6 +37,30 @@ export type DptCategory =
   | "color_temperature_kelvin"
   | "hvac_mode"
   | "hvac_fan_speed"
+  /** § Phase 3.3C-2 — DPT 20.105 `DPT_HVACContrMode` ("HVAC Controlling Mode"), verified
+   * against the canonical KNX Association "KNX Standard Interworking Datapoint Types"
+   * v02.02.01 §4.3: an 18(+1)-value plant/controller operating-mode enum (Auto, Heat,
+   * Morning Warmup, Cool, Night Purge, Precool, Off, Test, Emergency Heat, Fan only, Free
+   * Cool, Ice, Maximum Heating, Economic Heat/Cool, Dehumidification, Calibration,
+   * Emergency Cool, Emergency Steam, NoDem) — a DIFFERENT concept from DPT 20.102's
+   * simpler 5-value comfort-preset enum ("hvac_mode" above). Deliberately its own
+   * category, never folded into "hvac_mode".*/
+  | "hvac_contr_mode"
+  /** § Phase 3.3C-3 — DPT 1.100 `DPT_Heat/Cool` ("KNX Standard Interworking Datapoint
+   * Types" v02.02.01 §3.1 Data Type "Boolean", subtype table): a single bit, 0=cooling,
+   * 1=heating. Deliberately its own category rather than falling into "binary_generic" —
+   * that fallback would let it be misread as a plain switch, losing the heat/cool
+   * semantic the canonical document assigns this specific subtype. */
+  | "hvac_heat_cool"
+  /** § Phase 3.3C-4 — DPT 22.101 `DPT_StatusRHCC` ("KNX Standard Interworking Datapoint
+   * Types" v02.02.01 §4.5.2): a 16-bit status/diagnostic bitset (fault, alarms, disable
+   * flags, eco/limit flags), read/feedback-only — never a plain binary_generic/switch. */
+  | "hvac_status"
+  /** § Phase 3.3C-5B — DPT 222.100 `DPT_TempRoomSetpSetF16[3]` ("KNX Standard
+   * Interworking Datapoint Types" v02.02.01 §4.23.1): a compound 3-field (Comfort/
+   * Standby/Economy) F16 setpoint snapshot in ONE Group Object — read/feedback-only,
+   * never a plain float_generic/float_temperature. */
+  | "hvac_setpoints"
   | "enum_generic"
   | "string"
   | "datetime"
@@ -69,6 +93,8 @@ const SUBTYPE_RULES: Record<string, { category: DptCategory; label: string }> = 
   "1.019": { category: "binary_windowdoor", label: "Window/Door" },
   "1.021": { category: "binary_generic", label: "Logical Function" },
   "1.022": { category: "binary_generic", label: "Scene A/B" },
+  // § Phase 3.3C-3 — DPT 1.100 DPT_Heat/Cool: 0=cooling, 1=heating. Not a generic switch.
+  "1.100": { category: "hvac_heat_cool", label: "Heat/Cool" },
 
   "3.007": { category: "step_dimming", label: "Relative Dimming" },
   "3.008": { category: "step_blind", label: "Blind Step" },
@@ -123,8 +149,20 @@ const SUBTYPE_RULES: Record<string, { category: DptCategory; label: string }> = 
   "19.001": { category: "datetime", label: "Date & Time" },
 
   "20.102": { category: "hvac_mode", label: "HVAC Controller Mode" },
-  "20.105": { category: "hvac_fan_speed", label: "HVAC Fan Speed" },
+  // § Phase 3.3C-2 fix — this was PREVIOUSLY (wrongly) classified "hvac_fan_speed"/"HVAC
+  // Fan Speed". Verified against the canonical document: DPT 20.105 is `DPT_HVACContrMode`
+  // ("HVAC Controlling Mode"), an 18-value plant/controller operating-mode enum — it has
+  // no relationship to fan speed at all. This was the exact class of fabricated-from-a-
+  // DPT-number-without-checking-the-spec mistake the KNX canonical-source rule exists to
+  // catch (confirmed: "20.105" was the ONLY DPT ever classified "hvac_fan_speed" anywhere
+  // in this codebase — not a real fan-speed mapping being reused, a genuine mislabel).
+  "20.105": { category: "hvac_contr_mode", label: "HVAC Controlling Mode" },
   "20.106": { category: "hvac_mode", label: "HVAC Controller Status" },
+  // § Phase 3.3C-4 — DPT 22.101 DPT_StatusRHCC: 16-bit HVAC status/diagnostic bitset.
+  "22.101": { category: "hvac_status", label: "HVAC Status (RHCC)" },
+  // § Phase 3.3C-5B — DPT 222.100 DPT_TempRoomSetpSetF16[3]: Comfort/Standby/Economy
+  // room-temperature setpoint snapshot (F16, no Building Protection field).
+  "222.100": { category: "hvac_setpoints", label: "HVAC Named Setpoints (Comfort/Standby/Economy)" },
 
   "28.001": { category: "string", label: "UTF-8 String" },
 
@@ -201,6 +239,8 @@ const READONLY_CATEGORIES: ReadonlySet<DptCategory> = new Set<DptCategory>([
   "binary_alarm",
   "binary_occupancy",
   "binary_windowdoor",
+  "hvac_status",
+  "hvac_setpoints",
 ]);
 
 export function isReadonlyCategory(category: DptCategory): boolean {

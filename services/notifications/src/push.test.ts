@@ -66,6 +66,36 @@ describe("PushService", () => {
     expect(await new PushService(store, [fcm]).deliver(notif(null))).toBe(2);
   });
 
+  it("§Phase13.2 §7 — stamps the routing envelope (hubId/eventId/ts) into the push data payload when a hubId is configured", async () => {
+    const store = new InMemoryPushTokenStore();
+    await store.register(tok("user-a", "fcm", "tok-a1"));
+    const fcm = new FakeProvider("fcm");
+    const push = new PushService(store, [fcm], "hub-abc-123");
+
+    const n = notif("user-a");
+    await push.deliver(n);
+
+    const data = fcm.sent[0]!.message.data;
+    expect(data.hubId).toBe("hub-abc-123");
+    expect(data.eventId).toBe(n.id);
+    expect(data.ts).toBe(n.createdAt);
+    expect(data.v).toBe("1");
+    // Never leaks a credential or authoritative state into the payload.
+    expect(Object.keys(data)).not.toContain("token");
+    expect(Object.keys(data)).not.toContain("bearerToken");
+  });
+
+  it("omits the routing envelope entirely when no hubId is configured (backward compatible)", async () => {
+    const store = new InMemoryPushTokenStore();
+    await store.register(tok("user-a", "fcm", "tok-a1"));
+    const fcm = new FakeProvider("fcm");
+    await new PushService(store, [fcm]).deliver(notif("user-a"));
+
+    const data = fcm.sent[0]!.message.data;
+    expect(data.hubId).toBeUndefined();
+    expect(data.notificationId).toBeTruthy(); // existing fields unchanged
+  });
+
   it("is a no-op (WSS-only degrade) when no provider is configured", async () => {
     const push = new PushService(new InMemoryPushTokenStore(), []);
     expect(push.enabled).toBe(false);

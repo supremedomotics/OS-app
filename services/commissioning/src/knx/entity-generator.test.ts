@@ -22,4 +22,27 @@ describe("entity generator", () => {
     const entity = generateEntities(device!);
     expect(entity.bindings[0]?.config).toMatchObject({ dpt: "DPT14.056", measure: "power", unit: "W" });
   });
+
+  it("§ Phase 3.3B — threads a temperature binding's hvacRoles into config.hvacRoles, keyed by semantic role", () => {
+    const model = parseGaExport(`<x>
+      <GroupAddress Name="Living Room AC - Setpoint" Address="3/1/1" DPTs="DPST-9-1" />
+      <GroupAddress Name="Living Room AC - Current Temperature" Address="3/1/2" DPTs="DPST-9-1" />
+      <GroupAddress Name="Living Room AC - Mode" Address="3/1/3" DPTs="DPST-20-102" />
+    </x>`);
+    const [device] = recognizeDevices(model, ["Living Room"]).devices;
+    const entity = generateEntities(device!);
+    const tempBinding = entity.bindings.find((b) => b.capability === "temperature")!;
+    expect(tempBinding.config).toEqual({
+      dpt: "DPT9.001",
+      statusAddress: "3/1/2",
+      hvacRoles: { operatingMode: { address: "3/1/3", dpt: "DPT20.102" } },
+    });
+  });
+
+  it("§ Phase 3.3B — a single-GA temperature binding (no HVAC roles) carries no hvacRoles key at all", () => {
+    const model = parseGaExport(`<x><GroupAddress Name="Bathroom Floor Setpoint" Address="4/2/1" DPTs="DPST-9-1" /></x>`);
+    const [device] = recognizeDevices(model).devices;
+    const entity = generateEntities(device!);
+    expect(entity.bindings[0]?.config).not.toHaveProperty("hvacRoles");
+  });
 });

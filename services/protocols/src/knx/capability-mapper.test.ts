@@ -28,12 +28,26 @@ describe("classifyFromText", () => {
     expect(hint.capabilities).toEqual([]);
   });
 
-  it("§ Correctness Fix — same for the DPT-based fan_speed_percentage/hvac_fan_speed signals", () => {
-    // DPT 5.100 (Fan Speed %) and DPT 20.105 (HVAC Fan Speed) both classify their
-    // device kind correctly for diagnostics, but neither advertises `fan` since
-    // knx-codec.ts still can't execute it.
+  it("§ Correctness Fix — same for the DPT-based fan_speed_percentage signal", () => {
+    // DPT 5.100 (Fan Speed %) classifies its device kind correctly for diagnostics, but
+    // doesn't advertise `fan` since knx-codec.ts still can't execute it.
     expect(classifyEtsSignal("5.100", "AHU Fan Speed")).toMatchObject({ deviceKind: "fan", capabilities: [] });
-    expect(classifyEtsSignal("20.105", "AHU Fan Speed Mode")).toMatchObject({ deviceKind: "fan", capabilities: [] });
+  });
+
+  it("§ Phase 3.3C-2 fix — DPT 20.105 is no longer misclassified as fan speed; it's HVAC Controlling Mode (DPT_HVACContrMode), recognized as a climate device's temperature capability", () => {
+    expect(classifyEtsSignal("20.105", "AHU Controlling Mode")).toMatchObject({ deviceKind: "climate", capabilities: ["temperature"] });
+  });
+
+  it("§ Phase 3.3C-3 — DPT 1.100 (DPT_Heat/Cool) is recognized as a climate device's temperature capability, never a generic switch", () => {
+    expect(classifyEtsSignal("1.100", "AHU Heat/Cool")).toMatchObject({ deviceKind: "climate", capabilities: ["temperature"] });
+  });
+
+  it("§ Phase 3.3C-4 — DPT 22.101 (DPT_StatusRHCC) is recognized as a climate device's temperature capability, never a generic status boolean", () => {
+    expect(classifyEtsSignal("22.101", "AHU Status")).toMatchObject({ deviceKind: "climate", capabilities: ["temperature"] });
+  });
+
+  it("§ Phase 3.3C-5B — DPT 222.100 (DPT_TempRoomSetpSetF16[3]) is recognized as a climate device's temperature capability, never a generic float/temperature", () => {
+    expect(classifyEtsSignal("222.100", "AHU Setpoints")).toMatchObject({ deviceKind: "climate", capabilities: ["temperature"] });
   });
 });
 
@@ -160,8 +174,15 @@ describe("colorModesFromDpt", () => {
     expect(colorModesFromDpt("DPT7.600")).toEqual({ rgb: false, cct: true });
   });
 
-  it("DPT 9.x (2-byte float, incl. absolute Kelvin) resolves CCT-only", () => {
-    expect(colorModesFromDpt("9.22")).toEqual({ rgb: false, cct: true });
+  it("§ KNX DPT Canonical Audit correction — DPT 9.x is temperature/humidity/lux/etc. (KNX AS v02.02.01 §3.10), NEVER colour temperature EXCEPT the named 9.022 manufacturer exception (see this function's doc comment)", () => {
+    expect(colorModesFromDpt("9.001")).toBeNull(); // DPT_Value_Temp itself — definitely not CCT
+    expect(colorModesFromDpt("9.004")).toBeNull(); // lux — definitely not CCT
+    expect(colorModesFromDpt("9.007")).toBeNull(); // humidity — definitely not CCT
+  });
+
+  it("DPT9.022 stays CCT-only — a named, evidence-backed exception (live-reproduced real fixture), not the old blanket DPT9 rule", () => {
+    expect(colorModesFromDpt("9.022")).toEqual({ rgb: false, cct: true });
+    expect(colorModesFromDpt("DPT9.022")).toEqual({ rgb: false, cct: true });
   });
 
   it("DPT 232.x (HSV) / 233.x (RGB) / 251.x (RGBW) resolve RGB-only", () => {

@@ -8,6 +8,12 @@ packages:
   # apps/installer — form factor (Flutter vs web) is a deferred open item (§4 / open #2)
   - packages/aureon-flutter
   - packages/supreme-sdk-dart
+  # apps/new/* — new-generation SupremeOS UI (mobile + touch panel), built from
+  # scratch per the residence-first architecture; independent of apps/mobile.
+  - apps/new/shared
+  - apps/new/shared_ui
+  - apps/new/mobile
+  - apps/new/touchpanel
 
 command:
   bootstrap:

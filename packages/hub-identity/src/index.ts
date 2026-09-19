@@ -9,6 +9,12 @@ import {
 import { isUuidv7, uuidv7 } from "./uuid.js";
 
 export { uuidv7, isUuidv7 } from "./uuid.js";
+export {
+  issueMobileAuthorizationToken,
+  verifyMobileAuthorizationToken,
+  MOBILE_TOKEN_TTL_MS,
+  type MobileAuthorizationTokenPayload,
+} from "./mobile-authorization.js";
 
 /**
  * @supreme/hub-identity — the hub's cryptographic identity and the zero-touch enrollment

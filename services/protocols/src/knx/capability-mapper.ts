@@ -135,6 +135,26 @@ const DPT_CATEGORY_CAPABILITY: Partial<Record<DptCategory, { capabilities: Capab
   color_rgbw: { capabilities: ["color"], deviceKind: "rgbw_light" },
   float_temperature: { capabilities: ["temperature"], deviceKind: "thermostat" },
   hvac_mode: { capabilities: ["temperature"], deviceKind: "climate" },
+  // § Phase 3.3C-2 fix — DPT 20.105 (`hvac_contr_mode`, dpt-analyzer.ts) was PREVIOUSLY
+  // classified here under the wrong category ("hvac_fan_speed") — corrected in
+  // dpt-analyzer.ts; this system (a separate, secondary classification pipeline from
+  // `device-recognition-engine.ts`'s hvacRoles architecture, backing `SupremeKnxDriver`'s
+  // scan-time capability hints only) has no hvacRoles mechanism of its own to carry the
+  // richer signal, so the most honest treatment available here is the same one "hvac_mode"
+  // already gets: recognized as belonging to a climate device's `temperature` capability,
+  // never discarded, never mislabeled as fan-related.
+  hvac_contr_mode: { capabilities: ["temperature"], deviceKind: "climate" },
+  // § Phase 3.3C-3 — DPT 1.100 (`hvac_heat_cool`, dpt-analyzer.ts). Same reasoning as
+  // "hvac_contr_mode" above: this secondary pipeline has no hvacRoles mechanism of its
+  // own, so it's recognized as a climate device's `temperature` capability rather than
+  // falling into "binary_generic"/being unclassified.
+  hvac_heat_cool: { capabilities: ["temperature"], deviceKind: "climate" },
+  // § Phase 3.3C-4 — DPT 22.101 (`hvac_status`, dpt-analyzer.ts). Same reasoning as
+  // "hvac_contr_mode"/"hvac_heat_cool" above.
+  hvac_status: { capabilities: ["temperature"], deviceKind: "climate" },
+  // § Phase 3.3C-5B — DPT 222.100 (`hvac_setpoints`, dpt-analyzer.ts). Same reasoning as
+  // "hvac_status"/"hvac_heat_cool" above.
+  hvac_setpoints: { capabilities: ["temperature"], deviceKind: "climate" },
   // § Correctness Fix — same reason as fan_speed_percentage above.
   hvac_fan_speed: { capabilities: [], deviceKind: "fan" },
   binary_occupancy: { capabilities: ["sensor"], deviceKind: "presence_sensor" },
@@ -410,13 +430,36 @@ export function roleOfEtsSignal(
  * approved it. Accepts a DPT string in either "7.600" or "DPT7.600" form (both appear
  * across this codebase's binding config). `null` for anything not structurally RGB(W)
  * or Kelvin — never guessed from a name/label, only from the real DPT major number:
- *   - DPT 7 (Percentage-scaled Kelvin, tunable-white) / DPT 9 (2-byte float Kelvin) → CCT
- *   - DPT 232 (HSV) / DPT 233 (RGB) / DPT 251 (RGBW) → RGB(W)
+ *   - DPT 7 (`DPT_Absolute_Colour_Temperature`, U16, unsigned, Kelvin, 0-65535K, 1K
+ *     resolution — KNX Association "KNX Standard Interworking Datapoint Types" v02.02.01
+ *     §6.2) → CCT
+ *   - DPT 232 (HSV/RGB) / DPT 233 (RGB) / DPT 251 (RGBW) → RGB(W)
+ *
+ * § KNX DPT Canonical Audit correction — this previously treated the ENTIRE DPT 9.xxx
+ * major family as a second "Kelvin" DPT group. Verified against the canonical KNX
+ * Association document ("KNX Standard Interworking Datapoint Types" v02.02.01, §3.10 "2-
+ * Octet Float Value"): DPT 9.xxx is temperature/humidity/lux/pressure/air-flow/current/
+ * etc. — DPT 9.001 alone is `DPT_Value_Temp` in °C — and the canonical document defines NO
+ * 9.xxx subtype as a colour temperature in Kelvin. Blindly treating every 9.xxx DPT as CCT
+ * was exactly the fabricated-from-a-number-range mistake this codebase's KNX canonical-
+ * source rule exists to prevent.
+ *
+ * DPT9.022 is kept as a NAMED, NARROW exception, NOT restored to the old blanket rule: a
+ * real fixture ("Conference Hanging") was live-reproduced using exactly `DPST-9-22` to
+ * carry a genuine 2-byte Kelvin colour-temperature value (see
+ * `supreme-knx-driver.test.ts`'s "a color binding with DPT9.022... reports cct-only" —
+ * that test's own bug-report comment predates this correction and is left as the real
+ * evidence for keeping 9.022 specifically). This is flagged here as
+ * MANUFACTURER-OBSERVED/IMPLEMENTATION-INFERENCE (a real device's confirmed wire
+ * behavior), explicitly NOT a claim about what the canonical document itself defines for
+ * 9.022 — the canonical document does not appear to register a "9.022" subtype in the
+ * material reviewed for this audit. Every OTHER 9.xxx subtype now correctly returns
+ * `null` (unknown/unresolved) rather than a fabricated CCT claim.
  */
 export function colorModesFromDpt(dpt: string | null | undefined): { rgb: boolean; cct: boolean } | null {
   if (!dpt) return null;
-  const { major } = dptParts(dpt);
-  if (major === 7 || major === 9) return { rgb: false, cct: true };
+  const { major, minor } = dptParts(dpt);
+  if (major === 7 || (major === 9 && minor === 22)) return { rgb: false, cct: true };
   if (major === 232 || major === 233 || major === 251) return { rgb: true, cct: false };
   return null;
 }

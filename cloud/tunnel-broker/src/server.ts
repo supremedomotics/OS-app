@@ -2,6 +2,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { TunnelBroker, type HubHandshake, type TunnelRequest } from "./broker.js";
+import { verifyMobileAuthorizationToken } from "@supreme/hub-identity";
 
 /**
  * Tunnel Broker HTTP/WS surface (ADR 0009):
@@ -63,7 +64,7 @@ export function buildTunnelBrokerServer(opts: TunnelBrokerServerOptions): Fastif
             ws.close(1008, "unauthorized");
             return;
           }
-          detach = broker.attach(result.hubId, { send: (d) => ws.send(d) });
+          detach = broker.attach(result.hubId, { send: (d) => ws.send(d) }, frame.credential.devicePublicKey);
           ws.send(JSON.stringify({ t: "ready", hubId: result.hubId }));
           (ws as unknown as { _hubId?: string })._hubId = result.hubId;
           return;
@@ -77,10 +78,75 @@ export function buildTunnelBrokerServer(opts: TunnelBrokerServerOptions): Fastif
     });
   });
 
+  // Real default authorizer (§Phase12 §11): verifies a Mobile-authorization token's Ed25519
+  // signature against THIS hub's own device public key — the same key `verifyHandshake`
+  // above already proved possession of. No synchronous call back to the hub is needed, and
+  // no second, separately-trusted keypair is introduced; the Hub remains the sole issuer
+  // (`services/gateway/src/routes/pairing.ts`). Fails closed on a missing/malformed header,
+  // an unknown/offline hub (no public key on file), or ANY verification failure — never a
+  // default-allow. `opts.authorizeClient` (tests, or a future additional policy layer) always
+  // takes precedence when supplied. Shared by both the request/response route below AND the
+  // stream route (§Phase12.9) — one authorization policy, not two.
+  const authorize =
+    opts.authorizeClient ??
+    (async (hubId: string, authorization: string | undefined): Promise<boolean> => {
+      if (!authorization?.startsWith("Bearer ")) return false;
+      const hubPublicKey = broker.getHubPublicKey(hubId);
+      if (!hubPublicKey) return false; // unknown/offline hub — never authorized
+      const token = authorization.slice("Bearer ".length);
+      const payload = verifyMobileAuthorizationToken(token, hubPublicKey);
+      return payload !== null && payload.hubId === hubId;
+    });
+
+  // ── Off-LAN client live stream → broker → hub tunnel → hub's own /v1/stream → back ────────
+  // §Phase12.9 — the remote counterpart of `/v1/route/:hubId/*` for a persistent stream instead
+  // of one-shot request/response. Same authorization as the HTTP route (a Mobile-authorization
+  // bearer token, Ed25519-verified against the Hub's own device public key — never a second
+  // trust root); the token is then forwarded as the local `/v1/stream?access_token=` query the
+  // Hub's own gateway already expects, so the Hub re-validates it exactly as it would on the LAN.
+  app.register(async (scoped) => {
+    await scoped.register(fastifyWebsocket);
+    scoped.get<{ Params: { hubId: string }; Querystring: { access_token?: string } }>(
+      "/v1/route/:hubId/stream",
+      { websocket: true },
+      async (socket, req) => {
+        const ws = socket as unknown as WebSocket;
+        const { hubId } = req.params;
+        // A WS client can't always set a custom Authorization header on the upgrade request
+        // (`package:web_socket_channel`'s portable `WebSocketChannel.connect` cannot) — mirror
+        // the Hub's OWN `/v1/stream?access_token=` convention as a fallback so
+        // `WebSocketHubEventStream` (§Phase12.7) works unmodified against this remote route,
+        // never a second stream-transport implementation for "remote."
+        const authorization =
+          req.headers.authorization ?? (req.query.access_token ? `Bearer ${req.query.access_token}` : undefined);
+        if (!(await authorize(hubId, authorization))) {
+          ws.close(1008, "not authorized for this hub");
+          return;
+        }
+        if (!broker.isOnline(hubId)) {
+          ws.close(1013, "hub offline");
+          return;
+        }
+        const token = (authorization ?? "").slice("Bearer ".length);
+        const stream = broker.openStream(hubId, `/v1/stream?access_token=${encodeURIComponent(token)}`, {
+          onData: (data) => {
+            if (ws.readyState === ws.OPEN) ws.send(data);
+          },
+          onClose: (code, reason) => ws.close(code ?? 1011, reason ?? "hub stream closed"),
+        });
+        if (!stream) {
+          ws.close(1013, "hub offline");
+          return;
+        }
+        ws.on("message", (raw: Buffer) => stream.send(raw.toString()));
+        ws.on("close", () => stream.close());
+      },
+    );
+  });
+
   // ── Off-LAN client → broker → hub tunnel → hub gateway → back ────────────────────────────
   app.all<{ Params: { hubId: string; "*": string } }>("/v1/route/:hubId/*", async (req, reply) => {
     const { hubId } = req.params;
-    const authorize = opts.authorizeClient ?? (async () => false);
     if (!(await authorize(hubId, req.headers.authorization))) {
       return reply.code(403).send({ code: "forbidden", message: "not authorized for this hub" });
     }

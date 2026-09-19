@@ -2,6 +2,23 @@
 node_modules/
 .pnpm-store/
 
+# Local agent-tooling runtime state (daemon pid/logs/metrics — machine-specific, not source)
+.claude-flow/
+.claude/.proven-config-version
+.claude/memory.json
+.claude/proven-config.json
+
+# Playwright MCP debug/scratch output (page snapshots, screenshots from ad-hoc QA runs — not
+# project source, regenerated per session)
+.claude/playwright-output/
+
+# Home Assistant container runtime state (bind-mounted, regenerated on each run — not source)
+infra/hub-compose/homeassistant/.ha_run.lock
+infra/hub-compose/homeassistant/.HA_VERSION
+infra/hub-compose/homeassistant/home-assistant.log*
+infra/hub-compose/homeassistant/home-assistant_v2.db
+infra/hub-compose/homeassistant/blueprints/
+
 # Build output
 dist/
 build/

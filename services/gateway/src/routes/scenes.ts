@@ -10,6 +10,7 @@ import type { SceneId } from "@supreme/domain-model";
 import { validateSchedule, ScheduleError } from "@supreme/scenes";
 import type { FastifyInstance } from "fastify";
 import { authenticate, can, enforce } from "../auth.js";
+import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 
@@ -17,7 +18,9 @@ import { sendError } from "../http-errors.js";
 export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get("/v1/scenes", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      // §Phase12.4 — SupremeOS "Experiences" are this Hub's existing Scenes; a paired Mobile
+      // may list them the same way an existing session does.
+      const user = await authenticateMobileOrUser(ctx, req);
       const all = await ctx.scenes.list();
       const visible = [];
       for (const s of all) if (await can(ctx, user, "scene", s.id, "view")) visible.push(s);
@@ -72,7 +75,8 @@ export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void
 
   app.post<{ Params: { id: string } }>("/v1/scenes/:id/activate", async (req, reply) => {
     try {
-      const user = await authenticate(ctx, req);
+      // §Phase12.4 — "invoke Experience" for a paired Mobile.
+      const user = await authenticateMobileOrUser(ctx, req);
       const id = req.params.id as SceneId;
       await ctx.scenes.get(id);
       await enforce(ctx, user, "scene", id, "control");

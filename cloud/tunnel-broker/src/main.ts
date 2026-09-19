@@ -24,6 +24,14 @@ async function main(): Promise<void> {
   // One broker core behind both surfaces.
   const broker = new TunnelBroker({ caPublicKey });
   const devAllowAll = process.env.SUPREME_BROKER_DEV_ALLOW_ALL === "1";
+  // §Phase12 §12: production must never silently run with allow-all — fail the whole process
+  // at startup rather than serve traffic under a security bypass nobody explicitly reviewed.
+  if (devAllowAll && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "SUPREME_BROKER_DEV_ALLOW_ALL=1 is set with NODE_ENV=production — refusing to start. " +
+        "This flag disables all Mobile/client authorization and must never be set in production.",
+    );
+  }
   const app = buildTunnelBrokerServer({
     caPublicKey,
     broker,

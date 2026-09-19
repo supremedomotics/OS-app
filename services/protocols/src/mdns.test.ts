@@ -89,23 +89,39 @@ describe("mDNS DNS codec", () => {
   });
 });
 
-describe("Devialet discovery over mDNS", () => {
-  it("maps Bonjour services to commission-ready DiscoveredDevices", async () => {
+describe("Devialet discovery over mDNS (§ D5 — real _http._tcp service type, stable deviceId identity)", () => {
+  it("maps a real Devialet -ipcontrol Bonjour instance to a commission-ready DiscoveredDevice, keyed by the R1 deviceId — never by IP", async () => {
     const fake: MdnsService = {
-      name: `Living\\032Room.${SERVICE}`,
+      name: "Living\\032Room-ipcontrol._http._tcp.local",
       host: "phantom.local",
       port: 80,
       addresses: ["10.0.0.30"],
-      txt: { model: "Phantom II" },
+      txt: { manufacturer: "Devialet", ipControlVersion: "1", path: "/ipcontrol/v1" },
     };
-    const driver = new DevialetProtocolDriver({ mdns: async () => [fake] });
+    const driver = new DevialetProtocolDriver({
+      mdns: async () => [fake],
+      fetchImpl: (async (url: string) => {
+        if (String(url).endsWith("/devices/current")) {
+          return new Response(
+            JSON.stringify({ deviceId: "5b35aa24-e4c9-4942-a501-7b0cf5c1e892", model: "Phantom II 98 dB", release: { version: "2.14.2" }, serial: "P35V12345TQ9A", deviceName: "Living Room" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
     const found = await driver.discover();
     expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({ backendId: "10.0.0.30", capabilities: ["media"] });
+    // § D5 — backendId is the real Devialet deviceId (a UUID from /devices/current),
+    // never the IP address the pre-D5 driver used to return here.
+    expect(found[0]).toMatchObject({ backendId: "5b35aa24-e4c9-4942-a501-7b0cf5c1e892", capabilities: ["media"] });
     expect(found[0]?.suggestedName).toBe("Living Room");
 
-    // backendId is exactly the bind address.
-    await driver.bind({ deviceId: "x" as DeviceId, capability: "media", address: found[0]!.backendId });
+    // The bind address is transport information (raw.host, IP:port) — a SEPARATE
+    // concept from backendId (identity) since D5. `raw.path` is what a real
+    // commissioning flow would copy into `ProtocolBinding.config.path`.
+    expect(found[0]?.raw).toMatchObject({ host: "10.0.0.30:80", path: "/ipcontrol/v1" });
+    await driver.bind({ deviceId: "x" as DeviceId, capability: "media", address: (found[0]!.raw as { host: string }).host, config: { path: (found[0]!.raw as { path: string }).path } });
     expect(driver.manages("x" as DeviceId)).toBe(true);
   });
 });

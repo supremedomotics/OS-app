@@ -45,6 +45,11 @@ export class BrokerTunnelClient {
   private authed = false;
   private readonly ctor: BrokerWebSocketCtor;
   private readonly fetchImpl: typeof fetch;
+  /** §Phase12.9 — local WebSockets opened on THIS hub's own gateway (e.g. `/v1/stream`) on
+   * behalf of a remote broker-side stream, keyed by the broker's stream id. Each one is a real
+   * connection to `localBaseUrl`'s own stream endpoint — auth/RBAC is enforced there exactly as
+   * on the LAN; the tunnel only relays bytes. */
+  private readonly localStreams = new Map<string, BrokerWebSocket>();
 
   constructor(private readonly opts: BrokerTunnelOptions) {
     this.ctor = opts.WebSocketImpl ?? (globalThis.WebSocket as unknown as BrokerWebSocketCtor);
@@ -60,6 +65,8 @@ export class BrokerTunnelClient {
     this.stopped = true;
     this.ws?.close();
     this.ws = null;
+    for (const local of this.localStreams.values()) local.close();
+    this.localStreams.clear();
   }
 
   private connect(): void {
@@ -79,7 +86,16 @@ export class BrokerTunnelClient {
   }
 
   private async onFrame(raw: string): Promise<void> {
-    let frame: { t?: string; nonce?: string; id?: string; method?: string; path?: string; headers?: Record<string, string>; body?: string };
+    let frame: {
+      t?: string;
+      nonce?: string;
+      id?: string;
+      method?: string;
+      path?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      data?: string;
+    };
     try {
       frame = JSON.parse(raw);
     } catch {
@@ -105,7 +121,49 @@ export class BrokerTunnelClient {
     if (frame.t === "req" && this.authed) {
       const res = await this.proxyLocal(frame as ReqFrame);
       this.ws?.send(JSON.stringify({ t: "res", id: (frame as ReqFrame).id, ...res }));
+      return;
     }
+    // §Phase12.9 — a remote client wants a live stream (e.g. `/v1/stream`): open a REAL local
+    // WebSocket to this hub's own gateway and relay bytes both ways. Local auth/RBAC applies
+    // exactly as it would on the LAN — the tunnel adds no privilege.
+    if (frame.t === "stream_open" && this.authed && frame.id && frame.path) {
+      this.openLocalStream(frame.id, frame.path);
+      return;
+    }
+    if (frame.t === "stream_data" && frame.id && frame.data !== undefined) {
+      const local = this.localStreams.get(frame.id);
+      if (local) local.send(frame.data);
+      else this.pendingStreamFrames.get(frame.id)?.push(frame.data) ?? this.pendingStreamFrames.set(frame.id, [frame.data]);
+      return;
+    }
+    if (frame.t === "stream_close" && frame.id) {
+      this.localStreams.get(frame.id)?.close();
+      this.localStreams.delete(frame.id);
+      this.pendingStreamFrames.delete(frame.id);
+      return;
+    }
+  }
+
+  /** Frames the broker relayed before this hub's own local WebSocket finished connecting —
+   * the remote client can send data the instant `stream_open` is acked, well before a real
+   * `ws` handshake to `localBaseUrl` completes. Queued, not dropped, and flushed in order. */
+  private readonly pendingStreamFrames = new Map<string, string[]>();
+
+  private openLocalStream(streamId: string, path: string): void {
+    const base = this.opts.localBaseUrl.replace(/^http/, "ws").replace(/\/$/, "");
+    const local = new this.ctor(`${base}${path}`);
+    local.addEventListener("open", () => {
+      this.localStreams.set(streamId, local);
+      for (const data of this.pendingStreamFrames.get(streamId) ?? []) local.send(data);
+      this.pendingStreamFrames.delete(streamId);
+    });
+    local.addEventListener("message", (ev) => {
+      this.ws?.send(JSON.stringify({ t: "stream_data", id: streamId, data: String(ev.data) }));
+    });
+    local.addEventListener("close", () => {
+      this.localStreams.delete(streamId);
+      this.ws?.send(JSON.stringify({ t: "stream_close", id: streamId }));
+    });
   }
 
   private async proxyLocal(frame: ReqFrame): Promise<{ status: number; headers: Record<string, string>; body: string }> {

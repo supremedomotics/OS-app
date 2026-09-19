@@ -1,0 +1,28 @@
+name: supreme_os_ui
+description: >
+  SupremeOS Flutter design system: the Flutter binding for supreme_os_core's
+  design tokens and adaptive-layout engine, plus the reusable component
+  library (room header, environmental state, domain controls, adaptive
+  panels) shared by Mobile and Touch Panel. `supreme_os_core` stays pure
+  Dart on purpose; this package is where those tokens become real
+  ThemeData/Widgets — one visual language, two apps.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supreme_os_core:
+    path: ../shared
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

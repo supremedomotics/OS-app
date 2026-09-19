@@ -7,6 +7,382 @@
 
 ## Critical
 
+### iOS Runtime / VoIP Wake Foundation (Phase 13.4)
+- **Description:** real PushKit (`.voIP` type only) + CallKit foundation (`VoipCallManager.swift`,
+  new). Wired Phase 12.5's already-built but previously-unused `MobileRuntime` call-state machine
+  to a real event source for the first time. 4 new `NativeRuntimeEvent` subtypes on the existing
+  `com.supremeos/runtime` channel (no new channel). Call-UUID→Home mapping solved via a native
+  `callHomeMap`, never a bearer token in CallKit metadata. Answering/ending a call never touches
+  any HTTP/command path — verified structurally and by test. Real finding during testing: fixed
+  an illegal `incoming→connecting` transition attempt by emitting `ringing` first (CallKit's own
+  successful report IS the real "ringing" signal). `UIBackgroundModes: [voip]` added — the first
+  background mode this project has declared, backing a real implemented mechanism only. Gate:
+  mobile 74/74, shared/shared_ui/touchpanel unchanged (172/7/23); Android build re-confirmed
+  failing identically (no regression). See `SESSION_HANDOFF.md` "Phase 13.4" for full detail.
+- **Explicitly not built (confirmed by code review):** SIP stack, RTP/SRTP, codecs, STUN/TURN,
+  video, door release, unlock command, Android ConnectionService — none implemented. No
+  server-side VoIP-token registration route exists yet (Hub can't send a VoIP push today). No
+  Home-context/snapshot restoration wired to a cold VoIP wake. Real APNs/PushKit/CallKit
+  behavior remains REAL-WORLD ACCEPTANCE TEST REQUIRED — no macOS/Xcode/device available.
+
+### Android Runtime / Background Execution (Phase 13.3)
+- **Description:** real Android foreground-service background execution. Added a third
+  orthogonal lifecycle dimension (`AndroidServiceState`, never folded into `ProcessState`),
+  extended `MobileRuntimePlatform` with `startBackgroundService()`/`stopBackgroundService()` +
+  a `ServiceStateChanged` event. `MainActivity` now caches its `FlutterEngine`
+  (`provideFlutterEngine`/`shouldDestroyEngineWithHost(false)`) so the SAME Dart isolate/
+  `RuntimeController` survives Activity destruction — the new `SupremeForegroundService` holds
+  NO engine/Dart state of its own, purely a native construct that keeps the process alive so the
+  ONE existing runtime keeps running (avoids the "two competing runtimes" trap by construction).
+  Real Android 14+ `dataSync` foreground service type, calm protocol-free notification, explicit
+  Dart-driven start/stop only (never self-started, never boot-started). No new WebSocket/
+  connection logic — reuses Phase 12's `ConnectionManager`/`HomeEventStreamSession` entirely.
+  Gate: mobile 61/61, shared 172/172, shared_ui 7/7, touchpanel 23/23 (last three untouched). See
+  `SESSION_HANDOFF.md` "Phase 13.3" for full detail.
+- **Explicitly not built (per this phase's own stop condition, confirmed by code review):** SIP,
+  CallKit, PushKit, iOS background runtime, video, door release, incoming-call UI,
+  ConnectionService — none implemented. `BOOT_COMPLETED` restore deliberately deferred (no
+  user-facing "keep connected after reboot" setting exists yet to gate it — adding boot-start
+  without one would be exactly the uncontrolled-always-running-service the phase forbids). Real
+  Android compile/device verification remains blocked by the same pre-existing Gradle
+  loopback-socket issue (re-confirmed, ~6s failure, pre-project-evaluation) — this phase's
+  Kotlin is REAL-WORLD/NATIVE BUILD ACCEPTANCE REQUIRED, not falsely upgraded.
+
+### Mobile Push Foundation (Phase 13.2)
+- **Description:** extended the existing `PlatformPushTokenSource` interface (initialize/
+  currentToken/onTokenRefresh/onPushReceived/dispose) and implemented it for real —
+  `NativePushTokenSource` speaking a new `com.supremeos/push` channel pair, with real Android
+  (`SupremeFirebaseMessagingService` + Firebase Gradle wiring) and real iOS (plain APNs
+  registration via `AppDelegate.swift`, no PushKit) native code. `RuntimeController` gained
+  `unregisterPushTokenForHome`/`ingestPushPayload`. New `mapPushEnvelopeToHomeEvent` (shared)
+  routes push events through the SAME `MobileRuntime.ingestEvent` dedup/isolation pipeline
+  WebSocket events use — no second dedup system. Backend: `PushService` now stamps a minimal
+  `PushEnvelope` (hubId/eventId/ts) into delivered messages — smallest possible backward-
+  compatible extension, `/v1/push/tokens` itself untouched (already correctly Home-scoped).
+  Gate: shared 172/172, mobile 49/49, shared_ui 7/7, touchpanel 23/23 = 251;
+  services/notifications 6/6; gateway 528/529 (1 pre-existing unrelated flake). See
+  `SESSION_HANDOFF.md` "Phase 13.2" for full detail.
+- **Explicitly not built (next up, per this phase's own stop condition):** Android foreground
+  service/BOOT_COMPLETED (Phase 13.3 — also required before a received push can reach Dart when
+  no engine is alive, currently dropped in that case), iOS PushKit/CallKit/VoIP background mode
+  (Phase 13.4), SIP/video/door-release (13.5–13.7). A real Firebase project
+  (`google-services.json`) and real APNs credentials are a **provisioning gap, not a code gap**
+  — the Gradle/native wiring is real and correctly requires them; nothing was fabricated. Native
+  compilation remains blocked by the same Gradle loopback-socket issue identified in Phase 13.1
+  (confirmed still present, occurs before Gradle even evaluates this phase's new plugin/
+  dependency lines) — this phase's Kotlin/Swift is REAL-WORLD/NATIVE BUILD ACCEPTANCE REQUIRED,
+  not falsely upgraded.
+
+### Mobile Runtime foundation & native platform boundary (Phase 13.1)
+- **Description:** generated real Android/iOS platform projects for `apps/new/mobile` via
+  `flutter create` (no hand-written platform files), established the `MobileRuntimePlatform`
+  Dart interface + `NativeRuntimeBridge`/`NoOpMobileRuntimePlatform` implementations speaking a
+  new `com.supremeos/runtime` MethodChannel/EventChannel, added the `ProcessState`/`UiState`
+  orthogonal lifecycle dimensions, and wired them into the existing `RuntimeController`
+  (recording only — connectivity/Home-authorization behavior unchanged, verified by test).
+  `MainActivity.kt`/`AppDelegate.swift` forward OS foreground/background transitions only — no
+  foreground service, no BOOT_COMPLETED, no FCM/APNs/PushKit/CallKit/SIP. Gate: mobile 38/38,
+  shared 162/162, shared_ui 7/7, touchpanel 23/23; all four `flutter analyze` clean; mobile +
+  touchpanel web builds succeed. See `SESSION_HANDOFF.md` "Phase 13.1" for full detail including
+  the identified Android build blocker (a local Gradle loopback-socket restriction on this
+  machine, not a code defect — confirmed by ruling out tool-sandboxing).
+- **Explicitly not built (next up, per this phase's own scope limit):** Android foreground
+  service/BOOT_COMPLETED/FCM (Phase 13.2), iOS PushKit/CallKit/VoIP background mode/APNs (Phase
+  13.4), SIP/voice/video/door-release-from-call (13.5–13.7). Real Android compile verification
+  is blocked on a local network/loopback-socket issue this session could not resolve — needs
+  either a fixed local environment or a different build-capable machine/CI. Real iOS compile
+  verification remains impossible on this machine (no macOS).
+
+### Connectivity & security acceptance closure — 12.x architecture frozen (Phase 12.11)
+- **Description:** closed every remaining gap Phase 12.10's final report flagged, with real
+  automated proof: (1) remote reconnect proven with a real socket disconnect (code 1001) and a
+  real second connection, plus proof that reconnect always triggers a fresh snapshot; (2/3)
+  LAN→remote and remote→LAN transitions proven with a flip-able fake discovery driving real
+  `ConnectionManager.notifyNetworkChanged()` transitions; (4) Remote Access OFF confirmed to stay
+  offline, never silently falling back; (5) stream revocation proven AND corrected — the Hub's
+  own live `mobileAuthorizations` registry check (not just the broker's coarse signature/exp
+  check) means revocation is immediately effective for new stream connections, contradicting a
+  stale doc comment that has now been corrected by the test itself; (6) expired-but-validly-
+  signed token rejected on the remote stream; (7) a real Hub-A token rejected on a real,
+  broker-attached Hub B's stream; (8) the mandatory Home-switch stale-response race proven
+  deterministically with a delayed-response fake transport, for both reads and commands; (9)
+  multi-Home isolation extended with a real reconnect step; (10) the broker URL is now
+  deployment-configurable via `--dart-define=SUPREME_BROKER_URL`, with the exact future
+  provisioning interface documented (a `brokerUrl` field on the pairing-verify response). Gate:
+  shared 162/162, mobile 24/24, shared_ui 7/7, touchpanel 23/23 = 216; tunnel-broker 24/24;
+  hub-identity 18/18; gateway 529/531 (2 pre-existing environment-flake failures, confirmed via
+  the same 37-accumulated-node-process signature seen in every prior occurrence). See
+  `SESSION_HANDOFF.md` "Phase 12.11" for full detail and the corrected revocation finding.
+- **12.x connectivity/security architecture is now FROZEN.** Next work is Phase 13: native
+  Android/iOS background execution, SIP doorphone, voice/video calls, push notification
+  delivery, continuous live feedback.
+- **Explicitly not built (next up, Phase 13 prerequisites):** real broker URL provisioning
+  (BACKEND/PROVISIONING CONTRACT MISSING — interface documented, nothing populates it);
+  malformed-token stream-route-specific test (reasoned identical to the proven HTTP case, not
+  separately tested); physical device/hardware acceptance testing (REAL-WORLD ACCEPTANCE TEST
+  REQUIRED, no hardware in this environment).
+
+### Mobile remote activation, real remote command→feedback, two real Hubs (Phase 12.10)
+- **Description:** (1) Added a homeowner-facing Remote Access toggle per Home
+  (`PairedHome.remoteAccessEnabled`, default OFF, `HomeSettingsScreen` `SwitchListTile`, no
+  technical detail ever shown). (2) Wired the real Mobile composition root
+  (`connectionManagerProvider`, `RuntimeController.resolveHomeStreamUri`, a new shared
+  `remoteHubConfigFor` helper) so the LAN/remote decision for BOTH the HTTP transport and the
+  live event stream is made once, per Home, based on that Home's own switch — never a silent
+  fallback, never duplicated logic. (3) Proved real remote command→feedback end-to-end for the
+  first time: `services/gateway/src/broker-tunnel.e2e.test.ts` sends a real command through
+  `RemoteHubTransport`'s HTTP route and observes the resulting state delta over the real remote
+  WebSocket stream — surfaced and fixed a real subscribe/command ordering race unique to the
+  broker's extra hop (documented pattern: ping/pong confirms subscribe was applied). (4) Proved
+  two independent real Hub processes (two real `AppContext`s + gateways + tunnel clients on one
+  broker) stay fully isolated — cross-hub token rejection, cross-hub event isolation with
+  identical room names. (5) `RoomScreen`'s four domain widgets now catch
+  `AmbiguousDeviceResolutionException` (Phase 12.9) and render a safe "isn't fully configured
+  yet" card instead of spinning forever or leaking a technical exception. Gate: shared 155/155,
+  mobile 24/24, shared_ui 7/7, touchpanel 23/23 = 209; gateway 527/529 (2 pre-existing
+  environment-flake failures, confirmed unrelated). See `SESSION_HANDOFF.md` "Phase 12.10".
+- **Explicitly not built (next up):** the broker URL in `remoteHubConfigFor` is still a
+  placeholder — no installer/account-provisioning flow anywhere supplies a real one, so "Remote
+  Access: On" in the real app cannot yet reach a real broker. Remote-specific reconnect (§10) and
+  live LAN↔remote transition (§12) were not newly tested this phase — reasoned safe by shared
+  code paths, not separately proven. A dedicated Home-switch stale-response race test (§9) was
+  not written — the structural argument (fresh repository per Home switch, no shared mutable
+  state) was verified by re-reading the provider graph, not by a targeted test with a
+  deliberately delayed response. Expired-token/revoked-Mobile-authorization against the remote
+  STREAM route specifically were not separately tested (reasoned identical to the HTTP route
+  since both share one `authorize()` function). Physical device/hardware acceptance testing and
+  native background/SIP/CallKit/PushKit/FCM/APNs remain unbuilt, explicitly deferred to Phase 13.
+
+### Remote live stream, real Hub E2E proof, deterministic device resolution (Phase 12.9)
+- **Description:** (1) Extended the Tunnel Broker with real WebSocket stream multiplexing
+  (`TunnelBroker.openStream`, new `GET /v1/route/:hubId/stream` route) over the SAME hub-initiated
+  tunnel socket used for request/response — no second socket, no second broker architecture.
+  Proven end-to-end with a real broker + real hub gateway + real `BrokerTunnelClient` + real `ws`
+  client in `services/gateway/src/broker-tunnel.e2e.test.ts` (genuine ping/pong round trip through
+  the full remote path, plus forged-token and unknown-hub fail-closed tests). This is the first
+  proven remote live-event path in the project — `RemoteHubTransport`'s doc previously stated
+  real-time remote events were unavailable; corrected. (2) `RemoteHubConfig.streamUri()` builds
+  the `wss://` URL for `WebSocketHubEventStream` to use unmodified. (3) Removed Phase 12.8's
+  "first matching device per room" heuristic: `HubHomeStateRepository` now throws
+  `AmbiguousDeviceResolutionException` when a room has 2+ devices sharing a capability, instead of
+  silently picking one — documented as BACKEND CONTRACT MISSING (no Hub-side semantic
+  primary-device mapping exists). Gate: shared 150/150, mobile 21/21, shared_ui 7/7, touchpanel
+  23/23 = 201; tunnel-broker 24/24; gateway 528/529 (1 pre-existing environment flake, confirmed
+  unrelated). See `SESSION_HANDOFF.md` "Phase 12.9" for full detail.
+- **Explicitly not built (next up):** Mobile composition-root wiring for the remote stream —
+  `apps/new/mobile/lib/main.dart` still has `remoteAccessEnabled: false` and a placeholder broker
+  URL; there is no Remote Access opt-in UI anywhere in `apps/new`, so activating the new broker
+  capability from the actual app is blocked on that missing UI, not on transport capability.
+  Two-real-Hub-process multi-Home isolation was not attempted (proven with fakes + a
+  single-process cross-hub broker test only). A real device-command → SIL → driver → Hub state →
+  `/v1/stream` → REMOTE Mobile round trip was not exercised (only arbitrary-frame relay was
+  proven). No UI screen renders `AmbiguousDeviceResolutionException` yet — thrown and tested at
+  the repository layer only. Physical device/hardware acceptance testing, native Android/iOS
+  background execution, and SIP/CallKit/PushKit/FCM/APNs remain unbuilt and out of scope.
+
+### Real end-to-end Home synchronization (Phase 12.8)
+- **Description:** closed three concrete gaps left by Phase 12.7. (1) `HubTransport.get(path)`
+  added to the interface + `MockHubTransport`/`RemoteHubTransport`, since the real Hub API mixes
+  GET reads and POST writes and `sendCommand` was POST-only. (2) `HttpHubTransport` (NEW,
+  `apps/new/shared/lib/src/connection/http_hub_transport.dart`) — the first REAL LAN
+  `HubTransport`, plain `package:http` against the Hub's gateway REST surface on port 443 (native
+  `:7272` has no HTTP listener for this contract), proven against a real local `dart:io`
+  `HttpServer` (5 tests, not a mock). (3) `HubHomeStateRepository` fully rewritten to call the
+  REAL Phase-12.4 contract (`v1/home`, `v1/devices`, `v1/rooms/:id/devices`, `v1/devices/:id/
+  command`, `v1/scenes`, `v1/scenes/:id/activate`) instead of Phase 12.3's invented paths, with an
+  honestly-documented "first matching device per room" simplification. (4) `main.dart`'s
+  `resolveHomeBaseUrl` now does a real `SingleHubDiscovery`-scoped LAN lookup instead of always
+  returning null; `connectionManagerProvider` builds a real `HttpHubTransport`; `onSnapshotRequired`
+  builds a real one-shot transport+repository per Home instead of a no-op. Multi-Home isolation
+  proven again at this layer (two fake Hubs, identical room id, opposite state, zero
+  cross-contamination in both reads and commands). Gate: shared 144/144, mobile 21/21, shared_ui
+  7/7, touchpanel 23/23 = 195. See `SESSION_HANDOFF.md` "Phase 12.8" for full detail.
+- **Explicitly not built (next up):** **remote WebSocket event streaming through the Tunnel
+  Broker was not attempted this phase** — `cloud/tunnel-broker` was not even inspected;
+  `RemoteHubTransport` still cannot carry a WebSocket, so there is no remote live-event path
+  today (needs its own inspection-first phase). No test in this phase dialed an actual running
+  Hub process from the Mobile composition root — the plumbing is real and unit/integration
+  tested, but Mobile is not yet provably "live" end-to-end against a real Hub (Tests B/C/E/F from
+  the Phase 12.8 spec were proven at the fake/unit layer only; Test D was not run at all). Real
+  per-device UI (fixing the "first matching device per room" simplification) remains unbuilt.
+  Physical device/hardware acceptance testing remains unbuilt (no physical KNX/Casambi/Matter
+  device in this environment). Native Android/iOS background execution and SIP/CallKit/PushKit/
+  FCM/APNs delivery remain explicitly out of scope, unchanged from Phase 12.7.
+
+### Live Mobile Runtime event stream (Phase 12.7)
+- **Description:** wired the Dart client to the real `/v1/stream` (Phase 12.6). New
+  `apps/new/shared/lib/src/runtime/{event_stream_transport.dart, home_event_stream_session.dart}`
+  — `WebSocketHubEventStream` (real `package:web_socket_channel`, terminal on WS 1008/auth
+  failure, capped-backoff reconnect otherwise) and `HomeEventStreamSession` (per-Home:
+  transport → `HomeEventMapper` → `MobileRuntime`, with snapshot-before-live-frame ordering on
+  every (re)connect, since Phase 12.6 established there is no durable replay).
+  `RuntimeController.startEventStreamsForAllHomes()` opens one session per authorized Home with
+  a live session + resolvable address, idempotent, disposes on Home removal. 7 new shared tests
+  (4 against a REAL local `dart:io` WebSocket server), 4 new mobile tests. Gate: shared 139/139,
+  mobile 21/21, shared_ui 7/7, touchpanel 23/23 = 190. See `SESSION_HANDOFF.md` "Phase 12.7".
+- **Explicitly not built (next up):** `resolveHomeBaseUrl` still resolves to null everywhere —
+  no real stream has dialed an actual running Hub from the Mobile app yet; no per-Home
+  `HomeStateRepository` for snapshot recovery to call; `RemoteHubTransport` still cannot carry a
+  WebSocket through the Tunnel Broker (remote event streaming unaddressed); no native
+  Android/iOS background execution (per this phase's own instruction not to start it yet).
+
+### Hub Event Bus + live feedback + call-signalling architecture (Phase 12.6)
+- **Description:** inspection found `services/gateway/src/stream.ts`'s `/v1/stream` is ALREADY
+  a real, production WebSocket event bus (state deltas, notifications, driver state), fed by
+  the existing `IEventBus`/`onBackendState()` pipeline every native driver (SIP included)
+  already flows through. The only real gap: its auth didn't recognize a Mobile-authorization
+  token. Closed via `mobile-auth-bridge.ts`'s new `resolveMobileOrSessionToken`/
+  `resolveMobileOrSessionUser` (shared by the HTTP-header and WS-query-param callers) — one
+  real, tested one-line change to `stream.ts`. New `apps/new/shared/lib/src/runtime/
+  home_event_mapper.dart` (`HomeEventMapper`) translates real stream frames into Phase 12.5's
+  `HomeEvent`, including the sensor-ring→doorphoneRing heuristic. 8 new server tests (incl. a
+  full physical→SIL→bus→WSS→Mobile-authenticated-client round trip), 8 new shared tests. See
+  `SESSION_HANDOFF.md` "Phase 12.6" for full detail, honest replay/delivery classification
+  (AT-MOST-ONCE, SNAPSHOT RECOVERY — no durable replay exists), and SIP findings (still no real
+  call-session backend — confirmed again, not newly solved).
+- **Known test flake:** one WS integration test in `mobile-stream-bridge.test.ts` is timing-
+  sensitive under heavy parallel-worker load in this session specifically (passes cleanly and
+  quickly every time in isolation) — a test-infra/environment observation, not a code defect.
+- **Explicitly not built (next up):** no Dart client actually opens a `/v1/stream` connection
+  yet — `HomeEventMapper` is real and tested in isolation, but `apps/new/mobile` has no
+  `WebSocketHubEventStream`/`RuntimeController` wiring to consume it. Do not begin Phase 12.7
+  native Android/iOS background work until that wiring exists per this phase's own instruction.
+
+### SupremeOS Mobile Runtime foundation (Phase 12.5)
+- **Description:** built the shared background-runtime architecture (§Phase12.5) after
+  inspecting the real Hub: `apps/new/shared/lib/src/runtime/` (`HomeEvent`/`CallSession`/
+  `CallState`/`SeenEventTracker`/`MobileRuntime`/`PushRegistrationClient`) — multi-Home event
+  isolation, replay-safe dedup, and the full 8-state doorphone call machine, all real and
+  tested (20 new shared tests). `apps/new/mobile/lib/runtime/runtime_controller.dart` wires it
+  to `PairedHomeController` and registers push tokens through the real, now-Mobile-bridged
+  `/v1/push/tokens` route (`services/gateway/src/routes/notifications.ts`, +1 real e2e test).
+- **Brutally honest findings (do not re-litigate without new evidence):** SIP calling
+  (`services/protocols/src/sip-driver.ts`) has a real door-release/ring capability mapping but
+  NO live audio/video call session concept and NO production SIP user agent wired
+  (`defaultSipStation` throws) — **SIP/Video/Voice: BACKEND CONTRACT MISSING**. Push
+  architecture (`services/notifications/src/push.ts`) is real and sound (`RelayPushProvider`
+  keeps FCM/APNs secrets off the Hub) but no concrete FCM/APNs provider implementation exists
+  anywhere in the repo — **push delivery: BACKEND/PLATFORM CONTRACT MISSING**, only token
+  registration is real. No Hub event stream exists for live feedback — **BACKEND CONTRACT
+  MISSING**, not invented. See `SESSION_HANDOFF.md` "Phase 12.5" for the full classification.
+- **Explicitly not built (next up, in priority order):** a real FCM/APNs `IPushProvider`
+  (cloud-side); a real SIP UA + call-session concept (Hub-side, substantial scope); native
+  CallKit/PushKit (iOS) and foreground-service/full-screen-notification (Android) integration —
+  deliberately deferred until there's a real call backend to target; per-Home base-URL
+  resolution for `RuntimeController` (same gap Phase 12.4 left for pairing discovery); actual
+  OS boot/network-change hooks registering this runtime (DEVICE TEST REQUIRED regardless).
+
+### `services/gateway` — Mobile-authorization bridge to the real homeowner API (Phase 12.4)
+- **Description:** closed the real gap Phase 12.3 mis-labeled as "backend contract missing" —
+  the homeowner semantic API (`/v1/home`, `/v1/devices`, `/v1/devices/:id/command`,
+  `/v1/scenes`, `/v1/scenes/:id/activate`) already existed and is real/capability-driven; it
+  just didn't recognize Phase 11/12's Mobile-authorization token, only a Supreme user session.
+  New `services/gateway/src/mobile-auth-bridge.ts` (`authenticateMobileOrUser`) tries session
+  auth first, falls back to verifying the Mobile token against the Hub's own device key +
+  registry (revocation-aware), then acts as the home's master account. Wired into the minimum
+  6 routes needed; every other route unchanged. 9 new real end-to-end tests (including one that
+  actually flips a real device's capability state and reads it back). Gateway: 512/512, zero
+  regressions. See `SESSION_HANDOFF.md` "Phase 12.4" for full detail and honest status labels.
+- **Explicitly NOT done this phase (next up):** `apps/new/shared`'s `HubHomeStateRepository`
+  still calls invented paths (`v1/spaces` etc.) that don't exist — it needs rewriting to call
+  the REAL routes this phase wired, and to reconcile SupremeOS's one-control-per-room model
+  with the real per-DEVICE capability model (a room can have multiple lighting devices). Also
+  needed: a `HubTransport.get()` method (today's `sendCommand` is POST-only, but the real reads
+  are `GET`), and a real LAN `HubTransport` (still `MockHubTransport` — Phase 9's original gap).
+  None of `apps/new` was touched this phase.
+
+### `apps/new/` — new-generation Mobile + Touch Panel foundation (Phase 12.3 done, in progress)
+- **Phase 12.3 (Mobile/Tablet-only, Touch Panel untouched):** replaced `MockHomeRepository`
+  with a real `HomeStateRepository`/`HubHomeStateRepository` boundary
+  (`apps/new/shared/lib/src/semantic/home_state_repository.dart`) driven by the active Home's
+  `ConnectionManager` — `SpacesScreen`, `ExperiencesScreen`, and `RoomScreen` now read/write
+  live state instead of hardcoded demo values. State isolation between Homes proven by test
+  (identical room ids on two Hubs never cross). **BACKEND CONTRACT MISSING** (documented, not
+  faked): the proposed `v1/spaces`/`v1/rooms/:id/<domain>` paths aren't implemented by
+  `services/gateway` yet — a real Hub 404s every call today; the client-side plumbing is real
+  and tested. Also this phase: real `MdnsHubDiscovery` wired into the production composition
+  root (web falls back to an empty mock — no UDP multicast in a browser); real
+  `connectivity_plus` → `ConnectionManager.notifyNetworkChanged()` wiring; real
+  `flutter_secure_storage`-backed Mobile identity + per-Home session storage (Keystore/
+  Keychain), closing a Phase 11/12.2 carry-forward. 7 new shared tests; mobile's isolation
+  tests adjusted to override discovery/auth-store providers (deterministic, not weakened). See
+  `SESSION_HANDOFF.md` "Phase 12.3" for full detail and exact status labels.
+- **Phase 12.2 (Mobile/Tablet-only, Touch Panel untouched):** closed Phase 12.1's two named
+  gaps. Real Add-Home pairing (`realPairHome` in `main.dart`, replacing the `UnimplementedError`
+  stub) via new `HttpPairingTransport` (`apps/new/shared`) driving the real Phase 11/12
+  `PairingClient` against the real `/v1/pairing/*` server routes — a failed pairing creates no
+  local Home. New `SingleHubDiscovery` + a per-Home `PairedHomeAuthorizationStore` (in-memory,
+  never written to the Home-metadata SharedPreferences store) make `connectionManagerProvider`
+  genuinely per-Home: switching Homes disposes the old `ConnectionManager` and builds a fresh
+  one scoped to the new Home's `hubId`, with its own bearer token — proven never to cross
+  Homes, by test. 18 new tests (13 shared, 5 mobile). See `SESSION_HANDOFF.md` "Phase 12.2" for
+  full detail, including the honest caveat that homeowner-facing screens (Home/Spaces/
+  Experiences) still read `MockHomeRepository`, not live per-Home Hub state — so today's
+  stale-state protection is proven at the connection layer, not yet observable at the UI layer
+  (flagged as FUTURE ENHANCEMENT, not silently assumed done).
+- **Phase 12.1 (Mobile/Tablet-only, Touch Panel untouched — §20):** Multi-Hub Home management.
+  New `PairedHome`/`PairedHomeManager`/`PairedHomeStore` (`apps/new/shared/lib/src/identity/
+  paired_home.dart`) — canonical `hubId`/`projectId` vs. a purely-local, validated
+  `displayName`, structurally never conflated (renaming never touches identity — tested).
+  `apps/new/mobile`: `SharedPrefsPairedHomeStore`, `PairedHomeController`, `SettingsScreen` +
+  `HomeSettingsScreen` (Settings → Home: list/add/rename/remove/switch, no raw hubId/IP/port
+  shown to homeowners). `connectionManagerProvider` now rebuilds per active-Home switch
+  (Riverpod `activeHomeIdProvider`) — the *mechanism* is real; wiring it to each Home's actual
+  distinct transport/identity is still **PRODUCTION HARDENING REQUIRED** (needs a secure
+  per-Home token store, not yet built). "Add Home" pairing UI has the real
+  `PairingCodeHandler`/`PairHomeResult` contract wired through, but the actual network call
+  into Phase 11/12's `PairingClient` is an explicit `UnimplementedError` stub
+  (`pendingPairHome` in `main.dart`) — no Hub-discovery step exists yet to know which Hub's LAN
+  address to pair against. 26 new tests (19 shared, 7 mobile widget) — see
+  `SESSION_HANDOFF.md` "Phase 12.1" for full detail.
+- **Description:** ground-up rebuild per the residence-OS North Star spec, parallel to
+  (not replacing) `apps/mobile`. Phases 1-12 landed — see `SESSION_HANDOFF.md` "Phase 12 —
+  end-to-end production remote authorization & pairing" for full detail on the latest. Phase 12
+  is server-side (`packages/hub-identity`, `cloud/tunnel-broker`, `services/gateway`) — no
+  `apps/new` file changed this phase; its Phase 11 client protocol is now backed by a real
+  server implementing exactly the contract it already documented.
+- **This phase closed the two biggest Phase 11 SERVER-SIDE REQUIRED gaps:**
+  - Real `/v1/pairing/{codes,challenge,verify,refresh,mobiles,mobiles/:id/revoke}` routes in
+    `services/gateway/src/routes/pairing.ts`, backed by `services/gateway/src/mobile-pairing.ts`
+    (real Ed25519 signature verification, single-use replay-proof challenges, a persisted
+    Hub-side `MobileAuthorizationRegistry`).
+  - The Tunnel Broker's `/v1/route/:hubId/*` default `authorizeClient` (`cloud/tunnel-broker/
+    src/server.ts`) now really verifies a Mobile-authorization token — signed by the Hub's own
+    device Ed25519 key (`packages/hub-identity/src/mobile-authorization.ts`) and checked against
+    that same key, which the broker already retains per-hub from the ADR 0009 tunnel handshake
+    (`broker.ts`'s new `getHubPublicKey`). No second keypair, no synchronous call back to the
+    Hub, Hub remains sole issuer.
+  - `cloud/tunnel-broker/src/main.ts` now refuses to start with
+    `SUPREME_BROKER_DEV_ALLOW_ALL=1` + `NODE_ENV=production`.
+- **Real end-to-end integration test** added to `services/gateway/src/broker-tunnel.e2e.test.ts`:
+  real Ed25519 Mobile keypair → real login → real pairing code → real signed challenge/response
+  → real Hub-issued token → real broker verification → real tunneled `/healthz` — plus replay,
+  forged-signature, wrong-hub, and revoke-then-refresh-denied cases. Not a mocked 200 OK.
+- **Still explicitly not done (flagged, not silently shipped):**
+  - `SecretBytesStore` (Mobile private-key storage) still has no Android Keystore / iOS Keychain
+    implementation — Phase 11 carry-forward, untouched this phase. **PRODUCTION HARDENING REQUIRED.**
+  - No OS connectivity-change listener wired to `ConnectionManager.notifyNetworkChanged()` —
+    Phase 11 carry-forward, untouched. **PRODUCTION HARDENING REQUIRED.**
+  - `RemoteHubTransport`/`PairingClient` (Dart, `apps/new/shared`) are not yet wired to call
+    these real new routes from `apps/new/mobile`'s actual app — the server contract now exists,
+    but nothing in `apps/new/mobile/lib/main.dart` composes a real pairing UI/flow yet.
+  - No homeowner-facing UI exists for displaying a pairing code, QR-encoding it, or managing
+    paired Mobiles — this phase was explicitly server/protocol-only per its own "no UI polish
+    first" instruction.
+  - `MdnsHubDiscovery` real code, still integration-unverified (no Hub advertises
+    `_supremeos._tcp` yet).
+  - `DeterministicHmacConfigVerifier` (Touch Panel config integrity) still NOT real
+    cryptography — deliberately not touched this phase (different component/identity; a
+    migration needs its own backward-compatibility pass, per this phase's own instruction not
+    to do that casually).
+  - Full real-world acceptance matrix (§24 — LAN/5G/CGNAT/Hub-restart/DHCP-change/Internet-loss
+    on real devices) has NOT been run. **REAL-WORLD TEST REQUIRED.**
+- **Next (Phase 13+):** wire `apps/new/mobile` to actually call the new `/v1/pairing/*` routes
+  (a real pairing UI), platform `SecretBytesStore` (Keystore/Keychain) + `connectivity_plus`,
+  the Caddy `:7272` change (needs sign-off), a real Ed25519 `HubConfigVerifier` for Touch Panel
+  config integrity, watch targets, Experience editor, automations UI, technical logs UI, Web
+  Homeowner. Do not start these until told to.
+
 ### ~~`SupremeNativeAdapter` simulates unbound devices — and `migrateDomainToNative` creates them~~ — RESOLVED by ADR-0023
 - **Description:** found by the HA Dependency Audit addendum
   (`docs/architecture/Home-Assistant-Dependency-Audit.md`, item **A-1**).

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- §3 real TLS socket to SupremeOS hub on the LAN. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Required for SupremeOsAgentService's foregroundServiceType="dataSync" below —
+         API 28+ requires the generic permission, API 34+ ALSO requires the type-specific
+         one. Both were missing from the original manifest (found during the Phase 3B
+         verification audit); without them, startForeground() throws
+         SecurityException on API 34+ devices. NOTE: the service code itself still does
+         NOT call startForeground()/create a notification channel — see
+         docs/architecture/tv/PHASE-3B-VERIFICATION-BLOCKERS.md, this permission fix
+         alone does not make the service correctly start in the foreground. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- §7/§20 AppInventoryProvider (PackageManager) — package-visibility on API 30+
+         requires an explicit <queries> declaration (below), not this permission; kept
+         here only as a note for whoever wires the manifest against a real SDK. -->
+
+    <!-- Android TV / Google TV only. -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <!--
+      android:banner/android:icon deliberately omitted: this pass ships no drawable/
+      mipmap assets (nothing to compile/verify them against in this environment — see
+      the Phase 3B completion report). Add a real TV banner (320x180 launcher banner,
+      required for the Leanback launcher to list this app) before any real build.
+    -->
+    <application
+        android:name=".SupremeOsTvAgentApplication"
+        android:allowBackup="false"
+        android:label="@string/app_name">
+
+        <!-- §11/§13 — a foreground Service so Android does not kill it under normal TV
+             background-app memory pressure; MUST cleanly stop every observer/timer/
+             socket in onDestroy() (see SupremeOsAgentService.kt's doc comment). -->
+        <service
+            android:name=".agent.SupremeOsAgentService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- §5/§6/§19 AccessibilityObserver — OPTIONAL, requires explicit user consent
+             via Android Settings; the Agent's other components (MediaSession, app
+             inventory, device info) must all function with this entirely absent. -->
+        <service
+            android:name=".agent.AccessibilityObserverService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+
+    <!-- §20 AppInventoryProvider — API 30+ package visibility: without this,
+         PackageManager.getInstalledApplications() silently returns almost nothing.
+         android.intent.action.MAIN/LAUNCHER covers "launchable" detection; this is
+         intentionally broad since the whole point of app inventory is seeing every
+         installed app, not a pre-guessed allowlist (§8/§20 "do not hardcode only major
+         streaming applications"). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+</manifest>
