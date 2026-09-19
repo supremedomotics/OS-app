@@ -55,7 +55,7 @@ import { bestEffortMacForIp } from "./arp-lookup.js";
 
 /** Kept independent of `supreme-avr`'s own version counter — bumped when this driver's
  * own architecture/behavior changes materially. Surfaced in Diagnostics only. */
-const DRIVER_VERSION = "10.0.0-fusion-d10";
+const DRIVER_VERSION = "11.0.0-fusion-d11";
 
 /**
  * § D3 — the literal example path from the R1 doc's own "The global prefix" section
@@ -92,6 +92,18 @@ export interface DevialetDriverOptions {
   /** Per-request timeout (ms), forwarded to `DevialetIpControlClient`. See that
    * class's own doc for why the default (1000ms) is cited from the R1 spec itself. */
   timeoutMs?: number;
+  /**
+   * § D11 — how often `poll()` opportunistically piggybacks a FULL `refreshTopology()`
+   * sweep onto the existing media-poll timer (never a second `setInterval` — see
+   * `poll()`'s own doc for the full cost/cadence justification). Default 60000 (60s):
+   * a physical System/Group re-pair (Solo↔Stereo, a Group membership change) is a
+   * rare, human-initiated action, not a per-second event like volume/track changes,
+   * so a bounded ~1-minute worst-case detection latency is an acceptable trade
+   * against request volume — 1/20th the rate of the default 3000ms media poll,
+   * scaling linearly (one `/devices/current` per bound device, deduped
+   * `/systems/current` per distinct systemId) with device count, never O(N²).
+   */
+  topologyRefreshMs?: number;
   /** § D8 — builds the gateway's own artwork-proxy URL for a device
    * (`/v1/devices/:id/media/artwork`), the SAME pattern `AvrProtocolDriver` already
    * uses. `MediaState.artworkUrl` only ever carries this proxy URL, never R1's raw
@@ -179,6 +191,15 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
    * binding (see `ensureBindingTopology()`) onto one in-flight query. Instance-scoped
    * (a plain field, like every other piece of driver state) — never module-level. */
   private readonly inFlightTopologyRefresh = new Map<string, Promise<void>>();
+  /** § D11 — coalesces concurrent FULL-sweep `refreshTopology()` calls (the periodic
+   * piggyback below and any caller-invoked one landing at the same time) onto one
+   * in-flight sweep, the same pattern `inFlightTopologyRefresh` already uses for a
+   * single binding. Never module-level. */
+  private inFlightFullTopologyRefresh: Promise<DevialetTopologyChangeResult> | null = null;
+  /** § D11 — `Date.now()` of the last full topology sweep (periodic or manual),
+   * driving the piggyback cadence in `poll()`. `0` means "never" — the first poll
+   * always sweeps once bindings exist, establishing topology promptly at startup. */
+  private lastTopologyRefreshAt = 0;
   /** § D8 — one physical device's last-known REAL media context, populated by
    * `poll()`'s media refresh. `coverArtUrl` is R1's own raw URL (never the gateway
    * proxy URL `MediaState.artworkUrl` advertises) — retained here specifically so
@@ -268,6 +289,14 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
    * polling for as long as the process runs (§ D10 resource/concurrency safety). */
   async connect(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    // § D11 — baseline the periodic topology-piggyback clock at connect() time so the
+    // very first poll() doesn't immediately re-sweep topology right after
+    // `refreshMediaState()`'s own on-demand `ensureBindingTopology()` already
+    // resolved it for a freshly-bound device (§ D8/AH's "exactly one on-demand
+    // identity query" behavior stays exactly one) — the piggyback's job is
+    // detecting DRIFT after topology is already known, not duplicating first
+    // resolution.
+    this.lastTopologyRefreshAt = Date.now();
     // Devialet's control surface is stateless HTTP — there is no persistent link to
     // lazily open per binding, so "readiness" is just: start polling.
     this.connected = true;
@@ -544,6 +573,19 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
    * frequently topology should be refreshed").
    */
   async refreshTopology(): Promise<DevialetTopologyChangeResult> {
+    // § D11 — coalesce concurrent full-sweep callers (the periodic `poll()` piggyback
+    // and any caller-invoked refresh landing at the same time) onto ONE in-flight
+    // sweep, exactly like `ensureBindingTopology()` already does for a single
+    // binding — never two overlapping full sweeps issuing duplicate requests.
+    if (this.inFlightFullTopologyRefresh) return this.inFlightFullTopologyRefresh;
+    const promise = this.runTopologyRefresh().finally(() => {
+      this.inFlightFullTopologyRefresh = null;
+    });
+    this.inFlightFullTopologyRefresh = promise;
+    return promise;
+  }
+
+  private async runTopologyRefresh(): Promise<DevialetTopologyChangeResult> {
     this.tracer.event("topology: refresh started");
     const mediaBindings = this.bindings.filter((b) => b.capability === "media");
     const systemNames = new Map<string, string | null>();
@@ -553,6 +595,7 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
       if (entry) fresh.push(entry);
     }
     const result = this.notifyTopologyChange(this.topology.merge(fresh));
+    this.lastTopologyRefreshAt = Date.now();
     this.tracer.event(result.changed ? "topology: changed" : "topology: unchanged");
     return result;
   }
@@ -819,14 +862,39 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     return () => this.listeners.delete(listener);
   }
 
-  /** Poll-only feedback (unchanged cadence/mechanism from D2 — whether R1 offers a
+  /**
+   * Poll-only feedback (unchanged cadence/mechanism from D2 — whether R1 offers a
    * real push channel is unconfirmed by the doc). Delegates to `refreshMediaState()`
    * (§ D8) — kept as a separate method rather than inlined here per §21 of the D8
    * brief ("do not combine this with command execution"; also keeps `poll()` a
    * stable, minimal lifecycle hook `connect()`'s timer calls, unchanged in shape
-   * since D2). */
+   * since D2).
+   *
+   * § D11 — dynamic topology detection. Neither R1 request `refreshMediaState()`
+   * already issues (`GET .../soundControl/volume`, `GET .../sources/current`) returns
+   * a `systemId`/`groupId` field at all — only `GET /devices/current` and `GET
+   * /systems/current` do (§ D3/D6 report), and `refreshMediaState()` only calls those
+   * (via `ensureBindingTopology()`) when a binding's cached topology is UNKNOWN
+   * (`null`), never merely possibly-stale. So a device that stays reachable while its
+   * real System/Group membership changes (a Solo↔Stereo re-pair, a Group reshuffle)
+   * would otherwise never have that change detected — confirmed by tracing the actual
+   * call graph, not assumed (Option A from the D11 brief: reusing the existing R1
+   * calls verbatim is NOT sufficient, since they carry no topology fields).
+   *
+   * Rather than a second `setInterval` (explicitly disallowed), this piggybacks a
+   * full `refreshTopology()` sweep onto the SAME timer tick `connect()` already
+   * drives, gated by `topologyRefreshMs` (default 60s) so it runs far less often than
+   * the media half of every tick — see `DevialetDriverOptions.topologyRefreshMs`'s
+   * doc for the cadence/cost justification. `refreshTopology()`'s own coalescing
+   * (`inFlightFullTopologyRefresh`) means an overlapping manual caller never causes a
+   * duplicate sweep.
+   */
   async poll(): Promise<void> {
     await this.refreshMediaState();
+    const period = this.opts.topologyRefreshMs ?? 60_000;
+    if (this.bindings.length > 0 && Date.now() - this.lastTopologyRefreshAt >= period) {
+      await this.refreshTopology();
+    }
   }
 
   /**
