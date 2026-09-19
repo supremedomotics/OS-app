@@ -41,8 +41,12 @@ export interface DevialetMediaCacheEntry {
   muted?: boolean;
   /** From the group-level current-source query (`playingState`), reported exactly
    * as R1 returns it — never corrected/inferred (see the doc's "pause on a source
-   * that can't semantically pause instead mutes" behavior). */
-  playback?: DevialetPlayingState;
+   * that can't semantically pause instead mutes" behavior). `"idle"` is the one
+   * value R1 itself never returns (`DevialetPlayingState` is only "playing"/
+   * "paused") — it is set exclusively by `devialet-driver.ts`'s D10 handling of the
+   * real, confirmed `NoCurrentSource` logical answer, mapped onto the schema's own
+   * "genuinely nothing playing" enum value rather than left as stale prior data. */
+  playback?: DevialetPlayingState | "idle";
   title?: string | null;
   artist?: string | null;
   album?: string | null;

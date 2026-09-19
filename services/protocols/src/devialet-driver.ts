@@ -55,7 +55,7 @@ import { bestEffortMacForIp } from "./arp-lookup.js";
 
 /** Kept independent of `supreme-avr`'s own version counter — bumped when this driver's
  * own architecture/behavior changes materially. Surfaced in Diagnostics only. */
-const DRIVER_VERSION = "9.0.0-fusion-d9";
+const DRIVER_VERSION = "10.0.0-fusion-d10";
 
 /**
  * § D3 — the literal example path from the R1 doc's own "The global prefix" section
@@ -261,7 +261,13 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     return { host: b.host };
   }
 
+  /** § D10 — idempotent: a repeat `connect()` (e.g. a caller reconnecting without an
+   * intervening `disconnect()`) clears any existing poll timer FIRST rather than just
+   * overwriting `this.timer`'s reference — otherwise the previous `setInterval` would
+   * leak forever (never reachable to `clearInterval` again), producing duplicate
+   * polling for as long as the process runs (§ D10 resource/concurrency safety). */
   async connect(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
     // Devialet's control surface is stateless HTTP — there is no persistent link to
     // lazily open per binding, so "readiness" is just: start polling.
     this.connected = true;
@@ -861,7 +867,15 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
     this.tracer.event("media: refresh started");
     const mediaBindings = this.bindings.filter((b) => b.capability === "media");
     const volumeBySystem = new Map<string, Promise<{ volume: number } | null>>();
-    const mediaByGroup = new Map<string, Promise<DevialetCurrentSource | null>>();
+    // § D10 — "no source" is a REAL, confirmed R1 answer (the `NoCurrentSource`
+    // logical error, per the R1 doc's own Error Handling section), distinct from a
+    // transport/HTTP failure. The literal `"no-source"` sentinel lets the merge logic
+    // below tell "the group genuinely has nothing playing right now" (clear the
+    // cache to an honest idle state) apart from "this query failed, we don't know
+    // anything new" (preserve whatever was cached before) — conflating the two would
+    // either fabricate a real answer as a mere hiccup, or leave stale playback/title/
+    // artwork behind indefinitely after the group's source was genuinely cleared.
+    const mediaByGroup = new Map<string, Promise<DevialetCurrentSource | null | "no-source">>();
 
     for (const b of mediaBindings) {
       let topology = b.devialetId ? (this.topology.get().devices[b.devialetId] ?? null) : null;
@@ -900,6 +914,10 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
         mediaByGroup.set(
           groupId,
           this.tracked(b.host, "R1 GET current source", () => this.client.getCurrentSource(endpoint)).catch((err) => {
+            if (err instanceof DevialetApiError && err.kind === "logical" && err.logical?.code === "NoCurrentSource") {
+              this.tracer.event(`media: group ${groupId} reports NoCurrentSource — clearing to idle (real, confirmed answer, not a failure)`);
+              return "no-source" as const;
+            }
             this.tracer.event(`media: group query failed for group ${groupId} — ${err instanceof Error ? err.message : String(err)}`);
             return null;
           }),
@@ -918,7 +936,20 @@ export class DevialetProtocolDriver implements INativeProtocolDriver {
       if (vol !== null) {
         merged.volume = vol.volume;
       }
-      if (current !== null) {
+      if (current === "no-source") {
+        // § D10 — a confirmed "nothing playing" answer, not stale/unknown data.
+        // `muted` has no real R1 value to report here (no current source), and the
+        // least-fabricating honest default is `false` — never carried over from
+        // whatever the LAST active source happened to report.
+        merged.muted = false;
+        merged.playback = "idle";
+        merged.title = null;
+        merged.artist = null;
+        merged.album = null;
+        merged.source = null;
+        merged.availableOperations = [];
+        this.mediaProjections.delete(b.deviceId);
+      } else if (current !== null) {
         merged.muted = current.muteState === "muted";
         merged.playback = current.playingState;
         merged.title = current.metadata?.title ?? null;

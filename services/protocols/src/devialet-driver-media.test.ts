@@ -426,14 +426,19 @@ describe("DevialetProtocolDriver — D8 real-time media state, projection, artwo
     await driver.disconnect();
   });
 
-  it("V — a real NoCurrentSource logical error publishes no media state and does not throw", async () => {
+  it("V — a real NoCurrentSource logical error publishes an honest idle state (§ D10 — a confirmed answer, not a failure) and does not throw", async () => {
     const srv = await startHttp(deviceServer("A", { systemId: "S1", groupId: "G1", role: "Mono" }, { noCurrentSource: true }));
     servers.push(srv.server);
     const dev = "device-a" as DeviceId;
     const driver = await bound(srv, dev);
 
     await expect(driver.poll()).resolves.toBeUndefined();
-    expect(driver.getState(dev, "media")).toBeNull();
+    const state = driver.getState(dev, "media") as { playback: string; muted: boolean; title: string | null; source: string | null } | null;
+    expect(state).not.toBeNull();
+    expect(state!.playback).toBe("idle");
+    expect(state!.muted).toBe(false);
+    expect(state!.title).toBeNull();
+    expect(state!.source).toBeNull();
 
     await driver.disconnect();
   });
