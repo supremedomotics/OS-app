@@ -1,0 +1,33 @@
+name: Windows Simulator
+
+on:
+  push:
+    branches: [main, "feat/windows-simulator"]
+    paths:
+      - "apps/windows-simulator/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+jobs:
+  build-windows-simulator:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/windows-simulator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - run: pnpm --dir apps/windows-simulator dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supreme-os-simulation-lab-windows
+          path: apps/windows-simulator/dist/*.exe
