@@ -6,15 +6,11 @@ on:
     paths:
       - "apps/windows-simulator/**"
       - "pnpm-workspace.yaml"
-      - "pnpm-lock.yaml"
   workflow_dispatch:
 
 jobs:
   build-windows-simulator:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: apps/windows-simulator
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -24,8 +20,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-        working-directory: .
+      - run: pnpm --dir apps/windows-simulator install --no-frozen-lockfile
       - run: pnpm --dir apps/windows-simulator dist
       - uses: actions/upload-artifact@v4
         with:
