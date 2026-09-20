@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supreme OS — Simulation Lab</title><link rel="stylesheet" href="styles.css"></head>
+<body><main id="app">
+<header class="topbar"><div><div class="eyebrow">SUPREME DOMOTICS · ENGINEERING</div><h1>Supreme OS Simulation Lab</h1><p>Virtual residence, protocol behavior, stress and chaos testing.</p></div>
+<div class="top-actions"><button id="generateBtn" class="primary">Generate Residence</button><button id="runBtn">Run Stress Test</button><button id="chaosBtn">Chaos: OFF</button></div></header>
+<section class="stats" id="stats"></section>
+<section class="grid">
+<article class="panel wide"><div class="panel-head"><div><h2>Virtual Residence</h2><span id="residenceLabel">No simulation loaded</span></div><div class="row"><label>Devices <input id="deviceCount" type="number" min="10" max="5000" step="10" value="500"></label><label>Event rate/s <input id="eventRate" type="number" min="1" max="1000" value="50"></label></div></div><div id="rooms" class="rooms"></div></article>
+<article class="panel"><div class="panel-head"><div><h2>Protocols</h2><span>Virtual bus health</span></div></div><div id="protocols"></div></article>
+<article class="panel"><div class="panel-head"><div><h2>Fault Injection</h2><span>Make the system fail safely</span></div></div><div class="faults">
+<label>Latency <input id="latency" type="range" min="0" max="2000" value="0"><b id="latencyValue">0 ms</b></label>
+<label>Packet loss <input id="loss" type="range" min="0" max="50" value="0"><b id="lossValue">0%</b></label>
+<label>Offline devices <input id="offline" type="range" min="0" max="30" value="0"><b id="offlineValue">0%</b></label>
+<div class="fault-buttons"><button data-fault="gateway">Drop gateway</button><button data-fault="duplicates">Duplicate events</button><button data-fault="reorder">Reorder events</button><button data-fault="malformed">Malformed values</button></div></div></article>
+<article class="panel wide"><div class="panel-head"><div><h2>Event Stream</h2><span id="eventSummary">Waiting for events</span></div><button id="clearEvents">Clear</button></div><div id="events" class="events" aria-live="polite"></div></article>
+<article class="panel"><div class="panel-head"><div><h2>Gateway</h2><span>Optional real Supreme OS connection</span></div></div><div class="gateway">
+<label>Base URL<input id="gatewayUrl" value="http://127.0.0.1:8080"></label><label>Bearer token<input id="gatewayToken" type="password" placeholder="Optional"></label>
+<div class="row"><button id="healthBtn">Health Check</button><button id="snapshotBtn">Send Snapshot</button></div><pre id="gatewayResult">Not connected.</pre></div></article>
+<article class="panel"><div class="panel-head"><div><h2>Test Scenarios</h2><span>Deterministic regression drills</span></div></div><div id="scenarios" class="scenarios"></div></article>
+</section></main><script src="renderer.js"></script></body></html>
