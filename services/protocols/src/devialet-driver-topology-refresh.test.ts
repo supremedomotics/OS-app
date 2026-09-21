@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { DeviceId } from "@supreme/domain-model";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DevialetProtocolDriver } from "./devialet-driver.js";
 
 /**
@@ -317,18 +317,46 @@ describe("DevialetProtocolDriver — D11 dynamic topology detection/refresh", ()
   });
 
   it("Q — reconnect followed by a topology refresh baselines cleanly (no duplicate immediate sweep)", async () => {
+    // § D18 — this test needs the OPPOSITE guarantee every other test in this file
+    // needs: "less than topologyRefreshMs has elapsed" across operations that include
+    // REAL network round trips (bind()'s topology resolution, poll()'s media query).
+    // A real sleep can only ever prove "at least N ms elapsed" reliably (CPU
+    // scheduling delays a timer, never fires it early) — it can never reliably prove
+    // "at most N ms elapsed," which is exactly what "no redundant sweep" requires.
+    // Under CPU contention, the real I/O in `bound()`'s own `connect()`+`poll()` can
+    // itself take >=30ms, making `poll()`'s own topologyRefreshMs check fire an
+    // uninvited sweep before this test ever reaches its own assertions — a real,
+    // reproducible flake (see D17/D18 reports), not a driver defect.
+    //
+    // Fix: mock `Date.now()` so the driver's own elapsed-time arithmetic
+    // (`poll()`'s `Date.now() - lastTopologyRefreshAt >= topologyRefreshMs`) is fully
+    // controlled by the test, decoupled from real wall-clock speed. Real HTTP I/O and
+    // real timers are untouched — only `Date.now()` is mocked, so `connect()`'s
+    // timer/`bind()`/`poll()`'s actual async work still runs for real; only the
+    // driver's own "how much time has passed" question becomes deterministic.
     const topo: DeviceTopo = { systemId: "S1", groupId: "G1", volume: 40 };
     const srv = await startDeviceServer("A", topo);
     servers.push(srv.server);
     const dev = "dev-q" as DeviceId;
-    const driver = await bound(srv, dev);
-    const hitsAfterFirstPoll = srv.hits.filter((h) => h.endsWith("/devices/current")).length;
-    expect(hitsAfterFirstPoll).toBe(1);
 
-    await driver.disconnect();
-    await driver.connect();
-    await driver.poll(); // topology already known — no redundant sweep right after reconnect
-    expect(srv.hits.filter((h) => h.endsWith("/devices/current")).length).toBe(hitsAfterFirstPoll);
-    await driver.disconnect();
+    let now = 1_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const driver = new DevialetProtocolDriver({ pollMs: 1_000_000, topologyRefreshMs: 30 });
+      await driver.connect(); // baselines lastTopologyRefreshAt at the mocked "now"
+      await driver.bind({ deviceId: dev, capability: "media", address: srv.base, config: { path: IP_CONTROL_PATH } });
+      await driver.poll(); // real I/O runs, but the mocked clock never advances during it
+      const hitsAfterFirstPoll = srv.hits.filter((h) => h.endsWith("/devices/current")).length;
+      expect(hitsAfterFirstPoll).toBe(1);
+
+      await driver.disconnect();
+      now += 10; // deterministically "10ms later" — well under the 30ms threshold
+      await driver.connect(); // re-baselines the clock at this new mocked "now"
+      await driver.poll(); // topology already known — no redundant sweep right after reconnect
+      expect(srv.hits.filter((h) => h.endsWith("/devices/current")).length).toBe(hitsAfterFirstPoll);
+      await driver.disconnect();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 });
