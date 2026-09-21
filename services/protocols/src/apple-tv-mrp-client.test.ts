@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, type Server, type Socket } from "node:net";
 import {
   createCipheriv,
@@ -350,8 +350,9 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     // First real command proof: SupremeOS command -> AppleTvProtocolDriver's client
     // seam -> MRP adapter -> encrypted transport -> Apple TV (the fake accessory).
     await client.play();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play);
+    // § Real TCP + real ChaCha20-Poly1305 round-trip — a fixed sleep is a flaky guess at how
+    // long that takes under host load (confirmed flaky in production CI); poll instead.
+    await vi.waitFor(() => expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play));
 
     await client.close?.();
   });
@@ -408,8 +409,9 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     const clientB = await connect({ address: `127.0.0.1:${portB}`, deviceId: deviceB });
 
     await clientA.play();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(tvA.receivedCommands).toContain(MrpTransportCommand.Play);
+    // § Same flaky-fixed-sleep fix as above: poll for tvA's receipt, then check tvB's absence
+    // (by the time tvA has genuinely received it, any leak to tvB would already have too).
+    await vi.waitFor(() => expect(tvA.receivedCommands).toContain(MrpTransportCommand.Play));
     expect(tvB.receivedCommands).not.toContain(MrpTransportCommand.Play);
 
     await clientA.close?.();
