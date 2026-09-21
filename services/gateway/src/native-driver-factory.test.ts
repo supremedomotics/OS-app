@@ -73,6 +73,38 @@ describe("native-driver-factory — AVR/HEOS/Yamaha", () => {
   });
 });
 
+/**
+ * § D14 — Devialet joins the Extension Center via the exact same manifest↔runtime
+ * bridge AVR/HEOS/Yamaha already use. Same posture: an empty configSchema (real
+ * per-speaker IP comes later via Bus Binding), so the factory always succeeds.
+ */
+describe("native-driver-factory — Devialet", () => {
+  it("reports a factory for devialet", () => {
+    expect(hasNativeFactory("devialet")).toBe(true);
+  });
+
+  it("builds a live driver instance from an empty config (nothing global to configure)", () => {
+    const devialet = buildNativeDriver("devialet", {});
+    expect(devialet?.protocol).toBe("devialet");
+  });
+
+  it("threads ctx.onLog and ctx.artworkUrlFor into the Devialet driver, matching the AVR pattern", async () => {
+    const logs: string[] = [];
+    const devialet = buildNativeDriver("devialet", {}, {
+      onLog: (level, message) => logs.push(`${level}:${message}`),
+      artworkUrlFor: (id) => `https://hub.local/v1/devices/${id}/media/artwork`,
+    });
+    expect(devialet).not.toBeNull();
+    await devialet!.connect();
+    await devialet!.disconnect();
+    expect(devialet!.protocol).toBe("devialet");
+  });
+
+  it("omits ctx entirely — still builds a working driver (ctx defaults to {})", () => {
+    expect(buildNativeDriver("devialet", {})?.protocol).toBe("devialet");
+  });
+});
+
 describe("native-driver-factory — CoolMaster", () => {
   it("reports a factory for coolmaster", () => {
     expect(hasNativeFactory("coolmaster")).toBe(true);

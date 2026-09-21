@@ -4,6 +4,7 @@ import {
   AvrProtocolDriver,
   CasambiProtocolDriver,
   CoolMasterProtocolDriver,
+  DevialetProtocolDriver,
   HeosProtocolDriver,
   KnxProtocolDriver,
   ModbusProtocolDriver,
@@ -174,6 +175,12 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   avr: (c, ctx) => new AvrProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, artworkUrlFor: ctx.artworkUrlFor, diagnostics: ctx.avrDiagnostics === true }),
   heos: (c, ctx) => new HeosProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true }),
   yamaha: (c, ctx) => new YamahaProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true }),
+  // § D14 — same posture as avr/heos/yamaha above: nothing global to configure here
+  // (each Devialet speaker is added by IP through Bus Binding after enabling), so this
+  // factory always succeeds. `artworkUrlFor` threads the gateway's real artwork-proxy
+  // URL builder exactly like the `avr` factory does — `devialet-driver.ts` already
+  // accepts and uses it (§ D8); no new wiring needed on the driver side.
+  devialet: (c, ctx) => new DevialetProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, artworkUrlFor: ctx.artworkUrlFor }),
 };
 
 /**

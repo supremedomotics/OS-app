@@ -397,6 +397,42 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     ],
   }),
   defineManifest({
+    key: "supreme-devialet",
+    // § D14 — Devialet's own R1 IP Control protocol documents no power/on-off endpoint
+    // at all (D12/D13 audit), so `capabilities` deliberately omits "onoff" — same
+    // reasoning as HEOS's own entry below, which has no power concept either. `seek`,
+    // EQ/night-mode, and CISettings-only fields are likewise never claimed here: the
+    // manifest describes exactly what devialet-driver.ts actually implements, nothing
+    // a protocol field alone would suggest is "probably" supported.
+    name: "Supreme Devialet",
+    description: "Devialet Phantom/Expert speakers over IP Control (R1) — real-time media, volume, and mute.",
+    category: "media",
+    channel: "official",
+    publisher: PUBLISHER,
+    version: "1.0.0",
+    capabilities: ["media"],
+    protocols: ["devialet"],
+    compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
+    backend: { type: "native", ref: "devialet" },
+    operations: [...PROTO_OPS],
+    documentationUrl: "https://docs.supreme.local/extensions/devialet",
+    releaseNotes:
+      "Real Devialet IP Control (R1) support: now-playing (source/artist/album/title/artwork), system-level volume, group-level mute/play/pause/next/previous, and real mDNS discovery. Device/System/Group topology is derived and kept current automatically. Each speaker is added by IP address through Bus Binding after enabling — there's nothing to configure here.",
+    changelog: [
+      { version: "1.0.0", date: "2026-09-21", notes: "First stable release: R1 media/volume/mute/playback, mDNS discovery, dynamic topology, CISettings enrichment, lifecycle hardening (D5-D11)." },
+    ],
+    configSchema: [
+      {
+        key: "trace",
+        label: "Raw protocol trace logging",
+        type: "boolean",
+        required: false,
+        default: false,
+        secret: false,
+      },
+    ],
+  }),
+  defineManifest({
     key: "supreme-yamaha",
     name: "Supreme Yamaha (YXC/MusicCast)",
     description: "Yamaha Extended Control — standalone MusicCast streamers and MusicCast-enabled AVRs.",
