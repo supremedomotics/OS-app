@@ -109,6 +109,46 @@ export function temperatureCommandForSystemMode(systemMode: Thermostat.SystemMod
   return { capability: "temperature", mode };
 }
 
+/**
+ * § Phase 3.4C — Matter Thermostat READ-BACK (confirmed `TemperatureState` → the direction
+ * to report to Matter). Phase 3.4B fixed the Matter → KNX *command* direction (Heat/Cool
+ * route to `heatCool`, the genuine DPT 1.100 destination); this closes the matching gap on
+ * the way back: `real-server.ts`'s confirmed-state write path previously derived
+ * `systemMode` from `state.mode` alone, so a KNX-backed device's confirmed `heatCool`
+ * feedback (DPT 1.100) never reached Matter at all — `state.mode` stays hardcoded `"auto"`
+ * for a single-GA KNX temperature entity (`knx-codec.ts`'s `stateFromValue()`, unmodified),
+ * so `systemModeFromSupremeMode("auto")` always returned `null` (§ Phase 3.1.1's documented
+ * "leave the attribute alone for auto" degradation) regardless of what `heatCool` said.
+ *
+ * PRIORITY RULE (existing SupremeOS semantics, not invented here): `heatCool` is a more
+ * specific, dedicated heat/cool selector than the generic `mode` field — when a driver
+ * populates it with a real "heat"/"cool" value, that IS the confirmed direction, full stop.
+ * `mode` is only consulted as a fallback when `heatCool` is absent/null. This is exactly
+ * the same precedence `TemperatureState.heatCool`'s own doc comment in
+ * `packages/domain-model/src/capabilities.ts` already establishes ("a separate, simple
+ * heat-vs-cool selector distinct from `mode`... some KNX installations expose this as its
+ * OWN group object") — this function does not choose a new precedence, it applies the
+ * existing one at the one place (Matter read-back) that was still ignoring it.
+ *
+ * PROTOCOL-NEUTRAL BY CONSTRUCTION: no protocol check exists or is needed. CoolMaster's
+ * `unitTemperatureState()` (`coolmaster-mapper.ts`) never sets `heatCool` at all — for a
+ * CoolMaster-backed device this function always falls through to `mode`, byte-for-byte the
+ * pre-Phase-3.4C behavior. A KNX device with no `heatCool` role bound (or one that has never
+ * received real feedback yet) behaves identically — `heatCool` is `undefined`/`null` in
+ * both cases, indistinguishable to this function, which is exactly correct: no signal means
+ * no override.
+ *
+ * NEVER PRODUCES "off"/"fan_only" FROM `heatCool` — DPT 1.100 has exactly two values
+ * (0=cooling, 1=heating; `TemperatureState.heatCool`'s type is `"heat" | "cool"` only), so
+ * this function structurally cannot fabricate Off or FanOnly from it. Off/FanOnly (when
+ * `heatCool` is absent) still come only from `mode`, unchanged. */
+export function confirmedHeatCoolDirection(state: {
+  mode: "off" | "heat" | "cool" | "auto" | "fan_only";
+  heatCool?: "heat" | "cool" | null;
+}): "off" | "heat" | "cool" | "auto" | "fan_only" {
+  return state.heatCool === "heat" || state.heatCool === "cool" ? state.heatCool : state.mode;
+}
+
 /** Builds the SupremeOS `temperature` command for a Matter heating/cooling setpoint write.
  * Both `occupiedHeatingSetpoint` and `occupiedCoolingSetpoint` map onto the SAME single
  * `targetC` field (§10 — "do not invent separate heating and cooling targets", since

@@ -43,6 +43,7 @@ export const ProtocolKind = z.enum([
   "avr",
   "heos",
   "yamaha",
+  "devialet",
 ]);
 export type ProtocolKind = z.infer<typeof ProtocolKind>;
 

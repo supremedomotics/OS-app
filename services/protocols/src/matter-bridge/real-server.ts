@@ -31,6 +31,7 @@ import {
 import { positionToMatterPercent100ths, positionFromMatterPercent100ths } from "./clusters/window-covering-adapter.js";
 import {
   celsiusToMatter,
+  confirmedHeatCoolDirection,
   systemModeFromSupremeMode,
   temperatureCommandForSetpoint,
   temperatureCommandForSystemMode,
@@ -603,7 +604,16 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
           (n, command) => emit(n, command),
           (n, command) => emit(n, command),
         );
-        const systemMode = initial ? (systemModeFromSupremeMode(initial.mode) ?? Thermostat.SystemMode.Off) : Thermostat.SystemMode.Off;
+        // § Phase 3.4C — the SAME confirmedHeatCoolDirection() precedence used by the
+        // runtime confirmed-state write path below (case "temperature" in
+        // setCapabilityState-equivalent code), applied here too so a KNX-backed
+        // Thermostat's INITIAL endpoint construction (e.g. after a gateway restart,
+        // seeded from the last-persisted confirmed state) reflects heatCool exactly like
+        // every subsequent update does — this construction-time seed is not a separate,
+        // stale code path.
+        const systemMode = initial
+          ? (systemModeFromSupremeMode(confirmedHeatCoolDirection(initial)) ?? Thermostat.SystemMode.Off)
+          : Thermostat.SystemMode.Off;
         const targetMatter = initial?.targetC != null ? celsiusToMatter(initial.targetC) : celsiusToMatter(21);
         endpoint = new Endpoint(ThermostatDevice.with(BridgedDeviceBasicInformationServer, ThermostatServerClass), {
           ...baseOptions,
@@ -780,18 +790,26 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       // only a real `onState` event (this method's caller) reaches here.
       case "temperature": {
         const thermostat: Record<string, unknown> = { localTemperature: celsiusToMatter(state.ambientC) };
-        const systemMode = systemModeFromSupremeMode(state.mode);
+        // § Phase 3.4C — `heatCool` (a dedicated, confirmed heat/cool selector — e.g. KNX
+        // DPT 1.100) takes priority over the generic `mode` field when it holds a real
+        // value; falls through to `mode` unchanged when `heatCool` is absent (CoolMaster
+        // never sets it, so this is a pure no-op there — see confirmedHeatCoolDirection's
+        // own doc comment for the full reasoning).
+        const confirmedDirection = confirmedHeatCoolDirection(state);
+        const systemMode = systemModeFromSupremeMode(confirmedDirection);
         // `null` = "auto" — deliberately DO NOT write `systemMode` at all (Phase 3.1.1's
         // documented, explicit degradation: leave the attribute at its last-reported value
         // rather than fabricate which single Matter mode "auto" should look like).
         if (systemMode !== null) thermostat.systemMode = systemMode;
         if (state.targetC != null) {
           const matterSetpoint = celsiusToMatter(state.targetC);
-          // § Phase 3.1.1 §9/§10 — only the setpoint matching the CONFIRMED mode is meaningful;
-          // `fan_only`/`off`/`auto` have no active target, so neither setpoint is touched
-          // (never invents a value for a setpoint that isn't the one actually driving the unit).
-          if (state.mode === "heat") thermostat.occupiedHeatingSetpoint = matterSetpoint;
-          else if (state.mode === "cool") thermostat.occupiedCoolingSetpoint = matterSetpoint;
+          // § Phase 3.1.1 §9/§10 — only the setpoint matching the CONFIRMED direction is
+          // meaningful; `fan_only`/`off`/`auto` have no active target, so neither setpoint
+          // is touched (never invents a value for a setpoint that isn't the one actually
+          // driving the unit). Uses the SAME confirmedDirection as systemMode above (§
+          // Phase 3.4C) so the two attributes can never disagree about which setpoint is live.
+          if (confirmedDirection === "heat") thermostat.occupiedHeatingSetpoint = matterSetpoint;
+          else if (confirmedDirection === "cool") thermostat.occupiedCoolingSetpoint = matterSetpoint;
         }
         await ep.set({ thermostat });
         return;
