@@ -1268,6 +1268,9 @@ importers:
       coap-packet:
         specifier: ^1.1.1
         version: 1.1.1
+      fast-srp-hap:
+        specifier: ^2.0.4
+        version: 2.0.4
       knxultimate:
         specifier: ^6.0.1
         version: 6.0.1
@@ -2915,6 +2918,10 @@ packages:
 
   fast-querystring@1.1.2:
     resolution: {integrity: sha512-g6KuKWmFXc0fID8WWH0jit4g0AGBoJhCkJMb1RmbsSEUNvQ+ZC8D6CUZ+GtF8nMzSPXnhiePyyqqipzNNEnHjg==}
+
+  fast-srp-hap@2.0.4:
+    resolution: {integrity: sha512-lHRYYaaIbMrhZtsdGTwPN82UbqD9Bv8QfOlKs+Dz6YRnByZifOh93EYmf2iEWFtkOEIqR2IK8cFD0UN5wLIWBQ==}
+    engines: {node: '>=10.17.0'}
 
   fast-unique-numbers@8.0.13:
     resolution: {integrity: sha512-7OnTFAVPefgw2eBJ1xj2PGGR9FwYzSUso9decayHgCDX4sJkHLdcsYTytTg+tYv+wKF3U8gJuSBz2jJpQV4u/g==}
@@ -5161,6 +5168,8 @@ snapshots:
   fast-querystring@1.1.2:
     dependencies:
       fast-decode-uri-component: 1.0.1
+
+  fast-srp-hap@2.0.4: {}
 
   fast-unique-numbers@8.0.13:
     dependencies:

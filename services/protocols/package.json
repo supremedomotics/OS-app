@@ -30,6 +30,7 @@
     "@matter/main": "^0.17.9",
     "coap": "^1.5.0",
     "coap-packet": "^1.1.1",
+    "fast-srp-hap": "^2.0.4",
     "knxultimate": "^6.0.1",
     "modbus-serial": "^8.0.21",
     "mqtt": "^5.10.1"

@@ -466,13 +466,25 @@ export {
 } from "./airplay-driver.js";
 export {
   AppleTvProtocolDriver,
+  AppleTvPairingRequiredError,
   mediaStateFromNowPlaying,
+  type AppleTvConnectionState,
   type AppleTvDriverOptions,
   type AppleTvClient,
   type AppleTvNowPlaying,
   type AppleTvConnect,
 } from "./apple-tv-driver.js";
-export { createAppleTvConnect, type AppleTvBridgeOptions } from "./apple-tv-bridge.js";
+export { encodeTlv8, decodeTlv8, HapTlvTag, type HapTlvTagValue } from "./apple-tv-hap-tlv8.js";
+export {
+  generateControllerIdentity,
+  hapPairSetup,
+  hapPairVerify,
+  type HapLongTermIdentity,
+  type PairSetupResult,
+  type HapSession,
+  type HapVerifiedChannel,
+  type HapExchange,
+} from "./apple-tv-hap-pairing.js";
 export { LutronProtocolDriver, type LutronDriverOptions } from "./lutron-driver.js";
 export { commandToLutron, parseLutronLine, stateFromLutronLevel, type LutronLine } from "./lutron-codec.js";
 export {
