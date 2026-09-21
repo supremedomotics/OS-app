@@ -494,3 +494,29 @@ export {
   type TuyaConnect,
 } from "./tuya-driver.js";
 export * from "./casambi/index.js";
+export { PjlinkProtocolDriver, buildDisplayState, type PjlinkDriverOptions } from "./pjlink-driver.js";
+export {
+  commandToPjlink,
+  parsePjlinkLine,
+  parsePjlinkGreeting,
+  pjlinkAuthDigest,
+  buildPollCommands,
+  buildInfoCommands,
+  buildClassQuery,
+  inputToken,
+  parseInputToken,
+  fallbackInputLabel,
+  PjlinkProtocolError,
+  PJLINK_DEFAULT_PORT,
+  PJLINK_SOURCE_TYPE,
+  type PjlinkClass,
+  type PjlinkInputRef,
+  type PjlinkUpdate,
+  type PjlinkErrorCode,
+  type PjlinkPowerState,
+  type PjlinkAvMute,
+  type PjlinkErrorStatus,
+  type PjlinkGreeting,
+} from "./pjlink-codec.js";
+export { discoverPjlinkClass2, type PjlinkDiscoveryCandidate, type PjlinkDiscoveryOptions } from "./pjlink-discovery.js";
+export { PjlinkSimulator, startPjlinkFarm, stopPjlinkFarm, type PjlinkSimulatorOptions } from "./pjlink-simulator.js";

@@ -9,6 +9,7 @@ import {
   KnxProtocolDriver,
   ModbusProtocolDriver,
   MqttProtocolDriver,
+  PjlinkProtocolDriver,
   YamahaProtocolDriver,
 } from "@supreme/protocols";
 import { LocalDirectUdpTransport, type UdpTransport } from "@supreme/lan";
@@ -181,6 +182,11 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   // URL builder exactly like the `avr` factory does — `devialet-driver.ts` already
   // accepts and uses it (§ D8); no new wiring needed on the driver side.
   devialet: (c, ctx) => new DevialetProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, artworkUrlFor: ctx.artworkUrlFor }),
+  // § PJLink Class 2 native driver — same posture as avr/heos/devialet above: nothing
+  // global to configure here (each projector is added by IP through Bus Binding, with
+  // its own optional per-device password/class-override in the BINDING's own config,
+  // not this driver-instance-level config), so the factory always succeeds.
+  pjlink: (c, ctx) => new PjlinkProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, udpTransportFactory: ctx.udpTransportFactory }),
 };
 
 /**
