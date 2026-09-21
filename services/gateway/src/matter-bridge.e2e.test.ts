@@ -206,8 +206,13 @@ describe("Matter Bridge (gateway e2e — per-device isolation, real bug found li
       // capability"; it's "the device's full capability set resolves to a supported Matter
       // Device Type" (the SAME resolver `exposeMatterDevices` itself calls), so the test's own
       // expected count is computed the identical real way rather than re-guessing the old filter.
+      // `deviceKind: d.supremeType` MUST be passed here too — `reconcileMatterDevices` passes it
+      // to every real resolution (see context.ts), and without it a temperature-only thermostat
+      // (no bare `onoff`) silently falls through to UNSUPPORTED here while the real driver
+      // correctly resolves it as a Matter Thermostat, undercounting this test's own expectation
+      // by exactly the device Phase 3.2's `deviceKind === "thermostat"` branch exists to catch.
       const bridgeableDeviceCount = (await ctx.home.listDevices()).filter(
-        (d) => resolveMatterDeviceType(d.capabilities).outcome === "SUPPORTED",
+        (d) => resolveMatterDeviceType(d.capabilities, undefined, d.supremeType).outcome === "SUPPORTED",
       ).length;
       expect(bridgeableDeviceCount).toBeGreaterThan(2); // the demo home has several — this bug needs 3+ to reproduce
 

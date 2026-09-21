@@ -16,29 +16,70 @@ import { mdnsBrowse, type MdnsService } from "./mdns.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
 
 /**
- * Apple TV driver (§3) — full media control + rich "now playing" (foreground app and
- * its content) for a tvOS device.
+ * Apple TV driver — Phase 1 rebuild (multi-instance core: registration, discovery,
+ * stable identity, connection lifecycle, media capability). See the accompanying
+ * architecture note in this file's own history for the full spec; this Phase 1 slice
+ * deliberately does NOT yet implement: persistent pairing-credential storage (the
+ * `connect()` seam receives an address only, same as before — a real pairing-aware
+ * client is injected by a later phase), application discovery/launch, keyboard input,
+ * or deep links. None of those exist in the Supreme capability vocabulary yet either
+ * (§ "never fabricate a capability" — CLAUDE.md) — adding them is explicitly deferred
+ * to a follow-up phase that also touches the domain model, not silently invented here.
  *
- * SHAPE NOTE (mirrors the AirPlay driver's honesty): Apple TV is controlled over the
- * **Media Remote Protocol (MRP)**, which since tvOS 15 is tunnelled over the AirPlay 2 /
- * Companion link with HAP-style pairing (SRP + Curve25519) and is fully encrypted. There
- * is no production-grade pure-Node MRP stack; the de-facto implementation is `pyatv`
- * (Python), which also needs per-device credentials obtained through an interactive
- * pairing flow. So:
- *   • DISCOVERY is real here — Apple TVs announce `_mediaremotetv._tcp` over Bonjour (mDNS).
- *   • CONTROL + NOW-PLAYING map the Supreme `media` capability to an injectable
- *     {@link AppleTvClient} seam. A real deployment supplies the client (wrapping pyatv with
- *     stored credentials — e.g. via the Python commissioning sidecar or an `atvremote`
- *     bridge); tests inject a fake. The mapping + discovery are unit-tested; the
- *     MRP/pairing transport is the integration point.
+ * MULTI-INSTANCE BY CONSTRUCTION: exactly the same shape every other driver in this
+ * codebase uses (KNX, CoolMaster, Matter, AVR, …) — `bindings: Array` + `devices: Set`,
+ * one entry per physical device, never a singleton. `bind()`/`unbind()`/`command()` all
+ * take a `deviceId` and only ever touch that one binding's own state/client/timer — a
+ * failure or reconnect loop on one Apple TV can never observably affect another (see the
+ * isolation tests in apple-tv-driver.test.ts).
  *
- * The foreground app (Netflix, Disney+, Music, …) is surfaced as the Supreme media
- * `source`, and what's playing inside it as `title` / `artist` / `artworkUrl` — so clients
- * show "what app, playing what" with no contract change.
+ * ROOM/SPACE ASSIGNMENT: intentionally NOT modeled here at all. `Device.roomId`
+ * (`services/home/src/home-service.ts`) is a plain field on the generic Device record
+ * with no uniqueness constraint — multiple devices (including multiple Apple TVs) can
+ * already legitimately share one room today, and this driver never needs to know which
+ * room a device is in. This is the existing, protocol-agnostic mechanism; no
+ * Apple-TV-specific room database was created.
+ *
+ * STABLE IDENTITY / IP-CHANGE RECONCILIATION: `discover()`'s `backendId` is the mDNS
+ * service INSTANCE NAME (stable across a DHCP renewal — the address, not the name,
+ * changes), never the raw host/IP. This is honestly a "persistent discovery identifier"
+ * (tier 3 of the spec's preferred-identity order), not a real Apple TV hardware
+ * identifier (tier 1) — no canonical, verified source for extracting one from this
+ * service's TXT records was available this phase, so nothing was fabricated. Because
+ * `backendId` is stable, the EXISTING, already-tested, protocol-agnostic reconciliation
+ * primitives already in this codebase — `SupremeIntegrationLayerRegistry.isKnownBackendId()`
+ * (rediscovery of an already-configured device is recognized, never duplicated) and
+ * `DriverBindingEngine.rebind()` (re-binds a known device onto a new address while
+ * keeping its deviceId/name/room/automations untouched) — are sufficient; this driver
+ * does not need, and does not implement, a second reconciliation mechanism.
+ *
+ * CONNECTION LIFECYCLE: each binding independently tracks one of the six states the
+ * spec requires (`AppleTvConnectionState`) and reconnects with exponential backoff,
+ * capped, on its own timer — never a shared/global timer, never a singleton client.
  */
 const APPLE_TV_SERVICE = "_mediaremotetv._tcp.local";
 
-/** A snapshot of what the Apple TV is doing, as reported by the MRP client (pyatv). */
+/** The six connection states every Apple TV driver instance independently tracks. */
+export type AppleTvConnectionState =
+  | "disconnected"
+  | "connecting"
+  | "pairing_required"
+  | "connected"
+  | "reconnecting"
+  | "error";
+
+/** A client throws this (instead of a generic Error) when the Apple TV requires MRP/
+ * Companion pairing before it will accept a connection — the driver recognizes this
+ * specifically and moves the binding to `"pairing_required"` rather than endlessly
+ * retrying a connection that can never succeed without user action. */
+export class AppleTvPairingRequiredError extends Error {
+  constructor(message = "Apple TV requires pairing") {
+    super(message);
+    this.name = "AppleTvPairingRequiredError";
+  }
+}
+
+/** A snapshot of what the Apple TV is doing, as reported by the MRP/Companion client. */
 export interface AppleTvNowPlaying {
   /** Transport state of the focused app. */
   state: "playing" | "paused" | "stopped" | "idle";
@@ -50,59 +91,91 @@ export interface AppleTvNowPlaying {
   artist: string | null;
   /** Artwork URL the clients can render (must be a URL or null — raw bytes aren't passed up). */
   artworkUrl: string | null;
-  /** Output volume 0..100. */
-  volume: number;
-  /** Whether output is muted. */
-  muted: boolean;
+  /** Output volume 0..100; null when this Apple TV does not own audio output (e.g. audio
+   * is routed through an AVR/TV via HDMI-CEC/ARC — § "do not falsely report Apple TV as
+   * the volume owner", never fabricated as 0 or 100 in that case). */
+  volume: number | null;
+  /** Whether output is muted; null under the same "not the volume owner" condition. */
+  muted: boolean | null;
   /** True when the device has cover art available (fetched out-of-band via getArtwork). */
   hasArtwork?: boolean;
 }
 
-/** Control + state seam for one Apple TV. The real impl wraps pyatv (with credentials). */
+/** Control + state seam for one Apple TV. A real implementation wraps a pyatv-backed
+ * (or equivalent) MRP/Companion client carrying that device's own stored pairing
+ * credentials — never a shared/global client across instances. */
 export interface AppleTvClient {
   play(): Promise<void>;
   pause(): Promise<void>;
   stop(): Promise<void>;
   next(): Promise<void>;
   previous(): Promise<void>;
-  /** Set output volume (0..100). */
+  /** Set output volume (0..100). Only called when this Apple TV genuinely owns audio
+   * output — callers must not invoke this for a device whose `nowPlaying().volume` is
+   * `null`. */
   setVolume(percent: number): Promise<void>;
-  /** Mute / unmute output. */
   setMuted(muted: boolean): Promise<void>;
   /** Current foreground app + content + transport. */
   nowPlaying(): Promise<AppleTvNowPlaying>;
   /** Optional: current cover-art bytes (null if none). */
   getArtwork?(): Promise<MediaArtwork | null>;
-  /** Optional: release whatever the real MRP/pairing stack (pyatv) holds for this
-   * Apple TV (sockets, timers) — § Driver Lifecycle Completion. A test fake with
-   * nothing to release simply omits this. */
+  /** Optional: release whatever the real MRP/pairing stack holds for this Apple TV
+   * (sockets, timers) — § Driver Lifecycle Completion. A test fake with nothing to
+   * release simply omits this. */
   close?(): Promise<void>;
 }
 
-/** Resolve a client for an Apple TV address (IP / host), using stored MRP credentials. */
-export type AppleTvConnect = (address: string) => Promise<AppleTvClient>;
+/** § Phase 2B — widened from `(address: string)` to also carry `deviceId`: a real
+ * connect implementation needs to load/save THIS device's own pairing credentials
+ * (never another device's), which requires knowing which device it's connecting for.
+ * Every binding still owns its own client — this is not a shared/global lookup. */
+export interface AppleTvConnectContext {
+  address: string;
+  deviceId: DeviceId;
+}
+
+/** Resolve a client for an Apple TV, using that device's own stored pairing
+ * credentials. Throws {@link AppleTvPairingRequiredError} if pairing is needed. */
+export type AppleTvConnect = (ctx: AppleTvConnectContext) => Promise<AppleTvClient>;
 
 export interface AppleTvDriverOptions {
-  /** Poll period in ms for now-playing (default 4000). */
+  /** Poll period in ms for now-playing while connected (default 4000). */
   pollMs?: number;
-  /** Injectable client factory (tests inject a fake; prod wraps pyatv). */
+  /** Injectable client factory (tests inject a fake; prod wraps a real MRP/pairing client). */
   connect?: AppleTvConnect;
   /** Injectable mDNS browser (tests); defaults to a real multicast browse. */
   mdns?: (serviceType: string) => Promise<MdnsService[]>;
   /** Build the client-reachable artwork URL for a device (the gateway proxy path).
    * When set and the device has art, it's emitted as the media state's artworkUrl. */
   artworkUrlFor?: (deviceId: DeviceId) => string;
+  /** Base reconnect delay in ms (default 1000) — doubles per attempt, capped at
+   * `reconnectMaxMs`. Each binding has its OWN backoff counter; one device's repeated
+   * failures never affect another's schedule. */
+  reconnectBaseMs?: number;
+  /** Reconnect delay cap in ms (default 60000). */
+  reconnectMaxMs?: number;
 }
 
 interface AppleTvBinding {
   deviceId: DeviceId;
   capability: CapabilityKind;
-  client: AppleTvClient;
+  address: string;
+  client: AppleTvClient | null;
+  connectionState: AppleTvConnectionState;
+  lastError: string | null;
+  reconnectAttempts: number;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
  * Map an Apple TV now-playing snapshot onto the Supreme `media` capability state. App →
  * `source` (with an "Apple TV" fallback so the source is never empty for a live device).
+ * `MediaState.volume`/`muted` (`packages/domain-model/src/capabilities.ts`) are non-nullable
+ * by the frozen universal schema, so when this Apple TV doesn't own audio output
+ * (`np.volume`/`np.muted` are `null`) this maps to the honest "no output" values (0,
+ * unmuted) rather than a fabricated guess — the real distinction ("does this device own
+ * audio output at all") belongs in `advanced`/a future capability-config field, not in
+ * inventing a nullable variant of an already-frozen universal field.
  */
 export function mediaStateFromNowPlaying(
   np: AppleTvNowPlaying,
@@ -111,8 +184,8 @@ export function mediaStateFromNowPlaying(
   return {
     kind: "media",
     playback: np.state,
-    volume: Math.max(0, Math.min(100, Math.round(np.volume))),
-    muted: np.muted,
+    volume: np.volume === null ? 0 : Math.max(0, Math.min(100, Math.round(np.volume))),
+    muted: np.muted ?? false,
     title: np.title,
     artist: np.artist,
     source: np.app ?? "Apple TV",
@@ -128,7 +201,7 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   private readonly devices = new Set<DeviceId>();
   private readonly states = new Map<string, CapabilityState>();
   private readonly listeners = new Set<StateListener>();
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: AppleTvDriverOptions = {}) {
     this.opts = opts;
@@ -137,20 +210,25 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     this.connected = true;
     const period = this.opts.pollMs ?? 4000;
-    this.timer = setInterval(() => void this.poll(), period);
-    (this.timer as { unref?: () => void }).unref?.();
+    this.pollTimer = setInterval(() => void this.poll(), period);
+    (this.pollTimer as { unref?: () => void }).unref?.();
   }
+
   async disconnect(): Promise<void> {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-    // § Driver Lifecycle Completion: every bound client's own MRP/pairing session
-    // must be released too — previously nothing closed these on teardown at all.
-    for (const b of this.bindings) await b.client.close?.();
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = null;
+    // § Driver Lifecycle Completion — every binding's own reconnect timer and MRP/
+    // pairing client must be released too, never left running after teardown.
+    for (const b of this.bindings) {
+      if (b.reconnectTimer) clearTimeout(b.reconnectTimer);
+      await b.client?.close?.();
+    }
     this.bindings.length = 0;
     this.devices.clear();
     this.states.clear();
     this.connected = false;
   }
+
   isConnected(): boolean {
     return this.connected;
   }
@@ -159,21 +237,34 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
     if (binding.capability !== "media") {
       throw new Error(`appletv: capability ${binding.capability} not supported (media)`);
     }
-    const connect = this.opts.connect ?? defaultAppleTvConnect;
-    const client = await connect(binding.address);
-    this.bindings.push({ deviceId: binding.deviceId, capability: "media", client });
+    const b: AppleTvBinding = {
+      deviceId: binding.deviceId,
+      capability: "media",
+      address: binding.address,
+      client: null,
+      connectionState: "disconnected",
+      lastError: null,
+      reconnectAttempts: 0,
+      reconnectTimer: null,
+    };
+    this.bindings.push(b);
     this.devices.add(binding.deviceId);
+    await this.connectBinding(b);
   }
+
   manages(deviceId: DeviceId): boolean {
     return this.devices.has(deviceId);
   }
 
-  /** § Driver Lifecycle Completion — releases this one device's real MRP client (if
-   * the injected implementation supports closing one) plus its bindings/cached state,
-   * without touching the shared poll timer. Idempotent. */
+  /** § Driver Lifecycle Completion — releases this one device's reconnect timer + real
+   * MRP client (if the injected implementation supports closing one), plus its bindings/
+   * cached state, without touching any other device's timer/client/state or the shared
+   * poll timer. Idempotent. */
   async unbind(deviceId: DeviceId): Promise<void> {
     for (const b of this.bindings) {
-      if (b.deviceId === deviceId) await b.client.close?.();
+      if (b.deviceId !== deviceId) continue;
+      if (b.reconnectTimer) clearTimeout(b.reconnectTimer);
+      await b.client?.close?.();
     }
     removeDeviceBindings(this.bindings, deviceId);
     this.devices.delete(deviceId);
@@ -184,6 +275,9 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
     if (!b) throw new Error(`appletv: ${deviceId} not bound for ${command.capability}`);
     if (command.capability !== "media") throw new Error(`appletv: unsupported capability ${command.capability}`);
+    if (!b.client || b.connectionState !== "connected") {
+      throw new Error(`appletv: ${deviceId} is not connected (state: ${b.connectionState})`);
+    }
     switch (command.action) {
       case "play":
         await b.client.play();
@@ -217,18 +311,35 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
     return this.states.get(bindingKey(deviceId, capability)) ?? null;
   }
 
+  /** Diagnostics/UI surface (§ DeviceSheet Diagnostics section) — this device's own
+   * connection lifecycle state, last error (if any), and reconnect attempt count. Never
+   * exposes the pairing client/credentials themselves. */
+  getConnectionDiagnostics(deviceId: DeviceId): { state: AppleTvConnectionState; lastError: string | null; reconnectAttempts: number } | null {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) return null;
+    return { state: b.connectionState, lastError: b.lastError, reconnectAttempts: b.reconnectAttempts };
+  }
+
   async discover(): Promise<DiscoveredDevice[]> {
-    // Real mDNS discovery: Apple TVs advertise the Media Remote service.
+    // Real mDNS discovery: Apple TVs advertise the Media Remote service. `backendId` is
+    // the STABLE service instance name (survives a DHCP IP change) — never the raw
+    // host/address, so re-discovery of an already-configured device is recognized by
+    // the existing SupremeIntegrationLayerRegistry.isKnownBackendId() check rather than
+    // creating a duplicate (§ "if an already-configured Apple TV is discovered again:
+    // Already configured, not a duplicate" — this driver relies on that EXISTING,
+    // protocol-agnostic mechanism; it does not re-implement its own).
     const browse = this.opts.mdns ?? mdnsBrowse;
     const services = await browse(APPLE_TV_SERVICE);
-    return services.map((s) => ({
-      backendId: s.addresses[0] ?? s.host,
-      suggestedName:
-        s.name.split(`.${APPLE_TV_SERVICE.replace(/^\./, "")}`)[0]?.replace(/\\032/g, " ") ||
-        (typeof s.txt?.Name === "string" ? s.txt.Name : `Apple TV ${s.host}`),
-      capabilities: ["media"] as DiscoveredDevice["capabilities"],
-      raw: { host: s.host, port: s.port, txt: s.txt },
-    }));
+    return services.map((s) => {
+      const instanceName = s.name.split(`.${APPLE_TV_SERVICE.replace(/^\./, "")}`)[0] ?? s.name;
+      return {
+        backendId: instanceName,
+        suggestedName:
+          instanceName.replace(/\\032/g, " ") || (typeof s.txt?.Name === "string" ? s.txt.Name : `Apple TV ${s.host}`),
+        capabilities: ["media"] as DiscoveredDevice["capabilities"],
+        raw: { host: s.host, port: s.port, address: s.addresses[0] ?? s.host, txt: s.txt },
+      };
+    });
   }
 
   onState(listener: StateListener): () => void {
@@ -238,15 +349,63 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
 
   async poll(): Promise<void> {
     for (const b of this.bindings) {
+      if (b.connectionState !== "connected") continue;
       try {
         await this.refresh(b);
       } catch {
-        // A transient poll error on one device must not stop the others.
+        // A poll failure on one connected device must not stop the others; treat it as
+        // a lost connection and let this binding's own reconnect loop take over.
+        this.scheduleReconnect(b, "poll failed");
       }
     }
   }
 
+  /** Attempts to (re)connect one binding's client — isolated to that binding only.
+   * Never touches any other binding's state/timer. */
+  private async connectBinding(b: AppleTvBinding): Promise<void> {
+    b.connectionState = "connecting";
+    const connectFn = this.opts.connect ?? defaultAppleTvConnect;
+    try {
+      const client = await connectFn({ address: b.address, deviceId: b.deviceId });
+      b.client = client;
+      b.connectionState = "connected";
+      b.reconnectAttempts = 0;
+      b.lastError = null;
+      await this.refresh(b);
+    } catch (err) {
+      if (err instanceof AppleTvPairingRequiredError) {
+        // Pairing is a user action, not a transient fault — do not enter the reconnect
+        // loop; a future explicit re-bind (after pairing completes) is what resumes this.
+        b.connectionState = "pairing_required";
+        b.lastError = err.message;
+        return;
+      }
+      this.scheduleReconnect(b, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** Schedules this binding's own next reconnect attempt with exponential backoff,
+   * capped — a fresh `setTimeout` per binding, never a shared timer. Idempotent: if a
+   * reconnect is already scheduled for this binding, does nothing (never stacks
+   * multiple pending attempts for the same device). */
+  private scheduleReconnect(b: AppleTvBinding, reason: string): void {
+    b.client = null;
+    b.lastError = reason;
+    b.connectionState = b.reconnectAttempts === 0 ? "error" : "reconnecting";
+    if (b.reconnectTimer) return;
+    const base = this.opts.reconnectBaseMs ?? 1000;
+    const max = this.opts.reconnectMaxMs ?? 60_000;
+    const delay = Math.min(max, base * 2 ** b.reconnectAttempts);
+    b.reconnectAttempts += 1;
+    b.reconnectTimer = setTimeout(() => {
+      b.reconnectTimer = null;
+      void this.connectBinding(b);
+    }, delay);
+    (b.reconnectTimer as { unref?: () => void }).unref?.();
+  }
+
   private async refresh(b: AppleTvBinding): Promise<void> {
+    if (!b.client) return;
     const np = await b.client.nowPlaying();
     // Cover art is fetched out-of-band (getArtwork); advertise the gateway proxy URL
     // only when art exists and a URL builder is configured, else null.
@@ -255,10 +414,11 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
     this.record(b.deviceId, "media", mediaStateFromNowPlaying(np, artworkUrl));
   }
 
-  /** Fetch the bound device's current cover art (delegates to the client/bridge). */
+  /** Fetch the bound device's current cover art (delegates to that device's own client
+   * only — never another device's). */
   async getArtwork(deviceId: DeviceId): Promise<MediaArtwork | null> {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
-    if (!b || !b.client.getArtwork) return null;
+    if (!b?.client?.getArtwork) return null;
     return b.client.getArtwork();
   }
 
@@ -273,8 +433,8 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   }
 }
 
-async function defaultAppleTvConnect(_address: string): Promise<AppleTvClient> {
+async function defaultAppleTvConnect(_ctx: AppleTvConnectContext): Promise<AppleTvClient> {
   throw new Error(
-    "appletv: no client configured — provide connect() (a pyatv-backed MRP client with stored pairing credentials)",
+    "appletv: no client configured — provide connect() (a real MRP/Companion pairing-aware client)",
   );
 }

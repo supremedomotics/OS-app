@@ -34,7 +34,6 @@ import {
   MatterFabricManager,
   HttpMatterFabricSync,
   createSonosConnect,
-  createAppleTvConnect,
 } from "@supreme/protocols";
 import { createPersistence, migrateOwnershipToProvider } from "@supreme/persistence";
 import { createDriverSecretCrypto } from "@supreme/drivers";
@@ -216,19 +215,15 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // Shelly Gen2 (real local RPC + mDNS discovery); AirPlay (mDNS discovery + sender seam).
   if (config.shellyEnabled) nativeDrivers.push(new ShellyProtocolDriver());
   if (config.airplayEnabled) nativeDrivers.push(new AirPlayProtocolDriver());
-  // Apple TV — real mDNS discovery (_mediaremotetv._tcp); full media control + rich
-  // now-playing (foreground app + content). Control is fulfilled by the pyatv-backed
-  // bridge (services/appletv-py), which holds the per-device pairing credentials; when
-  // no bridge URL is set the driver still discovers, and a bind awaits a configured
-  // client (boot is unaffected either way).
+  // Apple TV — Phase 1 rebuild (§ multi-instance core: registration, real mDNS
+  // discovery, stable identity, connection lifecycle, media capability). Control
+  // (play/pause/volume/…) awaits a real pairing-aware connect() implementation — a
+  // later phase; until then this driver still discovers real Apple TVs and a bind()
+  // stays honestly in the "error"/"pairing_required" connection state rather than
+  // fabricating a connected one.
   if (config.appleTvEnabled) {
     nativeDrivers.push(
       new AppleTvProtocolDriver({
-        ...(config.appleTvBridgeUrl
-          ? { connect: createAppleTvConnect({ baseUrl: config.appleTvBridgeUrl }) }
-          : {}),
-        // Advertise client-reachable cover-art URLs (served by the gateway proxy)
-        // when a public base URL is configured.
         ...(config.publicBaseUrl
           ? { artworkUrlFor: (id) => `${config.publicBaseUrl}/v1/devices/${id}/media/artwork` }
           : {}),
