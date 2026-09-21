@@ -122,8 +122,11 @@ export const DriverManifest = z.object({
   channel: DriverChannel,
   publisher: z.string().min(1),
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
-  /** Supreme capabilities this driver can surface. */
-  capabilities: z.array(CapabilityKind).min(1),
+  /** Supreme capabilities this driver can surface. Empty for a pure software feature with
+   * no protocol/device backing it at all (e.g. "supreme-keypad" — a mapping/input engine,
+   * not a capability-producing device driver) — never a fabricated capability just to
+   * satisfy a non-empty requirement. */
+  capabilities: z.array(CapabilityKind).default([]),
   /** Protocols the driver speaks (for commissioning + diagnostics). */
   protocols: z.array(ProtocolKind).default([]),
   compat: z.object({

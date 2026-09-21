@@ -44,6 +44,10 @@ export interface KeypadMappingEngineOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Called whenever a mapping runs (for audit/last-run tracking). */
   onRun?: (mappingId: string, ok: boolean) => void;
+  /** Called for every mapping matched by a real button-press/gesture event (never a manual
+   * `testRun`), win or lose — lets a caller log "button X pressed → mapping Y triggered/not
+   * triggered" regardless of outcome (see gateway `installer.logEvent("supreme-keypad", …)`). */
+  onFire?: (event: KeypadInputEvent, mapping: KeypadMapping, run: KeypadMappingRun) => void;
   /** How many recent execution records to retain (mirrors the Automation Debugger). */
   historyLimit?: number;
   /** Monotonic clock for durations (tests can inject); defaults to Date.now. */
@@ -63,6 +67,7 @@ export class KeypadMappingEngine {
   private readonly ex: AutomationExecutors;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly onRun?: (id: string, ok: boolean) => void;
+  private readonly onFire?: (event: KeypadInputEvent, mapping: KeypadMapping, run: KeypadMappingRun) => void;
   private readonly runs: KeypadMappingRun[] = [];
   private readonly historyLimit: number;
   private readonly now: () => number;
@@ -73,6 +78,7 @@ export class KeypadMappingEngine {
     this.ex = opts.executors;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.onRun = opts.onRun;
+    this.onFire = opts.onFire;
     this.historyLimit = opts.historyLimit ?? 100;
     this.now = opts.now ?? (() => Date.now());
     this.persistBehaviorState = opts.persistBehaviorState;
@@ -91,7 +97,8 @@ export class KeypadMappingEngine {
   async onInputEvent(event: KeypadInputEvent): Promise<void> {
     for (const m of this.mappings) {
       if (m.input.keypadId === event.keypadId && m.input.control === event.control && m.input.event === event.type) {
-        await this.execute(m);
+        const run = await this.execute(m);
+        this.onFire?.(event, m, run);
       }
     }
   }
@@ -101,7 +108,7 @@ export class KeypadMappingEngine {
     await this.execute(mapping, true);
   }
 
-  private async execute(m: KeypadMapping, skipConditions = false): Promise<void> {
+  private async execute(m: KeypadMapping, skipConditions = false): Promise<KeypadMappingRun> {
     const started = new Date();
     const t0 = this.now();
     let conditionsPassed = true;
@@ -143,7 +150,7 @@ export class KeypadMappingEngine {
       }
     }
 
-    this.record({
+    const run: KeypadMappingRun = {
       id: `kpr-${started.getTime()}-${this.runSeq++}`,
       mappingId: m.id,
       startedAt: started.toISOString(),
@@ -153,7 +160,9 @@ export class KeypadMappingEngine {
       durationMs: this.now() - t0,
       ok: conditionsPassed && ok,
       ...(error ? { error } : {}),
-    });
+    };
+    this.record(run);
+    return run;
   }
 
   /** § Stage 2 — turn one mapping firing into the concrete `AutomationAction[]` to actually

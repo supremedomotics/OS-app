@@ -462,4 +462,37 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       },
     ],
   }),
+  defineManifest({
+    key: "supreme-keypad",
+    name: "Supreme Universal Keypad",
+    description: "Protocol-independent keypad input, feedback, and mapping engine — map any button, dial, or switch from any supported keypad hardware to any Supreme device or scene.",
+    category: "other",
+    channel: "official",
+    publisher: PUBLISHER,
+    version: "1.0.0",
+    // § No protocol/device backs this driver at all — it's a pure software mapping/input
+    // engine (@supreme/keypad-framework) that real keypad drivers (a future KNX/Casambi/
+    // Lutron/Matter/etc. keypad) plug INTO via the optional getKeypadCapabilities/
+    // onInputEvent/sendKeypadFeedback driver-SDK members (ADR 0016) — it never itself
+    // produces a device capability, so `capabilities`/`protocols` are honestly empty
+    // rather than fabricated, and `backend.ref` is null (nothing for the native driver
+    // factory to instantiate). `driverHealth()` already handles a zero-protocol driver
+    // correctly with no special-casing: `connected` reports `null` (no live connection to
+    // check), never a fabricated "disconnected".
+    capabilities: [],
+    protocols: [],
+    compat: { hubMinVersion: "0.1.0", requiresSku: null },
+    backend: { type: "native", ref: null },
+    // No connect/disconnect — see the doc comment above; this is DEFAULT_DRIVER_OPERATIONS,
+    // deliberately not PROTO_OPS, so the Driver Manager UI never shows a Connect button for
+    // a feature with no protocol connection to make.
+    operations: [...DEFAULT_DRIVER_OPERATIONS],
+    documentationUrl: "https://docs.supreme.local/extensions/keypad",
+    releaseNotes:
+      "Universal Input Engine (press-timing derivation: short/long/double/triple), Universal Feedback Engine (capability-gated feedback routing), and a KeypadMapping DSL reusing the existing Automation DSL's conditions/actions — install once, then map any keypad button to any device or scene from the Keypad screen.",
+    changelog: [
+      { version: "1.0.0", date: "2026-07-21", notes: "First release: Universal Input/Feedback engines, KeypadMapping/KeypadSubscription DSL, full REST CRUD surface." },
+    ],
+    configSchema: [],
+  }),
 ];

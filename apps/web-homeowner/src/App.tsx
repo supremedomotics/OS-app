@@ -111,6 +111,10 @@ export function App() {
   // The signed-in user's role (§8) — drives which nav destinations and controls are
   // visible, alongside the existing Developer Mode license flag (see NAV filtering below).
   const [role, setRole] = useState<string | null>(null);
+  // § Supreme Universal Keypad is an installable Extension Center feature ("supreme-keypad"),
+  // not a built-in — the nav tab must not appear until it's actually installed (never assume
+  // installed while loading; `null` = "don't know yet", filtered out exactly like `false`).
+  const [keypadInstalled, setKeypadInstalled] = useState<boolean | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const streamRef = useRef<SupremeStream | null>(null);
@@ -130,6 +134,14 @@ export function App() {
     if (!authed) return;
     void fetchLicense().then((l) => setDevMode(Boolean(l?.service?.devMode)));
     void client.me().then((m) => setRole(m.user.userType)).catch(() => setRole(null));
+  }, [authed]);
+  // Supreme Universal Keypad is an Extension Center install, not a built-in — the nav tab
+  // only appears once "supreme-keypad" is installed+enabled (same registry other drivers use).
+  useEffect(() => {
+    if (!authed) return;
+    void fetchDriverRegistry()
+      .then((drivers) => setKeypadInstalled(drivers.some((d) => d.key === "supreme-keypad" && d.installed && d.enabled)))
+      .catch(() => setKeypadInstalled(false));
   }, [authed]);
   // Global command palette: ⌘K / Ctrl-K toggles it from anywhere.
   useEffect(() => {
@@ -272,7 +284,7 @@ export function App() {
   };
   // The Developer tab shows for either the home-wide Developer Mode license flag OR an
   // account whose role is specifically "Developer" — either is a legitimate reason to see it.
-  const items = NAV.filter((n) => !n.dev || devMode || role === "developer");
+  const items = NAV.filter((n) => (!n.dev || devMode || role === "developer") && (n.id !== "keypad" || keypadInstalled));
   // An Installer-role account sees the same installer-facing diagnostics Developer Mode
   // already reveals in the device list (driver/protocol/IP/MAC) — see devices.tsx.
   const showInstallerDiagnostics = devMode || role === "installer" || role === "developer";

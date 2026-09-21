@@ -812,6 +812,22 @@ export class AppContext {
         const current = await keypadMappingStore.get(id);
         if (current) await keypadMappingStore.put({ ...current, behaviorState });
       },
+      // § Settings → Logs, "Supreme Universal Keypad" column: every real button press that
+      // matched a mapping lands in the unified system log under the "supreme-keypad" driver
+      // key (same log `categoryOf()` already groups every other installed driver's events by)
+      // — whether the mapping actually fired (conditions passed) or not, never only the wins.
+      onFire: (event, mapping, run) => {
+        this.installer.logEvent(
+          "supreme-keypad",
+          run.ok ? "info" : "warn",
+          `Button "${event.control}" (${event.type}) on keypad ${event.keypadId} → mapping "${mapping.name}" ` +
+            (!run.conditionsPassed
+              ? `not triggered (condition not met: ${run.failedCondition ?? "unknown"})`
+              : run.ok
+                ? "triggered"
+                : `triggered but failed (${run.error ?? "unknown error"})`),
+        );
+      },
     });
     this.keypadMappings = new KeypadMappingService(keypadMappingEngine, keypadMappingStore);
     await this.keypadMappings.start();
