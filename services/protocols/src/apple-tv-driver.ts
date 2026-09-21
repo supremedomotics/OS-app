@@ -97,9 +97,18 @@ export interface AppleTvNowPlaying {
   volume: number | null;
   /** Whether output is muted; null under the same "not the volume owner" condition. */
   muted: boolean | null;
+  /** Track duration/elapsed position in seconds; null when the source doesn't report
+   * them (live content) or the device hasn't reported them yet — mirrors
+   * `MediaState.durationSec`/`positionSec` exactly, never a device-specific field. */
+  durationSec?: number | null;
+  positionSec?: number | null;
   /** True when the device has cover art available (fetched out-of-band via getArtwork). */
   hasArtwork?: boolean;
 }
+
+/** The 8 directional/menu buttons the generic `remote` capability commands
+ * (`packages/domain-model/src/capabilities.ts`). */
+export type AppleTvRemoteButton = "up" | "down" | "left" | "right" | "select" | "back" | "menu" | "home";
 
 /** Control + state seam for one Apple TV. A real implementation wraps a pyatv-backed
  * (or equivalent) MRP/Companion client carrying that device's own stored pairing
@@ -115,6 +124,10 @@ export interface AppleTvClient {
    * `null`. */
   setVolume(percent: number): Promise<void>;
   setMuted(muted: boolean): Promise<void>;
+  /** Press one directional/menu button (§ Phase 2C `remote` capability). Rejects with a
+   * descriptive error for a button this client's protocol/device genuinely cannot send
+   * — never silently no-ops a button that looks supported but isn't wired. */
+  pressButton(button: AppleTvRemoteButton): Promise<void>;
   /** Current foreground app + content + transport. */
   nowPlaying(): Promise<AppleTvNowPlaying>;
   /** Optional: current cover-art bytes (null if none). */
@@ -158,7 +171,10 @@ export interface AppleTvDriverOptions {
 
 interface AppleTvBinding {
   deviceId: DeviceId;
-  capability: CapabilityKind;
+  /** § Phase 2C — a device can bind BOTH `media` and `remote` against the SAME
+   * underlying MRP connection (one physical Apple TV, one client, two capabilities) —
+   * never two separate connections for one device. */
+  capabilities: Set<CapabilityKind>;
   address: string;
   client: AppleTvClient | null;
   connectionState: AppleTvConnectionState;
@@ -190,6 +206,8 @@ export function mediaStateFromNowPlaying(
     artist: np.artist,
     source: np.app ?? "Apple TV",
     artworkUrl,
+    durationSec: np.durationSec ?? null,
+    positionSec: np.positionSec ?? null,
   };
 }
 
@@ -234,12 +252,19 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   }
 
   async bind(binding: ProtocolBinding): Promise<void> {
-    if (binding.capability !== "media") {
-      throw new Error(`appletv: capability ${binding.capability} not supported (media)`);
+    if (binding.capability !== "media" && binding.capability !== "remote") {
+      throw new Error(`appletv: capability ${binding.capability} not supported (media, remote)`);
+    }
+    const existing = this.bindings.find((x) => x.deviceId === binding.deviceId);
+    if (existing) {
+      // Same physical Apple TV, a second capability (media <-> remote) — reuse the
+      // existing connection/client rather than opening a second one.
+      existing.capabilities.add(binding.capability);
+      return;
     }
     const b: AppleTvBinding = {
       deviceId: binding.deviceId,
-      capability: "media",
+      capabilities: new Set([binding.capability]),
       address: binding.address,
       client: null,
       connectionState: "disconnected",
@@ -272,11 +297,18 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
-    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capabilities.has(command.capability));
     if (!b) throw new Error(`appletv: ${deviceId} not bound for ${command.capability}`);
-    if (command.capability !== "media") throw new Error(`appletv: unsupported capability ${command.capability}`);
+    if (command.capability !== "media" && command.capability !== "remote") {
+      throw new Error(`appletv: unsupported capability ${command.capability}`);
+    }
     if (!b.client || b.connectionState !== "connected") {
       throw new Error(`appletv: ${deviceId} is not connected (state: ${b.connectionState})`);
+    }
+    if (command.capability === "remote") {
+      await b.client.pressButton(command.action);
+      this.record(deviceId, "remote", { kind: "remote", lastButton: command.action });
+      return;
     }
     switch (command.action) {
       case "play":
@@ -336,7 +368,7 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
         backendId: instanceName,
         suggestedName:
           instanceName.replace(/\\032/g, " ") || (typeof s.txt?.Name === "string" ? s.txt.Name : `Apple TV ${s.host}`),
-        capabilities: ["media"] as DiscoveredDevice["capabilities"],
+        capabilities: ["media", "remote"] as DiscoveredDevice["capabilities"],
         raw: { host: s.host, port: s.port, address: s.addresses[0] ?? s.host, txt: s.txt },
       };
     });

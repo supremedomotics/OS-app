@@ -485,6 +485,28 @@ export {
   type HapVerifiedChannel,
   type HapExchange,
 } from "./apple-tv-hap-pairing.js";
+export {
+  encodeVarint,
+  decodeVarint,
+  buildPlaybackQueueRequestMessage,
+  parsePlaybackQueueArtwork,
+  isPlaybackQueueResponse,
+  MrpType,
+  MrpTransportCommand,
+  MrpPlaybackState,
+  MRP_HID_KEYS,
+  type MrpHidKey,
+  type MrpArtwork,
+} from "./apple-tv-mrp-protobuf.js";
+export { createMrpTcpTransport, type AppleTvMrpTransport } from "./apple-tv-mrp-transport.js";
+export { pairAppleTvMrp, createMrpAppleTvConnect, type AppleTvMrpClientOptions } from "./apple-tv-mrp-client.js";
+export {
+  createAppleTvCredentialStore,
+  createBindingConfigKv,
+  createInMemoryCredentialKv,
+  type AppleTvCredentialStore,
+  type AppleTvCredentialKv,
+} from "./apple-tv-credential-store.js";
 export { LutronProtocolDriver, type LutronDriverOptions } from "./lutron-driver.js";
 export { commandToLutron, parseLutronLine, stateFromLutronLevel, type LutronLine } from "./lutron-codec.js";
 export {

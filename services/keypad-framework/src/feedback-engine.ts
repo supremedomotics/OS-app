@@ -131,6 +131,7 @@ function onOffOf(state: CapabilityState): boolean | null {
     case "lock":
     case "vacuum":
     case "sensor":
+    case "remote":
       return null;
   }
 }
@@ -159,7 +160,13 @@ function describeState(state: CapabilityState): string | null {
       return describeVacuum(state.status);
     case "sensor":
       return `${state.value}${state.unit}`;
+    case "remote":
+      return state.lastButton !== null ? capitalize(state.lastButton) : null;
   }
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function describePlayback(playback: "playing" | "paused" | "stopped" | "idle"): string {

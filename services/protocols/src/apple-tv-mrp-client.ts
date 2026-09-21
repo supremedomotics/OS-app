@@ -19,6 +19,9 @@ import {
   extractCryptoPairingData,
   messageType,
   parseSetStateMessage,
+  buildPlaybackQueueRequestMessage,
+  parsePlaybackQueueArtwork,
+  isPlaybackQueueResponse,
   MrpType,
   MrpTransportCommand,
   MrpPlaybackState,
@@ -28,6 +31,7 @@ import {
 } from "./apple-tv-mrp-protobuf.js";
 import { createMrpTcpTransport, type AppleTvMrpTransport } from "./apple-tv-mrp-transport.js";
 import type { AppleTvCredentialStore } from "./apple-tv-credential-store.js";
+import type { MediaArtwork } from "@supreme/integration-layer";
 import { AppleTvPairingRequiredError, type AppleTvClient, type AppleTvConnect, type AppleTvNowPlaying } from "./apple-tv-driver.js";
 
 /** MRP-specific post-pair-verify session key derivation strings — verified against
@@ -156,9 +160,11 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
     transport.send(buildClientUpdatesConfigMessage({}));
 
     let latestState: MrpSetState = { playbackState: null, nowPlaying: null, displayName: null };
+    const pendingArtworkWaiters = new Set<(payload: Buffer) => void>();
     transport.onMessage((payload) => {
       if (messageType(payload) === MrpType.SET_STATE_MESSAGE) {
         latestState = parseSetStateMessage(payload);
+        for (const waiter of pendingArtworkWaiters) waiter(payload);
       }
     });
 
@@ -204,6 +210,19 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
       async setMuted() {
         throw new Error("appletv(mrp): setMuted is not implemented (not wire-verified this phase)");
       },
+      async pressButton(button) {
+        assertConnected();
+        // Verified against pyatv's MRP `RemoteControl._KEY_LOOKUP`: up/down/left/right/
+        // select/menu/home have real (usagePage, usage) HID codes. "back" has no entry
+        // in that verified table — Apple TV's MRP HID surface doesn't expose a distinct
+        // back code the way the D-pad/menu/home buttons have one, so this throws a
+        // structured, descriptive error rather than silently mapping it to "menu" (a
+        // guess) or pretending it worked.
+        if (!(button in MRP_HID_KEYS)) {
+          throw new Error(`appletv(mrp): "${button}" has no verified MRP HID mapping (not implemented)`);
+        }
+        await sendHidKey(button as MrpHidKey);
+      },
       async nowPlaying(): Promise<AppleTvNowPlaying> {
         const state = latestState;
         return {
@@ -212,16 +231,71 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
           title: state.nowPlaying?.title ?? null,
           artist: state.nowPlaying?.artist ?? null,
           artworkUrl: null,
+          durationSec: state.nowPlaying?.duration ?? null,
+          positionSec: state.nowPlaying?.elapsedTime ?? null,
           // Never claimed: MRP's volume ownership was not wire-verified this phase.
           volume: null,
           muted: null,
-          hasArtwork: false,
+          // § Artwork honesty limitation: ordinary now-playing push messages
+          // (NowPlayingInfo) carry no artwork-availability flag we've wire-verified —
+          // only an explicit PLAYBACK_QUEUE_REQUEST_MESSAGE round trip reveals that.
+          // Rather than always requesting it (extra traffic every poll) or guessing,
+          // `hasArtwork` reflects the outcome of the most recent real `getArtwork()`
+          // call (starts `false`, converges to truth after the first fetch) — never
+          // fabricated, just not instantly known on frame one.
+          hasArtwork: lastArtworkAvailable,
+        };
+      },
+      async getArtwork(): Promise<MediaArtwork | null> {
+        assertConnected();
+        transport.send(buildPlaybackQueueRequestMessage());
+        const artwork = await waitForArtworkResponse(4_000);
+        lastArtworkAvailable = artwork !== null;
+        if (!artwork) return null;
+        return {
+          contentType: artwork.mimeType ?? "application/octet-stream",
+          data: artwork.data,
+          ...(artwork.width !== null ? { width: artwork.width } : {}),
+          ...(artwork.height !== null ? { height: artwork.height } : {}),
         };
       },
       async close() {
         transport.disconnect();
       },
     };
+
+    let lastArtworkAvailable = false;
+
+    /** Waits for the next SET_STATE_MESSAGE that actually decodes to artwork bytes,
+     * bounded by `timeoutMs` — an unsolicited nowPlaying push with no playbackQueue data
+     * is simply ignored, not mistaken for "no artwork" (MRP has no request/response
+     * correlation id we've verified, so this is a best-effort filter, not a guarantee —
+     * documented limitation, not a fabricated one). */
+    function waitForArtworkResponse(timeoutMs: number): Promise<ReturnType<typeof parsePlaybackQueueArtwork>> {
+      return new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          pendingArtworkWaiters.delete(waiter);
+          resolve(null);
+        }, timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+        const waiter = (payload: Buffer) => {
+          // Only settle on a genuine playback-queue REPLY (even an empty/no-artwork
+          // one) — an ordinary unsolicited now-playing push (nowPlayingInfo only, no
+          // playbackQueue field) must not be mistaken for "no artwork", which would
+          // otherwise report false negatives before the real reply even arrives.
+          if (!isPlaybackQueueResponse(payload)) return;
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          pendingArtworkWaiters.delete(waiter);
+          resolve(parsePlaybackQueueArtwork(payload));
+        };
+        pendingArtworkWaiters.add(waiter);
+      });
+    }
 
     function assertConnected() {
       if (closed) throw new Error("appletv(mrp): connection closed");
