@@ -10,7 +10,7 @@ import {
   type AureonAccent,
   type AureonMode,
 } from "@supreme/aureon-web";
-import { activateLicense, client, devIssueLicense, fetchLicense, fetchSystemLogs, logOut, setDevMode, type LicenseInfo, type SystemLogEntry } from "./api.js";
+import { activateLicense, client, devIssueLicense, fetchDriverRegistry, fetchLicense, fetchSystemLogs, logOut, setDevMode, type DriverEntry, type LicenseInfo, type SystemLogEntry } from "./api.js";
 import { PasskeysSection } from "./passkeys.js";
 import { PasswordInput } from "./password-input.js";
 import { AdvancedSettings } from "./advanced.js";
@@ -161,22 +161,48 @@ const LOG_LEVELS = ["all", "error", "warn", "info"] as const;
 type LogLevelFilter = (typeof LOG_LEVELS)[number];
 const LOG_LEVEL_LABEL: Record<LogLevelFilter, string> = { all: "All", error: "Errors", warn: "Warnings", info: "Info" };
 
+/** "all" every entry; "devices" every `"Device: <name>"`-sourced entry (device command
+ * outcomes); a driver key (e.g. "knx", "supreme-coolmaster") every entry whose `source`
+ * belongs to that specific installed driver — see {@link categoryOf}. */
+type CategoryFilter = "all" | "devices" | string;
+const DEVICE_SOURCE_PREFIX = "Device: ";
+
+/** Which category a log entry's raw `source` string belongs to. A driver key that owns
+ * multiple instances is logged as `"<key>#<installedId>"` (see `installer-context.ts`'s
+ * `runtimeProtocolFor`) — matched here by prefix so every instance of a multi-instance
+ * driver still lands under that driver's one chip, never split into phantom categories. */
+function categoryOf(source: string, drivers: DriverEntry[]): CategoryFilter {
+  if (source.startsWith(DEVICE_SOURCE_PREFIX)) return "devices";
+  const driver = drivers.find((d) => source === d.key || source.startsWith(`${d.key}#`));
+  return driver ? driver.key : "all"; // an unrecognized/uninstalled source still counts under "All"
+}
+
 /**
  * Logs (§ Diagnostics): one unified, live-refreshing stream of everything SupremeOS is doing —
- * driver install/enable/connect/native-connection events (from the Extension Center) and every
- * device control operation's real outcome (not just "the request was accepted", but whether the
- * command actually reached the device). A silent failure anywhere in the stack — a receiver that
- * never connects, a command dropped because the socket was never open — becomes a visible,
- * timestamped line here instead of nothing at all.
+ * driver install/enable/connect/native-connection events (real, from the shared Driver Lifecycle
+ * pipeline every native driver — env-configured or Extension-Center-installed — registers
+ * through) and every device control operation's real outcome (not just "the request was
+ * accepted", but whether the command actually reached the device). A silent failure anywhere in
+ * the stack — a receiver that never connects, a command dropped because the socket was never
+ * open — becomes a visible, timestamped line here instead of nothing at all.
+ *
+ * Category filter: "All" / "Devices" / one chip per currently INSTALLED driver — never a
+ * fabricated chip for a driver that isn't actually installed. Combines with the existing level
+ * filter (both apply together).
  */
 function LogsSettings() {
   const [entries, setEntries] = useState<SystemLogEntry[] | null>(null);
+  const [drivers, setDrivers] = useState<DriverEntry[]>([]);
   const [level, setLevel] = useState<LogLevelFilter>("all");
+  const [category, setCategory] = useState<CategoryFilter>("all");
   const [auto, setAuto] = useState(true);
 
   async function load() {
     setEntries(await fetchSystemLogs(300));
   }
+  useEffect(() => {
+    void fetchDriverRegistry().then((all) => setDrivers(all.filter((d) => d.installed)));
+  }, []);
   useEffect(() => {
     void load();
     if (!auto) return;
@@ -184,9 +210,18 @@ function LogsSettings() {
     return () => clearInterval(id);
   }, [auto]);
 
-  const shown = (entries ?? []).filter((e) => level === "all" || e.level === level);
-  const counts = { all: entries?.length ?? 0, error: 0, warn: 0, info: 0 };
-  for (const e of entries ?? []) counts[e.level]++;
+  const byLevel = (entries ?? []).filter((e) => level === "all" || e.level === level);
+  const shown = byLevel.filter((e) => category === "all" || categoryOf(e.source, drivers) === category);
+
+  const levelCounts = { all: entries?.length ?? 0, error: 0, warn: 0, info: 0 };
+  for (const e of entries ?? []) levelCounts[e.level]++;
+
+  const categoryCounts: Record<string, number> = { all: byLevel.length, devices: 0 };
+  for (const d of drivers) categoryCounts[d.key] = 0;
+  for (const e of byLevel) {
+    const c = categoryOf(e.source, drivers);
+    if (c !== "all") categoryCounts[c] = (categoryCounts[c] ?? 0) + 1;
+  }
 
   return (
     <section className="card-section">
@@ -199,7 +234,21 @@ function LogsSettings() {
       <div className="chip-row">
         {LOG_LEVELS.map((l) => (
           <button key={l} className={`chip${level === l ? " active" : ""}`} onClick={() => setLevel(l)}>
-            {LOG_LEVEL_LABEL[l]}<span className="chip-n">{counts[l]}</span>
+            {LOG_LEVEL_LABEL[l]}<span className="chip-n">{levelCounts[l]}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="chip-row" style={{ marginTop: 6 }}>
+        <button className={`chip${category === "all" ? " active" : ""}`} onClick={() => setCategory("all")}>
+          All<span className="chip-n">{categoryCounts.all}</span>
+        </button>
+        <button className={`chip${category === "devices" ? " active" : ""}`} onClick={() => setCategory("devices")}>
+          Devices<span className="chip-n">{categoryCounts.devices}</span>
+        </button>
+        {drivers.map((d) => (
+          <button key={d.key} className={`chip${category === d.key ? " active" : ""}`} onClick={() => setCategory(d.key)}>
+            {d.name}<span className="chip-n">{categoryCounts[d.key] ?? 0}</span>
           </button>
         ))}
       </div>
@@ -213,7 +262,12 @@ function LogsSettings() {
       </div>
 
       {entries === null && <p className="muted">Loading…</p>}
-      {entries && shown.length === 0 && <p className="muted">No log entries{level !== "all" ? ` at level "${LOG_LEVEL_LABEL[level]}"` : ""} yet.</p>}
+      {entries && shown.length === 0 && (
+        <p className="muted">
+          No log entries{level !== "all" ? ` at level "${LOG_LEVEL_LABEL[level]}"` : ""}
+          {category !== "all" ? ` for "${category === "devices" ? "Devices" : (drivers.find((d) => d.key === category)?.name ?? category)}"` : ""} yet.
+        </p>
+      )}
 
       <div className="log-list">
         {shown.map((e, i) => (
