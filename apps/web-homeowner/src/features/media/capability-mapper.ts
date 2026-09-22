@@ -52,7 +52,11 @@ function isMediaDeviceKind(v: unknown): v is MediaDeviceKind {
 export function mediaDeviceKind(device: Device, driverProtocol?: string | null): MediaDeviceKind {
   const override = (device.metadata as { media?: { kind?: unknown } } | undefined)?.media?.kind;
   if (isMediaDeviceKind(override)) return override;
-  if (driverProtocol === "avr") return "avr";
+  // § AVR ecosystem — avr-driver.ts (Denon/Marantz), yamaha-driver.ts, and the standalone
+  // HEOS driver are all multi-zone/tone/HDMI-switching receiver-shaped, so all three default
+  // to the "avr" kind (the AvrConsole page) rather than falling through to "speaker". Devialet
+  // has no such receiver shape — it stays on the conservative "speaker" default below.
+  if (driverProtocol === "avr" || driverProtocol === "heos" || driverProtocol === "yamaha") return "avr";
   if (driverProtocol === "appletv") return "apple_tv";
   return "speaker";
 }
@@ -67,6 +71,15 @@ export function mediaKindMeta(kind: MediaDeviceKind): MediaKindMeta {
  * projector has no zones, no tone controls, no listening-mode DSP. */
 export function usesSimpleMediaDetail(kind: MediaDeviceKind): boolean {
   return kind === "television" || kind === "projector";
+}
+
+/** Media Player and Apple TV get the Media Player master page (§ Media Player Remote,
+ * remote-detail.tsx) — a directional-pad + play/pause remote, modeled on the 3rd-gen Apple
+ * TV remote — rather than the AVR console's zone/tone/DSP shape, which a streaming box has
+ * none of. Apple TV keeps its own richer `apple_tv` kind (nicer icon/label) rather than being
+ * collapsed into `media_player`, but both render the identical page. */
+export function usesRemoteMediaDetail(kind: MediaDeviceKind): boolean {
+  return kind === "media_player" || kind === "apple_tv";
 }
 
 /** Loose, best-effort icon per input connector type (§ `AvrInput.type` is a display hint

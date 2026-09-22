@@ -28,6 +28,9 @@ export type IconName =
   | "monitor" | "database" | "target" | "heart" | "download" | "tv" | "projector" | "receiver"
   | "speaker" | "gamepad" | "volume" | "volume-mute" | "image" | "remote" | "film" | "music-note"
   | "apple-tv" | "cabinet"
+  // § Media Player Remote (Apple TV 3rd-gen-style D-pad) — directional/transport glyphs
+  // the Media Player master page needs that nothing above already covers.
+  | "chevron-up" | "chevron-down" | "chevron-left" | "chevron-right" | "pause" | "skip-forward" | "skip-back" | "menu-lines"
   // § Infrastructure Design Language — Energy (reusable across Solar/Battery/EV/Generator)
   | "plug" | "sun" | "ev" | "generator-unit" | "leaf" | "trend-up" | "flow"
   // § Supreme Universal Keypad — a physical button controller (distinct from "devices"'
@@ -110,6 +113,14 @@ const PATHS: Record<IconName, JSX.Element> = {
   film: <><rect x="3" y="4.5" width="18" height="15" rx="1.6" /><path d="M8 4.5v15M16 4.5v15" /><path d="M3 9h5M16 9h5M3 15h5M16 15h5" /></>,
   "music-note": <><path d="M9 18a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z" /><path d="M12 15V4.5l7-1.5v11" /></>,
   cabinet: <><rect x="5" y="2.5" width="14" height="19" rx="1.4" /><path d="M5 12h14" /><circle cx="9.5" cy="7.2" r="0.8" fill="currentColor" stroke="none" /><circle cx="9.5" cy="16.8" r="0.8" fill="currentColor" stroke="none" /></>,
+  "chevron-up": <path d="M6 15l6-6 6 6" />,
+  "chevron-down": <path d="M6 9l6 6 6-6" />,
+  "chevron-left": <path d="M15 6l-6 6 6 6" />,
+  "chevron-right": <path d="M9 6l6 6-6 6" />,
+  pause: <><rect x="7" y="5" width="4" height="14" rx="1" /><rect x="13" y="5" width="4" height="14" rx="1" /></>,
+  "skip-forward": <><path d="M6 5.5v13l9-6.5z" /><path d="M17 5.5v13" /></>,
+  "skip-back": <><path d="M18 5.5v13l-9-6.5z" /><path d="M7 5.5v13" /></>,
+  "menu-lines": <path d="M4 6.5h16M4 12h16M4 17.5h16" />,
 
   // § Infrastructure Design Language — Energy (§ reusable across future Solar/Battery/EV/Generator pages)
   plug: <><path d="M9 2.5v6M15 2.5v6" /><path d="M6.5 8.5h11v3.5a5.5 5.5 0 0 1-11 0z" /><path d="M12 17.5V21" /></>,

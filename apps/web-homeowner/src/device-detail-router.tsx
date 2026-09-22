@@ -8,7 +8,8 @@ import { ClimateSchedulerPage } from "./climate-scheduler-ui.js";
 import { LockDetail } from "./features/security/lock-detail.js";
 import { AvrConsole } from "./features/media/detail.js";
 import { SimpleMediaDetail } from "./features/media/simple-detail.js";
-import { mediaDeviceKind, usesSimpleMediaDetail } from "./features/media/capability-mapper.js";
+import { MediaPlayerRemote } from "./features/media/remote-detail.js";
+import { mediaDeviceKind, usesRemoteMediaDetail, usesSimpleMediaDetail } from "./features/media/capability-mapper.js";
 import { EnergyDeviceDetail } from "./features/infrastructure/energy/detail.js";
 import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 import { DeviceSheet } from "./device-sheets.js";
@@ -147,6 +148,11 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
     if (usesSimpleMediaDetail(kind)) {
       return (
         <SimpleMediaDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onRemoved} devMode={ctx.devMode} />
+      );
+    }
+    if (usesRemoteMediaDetail(kind)) {
+      return (
+        <MediaPlayerRemote device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onRemoved} devMode={ctx.devMode} />
       );
     }
     return (
