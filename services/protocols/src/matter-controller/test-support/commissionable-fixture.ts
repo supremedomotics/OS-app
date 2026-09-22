@@ -64,6 +64,17 @@ export async function createCommissionableFixture(nodeId: string, storagePath: s
         id: nodeId,
         environment,
         network: { port },
+        // § Phase 3.4 real root cause (found via direct @matter/protocol source tracing,
+        // reproduced with vanilla zero-SupremeOS @matter/main code): `CommissioningServer`'s
+        // `#enterOnlineMode()` (run automatically on `node.start()`) checks
+        // `ProductDescriptionServer.state.deviceType !== UNKNOWN_DEVICE_TYPE` and, if unset,
+        // SILENTLY skips entering commissionable mode — the PASE commissioner
+        // (`SecureChannelProtocol#paseCommissioner`) never gets armed, so EVERY subsequent
+        // PASE attempt (any transport, any topology, same-process or cross-process) hits the
+        // dispatcher-level "no commissioner" `InvalidParam` rejection instantly, before
+        // `PaseServer` is ever invoked. This field was never set here. Setting it fixes real
+        // commissioning end-to-end — verified live.
+        productDescription: { name: "Fixture Multi-Endpoint Device", deviceType: OnOffLightDevice.deviceType },
         basicInformation: {
           vendorName: "Fixture Vendor",
           productName: "Fixture Multi-Endpoint Device",

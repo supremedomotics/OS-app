@@ -2,6 +2,7 @@ import type { DiscoveredDevice } from "@supreme/integration-layer";
 import { capabilitiesFromUnit, colorConfigFromUnit, isKeypadUnit, suggestedKindFromUnit, type CasambiUnit } from "./entity-mapper.js";
 import type { CasambiGroup } from "./cloud-transport.js";
 import {
+  encodeNotifyControlValuesRead,
   encodeNotifyControlValuesSetDefaultMask,
   encodeNotifyControlValuesSubscribe,
   encodeNotifyControlValuesUnsubscribe,
@@ -31,6 +32,15 @@ import {
 export async function startLocalDiscovery(udp: Pick<CasambiUdpEngine, "send">, netId: number): Promise<void> {
   await udp.send(encodeNotifyControlValuesSetDefaultMask(netId));
   await udp.send(encodeNotifyControlValuesSubscribe(netId, 0, 250));
+  // § Bug fix (live-reported) — Subscribe only arms FUTURE NotifyControlValues pushes; the
+  // Casambi gateway only ever sends one of those on a state TRANSITION, never as an initial
+  // "here's everyone's current state" burst. A light already on before SupremeOS started (or
+  // reconnected after a restart/update) never transitions, so it stayed unknown/stale in
+  // `this.units` until someone toggled it again. 0x4B's own Read request (already decoded by
+  // the exact same NotifyControlValues receive path Subscribe's pushes use — see
+  // `updateUnitFromControlValues`) is the documented one-time query for exactly this; nothing
+  // new to parse, just the missing request to actually ask for it.
+  await udp.send(encodeNotifyControlValuesRead(netId, 0, 250));
 }
 
 export async function stopLocalDiscovery(udp: Pick<CasambiUdpEngine, "send">, netId: number): Promise<void> {

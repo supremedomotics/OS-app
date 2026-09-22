@@ -82,7 +82,12 @@ export async function readAttribute(
   const { name, id: attributeId } = resolveAttribute(resolved, attribute, ctx);
 
   const value = await runLive(async () => {
-    const state = resolved.endpoint.stateOf(resolved.type) as Record<string, unknown>;
+    // § `Endpoint.stateOf()` only returns the LOCAL mirrored cache (no subscription is
+    // established — § requirement per `real-controller.ts`'s `subscribe()` being Phase 4, not
+    // yet implemented), so it would silently return a stale pre-invoke value. `getStateOf()` is
+    // `@matter/node`'s own real forced-remote-read API (see `Endpoint.js#getStateOf` →
+    // `#performRead()` → `node.interaction.read()`) — a genuine over-the-wire attribute read.
+    const state = (await resolved.endpoint.getStateOf(resolved.type.id, [name])) as Record<string, unknown>;
     return state[name];
   }, { ...ctx, attributeId });
 
@@ -105,17 +110,22 @@ export async function writeAttribute(
   const writeCtx = { ...ctx, attributeId };
 
   await runLive(async () => {
-    // § real remote write — `ClientNode.act()` performs the actual over-the-wire Matter
+    // § real remote write — `Endpoint.act()` performs the actual over-the-wire Matter
     // interaction for a peer's cluster state, not a local mutation (matches matter.js's own
     // documented controller usage pattern). `@matter/main` itself validates the value against
     // the cluster's real schema/constraints during this call — never re-implemented here.
-    await node!.act((agent) => {
+    // Must act() on `resolved.endpoint`, NOT `node`: `Endpoint.act()` binds the callback's
+    // `agent` to the endpoint it's called on (see `Endpoint.js#act` → `this.agentFor(context)`),
+    // so `node!.act()` would hand back an agent for the ROOT endpoint — `agent.get()` would then
+    // reject every non-root-endpoint cluster type as "Unsupported behavior" even though
+    // `target-resolver.ts` resolved it correctly.
+    await resolved.endpoint.act((agent) => {
       const instance = agent.get(resolved.type) as unknown as Record<string, unknown>;
       (instance.state as Record<string, unknown>)[name] = value;
     });
   }, writeCtx);
 
-  const after = (resolved.endpoint.stateOf(resolved.type) as Record<string, unknown>)[name];
+  const after = ((await resolved.endpoint.getStateOf(resolved.type.id, [name])) as Record<string, unknown>)[name];
   return { nodeId, endpointId, clusterId, attributeId, attributeName: name, value: after, timestamp: new Date().toISOString() };
 }
 
@@ -135,7 +145,9 @@ export async function invokeCommand(
   const invokeCtx = { ...ctx, commandId };
 
   const response = await runLive(async () => {
-    return node!.act((agent) => {
+    // § see the write-path note above — must act() on `resolved.endpoint`, not `node`, or
+    // `agent.get()` resolves against the root endpoint and rejects the real cluster type.
+    return resolved.endpoint.act((agent) => {
       const instance = agent.get(resolved.type) as unknown as Record<string, (arg?: unknown) => unknown>;
       const method = instance[name];
       if (typeof method !== "function") {
@@ -145,7 +157,11 @@ export async function invokeCommand(
           `matter-controller: command ${name} (${commandId}) on cluster ${clusterId} is not invocable on this endpoint`,
         );
       }
-      return method.call(instance, fields);
+      // § a no-argument command's generated client method (e.g. OnOff's `on()`/`off()`) takes
+      // no parameter at all — its TLV request schema is `NoArgumentsSchema` (void). Calling it
+      // with an empty `{}` (this function's own default) fails real validation with
+      // "Expected void, got object", so an empty `fields` must be passed as no argument.
+      return Object.keys(fields).length ? method.call(instance, fields) : method.call(instance);
     });
   }, invokeCtx);
 

@@ -160,9 +160,14 @@ describe("Matter Controller — generic cluster engine, separate OS process (Pha
       const aState = await nodeA.controller.readAttribute(nodeA.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff");
       expect(aState.value).toBe(true);
 
-      await expect(
-        nodeB.controller.readAttribute(nodeA.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff"),
-      ).rejects.toMatchObject({ reason: "node_not_commissioned" } satisfies Partial<MatterEngineError>);
+      // § see cluster-engine.e2e.test.ts's identical "I" test for the real finding: operational
+      // node ids (`ClientNode.id`, e.g. "peer1") are assigned per controller fabric, not
+      // globally, so `nodeA.nodeId === nodeB.nodeId` is expected here, not a bug. What matters
+      // is that node B's controller resolves that shared id to ITS OWN device (own model store,
+      // own live `ClientNode`) — never node A's real, just-turned-on state leaking across the
+      // process boundary.
+      const viaNodeB = await nodeB.controller.readAttribute(nodeA.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff");
+      expect(viaNodeB.value).toBe(false);
 
       const bState = await nodeB.controller.readAttribute(nodeB.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff");
       expect(bState.value).toBe(false);

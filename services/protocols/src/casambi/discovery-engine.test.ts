@@ -84,12 +84,13 @@ describe("startLocalDiscovery / stopLocalDiscovery", () => {
     return { sent, send: async (packet: CasambiPacket) => void sent.push(packet) };
   }
 
-  it("sends SetDefaultMask then Subscribe(0, 0, 250), in that order", async () => {
+  it("sends SetDefaultMask, then Subscribe(0, 250), then Read(0, 250), in that order", async () => {
     const udp = fakeUdp();
     await startLocalDiscovery(udp, 0);
     expect(udp.sent).toEqual([
       { netId: 0, direction: "toCasambi", opcode: 0x4b, args: [3, 0, 0, 0xff, 0xff, 0xff, 0xff] },
       { netId: 0, direction: "toCasambi", opcode: 0x4b, args: [1, 0, 250] },
+      { netId: 0, direction: "toCasambi", opcode: 0x4b, args: [2, 0, 250] },
     ]);
   });
 
