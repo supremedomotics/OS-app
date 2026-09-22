@@ -105,6 +105,42 @@ describe("native-driver-factory — Devialet", () => {
   });
 });
 
+/**
+ * § Apple TV Phase 4 — same posture as avr/heos/yamaha/devialet above: nothing global
+ * to configure here (each Apple TV is added by real mDNS discovery through Bus Binding
+ * after enabling), so this factory always succeeds. `ctx.appleTvConnect` (built once by
+ * `installer-context.ts`'s `nativeDriverContext()` from the real credential store) is
+ * the pairing-aware MRP client; its absence here (test constructs the factory directly)
+ * leaves the driver honestly un-configured, never a crash.
+ */
+describe("native-driver-factory — Apple TV", () => {
+  it("reports a factory for appletv", () => {
+    expect(hasNativeFactory("appletv")).toBe(true);
+  });
+
+  it("builds a live driver instance from an empty config (nothing global to configure)", () => {
+    const appletv = buildNativeDriver("appletv", {});
+    expect(appletv?.protocol).toBe("appletv");
+  });
+
+  it("threads ctx.artworkUrlFor and ctx.appleTvConnect into the Apple TV driver", async () => {
+    const appletv = buildNativeDriver("appletv", {}, {
+      artworkUrlFor: (id) => `https://hub.local/v1/devices/${id}/media/artwork`,
+      appleTvConnect: async () => {
+        throw new Error("no fake client configured");
+      },
+    });
+    expect(appletv).not.toBeNull();
+    await appletv!.connect();
+    await appletv!.disconnect();
+    expect(appletv!.protocol).toBe("appletv");
+  });
+
+  it("omits ctx entirely — still builds a working driver (ctx defaults to {})", () => {
+    expect(buildNativeDriver("appletv", {})?.protocol).toBe("appletv");
+  });
+});
+
 describe("native-driver-factory — CoolMaster", () => {
   it("reports a factory for coolmaster", () => {
     expect(hasNativeFactory("coolmaster")).toBe(true);

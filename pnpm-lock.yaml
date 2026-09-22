@@ -1253,6 +1253,9 @@ importers:
       '@supreme/domain-model':
         specifier: workspace:*
         version: link:../../packages/domain-model
+      '@supreme/drivers':
+        specifier: workspace:*
+        version: link:../drivers
       '@supreme/integration-layer':
         specifier: workspace:*
         version: link:../integration-layer

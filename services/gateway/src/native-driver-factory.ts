@@ -1,6 +1,7 @@
 import type { DiscoveredDevice, INativeProtocolDriver, ProtocolBinding } from "@supreme/integration-layer";
 import type { DeviceId } from "@supreme/domain-model";
 import {
+  AppleTvProtocolDriver,
   AvrProtocolDriver,
   CasambiProtocolDriver,
   CoolMasterProtocolDriver,
@@ -60,6 +61,14 @@ export interface NativeDriverFactoryContext {
     deviceIdForUnit(unitId: number): DeviceId | null;
     unitForDeviceId(deviceId: DeviceId): number | null;
   };
+  /** § Apple TV Phase 4 — the real, pairing-aware MRP `connect()` implementation
+   * (`createMrpAppleTvConnect`), built ONCE by `installer-context.ts`'s
+   * `nativeDriverContext()` from the SAME `protocolBindingStore`/`driverSecretCrypto`
+   * every other driver's per-device secrets go through — never a second credential
+   * store. Absent only in tests that construct the factory directly (falls back to the
+   * driver's own honest "no client configured" stub, matching every other driver's
+   * "missing context never silently breaks it" contract). */
+  appleTvConnect?: import("@supreme/protocols").AppleTvConnect;
 }
 export type NativeDriverFactory = (config: Record<string, unknown>, ctx: NativeDriverFactoryContext) => INativeProtocolDriver | null;
 
@@ -181,6 +190,17 @@ export const NATIVE_DRIVER_FACTORIES: Record<string, NativeDriverFactory> = {
   // URL builder exactly like the `avr` factory does — `devialet-driver.ts` already
   // accepts and uses it (§ D8); no new wiring needed on the driver side.
   devialet: (c, ctx) => new DevialetProtocolDriver({ onLog: ctx.onLog, trace: c.trace === true, artworkUrlFor: ctx.artworkUrlFor }),
+  // § Apple TV Phase 4 — same posture as avr/heos/yamaha/devialet: nothing global to
+  // configure here (each Apple TV is added by real mDNS discovery through Bus Binding
+  // after enabling), so this factory always succeeds. `appleTvConnect` (built once by
+  // `nativeDriverContext()`) is the real, pairing-aware MRP client; its absence (only
+  // in tests constructing this factory directly) leaves the driver honestly in
+  // pairing_required/error state rather than fabricating a connection.
+  appletv: (_c, ctx) =>
+    new AppleTvProtocolDriver({
+      ...(ctx.appleTvConnect ? { connect: ctx.appleTvConnect } : {}),
+      ...(ctx.artworkUrlFor ? { artworkUrlFor: ctx.artworkUrlFor } : {}),
+    }),
 };
 
 /**
