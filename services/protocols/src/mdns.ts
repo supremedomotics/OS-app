@@ -202,7 +202,21 @@ function defaultSocket(): MdnsSocket {
   const sock = dgram.createSocket({ type: "udp4", reuseAddr: true });
   return {
     on: (e, cb) => sock.on(e, cb),
-    bind: (cb) => sock.bind(cb),
+    // § Real bug found live (2026-09-22): binding to an ephemeral port and never
+    // joining the multicast group meant this socket could SEND queries to
+    // 224.0.0.251:5353 but could never RECEIVE a responder's true-multicast reply —
+    // only devices that happen to unicast back to our source port were ever seen.
+    // A UDP socket must be bound to the group's port AND a member of the group to
+    // receive multicast-addressed traffic per the OS network stack.
+    bind: (cb) =>
+      sock.bind(MDNS_PORT, () => {
+        try {
+          sock.addMembership(MDNS_HOST);
+        } catch {
+          /* no usable multicast-capable interface — still try unicast replies */
+        }
+        cb();
+      }),
     send: (msg, port, host) => sock.send(msg, port, host),
     close: () => sock.close(),
   };
