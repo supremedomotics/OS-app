@@ -55,6 +55,9 @@ function fakeClient(overrides: Partial<AppleTvNowPlaying> = {}): { client: Apple
       calls.push(`muted:${muted}`);
       np.muted = muted;
     },
+    async pressButton(button) {
+      calls.push(`button:${button}`);
+    },
     async nowPlaying() {
       return { ...np };
     },
@@ -86,6 +89,8 @@ describe("mediaStateFromNowPlaying", () => {
       artist: null,
       source: "Netflix",
       artworkUrl: "https://hub.local/art.jpg",
+      durationSec: null,
+      positionSec: null,
     });
   });
 
@@ -295,7 +300,7 @@ describe("AppleTvProtocolDriver — discovery / stable identity", () => {
     expect(found[0]!.backendId).toBe("Living Room");
     expect(found[0]!.backendId).not.toBe("192.168.1.50");
     expect(found[0]!.suggestedName).toBe("Living Room");
-    expect(found[0]!.capabilities).toEqual(["media"]);
+    expect(found[0]!.capabilities).toEqual(["media", "remote"]);
   });
 
   it("the SAME device rediscovered after an IP change reports the SAME backendId — proves reconciliation is possible via the existing registry, never IP-keyed identity", async () => {
@@ -361,12 +366,206 @@ describe("AppleTvProtocolDriver — state events / artwork", () => {
 });
 
 describe("AppleTvProtocolDriver — capability guard", () => {
-  it("rejects a bind for any capability other than 'media'", async () => {
+  it("rejects a bind for any capability other than 'media'/'remote'", async () => {
     const driver = new AppleTvProtocolDriver();
     await driver.connect();
     await expect(
       driver.bind({ deviceId: "device-x" as DeviceId, capability: "onoff", address: "10.0.0.1" }),
     ).rejects.toThrow(/not supported/);
+    await driver.disconnect();
+  });
+});
+
+describe("AppleTvProtocolDriver — remote (navigation) capability (§ Phase 2C)", () => {
+  it("binding both media and remote for one device shares a single connection/client", async () => {
+    const { client, calls } = fakeClient();
+    let connectCount = 0;
+    const driver = new AppleTvProtocolDriver({
+      connect: async () => {
+        connectCount++;
+        return client;
+      },
+    });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "media", address: "a" });
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "remote", address: "a" });
+    expect(connectCount).toBe(1);
+
+    await driver.command("tv-1" as DeviceId, { capability: "remote", action: "up" });
+    expect(calls).toContain("button:up");
+    await driver.disconnect();
+  });
+
+  it("routes each of up/down/left/right/select/menu/home through the client's pressButton", async () => {
+    const { client, calls } = fakeClient();
+    const driver = new AppleTvProtocolDriver({ connect: async () => client });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "remote", address: "a" });
+
+    for (const action of ["up", "down", "left", "right", "select", "menu", "home"] as const) {
+      await driver.command("tv-1" as DeviceId, { capability: "remote", action });
+      expect(calls).toContain(`button:${action}`);
+    }
+    await driver.disconnect();
+  });
+
+  it("records remote state (lastButton) scoped to the remote capability, independent of media state", async () => {
+    const { client } = fakeClient();
+    const driver = new AppleTvProtocolDriver({ connect: async () => client });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "media", address: "a" });
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "remote", address: "a" });
+
+    await driver.command("tv-1" as DeviceId, { capability: "remote", action: "menu" });
+    expect(driver.getState("tv-1" as DeviceId, "remote")).toEqual({ kind: "remote", lastButton: "menu" });
+    expect(driver.getState("tv-1" as DeviceId, "media")?.kind).toBe("media");
+  });
+
+  it("a command for a capability this device wasn't bound for throws (no bypass)", async () => {
+    const { client } = fakeClient();
+    const driver = new AppleTvProtocolDriver({ connect: async () => client });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "media", address: "a" }); // remote NOT bound
+    await expect(
+      driver.command("tv-1" as DeviceId, { capability: "remote", action: "up" }),
+    ).rejects.toThrow(/not bound/);
+    await driver.disconnect();
+  });
+
+  it("two Apple TVs each bound for remote+media stay isolated: a button on A never reaches B", async () => {
+    const a = fakeClient();
+    const b = fakeClient();
+    const driver = new AppleTvProtocolDriver({
+      connect: async ({ address }) => (address === "addr-a" ? a.client : b.client),
+    });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-a" as DeviceId, capability: "media", address: "addr-a" });
+    await driver.bind({ deviceId: "tv-a" as DeviceId, capability: "remote", address: "addr-a" });
+    await driver.bind({ deviceId: "tv-b" as DeviceId, capability: "media", address: "addr-b" });
+    await driver.bind({ deviceId: "tv-b" as DeviceId, capability: "remote", address: "addr-b" });
+
+    await driver.command("tv-a" as DeviceId, { capability: "remote", action: "select" });
+    expect(a.calls).toContain("button:select");
+    expect(b.calls).not.toContain("button:select");
+    await driver.disconnect();
+  });
+});
+
+describe("AppleTvProtocolDriver — multi-instance regression: A/B/C, shared room (§ Phase 2C)", () => {
+  it("three Apple TVs (two sharing a room) stay fully isolated for commands, state, and artwork", async () => {
+    const a = fakeClient({ title: "A-title" });
+    const b = fakeClient({ title: "B-title" });
+    const c = fakeClient({ title: "C-title" });
+    const driver = new AppleTvProtocolDriver({
+      connect: async ({ address }) => (address === "addr-a" ? a.client : address === "addr-b" ? b.client : c.client),
+    });
+    await driver.connect();
+    // A and C are both "Living Room" at the SupremeOS device-model level (this driver
+    // never sees/stores roomId at all — Device.roomId has no uniqueness constraint, so
+    // this is purely a documentation fixture, not something the driver code branches on).
+    await driver.bind({ deviceId: "tv-a" as DeviceId, capability: "media", address: "addr-a" });
+    await driver.bind({ deviceId: "tv-a" as DeviceId, capability: "remote", address: "addr-a" });
+    await driver.bind({ deviceId: "tv-b" as DeviceId, capability: "media", address: "addr-b" });
+    await driver.bind({ deviceId: "tv-b" as DeviceId, capability: "remote", address: "addr-b" });
+    await driver.bind({ deviceId: "tv-c" as DeviceId, capability: "media", address: "addr-c" });
+    await driver.bind({ deviceId: "tv-c" as DeviceId, capability: "remote", address: "addr-c" });
+
+    await driver.command("tv-a" as DeviceId, { capability: "media", action: "play" });
+    expect(a.calls).toContain("play");
+    expect(b.calls).not.toContain("play");
+    expect(c.calls).not.toContain("play");
+
+    await driver.command("tv-b" as DeviceId, { capability: "remote", action: "down" });
+    expect(b.calls).toContain("button:down");
+    expect(a.calls).not.toContain("button:down");
+    expect(c.calls).not.toContain("button:down");
+
+    await driver.command("tv-c" as DeviceId, { capability: "remote", action: "home" });
+    expect(c.calls).toContain("button:home");
+    expect(a.calls).not.toContain("button:home");
+    expect(b.calls).not.toContain("button:home");
+
+    expect(driver.getState("tv-a" as DeviceId, "media")?.kind === "media" && (driver.getState("tv-a" as DeviceId, "media") as any).title).toBe(
+      "A-title",
+    );
+    expect(driver.getState("tv-b" as DeviceId, "media")?.kind === "media" && (driver.getState("tv-b" as DeviceId, "media") as any).title).toBe(
+      "B-title",
+    );
+
+    await driver.getArtwork("tv-a" as DeviceId);
+    // fakeClient() (Phase 1 helper) has no getArtwork — driver.getArtwork() must return
+    // null rather than throwing, and must never touch B/C's clients.
+    expect(b.calls.length + c.calls.length).toBe(2); // only the two button-press calls above
+    await driver.disconnect();
+  });
+});
+
+describe("AppleTvProtocolDriver — IP-change / rebind identity (§ Phase 2C)", () => {
+  it("rebinding a device onto a new address reconnects the SAME deviceId's binding, never a duplicate", async () => {
+    const oldSite = fakeClient();
+    const newSite = fakeClient();
+    let connectedAddresses: string[] = [];
+    const driver = new AppleTvProtocolDriver({
+      connect: async ({ address }) => {
+        connectedAddresses.push(address);
+        return address === "192.168.1.10" ? oldSite.client : newSite.client;
+      },
+    });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-stable" as DeviceId, capability: "media", address: "192.168.1.10" });
+    expect(driver.manages("tv-stable" as DeviceId)).toBe(true);
+
+    // The existing, generic reconciliation path (DriverBindingEngine.rebind(): unbind
+    // then bind again) — this driver implements no second IP-change mechanism of its
+    // own, per Phase 1's architecture note.
+    await driver.unbind("tv-stable" as DeviceId);
+    await driver.bind({ deviceId: "tv-stable" as DeviceId, capability: "media", address: "192.168.1.50" });
+
+    expect(connectedAddresses).toEqual(["192.168.1.10", "192.168.1.50"]);
+    expect(driver.manages("tv-stable" as DeviceId)).toBe(true); // same deviceId, still exactly one entry
+    await driver.command("tv-stable" as DeviceId, { capability: "media", action: "play" });
+    expect(newSite.calls).toContain("play");
+    expect(oldSite.calls).not.toContain("play"); // old connection's client never reused
+    await driver.disconnect();
+  });
+});
+
+describe("AppleTvProtocolDriver — application registry (§ Phase 3, driver-level delegation)", () => {
+  it("throws (never returns a fake empty list) when the client has no Companion session", async () => {
+    const { client } = fakeClient(); // Phase 1 fake has no getApplications
+    const driver = new AppleTvProtocolDriver({ connect: async () => client });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "media", address: "a" });
+    await expect(driver.getApplications("tv-1" as DeviceId)).rejects.toThrow(/no Companion session/);
+    await expect(driver.launchApplication("tv-1" as DeviceId, "com.netflix.Netflix")).rejects.toThrow(/no Companion session/);
+    await expect(driver.launchDeepLink("tv-1" as DeviceId, "netflix://title/123")).rejects.toThrow(/no Companion session/);
+    await driver.disconnect();
+  });
+
+  it("delegates to the device's own client only when it DOES have a Companion session, isolated per device", async () => {
+    const { client: a } = fakeClient();
+    const { client: b } = fakeClient();
+    const appsA = [{ packageName: "com.netflix.Netflix", applicationName: "Netflix", versionName: null, versionCode: null, launchable: true, installed: true, lastSeen: "now" }];
+    a.getApplications = async () => appsA;
+    a.launchApplication = async () => {};
+    const bLaunches: string[] = [];
+    b.launchApplication = async (id: string) => {
+      bLaunches.push(id);
+    };
+    b.getApplications = async () => [];
+
+    const driver = new AppleTvProtocolDriver({
+      connect: async ({ address }) => (address === "addr-a" ? a : b),
+    });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-a" as DeviceId, capability: "media", address: "addr-a" });
+    await driver.bind({ deviceId: "tv-b" as DeviceId, capability: "media", address: "addr-b" });
+
+    expect(await driver.getApplications("tv-a" as DeviceId)).toEqual(appsA);
+    expect(await driver.getApplications("tv-b" as DeviceId)).toEqual([]);
+
+    await driver.launchApplication("tv-b" as DeviceId, "com.google.ios.youtube");
+    expect(bLaunches).toEqual(["com.google.ios.youtube"]);
     await driver.disconnect();
   });
 });

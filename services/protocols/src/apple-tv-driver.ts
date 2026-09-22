@@ -14,6 +14,13 @@ import {
 } from "@supreme/integration-layer";
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
 import { removeDeviceBindings, removeDeviceStates } from "./binding-cleanup.js";
+// § Phase 3 — reuses the TV SDK's ALREADY-GENERIC app-registry/foreground-app shapes
+// (built for Android TV/Google TV/Fire OS) rather than inventing a parallel Apple-TV-
+// specific application model. `packageName` is TvAppRegistryEntry's field name for
+// "the platform's stable app identifier" — for Apple TV that's the bundle identifier;
+// the field is reused as-is, not renamed, so a future cross-platform app-registry
+// consumer doesn't need to branch on which kind of device it's looking at.
+import type { TvAppRegistryEntry, TvForegroundApp } from "./tv-sdk/tv-types.js";
 
 /**
  * Apple TV driver — Phase 1 rebuild (multi-instance core: registration, discovery,
@@ -97,9 +104,18 @@ export interface AppleTvNowPlaying {
   volume: number | null;
   /** Whether output is muted; null under the same "not the volume owner" condition. */
   muted: boolean | null;
+  /** Track duration/elapsed position in seconds; null when the source doesn't report
+   * them (live content) or the device hasn't reported them yet — mirrors
+   * `MediaState.durationSec`/`positionSec` exactly, never a device-specific field. */
+  durationSec?: number | null;
+  positionSec?: number | null;
   /** True when the device has cover art available (fetched out-of-band via getArtwork). */
   hasArtwork?: boolean;
 }
+
+/** The 8 directional/menu buttons the generic `remote` capability commands
+ * (`packages/domain-model/src/capabilities.ts`). */
+export type AppleTvRemoteButton = "up" | "down" | "left" | "right" | "select" | "back" | "menu" | "home";
 
 /** Control + state seam for one Apple TV. A real implementation wraps a pyatv-backed
  * (or equivalent) MRP/Companion client carrying that device's own stored pairing
@@ -115,10 +131,35 @@ export interface AppleTvClient {
    * `null`. */
   setVolume(percent: number): Promise<void>;
   setMuted(muted: boolean): Promise<void>;
+  /** Press one directional/menu button (§ Phase 2C `remote` capability). Rejects with a
+   * descriptive error for a button this client's protocol/device genuinely cannot send
+   * — never silently no-ops a button that looks supported but isn't wired. */
+  pressButton(button: AppleTvRemoteButton): Promise<void>;
   /** Current foreground app + content + transport. */
   nowPlaying(): Promise<AppleTvNowPlaying>;
   /** Optional: current cover-art bytes (null if none). */
   getArtwork?(): Promise<MediaArtwork | null>;
+  /** § Phase 3 — current foreground app, from real MRP `playerPath.client` feedback
+   * (never inferred from the last command sent). `null` when the Apple TV hasn't
+   * reported one yet. Available on every MRP-paired client — no Companion needed. */
+  getCurrentApplication?(): Promise<TvForegroundApp | null>;
+  /** § Phase 3 — installed/launchable app list. Optional: only present when this
+   * client also has a paired Companion session (MRP alone cannot enumerate apps —
+   * verified against pyatv: `Apps` is implemented only by `CompanionApps`, MRP has no
+   * app-list message at all). Absent (not just empty) when Companion isn't paired —
+   * callers must distinguish "no Companion" from "Companion says zero apps". */
+  getApplications?(): Promise<TvAppRegistryEntry[]>;
+  /** § Phase 3 — launch by stable bundle identifier (verified Companion `_launchApp`
+   * with `_bundleID`). Resolves once the COMMAND was accepted by the protocol — this is
+   * NOT a guarantee the app finished starting; real "it's running" confirmation is
+   * `getCurrentApplication()`/the next `playerPath.client` event, never inferred here. */
+  launchApplication?(bundleIdentifier: string): Promise<void>;
+  /** § Phase 3 — launch a URL/URL-scheme deep link (verified Companion `_launchApp`
+   * with `_urlS` — the SAME command as `launchApplication`, just a URL instead of a
+   * bundle id; tvOS itself decides whether that URL/scheme is meaningful; this method
+   * only reports whether the COMMAND was accepted, never fabricates content-level
+   * success). */
+  launchDeepLink?(urlOrScheme: string): Promise<void>;
   /** Optional: release whatever the real MRP/pairing stack holds for this Apple TV
    * (sockets, timers) — § Driver Lifecycle Completion. A test fake with nothing to
    * release simply omits this. */
@@ -158,7 +199,10 @@ export interface AppleTvDriverOptions {
 
 interface AppleTvBinding {
   deviceId: DeviceId;
-  capability: CapabilityKind;
+  /** § Phase 2C — a device can bind BOTH `media` and `remote` against the SAME
+   * underlying MRP connection (one physical Apple TV, one client, two capabilities) —
+   * never two separate connections for one device. */
+  capabilities: Set<CapabilityKind>;
   address: string;
   client: AppleTvClient | null;
   connectionState: AppleTvConnectionState;
@@ -190,6 +234,8 @@ export function mediaStateFromNowPlaying(
     artist: np.artist,
     source: np.app ?? "Apple TV",
     artworkUrl,
+    durationSec: np.durationSec ?? null,
+    positionSec: np.positionSec ?? null,
   };
 }
 
@@ -234,12 +280,19 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   }
 
   async bind(binding: ProtocolBinding): Promise<void> {
-    if (binding.capability !== "media") {
-      throw new Error(`appletv: capability ${binding.capability} not supported (media)`);
+    if (binding.capability !== "media" && binding.capability !== "remote") {
+      throw new Error(`appletv: capability ${binding.capability} not supported (media, remote)`);
+    }
+    const existing = this.bindings.find((x) => x.deviceId === binding.deviceId);
+    if (existing) {
+      // Same physical Apple TV, a second capability (media <-> remote) — reuse the
+      // existing connection/client rather than opening a second one.
+      existing.capabilities.add(binding.capability);
+      return;
     }
     const b: AppleTvBinding = {
       deviceId: binding.deviceId,
-      capability: "media",
+      capabilities: new Set([binding.capability]),
       address: binding.address,
       client: null,
       connectionState: "disconnected",
@@ -272,11 +325,18 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
   }
 
   async command(deviceId: DeviceId, command: CapabilityCommand): Promise<void> {
-    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === command.capability);
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capabilities.has(command.capability));
     if (!b) throw new Error(`appletv: ${deviceId} not bound for ${command.capability}`);
-    if (command.capability !== "media") throw new Error(`appletv: unsupported capability ${command.capability}`);
+    if (command.capability !== "media" && command.capability !== "remote") {
+      throw new Error(`appletv: unsupported capability ${command.capability}`);
+    }
     if (!b.client || b.connectionState !== "connected") {
       throw new Error(`appletv: ${deviceId} is not connected (state: ${b.connectionState})`);
+    }
+    if (command.capability === "remote") {
+      await b.client.pressButton(command.action);
+      this.record(deviceId, "remote", { kind: "remote", lastButton: command.action });
+      return;
     }
     switch (command.action) {
       case "play":
@@ -336,7 +396,7 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
         backendId: instanceName,
         suggestedName:
           instanceName.replace(/\\032/g, " ") || (typeof s.txt?.Name === "string" ? s.txt.Name : `Apple TV ${s.host}`),
-        capabilities: ["media"] as DiscoveredDevice["capabilities"],
+        capabilities: ["media", "remote"] as DiscoveredDevice["capabilities"],
         raw: { host: s.host, port: s.port, address: s.addresses[0] ?? s.host, txt: s.txt },
       };
     });
@@ -420,6 +480,42 @@ export class AppleTvProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId);
     if (!b?.client?.getArtwork) return null;
     return b.client.getArtwork();
+  }
+
+  /** § Phase 3 — current foreground app for this ONE device (real MRP feedback, never
+   * inferred from a prior command). `null` when unknown or not connected. */
+  async getCurrentApplication(deviceId: DeviceId): Promise<TvForegroundApp | null> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b?.client?.getCurrentApplication) return null;
+    return b.client.getCurrentApplication();
+  }
+
+  /** § Phase 3 — this device's installed/launchable apps. Throws (never returns an
+   * empty array as a stand-in) when this device has no Companion session — "no apps
+   * known" and "Companion not paired" are different facts and must not be conflated. */
+  async getApplications(deviceId: DeviceId): Promise<TvAppRegistryEntry[]> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) throw new Error(`appletv: ${deviceId} not bound`);
+    if (!b.client?.getApplications) throw new Error(`appletv: ${deviceId} has no Companion session for app discovery`);
+    return b.client.getApplications();
+  }
+
+  /** § Phase 3 — launch by stable bundle identifier, routed to this ONE device's own
+   * client only. */
+  async launchApplication(deviceId: DeviceId, bundleIdentifier: string): Promise<void> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) throw new Error(`appletv: ${deviceId} not bound`);
+    if (!b.client?.launchApplication) throw new Error(`appletv: ${deviceId} has no Companion session for app launch`);
+    await b.client.launchApplication(bundleIdentifier);
+  }
+
+  /** § Phase 3 — launch a URL/URL-scheme deep link, routed to this ONE device's own
+   * client only. */
+  async launchDeepLink(deviceId: DeviceId, urlOrScheme: string): Promise<void> {
+    const b = this.bindings.find((x) => x.deviceId === deviceId);
+    if (!b) throw new Error(`appletv: ${deviceId} not bound`);
+    if (!b.client?.launchDeepLink) throw new Error(`appletv: ${deviceId} has no Companion session for deep links`);
+    await b.client.launchDeepLink(urlOrScheme);
   }
 
   private record(deviceId: DeviceId, capability: CapabilityKind, state: CapabilityState): void {

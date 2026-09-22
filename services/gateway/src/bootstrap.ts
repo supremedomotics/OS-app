@@ -28,6 +28,10 @@ import {
   ShellyProtocolDriver,
   AirPlayProtocolDriver,
   AppleTvProtocolDriver,
+  createMrpAppleTvConnect,
+  createAppleTvCredentialStore,
+  createBindingConfigKv,
+  createInMemoryCredentialKv,
   LutronProtocolDriver,
   TuyaProtocolDriver,
   CasambiProtocolDriver,
@@ -222,8 +226,27 @@ export async function createHubContext(config: GatewayConfig): Promise<AppContex
   // stays honestly in the "error"/"pairing_required" connection state rather than
   // fabricating a connected one.
   if (config.appleTvEnabled) {
+    // § Phase 2C — real HAP pairing + MRP client, credentials persisted per-device
+    // through the SAME `IProtocolBindingStore`/`DriverSecretCrypto` every other driver's
+    // secrets go through (no second store, no second encryption implementation). Without
+    // a database (dev/mock backend) there is no durable binding store to attach
+    // credentials to, so pairing still works within a boot session but does not survive
+    // a restart — the same honest degradation every other persisted feature has in that
+    // mode, not a silently broken Apple TV.
+    const appleTvCredentialKv = deps.protocolBindingStore
+      ? createBindingConfigKv(deps.protocolBindingStore, "media", "appletv")
+      : createInMemoryCredentialKv();
+    const appleTvCredentialStore = createAppleTvCredentialStore(
+      deps.driverSecretCrypto ?? createDriverSecretCrypto(resolveDriverSecretEncryptionKey(config)),
+      appleTvCredentialKv,
+    );
     nativeDrivers.push(
       new AppleTvProtocolDriver({
+        connect: createMrpAppleTvConnect({
+          credentialStore: appleTvCredentialStore,
+          hubIdentifier: "SUPREMEOS-HUB",
+          hubName: "SupremeOS Hub",
+        }),
         ...(config.publicBaseUrl
           ? { artworkUrlFor: (id) => `${config.publicBaseUrl}/v1/devices/${id}/media/artwork` }
           : {}),

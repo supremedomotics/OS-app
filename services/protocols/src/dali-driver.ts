@@ -87,8 +87,12 @@ export class DaliProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     if (this.bus) return;
     const factory = this.opts.createBus ?? defaultDaliBus;
-    this.bus = await factory(this.opts);
-    await this.bus.connect();
+    const bus = await factory(this.opts);
+    // § Same class of bug found live in knx-driver.ts: only assign `this.bus` once
+    // connect() has actually succeeded, so a failed attempt leaves the driver honestly
+    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+    await bus.connect();
+    this.bus = bus;
     const period = this.opts.pollMs ?? 5000;
     this.timer = setInterval(() => void this.poll(), period);
     (this.timer as { unref?: () => void }).unref?.();

@@ -57,6 +57,11 @@ export type StateListener = (event: BackendStateEvent) => void;
 export interface MediaArtwork {
   contentType: string;
   data: Uint8Array;
+  /** § Phase 2C — pixel dimensions, when the source protocol reports them (e.g. MRP's
+   * `ContentItem.artworkDataWidth`/`Height`). Optional/absent for any driver that
+   * doesn't have this — never fabricated, never required. */
+  width?: number;
+  height?: number;
 }
 
 /** One entry in a media device's play queue (protocols that genuinely expose one,

@@ -110,5 +110,7 @@ export function applyCommand(
                 : base?.status ?? "idle";
       return { kind: "vacuum", status, fanSpeed: command.fanSpeed ?? base?.fanSpeed ?? "normal" };
     }
+    case "remote":
+      return { kind: "remote", lastButton: command.action };
   }
 }

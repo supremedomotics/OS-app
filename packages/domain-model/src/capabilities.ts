@@ -25,6 +25,13 @@ export const CapabilityKind = z.enum([
   "fan", // fan: speed preset + direction
   "vacuum", // robot vacuum: status + suction
   "sensor", // read-only measured value
+  /** § Phase 2C — generic directional/menu remote-control input (up/down/left/right/
+   * select/back/menu/home). Deliberately NOT "media" (media's action vocabulary is
+   * transport/volume, a different semantic) and NOT Apple-TV-specific — any device that
+   * simulates a physical directional remote (a TV, a projector, an AVR's on-screen menu,
+   * a streaming box) advertises this the same way. A device commonly advertises BOTH
+   * "media" (play/pause/volume) and "remote" (navigation) together. */
+  "remote",
 ]);
 export type CapabilityKind = z.infer<typeof CapabilityKind>;
 
@@ -257,6 +264,17 @@ export const SensorState = z.object({
   measure: z.string(),
 });
 
+/** § Phase 2C — generic directional/menu remote. A physical remote has essentially no
+ * meaningful persisted state of its own (unlike a lock or a fan); `lastButton` is purely
+ * a diagnostics/UI-feedback aid (e.g. a brief press-flash), never something a client reads
+ * to know "what the device is doing" the way `media.playback` does. Null when nothing has
+ * been pressed yet this session. */
+export const RemoteState = z.object({
+  lastButton: z
+    .enum(["up", "down", "left", "right", "select", "back", "menu", "home"])
+    .nullable(),
+});
+
 /** Discriminated union of all capability states, keyed by capability kind. */
 export const CapabilityState = z.discriminatedUnion("kind", [
   OnOffState.extend({ kind: z.literal("onoff") }),
@@ -269,6 +287,7 @@ export const CapabilityState = z.discriminatedUnion("kind", [
   FanState.extend({ kind: z.literal("fan") }),
   VacuumState.extend({ kind: z.literal("vacuum") }),
   SensorState.extend({ kind: z.literal("sensor") }),
+  RemoteState.extend({ kind: z.literal("remote") }),
 ]);
 export type CapabilityState = z.infer<typeof CapabilityState>;
 
@@ -357,6 +376,14 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
     capability: z.literal("vacuum"),
     action: z.enum(["start", "pause", "stop", "return", "fan"]),
     fanSpeed: z.enum(["quiet", "normal", "turbo"]).optional(),
+  }),
+  /** § Phase 2C — one press of a directional/menu button. `action` IS the button; no
+   * separate payload field, mirroring `onoff`'s "action is the whole command" shape.
+   * Any driver that can simulate a physical remote's D-pad/menu/home implements this the
+   * same way — first consumer is Apple TV (MRP HID), but nothing here names Apple TV. */
+  z.object({
+    capability: z.literal("remote"),
+    action: z.enum(["up", "down", "left", "right", "select", "back", "menu", "home"]),
   }),
 ]);
 export type CapabilityCommand = z.infer<typeof CapabilityCommand>;
