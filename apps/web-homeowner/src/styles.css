@@ -1526,6 +1526,46 @@ input[type="password"]::-ms-reveal, input[type="password"]::-ms-clear { display:
 }
 .avr-icon-btn.xl:hover { filter: brightness(1.04); }
 
+/* § Media Player Remote (Apple TV 3rd-gen-style) — a circular touch-surface D-pad: four
+   edge buttons in a cross layout around a raised center Select button, inside a bordered
+   ring that reads as one glass surface. Sized to the remote body card, not the page, so it
+   stays a fixed physical-feeling size at every density rather than stretching on wide
+   displays (§ "eliminate empty space" applies to the CARD, not to a control meant to be
+   thumb-sized). */
+.media-remote-body {
+  display: flex; flex-direction: column; align-items: center; gap: 20px;
+  max-width: 260px; margin: 0 auto; padding: 28px 20px;
+}
+.media-remote-pad {
+  position: relative; width: 220px; height: 220px; border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--aureon-color-base-surface-raised) 100%, white 4%) 0%, var(--aureon-color-base-surface) 70%);
+  border: 1px solid var(--aureon-color-base-hairline);
+  box-shadow: 0 1px 0 color-mix(in srgb, white 6%, transparent) inset, 0 20px 40px -22px rgba(0,0,0,0.65);
+  display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr;
+}
+.media-remote-pad button {
+  background: none; border: 0; color: var(--aureon-color-text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.media-remote-pad button:hover { color: var(--aureon-color-text-primary); }
+.media-remote-pad button:active { transform: scale(0.92); }
+.media-remote-pad button:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+.media-remote-pad button:focus-visible { outline: 2px solid var(--aureon-color-gold-400); outline-offset: -2px; }
+.media-remote-up { grid-column: 2; grid-row: 1; border-top-left-radius: 50% 100%; border-top-right-radius: 50% 100%; }
+.media-remote-left { grid-column: 1; grid-row: 2; border-top-left-radius: 100% 50%; border-bottom-left-radius: 100% 50%; }
+.media-remote-right { grid-column: 3; grid-row: 2; border-top-right-radius: 100% 50%; border-bottom-right-radius: 100% 50%; }
+.media-remote-down { grid-column: 2; grid-row: 3; border-bottom-left-radius: 50% 100%; border-bottom-right-radius: 50% 100%; }
+.media-remote-select {
+  grid-column: 2; grid-row: 2; margin: 14px; border-radius: 50%;
+  background: linear-gradient(180deg, var(--aureon-color-gold-200, var(--aureon-color-gold-400)) 0%, var(--aureon-color-gold-500) 100%);
+  color: #15161b; box-shadow: 0 1px 0 color-mix(in srgb, white 25%, transparent) inset, 0 10px 22px -10px color-mix(in srgb, var(--aureon-color-gold-400) 60%, transparent);
+}
+.media-remote-select:hover { filter: brightness(1.05); color: #15161b; }
+.media-remote-select.flash { animation: media-remote-flash 0.28s ease; }
+@keyframes media-remote-flash { 0% { filter: brightness(1.35); } 100% { filter: brightness(1); } }
+.media-remote-row { display: flex; align-items: center; justify-content: center; gap: 36px; width: 100%; }
+
 .avr-menu-wrap { position: relative; }
 .avr-menu {
   position: absolute; right: 0; top: calc(100% + 8px); background: var(--aureon-color-base-surface-raised);
