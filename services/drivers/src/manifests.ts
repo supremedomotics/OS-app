@@ -236,7 +236,7 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     category: "protocol",
     channel: "official",
     publisher: PUBLISHER,
-    version: "1.0.0",
+    version: "1.1.0",
     capabilities: ["onoff", "brightness", "color", "position", "sensor"],
     protocols: ["matter"],
     compat: { hubMinVersion: "0.1.0", requiresSku: null },
@@ -244,6 +244,19 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     shipsDisabled: true,
     operations: [...PROTO_OPS],
     configSchema: [{ key: "fabricLabel", label: "Fabric label", type: "text", default: "Supreme", secret: false }],
+    releaseNotes:
+      "Real @matter/main-backed controller foundation: persistent fabric storage, lifecycle, and " +
+      "commissioning of third-party Matter devices onto the hub's own fabric. Generic cluster " +
+      "command/state (control of a commissioned device) ships in a following release.",
+    changelog: [
+      {
+        version: "1.1.0",
+        date: "2026-09-21",
+        notes:
+          "Real Matter Controller foundation (commissioning, persistent per-instance fabric storage, " +
+          "node discovery); command/state control not yet implemented.",
+      },
+    ],
   }),
   defineManifest({
     key: "supreme-lutron",

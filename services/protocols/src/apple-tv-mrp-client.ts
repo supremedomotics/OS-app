@@ -9,7 +9,13 @@
  * guarantees one instance of this per binding, never shared.
  */
 import type { DeviceId } from "@supreme/domain-model";
-import { generateControllerIdentity, hapPairSetup, hapPairVerify, type HapExchange } from "./apple-tv-hap-pairing.js";
+import {
+  generateControllerIdentity,
+  hapPairSetup,
+  hapPairSetupBegin,
+  hapPairVerify,
+  type HapExchange,
+} from "./apple-tv-hap-pairing.js";
 import {
   buildCryptoPairingMessage,
   buildDeviceInfoMessage,
@@ -142,6 +148,66 @@ export async function pairAppleTvMrp(
     await opts.credentialStore.save(deviceId, result);
   } finally {
     transport.disconnect();
+  }
+}
+
+/** A pairing attempt whose transport connection is held open between "M1 sent, PIN now
+ * showing on the TV" and "user typed the PIN" — see {@link beginAppleTvMrpPairing}. */
+export interface AppleTvMrpPairingSession {
+  /** Completes M3-M6 with the submitted PIN, persists the resulting credentials via this
+   * session's `AppleTvCredentialStore`, and closes the transport either way (success or
+   * failure) — a session is single-use; a wrong PIN means starting a new one. */
+  submitPin(pin: string): Promise<void>;
+  /** Releases the open transport without pairing — for an abandoned attempt (the user
+   * navigates away, or a server-side timeout fires). Idempotent. */
+  cancel(): void;
+}
+
+/**
+ * Opens a real MRP transport and sends HAP pair-setup's M1 — which is what makes a real
+ * Apple TV display its on-screen PIN — WITHOUT yet knowing the PIN, and returns a
+ * session that can complete the handshake once the user has read and submitted it. This
+ * is the split `pairAppleTvMrp` doesn't need (its PIN is supplied upfront, e.g. by a
+ * test) but a real installer-driven HTTP flow does: the gateway route that starts
+ * pairing can't block an HTTP response on a person reading their TV screen, so it holds
+ * this session server-side (keyed by deviceId, with its own timeout) between the
+ * "start" and "submit PIN" requests.
+ */
+export async function beginAppleTvMrpPairing(
+  address: string,
+  deviceId: DeviceId,
+  opts: AppleTvMrpClientOptions,
+): Promise<AppleTvMrpPairingSession> {
+  const [host, portStr] = address.split(":");
+  const port = Number(portStr);
+  const transport = (opts.transportFactory ?? createMrpTcpTransport)(host!, port);
+  await transport.connect();
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    transport.disconnect();
+  };
+  try {
+    transport.send(buildDeviceInfoMessage(hubDeviceInfo(opts.hubIdentifier, opts.hubName)));
+    const identity = generateControllerIdentity(Buffer.from(`supremeos-${deviceId}`));
+    const exchange = makeMrpHapExchange(transport, true);
+    const pairSetup = await hapPairSetupBegin(identity, exchange);
+    return {
+      async submitPin(pin: string): Promise<void> {
+        if (closed) throw new Error("appletv pairing session already closed");
+        try {
+          const result = await pairSetup.submitPin(pin);
+          await opts.credentialStore.save(deviceId, result);
+        } finally {
+          close();
+        }
+      },
+      cancel: close,
+    };
+  } catch (err) {
+    close();
+    throw err;
   }
 }
 

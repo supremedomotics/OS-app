@@ -48,10 +48,9 @@ this work.
   should update both, or explicitly note in the PR that the native-linux side is deferred.
   Nothing about this ADR requires them to update in lockstep same-PR when there's a reason not to,
   but silent drift is a real risk this decision accepts.
-- The native deployment currently omits the `ai`/`appletv`/go2rtc services (see the architecture
-  doc's "Known scope gaps") — this is not a regression relative to Docker (those already degrade
-  to an honest no-op when unset there too), but it does mean native-linux is not yet a byte-for-
-  byte feature match. Closing that gap is future work, not blocking for this ADR's acceptance.
+- **Update**: the `ai`/`appletv`/go2rtc gap described above has since been closed — see the
+  architecture doc's "Known scope gaps" section for what now runs natively
+  (`supreme-ai.service`, `supreme-appletv.service`, `supreme-streamer.service`).
 - `assertSecureConfig()`'s `SUPREME_CORS_ORIGINS` production-hardening check (`services/gateway/
   src/config.ts`) was found, during this work, to be a latent boot-failure trap in Docker's own
   `.env.example` default too (empty value + `NODE_ENV=production` = refuse to boot). This ADR does

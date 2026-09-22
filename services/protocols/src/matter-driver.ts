@@ -38,6 +38,14 @@ export interface MatterNodeInfo {
   clusters: string[];
   vendor?: string;
   product?: string;
+  /** § Matter Controller Extension, Phase 2 — the full per-endpoint device-interview result
+   * (see `./matter-controller/device-model.ts`), when the controller performed one. Additive
+   * and optional so existing callers/tests built against the flat `clusters`/`endpoint` shape
+   * are unaffected; `discover()`/`commission()` below thread it into `DiscoveredDevice.raw`
+   * for anything that wants the real endpoint hierarchy rather than the flattened summary. */
+  endpoints?: import("./matter-controller/device-model.js").MatterEndpointModel[];
+  interviewState?: import("./matter-controller/device-model.js").MatterInterviewState;
+  lastInterviewError?: string | null;
 }
 
 /**
@@ -203,6 +211,8 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
           vendor: n.vendor ?? null,
           product: n.product ?? null,
           ...(capabilities.length === 0 ? { unmappedClusters: n.clusters } : {}),
+          ...(n.endpoints ? { endpoints: n.endpoints } : {}),
+          ...(n.interviewState ? { interviewState: n.interviewState, lastInterviewError: n.lastInterviewError ?? null } : {}),
         },
       };
     });
@@ -241,7 +251,13 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
       backendId: `${node.nodeId}/${node.endpoint}`,
       suggestedName: node.product ?? `Matter ${node.nodeId}/${node.endpoint}`,
       capabilities: caps,
-      raw: { vendor: node.vendor ?? null, product: node.product ?? null, nodeId: node.nodeId },
+      raw: {
+        vendor: node.vendor ?? null,
+        product: node.product ?? null,
+        nodeId: node.nodeId,
+        ...(node.endpoints ? { endpoints: node.endpoints } : {}),
+        ...(node.interviewState ? { interviewState: node.interviewState, lastInterviewError: node.lastInterviewError ?? null } : {}),
+      },
     };
   }
 
@@ -271,15 +287,13 @@ function parseAddress(address: string): MatterAddress {
 }
 
 /**
- * Default controller backed by the optional `@matter/main` stack. Real Matter
- * commissioning + fabric storage is a substantial subsystem; a production hub
- * initializes it here. Until that is provisioned this surfaces a clear, actionable
- * error rather than pretending to be connected.
+ * Default controller backed by the real `@matter/main` stack (`./matter-controller/
+ * real-controller.ts`), independently versioned from this driver facade per the Matter
+ * Controller extension boundary (§ Extension Center integration — the `@matter/main`
+ * version this pulls in can move without this file changing). Dynamically imported so a
+ * hub that never enables Matter never pays the `@matter/main` startup cost.
  */
-async function defaultMatterController(_opts: { storagePath?: string }): Promise<MatterController> {
-  throw new Error(
-    "matter: no controller configured — provide createController (a fabric-initialized " +
-      "@matter/main controller that performs PASE/CASE commissioning) or run the Matter " +
-      "controller subsystem on the hub",
-  );
+async function defaultMatterController(opts: { storagePath?: string }): Promise<MatterController> {
+  const { createRealMatterController } = await import("./matter-controller/real-controller.js");
+  return createRealMatterController(opts);
 }

@@ -23,6 +23,8 @@ import {
   type BindProtocolRequest,
   type ProtocolBindingList,
   type ProtocolBindingView,
+  type StartAppleTvPairingResponse,
+  type SubmitAppleTvPinResponse,
   type CameraList,
   type CameraResponse,
   type CameraStreamResponse,
@@ -651,6 +653,18 @@ export class SupremeClient {
     return this.request("POST", "/v1/commissioning/commission", input) as Promise<{
       device: { id: string; name: string };
     }>;
+  }
+  /** § Apple TV HAP pairing (gap fix) — begins pairing for an already-commissioned Apple
+   * TV: opens a real MRP connection and sends M1, which is what makes the real device
+   * show its 4-digit on-screen PIN. Call {@link submitAppleTvPairingPin} with what the
+   * installer reads off the screen before `expiresInMs` elapses. */
+  startAppleTvPairing(deviceId: DeviceId): Promise<StartAppleTvPairingResponse> {
+    return this.request("POST", `/v1/devices/${deviceId}/apple-tv/pairing/start`) as Promise<StartAppleTvPairingResponse>;
+  }
+  /** Completes M3-M6 against the connection `startAppleTvPairing` opened. `"wrong_pin"`/
+   * `"expired"` are normal, retryable outcomes — call `startAppleTvPairing` again to retry. */
+  submitAppleTvPairingPin(deviceId: DeviceId, pin: string): Promise<SubmitAppleTvPinResponse> {
+    return this.request("POST", `/v1/devices/${deviceId}/apple-tv/pairing/submit`, { pin }) as Promise<SubmitAppleTvPinResponse>;
   }
   /** Bind a commissioned device's capability to a real bus address (KNX/Modbus/MQTT). */
   bindProtocol(input: BindProtocolRequest): Promise<{ binding: ProtocolBindingView }> {

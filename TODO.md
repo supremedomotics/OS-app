@@ -7,6 +7,46 @@
 
 ## Critical
 
+### Matter Controller Extension — Phase 4 (Subscriptions + Capability Adapters)
+- **Description:** Phase 3 (generic cluster engine) is done — `services/protocols/src/
+  matter-controller/cluster-engine.ts` performs real numeric-id (or real-runtime-name)
+  attribute read/write and command invocation against the live `@matter/main` `ClientNode`,
+  via `target-resolver.ts`'s single generic resolution layer and `errors.ts`'s consistent
+  `MatterEngineError` model. `RealMatterController.invoke()` is now real;
+  `MatterProtocolDriver.command()` can drive a controller-commissioned device end to end.
+  `subscribe()`/`getState()`'s live-feedback path is still a stub — no attribute
+  subscription/reporting exists yet, so `getState()` never gets populated for a
+  controller-commissioned device.
+- **Next steps:** real Matter attribute subscriptions (live feedback → `getState()`
+  population), reconciliation/recovery on subscription loss, then capability adapters mapping
+  the now-real cluster inventory onto SupremeOS capabilities (Light/Lock/Climate/Cover/
+  Sensor), and Extension Center version/rollback wiring (`services/drivers/src/manifests.ts`'s
+  `supreme-matter` entry already tracks version 1.1.0 — no bump needed for Phase 3, which
+  changed no persisted schema or external contract).
+- **Known environment/vendor-library limitation — root-caused further in Phase 3.3 (still
+  BLOCKED, confirmed NOT a SupremeOS bug):** the real commission→read/write/invoke round trip
+  still doesn't pass. Phase 3.3 traced the actual `@matter/node`/`@matter/protocol` 0.17.9
+  source: `Peers.forDescriptor()` + `ClientNode.commission()` is structurally IDENTICAL to
+  what the normal mDNS discovery path does internally (`ClientNodeFactory.create()` +
+  `agent.commissioning.commission()`) — confirmed the correct, intended API, not a misuse.
+  A vanilla, zero-SupremeOS reproduction (bare `@matter/main` `ServerNode`s only) hits the
+  IDENTICAL `PaseServer` → `StatusReport Failure InvalidParam` rejection on the very first
+  `PbkdfParamRequest` — proving this is a real `@matter/main`/`@matter/protocol` 0.17.9 or
+  host-environment issue, not something SupremeOS's `RealMatterController`/
+  `commissionAtAddress()` code caused. One hypothesis (lazy `ControllerBehavior` load timing
+  competing with PASE) was tested and disproven; no production code changed as a result.
+  **Concrete next step:** instrument `@matter/protocol`'s `PaseServer.handlePairingRequest()`/
+  `readPbkdfParamRequest()` directly (temporary local edit to the installed package, or a
+  debugger breakpoint) to find the exact validation condition — the responder logs nothing
+  between receiving the request and sending the rejection, so the exact failing check is still
+  unidentified. Normal mDNS-based production commissioning is unaffected — this entire
+  finding is scoped to the test-harness's real-address commissioning path. Engine code itself
+  remains logically verified (clean typecheck, real `node_not_commissioned` error-path
+  confirmed via `real-controller.test.ts`).
+- **Must preserve:** Matter Bridge (`services/protocols/src/matter-bridge/`, outbound) stays
+  untouched and independent — no shared fabric state, no shared storage root, no bridge/
+  controller event loop. Confirmed unmodified this session.
+
 ### iOS Runtime / VoIP Wake Foundation (Phase 13.4)
 - **Description:** real PushKit (`.voIP` type only) + CallKit foundation (`VoipCallManager.swift`,
   new). Wired Phase 12.5's already-built but previously-unused `MobileRuntime` call-state machine
@@ -1392,6 +1432,116 @@
 
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
+
+- **Matter Controller Extension — Phase 3.3 PASE root-cause analysis** (BLOCKED overall, but
+  conclusively exonerates SupremeOS's implementation). Traced actual `@matter/node`/
+  `@matter/protocol` 0.17.9 source (`CommissioningDiscovery.ts`, `Discovery.ts`, `Peers.ts`,
+  `ClientNodeFactory`) and proved `Peers.forDescriptor()` + `ClientNode.commission()` is
+  structurally identical to the normal mDNS discovery path's own internal commissioning
+  call — the correct, intended manual-commissioning API for 0.17.9, not a misuse. A vanilla,
+  zero-SupremeOS reproduction (bare `@matter/main` `ServerNode`s, no `RealMatterController`)
+  hits the identical `PaseServer` `InvalidParam` rejection, proving the issue is a real
+  `@matter/main`/environment issue, not a SupremeOS bug. Tested and disproved one hypothesis
+  (`ControllerBehavior` load timing vs. PASE); no production code changed. Zero regressions:
+  `real-controller.test.ts` 3/3, `matter-driver`/`matter-fabric`/`matter-pairing` 20/20, Matter
+  Bridge 166/167 (pre-existing artifact only, zero Bridge files touched), `services/drivers`
+  56/56, typecheck clean. Debug artifacts `repro-vanilla.ts`/`repro-vanilla2.ts` removed after
+  use.
+
+- **Matter Controller Extension — Phase 3.2 separate-process validation** (BLOCKED overall,
+  but a real, reusable test harness delivered). New
+  `test-support/{fixture-process,fixture-process-handle}.ts` — a genuine separate-OS-process
+  Matter fixture (`node:child_process.fork`, real IPC for orchestration only, real
+  `@matter/main` UDP transport for Matter traffic) and `cluster-engine.separate-process.e2e
+  .test.ts`. Proved real UDP delivers correctly across the process boundary (fixture logs show
+  it genuinely receiving the controller's PASE request), narrowing Phase 3.1's "same-process
+  multicast" theory (now shown too narrow — mDNS fails cross-process too) down to a specific,
+  still-unresolved protocol-level PASE rejection (`PaseServer` responds `InvalidParam`
+  immediately) present in both topologies. Debug artifacts `repro-fork.ts`/`repro-mdns-sp.ts`
+  created and removed after their one-shot use. Zero regressions: `real-controller.test.ts`
+  3/3, Matter Bridge 166/167 (pre-existing artifact only, zero Bridge files touched),
+  `services/drivers` 56/56, typecheck clean.
+
+- **Matter Controller Extension — Phase 3.1 validation/recovery investigation** (BLOCKED
+  overall, but real progress: found and fixed two real bugs). Added
+  `RealMatterController.commissionAtAddress()` — a real, additive manual-commissioning entry
+  point (`Peers.forDescriptor()` + `ClientNode.commission()`, bypassing only mDNS discovery,
+  normal `commission()` unchanged) and fixed a real `ControllerBehavior`-unsupported bug on
+  the controller's root node (`Behaviors.require()` before `load()`). Root-caused the original
+  "No commissionable device discovered" failure precisely: the fixture's own mDNS responder
+  never initializes multicast on this host when a second `@matter/main` node shares the
+  process. Discovered a DEEPER issue past that: even direct UDP unicast PASE between two
+  same-process nodes fails with `PairRetransmissionLimitReachedError` — a same-process
+  UDP-delivery limitation on this host, not mDNS-specific. Full round trip still not passing;
+  concrete next step is a separate-OS-process test fixture or native-linux/CI. Zero
+  regressions: 186/187 (`matter-controller`/`matter-driver`/`matter-fabric`/`matter-pairing`),
+  Bridge 166/167 (both 1-failure counts are the pre-existing Windows `0600` artifact),
+  `services/drivers` 56/56, typecheck clean, Matter Bridge unmodified.
+
+- **Matter Controller Extension — Phase 3 generic cluster engine** (real numeric-id
+  read/write/invoke against a live commissioned `@matter/main` node, never a per-device-type
+  branch). New `services/protocols/src/matter-controller/{errors,target-resolver,
+  cluster-engine}.ts` — a single generic target-resolution layer shared by read/write/invoke,
+  a consistent `MatterEngineError` model (node_not_commissioned/node_not_found/
+  endpoint_not_found/cluster_not_found/attribute_not_found/command_not_found/unavailable/
+  runtime_error), and real operations via `@matter/main`'s `Agent`/behavior-state API (no
+  hand-built low-level protocol requests). `RealMatterController.invoke()` now delegates to
+  the engine instead of throwing "not yet implemented"; new `readAttribute()`/
+  `writeAttribute()`/`invokeCommand()` methods added. Real regression: 186/187 passing (1
+  pre-existing Windows file-mode artifact); typecheck clean; Matter Bridge untouched. The new
+  `cluster-engine.e2e.test.ts` real round-trip suite exists but could not be verified passing
+  this session — cross-node mDNS commissioning is currently failing 100% of attempts on this
+  dev machine (same documented adapter-noise limitation as Phase 2, confirmed worse via a live
+  baseline re-check of Phase 2's own previously-passing e2e test).
+
+- **Matter Controller Extension — Phase 2 device interview** (real Descriptor/DeviceTypeList/
+  ServerList/ClientList/attribute/command discovery against the real `@matter/main` stack, no
+  mocks). New `services/protocols/src/matter-controller/{device-model,device-type-resolver,
+  discovery,persistence}.ts` and a real multi-endpoint commissionable test fixture
+  (`test-support/commissionable-fixture.ts`). `RealMatterController.commission()` now
+  interviews and persists real topology; `connect()` re-interviews every peer on reconnect
+  without duplicating devices; commissioning and interview are tracked as separate states.
+  Found and fixed real `@matter/main` bugs along the way: missing mandatory `colorMode`/
+  `coupleColorTempToLevelMinMireds` on a Color Temperature Light endpoint, same-process
+  same-node-id reuse crashing `SessionManager`, and standard-port collision with another real
+  process on a shared dev box (fixed with optional `nodeId`/`port` overrides + bounded
+  bind-retry, production behavior unchanged). 186/187 full regression passing (1 pre-existing,
+  unrelated Windows file-mode artifact); `services/drivers`/`services/protocols` typecheck
+  clean; Matter Bridge untouched. One real cross-node commission→interview cycle verified
+  end-to-end with every assertion passing; the e2e suite is intermittently flaky specifically
+  on this dev machine's unusually adapter-heavy Windows network stack (documented, not a code
+  defect — recommend re-running on native-linux/CI).
+
+- **Matter Controller Extension — Phase 1 foundation** (inbound: external Matter devices →
+  SupremeOS, the opposite direction from the existing outbound Matter Bridge). Real
+  `@matter/main`-backed `RealMatterController` (`services/protocols/src/matter-controller/
+  real-controller.ts`): own `ServerNode`, fresh per-instance `Environment`/`storagePath`
+  (never shared with the Bridge's), lifecycle, persistent fabric storage verified across a
+  real restart, and real PASE/CASE commissioning. Wired into `matter-driver.ts`'s
+  previously-throwing `defaultMatterController()`. `invoke()`/`subscribe()` honestly throw
+  "not yet implemented" rather than faking device control. `supreme-matter` driver manifest
+  bumped 1.0.0 → 1.1.0 with changelog. 3 new tests against the real stack; zero regressions
+  (183/184 `matter*` tests pass; the 1 failure is a pre-existing Windows file-mode artifact
+  unrelated to this change).
+- **Apple TV HAP pairing PIN UI (gap fix)** — `apps/web-homeowner` had zero UI for entering the
+  4-digit HAP pairing PIN an Apple TV shows on first pairing, even though the real driver/crypto
+  already existed (`AppleTvPairingRequiredError`, `hapPairSetup`); a paired Apple TV was stuck
+  disconnected forever with no way to ever supply the PIN. Split `hapPairSetup` into
+  `hapPairSetupBegin`/`submitPin` (`services/protocols/src/apple-tv-hap-pairing.ts`) and added
+  `beginAppleTvMrpPairing` (`apple-tv-mrp-client.ts`) so M1 (which makes the real TV show its
+  PIN) can be sent before the PIN is known, holding the open MRP connection server-side (a new
+  TTL'd session map in `InstallerServices`, `installer-context.ts`) until the installer submits
+  one. New `SIL.rebindNative()` (`services/integration-layer/src/sil.ts`) forces a fresh connect
+  after pairing succeeds. New routes `POST /v1/devices/:id/apple-tv/pairing/{start,submit}`
+  (`routes/devices.ts`), contracts in `supreme-contracts/src/installer.ts`, SDK methods in
+  `supreme-sdk-ts/src/client.ts`. New shared `AppleTvPinModal`
+  (`apps/web-homeowner/src/features/media/apple-tv-pin-modal.tsx`) wired into both
+  `discover.tsx` (right after commissioning an Apple TV) and `device-detail-sections.tsx`'s
+  Diagnostics section (re-pairing an already-commissioned device whose credentials went stale).
+  2 new tests in `apple-tv-mrp-client.test.ts` (21/21 passing across the three apple-tv-*
+  suites); `pnpm build` clean across all 57 packages. No real-device manual test yet (no
+  physical Apple TV available) — see `SESSION_HANDOFF.md` for the full breakdown and recommended
+  next step (real-device smoke test).
 
 - **Casambi Cloud "Network id" field caused a live 404 when set to the network's
   display name instead of its real Casambi-internal ID** — found via a real user

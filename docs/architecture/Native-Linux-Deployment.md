@@ -738,6 +738,9 @@ instead of a container bridge network):
 | Caddy (HTTP→HTTPS redirect) | 80 | `0.0.0.0` |
 | Gateway | 8080 | `127.0.0.1` (fronted by Caddy) |
 | Commissioning | 9100 | `127.0.0.1` |
+| AI assistant | 9200 | `127.0.0.1` |
+| Apple TV bridge | 9300 | `127.0.0.1` |
+| Streamer (go2rtc) | 1984 | `127.0.0.1` |
 | PostgreSQL | 5432 | `127.0.0.1` |
 | Redis | 6379 | `127.0.0.1` |
 | NATS (+ JetStream) | 4222 | `127.0.0.1` |
@@ -758,13 +761,20 @@ hardware in this phase (see "Known scope gaps").
 
 ## Supply-chain integrity
 
-NATS (`2.10.24`) and Caddy (`2.8.4`) are the two binaries not available as an Ubuntu 24.04 apt
-package at the version this stack targets. `install.sh` downloads each directly from its own
-GitHub release and verifies it against a checksum pinned in `install.sh` itself
-(`NATS_DEB_SHA256`, `CADDY_DEB_SHA512`) — both checksums were obtained by downloading the real
-release assets and diffing them against that release's own published `SHA256SUMS`/`checksums.txt`
-manifest during this work, not invented. Nothing in the install path pipes an unauthenticated
-`curl` straight into a shell.
+NATS (`2.10.24`), Caddy (`2.8.4`), and go2rtc (`1.9.14`) are the three binaries not available as an
+Ubuntu 24.04 apt package at the version this stack targets. `install.sh` downloads each directly
+from its own GitHub release and verifies it against a checksum pinned in `install.sh` itself
+(`NATS_DEB_SHA256`, `CADDY_DEB_SHA512`, `GO2RTC_LINUX_AMD64_SHA256`). Nothing in the install path
+pipes an unauthenticated `curl` straight into a shell.
+
+**Disclosed difference in verification strength**: the NATS and Caddy checksums were obtained by
+downloading the real release assets and diffing them against that release's own published
+`SHA256SUMS`/`checksums.txt` manifest — an independent, vendor-published cross-check. go2rtc's
+GitHub releases do not publish any such manifest (confirmed by inspecting the v1.9.14 release's
+own asset list during this work); `GO2RTC_LINUX_AMD64_SHA256` is a trust-on-first-use pin computed
+directly from the real binary downloaded from that release during this work — a real, reproducible
+hash, but a weaker supply-chain guarantee than NATS/Caddy's cross-checked one, disclosed here
+rather than presented as equivalent.
 
 ## Known deviations from Docker (disclosed by design, not oversights)
 
@@ -800,14 +810,17 @@ These mirror gaps that already exist in the Docker deployment when their env var
 so this is not a regression relative to Docker — it's the same honest-empty pattern applied to a
 new deployment layer:
 
-- **`ai` (local LLM planner) and `appletv` (pyatv bridge) services** are not yet part of this
-  native deployment. `SUPREME_AI_URL`/`SUPREME_APPLETV_URL` are left empty in `gateway.env.
-  template`, which is exactly how the Gateway already behaves when those are unset under Docker —
-  it falls back to its built-in planner / disables the Apple TV bridge, honestly, rather than
-  pointing at a nonexistent localhost port.
-- **go2rtc (camera streaming)** is likewise not wired up. `SUPREME_STREAM_API_URL` is left empty;
-  the Caddyfile's `/stream/*` route is left in place pointed at `127.0.0.1:1984` so it 502s
-  cleanly if ever hit, matching Docker's own behavior when the `streamer` container isn't running.
+- **`ai` (local LLM planner), `appletv` (pyatv bridge), and `go2rtc` (camera streaming) —
+  CLOSED.** These three now run natively: `supreme-ai.service`/`supreme-appletv.service`
+  (Python venvs under `___SUPREME_APP_DIR___/venvs/{ai,appletv}`, exactly the same
+  fastapi/uvicorn/pydantic (+`pyatv` for appletv) dependencies their Dockerfiles install) and
+  `supreme-streamer.service` (the upstream `go2rtc` binary, checksum-pinned and installed by
+  `install_streamer()` — see "Supply-chain integrity" below for its disclosed caveat).
+  `gateway.env.template`'s `SUPREME_AI_URL`/`SUPREME_APPLETV_URL`/`SUPREME_STREAM_API_URL` now
+  point at these services' loopback ports (`9200`/`9300`/`1984`) instead of being left empty. The
+  on-box LLM runtime itself (Docker's opt-in `WITH_LLM=1` build) is still not installed by this
+  layer — same deterministic-planner-only behavior as Docker's own default build — and the
+  Apple TV *driver* remains gated by the existing `SUPREME_APPLETV_ENABLED` flag, unchanged.
 - **Home Assistant Core venv bring-up** was not executed end-to-end against real hardware in this
   phase — only reviewed and scripted (`install_homeassistant_venv`,
   `supreme-homeassistant.service`). Treat first real HA installs via this path as needing a

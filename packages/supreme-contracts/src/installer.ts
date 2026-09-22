@@ -271,6 +271,33 @@ export const CommissionRequest = z.object({
 });
 export type CommissionRequest = z.infer<typeof CommissionRequest>;
 
+// ── Apple TV HAP pairing (§ AI Operating Instructions gap fix) ───────────────
+
+/**
+ * Start (or resume, after a stale attempt timed out) HAP pairing for an already-
+ * commissioned Apple TV device. No body — the device's own stored `address` (its
+ * ProtocolBinding) is what the driver connects to; this just triggers M1, which is
+ * what makes the real Apple TV display its on-screen PIN.
+ */
+export const StartAppleTvPairingResponse = z.object({
+  status: z.literal("awaiting_pin"),
+  deviceId: z.string(),
+  /** How long the server will hold the open connection awaiting a PIN before it gives
+   * up and the installer must call start again. */
+  expiresInMs: z.number().int(),
+});
+export type StartAppleTvPairingResponse = z.infer<typeof StartAppleTvPairingResponse>;
+
+export const SubmitAppleTvPinRequest = z.object({
+  pin: z.string().regex(/^\d{4}$/, "PIN must be the 4 digits shown on the Apple TV"),
+});
+export type SubmitAppleTvPinRequest = z.infer<typeof SubmitAppleTvPinRequest>;
+
+export const SubmitAppleTvPinResponse = z.object({
+  status: z.enum(["paired", "wrong_pin", "expired"]),
+});
+export type SubmitAppleTvPinResponse = z.infer<typeof SubmitAppleTvPinResponse>;
+
 /** Bind a commissioned device's capability to a real bus address (KNX/Modbus/MQTT). */
 export const ProtocolBindingView = z.object({
   deviceId: z.string(),
