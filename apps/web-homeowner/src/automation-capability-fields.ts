@@ -63,6 +63,7 @@ export const CAPABILITY_LABELS: Record<CapabilityKind, string> = {
   fan: "Fan",
   vacuum: "Vacuum",
   sensor: "Sensor",
+  remote: "Remote",
 };
 
 /** Capabilities that can never be the target of a `device_command` action (read-only). */
@@ -115,6 +116,9 @@ export const STATE_FIELDS: Record<CapabilityKind, FieldDef[]> = {
   ],
   sensor: [
     { key: "value", label: "Value", type: "number" },
+  ],
+  remote: [
+    { key: "lastButton", label: "Last button", type: "enum", enumValues: ["up", "down", "left", "right", "select", "back", "menu", "home"] },
   ],
 };
 
@@ -231,6 +235,12 @@ export const COMMAND_DEFINITIONS: Record<CapabilityKind, CommandDefinition[]> = 
     },
   ],
   sensor: [],
+  remote: (["up", "down", "left", "right", "select", "back", "menu", "home"] as const).map((action) => ({
+    capability: "remote" as const,
+    action,
+    label: `Press ${action}`,
+    params: [],
+  })),
 };
 
 export function commandableCapabilities(kinds: readonly CapabilityKind[]): CapabilityKind[] {
