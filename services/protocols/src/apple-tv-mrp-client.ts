@@ -33,6 +33,8 @@ import { createMrpTcpTransport, type AppleTvMrpTransport } from "./apple-tv-mrp-
 import type { AppleTvCredentialStore } from "./apple-tv-credential-store.js";
 import type { MediaArtwork } from "@supreme/integration-layer";
 import { AppleTvPairingRequiredError, type AppleTvClient, type AppleTvConnect, type AppleTvNowPlaying } from "./apple-tv-driver.js";
+import type { TvForegroundApp } from "./tv-sdk/tv-types.js";
+import { connectAppleTvCompanion, type AppleTvCompanionAppClient } from "./apple-tv-companion-client.js";
 
 /** MRP-specific post-pair-verify session key derivation strings — verified against
  * `pyatv/protocols/mrp/protocol.py`'s `SRP_SALT`/`SRP_OUTPUT_INFO`/`SRP_INPUT_INFO`. */
@@ -92,6 +94,18 @@ export interface AppleTvMrpClientOptions {
   hubName: string;
   /** Injectable transport factory (tests use a deterministic fake MRP peer). */
   transportFactory?: (host: string, port: number) => AppleTvMrpTransport;
+  /** § Phase 3 — OPTIONAL Companion session, additive to the MRP connection. When
+   * present, the returned client also gets `getApplications`/`launchApplication`/
+   * `launchDeepLink` (real, Companion-backed — see `apple-tv-companion-client.ts`).
+   * Absent, or `addressFor` returning `null`, or Companion pairing simply not existing
+   * yet: those three methods are left OFF the client (never present-but-throwing) —
+   * MRP's own connection is never blocked or torn down by a Companion failure. Companion
+   * discovery (`_companion-link._tcp`) is not implemented this phase — `addressFor`
+   * must be supplied out-of-band (e.g. from commissioning). */
+  companion?: {
+    credentialStore: AppleTvCredentialStore;
+    addressFor: (deviceId: DeviceId) => string | null;
+  };
 }
 
 /**
@@ -159,7 +173,7 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
     transport.enableEncryption(session);
     transport.send(buildClientUpdatesConfigMessage({}));
 
-    let latestState: MrpSetState = { playbackState: null, nowPlaying: null, displayName: null };
+    let latestState: MrpSetState = { playbackState: null, nowPlaying: null, displayName: null, currentApplication: null };
     const pendingArtworkWaiters = new Set<(payload: Buffer) => void>();
     transport.onMessage((payload) => {
       if (messageType(payload) === MrpType.SET_STATE_MESSAGE) {
@@ -259,10 +273,45 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
           ...(artwork.height !== null ? { height: artwork.height } : {}),
         };
       },
+      async getCurrentApplication(): Promise<TvForegroundApp | null> {
+        const app = latestState.currentApplication;
+        if (!app || (app.bundleIdentifier === null && app.displayName === null)) return null;
+        return {
+          packageName: app.bundleIdentifier,
+          applicationName: app.displayName,
+          source: "mrp-playerpath",
+          // "exact": this is real, event-driven feedback straight from the Apple TV's
+          // own playerPath.client, never inferred from a prior command.
+          confidence: "exact",
+          timestamp: new Date().toISOString(),
+        };
+      },
       async close() {
         transport.disconnect();
+        await companionClient?.close();
       },
     };
+
+    // § Phase 3 — best-effort, additive Companion session for app discovery/launch.
+    // A Companion failure (not configured, not paired, connect error) never blocks or
+    // tears down the already-working MRP connection — it just means the three
+    // Companion-only methods stay off this client, exactly like "no artwork" is honest
+    // absence rather than a crash.
+    let companionClient: AppleTvCompanionAppClient | null = null;
+    const companionAddress = opts.companion?.addressFor(deviceId) ?? null;
+    if (opts.companion && companionAddress) {
+      try {
+        companionClient = await connectAppleTvCompanion(companionAddress, deviceId, {
+          credentialStore: opts.companion.credentialStore,
+        });
+        client.getApplications = () => companionClient!.getApplications();
+        client.launchApplication = (bundleIdentifier: string) => companionClient!.launchApplication(bundleIdentifier);
+        client.launchDeepLink = (urlOrScheme: string) => companionClient!.launchDeepLink(urlOrScheme);
+      } catch {
+        // Not paired for Companion yet, or it's unreachable — leave the three methods
+        // off the client. The MRP connection above already succeeded and is unaffected.
+      }
+    }
 
     let lastArtworkAvailable = false;
 

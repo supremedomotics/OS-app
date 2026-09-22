@@ -93,6 +93,16 @@ class FakeMrpAppleTv {
   /** Test-controlled artwork response: "malformed" sends a truncated/corrupt frame. */
   artwork: { data: Buffer; mimeType: string } | null | "malformed" = null;
   receivedQueueRequests = 0;
+  lastSend: ((payload: Buffer) => void) | null = null;
+
+  /** Pushes an unsolicited SET_STATE_MESSAGE carrying playerPath.client, simulating a
+   * real "foreground app changed" push from the Apple TV. */
+  pushCurrentApp(bundleIdentifier: string, displayName: string): void {
+    const client = Buffer.concat([fieldString(2, bundleIdentifier), fieldString(7, displayName)]);
+    const playerPath = fieldBytes(2, client);
+    const setState = fieldBytes(9, playerPath); // SetStateMessage.playerPath
+    this.lastSend!(buildProtocolMessage(MrpType.SET_STATE_MESSAGE, MrpField.setStateMessage, setState));
+  }
   receivedHidEvents: Array<{ usagePage: number; usage: number; down: boolean }> = [];
   receivedCommands: MrpTransportCommand[] = [];
 
@@ -127,6 +137,7 @@ class FakeMrpAppleTv {
       const wire = sessionWriteKey ? seal(sessionWriteKey, counterNonce8(writeSeq++), payload) : payload;
       sock.write(Buffer.concat([encodeVarint(wire.length), wire]));
     };
+    this.lastSend = send; // test convenience: push an unsolicited SET_STATE_MESSAGE later
 
     sock.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -578,6 +589,39 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
       const client = await connectedClient(fakeTv, port, "appletv-art-d" as DeviceId);
       const artwork = await client.getArtwork!();
       expect(artwork).toBeNull();
+      await client.close?.();
+    });
+  });
+
+  describe("current application (§ Phase 3 — real MRP playerPath.client feedback, no Companion needed)", () => {
+    it("decodes a real foreground-app push into getCurrentApplication()", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+      const kv = createInMemoryCredentialKv();
+      const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+      const deviceId = "appletv-app-a" as DeviceId;
+      const address = `127.0.0.1:${port}`;
+      const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+      await pairAppleTvMrp(address, deviceId, fakeTv.pin, clientOpts);
+      const client = await createMrpAppleTvConnect(clientOpts)({ address, deviceId });
+
+      expect(await client.getCurrentApplication!()).toBeNull(); // nothing pushed yet
+
+      fakeTv.pushCurrentApp("com.netflix.Netflix", "Netflix");
+      await new Promise((r) => setTimeout(r, 20));
+      const app = await client.getCurrentApplication!();
+      expect(app).toEqual({
+        packageName: "com.netflix.Netflix",
+        applicationName: "Netflix",
+        source: "mrp-playerpath",
+        confidence: "exact",
+        timestamp: expect.any(String),
+      });
+
+      fakeTv.pushCurrentApp("com.apple.tv", "Apple TV");
+      await new Promise((r) => setTimeout(r, 20));
+      expect((await client.getCurrentApplication!())?.packageName).toBe("com.apple.tv");
       await client.close?.();
     });
   });

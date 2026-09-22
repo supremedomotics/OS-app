@@ -326,10 +326,21 @@ export interface MrpNowPlayingInfo {
   title: string | null;
 }
 
+/** The current foreground app, decoded from `SetStateMessage.playerPath.client` —
+ * verified field numbers: `PlayerPath.client`(2), `NowPlayingClient.
+ * bundleIdentifier`(2)/`displayName`(7). This is the STABLE app identity (bundle id),
+ * never inferred from the last command SupremeOS sent — only from what the Apple TV
+ * itself reports. */
+export interface MrpCurrentApplication {
+  bundleIdentifier: string | null;
+  displayName: string | null;
+}
+
 export interface MrpSetState {
   playbackState: MrpPlaybackState | null;
   nowPlaying: MrpNowPlayingInfo | null;
   displayName: string | null;
+  currentApplication: MrpCurrentApplication | null;
 }
 
 /** Reads a proto2 `double` (8-byte little-endian IEEE754) stored as a length-delimited
@@ -385,14 +396,16 @@ function getDouble(m: Map<number, Buffer | number>, fieldNumber: number): number
 }
 
 const NowPlayingField = { album: 1, artist: 2, duration: 3, elapsedTime: 4, title: 9 } as const;
-const SetStateField = { nowPlayingInfo: 1, displayName: 5, playbackState: 6 } as const;
+const SetStateField = { nowPlayingInfo: 1, displayName: 5, playbackState: 6, playerPath: 9 } as const;
+const PlayerPathField = { client: 2 } as const;
+const NowPlayingClientField = { bundleIdentifier: 2, displayName: 7 } as const;
 
 /** Parses a `SET_STATE_MESSAGE` `ProtocolMessage` — real decode, no fabricated fields:
  * anything the message doesn't include comes back `null`. */
 export function parseSetStateMessage(protocolMessage: Buffer): MrpSetState {
   const top = fieldMapLoose(protocolMessage);
   const setStateBuf = getBytes(top as Map<number, Buffer | number>, MrpField.setStateMessage);
-  if (!setStateBuf) return { playbackState: null, nowPlaying: null, displayName: null };
+  if (!setStateBuf) return { playbackState: null, nowPlaying: null, displayName: null, currentApplication: null };
   const setState = fieldMapLoose(setStateBuf);
   const playbackStateRaw = setState.get(SetStateField.playbackState);
   const playbackState = typeof playbackStateRaw === "number" ? (playbackStateRaw as MrpPlaybackState) : null;
@@ -410,7 +423,20 @@ export function parseSetStateMessage(protocolMessage: Buffer): MrpSetState {
         };
       })()
     : null;
-  return { playbackState, nowPlaying, displayName };
+  const playerPathBuf = getBytes(setState, SetStateField.playerPath);
+  const currentApplication = playerPathBuf
+    ? (() => {
+        const playerPath = fieldMapLoose(playerPathBuf);
+        const clientBuf = getBytes(playerPath, PlayerPathField.client);
+        if (!clientBuf) return null;
+        const client = fieldMapLoose(clientBuf);
+        return {
+          bundleIdentifier: getString(client, NowPlayingClientField.bundleIdentifier),
+          displayName: getString(client, NowPlayingClientField.displayName),
+        };
+      })()
+    : null;
+  return { playbackState, nowPlaying, displayName, currentApplication };
 }
 
 /** True if this decoded `ProtocolMessage`'s `type` field equals the given type. */

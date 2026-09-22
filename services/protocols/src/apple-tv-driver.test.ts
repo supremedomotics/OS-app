@@ -529,3 +529,43 @@ describe("AppleTvProtocolDriver — IP-change / rebind identity (§ Phase 2C)", 
     await driver.disconnect();
   });
 });
+
+describe("AppleTvProtocolDriver — application registry (§ Phase 3, driver-level delegation)", () => {
+  it("throws (never returns a fake empty list) when the client has no Companion session", async () => {
+    const { client } = fakeClient(); // Phase 1 fake has no getApplications
+    const driver = new AppleTvProtocolDriver({ connect: async () => client });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-1" as DeviceId, capability: "media", address: "a" });
+    await expect(driver.getApplications("tv-1" as DeviceId)).rejects.toThrow(/no Companion session/);
+    await expect(driver.launchApplication("tv-1" as DeviceId, "com.netflix.Netflix")).rejects.toThrow(/no Companion session/);
+    await expect(driver.launchDeepLink("tv-1" as DeviceId, "netflix://title/123")).rejects.toThrow(/no Companion session/);
+    await driver.disconnect();
+  });
+
+  it("delegates to the device's own client only when it DOES have a Companion session, isolated per device", async () => {
+    const { client: a } = fakeClient();
+    const { client: b } = fakeClient();
+    const appsA = [{ packageName: "com.netflix.Netflix", applicationName: "Netflix", versionName: null, versionCode: null, launchable: true, installed: true, lastSeen: "now" }];
+    a.getApplications = async () => appsA;
+    a.launchApplication = async () => {};
+    const bLaunches: string[] = [];
+    b.launchApplication = async (id: string) => {
+      bLaunches.push(id);
+    };
+    b.getApplications = async () => [];
+
+    const driver = new AppleTvProtocolDriver({
+      connect: async ({ address }) => (address === "addr-a" ? a : b),
+    });
+    await driver.connect();
+    await driver.bind({ deviceId: "tv-a" as DeviceId, capability: "media", address: "addr-a" });
+    await driver.bind({ deviceId: "tv-b" as DeviceId, capability: "media", address: "addr-b" });
+
+    expect(await driver.getApplications("tv-a" as DeviceId)).toEqual(appsA);
+    expect(await driver.getApplications("tv-b" as DeviceId)).toEqual([]);
+
+    await driver.launchApplication("tv-b" as DeviceId, "com.google.ios.youtube");
+    expect(bLaunches).toEqual(["com.google.ios.youtube"]);
+    await driver.disconnect();
+  });
+});

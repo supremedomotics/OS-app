@@ -484,6 +484,8 @@ export {
   type HapSession,
   type HapVerifiedChannel,
   type HapExchange,
+  chacha20poly1305Seal,
+  chacha20poly1305Open,
 } from "./apple-tv-hap-pairing.js";
 export {
   encodeVarint,
@@ -499,6 +501,20 @@ export {
   type MrpArtwork,
 } from "./apple-tv-mrp-protobuf.js";
 export { createMrpTcpTransport, type AppleTvMrpTransport } from "./apple-tv-mrp-transport.js";
+export { opackPack, opackUnpack, type OpackValue } from "./apple-tv-opack.js";
+export {
+  createCompanionTcpTransport,
+  CompanionFrameType,
+  type AppleTvCompanionTransport,
+  type CompanionSession,
+  type CompanionFrameTypeValue,
+} from "./apple-tv-companion-transport.js";
+export {
+  pairAppleTvCompanion,
+  connectAppleTvCompanion,
+  type AppleTvCompanionClientOptions,
+  type AppleTvCompanionAppClient,
+} from "./apple-tv-companion-client.js";
 export { pairAppleTvMrp, createMrpAppleTvConnect, type AppleTvMrpClientOptions } from "./apple-tv-mrp-client.js";
 export {
   createAppleTvCredentialStore,
