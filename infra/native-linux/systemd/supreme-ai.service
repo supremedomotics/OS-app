@@ -1,0 +1,54 @@
+# supreme-ai — SupremeOS on-box AI assistant (native-linux production deployment).
+#
+# Same FastAPI/uvicorn app the Docker deployment runs (services/ai-py/app, see
+# infra/hub-compose's build via services/ai-py/Dockerfile), served from a dedicated Python
+# virtualenv (___SUPREME_APP_DIR___/venvs/ai) that install.sh creates with exactly the
+# base dependencies the Dockerfile's default (WITH_LLM=0) build installs
+# (fastapi, "uvicorn[standard]", pydantic) — no extra packages.
+#
+# HONEST STATUS: the optional on-box LLM runtime (llama.cpp/GGUF, Docker's WITH_LLM=1
+# build arg) is NOT installed by this deployment layer yet — same as Docker's own default
+# (WITH_LLM=0), the service runs its deterministic-planner fallback. Weights are never
+# shipped here either way (see SUPREME_AI_MODEL_PATH below).
+#
+# Bound to loopback only (127.0.0.1:9200) — only the Gateway calls it, matching Docker's
+# internal-only `supreme-core` network isolation for this service.
+
+[Unit]
+Description=SupremeOS On-Box AI Assistant
+Documentation=file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=___SUPREME_APP_DIR___/venvs/ai/bin/uvicorn app.main:app --host 127.0.0.1 --port 9200
+WorkingDirectory=___SUPREME_APP_DIR___/current/services/ai-py
+EnvironmentFile=___SUPREME_CONFIG_DIR___/ai.env
+Restart=always
+RestartSec=2
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+# Read-only access to wherever a homeowner-provided GGUF model lives, matching Docker's
+# `:ro` model-directory mount — this deployment layer has no model-provisioning story yet
+# (see class doc above), so this is empty/unused until one exists.
+ReadOnlyPaths=___SUPREME_DATA_DIR___/ai-models
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+CapabilityBoundingSet=
+# CPython has no JIT (unlike Node's V8) — no known W+X memory requirement, safe to deny.
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

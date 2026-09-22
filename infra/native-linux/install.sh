@@ -57,6 +57,20 @@ fi
 CADDY_VERSION="2.8.4"
 CADDY_DEB_SHA512="b2f101291ef1a9359717a6349b90ac44d43e3087b87f975f3d4eb5eb22d6bd8af0b1a3a85d7aa9a9b8ba2ad0fbc2ad165c8631c57e0dbf4ca3df986ee728e205"
 
+# § go2rtc (the `streamer` service — the one backend component in this repo that isn't
+# SupremeOS's own code, see infra/hub-compose/docker-compose.yml's `streamer` service,
+# which runs the upstream `alexxit/go2rtc:latest` image unmodified). DISCLOSED SUPPLY-CHAIN
+# CAVEAT: unlike NATS/Caddy above, go2rtc's GitHub releases do not publish a checksums.txt/
+# SHA256SUMS manifest (confirmed by inspecting the v1.9.14 release's own asset list during
+# this work) — there is no independent published hash to cross-check. The hash below was
+# computed directly from the real go2rtc_linux_amd64 binary downloaded from that exact
+# release during this work (trust-on-first-use pinning, not invented), which is a weaker
+# guarantee than NATS/Caddy's cross-checked manifest and is disclosed as such rather than
+# presented as equivalent.
+GO2RTC_VERSION="1.9.14"
+GO2RTC_LINUX_AMD64_SHA256="32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6"
+SUPREME_STREAMER_BIN="${SUPREME_STREAMER_BIN:-/usr/bin/go2rtc}"
+
 # ── Answers ─────────────────────────────────────────────────────────────────────────────
 # Every field .env.example documents, plus the two purely-deployment questions Docker never
 # had to ask (domain, whether to install Home Assistant at all). Persisted to
@@ -476,6 +490,91 @@ install_caddy() {
   log_info "caddy $(caddy version) installed and checksum-verified (ships its own caddy.service unit)."
 }
 
+validate_phase_install_streamer() {
+  [ -x "$SUPREME_STREAMER_BIN" ]
+}
+
+install_streamer() {
+  log_step "Installing go2rtc ${GO2RTC_VERSION} (camera/RTSP-to-WebRTC streaming bridge)"
+  if [ -x "$SUPREME_STREAMER_BIN" ]; then
+    log_info "go2rtc already installed at ${SUPREME_STREAMER_BIN} — skipping."
+    return
+  fi
+  local tmp
+  tmp="$(mktemp -d)"
+  if [ "$SUPREME_OFFLINE" = "1" ]; then
+    local bin_path="${SUPREME_GO2RTC_BIN_PATH:?SUPREME_OFFLINE=1 requires SUPREME_GO2RTC_BIN_PATH pointing at a local go2rtc_linux_amd64 binary (no network download in offline mode)}"
+    [ -r "$bin_path" ] || die "SUPREME_GO2RTC_BIN_PATH=${bin_path} is not readable."
+    cp "$bin_path" "${tmp}/go2rtc"
+  else
+    curl -fsSL "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_amd64" -o "${tmp}/go2rtc"
+  fi
+  echo "${GO2RTC_LINUX_AMD64_SHA256}  ${tmp}/go2rtc" | sha256sum -c - \
+    || die "go2rtc binary checksum mismatch — refusing to install a binary that doesn't match the pinned hash (see this script's GO2RTC_* constants for the disclosed supply-chain caveat)."
+  install -o root -g root -m 0755 "${tmp}/go2rtc" "$SUPREME_STREAMER_BIN"
+  rm -rf "$tmp"
+  mkdir -p "${SUPREME_DATA_DIR}/streamer"
+  chown "${SUPREME_USER}:${SUPREME_GROUP}" "${SUPREME_DATA_DIR}/streamer"
+  log_info "go2rtc ${GO2RTC_VERSION} installed and checksum-verified at ${SUPREME_STREAMER_BIN}."
+}
+
+validate_phase_install_ai_venv() {
+  [ -x "${SUPREME_APP_DIR}/venvs/ai/bin/uvicorn" ]
+}
+
+install_ai_venv() {
+  log_step "Installing the on-box AI assistant's Python environment"
+  local venv="${SUPREME_APP_DIR}/venvs/ai"
+  sudo -u "$SUPREME_USER" python3 -m venv "$venv"
+  sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet --upgrade pip
+  # Exactly the base dependencies services/ai-py/Dockerfile installs in its default
+  # (WITH_LLM=0) build — no extra packages. The optional llama.cpp/GGUF LLM runtime is not
+  # installed by this deployment layer yet (see systemd/supreme-ai.service's own doc): same
+  # deterministic-planner fallback Docker's own default build runs.
+  sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet fastapi "uvicorn[standard]" pydantic
+  mkdir -p "${SUPREME_DATA_DIR}/ai-models"
+  chown "${SUPREME_USER}:${SUPREME_GROUP}" "${SUPREME_DATA_DIR}/ai-models"
+  log_info "AI assistant venv ready at ${venv} (deterministic-planner mode; no on-box LLM)."
+}
+
+validate_phase_install_appletv_venv() {
+  [ -x "${SUPREME_APP_DIR}/venvs/appletv/bin/uvicorn" ]
+}
+
+install_appletv_venv() {
+  log_step "Installing the Apple TV bridge's Python environment"
+  local venv="${SUPREME_APP_DIR}/venvs/appletv"
+  sudo -u "$SUPREME_USER" python3 -m venv "$venv"
+  sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet --upgrade pip
+  # Exactly what services/appletv-py/Dockerfile installs.
+  sudo -u "$SUPREME_USER" "${venv}/bin/pip" install --quiet fastapi "uvicorn[standard]" pydantic "pyatv>=0.14.5"
+  mkdir -p "${SUPREME_DATA_DIR}/appletv"
+  chown "${SUPREME_USER}:${SUPREME_GROUP}" "${SUPREME_DATA_DIR}/appletv"
+  log_info "Apple TV bridge venv ready at ${venv}."
+}
+
+validate_phase_configure_ai_env() {
+  [ -r "${SUPREME_CONFIG_DIR}/ai.env" ]
+}
+
+configure_ai_env() {
+  log_step "Rendering AI assistant environment"
+  render_template "${SCRIPT_DIR}/config/ai.env.template" "${SUPREME_CONFIG_DIR}/ai.env"
+  chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/ai.env"
+  chmod 0640 "${SUPREME_CONFIG_DIR}/ai.env"
+}
+
+validate_phase_configure_appletv_env() {
+  [ -r "${SUPREME_CONFIG_DIR}/appletv.env" ]
+}
+
+configure_appletv_env() {
+  log_step "Rendering Apple TV bridge environment"
+  render_template "${SCRIPT_DIR}/config/appletv.env.template" "${SUPREME_CONFIG_DIR}/appletv.env"
+  chown "root:${SUPREME_GROUP}" "${SUPREME_CONFIG_DIR}/appletv.env"
+  chmod 0640 "${SUPREME_CONFIG_DIR}/appletv.env"
+}
+
 validate_phase_install_commissioning_venv() {
   [ -x "${SUPREME_APP_DIR}/venvs/commissioning/bin/uvicorn" ]
 }
@@ -641,13 +740,19 @@ configure_gateway_env() {
 validate_phase_install_systemd_units() {
   [ -r /etc/systemd/system/supreme-gateway.service ] \
     && [ -r /etc/systemd/system/supreme-commissioning.service ] \
-    && [ -r /etc/systemd/system/supreme-lan.service ]
+    && [ -r /etc/systemd/system/supreme-lan.service ] \
+    && [ -r /etc/systemd/system/supreme-ai.service ] \
+    && [ -r /etc/systemd/system/supreme-appletv.service ] \
+    && [ -r /etc/systemd/system/supreme-streamer.service ]
 }
 
 install_systemd_units() {
   log_step "Installing systemd units"
   render_template "${SCRIPT_DIR}/systemd/supreme-gateway.service" /etc/systemd/system/supreme-gateway.service
   render_template "${SCRIPT_DIR}/systemd/supreme-commissioning.service" /etc/systemd/system/supreme-commissioning.service
+  render_template "${SCRIPT_DIR}/systemd/supreme-ai.service" /etc/systemd/system/supreme-ai.service
+  render_template "${SCRIPT_DIR}/systemd/supreme-appletv.service" /etc/systemd/system/supreme-appletv.service
+  render_template "${SCRIPT_DIR}/systemd/supreme-streamer.service" /etc/systemd/system/supreme-streamer.service
   # § UI-triggered update (see lib/common.sh's configure_update_sudoers doc comment). The log file
   # itself is created group-readable up front so the gateway (User=supreme) can tail it even
   # before the first update ever runs and creates it via systemd-run's append redirect as root.
@@ -686,6 +791,9 @@ start_services() {
   log_step "Enabling and starting SupremeOS services"
   systemctl_enable_now supreme-commissioning
   systemctl_enable_now supreme-lan
+  systemctl_enable_now supreme-ai
+  systemctl_enable_now supreme-appletv
+  systemctl_enable_now supreme-streamer
   systemctl_enable_now supreme-gateway
 }
 
@@ -850,6 +958,7 @@ main() {
     run_phase "install_node" install_node
     run_phase "install_nats" install_nats
     run_phase "install_caddy" install_caddy
+    run_phase "install_streamer" install_streamer
   fi
 
   # § Issue 2: reconstruct SUPREME_RELEASE_VERSION (and, in release mode, every other
@@ -874,12 +983,16 @@ main() {
 
   if [ "$on_appliance_image" != "1" ]; then
     run_phase "install_commissioning_venv" install_commissioning_venv
+    run_phase "install_ai_venv" install_ai_venv
+    run_phase "install_appletv_venv" install_appletv_venv
   fi
   run_phase "configure_postgres" configure_postgres
   run_phase "configure_redis" configure_redis
   run_phase "configure_mosquitto" configure_mosquitto
   run_phase "configure_nats" configure_nats
   run_phase "configure_gateway_env" configure_gateway_env
+  run_phase "configure_ai_env" configure_ai_env
+  run_phase "configure_appletv_env" configure_appletv_env
   run_phase "configure_caddy" configure_caddy
   run_phase "install_systemd_units" install_systemd_units
   run_phase "install_cli_commands" install_cli_commands

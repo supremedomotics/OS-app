@@ -1,0 +1,52 @@
+# supreme-streamer — go2rtc (camera/RTSP-to-WebRTC streaming bridge), native-linux
+# production deployment.
+#
+# Docker runs the upstream `alexxit/go2rtc:latest` image unmodified, with no custom
+# environment/volumes (see infra/hub-compose/docker-compose.yml's `streamer` service —
+# it is the only backend service in this repo that isn't SupremeOS's own code). This unit
+# runs the exact same upstream binary, installed by install.sh's install_streamer() from
+# go2rtc's own GitHub release (checksum-pinned — see install.sh's GO2RTC_* constants and
+# their disclosed supply-chain caveat: go2rtc does not publish a checksums manifest, so
+# that hash is a trust-on-first-use pin computed from the real downloaded release asset
+# during this work, not a Caddy/NATS-grade cross-checked one).
+#
+# No config file: same as the Docker deployment, this runs with go2rtc's own defaults (no
+# go2rtc.yaml is shipped by either deployment layer). Bound to loopback only — only the
+# Gateway (admin API) and Caddy (/stream, WebRTC signaling) reach it, matching Docker's
+# internal-only `supreme-core`/`supreme-edge` network isolation for this service.
+
+[Unit]
+Description=SupremeOS Streaming Bridge (go2rtc)
+Documentation=file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/go2rtc
+WorkingDirectory=___SUPREME_DATA_DIR___/streamer
+Restart=always
+RestartSec=2
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+ReadWritePaths=___SUPREME_DATA_DIR___/streamer
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+CapabilityBoundingSet=
+# Go binaries are statically compiled with no JIT — safe to deny, same reasoning already
+# documented for the commissioning/ai Python units.
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

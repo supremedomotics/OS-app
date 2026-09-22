@@ -42,10 +42,12 @@ class MainActivity : FlutterActivity() {
         private const val CACHED_ENGINE_ID = "supreme_os_main_engine"
     }
 
-    override fun provideFlutterEngine(context: Context): FlutterEngine {
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
         FlutterEngineCache.getInstance().get(CACHED_ENGINE_ID)?.let { return it }
         val engine = super.provideFlutterEngine(context)
-        FlutterEngineCache.getInstance().put(CACHED_ENGINE_ID, engine)
+        if (engine != null) {
+            FlutterEngineCache.getInstance().put(CACHED_ENGINE_ID, engine)
+        }
         return engine
     }
 

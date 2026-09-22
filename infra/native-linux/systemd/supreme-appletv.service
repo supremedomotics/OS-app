@@ -1,0 +1,57 @@
+# supreme-appletv — SupremeOS Apple TV bridge (pyatv), native-linux production deployment.
+#
+# Same FastAPI/uvicorn app the Docker deployment runs (services/appletv-py/app, see
+# infra/hub-compose's build via services/appletv-py/Dockerfile), served from a dedicated
+# Python virtualenv (___SUPREME_APP_DIR___/venvs/appletv) that install.sh creates with
+# exactly the dependencies the Dockerfile installs (fastapi, "uvicorn[standard]", pydantic,
+# "pyatv>=0.14.5").
+#
+# Pairing credentials persist at ___SUPREME_DATA_DIR___/appletv/appletv-creds.json —
+# the native equivalent of Docker's `appletv-data` named volume.
+#
+# NOTE (carried over from services/appletv-py/README.md, unchanged by this deployment
+# layer): reliable mDNS discovery of real Apple TVs on the LAN needs this process to see
+# real LAN multicast traffic. On bare-metal native-linux this is not a Docker networking
+# concern at all — the process runs directly on the host's own network stack — but a
+# host firewall dropping mDNS (UDP 5353) would have the same practical effect; not
+# something this unit file can fix, flagged here for whoever debugges a "no Apple TVs
+# found" report on a real deployment.
+
+[Unit]
+Description=SupremeOS Apple TV Bridge
+Documentation=file://___SUPREME_APP_DIR___/repo/docs/architecture/Native-Linux-Deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=___SUPREME_APP_DIR___/venvs/appletv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9300
+WorkingDirectory=___SUPREME_APP_DIR___/current/services/appletv-py
+EnvironmentFile=___SUPREME_CONFIG_DIR___/appletv.env
+Restart=always
+RestartSec=2
+
+User=___SUPREME_USER___
+Group=___SUPREME_GROUP___
+ReadWritePaths=___SUPREME_DATA_DIR___/appletv
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# pyatv's own mDNS discovery needs AF_NETLINK for interface enumeration, same real reason
+# supreme-lan.service and supreme-gateway.service already document for Node's
+# uv_interface_addresses()/getifaddrs(3) — pyatv/zeroconf makes the equivalent call on the
+# Python side.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictRealtime=yes
+CapabilityBoundingSet=
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

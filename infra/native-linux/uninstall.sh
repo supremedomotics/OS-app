@@ -54,7 +54,7 @@ confirm() {
 
 stop_and_remove_units() {
   log_step "Stopping and removing SupremeOS systemd units"
-  local units=(supreme-gateway supreme-lan supreme-commissioning supreme-homeassistant supreme-nats)
+  local units=(supreme-gateway supreme-lan supreme-commissioning supreme-ai supreme-appletv supreme-streamer supreme-homeassistant supreme-nats)
   for u in "${units[@]}"; do
     if systemd_is_live && systemctl list-unit-files "${u}.service" >/dev/null 2>&1; then
       systemctl disable --now "$u" 2>/dev/null || true
