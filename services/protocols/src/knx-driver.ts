@@ -479,6 +479,8 @@ interface KnxUltimateClient {
   on(event: "connected", cb: () => void): KnxUltimateClient;
   on(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
   on(event: "indication", cb: (packet: KnxUltimateIndication) => void): KnxUltimateClient;
+  off(event: "connected", cb: () => void): KnxUltimateClient;
+  off(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
 }
 
 interface KnxUltimateDptLib {
@@ -520,14 +522,34 @@ function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): 
   return {
     async connect() {
       await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        client.on("connected", () => {
-          settled = true;
+        // § Real production bug (instability found live, right after auto-retry started
+        // calling connect() every 60s for a persistently-down driver): a FAILED attempt
+        // here never released anything — the "connected"/"error" listeners stayed attached
+        // forever, and whatever socket/timer `client.Connect()` had already opened before
+        // failing was never torn down via `client.Disconnect()`. Repeated retries against a
+        // driver that stays down (exactly KNX's "No More Connections" state) leaked one of
+        // these per failed attempt, compounding over hours into the kind of slow resource
+        // exhaustion that causes unrelated-looking symptoms (intermittent restarts —
+        // clearing the in-memory system log, general sluggishness). Every path out of this
+        // promise now removes its own listeners, and a failure explicitly disconnects the
+        // client it just failed to bring up before rejecting.
+        const onConnected = () => {
+          cleanup();
           resolve();
-        });
-        client.on("error", (err) => {
-          if (!settled) reject(err instanceof Error ? err : new Error(String(err)));
-        });
+        };
+        const onError = (err: unknown) => {
+          cleanup();
+          void client.Disconnect().catch(() => {
+            // best-effort — the client already failed to connect; nothing more to report.
+          });
+          reject(err instanceof Error ? err : new Error(String(err)));
+        };
+        const cleanup = () => {
+          client.off("connected", onConnected);
+          client.off("error", onError);
+        };
+        client.on("connected", onConnected);
+        client.on("error", onError);
         client.Connect();
       });
     },

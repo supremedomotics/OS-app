@@ -198,7 +198,14 @@ function LogsSettings() {
   const [auto, setAuto] = useState(true);
 
   async function load() {
-    setEntries(await fetchSystemLogs(300));
+    // § A transient fetch failure (a gateway restart mid-poll, a network blip) must never
+    // wipe out what's already on screen — every other load() in this file already follows
+    // this "keep the last known-good state" pattern; this one was missing it.
+    try {
+      setEntries(await fetchSystemLogs(300));
+    } catch {
+      /* keep */
+    }
   }
   useEffect(() => {
     void fetchDriverRegistry().then((all) => setDrivers(all.filter((d) => d.installed)));
