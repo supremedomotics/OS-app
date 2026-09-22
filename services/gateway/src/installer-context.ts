@@ -2796,9 +2796,28 @@ export class InstallerServices {
       // now" is `status.connected` (native-adapter.ts's protocolStatus(), which calls
       // the driver's own isConnected() fresh on every call) — using `!status.error`
       // here would never detect an autonomous drop at all.
-      const nowHealthy = status.connected;
-      if (nowHealthy === prev.healthy) continue; // no autonomous drift — nothing to reconcile
-      const errorMessage = nowHealthy ? null : (status.error ?? "connection lost");
+      let nowHealthy = status.connected;
+      let errorMessage = nowHealthy ? null : (status.error ?? "connection lost");
+      // § Real gap found live (KNX: "registered but failed to connect" stayed disconnected
+      // forever): this pass previously only WATCHED for connectivity changes — a native
+      // client with no reconnect logic of its own (unlike e.g. the NATS bus client's
+      // built-in infinite-reconnect) never got retried until a human clicked Connect or the
+      // gateway restarted. Retry only when the driver was ALREADY unhealthy last tick
+      // (`prev.healthy === false`, not just "not currently healthy") — the tick that FIRST
+      // observes a drop still reports it honestly before anything tries to fix it; auto-
+      // retry begins from the next tick onward, through the exact same
+      // connectNativeProtocol() path the manual "Connect" button uses. Best-effort: errors
+      // fold into the same unhealthy-state reporting below rather than throwing out of the
+      // tick loop (see main.ts's `guard()`).
+      if (!nowHealthy && prev.healthy === false) {
+        try {
+          nowHealthy = await this.d.sil.connectNativeProtocol(status.protocol);
+          if (nowHealthy) errorMessage = null;
+        } catch (err) {
+          errorMessage = err instanceof Error ? err.message : String(err);
+        }
+      }
+      if (nowHealthy === prev.healthy) continue; // no state change — nothing new to report
       this.setStage(status.protocol, { healthy: nowHealthy, lastError: errorMessage });
       // setStage()'s own stage-transition hook doesn't fire here (stage stays "ready") —
       // publish explicitly; this IS the autonomous connection-lost/auto-reconnected event.

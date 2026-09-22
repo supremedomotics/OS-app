@@ -168,8 +168,16 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     if (this.conn) return;
     const factory = this.opts.createConnection ?? defaultKnxConnection;
-    this.conn = await factory({ host: this.opts.host, port: this.opts.port ?? 3671 });
-    await this.conn.connect();
+    const conn = await factory({ host: this.opts.host, port: this.opts.port ?? 3671 });
+    // § Real production bug: `this.conn` was previously assigned before `conn.connect()`
+    // was confirmed to succeed. A failed connect (e.g. a KNXnet/IP gateway rejecting with
+    // "No More Connections") left `this.conn` truthy anyway, so every subsequent connect()
+    // call — including an auto-retry — silently no-op'd via the `if (this.conn) return;`
+    // guard above, and isConnected() (which also just checks nullness) wrongly reported
+    // connected. Only assign `this.conn` once `connect()` has actually succeeded, so a
+    // failed attempt leaves the driver honestly disconnected and retryable.
+    await conn.connect();
+    this.conn = conn;
     for (const b of this.bindings) this.observe(b);
   }
 
