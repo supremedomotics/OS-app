@@ -79,7 +79,13 @@ main() {
     rm -rf "$config_building" "$config_previous"
     cp -a "${work}/config" "$config_building"
     chown -R "root:${SUPREME_GROUP}" "$config_building"
-    chmod 0700 "${config_building}/secrets" 2>/dev/null || true
+    # § Real production incident (native-linux, EACCES on driver_secret_encryption_key /
+    # hub_identity at gateway boot): 0700 blocks the "supreme" GROUP from traversing into
+    # this directory at all, regardless of the files' own 0640 mode — install.sh's
+    # persist_secrets() already documents this exact trap and uses 0750 instead. A restore
+    # (this script) was independently hardcoding 0700, so every restore/rollback silently
+    # reintroduced the same lockout install.sh had already fixed once.
+    chmod 0750 "${config_building}/secrets" 2>/dev/null || true
     chmod 0640 "${config_building}/secrets"/* 2>/dev/null || true
     mv "$SUPREME_CONFIG_DIR" "$config_previous"
     mv "$config_building" "$SUPREME_CONFIG_DIR"
