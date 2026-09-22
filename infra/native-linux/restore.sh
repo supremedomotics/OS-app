@@ -87,6 +87,11 @@ main() {
     # reintroduced the same lockout install.sh had already fixed once.
     chmod 0750 "${config_building}/secrets" 2>/dev/null || true
     chmod 0640 "${config_building}/secrets"/* 2>/dev/null || true
+    # § Real production incident: the gateway process also generates a few secrets itself
+    # at runtime (hub identity keypair, HA token) — install.sh's create_directories()
+    # grants the supreme USER (not the whole group) write access via ACL for exactly this;
+    # a restore must reapply it too, or every restore/rollback regresses to EACCES on boot.
+    setfacl -m "u:${SUPREME_USER}:rwx" "${config_building}/secrets" 2>/dev/null || true
     mv "$SUPREME_CONFIG_DIR" "$config_previous"
     mv "$config_building" "$SUPREME_CONFIG_DIR"
     rm -rf "$config_previous"

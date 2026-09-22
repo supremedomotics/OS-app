@@ -53,6 +53,12 @@ detect_and_repair() {
     chmod 0750 "$SUPREME_SECRETS_DIR" 2>/dev/null
     chmod 0640 "${SUPREME_SECRETS_DIR}"/* 2>/dev/null
     chown -R "root:${SUPREME_GROUP}" "$SUPREME_SECRETS_DIR" 2>/dev/null && note_fixed "Permissions on ${SUPREME_SECRETS_DIR}"
+    # § Real production incident: the gateway process also generates a few secrets itself
+    # at runtime (hub identity keypair, HA token) and needs WRITE (create) on the
+    # directory for that — install.sh's create_directories() grants the supreme USER
+    # (never the whole group) that via ACL; repair it here too, since it's exactly the
+    # kind of drift this script exists to catch and fix.
+    setfacl -m "u:${SUPREME_USER}:rwx" "$SUPREME_SECRETS_DIR" 2>/dev/null && note_fixed "ACL write grant on ${SUPREME_SECRETS_DIR} for ${SUPREME_USER}"
   fi
 
   log_step "Checking the active release"
