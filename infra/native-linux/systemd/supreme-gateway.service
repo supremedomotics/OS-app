@@ -29,9 +29,9 @@ Requires=postgresql.service
 # nats-bus.ts's own NATS client connects with infinite reconnect + backoff, so a Gateway
 # that starts before NATS is ready keeps retrying instead of crashing; (2) the StartLimit*
 # directives below stop systemd from restart-storming the Gateway process itself while it
-# waits, and RestartSec's own backoff (unchanged at 2s) gives NATS room to come up between
-# attempts. Auto-recovery when NATS reappears is therefore the NATS client's own reconnect
-# logic — reused here, not a second mechanism invented at the deployment layer.
+# waits, and RestartSec's own backoff gives NATS room to come up between attempts.
+# Auto-recovery when NATS reappears is therefore the NATS client's own reconnect logic —
+# reused here, not a second mechanism invented at the deployment layer.
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -41,7 +41,19 @@ ExecStart=/usr/bin/node ___SUPREME_APP_DIR___/current/services/gateway/dist/main
 WorkingDirectory=___SUPREME_APP_DIR___/current/services/gateway
 EnvironmentFile=___SUPREME_CONFIG_DIR___/gateway.env
 Restart=always
-RestartSec=2
+# § Real production incident: update.sh's render_config() rewrites this unit file and
+# calls `systemctl daemon-reload` immediately before restart_services() restarts the
+# Gateway — with the old RestartSec=2, five back-to-back restart attempts (StartLimitBurst)
+# landed within ~20s of that reload and ALL failed with EACCES writing a runtime-generated
+# secret (hub_identity) under ProtectSystem=strict/ReadWritePaths, even though the
+# directory's ACL and ReadWritePaths were both confirmed correct — a single clean restart
+# minutes later, with no code/permission change at all, succeeded immediately. That signature
+# (deterministic failure only under rapid back-to-back restarts right after a daemon-reload,
+# and 100% success on an isolated restart) matches systemd's private-mount-namespace teardown
+# for ReadWritePaths/ProtectSystem lagging behind the previous attempt's process exit — 2s
+# isn't enough for it to reliably finish before the next attempt's own namespace setup runs.
+# 5s is not a magic number, just enough slack for that teardown to complete in practice.
+RestartSec=5
 # The gateway's own migration-on-start (see header) can take longer than systemd's
 # default 90s start timeout against a cold Postgres on modest hardware (a Pi-class or
 # small-VM SupremeOS box) — generous rather than tight, since a false "failed to start"
