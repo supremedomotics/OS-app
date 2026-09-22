@@ -327,6 +327,15 @@ create_directories() {
   # already marked readable.
   chmod 0750 "$SUPREME_SECRETS_DIR"
   chown "root:${SUPREME_GROUP}" "$SUPREME_SECRETS_DIR"
+  # § Real production incident: the gateway process (User=supreme) also GENERATES a
+  # handful of secrets itself at first runtime (the hub identity keypair, an HA long-lived
+  # token) via FileSecretStore.set() — services/gateway/src/secrets.ts. That needs WRITE
+  # (create) on the directory itself, which the root:supreme/0750 policy above deliberately
+  # withholds from the whole group. A POSIX ACL grants exactly that to the supreme USER
+  # alone (never the wider group), so the base owner/mode stays root:supreme/0750 for
+  # security-audit.sh's existing checks — a `default` ACL isn't needed since nothing here
+  # creates subdirectories. `setfacl` is already a required apt dependency for this reason.
+  setfacl -m "u:${SUPREME_USER}:rwx" "$SUPREME_SECRETS_DIR"
 }
 
 validate_phase_persist_secrets() {

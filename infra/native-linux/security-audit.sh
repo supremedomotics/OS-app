@@ -54,6 +54,18 @@ done
 if [ -d "$SUPREME_SECRETS_DIR" ]; then
   owner="$(stat -c '%U:%G' "$SUPREME_SECRETS_DIR" 2>/dev/null || echo unknown)"
   [ "$owner" = "root:${SUPREME_GROUP}" ] && rc_pass "${SUPREME_SECRETS_DIR} owned by ${owner}" || rc_fail "${SUPREME_SECRETS_DIR} owned by ${owner}, expected root:${SUPREME_GROUP}"
+  # § Real production incident: the gateway process generates a few secrets itself at
+  # runtime (hub identity keypair, HA token) — FileSecretStore.set() in
+  # services/gateway/src/secrets.ts — which needs WRITE (create) on this directory. The
+  # base owner/mode above deliberately withholds that from the whole group, so a POSIX ACL
+  # grants it to the supreme USER alone instead (install.sh's create_directories()). If
+  # this ACL is missing, the gateway fails to boot with EACCES the first time it needs to
+  # generate any such secret — confirmed live in production.
+  if getfacl -p "$SUPREME_SECRETS_DIR" 2>/dev/null | grep -q "^user:${SUPREME_USER}:rwx"; then
+    rc_pass "${SUPREME_SECRETS_DIR} grants ${SUPREME_USER} write via ACL"
+  else
+    rc_fail "${SUPREME_SECRETS_DIR} has no rwx ACL for ${SUPREME_USER} — gateway will fail to boot with EACCES the first time it needs to write a runtime-generated secret (hub identity, HA token). Fix: setfacl -m u:${SUPREME_USER}:rwx ${SUPREME_SECRETS_DIR}"
+  fi
 fi
 
 echo ""
