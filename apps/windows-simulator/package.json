@@ -1,0 +1,24 @@
+{
+  "name": "@supreme/windows-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Supreme OS virtual smart-home and chaos testing laboratory for Windows",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "in.supremedomotics.supremeos.simulator",
+    "productName": "Supreme OS Simulation Lab",
+    "directories": { "output": "dist" },
+    "files": ["**/*", "!dist/**"],
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
+  },
+  "devDependencies": {
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12"
+  }
+}
