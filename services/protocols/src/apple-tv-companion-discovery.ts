@@ -15,7 +15,7 @@
  */
 import { mdnsBrowse, type MdnsService } from "./mdns.js";
 
-const COMPANION_SERVICE = "_companion-link._tcp.local";
+export const COMPANION_SERVICE = "_companion-link._tcp.local";
 
 /**
  * Finds the Companion endpoint for the SAME physical Apple TV already reachable at
