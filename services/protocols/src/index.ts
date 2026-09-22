@@ -515,7 +515,13 @@ export {
   type AppleTvCompanionClientOptions,
   type AppleTvCompanionAppClient,
 } from "./apple-tv-companion-client.js";
-export { pairAppleTvMrp, createMrpAppleTvConnect, type AppleTvMrpClientOptions } from "./apple-tv-mrp-client.js";
+export {
+  pairAppleTvMrp,
+  createMrpAppleTvConnect,
+  beginAppleTvMrpPairing,
+  type AppleTvMrpClientOptions,
+  type AppleTvMrpPairingSession,
+} from "./apple-tv-mrp-client.js";
 export {
   createAppleTvCredentialStore,
   createBindingConfigKv,

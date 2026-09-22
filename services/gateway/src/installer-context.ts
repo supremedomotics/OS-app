@@ -74,6 +74,9 @@ import {
   createAppleTvCredentialStore,
   createBindingConfigKv,
   createInMemoryCredentialKv,
+  beginAppleTvMrpPairing,
+  type AppleTvMrpPairingSession,
+  type AppleTvCredentialStore,
 } from "@supreme/protocols";
 import {
   CommissioningService,
@@ -428,6 +431,15 @@ export class InstallerServices {
    * gateway restart) loses nothing an installer can't recreate by re-selecting the file. */
   private readonly knxChunkedUploads = new Map<string, { chunks: (Buffer | undefined)[]; totalChunks: number; createdAt: number }>();
   private static readonly CHUNKED_UPLOAD_TTL_MS = 30 * 60 * 1000;
+  /** § Apple TV HAP pairing (gap fix) — one open, PIN-awaiting transport per deviceId,
+   * held server-side between "start pairing" (sends M1, the real TV shows its PIN) and
+   * "submit PIN" (completes M3-M6). In-memory only, same durability contract as the KNX
+   * job maps above: an abandoned pairing attempt (server restart, browser closed) loses
+   * nothing an installer can't recreate by clicking "Pair" again. Each entry owns a
+   * timer that cancels the transport if no PIN is submitted in time — never a leaked
+   * socket held open forever. */
+  private readonly appleTvPairingSessions = new Map<DeviceId, { session: AppleTvMrpPairingSession; timer: ReturnType<typeof setTimeout> }>();
+  private static readonly APPLE_TV_PAIRING_TTL_MS = 2 * 60 * 1000;
 
   constructor(deps: InstallerDeps) {
     this.d = deps;
@@ -593,6 +605,81 @@ export class InstallerServices {
 
   listProtocolBindings(): Promise<StoredProtocolBinding[]> {
     return this.d.protocolBindingStore?.list() ?? Promise.resolve([]);
+  }
+
+  /** Same credential store `nativeDriverContext()` wires into the driver's own
+   * `appleTvConnect` — reused here (never a second store) so a pairing done through this
+   * route and a later normal reconnect both read/write the exact same encrypted blob. */
+  private appleTvPairingCredentialStore(): AppleTvCredentialStore {
+    return createAppleTvCredentialStore(
+      this.d.driverSecretCrypto ?? createDriverSecretCrypto(this.appleTvEphemeralSecretKey()),
+      this.d.protocolBindingStore ? createBindingConfigKv(this.d.protocolBindingStore, "media", "appletv") : createInMemoryCredentialKv(),
+    );
+  }
+
+  private async appleTvBindingFor(deviceId: DeviceId): Promise<StoredProtocolBinding | null> {
+    const bindings = await this.listProtocolBindings();
+    return bindings.find((b) => b.deviceId === deviceId && b.protocol === "appletv") ?? null;
+  }
+
+  /** § Apple TV HAP pairing — starts (or restarts, replacing any stale attempt) pairing
+   * for an already-commissioned Apple TV: opens a real MRP connection and sends M1,
+   * which is what makes the real device show its 4-digit PIN. The connection is held
+   * open server-side (keyed by deviceId) until {@link submitAppleTvPairingPin} completes
+   * it or the TTL timer fires and cancels it. */
+  async startAppleTvPairing(deviceId: DeviceId): Promise<{ expiresInMs: number }> {
+    const stale = this.appleTvPairingSessions.get(deviceId);
+    if (stale) {
+      clearTimeout(stale.timer);
+      stale.session.cancel();
+      this.appleTvPairingSessions.delete(deviceId);
+    }
+    const binding = await this.appleTvBindingFor(deviceId);
+    if (!binding) throw new SupremeError("not_found", "no Apple TV binding for this device");
+
+    const session = await beginAppleTvMrpPairing(binding.address, deviceId, {
+      credentialStore: this.appleTvPairingCredentialStore(),
+      hubIdentifier: "SUPREMEOS-HUB",
+      hubName: "SupremeOS Hub",
+    });
+    const expiresInMs = InstallerServices.APPLE_TV_PAIRING_TTL_MS;
+    const timer = setTimeout(() => {
+      session.cancel();
+      this.appleTvPairingSessions.delete(deviceId);
+    }, expiresInMs);
+    (timer as { unref?: () => void }).unref?.();
+    this.appleTvPairingSessions.set(deviceId, { session, timer });
+    return { expiresInMs };
+  }
+
+  /** § Apple TV HAP pairing — completes M3-M6 with the PIN the installer read off the
+   * TV screen, persists the resulting credentials (via the same store `startAppleTvPairing`
+   * opened the session against), and forces the binding to reconnect immediately —
+   * `AppleTvProtocolDriver.bind()` early-returns for an already-known deviceId, so without
+   * this explicit `rebindNative` the device would stay in `pairing_required` until its
+   * next restart. `"expired"` means no session exists for this device (never started, or
+   * the TTL already fired) — the installer must call start again. `"wrong_pin"` leaves no
+   * session behind either (single-use) — same remedy. */
+  async submitAppleTvPairingPin(deviceId: DeviceId, pin: string): Promise<"paired" | "wrong_pin" | "expired"> {
+    const entry = this.appleTvPairingSessions.get(deviceId);
+    if (!entry) return "expired";
+    clearTimeout(entry.timer);
+    this.appleTvPairingSessions.delete(deviceId);
+
+    try {
+      await entry.session.submitPin(pin);
+    } catch {
+      return "wrong_pin";
+    }
+
+    const binding = await this.appleTvBindingFor(deviceId);
+    if (binding) {
+      await this.d.sil.rebindNative(
+        { deviceId: binding.deviceId, capability: binding.capability, address: binding.address, config: binding.config },
+        binding.protocol,
+      );
+    }
+    return "paired";
   }
 
   /** § live-confirmed fix — `HomeService.removeDevice`/`removeDevices` (the ONLY code

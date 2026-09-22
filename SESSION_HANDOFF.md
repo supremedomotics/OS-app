@@ -367,6 +367,90 @@ supported clusters/attributes), most naturally as a second `ServerNode` test fix
 commissionable peer so `commission()`/`nodes()` can be exercised end-to-end for real, then Phase 3
 (generic read/write/invoke/subscribe engine) to make `invoke()`/`subscribe()` real and unblock
 `MatterProtocolDriver.command()`/`getState()` for controller-commissioned devices.
+## Session: Apple TV HAP Pairing PIN UI (gap fix)
+
+Closed the gap where `apps/web-homeowner` had zero UI for entering the 4-digit HAP pairing PIN
+an Apple TV shows on first pairing — the driver/pairing crypto already existed
+(`AppleTvPairingRequiredError`, `hapPairSetup`) but there was no HTTP route or frontend to ever
+collect the PIN, so a paired Apple TV sat stuck in `pairing_required` forever.
+
+**1. Split HAP pair-setup into two phases** (`services/protocols/src/apple-tv-hap-pairing.ts`):
+added `hapPairSetupBegin(identity, exchange)` — sends M1 (which is what makes the real Apple TV
+display its PIN) and returns a `PairSetupSession` whose `submitPin(pin)` completes M3-M6. The
+original `hapPairSetup(pin, identity, exchange)` is now a thin wrapper (`begin` then
+`submitPin`) — kept for existing tests/`pairAppleTvMrp`'s already-have-the-PIN callers.
+Necessary because the real handshake can't take the PIN upfront in an installer-driven HTTP
+flow: the PIN is only known AFTER M1 triggers the TV to show it, but M1 has to be sent by
+*something* that then waits an arbitrary real-world amount of time for a person to read and
+type the PIN — that "something" is now a server-held session, not a single blocking call.
+
+**2. `beginAppleTvMrpPairing(address, deviceId, opts)`** (`apple-tv-mrp-client.ts`) — opens the
+real MRP transport, sends M1 via `hapPairSetupBegin`, and returns an
+`AppleTvMrpPairingSession { submitPin(pin), cancel() }` that owns the open socket. `pairAppleTvMrp`
+(existing one-shot function) now internally reuses the same split machinery.
+
+**3. Gateway session store** (`services/gateway/src/installer-context.ts`,
+`InstallerServices.startAppleTvPairing`/`submitAppleTvPairingPin`) — an in-memory
+`Map<DeviceId, { session, timer }>`, same "in-memory, no durability needed" pattern as the
+existing KNX import-job/chunked-upload maps in the same class, with a 2-minute TTL that cancels
+an abandoned attempt (installer never submits a PIN) so no socket leaks forever. Reuses the
+EXACT SAME `AppleTvCredentialStore`/`DriverSecretCrypto` `nativeDriverContext()`'s
+`appleTvConnect` already wires — never a second credential store.
+
+**4. New `SupremeIntegrationLayer.rebindNative()`** (`services/integration-layer/src/sil.ts`) —
+thin delegate to the existing `DriverBindingEngine.rebind()` (unbind+bind), exposed publicly for
+the first time. Needed because `AppleTvProtocolDriver.bind()` early-returns for an
+already-bound deviceId (adds the capability only) — after pairing succeeds, the binding already
+exists, so a plain re-`bindNative()` would never trigger `connectBinding()` again. Without this
+the device would stay `pairing_required` until the hub's next restart.
+
+**5. New gateway routes** (`services/gateway/src/routes/devices.ts`):
+`POST /v1/devices/:id/apple-tv/pairing/start` → `{ status: "awaiting_pin", deviceId, expiresInMs }`
+`POST /v1/devices/:id/apple-tv/pairing/submit` (body `{ pin }`) → `{ status: "paired" | "wrong_pin" | "expired" }`
+(wrong PIN / expired are 200s with a status field, not HTTP errors — expected, retryable
+outcomes the UI re-prompts for). Schemas added to `packages/supreme-contracts/src/installer.ts`
+(`StartAppleTvPairingResponse`, `SubmitAppleTvPinRequest`, `SubmitAppleTvPinResponse`). SDK
+methods added to `packages/supreme-sdk-ts/src/client.ts`.
+
+**6. Frontend** — new shared `apps/web-homeowner/src/features/media/apple-tv-pin-modal.tsx`
+(`AppleTvPinModal`), reused from two entry points (never forked per entry point):
+  - `discover.tsx`'s `FoundDevice`: right after commissioning an `appletv` device, opens the PIN
+    modal automatically instead of closing the card (§ real-world UX: pairing is required, not
+    optional, for this one protocol).
+  - `device-detail-sections.tsx`'s `DiagnosticsSection`: an already-commissioned Apple TV whose
+    credentials went stale (e.g. "Forget This Accessory" on the TV) shows an "Enter Apple TV
+    PIN" button, gated on a REAL signal — `dd.protocol === "appletv" && dd.connectionStatus ===
+    "disconnected" && /pairing/i.test(dd.lastError)` — i.e. `AppleTvPairingRequiredError`'s own
+    message surfacing through the existing Diagnostics `lastError` field, never a fabricated new
+    connection state.
+  - Reused the existing `.modal-backdrop`/`.modal` CSS classes (`styles.css`) rather than
+    inventing a new overlay pattern.
+
+**7. Tests:** `services/protocols/src/apple-tv-mrp-client.test.ts` — 2 new tests reusing the
+existing `FakeMrpAppleTv` deterministic-fake-accessory harness: begin+submitPin completes and the
+resulting client actually works end-to-end; `cancel()` releases the transport and leaves no
+credentials. (A "wrong PIN" case was attempted but dropped — the shared fake accessory harness
+throws synchronously on a wrong SRP password instead of sending a real M4 error TLV, which hangs
+the client waiting for a reply that never comes; fixing that is a harness change, not this
+feature's job. `apple-tv-hap-pairing.test.ts` already separately covers "wrong PIN rejected" at
+the crypto layer via a harness that does model it correctly.)
+
+**Verified:** `pnpm build` (all 57 packages) and `pnpm --filter <pkg> typecheck` clean for
+`@supreme/protocols`, `@supreme/integration-layer`, `@supreme/gateway`, `@supreme/contracts`,
+`@supreme/sdk`, `@supreme/web-homeowner`. `vitest run` on the three apple-tv-*.test.ts files:
+21/21 passing.
+
+**Known gaps / next steps:**
+- No real-device manual test yet (no physical Apple TV available in this environment) — the
+  fake-accessory harness proves the protocol-level split is correct, but the real end-to-end
+  "TV shows PIN → installer types it → device reconnects" flow has not been visually verified in
+  a browser (out of scope per this task's own instructions — no running stack/Playwright).
+  Recommend a real-device smoke test as the very next step before shipping.
+- The `FakeMrpAppleTv` test harness doesn't model a real wrong-PIN M4 error response (it throws
+  instead) — worth fixing separately so a "wrong PIN" split-pairing test can be added.
+- `startAppleTvPairing`'s 2-minute TTL is a fixed constant (`InstallerServices.
+  APPLE_TV_PAIRING_TTL_MS`), not configurable — fine for now, revisit if installers report it's
+  too short/long in the field.
 
 ## Session: Phase 13.4 — iOS Runtime / VoIP Wake Foundation
 

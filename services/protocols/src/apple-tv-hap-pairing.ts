@@ -95,17 +95,32 @@ export interface PairSetupResult {
 export type HapExchange = (outgoing: Buffer) => Promise<Buffer>;
 
 /**
- * Runs the controller side of HAP pair-setup (M1-M6) against `exchange`, using the PIN
- * displayed on the Apple TV. Verified message/state sequence against pyatv's
- * `hap_srp.py`/pairing state machine: M1 PS_Start(state=1) -> M2(state=2, salt+B) ->
- * M3(state=3, A+M1) -> M4(state=4, M2 proof) -> M5(state=5, encrypted controller
- * identity+ltpk+signature) -> M6(state=6, encrypted accessory identity+ltpk+signature).
+ * The paused-mid-handshake half of pair-setup: M1 has already been sent (which is what
+ * causes the real Apple TV to display its on-screen PIN) and M2 (salt + server public
+ * key) has already been received — everything needed to complete M3-M6 is captured in
+ * this closure, so the caller can hold it open across an arbitrary real-world delay
+ * (the time it takes a person to read a PIN off their TV and type it into a phone)
+ * without re-deriving anything or re-sending M1 a second time.
  */
-export async function hapPairSetup(
-  pin: string,
+export interface PairSetupSession {
+  /** Completes M3-M6 with the PIN the accessory displayed. Rejects (without leaving the
+   * session usable again) on a wrong PIN or any transport/protocol failure — the caller
+   * decides whether to let the user retry with a fresh session. */
+  submitPin(pin: string): Promise<PairSetupResult>;
+}
+
+/**
+ * M1 (start pairing) + M2 (receive salt/server public key) only — verified against
+ * pyatv's `hap_srp.py`/pairing state machine, same sequence {@link hapPairSetup}
+ * documents. Split out so a transport-owning caller (e.g. the gateway's Apple TV
+ * pairing route) can send M1 — which is what makes the real Apple TV show its PIN —
+ * BEFORE it has a PIN to complete the exchange with, then resume once the user submits
+ * one, all without a second M1/M2 round trip.
+ */
+export async function hapPairSetupBegin(
   identity: HapLongTermIdentity,
   exchange: HapExchange,
-): Promise<PairSetupResult> {
+): Promise<PairSetupSession> {
   // M1: start pairing.
   const m1 = encodeTlv8([[HapTlvTag.SeqNo, Buffer.from([1])], [HapTlvTag.Method, Buffer.from([0])]]);
   const m2 = decodeTlv8(await exchange(m1));
@@ -113,6 +128,37 @@ export async function hapPairSetup(
   const B = m2.get(HapTlvTag.PublicKey);
   if (!salt || !B) throw new Error("hap-pair-setup: M2 missing salt/public key");
 
+  return {
+    async submitPin(pin: string): Promise<PairSetupResult> {
+      return continuePairSetup(pin, identity, exchange, salt, B);
+    },
+  };
+}
+
+/**
+ * Runs the controller side of HAP pair-setup (M1-M6) against `exchange` in one
+ * continuous call, using the PIN displayed on the Apple TV. Convenience wrapper over
+ * {@link hapPairSetupBegin} for callers (tests, the one-shot `pairAppleTvMrp` CLI-style
+ * flow) that already have the PIN before pairing starts — a real installer-driven flow
+ * generally does NOT (the PIN is only shown after M1), and should use
+ * `hapPairSetupBegin`/`submitPin` instead so M1 can be sent before the PIN is known.
+ */
+export async function hapPairSetup(
+  pin: string,
+  identity: HapLongTermIdentity,
+  exchange: HapExchange,
+): Promise<PairSetupResult> {
+  const session = await hapPairSetupBegin(identity, exchange);
+  return session.submitPin(pin);
+}
+
+async function continuePairSetup(
+  pin: string,
+  identity: HapLongTermIdentity,
+  exchange: HapExchange,
+  salt: Buffer,
+  B: Buffer,
+): Promise<PairSetupResult> {
   const secret1 = await SRP.genKey();
   const client = new SrpClient(SRP.params.hap, salt, Buffer.from("Pair-Setup"), Buffer.from(pin), secret1, true);
   client.setB(B);
