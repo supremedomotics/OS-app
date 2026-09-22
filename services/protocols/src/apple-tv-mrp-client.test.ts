@@ -29,7 +29,7 @@ import {
   encodeVarint,
 } from "./apple-tv-mrp-protobuf.js";
 import { createMrpTcpTransport } from "./apple-tv-mrp-transport.js";
-import { pairAppleTvMrp, createMrpAppleTvConnect } from "./apple-tv-mrp-client.js";
+import { pairAppleTvMrp, createMrpAppleTvConnect, beginAppleTvMrpPairing } from "./apple-tv-mrp-client.js";
 import { createAppleTvCredentialStore, createInMemoryCredentialKv } from "./apple-tv-credential-store.js";
 import { createDriverSecretCrypto, type DriverSecretCrypto } from "@supreme/drivers";
 import type { DeviceId } from "@supreme/domain-model";
@@ -399,6 +399,50 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     await vi.waitFor(() => expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play));
 
     await client.close?.();
+  });
+
+  describe("split pairing session (§ HAP pairing gap fix — M1 sent before the PIN is known)", () => {
+    it("begins pairing (M1/M2), then completes M3-M6 once the PIN is submitted", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+
+      const kv = createInMemoryCredentialKv();
+      const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+      const deviceId = "appletv-split-pairing" as DeviceId;
+      const address = `127.0.0.1:${port}`;
+      const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+
+      // Real Apple TV only shows the PIN after M1 — this call already sent M1 (and got
+      // M2 back), but no credentials exist yet: pairing is genuinely mid-handshake.
+      const session = await beginAppleTvMrpPairing(address, deviceId, clientOpts);
+      expect(await credentialStore.load(deviceId)).toBeNull();
+
+      await session.submitPin(fakeTv.pin);
+      expect(await credentialStore.load(deviceId)).not.toBeNull();
+
+      const client = await createMrpAppleTvConnect(clientOpts)({ address, deviceId });
+      await client.play();
+      await vi.waitFor(() => expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play));
+      await client.close?.();
+    });
+
+    it("cancel() releases the open transport for an abandoned attempt without pairing", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+
+      const kv = createInMemoryCredentialKv();
+      const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+      const deviceId = "appletv-cancelled" as DeviceId;
+      const address = `127.0.0.1:${port}`;
+      const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+
+      const session = await beginAppleTvMrpPairing(address, deviceId, clientOpts);
+      session.cancel();
+      await expect(session.submitPin(fakeTv.pin)).rejects.toThrow(/closed/);
+      expect(await credentialStore.load(deviceId)).toBeNull();
+    });
   });
 
   it("throws AppleTvPairingRequiredError when no credentials are stored", async () => {

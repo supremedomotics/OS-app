@@ -15,6 +15,7 @@ import {
 } from "./api.js";
 import { friendlyType } from "./devices.js";
 import { useAsync } from "./use-async.js";
+import { AppleTvPinModal } from "./features/media/apple-tv-pin-modal.js";
 
 /**
  * The SupremeOS Universal Page Structure (§ Design System) — Information, Diagnostics,
@@ -119,7 +120,14 @@ function formatTimestamp(iso: string): string {
 export function DiagnosticsSection({ device }: { device: Device }) {
   const [registry] = useAsync(() => fetchDriverRegistry());
   const [bindings] = useAsync(() => client.protocolBindings());
-  const [driverDiagnostics] = useAsync(() => fetchDeviceDiagnostics(device.id), [device.id]);
+  const [driverDiagnostics, refreshDiagnostics] = useAsync(() => fetchDeviceDiagnostics(device.id), [device.id]);
+  // § Apple TV HAP pairing (gap fix) — an already-commissioned Apple TV whose stored
+  // credentials went stale (e.g. "Forget This Accessory" on the TV) surfaces this
+  // through the SAME real signal every other disconnect does — `AppleTvPairingRequiredError`'s
+  // message, verbatim, in `lastError` — never a separate fabricated "needs re-pairing"
+  // flag. Never gated to devMode: an installer/homeowner needs to see and act on this
+  // even outside Diagnostics' own devMode wrapper, so this one row renders unconditionally.
+  const [showPinModal, setShowPinModal] = useState(false);
   const driver = device.driverId
     ? registry?.find((r) => r.installedId === device.driverId || r.key === device.driverId) ?? null
     : null;
@@ -163,9 +171,28 @@ export function DiagnosticsSection({ device }: { device: Device }) {
     if (dd.lastError) rows.push({ label: "Last error", value: dd.lastError, icon: "⚠️", tone: "warning" });
   }
 
+  // § Apple TV HAP pairing (gap fix) — the honest signal, not a guessed device-type
+  // check: this protocol's own driver threw AppleTvPairingRequiredError, and its
+  // message (never rewritten) ended up here as `lastError`. Every other protocol's
+  // `lastError` never matches, so this never mis-fires for an unrelated disconnect.
+  const needsApplePairing = dd?.protocol === "appletv" && dd.connectionStatus === "disconnected" && /pairing/i.test(dd.lastError ?? "");
+
   return (
     <CollapsibleSection title="Diagnostics">
       <DeviceFacts rows={rows} />
+      {needsApplePairing && (
+        <div className="drv-actions">
+          <button className="primary" onClick={() => setShowPinModal(true)}>Enter Apple TV PIN</button>
+        </div>
+      )}
+      {showPinModal && (
+        <AppleTvPinModal
+          deviceId={device.id}
+          deviceName={device.name}
+          onPaired={() => { setShowPinModal(false); refreshDiagnostics(); }}
+          onClose={() => setShowPinModal(false)}
+        />
+      )}
     </CollapsibleSection>
   );
 }

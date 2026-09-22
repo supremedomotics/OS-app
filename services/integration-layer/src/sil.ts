@@ -165,6 +165,19 @@ export class SupremeIntegrationLayer {
     await this.router.bindingEngine.bind(binding, provider);
   }
 
+  /**
+   * Force a fresh connect attempt for an already-bound device (unbind + bind again via
+   * {@link DriverBindingEngine.rebind}) — used after an out-of-band credential change a
+   * driver's own reconnect loop can't discover on its own, e.g. Apple TV HAP pairing
+   * completing: the binding already exists (so plain `bindNative` would just add the
+   * capability, per `AppleTvProtocolDriver.bind()`'s early-return for a known deviceId),
+   * but the driver's `connectBinding()` needs to run again now that credentials exist.
+   */
+  async rebindNative(binding: ProtocolBinding, provider: string): Promise<void> {
+    if (!this.router) throw new SupremeError("conflict", "provider binding is not enabled on this hub");
+    await this.router.bindingEngine.rebind(binding, provider);
+  }
+
   /** Register a Supreme device capability ↔ backend entity mapping — used by
    * providers (e.g. Home Assistant) whose commissioning resolves through an entity
    * id rather than a wire address alone. */

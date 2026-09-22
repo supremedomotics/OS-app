@@ -2,6 +2,7 @@ import {
   BulkDeviceRequest,
   CommandRequest,
   DeviceRawCommandRequest,
+  SubmitAppleTvPinRequest,
   SupremeError,
   UpdateDeviceRequest,
   type CommandResponse,
@@ -10,6 +11,8 @@ import {
   type DeviceResponse,
   type DeviceTraceResponse,
   type MediaQueueResponse,
+  type StartAppleTvPairingResponse,
+  type SubmitAppleTvPinResponse,
 } from "@supreme/contracts";
 import type { DeviceId, RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
@@ -444,6 +447,45 @@ export function registerDeviceRoutes(app: FastifyInstance, ctx: AppContext): voi
       }
     },
   );
+
+  // § Apple TV HAP pairing (gap fix) — begins pairing for an already-commissioned Apple
+  // TV: opens a real MRP connection and sends M1, which is what makes the real device
+  // show its 4-digit on-screen PIN. Same "update" permission as the AVR input-rename
+  // routes above (an installer/admin action on an existing device, not a read).
+  app.post<{ Params: { id: string } }>("/v1/devices/:id/apple-tv/pairing/start", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "update");
+      const { expiresInMs } = await ctx.installer.startAppleTvPairing(deviceId);
+      const body: StartAppleTvPairingResponse = { status: "awaiting_pin", deviceId, expiresInMs };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // Completes M3-M6 with the PIN read off the Apple TV's screen, against the connection
+  // `.../pairing/start` opened and held server-side. `"wrong_pin"`/`"expired"` are sent
+  // as 200s with a status field (not an HTTP error) — a mistyped PIN is an expected,
+  // retryable outcome the UI re-prompts for, not a server fault.
+  app.post<{ Params: { id: string }; Body: unknown }>("/v1/devices/:id/apple-tv/pairing/submit", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      const deviceId = req.params.id as DeviceId;
+      const device = await ctx.home.getDevice(deviceId);
+      if (!device) throw new SupremeError("not_found", "device not found");
+      await enforce(ctx, user, "device", deviceId, "update");
+      const { pin } = SubmitAppleTvPinRequest.parse(req.body);
+      const status = await ctx.installer.submitAppleTvPairingPin(deviceId, pin);
+      const body: SubmitAppleTvPinResponse = { status };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
 }
 
 /** § Pass 12.6, Part E — shared by the PATCH/DELETE input-name routes: apply the change to
