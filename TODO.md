@@ -1393,6 +1393,26 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Apple TV HAP pairing PIN UI (gap fix)** — `apps/web-homeowner` had zero UI for entering the
+  4-digit HAP pairing PIN an Apple TV shows on first pairing, even though the real driver/crypto
+  already existed (`AppleTvPairingRequiredError`, `hapPairSetup`); a paired Apple TV was stuck
+  disconnected forever with no way to ever supply the PIN. Split `hapPairSetup` into
+  `hapPairSetupBegin`/`submitPin` (`services/protocols/src/apple-tv-hap-pairing.ts`) and added
+  `beginAppleTvMrpPairing` (`apple-tv-mrp-client.ts`) so M1 (which makes the real TV show its
+  PIN) can be sent before the PIN is known, holding the open MRP connection server-side (a new
+  TTL'd session map in `InstallerServices`, `installer-context.ts`) until the installer submits
+  one. New `SIL.rebindNative()` (`services/integration-layer/src/sil.ts`) forces a fresh connect
+  after pairing succeeds. New routes `POST /v1/devices/:id/apple-tv/pairing/{start,submit}`
+  (`routes/devices.ts`), contracts in `supreme-contracts/src/installer.ts`, SDK methods in
+  `supreme-sdk-ts/src/client.ts`. New shared `AppleTvPinModal`
+  (`apps/web-homeowner/src/features/media/apple-tv-pin-modal.tsx`) wired into both
+  `discover.tsx` (right after commissioning an Apple TV) and `device-detail-sections.tsx`'s
+  Diagnostics section (re-pairing an already-commissioned device whose credentials went stale).
+  2 new tests in `apple-tv-mrp-client.test.ts` (21/21 passing across the three apple-tv-*
+  suites); `pnpm build` clean across all 57 packages. No real-device manual test yet (no
+  physical Apple TV available) — see `SESSION_HANDOFF.md` for the full breakdown and recommended
+  next step (real-device smoke test).
+
 - **Casambi Cloud "Network id" field caused a live 404 when set to the network's
   display name instead of its real Casambi-internal ID** — found via a real user
   screenshot (`HTTP 404` on `casambi: session request failed`). Root cause:

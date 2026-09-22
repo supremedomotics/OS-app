@@ -11,6 +11,7 @@ import {
   pairCasambiGroup,
   type DriverEntry,
 } from "./api.js";
+import { AppleTvPinModal } from "./features/media/apple-tv-pin-modal.js";
 
 /**
  * Discover Devices (§ Automatic Device Discovery + § Unified Onboarding). One click scans every
@@ -718,6 +719,11 @@ function FoundDevice({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [placedIn, setPlacedIn] = useState("");
+  // § Apple TV HAP pairing (gap fix) — once this Apple TV is commissioned, its binding
+  // exists but connectBinding() will hit AppleTvPairingRequiredError immediately (no
+  // credentials yet); prompt for the PIN right away instead of leaving the device stuck
+  // disconnected until someone happens to open its detail page's Diagnostics section.
+  const [pairingDevice, setPairingDevice] = useState<{ id: string; name: string } | null>(null);
   // § live-confirmed fix — how this device physically moves is a real fact only the
   // installer knows (a roller blind's `position` capability looks byte-for-byte
   // identical to a sliding curtain's — the same DPT/wire shape, same 0..100 command),
@@ -769,7 +775,7 @@ function FoundDevice({
 
       // 3) Commission the device into its place.
       setStep("Pairing device…");
-      await client.commission({
+      const result = await client.commission({
         backendId: device.backendId,
         name: name.trim() || device.suggestedName,
         roomId: targetRoomId,
@@ -795,7 +801,13 @@ function FoundDevice({
       setStep("Ready");
       setPlacedIn(placedLabel);
       setDone(true);
-      setTimeout(onPaired, 900);
+      if (device.protocol === "appletv") {
+        // HAP pairing needs an installer-present flow (read the TV's on-screen PIN) —
+        // never auto-close this card until that finishes or is explicitly cancelled.
+        setPairingDevice({ id: result.device.id, name: result.device.name });
+      } else {
+        setTimeout(onPaired, 900);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Pairing failed.");
       setStep(null);
@@ -927,6 +939,14 @@ function FoundDevice({
             </>
           )}
         </div>
+      )}
+      {pairingDevice && (
+        <AppleTvPinModal
+          deviceId={pairingDevice.id}
+          deviceName={pairingDevice.name}
+          onPaired={() => { setPairingDevice(null); onPaired(); }}
+          onClose={() => { setPairingDevice(null); onPaired(); }}
+        />
       )}
     </div>
   );
