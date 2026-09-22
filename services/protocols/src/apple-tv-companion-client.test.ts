@@ -66,31 +66,67 @@ function realSecretCrypto() {
  * AAD-bound session — built from the same verified primitives/constants the client
  * module uses.
  */
-class FakeCompanionAppleTv {
+export class FakeCompanionAppleTv {
   readonly pin = "5678";
   readonly pairingId = Buffer.from("fake-companion-appletv");
-  private readonly ltKeyPair = generateKeyPairSync("ed25519");
-  private readonly ltpk = (this.ltKeyPair.publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32);
-  private readonly ltPriv = this.ltKeyPair.privateKey;
+  private readonly ltKeyPair: ReturnType<typeof generateKeyPairSync>;
+  private readonly ltpk: Buffer;
+  private readonly ltPriv: ReturnType<typeof generateKeyPairSync>["privateKey"];
   knownControllers = new Map<string, Buffer>();
+
+  /** `reuseIdentity`: pass a PREVIOUSLY-CREATED `FakeCompanionAppleTv`'s long-term
+   * identity to simulate "the SAME physical Apple TV" coming back on a fresh
+   * connection/process — a genuinely different key here would (correctly) fail
+   * pair-verify, since it would no longer be the accessory the controller paired with. */
+  constructor(reuseIdentity?: FakeCompanionAppleTv) {
+    if (reuseIdentity) {
+      this.ltKeyPair = reuseIdentity.ltKeyPair;
+      this.ltpk = reuseIdentity.ltpk;
+      this.ltPriv = reuseIdentity.ltPriv;
+    } else {
+      this.ltKeyPair = generateKeyPairSync("ed25519");
+      this.ltpk = (this.ltKeyPair.publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32);
+      this.ltPriv = this.ltKeyPair.privateKey;
+    }
+  }
   apps: Record<string, string> = { "com.netflix.Netflix": "Netflix", "com.google.ios.youtube": "YouTube" };
   /** Test-only: when set, sent verbatim instead of `apps` — for malformed-entry tests. */
   appListOverride: Record<string, OpackValue> | null = null;
   receivedLaunches: Array<Record<string, OpackValue>> = [];
   launchShouldFail = false;
+  private readonly sockets = new Set<Socket>();
 
-  start(): Promise<{ server: Server; port: number }> {
-    return new Promise((resolve) => {
+  /** Test convenience: forcibly severs every open connection (simulates the network
+   * dropping this Companion endpoint out from under an already-connected client). */
+  destroyAllConnections(): void {
+    for (const s of this.sockets) s.destroy();
+  }
+
+  start(port = 0, retriesLeft = 20): Promise<{ server: Server; port: number }> {
+    return new Promise((resolve, reject) => {
       const server = createServer((sock) => this.handleConnection(sock));
-      server.listen(0, "127.0.0.1", () => {
+      server.once("error", (err: NodeJS.ErrnoException) => {
+        server.close();
+        // Rebinding to a just-closed port (test-only scenario: simulating a Companion
+        // endpoint coming back) can hit a brief EADDRINUSE on some platforms while the
+        // OS finishes releasing it — retry a few times rather than hang forever.
+        if (err.code === "EADDRINUSE" && retriesLeft > 0 && port !== 0) {
+          setTimeout(() => this.start(port, retriesLeft - 1).then(resolve, reject), 50);
+        } else {
+          reject(err);
+        }
+      });
+      server.listen(port, "127.0.0.1", () => {
         const addr = server.address();
-        const port = typeof addr === "object" && addr ? addr.port : 0;
-        resolve({ server, port });
+        const boundPort = typeof addr === "object" && addr ? addr.port : 0;
+        resolve({ server, port: boundPort });
       });
     });
   }
 
   private handleConnection(sock: Socket): void {
+    this.sockets.add(sock);
+    sock.on("close", () => this.sockets.delete(sock));
     let buffer = Buffer.alloc(0);
     let sharedSecret: Buffer | null = null;
     let srpServer: SrpServer | null = null;

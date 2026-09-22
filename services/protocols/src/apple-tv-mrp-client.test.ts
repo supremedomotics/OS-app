@@ -83,7 +83,7 @@ function realSecretCrypto(): DriverSecretCrypto {
  * abstraction that allows a deterministic fake Apple TV server" without needing
  * physical hardware.
  */
-class FakeMrpAppleTv {
+export class FakeMrpAppleTv {
   readonly pin = "1234";
   readonly pairingId = Buffer.from("fake-mrp-appletv");
   private readonly ltKeyPair = generateKeyPairSync("ed25519");

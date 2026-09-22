@@ -35,6 +35,7 @@ import type { MediaArtwork } from "@supreme/integration-layer";
 import { AppleTvPairingRequiredError, type AppleTvClient, type AppleTvConnect, type AppleTvNowPlaying } from "./apple-tv-driver.js";
 import type { TvForegroundApp } from "./tv-sdk/tv-types.js";
 import { connectAppleTvCompanion, type AppleTvCompanionAppClient } from "./apple-tv-companion-client.js";
+import { discoverCompanionAddress } from "./apple-tv-companion-discovery.js";
 
 /** MRP-specific post-pair-verify session key derivation strings — verified against
  * `pyatv/protocols/mrp/protocol.py`'s `SRP_SALT`/`SRP_OUTPUT_INFO`/`SRP_INPUT_INFO`. */
@@ -94,17 +95,25 @@ export interface AppleTvMrpClientOptions {
   hubName: string;
   /** Injectable transport factory (tests use a deterministic fake MRP peer). */
   transportFactory?: (host: string, port: number) => AppleTvMrpTransport;
-  /** § Phase 3 — OPTIONAL Companion session, additive to the MRP connection. When
+  /** § Phase 3/3.1 — OPTIONAL Companion session, additive to the MRP connection. When
    * present, the returned client also gets `getApplications`/`launchApplication`/
    * `launchDeepLink` (real, Companion-backed — see `apple-tv-companion-client.ts`).
-   * Absent, or `addressFor` returning `null`, or Companion pairing simply not existing
-   * yet: those three methods are left OFF the client (never present-but-throwing) —
-   * MRP's own connection is never blocked or torn down by a Companion failure. Companion
-   * discovery (`_companion-link._tcp`) is not implemented this phase — `addressFor`
-   * must be supplied out-of-band (e.g. from commissioning). */
+   * Absent, discovery finding nothing, or Companion pairing simply not existing yet:
+   * those three methods are left OFF the client (never present-but-throwing) — MRP's
+   * own connection is never blocked or torn down by a Companion failure. A Companion-
+   * only disconnect (MRP stays healthy) is retried independently with its own bounded
+   * exponential backoff — see `scheduleCompanionReconnect` below — never a reconnect
+   * storm, never touching the MRP connection. */
   companion?: {
     credentialStore: AppleTvCredentialStore;
-    addressFor: (deviceId: DeviceId) => string | null;
+    /** Explicit/out-of-band Companion address — a testability fallback. When omitted,
+     * the production path applies: real mDNS discovery (`_companion-link._tcp`,
+     * verified against pyatv's `scan()`) against the same host as this MRP connection. */
+    addressFor?: (deviceId: DeviceId) => string | null;
+    /** Injectable mDNS browser for `discoverCompanionAddress` (tests). */
+    mdns?: (serviceType: string) => Promise<import("./mdns.js").MdnsService[]>;
+    reconnectBaseMs?: number;
+    reconnectMaxMs?: number;
   };
 }
 
@@ -287,31 +296,81 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
         };
       },
       async close() {
+        companionClosed = true;
+        if (companionReconnectTimer) clearTimeout(companionReconnectTimer);
         transport.disconnect();
         await companionClient?.close();
       },
     };
 
-    // § Phase 3 — best-effort, additive Companion session for app discovery/launch.
-    // A Companion failure (not configured, not paired, connect error) never blocks or
-    // tears down the already-working MRP connection — it just means the three
-    // Companion-only methods stay off this client, exactly like "no artwork" is honest
-    // absence rather than a crash.
+    // § Phase 3/3.1 — best-effort, additive Companion session for app discovery/
+    // launch. A Companion failure (not configured, not paired, connect error) never
+    // blocks or tears down the already-working MRP connection — it just means the
+    // three Companion-only methods stay off this client, exactly like "no artwork" is
+    // honest absence rather than a crash. A Companion-only disconnect is retried on its
+    // OWN bounded exponential backoff, entirely independent of MRP's — reconnecting
+    // Companion never touches the MRP transport/session, and an MRP reconnect (which
+    // reruns this whole connect function fresh) naturally supersedes any pending
+    // Companion retry for the old attempt.
     let companionClient: AppleTvCompanionAppClient | null = null;
-    const companionAddress = opts.companion?.addressFor(deviceId) ?? null;
-    if (opts.companion && companionAddress) {
+    let companionReconnectAttempts = 0;
+    let companionReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let companionClosed = false; // set by client.close() — stops further Companion retries
+
+    async function connectCompanion(): Promise<void> {
+      if (!opts.companion || companionClosed) return;
+      const companionAddress =
+        opts.companion.addressFor?.(deviceId) ?? (await discoverCompanionAddress(host!, opts.companion.mdns));
+      if (!companionAddress) return; // not discoverable right now — no methods added, no crash
       try {
-        companionClient = await connectAppleTvCompanion(companionAddress, deviceId, {
+        const newClient = await connectAppleTvCompanion(companionAddress, deviceId, {
           credentialStore: opts.companion.credentialStore,
         });
-        client.getApplications = () => companionClient!.getApplications();
-        client.launchApplication = (bundleIdentifier: string) => companionClient!.launchApplication(bundleIdentifier);
-        client.launchDeepLink = (urlOrScheme: string) => companionClient!.launchDeepLink(urlOrScheme);
+        if (companionClosed) {
+          // client.close() ran while this connect attempt was in flight — never
+          // resurrect a Companion session (or leave its socket open) after intentional
+          // shutdown; tear this one down immediately instead of wiring it up.
+          await newClient.close();
+          return;
+        }
+        companionClient = newClient;
+        companionReconnectAttempts = 0;
+        client.getApplications = () => newClient.getApplications();
+        client.launchApplication = (bundleIdentifier: string) => newClient.launchApplication(bundleIdentifier);
+        client.launchDeepLink = (urlOrScheme: string) => newClient.launchDeepLink(urlOrScheme);
+        newClient.onClose(() => {
+          // A stale close from an already-superseded Companion connection (e.g. this
+          // very reconnect raced a newer one) must never schedule a duplicate retry or
+          // clobber a client that's already moved on to a different companionClient.
+          if (companionClient !== newClient || companionClosed) return;
+          companionClient = null;
+          delete client.getApplications;
+          delete client.launchApplication;
+          delete client.launchDeepLink;
+          scheduleCompanionReconnect();
+        });
       } catch {
-        // Not paired for Companion yet, or it's unreachable — leave the three methods
-        // off the client. The MRP connection above already succeeded and is unaffected.
+        // Not paired yet, rejected, or unreachable — leave the three methods off the
+        // client (they may already be off, or belonged to a prior attempt that never
+        // got this far) and fall through to the bounded retry below.
+        scheduleCompanionReconnect();
       }
     }
+
+    function scheduleCompanionReconnect(): void {
+      if (companionClosed || companionReconnectTimer) return;
+      const base = opts.companion?.reconnectBaseMs ?? 1000;
+      const max = opts.companion?.reconnectMaxMs ?? 60_000;
+      const delay = Math.min(max, base * 2 ** companionReconnectAttempts);
+      companionReconnectAttempts += 1;
+      companionReconnectTimer = setTimeout(() => {
+        companionReconnectTimer = null;
+        void connectCompanion();
+      }, delay);
+      (companionReconnectTimer as { unref?: () => void }).unref?.();
+    }
+
+    await connectCompanion();
 
     let lastArtworkAvailable = false;
 

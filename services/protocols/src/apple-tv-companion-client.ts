@@ -118,6 +118,11 @@ export interface AppleTvCompanionAppClient {
   getApplications(): Promise<TvAppRegistryEntry[]>;
   launchApplication(bundleIdentifier: string): Promise<void>;
   launchDeepLink(urlOrScheme: string): Promise<void>;
+  /** § Phase 3.1 — fires when this Companion session's own transport closes, whether
+   * cleanly (`close()` called) or not (network drop). Lets a caller (the MRP client)
+   * detect a Companion-only disconnect and reconnect it independently, without
+   * touching the (possibly still-healthy) MRP connection. */
+  onClose(handler: (err: Error | null) => void): void;
   close(): Promise<void>;
 }
 
@@ -204,6 +209,9 @@ export async function connectAppleTvCompanion(
     },
     async launchDeepLink(urlOrScheme: string): Promise<void> {
       await sendCommand("_launchApp", { _urlS: urlOrScheme });
+    },
+    onClose(handler: (err: Error | null) => void): void {
+      transport.onClose(handler);
     },
     async close(): Promise<void> {
       transport.disconnect();
