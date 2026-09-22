@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { probeAvr } from "./avr-probe.js";
 import {
@@ -30,6 +30,7 @@ import {
   seedFirstPartyCatalog,
   withSecretEncryption,
   migrateDriverSecretsToEncrypted,
+  createDriverSecretCrypto,
   type IInstalledDriverStore,
   type DriverSecretCrypto,
   type ConfigFallbacks,
@@ -69,6 +70,10 @@ import {
   type DuplicateCheckResult,
   type DuplicateDecision,
   type ExistingInstallationState,
+  createMrpAppleTvConnect,
+  createAppleTvCredentialStore,
+  createBindingConfigKv,
+  createInMemoryCredentialKv,
 } from "@supreme/protocols";
 import {
   CommissioningService,
@@ -1821,7 +1826,35 @@ export class InstallerServices {
           return casambiUnitIdFromBackendId(bare);
         },
       },
+      // § Apple TV Phase 4 — real, pairing-aware MRP connect(), built from the SAME
+      // `protocolBindingStore`/`driverSecretCrypto` every other driver's per-device
+      // secrets go through (never a second credential store). Without a database
+      // (dev/mock backend) there is no durable binding store to attach credentials to
+      // — pairing still works within a boot session via an in-memory fallback, the
+      // same honest degradation every other persisted feature has in that mode.
+      appleTvConnect: createMrpAppleTvConnect({
+        credentialStore: createAppleTvCredentialStore(
+          this.d.driverSecretCrypto ?? createDriverSecretCrypto(this.appleTvEphemeralSecretKey()),
+          this.d.protocolBindingStore ? createBindingConfigKv(this.d.protocolBindingStore, "media", "appletv") : createInMemoryCredentialKv(),
+        ),
+        hubIdentifier: "SUPREMEOS-HUB",
+        hubName: "SupremeOS Hub",
+      }),
     };
+  }
+
+  /** § Apple TV Phase 4 — a per-process, in-memory-only fallback key, used ONLY when
+   * no persisted `driverSecretCrypto` exists (no database configured). Generated once
+   * per `InstallerContext` instance so repeated `nativeDriverContext()` calls within
+   * the same process still decrypt each other's ciphertext; never persisted, never
+   * logged — matches the "no durable secret store in dev/mock mode" reality honestly
+   * instead of inventing a second on-disk key file outside the real secrets manager. */
+  private _appleTvEphemeralSecretKey: string | null = null;
+  private appleTvEphemeralSecretKey(): string {
+    if (!this._appleTvEphemeralSecretKey) {
+      this._appleTvEphemeralSecretKey = randomBytes(32).toString("base64");
+    }
+    return this._appleTvEphemeralSecretKey;
   }
 
   private casambiContextDefaults(): Pick<NativeDriverFactoryContext, "casambiCloudDefaults"> {
