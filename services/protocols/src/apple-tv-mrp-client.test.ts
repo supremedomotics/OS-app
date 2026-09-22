@@ -490,8 +490,9 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     // And the same credentials keep working once the real Apple TV is reachable again.
     const client = await connect({ address: `127.0.0.1:${port}`, deviceId });
     await client.play();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play);
+    // § Same flaky-fixed-sleep fix as the earlier de-flake pass — a real TCP + real
+    // ChaCha20-Poly1305 round-trip under host load can outrun a fixed sleep; poll instead.
+    await vi.waitFor(() => expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play));
     await client.close?.();
   });
 
@@ -518,9 +519,12 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
       home: [12, 0x40],
     } as const)) {
       await client.pressButton(button as any);
-      await new Promise((r) => setTimeout(r, 15));
+      // § Same flaky-fixed-sleep fix as above — poll instead of guessing a fixed delay.
+      await vi.waitFor(() => {
+        const events = fakeTv.receivedHidEvents.filter((e) => e.usagePage === usagePage && e.usage === usage);
+        expect(events.length).toBeGreaterThanOrEqual(2); // down + up
+      });
       const events = fakeTv.receivedHidEvents.filter((e) => e.usagePage === usagePage && e.usage === usage);
-      expect(events.length).toBeGreaterThanOrEqual(2); // down + up
       expect(events.some((e) => e.down === true)).toBe(true);
       expect(events.some((e) => e.down === false)).toBe(true);
     }
