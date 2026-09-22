@@ -112,14 +112,25 @@ const PROTOCOL_BRAND_LABEL: Record<"avr" | "yamaha", string> = { avr: "Denon/Mar
  * AVR brands as separate extensions." HEOS stays its own entry (standalone HEOS products, no
  * zone concept). KNX/Modbus/MQTT devices are usually better added via the ETS import / Bus
  * Binding power-user tools, but a single manual bind works the same way here too.
+ *
+ * Not every installed driver belongs in this list: a row here needs a verified, single
+ * plain-address binding scheme (host, host:port, or a sub-address under an already-configured
+ * bridge). Drivers with a group/fixture model instead of one address per device (Casambi
+ * fixtures, Zigbee join-by-pairing) don't fit this form and are added via their own flows —
+ * listing them here would fabricate a field that doesn't correspond to how the driver actually
+ * binds. `appletv` binds on a plain `host:port` (identical shape to the AVR entry, see
+ * `apple-tv-driver.ts`'s `connectBinding()`), but pairing an Apple TV requires a 4-digit PIN
+ * shown on the TV — there is no PIN-entry step in this app yet, so a manually-added Apple TV
+ * will commission but fail to connect until that UI exists (tracked separately).
  */
-const MANUAL_PROTOCOLS = ["avr-receiver", "heos", "knx", "modbus", "mqtt"] as const;
+const MANUAL_PROTOCOLS = ["avr-receiver", "heos", "knx", "modbus", "mqtt", "appletv"] as const;
 const MANUAL_ADDRESS_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string> = {
   "avr-receiver": "Receiver IP e.g. 192.168.1.50",
   heos: "Any one HEOS player's IP e.g. 192.168.1.51 (port 1255)",
   knx: "Group address e.g. 1/2/0",
   modbus: "Register e.g. 100",
   mqtt: "Base topic e.g. z2m/lamp",
+  appletv: "Apple TV IP e.g. 192.168.1.60 (pairing PIN prompt not yet built — see help text)",
 };
 // HEOS's player id (pid) is required — get it from the HEOS app's "About This Device" screen.
 const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | null> = {
@@ -128,6 +139,7 @@ const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | nul
   knx: null,
   modbus: '{"type":"holding","scale":0.1,"unit":"kWh","measure":"energy"}',
   mqtt: '{"field":"temperature","unit":"°C","measure":"temperature"}',
+  appletv: null,
 };
 
 /** The extension that drives a discovered device, from registry metadata.
