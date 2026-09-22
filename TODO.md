@@ -17,32 +17,25 @@
   `subscribe()`/`getState()`'s live-feedback path is still a stub — no attribute
   subscription/reporting exists yet, so `getState()` never gets populated for a
   controller-commissioned device.
+- **RESOLVED (Phase 3.4/3.5):** the real commission→read/write/invoke round trip now fully
+  passes, same-process and cross-process. Root cause of the long-standing PASE blocker: the
+  test fixture's `ServerNode.create()` never set `productDescription.deviceType`, so
+  `CommissioningServer#enterOnlineMode()` silently skipped arming the PASE commissioner —
+  fixed in `test-support/commissionable-fixture.ts`. A second, genuinely new bug surfaced once
+  commissioning worked: `cluster-engine.ts` was calling `.act()` on the `ClientNode` instead of
+  the resolved target endpoint, so `agent.get()` always resolved against the ROOT endpoint and
+  rejected every real cluster type as "Unsupported behavior" — fixed by scoping `.act()` to
+  `resolved.endpoint`. See `SESSION_HANDOFF.md`'s Phase 3.4/3.5 entry for full detail (also
+  fixed: no-argument command TLV validation, stale local-cache read-back via `getStateOf()`,
+  and a pre-existing node-id-collision test-design flaw in two "cross node boundary" e2e tests).
+  All three previously-blocked e2e suites are now green: `cluster-engine.e2e.test.ts` 4/4,
+  `cluster-engine.separate-process.e2e.test.ts` 4/4, `discovery.e2e.test.ts` 5/5.
 - **Next steps:** real Matter attribute subscriptions (live feedback → `getState()`
   population), reconciliation/recovery on subscription loss, then capability adapters mapping
   the now-real cluster inventory onto SupremeOS capabilities (Light/Lock/Climate/Cover/
   Sensor), and Extension Center version/rollback wiring (`services/drivers/src/manifests.ts`'s
   `supreme-matter` entry already tracks version 1.1.0 — no bump needed for Phase 3, which
   changed no persisted schema or external contract).
-- **Known environment/vendor-library limitation — root-caused further in Phase 3.3 (still
-  BLOCKED, confirmed NOT a SupremeOS bug):** the real commission→read/write/invoke round trip
-  still doesn't pass. Phase 3.3 traced the actual `@matter/node`/`@matter/protocol` 0.17.9
-  source: `Peers.forDescriptor()` + `ClientNode.commission()` is structurally IDENTICAL to
-  what the normal mDNS discovery path does internally (`ClientNodeFactory.create()` +
-  `agent.commissioning.commission()`) — confirmed the correct, intended API, not a misuse.
-  A vanilla, zero-SupremeOS reproduction (bare `@matter/main` `ServerNode`s only) hits the
-  IDENTICAL `PaseServer` → `StatusReport Failure InvalidParam` rejection on the very first
-  `PbkdfParamRequest` — proving this is a real `@matter/main`/`@matter/protocol` 0.17.9 or
-  host-environment issue, not something SupremeOS's `RealMatterController`/
-  `commissionAtAddress()` code caused. One hypothesis (lazy `ControllerBehavior` load timing
-  competing with PASE) was tested and disproven; no production code changed as a result.
-  **Concrete next step:** instrument `@matter/protocol`'s `PaseServer.handlePairingRequest()`/
-  `readPbkdfParamRequest()` directly (temporary local edit to the installed package, or a
-  debugger breakpoint) to find the exact validation condition — the responder logs nothing
-  between receiving the request and sending the rejection, so the exact failing check is still
-  unidentified. Normal mDNS-based production commissioning is unaffected — this entire
-  finding is scoped to the test-harness's real-address commissioning path. Engine code itself
-  remains logically verified (clean typecheck, real `node_not_commissioned` error-path
-  confirmed via `real-controller.test.ts`).
 - **Must preserve:** Matter Bridge (`services/protocols/src/matter-bridge/`, outbound) stays
   untouched and independent — no shared fabric state, no shared storage root, no bridge/
   controller event loop. Confirmed unmodified this session.
@@ -1433,6 +1426,22 @@
 > High-level milestones only — see `git log` for full commit-level history, and
 > `PROJECT_CONTEXT.md` §6 for what each milestone actually delivers.
 
+- **Matter Controller Extension — Phase 3.4/3.5 PASE + cluster-engine fixes (RESOLVED).** Found
+  and fixed the real Phase 3.3 PASE blocker: `test-support/commissionable-fixture.ts` never set
+  `productDescription.deviceType`, so `CommissioningServer#enterOnlineMode()` silently never
+  armed the PASE commissioner — explains why the failure reproduced identically on Windows dev,
+  real Ubuntu prod, same-process, and separate-process alike. Also found and fixed a second,
+  genuinely new bug this unblocked: `cluster-engine.ts` called `.act()` on the `ClientNode`
+  instead of the resolved target endpoint, so `agent.get()` always rejected real cluster types
+  as "Unsupported behavior" against the wrong (root) endpoint; plus a no-argument-command TLV
+  validation bug and a stale-local-cache read-back bug (now uses `Endpoint.getStateOf()` for a
+  genuine forced remote read). Also fixed a pre-existing node-id-collision flaw in two e2e
+  tests' cross-node-boundary assertions (Matter operational node ids are per-fabric, not
+  global). All three previously-blocked e2e suites are green: `cluster-engine.e2e.test.ts` 4/4,
+  `cluster-engine.separate-process.e2e.test.ts` 4/4, `discovery.e2e.test.ts` 5/5,
+  `real-controller.test.ts` 3/3. Matter Bridge untouched (166/167, one pre-existing unrelated
+  Windows file-permission test failure), `services/drivers` 56/56, both packages typecheck
+  clean. See `SESSION_HANDOFF.md` for full trace detail.
 - **Matter Controller Extension — Phase 3.3 PASE root-cause analysis** (BLOCKED overall, but
   conclusively exonerates SupremeOS's implementation). Traced actual `@matter/node`/
   `@matter/protocol` 0.17.9 source (`CommissioningDiscovery.ts`, `Discovery.ts`, `Peers.ts`,

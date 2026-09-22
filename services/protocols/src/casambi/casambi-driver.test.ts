@@ -251,12 +251,13 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
     await driver.disconnect();
   });
 
-  it("connect() sends the SetDefaultMask/Subscribe/NotifyButtonEvent bootstrap sequence", async () => {
+  it("connect() sends the SetDefaultMask/Subscribe/Read/NotifyButtonEvent bootstrap sequence", async () => {
     const { socket, driver } = makeLocalDriver();
     await driver.connect();
     expect(socket.sent).toEqual([
       "0.72.8.4b.3.0.0.ff.ff.ff.ff\r\n", // SetDefaultMask
       "0.72.4.4b.1.0.fa\r\n", // Subscribe target ids 0..250
+      "0.72.4.4b.2.0.fa\r\n", // Read (one-time current-state query) target ids 0..250
       "0.72.2.50.fd\r\n", // NotifyButtonEvent enable
     ]);
     await driver.disconnect();
@@ -522,8 +523,8 @@ describe("CasambiProtocolDriver (Local Gateway, fake UDP socket)", () => {
       expect(udp?.stage).toBe("bound_waiting");
       expect(udp?.remoteAddress).toBe("192.168.1.90");
       expect(udp?.remotePort).toBe(5100);
-      // connect() already sent the SetDefaultMask/Subscribe/NotifyButtonEvent bootstrap.
-      expect(udp?.packetsSent).toBe(3);
+      // connect() already sent the SetDefaultMask/Subscribe/Read/NotifyButtonEvent bootstrap.
+      expect(udp?.packetsSent).toBe(4);
       expect(udp?.packetsReceived).toBe(0);
       expect(udp?.lastPacketAt).toBeNull();
       await driver.disconnect();

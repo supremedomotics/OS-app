@@ -4,6 +4,95 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Matter Controller Extension — Phase 3.4/3.5 PASE + Cluster-Engine Fixes (RESOLVED)
+
+Picked back up per a peer session's report that the exact Phase 3.3 PASE failures were now
+blocking a real `sudo ./update.sh` deploy on a production Ubuntu host (proving the issue was
+never Windows-dev-machine-specific). **Both the original PASE blocker and a newly-surfaced
+cluster-engine bug are now fixed and conclusively verified — all three previously-blocked e2e
+suites are green.**
+
+**Phase 3.4 root cause (the real PASE blocker, finally found):** direct `@matter/protocol`/
+`@matter/node` 0.17.9 source tracing (instrumented `PaseServer.onNewExchange()` in both the
+ESM and CJS vendor copies — neither ever logged, proving `PaseServer` itself was never reached)
+traced the rejection one layer up to `SecureChannelProtocol.onNewExchange()`'s
+`if (this.#paseCommissioner === undefined)` early-reject branch. `#paseCommissioner` is armed
+by `DeviceCommissioner.allowBasicCommissioning()`, which is only called from
+`CommissioningServer#enterOnlineMode()` (auto-run on `node.start()`) — and that method silently
+`return`s without arming PASE when
+`ProductDescriptionServer.state.deviceType === EndpointType.UNKNOWN_DEVICE_TYPE`, i.e. whenever
+`ServerNode.create()` never set `productDescription.deviceType`. Confirmed live with a vanilla,
+zero-SupremeOS repro script (`TRACE OK` once fixed). **Fix:**
+`test-support/commissionable-fixture.ts` now passes
+`productDescription: { name, deviceType: OnOffLightDevice.deviceType }` to `ServerNode.create()`.
+This explains why the bug reproduced identically on Windows dev, real Ubuntu prod, same-process,
+and separate-process — it was never a transport/platform issue, it was a missing field on the
+TEST FIXTURE only (never shipped/production code — `matter-bridge/real-server.ts` already sets
+this field correctly).
+
+**Phase 3.5 — new bug surfaced once commissioning finally worked:** `cluster-engine.ts`'s
+`readAttribute`/`writeAttribute`/`invokeCommand` threw
+`Initializing <endpoint>.<cluster>: Unsupported behavior` from `agent.get(resolved.type)`. Root
+cause: `node!.act(cb)` was being called on the `ClientNode` itself, but `Endpoint.act()` binds
+its callback's `agent` to the endpoint `.act()` is called ON (see `@matter/node`'s
+`Endpoint.js#act` → `this.agentFor(context)`) — so `node.act()` always produced an agent scoped
+to the ROOT endpoint (0), never `resolved.endpoint` (e.g. endpoint 1). `agent.get()` then
+correctly rejected the cluster type as unsupported on the root. **Fix:** `writeAttribute`/
+`invokeCommand` now call `.act()` on `resolved.endpoint` directly, never on `node`.
+
+Two further real, narrower bugs found once behavior resolution worked:
+1. A no-argument command's generated client method (e.g. OnOff's `on()`) has a `NoArgumentsSchema`
+   (void) request — `invokeCommand`'s default `fields = {}` was always passed as an argument,
+   failing real TLV validation ("Expected void, got object"). Fixed: only pass `fields` when
+   non-empty, otherwise call the method with zero arguments.
+2. `readAttribute`/`writeAttribute`'s read-back used `Endpoint.stateOf()`, which only returns the
+   LOCAL mirrored cache — with no subscription established (subscriptions are still Phase 4, per
+   `real-controller.ts`'s `subscribe()`), a read immediately after a real remote `invoke`/`write`
+   returned a stale pre-change value. Fixed: both now use `Endpoint.getStateOf(type.id, [name])`,
+   `@matter/node`'s own real forced-remote-read API (→ `#performRead()` → `node.interaction.read()`
+   — a genuine over-the-wire attribute read, not a cache access).
+
+**Pre-existing test-design flaw found and fixed (not a runtime bug):** both `cluster-engine
+.e2e.test.ts`'s and `cluster-engine.separate-process.e2e.test.ts`'s "I: operations cannot
+accidentally cross real node boundaries" test asserted that addressing node A's real
+`nodeId` through node B's *different* controller must reject with `node_not_commissioned`. Real
+finding: `ClientNode.id` (Matter's operational node id, e.g. `"peer1"`) is assigned sequentially
+**per controller fabric**, not globally — two independent controllers each commissioning one
+device legitimately produce the identical id. The two ids collided in both tests (both `"peer1"`),
+so node B's controller correctly resolved that shared string to **its own** device (not node A's)
+and returned `false` (its own real off-state) instead of rejecting — genuine isolation, wrong
+assertion. Fixed both tests to assert the actually-correct contract: addressing the shared id via
+node B's controller returns node B's own device state, never node A's real (just-turned-on) state.
+
+**Full regression matrix, all green:**
+- `cluster-engine.e2e.test.ts`: 4/4 (was 1/4 blocked on commissioning entirely before Phase 3.4)
+- `cluster-engine.separate-process.e2e.test.ts`: 4/4
+- `discovery.e2e.test.ts`: 5/5
+- `real-controller.test.ts`: 3/3
+- `services/protocols` typecheck: clean
+- Matter Bridge (`src/matter-bridge`): 166/167 — the one failure is a pre-existing Windows
+  file-permission-mode assertion (`0o600` expected, `0o666` actual — Windows doesn't enforce
+  POSIX chmod bits), unrelated to this session; `git diff --stat -- services/protocols/src/
+  matter-bridge` is empty, confirming zero Bridge files touched.
+- `services/drivers`: 56/56, typecheck clean.
+
+**Files modified:** `test-support/commissionable-fixture.ts` (the real fix),
+`matter-controller/cluster-engine.ts` (the real fix — endpoint-scoped `.act()`, no-arg command
+call, forced-remote read-back), `cluster-engine.e2e.test.ts` and
+`cluster-engine.separate-process.e2e.test.ts` (hook timeout bump + test "I" assertion fix).
+**Matter Bridge: untouched.** **`@matter/main` version: unchanged (still pinned 0.17.9).**
+
+**Temporary debug artifacts:** vendor-package (`PaseServer.js` ESM+CJS) `console.error` trace
+instrumentation and scratch `repro-trace*.ts`/`.log` files — all created, used, and fully removed
+before this handoff; vendor packages confirmed reverted to pristine (grep for "TRACE" returns
+nothing).
+
+**Phase 4 readiness:** Phase 3 (generic cluster engine: read/write/invoke by numeric id or real
+runtime name, against a live commissioned `ClientNode`, with deterministic structured errors) is
+now fully validated end-to-end, same-process and cross-process, including real PASE→CASE→
+commission→READ→WRITE→READ-BACK→INVOKE. `subscribe()` remains an explicit, honest "not yet
+implemented" stub (`real-controller.ts`) — that is Phase 4's actual scope, not a gap in Phase 3.
+
 ## Session: Matter Controller Extension — Phase 3.3 PASE Root-Cause Analysis (BLOCKED)
 
 Traced the exact `@matter/main`/`@matter/protocol` 0.17.9 source to find why the fixture's

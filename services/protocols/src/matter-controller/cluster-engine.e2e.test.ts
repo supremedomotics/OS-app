@@ -46,7 +46,10 @@ describe("Matter Controller — generic cluster engine (Phase 3)", () => {
     await new Promise((r) => setTimeout(r, 100));
     for (const d of dirs) rmSync(d, { recursive: true, force: true });
     dirs = [];
-  });
+    // § real `getStateOf()` forced-remote-reads (§ Phase 3.5 fix) add genuine wire round trips
+    // per test, so closing two commissioned devices + controllers can exceed vitest's default
+    // 10s hook timeout — was never exercised before commissioning worked at all.
+  }, 30_000);
 
   async function commissionFixture(label = "fixture"): Promise<{ nodeId: string; controller: RealMatterController }> {
     const fixture = await createCommissionableFixture(uniqueId(label), tempDir(label));
@@ -165,12 +168,16 @@ describe("Matter Controller — generic cluster engine (Phase 3)", () => {
     const aState = await nodeA.controller.readAttribute(nodeA.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff");
     expect(aState.value).toBe(true);
 
-    // Node B's controller has never commissioned node A — addressing node A's real id through
-    // node B's controller must fail with a real, deterministic error, never silently succeed
-    // or return node A's state.
-    await expect(
-      nodeB.controller.readAttribute(nodeA.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff"),
-    ).rejects.toMatchObject({ reason: "node_not_commissioned" } satisfies Partial<MatterEngineError>);
+    // § real `@matter/main` finding: operational node ids (`ClientNode.id`, e.g. "peer1") are
+    // assigned sequentially PER CONTROLLER FABRIC, not globally — two independent controllers
+    // each commissioning one device legitimately assign the identical id ("peer1"). So
+    // `nodeA.nodeId === nodeB.nodeId` here is expected, not a bug, and asserting a reject on
+    // that shared string would test the wrong thing. What must hold is real isolation: each
+    // controller keeps its OWN model store and OWN live `ClientNode`, so addressing that shared
+    // id through node B's controller resolves to node B's OWN device — never node A's real,
+    // just-turned-on state leaking across the boundary.
+    const viaNodeB = await nodeB.controller.readAttribute(nodeA.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff");
+    expect(viaNodeB.value).toBe(false);
 
     // Node B's own device, addressed through its own controller, is unaffected and independent.
     const bState = await nodeB.controller.readAttribute(nodeB.nodeId, ONOFF_LIGHT_ENDPOINT, "onOff", "onOff");
