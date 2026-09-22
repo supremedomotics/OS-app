@@ -326,10 +326,21 @@ export interface MrpNowPlayingInfo {
   title: string | null;
 }
 
+/** The current foreground app, decoded from `SetStateMessage.playerPath.client` —
+ * verified field numbers: `PlayerPath.client`(2), `NowPlayingClient.
+ * bundleIdentifier`(2)/`displayName`(7). This is the STABLE app identity (bundle id),
+ * never inferred from the last command SupremeOS sent — only from what the Apple TV
+ * itself reports. */
+export interface MrpCurrentApplication {
+  bundleIdentifier: string | null;
+  displayName: string | null;
+}
+
 export interface MrpSetState {
   playbackState: MrpPlaybackState | null;
   nowPlaying: MrpNowPlayingInfo | null;
   displayName: string | null;
+  currentApplication: MrpCurrentApplication | null;
 }
 
 /** Reads a proto2 `double` (8-byte little-endian IEEE754) stored as a length-delimited
@@ -385,14 +396,16 @@ function getDouble(m: Map<number, Buffer | number>, fieldNumber: number): number
 }
 
 const NowPlayingField = { album: 1, artist: 2, duration: 3, elapsedTime: 4, title: 9 } as const;
-const SetStateField = { nowPlayingInfo: 1, displayName: 5, playbackState: 6 } as const;
+const SetStateField = { nowPlayingInfo: 1, displayName: 5, playbackState: 6, playerPath: 9 } as const;
+const PlayerPathField = { client: 2 } as const;
+const NowPlayingClientField = { bundleIdentifier: 2, displayName: 7 } as const;
 
 /** Parses a `SET_STATE_MESSAGE` `ProtocolMessage` — real decode, no fabricated fields:
  * anything the message doesn't include comes back `null`. */
 export function parseSetStateMessage(protocolMessage: Buffer): MrpSetState {
   const top = fieldMapLoose(protocolMessage);
   const setStateBuf = getBytes(top as Map<number, Buffer | number>, MrpField.setStateMessage);
-  if (!setStateBuf) return { playbackState: null, nowPlaying: null, displayName: null };
+  if (!setStateBuf) return { playbackState: null, nowPlaying: null, displayName: null, currentApplication: null };
   const setState = fieldMapLoose(setStateBuf);
   const playbackStateRaw = setState.get(SetStateField.playbackState);
   const playbackState = typeof playbackStateRaw === "number" ? (playbackStateRaw as MrpPlaybackState) : null;
@@ -410,11 +423,109 @@ export function parseSetStateMessage(protocolMessage: Buffer): MrpSetState {
         };
       })()
     : null;
-  return { playbackState, nowPlaying, displayName };
+  const playerPathBuf = getBytes(setState, SetStateField.playerPath);
+  const currentApplication = playerPathBuf
+    ? (() => {
+        const playerPath = fieldMapLoose(playerPathBuf);
+        const clientBuf = getBytes(playerPath, PlayerPathField.client);
+        if (!clientBuf) return null;
+        const client = fieldMapLoose(clientBuf);
+        return {
+          bundleIdentifier: getString(client, NowPlayingClientField.bundleIdentifier),
+          displayName: getString(client, NowPlayingClientField.displayName),
+        };
+      })()
+    : null;
+  return { playbackState, nowPlaying, displayName, currentApplication };
 }
 
 /** True if this decoded `ProtocolMessage`'s `type` field equals the given type. */
 export function messageType(protocolMessage: Buffer): number | null {
   const top = fieldMap(protocolMessage);
   return getVarint(top, MrpField.type);
+}
+
+// --- PlaybackQueueRequestMessage / artwork (verified field numbers). ---
+
+/** Requests the CURRENT content item (location=0, length=1) including its artwork
+ * bytes, at the given max size — verified against `PlaybackQueueRequestMessage.proto`
+ * and pyatv's `messages.playback_queue_request()`. */
+export function buildPlaybackQueueRequestMessage(maxWidth = -1, maxHeight = 400): Buffer {
+  const inner = Buffer.concat([
+    fieldVarint(1, 0), // location: current item
+    fieldVarint(2, 1), // length: just the current item
+    fieldVarint(3, true), // includeMetadata
+    ...(maxWidth >= 0 ? [fieldVarint(4, maxWidth)] : []),
+    ...(maxHeight >= 0 ? [fieldVarint(5, maxHeight)] : []),
+  ]);
+  return buildProtocolMessage(MrpType.PLAYBACK_QUEUE_REQUEST_MESSAGE, MrpField.playbackQueueRequestMessage, inner);
+}
+
+const PlaybackQueueField = { contentItems: 2 } as const;
+const ContentItemField = { metadata: 2, artworkData: 3 } as const;
+const ContentItemMetadataField = { artworkMIMEType: 31, artworkDataWidth: 77, artworkDataHeight: 78 } as const;
+
+export interface MrpArtwork {
+  data: Buffer;
+  mimeType: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** Decodes artwork bytes out of a `SET_STATE_MESSAGE` sent in response to a
+ * `PlaybackQueueRequestMessage` — verified field numbers: `SetStateMessage.
+ * playbackQueue`(3) -> `PlaybackQueue.contentItems`(2)[0] -> `ContentItem.
+ * artworkData`(3)/`metadata`(2) -> `ContentItemMetadata.artworkMIMEType`(31)/
+ * `artworkDataWidth`(77)/`artworkDataHeight`(78). Returns `null` when the response has
+ * no artwork (honest "no artwork" — never fabricated) or is malformed. */
+/** True if this `SET_STATE_MESSAGE` is a genuine reply to a
+ * `PLAYBACK_QUEUE_REQUEST_MESSAGE` (carries a `playbackQueue` field at all — even an
+ * empty/no-artwork one), as opposed to an ordinary unsolicited now-playing push (which
+ * only ever carries `nowPlayingInfo`). Lets a caller distinguish "the real response
+ * arrived and there's genuinely no artwork" from "still waiting" without conflating the
+ * two the way testing for non-null artwork alone would. */
+export function isPlaybackQueueResponse(protocolMessage: Buffer): boolean {
+  try {
+    const top = fieldMapLoose(protocolMessage);
+    const setStateBuf = getBytes(top, MrpField.setStateMessage);
+    if (!setStateBuf) return false;
+    const setState = fieldMapLoose(setStateBuf);
+    return setState.has(3); // SetStateMessage.playbackQueue
+  } catch {
+    return true; // a malformed queue response is still "the response", just unparsable
+  }
+}
+
+export function parsePlaybackQueueArtwork(protocolMessage: Buffer): MrpArtwork | null {
+  try {
+    const top = fieldMapLoose(protocolMessage);
+    const setStateBuf = getBytes(top, MrpField.setStateMessage);
+    if (!setStateBuf) return null;
+    const setState = fieldMapLoose(setStateBuf);
+    const queueBuf = getBytes(setState, 3); // SetStateMessage.playbackQueue
+    if (!queueBuf) return null;
+    const queue = fieldMapLoose(queueBuf);
+    const itemBuf = getBytes(queue, PlaybackQueueField.contentItems);
+    if (!itemBuf) return null;
+    const item = fieldMapLoose(itemBuf);
+    const artworkData = getBytes(item, ContentItemField.artworkData);
+    if (!artworkData || artworkData.length === 0) return null;
+    const metadataBuf = getBytes(item, ContentItemField.metadata);
+    const metadata = metadataBuf ? fieldMapLoose(metadataBuf) : null;
+    return {
+      data: artworkData,
+      mimeType: metadata ? getString(metadata, ContentItemMetadataField.artworkMIMEType) : null,
+      width: metadata ? getVarintLoose(metadata, ContentItemMetadataField.artworkDataWidth) : null,
+      height: metadata ? getVarintLoose(metadata, ContentItemMetadataField.artworkDataHeight) : null,
+    };
+  } catch {
+    // Malformed/truncated response — honest "no artwork available" rather than a crash
+    // or a fabricated placeholder.
+    return null;
+  }
+}
+
+function getVarintLoose(m: Map<number, Buffer | number>, fieldNumber: number): number | null {
+  const v = m.get(fieldNumber);
+  return typeof v === "number" ? v : null;
 }

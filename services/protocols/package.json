@@ -24,6 +24,7 @@
   "dependencies": {
     "@supreme/commissioning": "workspace:*",
     "@supreme/domain-model": "workspace:*",
+    "@supreme/drivers": "workspace:*",
     "@supreme/integration-layer": "workspace:*",
     "@supreme/lan": "workspace:*",
     "@supreme/messaging": "workspace:*",

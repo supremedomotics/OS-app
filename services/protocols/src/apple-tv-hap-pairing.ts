@@ -29,14 +29,14 @@ function hkdf(salt: string, ikm: Buffer, info: string, length: number): Buffer {
   return Buffer.from(hkdfSync("sha512", ikm, Buffer.from(salt, "utf8"), Buffer.from(info, "utf8"), length));
 }
 
-function chacha20poly1305Seal(key: Buffer, nonce: Buffer, aad: Buffer | undefined, plaintext: Buffer): Buffer {
+export function chacha20poly1305Seal(key: Buffer, nonce: Buffer, aad: Buffer | undefined, plaintext: Buffer): Buffer {
   const cipher = sodium.createCipheriv("chacha20-poly1305", key, nonce, { authTagLength: 16 } as any);
   if (aad) cipher.setAAD(aad, { plaintextLength: plaintext.length } as any);
   const enc = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return Buffer.concat([enc, cipher.getAuthTag()]);
 }
 
-function chacha20poly1305Open(key: Buffer, nonce: Buffer, aad: Buffer | undefined, sealed: Buffer): Buffer {
+export function chacha20poly1305Open(key: Buffer, nonce: Buffer, aad: Buffer | undefined, sealed: Buffer): Buffer {
   const tag = sealed.subarray(sealed.length - 16);
   const ct = sealed.subarray(0, sealed.length - 16);
   const decipher = sodium.createDecipheriv("chacha20-poly1305", key, nonce, { authTagLength: 16 } as any);
@@ -197,8 +197,17 @@ export interface HapSession {
 export interface HapVerifiedChannel {
   /** Derive a long-lived AEAD session off this pair-verify's shared secret. Verified
    * nonce scheme (pyatv's `Chacha20Cipher8byteNonce`): 4 zero bytes + an 8-byte
-   * little-endian message counter, counted independently per direction. */
+   * little-endian message counter, counted independently per direction. Suits MRP;
+   * Companion uses a different nonce scheme AND per-message AAD — see `deriveKeys()`. */
   deriveSession(salt: string, outputInfo: string, inputInfo: string): HapSession;
+  /** Escape hatch for a protocol whose session framing genuinely differs from MRP's
+   * (verified: Companion's `Chacha20Cipher` uses a plain 12-byte little-endian counter
+   * nonce, no zero-padding, AND binds the frame header as AAD — neither of which
+   * `deriveSession()`'s fixed scheme supports). Returns the raw HKDF-derived keys off
+   * the SAME verified shared secret so a transport module can implement its own
+   * nonce/AAD scheme without this module needing to special-case every protocol's
+   * framing quirks. */
+  deriveKeys(salt: string, outputInfo: string, inputInfo: string): { writeKey: Buffer; readKey: Buffer };
 }
 
 function counterNonce8(counter: number): Buffer {
@@ -274,6 +283,12 @@ export async function hapPairVerify(saved: PairSetupResult, exchange: HapExchang
         decrypt(sealed: Buffer): Buffer {
           return chacha20poly1305Open(readKey, counterNonce8(readSeq++), undefined, sealed);
         },
+      };
+    },
+    deriveKeys(salt: string, outputInfo: string, inputInfo: string) {
+      return {
+        writeKey: hkdf(salt, sharedSecret, outputInfo, 32),
+        readKey: hkdf(salt, sharedSecret, inputInfo, 32),
       };
     },
   };

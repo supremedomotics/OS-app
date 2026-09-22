@@ -18,6 +18,10 @@ import {
   extractCryptoPairingData,
   messageType,
   fieldMap,
+  fieldBytes,
+  fieldString,
+  fieldVarint,
+  buildProtocolMessage,
   MrpType,
   MrpField,
   MrpTransportCommand,
@@ -26,7 +30,8 @@ import {
 } from "./apple-tv-mrp-protobuf.js";
 import { createMrpTcpTransport } from "./apple-tv-mrp-transport.js";
 import { pairAppleTvMrp, createMrpAppleTvConnect } from "./apple-tv-mrp-client.js";
-import { createAppleTvCredentialStore, createInMemoryCredentialKv, type AppleTvSecretCrypto } from "./apple-tv-credential-store.js";
+import { createAppleTvCredentialStore, createInMemoryCredentialKv } from "./apple-tv-credential-store.js";
+import { createDriverSecretCrypto, type DriverSecretCrypto } from "@supreme/drivers";
 import type { DeviceId } from "@supreme/domain-model";
 
 const MRP_SALT = "MediaRemote-Salt";
@@ -62,15 +67,12 @@ function ed25519PubFromRaw(raw: Buffer) {
   return createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), raw]), format: "der", type: "spki" });
 }
 
-/** No-op AES-256-GCM stand-in for tests — a real `DriverSecretCrypto` is provided by
- * `services/drivers` at the gateway boundary (Phase 2B doesn't add a `@supreme/drivers`
- * dependency to `@supreme/protocols` just for this test); this fake still proves the
- * credential-store module's own JSON (de)serialization and per-device scoping. */
-function fakeSecretCrypto(): AppleTvSecretCrypto {
-  return {
-    encryptFields: (config) => ({ ...config, pairing: `enc:${config.pairing}` }),
-    decryptFields: (config) => ({ ...config, pairing: String(config.pairing).replace(/^enc:/, "") }),
-  };
+/** § Phase 2C — the REAL `DriverSecretCrypto` (AES-256-GCM via `@supreme/crypto`), the
+ * same one `bootstrap.ts` wires in production, now that `@supreme/protocols` depends on
+ * `@supreme/drivers` directly. Proves the credential store round-trips through actual
+ * encryption, not a stand-in. */
+function realSecretCrypto(): DriverSecretCrypto {
+  return createDriverSecretCrypto(randomBytes(32).toString("base64"));
 }
 
 /**
@@ -81,13 +83,26 @@ function fakeSecretCrypto(): AppleTvSecretCrypto {
  * abstraction that allows a deterministic fake Apple TV server" without needing
  * physical hardware.
  */
-class FakeMrpAppleTv {
+export class FakeMrpAppleTv {
   readonly pin = "1234";
   readonly pairingId = Buffer.from("fake-mrp-appletv");
   private readonly ltKeyPair = generateKeyPairSync("ed25519");
   private readonly ltpk = (this.ltKeyPair.publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32);
   private readonly ltPriv = this.ltKeyPair.privateKey;
   knownControllers = new Map<string, Buffer>();
+  /** Test-controlled artwork response: "malformed" sends a truncated/corrupt frame. */
+  artwork: { data: Buffer; mimeType: string } | null | "malformed" = null;
+  receivedQueueRequests = 0;
+  lastSend: ((payload: Buffer) => void) | null = null;
+
+  /** Pushes an unsolicited SET_STATE_MESSAGE carrying playerPath.client, simulating a
+   * real "foreground app changed" push from the Apple TV. */
+  pushCurrentApp(bundleIdentifier: string, displayName: string): void {
+    const client = Buffer.concat([fieldString(2, bundleIdentifier), fieldString(7, displayName)]);
+    const playerPath = fieldBytes(2, client);
+    const setState = fieldBytes(9, playerPath); // SetStateMessage.playerPath
+    this.lastSend!(buildProtocolMessage(MrpType.SET_STATE_MESSAGE, MrpField.setStateMessage, setState));
+  }
   receivedHidEvents: Array<{ usagePage: number; usage: number; down: boolean }> = [];
   receivedCommands: MrpTransportCommand[] = [];
 
@@ -122,6 +137,7 @@ class FakeMrpAppleTv {
       const wire = sessionWriteKey ? seal(sessionWriteKey, counterNonce8(writeSeq++), payload) : payload;
       sock.write(Buffer.concat([encodeVarint(wire.length), wire]));
     };
+    this.lastSend = send; // test convenience: push an unsolicited SET_STATE_MESSAGE later
 
     sock.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -219,6 +235,11 @@ class FakeMrpAppleTv {
       const top = fieldMap(payload);
       const inner = fieldMap(top.get(MrpField.sendCommandMessage) as Buffer);
       this.receivedCommands.push(inner.get(1) as MrpTransportCommand);
+      return;
+    }
+    if (type === MrpType.PLAYBACK_QUEUE_REQUEST_MESSAGE) {
+      this.receivedQueueRequests++;
+      ctx.send(this.buildQueueResponse());
       return;
     }
     if (type === MrpType.CRYPTO_PAIRING_MESSAGE) {
@@ -321,6 +342,29 @@ class FakeMrpAppleTv {
       return;
     }
   }
+
+  /** Builds a SET_STATE_MESSAGE reply to a PLAYBACK_QUEUE_REQUEST_MESSAGE, matching the
+   * verified field layout `parsePlaybackQueueArtwork` decodes: SetStateMessage.
+   * playbackQueue(3) -> PlaybackQueue.contentItems(2) -> ContentItem.artworkData(3)/
+   * metadata(2) -> ContentItemMetadata.artworkMIMEType(31). */
+  private buildQueueResponse(): Buffer {
+    if (this.artwork === "malformed") {
+      // A SET_STATE_MESSAGE whose playbackQueue field claims to be a submessage but is
+      // actually truncated garbage bytes.
+      const setState = fieldBytes(3, Buffer.from([0xff, 0xff, 0xff])); // length-prefixed nonsense
+      return buildProtocolMessage(MrpType.SET_STATE_MESSAGE, MrpField.setStateMessage, setState);
+    }
+    if (this.artwork === null) {
+      // No artwork: a real, well-formed response with an empty playback queue.
+      const setState = fieldBytes(3, Buffer.alloc(0));
+      return buildProtocolMessage(MrpType.SET_STATE_MESSAGE, MrpField.setStateMessage, setState);
+    }
+    const metadata = fieldString(31, this.artwork.mimeType);
+    const contentItem = Buffer.concat([fieldBytes(2, metadata), fieldBytes(3, this.artwork.data)]);
+    const queue = fieldBytes(2, contentItem);
+    const setState = fieldBytes(3, queue);
+    return buildProtocolMessage(MrpType.SET_STATE_MESSAGE, MrpField.setStateMessage, setState);
+  }
 }
 
 describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, deterministic fake accessory)", () => {
@@ -336,7 +380,7 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     server = s;
 
     const kv = createInMemoryCredentialKv();
-    const credentialStore = createAppleTvCredentialStore(fakeSecretCrypto(), kv);
+    const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
     const deviceId = "appletv-living-room" as DeviceId;
     const address = `127.0.0.1:${port}`;
     const clientOpts = { credentialStore, hubIdentifier: "SUPREMEOS-HUB-TEST", hubName: "SupremeOS Test Hub" };
@@ -361,7 +405,7 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     const fakeTv = new FakeMrpAppleTv();
     const { server: s, port } = await fakeTv.start();
     server = s;
-    const credentialStore = createAppleTvCredentialStore(fakeSecretCrypto(), createInMemoryCredentialKv());
+    const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), createInMemoryCredentialKv());
     const connect = createMrpAppleTvConnect({ credentialStore, hubIdentifier: "H", hubName: "Hub" });
     await expect(connect({ address: `127.0.0.1:${port}`, deviceId: "unknown-tv" as DeviceId })).rejects.toThrow(/pairing/i);
   });
@@ -373,7 +417,7 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     server = s;
 
     const kv = createInMemoryCredentialKv();
-    const credentialStore = createAppleTvCredentialStore(fakeSecretCrypto(), kv);
+    const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
     const deviceId = "appletv-mismatched" as DeviceId;
     const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
 
@@ -396,7 +440,7 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     const { server: serverB, port: portB } = await tvB.start();
 
     const kv = createInMemoryCredentialKv();
-    const credentialStore = createAppleTvCredentialStore(fakeSecretCrypto(), kv);
+    const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
     const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
     const deviceA = "appletv-a" as DeviceId;
     const deviceB = "appletv-b" as DeviceId;
@@ -418,5 +462,169 @@ describe("Apple TV MRP client (real TCP, real HAP pairing + MRP session, determi
     await clientB.close?.();
     serverA.close();
     serverB.close();
+  });
+
+  it("a transient network/connect failure never clears stored credentials (only a rejected pair-verify does)", async () => {
+    const fakeTv = new FakeMrpAppleTv();
+    const { server: s, port } = await fakeTv.start();
+    server = s;
+
+    const kv = createInMemoryCredentialKv();
+    const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+    const deviceId = "appletv-flaky-network" as DeviceId;
+    const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+    await pairAppleTvMrp(`127.0.0.1:${port}`, deviceId, fakeTv.pin, clientOpts);
+    expect(await credentialStore.load(deviceId)).not.toBeNull();
+
+    // Simulate a network failure: connect to a port nothing is listening on. This must
+    // reject from transport.connect() itself, BEFORE pair-verify ever runs, so the
+    // client's rejected-pair-verify handling (which clears credentials) never executes.
+    const connect = createMrpAppleTvConnect(clientOpts);
+    const deadPort = port + 1; // nothing listening here
+    await expect(connect({ address: `127.0.0.1:${deadPort}`, deviceId })).rejects.toThrow();
+
+    const stillStored = await credentialStore.load(deviceId);
+    expect(stillStored).not.toBeNull();
+    expect(stillStored!.accessoryPairingId.toString()).toBe(fakeTv.pairingId.toString());
+
+    // And the same credentials keep working once the real Apple TV is reachable again.
+    const client = await connect({ address: `127.0.0.1:${port}`, deviceId });
+    await client.play();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fakeTv.receivedCommands).toContain(MrpTransportCommand.Play);
+    await client.close?.();
+  });
+
+  it("routes real navigation button presses to byte-exact MRP HID events, and rejects 'back' honestly", async () => {
+    const fakeTv = new FakeMrpAppleTv();
+    const { server: s, port } = await fakeTv.start();
+    server = s;
+
+    const kv = createInMemoryCredentialKv();
+    const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+    const deviceId = "appletv-nav" as DeviceId;
+    const address = `127.0.0.1:${port}`;
+    const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+    await pairAppleTvMrp(address, deviceId, fakeTv.pin, clientOpts);
+    const client = await createMrpAppleTvConnect(clientOpts)({ address, deviceId });
+
+    for (const [button, [usagePage, usage]] of Object.entries({
+      up: [1, 0x8c],
+      down: [1, 0x8d],
+      left: [1, 0x8b],
+      right: [1, 0x8a],
+      select: [1, 0x89],
+      menu: [1, 0x86],
+      home: [12, 0x40],
+    } as const)) {
+      await client.pressButton(button as any);
+      await new Promise((r) => setTimeout(r, 15));
+      const events = fakeTv.receivedHidEvents.filter((e) => e.usagePage === usagePage && e.usage === usage);
+      expect(events.length).toBeGreaterThanOrEqual(2); // down + up
+      expect(events.some((e) => e.down === true)).toBe(true);
+      expect(events.some((e) => e.down === false)).toBe(true);
+    }
+
+    await expect(client.pressButton("back")).rejects.toThrow(/no verified MRP HID mapping/);
+    await client.close?.();
+  });
+
+  describe("artwork (§ Phase 2C — real PLAYBACK_QUEUE_REQUEST_MESSAGE round trip)", () => {
+    async function connectedClient(fakeTv: FakeMrpAppleTv, port: number, deviceId: DeviceId) {
+      const kv = createInMemoryCredentialKv();
+      const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+      const address = `127.0.0.1:${port}`;
+      const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+      await pairAppleTvMrp(address, deviceId, fakeTv.pin, clientOpts);
+      return createMrpAppleTvConnect(clientOpts)({ address, deviceId });
+    }
+
+    it("returns real artwork bytes + mime type when the Apple TV has cover art", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+      fakeTv.artwork = { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02, 0x03]), mimeType: "image/png" };
+
+      const client = await connectedClient(fakeTv, port, "appletv-art-a" as DeviceId);
+      const artwork = await client.getArtwork!();
+      expect(artwork).not.toBeNull();
+      expect(artwork!.contentType).toBe("image/png");
+      expect(Buffer.from(artwork!.data).equals(fakeTv.artwork.data)).toBe(true);
+      expect(fakeTv.receivedQueueRequests).toBe(1);
+      await client.close?.();
+    });
+
+    it("returns null (never fabricated) when the Apple TV reports no artwork", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+      fakeTv.artwork = null;
+
+      const client = await connectedClient(fakeTv, port, "appletv-art-b" as DeviceId);
+      const artwork = await client.getArtwork!();
+      expect(artwork).toBeNull();
+      await client.close?.();
+    });
+
+    it("reflects an artwork change between two calls (no stale caching in the client itself)", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+      fakeTv.artwork = { data: Buffer.from("first-cover"), mimeType: "image/jpeg" };
+
+      const client = await connectedClient(fakeTv, port, "appletv-art-c" as DeviceId);
+      const first = await client.getArtwork!();
+      expect(Buffer.from(first!.data).toString()).toBe("first-cover");
+
+      fakeTv.artwork = { data: Buffer.from("second-cover"), mimeType: "image/jpeg" };
+      const second = await client.getArtwork!();
+      expect(Buffer.from(second!.data).toString()).toBe("second-cover");
+      await client.close?.();
+    });
+
+    it("returns null (not a crash) for a malformed/truncated artwork response", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+      fakeTv.artwork = "malformed";
+
+      const client = await connectedClient(fakeTv, port, "appletv-art-d" as DeviceId);
+      const artwork = await client.getArtwork!();
+      expect(artwork).toBeNull();
+      await client.close?.();
+    });
+  });
+
+  describe("current application (§ Phase 3 — real MRP playerPath.client feedback, no Companion needed)", () => {
+    it("decodes a real foreground-app push into getCurrentApplication()", async () => {
+      const fakeTv = new FakeMrpAppleTv();
+      const { server: s, port } = await fakeTv.start();
+      server = s;
+      const kv = createInMemoryCredentialKv();
+      const credentialStore = createAppleTvCredentialStore(realSecretCrypto(), kv);
+      const deviceId = "appletv-app-a" as DeviceId;
+      const address = `127.0.0.1:${port}`;
+      const clientOpts = { credentialStore, hubIdentifier: "H", hubName: "Hub" };
+      await pairAppleTvMrp(address, deviceId, fakeTv.pin, clientOpts);
+      const client = await createMrpAppleTvConnect(clientOpts)({ address, deviceId });
+
+      expect(await client.getCurrentApplication!()).toBeNull(); // nothing pushed yet
+
+      fakeTv.pushCurrentApp("com.netflix.Netflix", "Netflix");
+      await new Promise((r) => setTimeout(r, 20));
+      const app = await client.getCurrentApplication!();
+      expect(app).toEqual({
+        packageName: "com.netflix.Netflix",
+        applicationName: "Netflix",
+        source: "mrp-playerpath",
+        confidence: "exact",
+        timestamp: expect.any(String),
+      });
+
+      fakeTv.pushCurrentApp("com.apple.tv", "Apple TV");
+      await new Promise((r) => setTimeout(r, 20));
+      expect((await client.getCurrentApplication!())?.packageName).toBe("com.apple.tv");
+      await client.close?.();
+    });
   });
 });

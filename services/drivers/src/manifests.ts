@@ -495,4 +495,42 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     ],
     configSchema: [],
   }),
+  defineManifest({
+    key: "supreme-appletv",
+    // § Apple TV Phase 4 — Extension Center integration. Real mDNS discovery
+    // (`_mediaremotetv._tcp`/`_companion-link._tcp`), real HAP pairing, real MRP/
+    // Companion protocol clients — nothing here is a placeholder. Capabilities list
+    // ONLY what the driver actually implements: `media` (playback/now-playing/
+    // artwork/position/duration — NOT volume, which is honestly unsupported, see
+    // apple-tv-mrp-client.ts) and `remote` (navigation — 7 of 8 buttons; "back" has no
+    // verified MRP HID code and is rejected, never faked). Application discovery/
+    // launch/deep-link (Companion) and current-application feedback (MRP) are exposed
+    // through the driver's own methods (`getApplications`/`launchApplication`/
+    // `launchDeepLink`/`getCurrentApplication`), not a separate Supreme capability —
+    // there is no generic "application registry" capability in the Supreme vocabulary
+    // yet, so this is intentionally NOT claimed as a capability here (§ never fabricate
+    // a capability, CLAUDE.md).
+    name: "Apple TV",
+    description: "Native Apple TV control — playback, navigation, app launch, and now-playing feedback over real MRP/Companion protocols, with per-device HAP pairing.",
+    category: "media",
+    channel: "official",
+    publisher: PUBLISHER,
+    version: "1.0.0",
+    capabilities: ["media", "remote"],
+    protocols: ["appletv"],
+    compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
+    backend: { type: "native", ref: "appletv" },
+    operations: [...PROTO_OPS],
+    documentationUrl: "https://docs.supreme.local/extensions/appletv",
+    releaseNotes:
+      "Real HAP pairing (SRP6a/Ed25519/X25519/ChaCha20-Poly1305), real MRP encrypted session (playback, navigation, now-playing, artwork, position/duration, current application), and real Companion session (application discovery, launch by bundle id, deep links) — each Apple TV independently paired, connected, and reconnected. Each unit is added by mDNS discovery through Bus Binding after enabling — there's nothing to configure here. Volume, the 'back' button, and application icons are honestly not yet supported (no verified protocol path) rather than faked.",
+    changelog: [
+      { version: "1.0.0", date: "2026-09-22", notes: "First stable release: HAP pairing, MRP playback/navigation/now-playing/artwork, Companion application discovery/launch/deep-link, multi-instance isolation, independent reconnect (Phases 1-3.1)." },
+    ],
+    // Nothing to configure here — each Apple TV is added by mDNS discovery through Bus
+    // Binding after enabling, and the driver does not yet implement a trace/logging
+    // toggle (unlike avr/devialet/heos) — an honest empty schema rather than a config
+    // field with no real effect behind it.
+    configSchema: [],
+  }),
 ];
