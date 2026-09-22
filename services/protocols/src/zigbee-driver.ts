@@ -98,8 +98,12 @@ export class ZigbeeProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     if (this.controller) return;
     const factory = this.opts.createController ?? defaultZigbeeController;
-    this.controller = await factory(this.opts);
-    await this.controller.start();
+    const controller = await factory(this.opts);
+    // § Same class of bug found live in knx-driver.ts: only assign `this.controller` once
+    // start() has actually succeeded, so a failed attempt leaves the driver honestly
+    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+    await controller.start();
+    this.controller = controller;
     this.controller.onReport((report) => this.onReport(report));
   }
 

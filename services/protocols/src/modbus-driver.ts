@@ -77,14 +77,20 @@ export class ModbusProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.client) return;
+    // § Same class of bug found live in knx-driver.ts: only assign `this.client` once
+    // the connection has actually succeeded, so a failed attempt leaves the driver
+    // honestly disconnected (and retryable) instead of `isConnected()` wrongly reporting
+    // true (the TCP branch previously assigned `this.client` before `connectTCP()` was
+    // even attempted).
     if (this.opts.createClient) {
       this.client = await this.opts.createClient();
     } else {
       const moduleName = "modbus-serial";
       const mod = (await import(moduleName)) as unknown as { default: new () => ModbusClient };
       const Ctor = mod.default;
-      this.client = new Ctor();
-      await this.client.connectTCP(this.opts.host, { port: this.opts.port ?? 502 });
+      const client = new Ctor();
+      await client.connectTCP(this.opts.host, { port: this.opts.port ?? 502 });
+      this.client = client;
     }
     // Begin polling. Unref so the interval never holds the process open.
     const period = this.opts.pollMs ?? 2000;

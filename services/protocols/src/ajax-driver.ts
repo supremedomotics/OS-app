@@ -65,8 +65,12 @@ export class AjaxProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     if (this.client) return;
     const factory = this.opts.connect ?? defaultAjaxConnect;
-    this.client = await factory();
-    await this.client.start();
+    const client = await factory();
+    // § Same class of bug found live in knx-driver.ts: only assign `this.client` once
+    // start() has actually succeeded, so a failed attempt leaves the driver honestly
+    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+    await client.start();
+    this.client = client;
     this.client.onEvent((e) => this.onEvent(e));
   }
   async disconnect(): Promise<void> {

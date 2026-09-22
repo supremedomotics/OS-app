@@ -71,8 +71,12 @@ export class SipProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     if (this.station) return;
     const factory = this.opts.createStation ?? defaultSipStation;
-    this.station = await factory(this.opts);
-    await this.station.start();
+    const station = await factory(this.opts);
+    // § Same class of bug found live in knx-driver.ts: only assign `this.station` once
+    // start() has actually succeeded, so a failed attempt leaves the driver honestly
+    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+    await station.start();
+    this.station = station;
     this.station.onRing((event) => this.onRing(event));
   }
 

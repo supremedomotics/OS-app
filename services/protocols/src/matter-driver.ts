@@ -111,8 +111,12 @@ export class MatterProtocolDriver implements INativeProtocolDriver {
   async connect(): Promise<void> {
     if (this.controller) return;
     const factory = this.opts.createController ?? defaultMatterController;
-    this.controller = await factory({ storagePath: this.opts.storagePath });
-    await this.controller.connect();
+    const controller = await factory({ storagePath: this.opts.storagePath });
+    // § Same class of bug found live in knx-driver.ts: only assign `this.controller` once
+    // connect() has actually succeeded, so a failed attempt leaves the driver honestly
+    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+    await controller.connect();
+    this.controller = controller;
     for (const b of this.bindings) this.observe(b);
   }
 
