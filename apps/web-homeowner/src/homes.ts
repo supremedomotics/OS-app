@@ -114,10 +114,26 @@ function hash(s: string): number {
  * A localStorage-backed {@link TokenStore} scoped to the ACTIVE home, so each hub keeps its own
  * session across reloads (switching a home is a reload) and signing out of one home doesn't touch
  * another. Falls back to in-memory if storage is unavailable.
+ *
+ * Cross-tab sync (§ session-expiry desync fix): the identity service rotates the refresh token on
+ * every use and revokes the WHOLE session if an already-rotated (stale) one is ever presented
+ * again (replay protection — services/identity/src/identity-service.ts). Without this listener,
+ * two tabs each cache their own last-known token in `mem`; when tab A refreshes, tab B's `mem`
+ * silently goes stale, and B's own proactive/401 refresh then presents that stale token, which
+ * reads as replay and revokes the session out from under BOTH tabs — the user never clicked "sign
+ * out." Listening for the native `storage` event (fired in every OTHER tab when one tab writes
+ * this key) keeps `mem` following whichever token is actually current, so a later refresh from any
+ * tab always presents the live one.
  */
 export function homeTokenStore(): TokenStore {
   const key = `supreme.tokens.${activeHomeId()}`;
   let mem: { accessToken: string; refreshToken: string } | null = null;
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (e) => {
+      if (e.key !== key) return;
+      mem = e.newValue ? (JSON.parse(e.newValue) as { accessToken: string; refreshToken: string }) : null;
+    });
+  }
   return {
     get() {
       if (mem) return mem;

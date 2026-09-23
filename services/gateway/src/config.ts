@@ -19,6 +19,13 @@ export interface GatewayConfig {
   host: string;
   port: number;
   tokenSecret: string;
+  /** How long a login session (refresh token) stays valid without use, in seconds — the real
+   * "stay signed in" duration; the access token itself stays short-lived (15 min, TokenService's
+   * own default) and refreshes silently, invisible to the user. Local-first hub, not a public
+   * SaaS: defaults to 1 year rather than a public-web-app-style short session, so a homeowner's
+   * phone/browser stays signed in indefinitely with normal use. Override via
+   * SUPREME_SESSION_TTL_SECONDS (e.g. for a shorter policy on a shared/kiosk device). */
+  sessionTtlSeconds: number;
   /** "mock" runs the offline vertical slice; "native" runs the real Supreme-native backend. */
   backend: "mock" | "native";
   /** Directory for runtime-generated secrets; empty = in-memory. */
@@ -209,6 +216,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
     tokenSecret: secret(env, "SUPREME_TOKEN_SECRET") ?? DEV_TOKEN_SECRET,
+    sessionTtlSeconds: Number(env.SUPREME_SESSION_TTL_SECONDS ?? 60 * 60 * 24 * 365),
     backend,
     secretsDir: env.SUPREME_SECRETS_DIR ?? "",
     devMode: env.SUPREME_DEV_MODE === "1" || env.SUPREME_DEV_MODE === "true",
