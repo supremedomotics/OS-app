@@ -120,9 +120,9 @@ const PROTOCOL_BRAND_LABEL: Record<"avr" | "yamaha", string> = { avr: "Denon/Mar
  * fixtures, Zigbee join-by-pairing) don't fit this form and are added via their own flows —
  * listing them here would fabricate a field that doesn't correspond to how the driver actually
  * binds. `appletv` binds on a plain `host:port` (identical shape to the AVR entry, see
- * `apple-tv-driver.ts`'s `connectBinding()`), but pairing an Apple TV requires a 4-digit PIN
- * shown on the TV — there is no PIN-entry step in this app yet, so a manually-added Apple TV
- * will commission but fail to connect until that UI exists (tracked separately).
+ * `apple-tv-driver.ts`'s `connectBinding()`); pairing an Apple TV requires a 4-digit PIN shown
+ * on the TV, prompted for via `AppleTvPinModal` right after commissioning — same follow-up
+ * `FoundDevice`'s scan-result pairing already does for a discovered Apple TV.
  */
 const MANUAL_PROTOCOLS = ["avr-receiver", "heos", "knx", "modbus", "mqtt", "appletv"] as const;
 const MANUAL_ADDRESS_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string> = {
@@ -131,7 +131,7 @@ const MANUAL_ADDRESS_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string> = {
   knx: "Group address e.g. 1/2/0",
   modbus: "Register e.g. 100",
   mqtt: "Base topic e.g. z2m/lamp",
-  appletv: "Apple TV IP e.g. 192.168.1.60 (pairing PIN prompt not yet built — see help text)",
+  appletv: "Apple TV IP e.g. 192.168.1.60",
 };
 // HEOS's player id (pid) is required — get it from the HEOS app's "About This Device" screen.
 const MANUAL_CONFIG_HINT: Record<(typeof MANUAL_PROTOCOLS)[number], string | null> = {
@@ -1266,6 +1266,10 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [shadingKind, setShadingKind] = useState<ShadingKind>("updown");
+  // § Bug fix (live-reported) — manual-add was the only commission path that never opened the
+  // Apple TV pairing PIN modal; FoundDevice's scan-result pairing already did (see its own
+  // `pairingDevice` state above). Same fix, same pattern, just missing here.
+  const [pairingDevice, setPairingDevice] = useState<{ id: string; name: string } | null>(null);
   // Same async-rooms-load race as FoundDevice above: without this, opening this form before the
   // room list has finished loading leaves mode="new"/roomId="" stuck forever even once rooms
   // arrive, while the <select> visually (but not in state) shows the first room selected.
@@ -1286,6 +1290,7 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
     setDone(false);
     setStep(null);
     setErr(null);
+    setPairingDevice(null);
   }
 
   async function submit() {
@@ -1321,7 +1326,7 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
       }
 
       setStep("Adding device…");
-      await client.commission({
+      const result = await client.commission({
         backendId: `manual:${protocol}:${address.trim()}`,
         name: name.trim() || `${driver?.name ?? protocol.toUpperCase()} — ${address.trim()}`,
         roomId: targetRoomId,
@@ -1333,6 +1338,11 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
       });
       setDone(true);
       setStep(null);
+      if (protocol === "appletv") {
+        // HAP pairing needs an installer-present flow (read the TV's on-screen PIN) — same
+        // follow-up FoundDevice's scan-result pairing already does for a discovered Apple TV.
+        setPairingDevice({ id: result.device.id, name: result.device.name });
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Adding the device failed.");
       setStep(null);
@@ -1448,6 +1458,14 @@ function ManualAddDevice({ registry, rooms, onRoomCreated }: { registry: DriverE
           </>
         )}
       </div>
+      {pairingDevice && (
+        <AppleTvPinModal
+          deviceId={pairingDevice.id}
+          deviceName={pairingDevice.name}
+          onPaired={() => setPairingDevice(null)}
+          onClose={() => setPairingDevice(null)}
+        />
+      )}
     </div>
   );
 }
