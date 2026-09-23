@@ -5,8 +5,9 @@ Control4, Savant, Crestron and RTI.
 
 - **Local-first:** the home hub is a complete, self-sufficient system that works
   with zero internet. Supreme Cloud is optional/opt-in (remote access & management).
-- **Abstraction-first:** Home Assistant is a hidden backend behind the Supreme
-  Integration Layer and is never exposed to end users or installers.
+- **Abstraction-first:** no client ever speaks a protocol directly — every
+  device capability routes through the Supreme Integration Layer (SIL) to the
+  Supreme-native backend.
 - **Aureon** design language: dark, architectural, gold-accented, room-first.
 - **Matter** support is optional and user-activatable (runs locally on the hub).
 
@@ -30,13 +31,12 @@ see [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md), [`SESSION_HANDOFF.md`](SESSION_H
 - **UX benchmark references:** [`docs/reference/`](docs/reference/) · **UI screenshots:** [`docs/screenshots/`](docs/screenshots/)
 
 > Status: **Phases 0–4 implemented.** On the homeowner + installer + intelligence
-> stack, **Phase 4 (native migration)** lands the strangler-fig payoff: the SIL
-> routes each backend domain to Home Assistant *or* the Supreme-native engine, and
-> an operator migrates a domain to native at runtime with **zero change above the
-> SIL** (proven by e2e). The AI assistant runs a **real on-box LLM** (llama.cpp)
-> when a model is provisioned, with the deterministic planner as a correctness
-> floor. Everything is verified by automated tests (PGlite e2e, Ed25519/hash-chain,
-> a runtime native-migration e2e, and a real-inference test gated on a local model).
+> stack, **Phase 4 (native migration)** is complete: the SIL routes every backend
+> domain to the Supreme-native engine, with **zero change above the SIL** required
+> along the way (proven by e2e). The AI assistant runs a **real on-box LLM**
+> (llama.cpp) when a model is provisioned, with the deterministic planner as a
+> correctness floor. Everything is verified by automated tests (PGlite e2e,
+> Ed25519/hash-chain, and a real-inference test gated on a local model).
 >
 > Overall **development completion ~80%** (software surface built + tested in CI/
 > simulation); **real-world readiness ~25–30%** (no real field-bus hardware run yet,
@@ -61,13 +61,13 @@ see [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md), [`SESSION_HANDOFF.md`](SESSION_H
   Sonos, Ajax, SIP door stations, Shelly, AirPlay, Apple TV, Lutron LIP
   (RadioRA2/HomeWorks QS + Caséta Pro), Tuya.
 - **Ecosystem/voice**: Alexa Smart Home, Google Smart Home, HomeKit (local HAP
-  bridge), Matter commissioning + fabric sync — behind the same seam discipline as
-  the HA integration.
+  bridge), Matter commissioning + fabric sync — behind the same SIL seam
+  discipline as every other integration.
 - **Optional Supreme Cloud**: outbound-only remote-access relay (no inbound ports),
   push notification fan-out, off-site backup vault, installer fleet/multi-home
   management, dealer licensing.
-- **Native migration engine**: per-domain strangler-fig routing from the HA adapter
-  to a `SupremeNativeAdapter` behind a runtime flag, with zero frontend change.
+- **Native automation engine**: the `SupremeNativeAdapter` behind the SIL,
+  reached via a runtime backend flag, with zero frontend change.
 
 ## Tech stack
 
@@ -77,7 +77,6 @@ see [`DEVELOPMENT_LOG.md`](DEVELOPMENT_LOG.md), [`SESSION_HANDOFF.md`](SESSION_H
 | Web | React + TypeScript (Vite), `aureon-web` design tokens |
 | Backend services (Node/TS) | gateway, identity, permissions, home, scenes, automations, integration-layer (SIL), drivers, protocols, notifications, persistence, messaging, analytics, audit, security, cameras, intelligence, license, commissioning |
 | Python sidecars (FastAPI) | `ai-py`, `commissioning-py`, `appletv-py` |
-| Automation backend (hidden) | Home Assistant Core (headless), abstracted behind the SIL |
 | Databases | PostgreSQL (system of record; PGlite for embedded tests), Redis (presence/cache, optional), NATS JetStream (event bus, optional) |
 | Contracts/codegen | `supreme-contracts` (OpenAPI/AsyncAPI/zod), generated `supreme-sdk-ts` / `supreme-sdk-dart` |
 | Infra | Docker Compose (`infra/hub-compose`, `infra/cloud-compose`), Terraform (`infra/cloud-iac`), Caddy edge proxy, GitHub Actions CI/CD |
@@ -105,7 +104,7 @@ packages/   domain-model · supreme-contracts · supreme-sdk-ts ·
             supreme-sdk-dart · aureon-web · aureon-flutter · crypto ·
             hub-identity · hub-pki
 drivers/    sdk (driver authoring + signing)
-infra/      hub-compose (Docker Compose for the home hub, incl. hidden HA) ·
+infra/      hub-compose (Docker Compose for the home hub) ·
             cloud-compose · cloud-iac (Terraform) · observability
 tools/      codegen (Aureon token generation) · loadtest · ota
 docs/       architecture (blueprint + ADRs) · reference · screenshots
@@ -122,15 +121,15 @@ protocol-commissioning, AI, and Apple TV sidecars are **Python/FastAPI**.
 pnpm install
 pnpm build && pnpm test
 
-# Run the gateway standalone with the in-memory backend (no HA, no DB needed)
+# Run the gateway standalone with the in-memory backend (no DB needed)
 SUPREME_BACKEND=mock pnpm --filter @supreme/gateway dev
 # → Supreme API on http://127.0.0.1:8080  (GET /healthz)
 
-# Bring up the full home hub (headless hidden HA + Postgres data plane)
+# Bring up the full home hub (native backend + Postgres data plane)
 cd infra/hub-compose && cp .env.example .env && docker compose up -d --build
 # → Supreme API + installer portal behind TLS at https://localhost (dev: Caddy
 #   internal CA / self-signed). Only the edge proxy (:80/:443) is host-published;
-#   the gateway, portal, HA, and data plane stay internal.
+#   the gateway, portal, and data plane stay internal.
 ```
 
 ### Native toolchains (Flutter & Docker)
@@ -180,11 +179,9 @@ cd services/ai-py && pytest -q              # Python sidecar tests (ruff + pytes
 
 - **Tap a light through the full stack** (`services/gateway/src/e2e.test.ts`):
   login → REST command → SIL → backend → normalized state delta over WSS, with an
-  assertion that **no Home Assistant identifiers leak** into the Supreme contract.
+  assertion that **no backend-internal identifiers leak** into the Supreme contract.
 - **Homeowner MVP** (`services/gateway/src/phase1.e2e.test.ts`): scene activation
   driving device state over WSS, favorites, family-user RBAC, live notifications.
-- **Real HA backend** (`services/integration-layer/src/ha/ha-ws-transport.test.ts`):
-  a fake HA WebSocket server proves auth + command mapping + state normalization.
 - **Persistence** (`services/persistence/src/persistence.test.ts` and the gateway
   restart test): the services run on the Postgres-backed repositories via embedded
   Postgres (PGlite), and a commissioned hub survives a reboot.
@@ -232,7 +229,7 @@ Key variables:
 
 | Variable | Purpose |
 |---|---|
-| `SUPREME_BACKEND` | `ha` (real Home Assistant) or `mock` (in-memory, no HA) |
+| `SUPREME_BACKEND` | `native` (the real backend) or `mock` (in-memory, for local dev) |
 | `SUPREME_TOKEN_SECRET` | JWT signing secret, ≥32 chars, fail-closed in production |
 | `DATABASE_URL` / `POSTGRES_PASSWORD` | enables Postgres persistence |
 | `SUPREME_NATS_URL` / `SUPREME_REDIS_URL` | cross-process event bus + presence (optional; in-process otherwise) |
@@ -244,9 +241,9 @@ Key variables:
 
 - Follow [`CODING_STANDARDS.md`](CODING_STANDARDS.md) (naming, file organization,
   error handling, testing patterns) — derived from what the codebase already does.
-- Every capability that reaches Home Assistant or a protocol/driver must go
-  through the SIL (`IBackendAdapter`) — never call HA or a protocol directly from
-  a domain service or client (ADR 0001).
+- Every capability that reaches a protocol/driver must go through the SIL
+  (`IBackendAdapter`) — never call a protocol directly from a domain service
+  or client (ADR 0001).
 - New architectural decisions get a new ADR in `docs/architecture/adr/000N-*.md`
   following the existing Context/Decision/Consequences format.
 - CI must pass: TS build/typecheck/test, Flutter analyze/test/build, Python
@@ -259,8 +256,8 @@ Key variables:
 - Root `package.json` is pinned at `0.0.0` (pre-release monorepo; no public
   package versioning yet).
 - API contracts are versioned via a `/v1` namespace with a capability-negotiation
-  header (blueprint §6) — the client-facing contract must not break, since that's
-  what protects the HA→native migration.
+  header (blueprint §6) — the client-facing contract must not break as the
+  native backend evolves underneath it.
 - Hub/cloud releases ship via a **signed OTA manifest** (Ed25519, `tools/ota`)
   rather than semver package bumps; `docs/production-readiness.md` tracks
   readiness by dimension, not by version number.
