@@ -64,6 +64,7 @@ interface ModbusBinding {
 export class ModbusProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "modbus";
   private client: ModbusClient | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: ModbusDriverOptions;
   private readonly bindings: ModbusBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -77,25 +78,36 @@ export class ModbusProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.client) return;
-    // § Same class of bug found live in knx-driver.ts: only assign `this.client` once
-    // the connection has actually succeeded, so a failed attempt leaves the driver
-    // honestly disconnected (and retryable) instead of `isConnected()` wrongly reporting
-    // true (the TCP branch previously assigned `this.client` before `connectTCP()` was
-    // even attempted).
-    if (this.opts.createClient) {
-      this.client = await this.opts.createClient();
-    } else {
-      const moduleName = "modbus-serial";
-      const mod = (await import(moduleName)) as unknown as { default: new () => ModbusClient };
-      const Ctor = mod.default;
-      const client = new Ctor();
-      await client.connectTCP(this.opts.host, { port: this.opts.port ?? 502 });
-      this.client = client;
+    // § Same class of bug found live in knx-driver.ts (real production incident, "No More
+    // Connections" from a concurrent connect() attempt): every caller now awaits the SAME
+    // in-flight attempt instead of starting a second real connection while one is pending.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      // § Same class of bug found live in knx-driver.ts: only assign `this.client` once
+      // the connection has actually succeeded, so a failed attempt leaves the driver
+      // honestly disconnected (and retryable) instead of `isConnected()` wrongly reporting
+      // true (the TCP branch previously assigned `this.client` before `connectTCP()` was
+      // even attempted).
+      if (this.opts.createClient) {
+        this.client = await this.opts.createClient();
+      } else {
+        const moduleName = "modbus-serial";
+        const mod = (await import(moduleName)) as unknown as { default: new () => ModbusClient };
+        const Ctor = mod.default;
+        const client = new Ctor();
+        await client.connectTCP(this.opts.host, { port: this.opts.port ?? 502 });
+        this.client = client;
+      }
+      // Begin polling. Unref so the interval never holds the process open.
+      const period = this.opts.pollMs ?? 2000;
+      this.timer = setInterval(() => void this.poll(), period);
+      (this.timer as { unref?: () => void }).unref?.();
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
     }
-    // Begin polling. Unref so the interval never holds the process open.
-    const period = this.opts.pollMs ?? 2000;
-    this.timer = setInterval(() => void this.poll(), period);
-    (this.timer as { unref?: () => void }).unref?.();
   }
 
   async disconnect(): Promise<void> {

@@ -88,6 +88,32 @@ describe("KNX codec", () => {
 });
 
 describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
+  // § Real production bug (live-reported): "No More Connections" from the KNXnet/IP gateway,
+  // recurring roughly on reconcileDriverConnectivity()'s 60s retry cadence — a concurrent
+  // connect() call while a previous attempt was still pending opened a SECOND real tunnel
+  // connection against a gateway that only allows one, self-DoS-ing the driver's own slot.
+  it("awaits the same in-flight attempt instead of opening a second real connection when called concurrently", async () => {
+    let factoryCalls = 0;
+    let resolveConnect!: () => void;
+    const bus = new FakeKnxBus();
+    const slowConnect = new Promise<void>((resolve) => { resolveConnect = resolve; });
+    const originalConnect = bus.connect.bind(bus);
+    bus.connect = async () => { await slowConnect; await originalConnect(); };
+
+    const driver = new KnxProtocolDriver({
+      host: "10.0.0.9",
+      createConnection: async () => { factoryCalls += 1; return bus; },
+    });
+
+    const first = driver.connect();
+    const second = driver.connect();
+    resolveConnect();
+    await Promise.all([first, second]);
+
+    expect(factoryCalls).toBe(1);
+    expect(driver.isConnected()).toBe(true);
+  });
+
   it("group-writes commands and normalizes status telegrams from a separate GA", async () => {
     const bus = new FakeKnxBus();
     const driver = new KnxProtocolDriver({ host: "10.0.0.9", createConnection: async () => bus });

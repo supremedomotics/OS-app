@@ -69,6 +69,17 @@ export class KeypadMappingEngine {
   private readonly onRun?: (id: string, ok: boolean) => void;
   private readonly onFire?: (event: KeypadInputEvent, mapping: KeypadMapping, run: KeypadMappingRun) => void;
   private readonly runs: KeypadMappingRun[] = [];
+  /** § Bug fix (live-reported: "have to press multiple times just to toggle") — keyed by
+   * mapping id, so a second firing of the SAME mapping (a rapid double-press, or two
+   * `KeypadInputEvent`s from one physical press bouncing) awaits the PREVIOUS firing's full
+   * command-send-and-confirm round trip before it resolves its own action. Without this, a
+   * "toggle" behavior's `resolveBehaviorCommand()` reads `getState()` for both firings at
+   * nearly the same instant — before the first command has actually landed and the driver's
+   * confirming re-read has updated cached state — so both resolve to the SAME target action
+   * (e.g. both "turn on") instead of alternating, and the device never toggles off until an
+   * unrelated later press happens to read fresh state. Different mappings still run fully
+   * concurrently; only repeat firings of the identical mapping are serialized. */
+  private readonly inFlight = new Map<string, Promise<void>>();
   private readonly historyLimit: number;
   private readonly now: () => number;
   private readonly persistBehaviorState?: (mappingId: KeypadMappingId, behaviorState: KeypadMappingBehaviorState) => Promise<void>;
@@ -97,7 +108,16 @@ export class KeypadMappingEngine {
   async onInputEvent(event: KeypadInputEvent): Promise<void> {
     for (const m of this.mappings) {
       if (m.input.keypadId === event.keypadId && m.input.control === event.control && m.input.event === event.type) {
-        const run = await this.execute(m);
+        // Chain onto whatever's already running for THIS mapping (see `inFlight`'s own doc
+        // comment) — a concurrent firing of a different mapping is untouched.
+        const prior = this.inFlight.get(m.id) ?? Promise.resolve();
+        let run!: KeypadMappingRun;
+        const chained = prior.then(async () => {
+          run = await this.execute(m);
+        });
+        this.inFlight.set(m.id, chained);
+        await chained;
+        if (this.inFlight.get(m.id) === chained) this.inFlight.delete(m.id);
         this.onFire?.(event, m, run);
       }
     }

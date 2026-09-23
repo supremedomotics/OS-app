@@ -85,6 +85,7 @@ interface ZigbeeBinding {
 export class ZigbeeProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "zigbee";
   private controller: ZigbeeController | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: ZigbeeDriverOptions;
   private readonly bindings: ZigbeeBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -97,14 +98,25 @@ export class ZigbeeProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.controller) return;
-    const factory = this.opts.createController ?? defaultZigbeeController;
-    const controller = await factory(this.opts);
-    // § Same class of bug found live in knx-driver.ts: only assign `this.controller` once
-    // start() has actually succeeded, so a failed attempt leaves the driver honestly
-    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
-    await controller.start();
-    this.controller = controller;
-    this.controller.onReport((report) => this.onReport(report));
+    // § Same class of bug found live in knx-driver.ts (real production incident, "No More
+    // Connections" from a concurrent connect() attempt): every caller now awaits the SAME
+    // in-flight attempt instead of starting a second real connection while one is pending.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const factory = this.opts.createController ?? defaultZigbeeController;
+      const controller = await factory(this.opts);
+      // § Same class of bug found live in knx-driver.ts: only assign `this.controller` once
+      // start() has actually succeeded, so a failed attempt leaves the driver honestly
+      // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+      await controller.start();
+      this.controller = controller;
+      this.controller.onReport((report) => this.onReport(report));
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
   }
 
   async disconnect(): Promise<void> {

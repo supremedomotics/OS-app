@@ -174,6 +174,47 @@ describe("KeypadMappingEngine — behaviors (§ Supreme Universal Keypad, Stage 
     expect(ex.command).toHaveBeenLastCalledWith(light, { capability: "onoff", action: "off" });
   });
 
+  // § Bug fix (live-reported: "have to press multiple times just to toggle" — a real
+  // CoolMaster keypad symptom). A slow command (real hardware round trip, not instant like a
+  // test's default mock) used to let a rapid second press's toggle read `getState()` BEFORE
+  // the first press's command had actually landed — both resolved to the same target action
+  // instead of alternating.
+  it("toggle: a second press that arrives while the first command is still in flight waits for it, instead of racing its stale state read", async () => {
+    const kp = devId();
+    const light = devId();
+    let on = false;
+    let releaseFirstCommand!: () => void;
+    const firstCommandGate = new Promise<void>((resolve) => { releaseFirstCommand = resolve; });
+    let commandCalls = 0;
+    const ex = executors({
+      getState: vi.fn(async () => ({ kind: "onoff", on }) as CapabilityState),
+      command: vi.fn(async (_id, cmd) => {
+        commandCalls += 1;
+        if (commandCalls === 1) await firstCommandGate; // simulate a slow real device round trip
+        if (cmd.capability === "onoff" && cmd.action !== "toggle") on = cmd.action === "on";
+      }),
+    });
+    const engine = new KeypadMappingEngine({ executors: ex, sleep: async () => {} });
+    const m = mapping({
+      input: { keypadId: kp, control: "btn1", event: "short_press" },
+      actions: [],
+      behavior: "toggle",
+      target: { deviceId: light, capability: "onoff", step: 10 },
+    });
+    engine.setMappings([m]);
+
+    const firstPress = engine.onInputEvent(pressEvent(kp)); // OFF -> ON, but hasn't landed yet
+    // The second press fires before the first command resolves — it must wait for the first
+    // to fully finish (and `on` to actually flip) before it reads state for itself.
+    const secondPress = engine.onInputEvent(pressEvent(kp));
+    releaseFirstCommand();
+    await Promise.all([firstPress, secondPress]);
+
+    expect(ex.command).toHaveBeenNthCalledWith(1, light, { capability: "onoff", action: "on" });
+    expect(ex.command).toHaveBeenNthCalledWith(2, light, { capability: "onoff", action: "off" });
+    expect(on).toBe(false);
+  });
+
   it("alternate: Long Press -> DIM UP, next -> DIM DOWN, next -> DIM UP, in one process", async () => {
     const kp = devId();
     const light = devId();
