@@ -18,19 +18,21 @@ function sleep(ms: number): Promise<void> {
  * `avr-codec`/`DriverDiagnosticsTracker` as-is; this is a thin orchestration layer, not a
  * second transport.
  *
- * Zone 2 "detected" is honestly a heuristic, not a real capability query — Denon/Marantz's
- * classic Telnet protocol has no feature-query command (see avr-codec.ts's module doc). A
- * unit that's slow to answer within the window may show as "not detected" even though Zone 2
- * exists — callers must present this as editable, never authoritative.
+ * Zone 2/Zone 3 "detected" is honestly a heuristic, not a real capability query — Denon/
+ * Marantz's classic Telnet protocol has no feature-query command (see avr-codec.ts's module
+ * doc). A unit that's slow to answer within the window may show as "not detected" even
+ * though the zone exists — callers must present this as editable, never authoritative.
  */
 export async function probeAvr(address: string, opts: { httpPort?: number; fetchImpl?: typeof fetch } = {}): Promise<ProbeResult> {
   const driver = new AvrProtocolDriver({ httpPort: opts.httpPort, fetchImpl: opts.fetchImpl });
   const mainId = newId("device") as DeviceId;
   const zone2Id = newId("device") as DeviceId;
+  const zone3Id = newId("device") as DeviceId;
   try {
     await driver.connect();
     await driver.bind({ deviceId: mainId, capability: "onoff", address, config: { zone: "main" } });
     await driver.bind({ deviceId: zone2Id, capability: "onoff", address, config: { zone: "zone2" } });
+    await driver.bind({ deviceId: zone3Id, capability: "onoff", address, config: { zone: "zone3" } });
 
     const deadline = Date.now() + PROBE_TIMEOUT_MS;
     let diag = driver.getDiagnostics(mainId);
@@ -44,6 +46,7 @@ export async function probeAvr(address: string, opts: { httpPort?: number; fetch
       ? [
           { id: "main", label: "Zone 1", detected: true },
           { id: "zone2", label: "Zone 2", detected: driver.getState(zone2Id, "onoff") !== null },
+          { id: "zone3", label: "Zone 3", detected: driver.getState(zone3Id, "onoff") !== null },
         ]
       : [];
 
@@ -73,6 +76,7 @@ export async function probeAvr(address: string, opts: { httpPort?: number; fetch
   } finally {
     await driver.unbind(mainId);
     await driver.unbind(zone2Id);
+    await driver.unbind(zone3Id);
     await driver.disconnect();
   }
 }

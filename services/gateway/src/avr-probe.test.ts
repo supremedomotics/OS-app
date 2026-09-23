@@ -4,10 +4,11 @@ import { describe, expect, it } from "vitest";
 import { probeAvr } from "./avr-probe.js";
 
 /** A minimal in-process Denon-style AVR, purpose-built for the probe's own needs (reachability
- * + best-effort zone2 detection) — not the full command-reflecting fake `avr-driver.test.ts`
+ * + best-effort zone2/zone3 detection) — not the full command-reflecting fake `avr-driver.test.ts`
  * uses, since the probe only ever sends `?` queries during its init burst, never commands. */
-function startFakeAvr(opts: { answerZone2?: boolean } = {}): Promise<{ server: Server; port: number; sockets: Set<Socket> }> {
+function startFakeAvr(opts: { answerZone2?: boolean; answerZone3?: boolean } = {}): Promise<{ server: Server; port: number; sockets: Set<Socket> }> {
   const answerZone2 = opts.answerZone2 ?? true;
+  const answerZone3 = opts.answerZone3 ?? false;
   const sockets = new Set<Socket>();
   return new Promise((resolve) => {
     const server = createServer((sock: Socket) => {
@@ -27,6 +28,8 @@ function startFakeAvr(opts: { answerZone2?: boolean } = {}): Promise<{ server: S
           else if (cmd === "SI?") sock.write("SICD\r");
           else if (cmd === "Z2?" && answerZone2) sock.write("Z2ON\r");
           else if (cmd === "Z2MU?" && answerZone2) sock.write("Z2MUOFF\r");
+          else if (cmd === "Z3?" && answerZone3) sock.write("Z3ON\r");
+          else if (cmd === "Z3MU?" && answerZone3) sock.write("Z3MUOFF\r");
           else if (cmd === "PSTONE CTRL ?") sock.write("PSTONE CTRL ON\r");
           else if (cmd === "PSBAS ?") sock.write("PSBAS 50\r");
           else if (cmd === "PSTRE ?") sock.write("PSTRE 50\r");
@@ -42,8 +45,8 @@ function startFakeAvr(opts: { answerZone2?: boolean } = {}): Promise<{ server: S
 }
 
 describe("probeAvr", () => {
-  it("reports reachable with both zones detected when the receiver answers everything", async () => {
-    const fake = await startFakeAvr({ answerZone2: true });
+  it("reports reachable with zone2 detected (zone3 not) when the receiver answers zone2 but not zone3", async () => {
+    const fake = await startFakeAvr({ answerZone2: true, answerZone3: false });
     try {
       const result = await probeAvr(`127.0.0.1:${fake.port}`);
       expect(result.reachable).toBe(true);
@@ -51,6 +54,7 @@ describe("probeAvr", () => {
       expect(result.zones).toEqual([
         { id: "main", label: "Zone 1", detected: true },
         { id: "zone2", label: "Zone 2", detected: true },
+        { id: "zone3", label: "Zone 3", detected: false },
       ]);
     } finally {
       await new Promise<void>((r) => fake.server.close(() => r()));
@@ -65,6 +69,22 @@ describe("probeAvr", () => {
       expect(result.zones).toEqual([
         { id: "main", label: "Zone 1", detected: true },
         { id: "zone2", label: "Zone 2", detected: false },
+        { id: "zone3", label: "Zone 3", detected: false },
+      ]);
+    } finally {
+      await new Promise<void>((r) => fake.server.close(() => r()));
+    }
+  }, 10_000);
+
+  it("detects zone3 on a real 3-zone receiver (§ Zone 3 support)", async () => {
+    const fake = await startFakeAvr({ answerZone2: true, answerZone3: true });
+    try {
+      const result = await probeAvr(`127.0.0.1:${fake.port}`);
+      expect(result.reachable).toBe(true);
+      expect(result.zones).toEqual([
+        { id: "main", label: "Zone 1", detected: true },
+        { id: "zone2", label: "Zone 2", detected: true },
+        { id: "zone3", label: "Zone 3", detected: true },
       ]);
     } finally {
       await new Promise<void>((r) => fake.server.close(() => r()));

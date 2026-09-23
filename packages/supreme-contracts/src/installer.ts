@@ -103,6 +103,11 @@ export const DiscoveredDeviceView = z.object({
    * Absent when the protocol needs no config (KNX group address, Modbus register, …).
    */
   bindConfig: z.record(z.unknown()).optional(),
+  /** The real bus address to bind to, when it genuinely differs from `backendId` — e.g. an
+   * AVR Zone 2 entry, whose `backendId` is suffixed for identity uniqueness but whose physical
+   * connection is still the base unit's address. Pass straight through as `address` on a
+   * `CommissionRequest`. Absent when `backendId` IS the bus address (the common case). */
+  bindAddress: z.string().optional(),
   /**
    * Room-name hint the driver's own discovery already resolved (a Casambi Group name,
    * an ETS Function/Space, …) — never a guess invented by commissioning, only ever what

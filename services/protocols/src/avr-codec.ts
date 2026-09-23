@@ -75,7 +75,7 @@ const MV_MAX = 98;
 /** Tone control (`PSBAS`/`PSTRE`) is encoded 00–99 with 50 = 0dB (spec p.14). */
 const TONE_BIAS = 50;
 
-export type AvrZone = "main" | "zone2";
+export type AvrZone = "main" | "zone2" | "zone3";
 
 export function parseHostPort(address: string, defaultPort = 23): { host: string; port: number } {
   const [host, port] = address.split(":");
@@ -148,13 +148,16 @@ export const DENON_CINEMA_MODES = ["MUSIC", "CINEMA", "GAME", "PRO LOGIC"] as co
 
 /** Translate a Supreme command into AVR control tokens (null = unsupported). `zone`
  * selects which zone's token prefix to use — only "main" carries volume/tone/DSP, per
- * the spec (see module doc). */
+ * the spec (see module doc). Zone 3 (`Z3`) mirrors Zone 2 (`Z2`) exactly — same
+ * power/volume/mute/source command shape, just the `Z3` prefix instead of `Z2` (§ Zone 3
+ * support — same evidence basis as Zone 2, real-world Denon Telnet clients document `Z3`
+ * as the identical-shape sibling command family, not a guessed extrapolation). */
 export function commandToAvr(
   command: CapabilityCommand,
   prev: CapabilityState | null,
   zone: AvrZone = "main",
 ): string[] | null {
-  const z2 = zone === "zone2";
+  const zonePrefix = zone === "zone2" ? "Z2" : zone === "zone3" ? "Z3" : null;
   switch (command.capability) {
     case "onoff": {
       // Main zone uses `ZM` (Main Zone power) — NOT `PW` (whole-unit power/standby).
@@ -162,26 +165,26 @@ export function commandToAvr(
       // it (a real Zone 2 users hit); `ZM` is independent per zone, same as `Z2`/`Z3`.
       if (command.action === "toggle") {
         const on = prev?.kind === "onoff" ? prev.on : false;
-        return [z2 ? (on ? "Z2OFF" : "Z2ON") : on ? "ZMOFF" : "ZMON"];
+        return [zonePrefix ? (on ? `${zonePrefix}OFF` : `${zonePrefix}ON`) : on ? "ZMOFF" : "ZMON"];
       }
       const on = command.action === "on";
-      return [z2 ? (on ? "Z2ON" : "Z2OFF") : on ? "ZMON" : "ZMOFF"];
+      return [zonePrefix ? (on ? `${zonePrefix}ON` : `${zonePrefix}OFF`) : on ? "ZMON" : "ZMOFF"];
     }
     case "media": {
       switch (command.action) {
         case "volume":
-          // Zone 2 volume is `Z2<nn>` — same MV_MAX/0-98 scale as the main zone's `MV`
-          // (see module doc § Zone 2 volume).
-          return typeof command.volume === "number" ? [`${z2 ? "Z2" : "MV"}${mvFromPercent(command.volume)}`] : null;
+          // Zone 2/3 volume is `Z2<nn>`/`Z3<nn>` — same MV_MAX/0-98 scale as the main
+          // zone's `MV` (see module doc § Zone 2 volume).
+          return typeof command.volume === "number" ? [`${zonePrefix ?? "MV"}${mvFromPercent(command.volume)}`] : null;
         case "mute":
-          return [z2 ? "Z2MUON" : "MUON"];
+          return [zonePrefix ? `${zonePrefix}MUON` : "MUON"];
         case "unmute":
-          return [z2 ? "Z2MUOFF" : "MUOFF"];
+          return [zonePrefix ? `${zonePrefix}MUOFF` : "MUOFF"];
         case "source":
-          return typeof command.source === "string" ? [`${z2 ? "Z2" : "SI"}${command.source}`] : null;
+          return typeof command.source === "string" ? [`${zonePrefix ?? "SI"}${command.source}`] : null;
         case "advanced": {
           const adv = command.advanced;
-          if (!adv || z2) return null; // tone/DSP are main-zone only in this spec
+          if (!adv || zonePrefix) return null; // tone/DSP are main-zone only in this spec
           const tokens: string[] = [];
           if (typeof adv.bass === "number") tokens.push(`PSBAS ${toneToken(adv.bass)}`);
           if (typeof adv.treble === "number") tokens.push(`PSTRE ${toneToken(adv.treble)}`);
@@ -244,6 +247,10 @@ export type AvrUpdate =
   | { kind: "zone2Mute"; muted: boolean }
   | { kind: "zone2Volume"; volume: number; volumeDb: number }
   | { kind: "zone2Source"; source: string }
+  | { kind: "zone3Power"; on: boolean }
+  | { kind: "zone3Mute"; muted: boolean }
+  | { kind: "zone3Volume"; volume: number; volumeDb: number }
+  | { kind: "zone3Source"; source: string }
   | { kind: "dynamicEq"; on: boolean }
   | { kind: "audysseyMode"; mode: string }
   | { kind: "referenceLevel"; db: number }
@@ -324,6 +331,18 @@ export function parseAvrLine(line: string): AvrUpdate | null {
     const digits = t.slice(2);
     if (/^\d{2,3}$/.test(digits)) return { kind: "zone2Volume", volume: percentFromMv(digits), volumeDb: dbFromMv(digits) };
     return { kind: "zone2Source", source: digits };
+  }
+  // Zone 3 — same token shape as Zone 2, `Z3` prefix instead of `Z2` (§ Zone 3 support).
+  if (t === "Z3ON") return { kind: "zone3Power", on: true };
+  if (t === "Z3OFF") return { kind: "zone3Power", on: false };
+  if (t === "Z3MUON") return { kind: "zone3Mute", muted: true };
+  if (t === "Z3MUOFF") return { kind: "zone3Mute", muted: false };
+  if (t.startsWith("Z3MU")) return null; // avoid Z3 fallthrough matching Z3MU as a source
+  if (t.startsWith("Z3SLP")) return null; // Zone 3 sleep not surfaced as Supreme state today
+  if (t.startsWith("Z3")) {
+    const digits = t.slice(2);
+    if (/^\d{2,3}$/.test(digits)) return { kind: "zone3Volume", volume: percentFromMv(digits), volumeDb: dbFromMv(digits) };
+    return { kind: "zone3Source", source: digits };
   }
   if (t.startsWith("SI")) return { kind: "source", source: t.slice(2) };
   return null;
@@ -423,6 +442,9 @@ export function buildMediaState(cache: {
  * homeowner-facing rename API instead of discovered off the wire — no new schema. */
 export function denonCapabilityConfig(opts: {
   hasZone2: boolean;
+  /** Same installer-declared, wire-undiscoverable nature as `hasZone2` (§ Zone 3 support) —
+   * defaults `false` since most units only have Zone 2. */
+  hasZone3?: boolean;
   hasToneControl: boolean;
   hasAudyssey?: boolean;
   hasExtendedAudio?: boolean;
@@ -444,7 +466,15 @@ export function denonCapabilityConfig(opts: {
     inputs,
     soundModes: DENON_SOUND_MODES.map((id) => ({ id, label: id })),
     ...(opts.hasToneControl ? { toneControl: { bass: { min: -6, max: 6, step: 1 }, treble: { min: -6, max: 6, step: 1 } } } : {}),
-    ...(opts.hasZone2 ? { zones: [{ id: "main", label: "Main Zone", inputs }, { id: "zone2", label: "Zone 2", inputs }] } : {}),
+    ...(opts.hasZone2 || opts.hasZone3
+      ? {
+          zones: [
+            { id: "main", label: "Main Zone", inputs },
+            ...(opts.hasZone2 ? [{ id: "zone2", label: "Zone 2", inputs }] : []),
+            ...(opts.hasZone3 ? [{ id: "zone3", label: "Zone 3", inputs }] : []),
+          ],
+        }
+      : {}),
     transport: { play: false, pause: false, stop: false, next: false, previous: false, seek: false, shuffle: false, repeat: false },
     // Denon's `SLP<mmm>` accepts any 1-120 minute value (spec p.15), but the front panel
     // itself only ever offers these presets plus Off — matching that exactly rather than

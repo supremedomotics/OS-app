@@ -46,6 +46,11 @@ export interface DiscoveredView {
    * HEOS player's `pid`, an AVR/Yamaha `zone`, …) — pass straight through as the bind
    * `config` so commissioning needs no manual entry beyond room + name. */
   bindConfig?: Record<string, unknown>;
+  /** The real bus address to bind to, when it genuinely differs from `backendId` — e.g. an
+   * AVR Zone 2 entry, whose `backendId` is suffixed for identity uniqueness but whose physical
+   * connection is still the base unit's address. Pass straight through as `address` on a
+   * `CommissionRequest`. Absent when `backendId` IS the bus address (the common case). */
+  bindAddress?: string;
   /** Structural per-capability config the driver already normalized at discovery time (§ ADR
    * 0017 — Capability Normalization), e.g. `{ color: { colorModes: { rgb, cct } } }` — passed
    * straight through to `commission()` so the persisted device's capability carries the SAME
