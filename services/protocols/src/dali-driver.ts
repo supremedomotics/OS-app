@@ -73,6 +73,7 @@ interface DaliBinding {
 export class DaliProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "dali";
   private bus: DaliBus | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: DaliDriverOptions;
   private readonly bindings: DaliBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -86,16 +87,27 @@ export class DaliProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.bus) return;
-    const factory = this.opts.createBus ?? defaultDaliBus;
-    const bus = await factory(this.opts);
-    // § Same class of bug found live in knx-driver.ts: only assign `this.bus` once
-    // connect() has actually succeeded, so a failed attempt leaves the driver honestly
-    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
-    await bus.connect();
-    this.bus = bus;
-    const period = this.opts.pollMs ?? 5000;
-    this.timer = setInterval(() => void this.poll(), period);
-    (this.timer as { unref?: () => void }).unref?.();
+    // § Same class of bug found live in knx-driver.ts (real production incident, "No More
+    // Connections" from a concurrent connect() attempt): every caller now awaits the SAME
+    // in-flight attempt instead of starting a second real connection while one is pending.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const factory = this.opts.createBus ?? defaultDaliBus;
+      const bus = await factory(this.opts);
+      // § Same class of bug found live in knx-driver.ts: only assign `this.bus` once
+      // connect() has actually succeeded, so a failed attempt leaves the driver honestly
+      // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+      await bus.connect();
+      this.bus = bus;
+      const period = this.opts.pollMs ?? 5000;
+      this.timer = setInterval(() => void this.poll(), period);
+      (this.timer as { unref?: () => void }).unref?.();
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
   }
 
   async disconnect(): Promise<void> {

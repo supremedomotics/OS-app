@@ -58,6 +58,7 @@ interface SipBinding {
 export class SipProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "sip";
   private station: SipDoorStation | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: SipDriverOptions;
   private readonly bindings: SipBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -70,14 +71,25 @@ export class SipProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.station) return;
-    const factory = this.opts.createStation ?? defaultSipStation;
-    const station = await factory(this.opts);
-    // § Same class of bug found live in knx-driver.ts: only assign `this.station` once
-    // start() has actually succeeded, so a failed attempt leaves the driver honestly
-    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
-    await station.start();
-    this.station = station;
-    this.station.onRing((event) => this.onRing(event));
+    // § Same class of bug found live in knx-driver.ts (real production incident, "No More
+    // Connections" from a concurrent connect() attempt): every caller now awaits the SAME
+    // in-flight attempt instead of starting a second real connection while one is pending.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const factory = this.opts.createStation ?? defaultSipStation;
+      const station = await factory(this.opts);
+      // § Same class of bug found live in knx-driver.ts: only assign `this.station` once
+      // start() has actually succeeded, so a failed attempt leaves the driver honestly
+      // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+      await station.start();
+      this.station = station;
+      this.station.onRing((event) => this.onRing(event));
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
   }
 
   async disconnect(): Promise<void> {

@@ -52,6 +52,7 @@ interface AjaxBinding {
 export class AjaxProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "ajax";
   private client: AjaxClient | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: AjaxDriverOptions;
   private readonly bindings: AjaxBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -64,14 +65,27 @@ export class AjaxProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.client) return;
-    const factory = this.opts.connect ?? defaultAjaxConnect;
-    const client = await factory();
-    // § Same class of bug found live in knx-driver.ts: only assign `this.client` once
-    // start() has actually succeeded, so a failed attempt leaves the driver honestly
-    // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
-    await client.start();
-    this.client = client;
-    this.client.onEvent((e) => this.onEvent(e));
+    // § Same class of bug found live in knx-driver.ts (real production incident, "No More
+    // Connections" from a concurrent connect() attempt): the guard above only blocks a
+    // SECOND call once a PREVIOUS one already succeeded — while an attempt is still
+    // pending, a concurrent caller could start a second real connection. Every caller now
+    // awaits the SAME in-flight attempt instead.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const factory = this.opts.connect ?? defaultAjaxConnect;
+      const client = await factory();
+      // § Same class of bug found live in knx-driver.ts: only assign `this.client` once
+      // start() has actually succeeded, so a failed attempt leaves the driver honestly
+      // disconnected (and retryable) instead of `isConnected()` wrongly reporting true.
+      await client.start();
+      this.client = client;
+      this.client.onEvent((e) => this.onEvent(e));
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
   }
   async disconnect(): Promise<void> {
     await this.client?.stop();

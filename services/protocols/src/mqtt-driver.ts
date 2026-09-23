@@ -47,6 +47,7 @@ interface BoundCapability {
 export class MqttProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "mqtt";
   private client: MqttClient | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: MqttDriverOptions;
   private readonly commandSuffix: string;
   private readonly discoveryBaseTopic: string;
@@ -68,18 +69,31 @@ export class MqttProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.client) return;
-    const connector = this.opts.connect ?? connectAsync;
-    this.client = await connector(this.opts.url, {
-      username: this.opts.username,
-      password: this.opts.password,
-    });
-    this.client.on("message", (topic: string, payload: Buffer) =>
-      this.onMessage(topic, payload),
-    );
-    // Re-subscribe anything bound before connect (idempotent).
-    for (const topic of this.byTopic.keys()) this.client.subscribe(topic);
-    // Subscribe to the Zigbee2MQTT bridge device list (retained → arrives at once).
-    if (this.discoveryTopic) this.client.subscribe(this.discoveryTopic);
+    // § Same class of bug found live in knx-driver.ts (real production incident, "No More
+    // Connections" from a concurrent connect() attempt): every caller now awaits the SAME
+    // in-flight attempt instead of opening a second real MQTT connection while one is
+    // pending.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const connector = this.opts.connect ?? connectAsync;
+      const client = await connector(this.opts.url, {
+        username: this.opts.username,
+        password: this.opts.password,
+      });
+      this.client = client;
+      client.on("message", (topic: string, payload: Buffer) =>
+        this.onMessage(topic, payload),
+      );
+      // Re-subscribe anything bound before connect (idempotent).
+      for (const topic of this.byTopic.keys()) client.subscribe(topic);
+      // Subscribe to the Zigbee2MQTT bridge device list (retained → arrives at once).
+      if (this.discoveryTopic) client.subscribe(this.discoveryTopic);
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
   }
 
   async disconnect(): Promise<void> {

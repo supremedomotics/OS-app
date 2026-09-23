@@ -155,6 +155,7 @@ function parseHvacRoles(cfg: Record<string, unknown>, defaultDptValue: string): 
 export class KnxProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "knx";
   private conn: KnxConnection | null = null;
+  private connecting: Promise<void> | null = null;
   private readonly opts: KnxDriverOptions;
   private readonly bindings: KnxBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -167,18 +168,35 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
 
   async connect(): Promise<void> {
     if (this.conn) return;
-    const factory = this.opts.createConnection ?? defaultKnxConnection;
-    const conn = await factory({ host: this.opts.host, port: this.opts.port ?? 3671 });
-    // § Real production bug: `this.conn` was previously assigned before `conn.connect()`
-    // was confirmed to succeed. A failed connect (e.g. a KNXnet/IP gateway rejecting with
-    // "No More Connections") left `this.conn` truthy anyway, so every subsequent connect()
-    // call — including an auto-retry — silently no-op'd via the `if (this.conn) return;`
-    // guard above, and isConnected() (which also just checks nullness) wrongly reported
-    // connected. Only assign `this.conn` once `connect()` has actually succeeded, so a
-    // failed attempt leaves the driver honestly disconnected and retryable.
-    await conn.connect();
-    this.conn = conn;
-    for (const b of this.bindings) this.observe(b);
+    // § Real production bug (live-reported, "No More Connections" recurring ~60s apart —
+    // matching reconcileDriverConnectivity()'s retry interval): the guard above only blocks
+    // a SECOND call once a PREVIOUS one already succeeded. While a connect() attempt is
+    // still pending (this.conn still null — e.g. a slow/hanging TCP handshake), nothing
+    // stopped a concurrent caller (the 60s auto-retry firing again, a manual "Connect"
+    // click, boot-time connect) from starting a SECOND real tunnel-connect attempt against
+    // the same gateway. Most KNXnet/IP interfaces allow only one concurrent tunnel
+    // connection, so overlapping attempts self-DoS the driver's own single slot. Every
+    // caller now awaits the SAME in-flight attempt instead of starting a new one.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      const factory = this.opts.createConnection ?? defaultKnxConnection;
+      const conn = await factory({ host: this.opts.host, port: this.opts.port ?? 3671 });
+      // § Real production bug: `this.conn` was previously assigned before `conn.connect()`
+      // was confirmed to succeed. A failed connect (e.g. a KNXnet/IP gateway rejecting with
+      // "No More Connections") left `this.conn` truthy anyway, so every subsequent connect()
+      // call — including an auto-retry — silently no-op'd via the `if (this.conn) return;`
+      // guard above, and isConnected() (which also just checks nullness) wrongly reported
+      // connected. Only assign `this.conn` once `connect()` has actually succeeded, so a
+      // failed attempt leaves the driver honestly disconnected and retryable.
+      await conn.connect();
+      this.conn = conn;
+      for (const b of this.bindings) this.observe(b);
+    })();
+    try {
+      await this.connecting;
+    } finally {
+      this.connecting = null;
+    }
   }
 
   async disconnect(): Promise<void> {
