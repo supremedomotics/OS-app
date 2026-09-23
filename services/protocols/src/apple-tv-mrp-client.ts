@@ -38,9 +38,30 @@ import {
 import { createMrpTcpTransport, type AppleTvMrpTransport } from "./apple-tv-mrp-transport.js";
 import type { AppleTvCredentialStore } from "./apple-tv-credential-store.js";
 import type { MediaArtwork } from "@supreme/integration-layer";
+
+/** § Bug fix (live-reported) — `address.split(":")` with no port (e.g. a bare IP typed into
+ * the manual-add form) silently produced `Number(undefined)` = `NaN`, which `net.Socket
+ * .connect()` doesn't validate itself — it throws a raw, unhandled `RangeError
+ * [ERR_SOCKET_BAD_PORT]` deep inside Node's own socket internals, surfacing to the installer
+ * as an opaque "internal error" with no indication of what's actually wrong. One shared,
+ * validating parse used everywhere an MRP address string is split, so every caller fails the
+ * same clear, actionable way instead of crashing differently depending on where the bad
+ * address entered the system. */
+function parseMrpAddress(address: string): { host: string; port: number } {
+  const [host, portStr] = address.split(":");
+  const port = Number(portStr);
+  if (!host || !portStr || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(
+      `apple-tv: "${address}" is not a valid "host:port" MRP address — the port is required and ` +
+        `must be a real port number (1-65535), not a bare IP. This device's real MRP port isn't ` +
+        `known unless it was found via broadcast discovery.`,
+    );
+  }
+  return { host, port };
+}
 import { AppleTvPairingRequiredError, type AppleTvClient, type AppleTvConnect, type AppleTvNowPlaying } from "./apple-tv-driver.js";
 import type { TvForegroundApp } from "./tv-sdk/tv-types.js";
-import { connectAppleTvCompanion, type AppleTvCompanionAppClient } from "./apple-tv-companion-client.js";
+import { connectAppleTvCompanion, createCompanionOnlyAppleTvClient, type AppleTvCompanionAppClient } from "./apple-tv-companion-client.js";
 import { discoverCompanionAddress } from "./apple-tv-companion-discovery.js";
 
 /** MRP-specific post-pair-verify session key derivation strings — verified against
@@ -136,9 +157,8 @@ export async function pairAppleTvMrp(
   pin: string,
   opts: AppleTvMrpClientOptions,
 ): Promise<void> {
-  const [host, portStr] = address.split(":");
-  const port = Number(portStr);
-  const transport = (opts.transportFactory ?? createMrpTcpTransport)(host!, port);
+  const { host, port } = parseMrpAddress(address);
+  const transport = (opts.transportFactory ?? createMrpTcpTransport)(host, port);
   await transport.connect();
   try {
     transport.send(buildDeviceInfoMessage(hubDeviceInfo(opts.hubIdentifier, opts.hubName)));
@@ -178,9 +198,8 @@ export async function beginAppleTvMrpPairing(
   deviceId: DeviceId,
   opts: AppleTvMrpClientOptions,
 ): Promise<AppleTvMrpPairingSession> {
-  const [host, portStr] = address.split(":");
-  const port = Number(portStr);
-  const transport = (opts.transportFactory ?? createMrpTcpTransport)(host!, port);
+  const { host, port } = parseMrpAddress(address);
+  const transport = (opts.transportFactory ?? createMrpTcpTransport)(host, port);
   await transport.connect();
   let closed = false;
   const close = () => {
@@ -216,15 +235,72 @@ export async function beginAppleTvMrpPairing(
  * {@link AppleTvPairingRequiredError} immediately (never attempts a connection that can't
  * succeed). If credentials exist, opens a fresh transport, runs pair-verify, enables the
  * derived MRP session, exchanges DEVICE_INFO, and returns a live {@link AppleTvClient}. */
+/**
+ * § MRP-unreachable Companion fallback — the real-world case a production Apple TV
+ * exposed: it stopped advertising `_mediaremotetv._tcp` (MRP) entirely while remaining
+ * fully reachable over `_companion-link._tcp` (Companion), confirmed paired. Attempts a
+ * Companion-only connection (never fabricates an MRP session over it) and, on success,
+ * returns the {@link AppleTvClient} adapter from `apple-tv-companion-client.ts` so the
+ * driver's `remote`/`media` commands keep working through Companion alone. Returns
+ * `null` — never throws — when Companion isn't configured, has no discoverable/
+ * overridden address, or isn't paired either; the caller then surfaces the ORIGINAL MRP
+ * failure (pairing-required or connection error), never masking it with a misleading
+ * Companion-specific one.
+ */
+async function tryCompanionOnlyFallback(
+  host: string,
+  deviceId: DeviceId,
+  opts: AppleTvMrpClientOptions,
+): Promise<AppleTvClient | null> {
+  if (!opts.companion) return null;
+  const companionAddress =
+    opts.companion.addressFor?.(deviceId) ?? (await discoverCompanionAddress(host, opts.companion.mdns));
+  if (!companionAddress) return null;
+  try {
+    const companionClient = await connectAppleTvCompanion(companionAddress, deviceId, {
+      credentialStore: opts.companion.credentialStore,
+    });
+    return createCompanionOnlyAppleTvClient(companionClient);
+  } catch {
+    // Not paired, rejected, or unreachable — an honest "no fallback available", not a
+    // fabricated connection.
+    return null;
+  }
+}
+
 export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvConnect {
   return async ({ address, deviceId }) => {
-    const saved = await opts.credentialStore.load(deviceId);
-    if (!saved) throw new AppleTvPairingRequiredError();
+    // § Bug fix (live-reported) — unlike the pairing-start/submit call sites, a missing/
+    // invalid port here is NOT necessarily an error yet: a device manually added by bare IP
+    // (no known MRP port) with no saved MRP credentials legitimately falls straight through
+    // to the Companion-only fallback below, which only ever needs `host`. The port is only
+    // required — and only validated, via {@link parseMrpAddress} — once we actually have
+    // saved credentials and are about to open a real MRP transport.
+    const host = address.split(":")[0] ?? "";
 
-    const [host, portStr] = address.split(":");
-    const port = Number(portStr);
-    const transport = (opts.transportFactory ?? createMrpTcpTransport)(host!, port);
-    await transport.connect();
+    const saved = await opts.credentialStore.load(deviceId);
+    if (!saved) {
+      // No stored MRP credentials at all — real for a device (like the field case that
+      // motivated this fallback) that never advertised MRP to pair against in the first
+      // place. Before surfacing PAIRING_REQUIRED, see whether this device is already
+      // reachable and paired over Companion instead.
+      const fallback = await tryCompanionOnlyFallback(host, deviceId, opts);
+      if (fallback) return fallback;
+      throw new AppleTvPairingRequiredError();
+    }
+
+    const { host: mrpHost, port } = parseMrpAddress(address);
+    const transport = (opts.transportFactory ?? createMrpTcpTransport)(mrpHost, port);
+    try {
+      await transport.connect();
+    } catch (err) {
+      // Genuinely unreachable over MRP (host doesn't answer on that port — e.g. this
+      // Apple TV disabled MRP entirely) — never retried as if it were a pairing issue.
+      // Companion may still be reachable; only surface the original MRP error if it isn't.
+      const fallback = await tryCompanionOnlyFallback(mrpHost, deviceId, opts);
+      if (fallback) return fallback;
+      throw err;
+    }
 
     let channel;
     try {
@@ -237,8 +313,8 @@ export function createMrpAppleTvConnect(opts: AppleTvMrpClientOptions): AppleTvC
       // longer valid (revoked on the Apple TV, e.g. "Forget This Accessory") — clear
       // them so the driver surfaces PAIRING_REQUIRED instead of retrying forever with
       // credentials that can never succeed. A bare connection failure (host unreachable)
-      // throws before this catch (see transport.connect() above) and is NOT treated as
-      // invalid credentials — only a rejected verify is.
+      // is handled above and is NOT treated as invalid credentials — only a rejected
+      // verify is.
       await opts.credentialStore.clear(deviceId);
       throw new AppleTvPairingRequiredError(
         `Apple TV rejected stored credentials, re-pairing required: ${err instanceof Error ? err.message : String(err)}`,

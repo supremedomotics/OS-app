@@ -637,11 +637,21 @@ export class InstallerServices {
     const binding = await this.appleTvBindingFor(deviceId);
     if (!binding) throw new SupremeError("not_found", "no Apple TV binding for this device");
 
-    const session = await beginAppleTvMrpPairing(binding.address, deviceId, {
-      credentialStore: this.appleTvPairingCredentialStore(),
-      hubIdentifier: "SUPREMEOS-HUB",
-      hubName: "SupremeOS Hub",
-    });
+    // § Bug fix (live-reported) — a bare-IP manual-add binding (no known MRP port) previously
+    // reached Node's raw socket layer and threw an unhandled RangeError, surfacing to the
+    // installer as an opaque "internal error". `beginAppleTvMrpPairing` now validates the
+    // address itself and throws a clear message; re-thrown here as a `validation_failed` so
+    // the client sees that real message instead of the generic 500 fallback.
+    let session: Awaited<ReturnType<typeof beginAppleTvMrpPairing>>;
+    try {
+      session = await beginAppleTvMrpPairing(binding.address, deviceId, {
+        credentialStore: this.appleTvPairingCredentialStore(),
+        hubIdentifier: "SUPREMEOS-HUB",
+        hubName: "SupremeOS Hub",
+      });
+    } catch (err) {
+      throw new SupremeError("validation_failed", err instanceof Error ? err.message : "Couldn't start Apple TV pairing.");
+    }
     const expiresInMs = InstallerServices.APPLE_TV_PAIRING_TTL_MS;
     const timer = setTimeout(() => {
       session.cancel();
