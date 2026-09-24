@@ -90,7 +90,7 @@ interface AvrBinding {
   host: string;
   port: number;
   /** Which zone this binding controls — "main" (power/volume/mute/source/tone/DSP) or
-   * "zone2" (power/volume/mute/source; no tone/DSP — those are main-zone-only). */
+   * "zone2"/"zone3" (power/volume/mute/source; no tone/DSP — those are main-zone-only). */
   zone: AvrZone;
   /** Installer-declared: does this unit have tone control (bass/treble)? Telnet has no
    * feature-query command (see avr-codec.ts), so this can't be wire-detected. */
@@ -261,7 +261,8 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   async bind(binding: ProtocolBinding): Promise<void> {
     const { host, port } = parseHostPort(binding.address, this.defaultPort);
     const key = `${host}:${port}`;
-    const zone: AvrZone = binding.config?.zone === "zone2" ? "zone2" : "main";
+    const zone: AvrZone =
+      binding.config?.zone === "zone2" ? "zone2" : binding.config?.zone === "zone3" ? "zone3" : "main";
     const hasToneControl = binding.config?.hasToneControl !== false;
     const hasAudyssey = binding.config?.hasAudyssey === true;
     const hasExtendedAudio = binding.config?.hasExtendedAudio === true;
@@ -277,7 +278,7 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (customInputRaw && typeof customInputRaw === "object") {
       this.customInputNames.set(key, new Map(Object.entries(customInputRaw as Record<string, string>)));
     }
-    const isFirstZone2Binding = zone === "zone2" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === "zone2");
+    const isFirstZoneBinding = zone !== "main" && !this.bindings.some((b) => `${b.host}:${b.port}` === key && b.zone === zone);
     const isFirstBindingForHost = !this.bindings.some((b) => `${b.host}:${b.port}` === key);
     // § Universal AVR SDK — seed enrichment synchronously from discover()'s preview
     // data when the wizard already fetched it, so a freshly-commissioned device shows
@@ -313,13 +314,15 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       // reader could see a stale, misleadingly-`true` default. A link that isn't `ready`
       // by definition isn't fully synced either, so this closes the gap immediately.
       if (!link.ready) link.diagnostics.setFullySynced(false);
-      // A zone2 device bound AFTER its link already finished connecting (e.g. zone1 and
-      // zone2 added as two separate commission calls, as the guided AVR add wizard does)
-      // never gets `onLinkConnect`'s Z2?/Z2MU? — that init burst already fired without
-      // them, since no zone2 binding existed yet at that moment. Catch up immediately
-      // instead of leaving zone2's state stuck at null until the next reconnect.
-      if (isFirstZone2Binding && link.ready && link.socket && !link.socket.destroyed) {
-        const tokens = ["Z2?", "Z2MU?"];
+      // A zone2/zone3 device bound AFTER its link already finished connecting (e.g. zone1
+      // and zone2 added as two separate commission calls, as the guided AVR add wizard
+      // does) never gets `onLinkConnect`'s Z2?/Z2MU?/Z3?/Z3MU? — that init burst already
+      // fired without them, since no zone2/zone3 binding existed yet at that moment. Catch
+      // up immediately instead of leaving that zone's state stuck at null until the next
+      // reconnect.
+      if (isFirstZoneBinding && link.ready && link.socket && !link.socket.destroyed) {
+        const zonePrefix = zone === "zone2" ? "Z2" : "Z3";
+        const tokens = [`${zonePrefix}?`, `${zonePrefix}MU?`];
         for (const t of tokens) link.diagnostics.recordSend(t);
         link.socket.write(`${tokens.join("\r")}\r`);
       }
@@ -463,13 +466,15 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "media");
     if (!b) return null;
     const hasZone2 = this.bindings.some((x) => x.host === b.host && x.port === b.port && x.zone === "zone2");
+    const hasZone3 = this.bindings.some((x) => x.host === b.host && x.port === b.port && x.zone === "zone3");
     const enrichment = this.inputEnrichment.get(`${b.host}:${b.port}`);
     this.tracer.event(
-      `getCapabilityConfig ${deviceId} — hasZone2=${hasZone2}, hasToneControl=${b.hasToneControl}, ` +
+      `getCapabilityConfig ${deviceId} — hasZone2=${hasZone2}, hasZone3=${hasZone3}, hasToneControl=${b.hasToneControl}, ` +
         `renamedInputs=${enrichment?.renamed.size ?? 0}, hiddenInputs=${enrichment?.hidden.size ?? 0}`,
     );
     return denonCapabilityConfig({
       hasZone2,
+      hasZone3,
       hasToneControl: b.zone === "main" && b.hasToneControl,
       hasAudyssey: b.zone === "main" && b.hasAudyssey,
       hasExtendedAudio: b.zone === "main" && b.hasExtendedAudio,
@@ -828,6 +833,9 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
     if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone2")) {
       initTokens.push("Z2?", "Z2MU?");
     }
+    if (this.bindings.some((b) => `${b.host}:${b.port}` === `${host}:${port}` && b.zone === "zone3")) {
+      initTokens.push("Z3?", "Z3MU?");
+    }
     // § Universal AVR SDK — Audyssey-family (see avr-codec.ts module doc). Only queried
     // when the installer has declared this unit has Audyssey — an unnecessary query on a
     // unit without it just gets silently ignored by the receiver, but there's no reason
@@ -943,6 +951,18 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
         return;
       case "zone2Source":
         this.patchMedia(host, port, "zone2", (c) => { c.source = update.source; });
+        return;
+      case "zone3Power":
+        this.emitFor(host, port, "onoff", "zone3", { kind: "onoff", on: update.on });
+        return;
+      case "zone3Mute":
+        this.patchMedia(host, port, "zone3", (c) => { c.muted = update.muted; });
+        return;
+      case "zone3Volume":
+        this.patchMedia(host, port, "zone3", (c) => { c.volume = update.volume; c.volumeDb = update.volumeDb; });
+        return;
+      case "zone3Source":
+        this.patchMedia(host, port, "zone3", (c) => { c.source = update.source; });
         return;
       case "sleep":
         this.patchMedia(host, port, "main", (c) => { c.sleepMinutes = update.minutes; });

@@ -21,6 +21,8 @@ function startFakeAvr(): Promise<{ server: Server; port: number; received: strin
     let mute = false;
     let z2power = false;
     let z2mute = false;
+    let z3power = false;
+    let z3mute = false;
     let bass = 50;
     let treble = 50;
     let soundMode = "MOVIE";
@@ -64,6 +66,15 @@ function startFakeAvr(): Promise<{ server: Server; port: number; received: strin
           else if (cmd === "Z2MUOFF") { z2mute = false; sock.write("Z2MUOFF\r"); }
           else if (/^Z2[A-Z0-9/]+$/.test(cmd) && !cmd.startsWith("Z2MU") && cmd !== "Z2ON" && cmd !== "Z2OFF") {
             sock.write(`${cmd}\r`); // echo zone2 source select
+          }
+          else if (cmd === "Z3?") sock.write(z3power ? "Z3ON\r" : "Z3OFF\r");
+          else if (cmd === "Z3ON") { z3power = true; sock.write("Z3ON\r"); }
+          else if (cmd === "Z3OFF") { z3power = false; sock.write("Z3OFF\r"); }
+          else if (cmd === "Z3MU?") sock.write(z3mute ? "Z3MUON\r" : "Z3MUOFF\r");
+          else if (cmd === "Z3MUON") { z3mute = true; sock.write("Z3MUON\r"); }
+          else if (cmd === "Z3MUOFF") { z3mute = false; sock.write("Z3MUOFF\r"); }
+          else if (/^Z3[A-Z0-9/]+$/.test(cmd) && !cmd.startsWith("Z3MU") && cmd !== "Z3ON" && cmd !== "Z3OFF") {
+            sock.write(`${cmd}\r`); // echo zone3 source select
           }
           else if (cmd === "PSTONE CTRL ?") sock.write("PSTONE CTRL ON\r");
           else if (cmd === "PSBAS ?") sock.write(`PSBAS ${String(bass).padStart(2, "0")}\r`);
@@ -377,6 +388,66 @@ describe("AvrProtocolDriver — Zone 2 (independent Supreme device on the same l
 
     // zone2's own state must be completely unaffected.
     expect(driver.getState(zone2Dev, "onoff")).toEqual({ kind: "onoff", on: true });
+  });
+});
+
+describe("AvrProtocolDriver — Zone 3 (§ Zone 3 support — same independent-device pattern as Zone 2)", () => {
+  let avr: Awaited<ReturnType<typeof startFakeAvr>>;
+  let driver: AvrProtocolDriver;
+  const mainDev = "device-avr-main-z3" as DeviceId;
+  const zone3Dev = "device-avr-zone3" as DeviceId;
+
+  beforeAll(async () => {
+    avr = await startFakeAvr();
+    driver = new AvrProtocolDriver();
+    await driver.connect();
+    await driver.bind({ deviceId: mainDev, capability: "onoff", address: `127.0.0.1:${avr.port}` });
+    await driver.bind({ deviceId: zone3Dev, capability: "onoff", address: `127.0.0.1:${avr.port}`, config: { zone: "zone3" } });
+    await driver.bind({ deviceId: zone3Dev, capability: "media", address: `127.0.0.1:${avr.port}`, config: { zone: "zone3" } });
+    await vi.waitFor(() => expect(driver.getDiagnostics(mainDev)?.fullySynced).toBe(true));
+  });
+  afterAll(async () => {
+    await driver.disconnect();
+    await new Promise<void>((r) => avr.server.close(() => r()));
+  });
+
+  it("queries zone3's initial state even though its binding was added after the link already connected — same Z3? catch-up query Zone 2 already has", async () => {
+    await vi.waitFor(() => expect(driver.getState(zone3Dev, "onoff")).not.toBeNull());
+    expect(avr.received).toContain("Z3?");
+    expect(avr.received).toContain("Z3MU?");
+  });
+
+  it("commands zone3 power independently of the main zone and attributes state to the zone3 device only", async () => {
+    const ev = nextEvent(driver, (e) => e.deviceId === zone3Dev && e.capability === "onoff");
+    await driver.command(zone3Dev, { capability: "onoff", action: "on" });
+    expect((await ev).state).toEqual({ kind: "onoff", on: true });
+    expect(avr.received).toContain("Z3ON");
+    expect(driver.getState(mainDev, "onoff")).not.toEqual({ kind: "onoff", on: true });
+  });
+
+  it("mutes zone3 and surfaces it on the zone3 media device, not main", async () => {
+    const ev = nextEvent(driver, (e) => e.deviceId === zone3Dev && e.capability === "media");
+    await driver.command(zone3Dev, { capability: "media", action: "mute" });
+    const state = (await ev).state as { kind: string; muted: boolean };
+    expect(state.muted).toBe(true);
+    expect(avr.received).toContain("Z3MUON");
+  });
+
+  it("sets zone3 volume via Z3<nn> and surfaces it on the zone3 device only", async () => {
+    const ev = nextEvent(driver, (e) => e.deviceId === zone3Dev && e.capability === "media" && (e.state as { volume?: number }).volume !== undefined && (e.state as { volume?: number }).volume! > 0);
+    await driver.command(zone3Dev, { capability: "media", action: "volume", volume: 50 });
+    const state = (await ev).state as { kind: string; volume: number };
+    expect(avr.received).toContain("Z349"); // 50% of 98 ≈ 49
+    expect(state.volume).toBeGreaterThan(45);
+    expect(driver.getState(mainDev, "media")).not.toMatchObject({ volume: state.volume });
+  });
+
+  it("parses an unsolicited Z3<nn> echo as zone3 volume, not a zone3 source change", async () => {
+    const ev = nextEvent(driver, (e) => e.deviceId === zone3Dev && e.capability === "media" && (e.state as { volume?: number }).volume === 30);
+    await driver.command(zone3Dev, { capability: "media", action: "volume", volume: 30 });
+    const state = (await ev).state as { kind: string; volume: number; source: string | null };
+    expect(state.volume).toBe(30);
+    expect(state.source).toBeNull();
   });
 });
 

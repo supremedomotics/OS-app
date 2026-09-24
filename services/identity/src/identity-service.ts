@@ -43,6 +43,10 @@ export interface LoginContext {
  */
 export interface IdentityServiceOptions {
   tokenSecret: string;
+  /** Refresh-token (session) lifetime in seconds; defaults to `TokenService`'s own 30-day
+   * default when omitted. The access token's own TTL is unaffected — it stays short-lived and
+   * refreshes silently regardless of this setting. */
+  refreshTtlSeconds?: number;
   store?: IIdentityStore;
   sessionStore?: ISessionStore;
   /** Personal API-token store (§ Security Center). */
@@ -87,7 +91,7 @@ export class IdentityService {
     this.apiTokens = opts.apiTokenStore ?? new InMemoryApiTokenStore();
     this.webAuthnStore = opts.webAuthnStore ?? new InMemoryWebAuthnStore();
     this.rp = opts.webAuthn ?? { rpId: "localhost", rpName: "Supreme OS" };
-    this.tokens = new TokenService({ secret: opts.tokenSecret });
+    this.tokens = new TokenService({ secret: opts.tokenSecret, refreshTtlSeconds: opts.refreshTtlSeconds });
     this.passwordPolicy = opts.passwordPolicy ?? DEFAULT_PASSWORD_POLICY;
     this.maxLoginAttempts = opts.maxLoginAttempts ?? 5;
     this.lockoutMs = opts.lockoutMs ?? 15 * 60_000;

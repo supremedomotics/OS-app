@@ -90,6 +90,7 @@ import {
   runKnxImport,
   UNASSIGNED_ROOM_NAME,
   unzipKnxproj,
+  type DiscoveredView,
   type EntitySource,
   type IProtocolScanner,
   type KnxImportResultV2,
@@ -2562,8 +2563,38 @@ export class InstallerServices {
         )
       : undefined;
     const { discovered, driverResults } = await this.commissioning.discoverWithStatus(protocols);
+
+    // § Discover Devices Zone 2 parity — classic Denon/Marantz Telnet AVRs have no passive
+    // feature-query (SSDP/UPnP `discover()` genuinely cannot see Zone 2, see the comment on
+    // `autoCommissionMedia` above), so the LIST page silently showed Main Zone only even though
+    // "Add device manually" + `autoCommissionMedia` both already run `probeAvr`'s active zone
+    // check. Reuse that same probe here so the read-only discovery list is honest about what a
+    // manual-IP add would find, instead of only surfacing Zone 2 once the installer already knows
+    // to type the IP in by hand.
+    const zoneEntries: DiscoveredView[] = [];
+    for (const d of discovered) {
+      if (d.protocol !== "avr") continue;
+      const zones = (await probeAvr(d.backendId).catch(() => null))?.zones
+        .filter((z) => z.detected && z.id !== "main")
+        .map((z) => ({ id: z.id, label: z.label })) ?? [];
+      for (const zone of zones) {
+        const zoneBackendId = `${d.backendId}#${zone.id}`;
+        if (this.d.sil.registry.isKnownBackendId(zoneBackendId)) continue;
+        zoneEntries.push({
+          ...d,
+          backendId: zoneBackendId,
+          suggestedName: `${d.suggestedName} ${zone.label}`,
+          // The zone device's identity (backendId) is suffixed for uniqueness, but the real
+          // bus connection is still the base unit's address — same convention `autoCommissionMedia`
+          // already uses (`address: d.backendId`, `config: { zone: zone.id }`).
+          bindAddress: d.backendId,
+          bindConfig: { zone: zone.id },
+        });
+      }
+    }
+
     return {
-      discovered: discovered.map((d) => ({
+      discovered: [...discovered, ...zoneEntries].map((d) => ({
         ...d,
         driverName: (d.protocol && nameByProtocol.get(d.protocol)) ?? null,
         driverId: (d.protocol && driverIdByProtocol.get(d.protocol)) ?? null,

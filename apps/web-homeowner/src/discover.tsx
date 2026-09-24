@@ -49,6 +49,10 @@ type Discovered = {
    * never guessed, for sources that don't report one. */
   manufacturer?: string;
   bindConfig?: Record<string, unknown>;
+  /** The real bus address to bind to, when it genuinely differs from `backendId` — e.g. an
+   * AVR Zone 2 card, whose `backendId` is suffixed for identity uniqueness but whose physical
+   * connection is still the base unit's address. Absent when `backendId` IS the bus address. */
+  bindAddress?: string;
   /** § Casambi Local Gateway — Cloud device discovery: known only from the Cloud API, not yet
    * confirmed by a real local signal (e.g. Casambi Local mode's first UDP packet). */
   awaitingLocalSignal?: boolean;
@@ -797,6 +801,11 @@ function FoundDevice({
         ...(device.suggestedKind ? { kindOverride } : {}),
         ...(device.protocol ? { protocol: device.protocol } : {}),
         ...(device.network ? { network: device.network } : {}),
+        // § Discover Devices Zone 2 parity — a Zone 2 card's `backendId` is suffixed for
+        // identity uniqueness, so binding needs the base unit's real address + zone config
+        // instead of the (address defaults to backendId) common-case default.
+        ...(device.bindAddress ? { address: device.bindAddress } : {}),
+        ...(device.bindConfig ? { config: device.bindConfig } : {}),
       });
       setStep("Ready");
       setPlacedIn(placedLabel);

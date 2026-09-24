@@ -518,6 +518,7 @@ export class AppContext {
     });
     this.identity = new IdentityService({
       tokenSecret: config.tokenSecret,
+      refreshTtlSeconds: config.sessionTtlSeconds,
       store: deps.identityStore,
       sessionStore: deps.sessionStore,
       apiTokenStore: deps.apiTokenStore,

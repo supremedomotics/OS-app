@@ -367,4 +367,86 @@ describe("Auto-commission media — AVR active zone2 probe (§ auto-discovery Zo
       await avrCtx.shutdown();
     }
   }, 15_000);
+
+  it("also surfaces Zone 2 as its own card on the Discover Devices LIST (not just auto-media commissioning)", async () => {
+    const fake = await startFakeDenonReceiver();
+    try {
+      class FakeAvrDiscovery implements INativeProtocolDriver {
+        readonly protocol = "avr";
+        private readonly devices = new Set<DeviceId>();
+        private readonly listeners = new Set<StateListener>();
+        async connect(): Promise<void> {}
+        async disconnect(): Promise<void> {}
+        isConnected(): boolean { return true; }
+        async bind(b: ProtocolBinding): Promise<void> { this.devices.add(b.deviceId); }
+        manages(id: DeviceId): boolean { return this.devices.has(id); }
+        async command(): Promise<void> {}
+        getState(): CapabilityState | null { return null; }
+        async discover(): Promise<DiscoveredDevice[]> {
+          return [
+            {
+              backendId: `127.0.0.1:${fake.port}`,
+              suggestedName: "Theater Receiver",
+              capabilities: ["onoff", "media"],
+              raw: { protocol: "avr", bindConfig: { zone: "main" } },
+            },
+          ];
+        }
+        onState(l: StateListener): () => void { this.listeners.add(l); return () => this.listeners.delete(l); }
+      }
+
+      const registry = new EntityRegistryMirror();
+      const engine = new SupremeNativeAdapter({ drivers: [new FakeAvrDiscovery()] });
+      const providers = new ProviderRegistry();
+      const router = new ProviderRouter({ engine, registry: providers, bindingEngine: new DriverBindingEngine(engine, providers) });
+      const sil = new SupremeIntegrationLayer({ adapter: router, registry });
+      const avrCtx = await AppContext.create(loadConfig({ SUPREME_LOG_LEVEL: "silent" }), {
+        sil,
+        protocolBindingStore: new InMemoryProtocolBindingStore(),
+      });
+      const avrApp = await buildServer(avrCtx);
+      await avrApp.listen({ host: "127.0.0.1", port: 0 });
+      const addr = avrApp.server.address();
+      const avrBaseUrl = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+      try {
+        const loginRes = await fetch(`${avrBaseUrl}/v1/auth/login`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: "owner@supreme.local", password: "supreme-owner-demo-pass" }),
+        });
+        const avrToken = ((await loginRes.json()) as { accessToken: string }).accessToken;
+        const avrAuth = { authorization: `Bearer ${avrToken}`, "content-type": "application/json" };
+
+        // No `protocol` filter — the discover-list route resolves a `protocol` filter to
+        // installed-catalog driverIds first, which this minimal fixture never installs. Omitting
+        // it runs every registered native driver unfiltered (same as autoCommissionMedia's own
+        // `sil.discover()` bypass), which is enough to exercise the zone2-probe splice.
+        const res = await fetch(`${avrBaseUrl}/v1/commissioning/discover`, {
+          method: "POST",
+          headers: avrAuth,
+          body: JSON.stringify({}),
+        });
+        expect(res.status).toBe(200);
+        const out = (await res.json()) as {
+          discovered: { backendId: string; suggestedName: string; bindAddress?: string; bindConfig?: Record<string, unknown> }[];
+        };
+        expect(out.discovered).toHaveLength(2);
+        const main = out.discovered.find((d) => d.suggestedName === "Theater Receiver");
+        const zone2 = out.discovered.find((d) => d.suggestedName === "Theater Receiver Zone 2");
+        expect(main).toBeTruthy();
+        expect(zone2).toBeTruthy();
+        // Zone 2's identity is suffixed for uniqueness, but it must carry the base unit's
+        // real address + zone config so pairing it binds correctly instead of trying to
+        // connect to the literal "<ip>#zone2" string.
+        expect(zone2!.backendId).toBe(`127.0.0.1:${fake.port}#zone2`);
+        expect(zone2!.bindAddress).toBe(`127.0.0.1:${fake.port}`);
+        expect(zone2!.bindConfig).toEqual({ zone: "zone2" });
+      } finally {
+        await avrApp.close();
+        await avrCtx.shutdown();
+      }
+    } finally {
+      await new Promise<void>((r) => fake.server.close(() => r()));
+    }
+  }, 15_000);
 });

@@ -178,3 +178,41 @@ describe("avr-codec: denonCapabilityConfig hasExtendedAudio / tone-control-enabl
     expect(keys).toEqual(expect.arrayContaining(["subwoofer", "cinemaMode", "cinemaEq", "loudnessManagement"]));
   });
 });
+
+describe("avr-codec: Zone 3 support (§ Zone 3 support — same command shape as Zone 2, Z3 prefix)", () => {
+  it("encodes zone3 power/volume/mute/source with the Z3 prefix", () => {
+    expect(commandToAvr({ capability: "onoff", action: "on" }, null, "zone3")).toEqual(["Z3ON"]);
+    expect(commandToAvr({ capability: "onoff", action: "off" }, null, "zone3")).toEqual(["Z3OFF"]);
+    expect(commandToAvr({ capability: "media", action: "volume", volume: 50 }, null, "zone3")).toEqual(["Z349"]);
+    expect(commandToAvr({ capability: "media", action: "mute" }, null, "zone3")).toEqual(["Z3MUON"]);
+    expect(commandToAvr({ capability: "media", action: "unmute" }, null, "zone3")).toEqual(["Z3MUOFF"]);
+    expect(commandToAvr({ capability: "media", action: "source", source: "DVD" }, null, "zone3")).toEqual(["Z3DVD"]);
+  });
+
+  it("never encodes tone/DSP/Audyssey-family tokens for zone3 (main-zone only, same as zone2)", () => {
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { bass: 3 } }, null, "zone3")).toBeNull();
+    expect(commandToAvr({ capability: "media", action: "advanced", advanced: { dynamicEq: "on" } }, null, "zone3")).toBeNull();
+  });
+
+  it("parses Z3 status tokens distinctly from Z2 and main-zone tokens", () => {
+    expect(parseAvrLine("Z3ON")).toEqual({ kind: "zone3Power", on: true });
+    expect(parseAvrLine("Z3OFF")).toEqual({ kind: "zone3Power", on: false });
+    expect(parseAvrLine("Z3MUON")).toEqual({ kind: "zone3Mute", muted: true });
+    expect(parseAvrLine("Z3MUOFF")).toEqual({ kind: "zone3Mute", muted: false });
+    expect(parseAvrLine("Z349")).toEqual({ kind: "zone3Volume", volume: 50, volumeDb: -31 });
+    expect(parseAvrLine("Z3DVD")).toEqual({ kind: "zone3Source", source: "DVD" });
+    // Must not cross-contaminate with Zone 2's own parsing.
+    expect(parseAvrLine("Z2ON")).toEqual({ kind: "zone2Power", on: true });
+  });
+
+  it("denonCapabilityConfig advertises a zone3 entry only when hasZone3 is set, alongside zone2 when both are set", () => {
+    const bothZones = denonCapabilityConfig({ hasZone2: true, hasZone3: true, hasToneControl: false });
+    expect((bothZones.zones ?? []).map((z) => z.id)).toEqual(["main", "zone2", "zone3"]);
+
+    const zone3Only = denonCapabilityConfig({ hasZone2: false, hasZone3: true, hasToneControl: false });
+    expect((zone3Only.zones ?? []).map((z) => z.id)).toEqual(["main", "zone3"]);
+
+    const neither = denonCapabilityConfig({ hasZone2: false, hasToneControl: false });
+    expect(neither.zones).toBeUndefined();
+  });
+});
