@@ -2562,7 +2562,7 @@ export class InstallerServices {
             .flatMap((d) => d.protocols.map((p) => this.runtimeProtocolFor(d, p))),
         )
       : undefined;
-    const { discovered, driverResults } = await this.commissioning.discoverWithStatus(protocols);
+    const { discovered, allDiscovered, driverResults } = await this.commissioning.discoverWithStatus(protocols);
 
     // § Discover Devices Zone 2 parity — classic Denon/Marantz Telnet AVRs have no passive
     // feature-query (SSDP/UPnP `discover()` genuinely cannot see Zone 2, see the comment on
@@ -2571,8 +2571,18 @@ export class InstallerServices {
     // check. Reuse that same probe here so the read-only discovery list is honest about what a
     // manual-IP add would find, instead of only surfacing Zone 2 once the installer already knows
     // to type the IP in by hand.
+    //
+    // § Order-dependent zone-parity bug — probe off `allDiscovered` (every scanned AVR unit),
+    // NOT the already-commissioned-filtered `discovered`. Once the installer commissions ANY
+    // one zone of a physical AVR (e.g. Zone 1), that unit's base backendId is "known" and
+    // `discovered` correctly drops it as "not a new find" — but this loop keyed off `discovered`
+    // too, so it silently lost the only entry it uses to probe for the unit's OTHER zones.
+    // Result: add Zone 1 first, Zone 2 vanishes from Discover forever (even across rescans);
+    // add Zone 2 first, Zone 1 (still uncommissioned) stays the loop's driver and keeps working.
+    // Each individual zone candidate is still filtered by `isKnownBackendId` below, so an
+    // already-commissioned zone is never re-offered — only the probe SOURCE needed to survive.
     const zoneEntries: DiscoveredView[] = [];
-    for (const d of discovered) {
+    for (const d of allDiscovered) {
       if (d.protocol !== "avr") continue;
       const zones = (await probeAvr(d.backendId).catch(() => null))?.zones
         .filter((z) => z.detected && z.id !== "main")
