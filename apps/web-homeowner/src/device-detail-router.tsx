@@ -87,6 +87,14 @@ interface RouterContext {
   devMode: boolean;
   onClose: () => void;
   onRemoved: () => void;
+  /** A metadata/name/room edit (never a removal) made from within the open detail page —
+   * unlike {@link onRemoved}, this must NOT close the page. Applies the server's updated
+   * Device straight to this router's own local state so the just-changed field (e.g. an
+   * installer kind override) renders immediately instead of the page recomputing from the
+   * stale pre-write device on its next render (§ bug fix — a kind change was silently
+   * discarded here before, since every detail page's `onDeviceUpdated` was wired to the
+   * no-arg `onRemoved`, which both ignored the updated Device AND closed the page). */
+  onDeviceUpdated: (device: Device) => void;
   openDevice: (id: string) => void;
   scheduleDevice: Device | null;
   setScheduleDevice: (d: Device | null) => void;
@@ -121,7 +129,7 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
         onBack={ctx.onClose}
         onNavigateDevice={(d) => ctx.openDevice(d.id)}
         onRemoved={ctx.onRemoved}
-        onDeviceUpdated={ctx.onRemoved}
+        onDeviceUpdated={ctx.onDeviceUpdated}
         onOpenSchedule={(d) => ctx.setScheduleDevice(d)}
         devMode={ctx.devMode}
       />
@@ -135,7 +143,7 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
         roomName={ctx.roomName ?? "Other"}
         onBack={ctx.onClose}
         onRemoved={ctx.onRemoved}
-        onDeviceUpdated={ctx.onRemoved}
+        onDeviceUpdated={ctx.onDeviceUpdated}
         allLocks={ctx.allDevices.filter((d) => d.id !== device.id && isLock(d))}
         devMode={ctx.devMode}
       />
@@ -147,12 +155,12 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
     const kind = mediaDeviceKind(device, driver?.protocols[0] ?? null);
     if (usesSimpleMediaDetail(kind)) {
       return (
-        <SimpleMediaDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onRemoved} devMode={ctx.devMode} />
+        <SimpleMediaDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onDeviceUpdated} devMode={ctx.devMode} />
       );
     }
     if (usesRemoteMediaDetail(kind)) {
       return (
-        <MediaPlayerRemote device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onRemoved} devMode={ctx.devMode} />
+        <MediaPlayerRemote device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onDeviceUpdated} devMode={ctx.devMode} />
       );
     }
     return (
@@ -164,14 +172,14 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
         onBack={ctx.onClose}
         onNavigateDevice={(d) => ctx.openDevice(d.id)}
         onRemoved={ctx.onRemoved}
-        onDeviceUpdated={ctx.onRemoved}
+        onDeviceUpdated={ctx.onDeviceUpdated}
         devMode={ctx.devMode}
       />
     );
   }
 
   if (isEnergyDevice(device)) {
-    return <EnergyDeviceDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onRemoved} devMode={ctx.devMode} />;
+    return <EnergyDeviceDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onDeviceUpdated} devMode={ctx.devMode} />;
   }
 
   // Canonical fallback (§ Priority 2) — curtains, blinds, fans, sensors, water, generic
@@ -213,5 +221,14 @@ export function CanonicalDeviceDetail({ deviceId, devMode, onClose, onRemoved }:
     onClose();
     return null;
   }
-  return resolveCanonicalDetail(device, { allDevices, roomName, registry, devMode, onClose, onRemoved, openDevice, scheduleDevice, setScheduleDevice });
+
+  // § bug fix — applies a successful edit (e.g. a media kind override) straight to this
+  // router's own state so the open page re-renders with the NEW device immediately, instead
+  // of the next render recomputing from the stale one still sitting in `device`/`allDevices`.
+  const handleDeviceUpdated = (updated: Device) => {
+    setDevice(updated);
+    setAllDevices((all) => all.map((d) => (d.id === updated.id ? updated : d)));
+  };
+
+  return resolveCanonicalDetail(device, { allDevices, roomName, registry, devMode, onClose, onRemoved, onDeviceUpdated: handleDeviceUpdated, openDevice, scheduleDevice, setScheduleDevice });
 }
