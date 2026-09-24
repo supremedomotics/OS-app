@@ -232,6 +232,34 @@ describe("RealMatterBridgeServer — Thermostat (real @matter/main endpoint cons
   }, 30_000);
 
   /**
+   * § Production fix — a real production crash: a device bridged as a non-Thermostat device
+   * type (e.g. On/Off Light) can still receive a `temperature` capability state event (a
+   * CoolMaster AC unit whose capability set routed it to On/Off Light at bridge-construction
+   * time, per real logs from the field). Before this fix, `setCapabilityState` unconditionally
+   * called `ep.set({ thermostat })`, and matter.js throws `endpoint-behavior-not-present` as a
+   * genuinely FATAL unhandled rejection for an endpoint with no `thermostat` Behavior composed
+   * — crash-looping the entire gateway process every CoolMaster poll cycle in production. This
+   * proves the fix: the event is now a safe, silent no-op, matching this method's own documented
+   * contract ("a state kind that doesn't match anything this endpoint's composed clusters
+   * expose is simply ignored... never a crash").
+   */
+  it("§ Production fix — a temperature state event for a non-Thermostat endpoint (On/Off Light) is silently ignored, never throws", async () => {
+    const server = new RealMatterBridgeServer({ storagePath: dir, nodeId: "thermo-wrong-endpoint-type" });
+    if (!(await startOrSkip(server, "thermostat"))) return;
+    await server.addEndpoint({
+      endpointNumber: 1,
+      name: "Sample Room",
+      deviceTypeId: 0x0100, // On/Off Light — has no `thermostat` Behavior composed
+      initialState: { kind: "onoff", on: false },
+      capabilityKinds: ["onoff"],
+    });
+    await expect(
+      server.setCapabilityState(1, { kind: "temperature", ambientC: 22, targetC: 20, mode: "cool", advanced: null }),
+    ).resolves.toBeUndefined();
+    await server.stop();
+  }, 30_000);
+
+  /**
    * § Phase 3.4C — Matter Thermostat KNX heatCool read-back, real @matter/main SDK. Phase
    * 3.4B fixed Matter → KNX (SystemMode Heat/Cool write → SupremeOS heatCool command); this
    * closes the matching KNX → Matter gap: confirmed `TemperatureState.heatCool` feedback
