@@ -601,6 +601,24 @@ export class InstallerServices {
     // instead of an empty `{}` — never fabricated: null/undefined drivers leave it be.
     const config = await this.d.sil.getCapabilityConfig(binding.deviceId, binding.capability);
     if (config) await this.d.home.setCapabilityConfig(binding.deviceId, binding.capability, config);
+    // § AVR input-rename race — `AvrProtocolDriver.bind()` fires its renamed/hidden-input
+    // fetch (AppCommand.xml, or the HEOS CLI fallback) WITHOUT awaiting it, deliberately,
+    // so a slow/unreachable HTTP probe never blocks the Telnet bind itself. That means the
+    // capability-config snapshot just captured above can win the race and get persisted
+    // BEFORE the real renamed labels land — permanently, since nothing else re-persists it
+    // afterward. Live-confirmed: whichever zone got bound first (enrichment still in
+    // flight) kept default input names forever, while a zone bound moments later (host
+    // enrichment already resolved and cached from the first bind) got the real names right
+    // away. A bounded, best-effort re-check after the fetch has had time to land closes
+    // that window without blocking this response or touching the driver's own contract.
+    if (binding.protocol === "avr") {
+      setTimeout(() => {
+        void (async () => {
+          const settled = await this.d.sil.getCapabilityConfig(binding.deviceId, binding.capability);
+          if (settled) await this.d.home.setCapabilityConfig(binding.deviceId, binding.capability, settled);
+        })().catch(() => {});
+      }, 3_000);
+    }
     return binding;
   }
 
