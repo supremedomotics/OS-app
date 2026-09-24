@@ -140,6 +140,14 @@ export class CommissioningService {
    */
   async discoverWithStatus(driverProtocols?: string[]): Promise<{
     discovered: DiscoveredView[];
+    /** § AVR sibling-zone parity — same de-duplicated scan results as `discovered`, but
+     * WITHOUT the already-commissioned filter. A physical AVR's Zone 2/3 are probed off its
+     * MAIN unit's backendId (see `installer-context.ts`'s zone-probe loop); once that main
+     * unit is itself commissioned (e.g. as Zone 1), `discovered` correctly drops it as
+     * "not a new find" — but that also silently cut the probe loop off from ever finding
+     * its sibling zones again. Callers that need to re-probe an already-known unit for
+     * not-yet-known children use this list instead. */
+    allDiscovered: DiscoveredView[];
     driverResults: { protocol: string; status: "complete" | "failed"; count: number; error?: string }[];
   }> {
     const out: DiscoveredView[] = [];
@@ -186,8 +194,9 @@ export class CommissioningService {
     // now correctly shows both (the dedup fix above), but committing both still isn't safe until
     // a commissioned device's persisted backendId is itself network/gateway-scoped. That address
     // scoping is Stage 4's job, not this one's — deliberately not attempted here.
-    const discovered = [...seen.values()].filter((v) => !this.sil.registry.isKnownBackendId(v.backendId));
-    return { discovered, driverResults };
+    const allDiscovered = [...seen.values()];
+    const discovered = allDiscovered.filter((v) => !this.sil.registry.isKnownBackendId(v.backendId));
+    return { discovered, allDiscovered, driverResults };
   }
 
   /**

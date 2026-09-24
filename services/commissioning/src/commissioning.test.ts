@@ -139,6 +139,27 @@ describe("CommissioningService", () => {
     expect(rescan.map((f) => f.backendId)).not.toContain("light.studio");
   });
 
+  it("§ AVR sibling-zone parity — allDiscovered keeps an already-commissioned unit that discovered drops, so a zone-probe loop keyed off it can still find the unit's other, not-yet-known zones", async () => {
+    // Regression for an order-dependent Discover Devices bug: `installer-context.ts`
+    // probes an AVR's sibling zones off its MAIN unit's discovered entry. Once that main
+    // unit is itself commissioned (e.g. as Zone 1), `discovered` correctly drops it as
+    // "not a new find" (the test above) — but a probe loop that only ever saw `discovered`
+    // lost its only handle on the unit and could never find Zone 2 again, even on rescan.
+    const { sil, home, roomId } = await setup();
+    const svc = new CommissioningService(sil, home);
+
+    await svc.commission({
+      backendId: "light.studio",
+      name: "Studio Light",
+      roomId: roomId as never,
+      capabilities: ["onoff", "brightness"],
+    });
+
+    const { discovered, allDiscovered } = await svc.discoverWithStatus();
+    expect(discovered.map((f) => f.backendId)).not.toContain("light.studio");
+    expect(allDiscovered.map((f) => f.backendId)).toContain("light.studio");
+  });
+
   it("survives an AVR rediscovery: a user-renamed device is neither re-surfaced by discover() nor overwritten by a fresh friendlyName (§ Pass 12.2)", async () => {
     // Same exclusion mechanism as the generic test above, exercised end-to-end for the
     // AVR case specifically: an AVR scanner whose suggestedName is UPnP-friendlyName-
