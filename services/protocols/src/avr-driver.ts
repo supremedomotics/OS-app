@@ -23,6 +23,7 @@ import {
   parseMainZoneStatus,
   parseRenameSource,
 } from "./avr-http-codec.js";
+import { fetchHeosInputNames } from "./avr-heos-inputs.js";
 import { parseUpnpDescription } from "./yamaha-codec.js";
 import { ssdpSearch, type SsdpResponse, type SsdpSearchOptions } from "./ssdp.js";
 import { bestEffortMacForIp } from "./arp-lookup.js";
@@ -593,6 +594,8 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
   private async refreshInputEnrichment(host: string, port: number): Promise<void> {
     const key = `${host}:${port}`;
     const { port: httpPort, generation } = await this.resolveHttpPort(host);
+    let renamed = new Map<string, string>();
+    let hidden = new Set<string>();
     if (generation === "legacy") {
       try {
         this.tracer.event(`refreshInputEnrichment: ${host} detected as legacy (no AppCommand.xml) — reading ${MAIN_ZONE_STATUS_URL} on port ${httpPort} for diagnostics only`);
@@ -604,26 +607,41 @@ export class AvrProtocolDriver implements INativeProtocolDriver {
       } catch (err) {
         this.tracer.event(`refreshInputEnrichment: ${host} legacy status read failed — ${err instanceof Error ? err.message : String(err)}`);
       }
-      return;
+    } else {
+      try {
+        const [body] = buildAppCommandRequests([
+          { id: "1", text: "GetRenameSource" },
+          { id: "1", text: "GetDeletedSource" },
+        ]);
+        this.tracer.event(`refreshInputEnrichment: POST AppCommand.xml to ${host}:${httpPort}`);
+        const xml = await this.httpClient.request(`${key}:appcommand`, `http://${host}:${httpPort}/goform/AppCommand.xml`, {
+          method: "POST",
+          headers: { "content-type": "text/xml" },
+          body,
+        });
+        renamed = parseRenameSource(xml);
+        hidden = parseDeletedSource(xml);
+        this.tracer.event(`refreshInputEnrichment: ${host} — ${renamed.size} renamed, ${hidden.size} hidden`);
+      } catch (err) {
+        this.tracer.event(`refreshInputEnrichment: ${host} failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
-    try {
-      const [body] = buildAppCommandRequests([
-        { id: "1", text: "GetRenameSource" },
-        { id: "1", text: "GetDeletedSource" },
-      ]);
-      this.tracer.event(`refreshInputEnrichment: POST AppCommand.xml to ${host}:${httpPort}`);
-      const xml = await this.httpClient.request(`${key}:appcommand`, `http://${host}:${httpPort}/goform/AppCommand.xml`, {
-        method: "POST",
-        headers: { "content-type": "text/xml" },
-        body,
-      });
-      const renamed = parseRenameSource(xml);
-      const hidden = parseDeletedSource(xml);
-      this.inputEnrichment.set(key, { renamed, hidden });
-      this.tracer.event(`refreshInputEnrichment: ${host} — ${renamed.size} renamed, ${hidden.size} hidden`);
-    } catch (err) {
-      this.tracer.event(`refreshInputEnrichment: ${host} failed — ${err instanceof Error ? err.message : String(err)}`);
+    // § HEOS Input Bridge — AppCommand.xml has been observed to report nothing on some
+    // recent models (real hardware evidence: a Denon AVC-X3800H), and legacy units never
+    // had it at all. Every HEOS Built-in unit (all Denon/Marantz since ~2014) answers on
+    // the separate HEOS CLI port (1255) regardless, and its own `browse/browse` of the
+    // "Inputs" container reports the same real, current renamed labels — a genuine
+    // fallback source, not a guess (see avr-heos-inputs.ts's own doc for the evidence and
+    // its one documented limitation). Only consulted when AppCommand/legacy yielded
+    // nothing, and never overrides a real AppCommand-reported rename.
+    if (renamed.size === 0) {
+      const heosNames = await fetchHeosInputNames(host).catch(() => null);
+      if (heosNames && heosNames.size > 0) {
+        renamed = heosNames;
+        this.tracer.event(`refreshInputEnrichment: ${host} — ${renamed.size} renamed via HEOS Input Bridge (AppCommand reported none)`);
+      }
     }
+    this.inputEnrichment.set(key, { renamed, hidden });
   }
 
   /** § Universal AVR SDK — one slow (15-minute), adaptive-backoff poller per host that

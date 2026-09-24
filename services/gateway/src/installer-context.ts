@@ -2573,16 +2573,10 @@ export class InstallerServices {
     // to type the IP in by hand.
     const zoneEntries: DiscoveredView[] = [];
     for (const d of discovered) {
-      console.info(`[discover-zone2] discovered entry backendId=${d.backendId} protocol=${JSON.stringify(d.protocol)}`);
       if (d.protocol !== "avr") continue;
-      let probeResult: Awaited<ReturnType<typeof probeAvr>> | null = null;
-      try {
-        probeResult = await probeAvr(d.backendId);
-      } catch (err) {
-        console.error(`[discover-zone2] probeAvr(${d.backendId}) threw`, err);
-      }
-      console.info(`[discover-zone2] probeAvr(${d.backendId}) ->`, JSON.stringify(probeResult?.zones ?? "null"));
-      const zones = probeResult?.zones.filter((z) => z.detected && z.id !== "main").map((z) => ({ id: z.id, label: z.label })) ?? [];
+      const zones = (await probeAvr(d.backendId).catch(() => null))?.zones
+        .filter((z) => z.detected && z.id !== "main")
+        .map((z) => ({ id: z.id, label: z.label })) ?? [];
       for (const zone of zones) {
         const zoneBackendId = `${d.backendId}#${zone.id}`;
         if (this.d.sil.registry.isKnownBackendId(zoneBackendId)) continue;

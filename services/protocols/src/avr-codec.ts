@@ -611,9 +611,13 @@ export function denonCapabilityConfig(opts: {
   };
 }
 
-/** Input source names from the spec's `SI` parameter table (p.8). */
+/** Input source names from the spec's `SI` parameter table (p.8), plus three tokens
+ * (`CD`, `PHONO`, `AUX2`) the v8.6.0 PDF's target model (AVR-1713/1613) doesn't have but
+ * higher-end units do — confirmed as real `SI`-family tokens against a Denon AVC-X3800H's
+ * own HEOS "Inputs" browse list this session (§ HEOS Input Bridge), following the exact
+ * same uppercase-token convention every other entry here already uses. */
 export const DENON_INPUTS = [
-  "TUNER", "DVD", "BD", "TV", "SAT/CBL", "MPLAY", "GAME", "AUX1", "NET",
+  "TUNER", "DVD", "BD", "TV", "SAT/CBL", "MPLAY", "GAME", "AUX1", "AUX2", "CD", "PHONO", "NET",
   "PANDORA", "SIRIUSXM", "LASTFM", "FLICKR", "FAVORITES", "IRADIO", "SERVER", "USB/IPOD",
 ] as const;
 
@@ -633,6 +637,7 @@ export const DENON_INPUT_LABELS: Partial<Record<(typeof DENON_INPUTS)[number], s
   "SAT/CBL": "Satellite/Cable",
   MPLAY: "Media Player",
   AUX1: "AUX",
+  AUX2: "AUX 2",
   NET: "HEOS Music",
   IRADIO: "Internet Radio",
   SERVER: "Media Server",
@@ -650,6 +655,9 @@ const DENON_INPUT_TYPES: Partial<Record<(typeof DENON_INPUTS)[number], string>> 
   MPLAY: "hdmi",
   GAME: "hdmi",
   AUX1: "analog",
+  AUX2: "analog",
+  CD: "analog",
+  PHONO: "analog",
   NET: "network",
   PANDORA: "streaming",
   SIRIUSXM: "streaming",
