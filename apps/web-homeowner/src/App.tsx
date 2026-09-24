@@ -308,6 +308,7 @@ export function App() {
         devMode={showInstallerDiagnostics}
         onClose={() => setOpenDeviceId(null)}
         onRemoved={() => { setDeviceRefreshToken((t) => t + 1); setOpenDeviceId(null); }}
+        onDeviceUpdated={() => setDeviceRefreshToken((t) => t + 1)}
       />
     </div>
   ) : (

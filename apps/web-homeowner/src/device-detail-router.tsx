@@ -191,7 +191,7 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
 /** Renders at the app root, above whatever tab/page is active — an open device replaces
  * the current page content entirely (matching the existing full-screen detail convention
  * every page already used locally), keyed on `deviceId` alone. */
-export function CanonicalDeviceDetail({ deviceId, devMode, onClose, onRemoved }: { deviceId: string; devMode: boolean; onClose: () => void; onRemoved: () => void }) {
+export function CanonicalDeviceDetail({ deviceId, devMode, onClose, onRemoved, onDeviceUpdated }: { deviceId: string; devMode: boolean; onClose: () => void; onRemoved: () => void; onDeviceUpdated?: () => void }) {
   const { openDevice } = useOpenDevice();
   const [device, setDevice] = useState<Device | null | undefined>(undefined);
   const [allDevices, setAllDevices] = useState<Device[]>([]);
@@ -225,9 +225,16 @@ export function CanonicalDeviceDetail({ deviceId, devMode, onClose, onRemoved }:
   // § bug fix — applies a successful edit (e.g. a media kind override) straight to this
   // router's own state so the open page re-renders with the NEW device immediately, instead
   // of the next render recomputing from the stale one still sitting in `device`/`allDevices`.
+  // Also notifies the caller (App.tsx, via `onDeviceUpdated`) so screens OTHER than this one
+  // — the Devices list foremost among them — know to refetch too; without this, a kind change
+  // was visible on the just-edited detail page but any other screen listing devices kept
+  // showing the pre-edit value until something else happened to bump its own refresh signal
+  // (§ second half of the same bug — the detail page updating itself was necessary but not
+  // sufficient; every OTHER device-listing screen needs its own notification too).
   const handleDeviceUpdated = (updated: Device) => {
     setDevice(updated);
     setAllDevices((all) => all.map((d) => (d.id === updated.id ? updated : d)));
+    onDeviceUpdated?.();
   };
 
   return resolveCanonicalDetail(device, { allDevices, roomName, registry, devMode, onClose, onRemoved, onDeviceUpdated: handleDeviceUpdated, openDevice, scheduleDevice, setScheduleDevice });
