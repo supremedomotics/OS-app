@@ -788,7 +788,21 @@ export class RealMatterBridgeServer implements MatterBridgeServer {
       // SOLE path that reports what CoolMaster's physical unit actually confirmed — a Matter
       // controller's write is NEVER treated as physical truth on its own (Phase 3.1.1 §6/§9);
       // only a real `onState` event (this method's caller) reaches here.
+      //
+      // § Production fix — a `temperature` capability event can arrive for a device whose
+      // endpoint was bridged as a non-Thermostat device type (e.g. a CoolMaster unit exposed
+      // as an On/Off Light because its declared capability set didn't route it to THERMOSTAT
+      // at `addEndpoint` time) — that endpoint's composed clusters have no `thermostat`
+      // Behavior at all, so `ep.set({ thermostat })` below throws matter.js's
+      // `endpoint-behavior-not-present` as a genuinely FATAL, process-crashing unhandled
+      // rejection (confirmed in production: crash-looped the whole gateway every ~2 minutes,
+      // in lockstep with CoolMaster's poll cycle). This method's own doc comment above already
+      // promises "a state kind that doesn't match anything this endpoint's composed clusters
+      // expose is simply ignored... never a crash" — the `color` case already honors that by
+      // checking `entry.deviceTypeId` before touching color-specific fields; `temperature` must
+      // too, since `thermostat` is ONLY composed for THERMOSTAT-typed endpoints.
       case "temperature": {
+        if (entry.deviceTypeId !== THERMOSTAT) return;
         const thermostat: Record<string, unknown> = { localTemperature: celsiusToMatter(state.ambientC) };
         // § Phase 3.4C — `heatCool` (a dedicated, confirmed heat/cool selector — e.g. KNX
         // DPT 1.100) takes priority over the generic `mode` field when it holds a real
