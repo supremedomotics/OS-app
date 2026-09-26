@@ -546,4 +546,55 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
     // field with no real effect behind it.
     configSchema: [],
   }),
+  defineManifest({
+    key: "supreme-pjlink",
+    name: "PJLink Projectors",
+    description: "JBMIA PJLink Class 1/2 projectors and displays over the standard TCP control protocol.",
+    category: "media",
+    channel: "official",
+    publisher: PUBLISHER,
+    version: "1.0.0",
+    capabilities: ["display"],
+    protocols: ["pjlink"],
+    compat: { hubMinVersion: "0.1.0", requiresSku: "pro" },
+    backend: { type: "native", ref: "pjlink" },
+    operations: [...PROTO_OPS],
+    documentationUrl: "https://docs.supreme.local/extensions/pjlink",
+    releaseNotes:
+      "Real PJLink Class 1/2 TCP control: power (with warming/cooling feedback), input selection (device-reported input list on Class 2), video/audio mute, error status (fan/lamp/temperature/cover/filter), lamp hours, and MD5 authentication. Not every Class 2 command is implemented yet (filter/security/volume) — see the extension's documentation for the exact coverage. Each projector is added by IP address through Bus Binding after enabling.",
+    changelog: [
+      { version: "1.0.0", date: "2026-09-21", notes: "First stable release: power/input/mute/error/lamp, Class 1 MD5 auth, per-projector command queueing + reconnect, Class 2 UDP search discovery." },
+    ],
+    configSchema: [
+      {
+        key: "password",
+        label: "Admin password",
+        type: "password",
+        required: false,
+        secret: true,
+        help: "Only needed if this projector's PJLink security is enabled (Class 1 MD5 authentication). Leave blank for an unauthenticated unit.",
+      },
+      {
+        key: "pjlinkClass",
+        label: "PJLink class override",
+        type: "select",
+        required: false,
+        options: [
+          { value: "", label: "Auto-detect (recommended)" },
+          { value: "1", label: "Force Class 1" },
+          { value: "2", label: "Force Class 2" },
+        ],
+        secret: false,
+        help: "Auto-detect queries CLSS on connect. Override only if a unit's CLSS reply is unreliable.",
+      },
+      {
+        key: "trace",
+        label: "Raw protocol trace logging",
+        type: "boolean",
+        required: false,
+        default: false,
+        secret: false,
+      },
+    ],
+  }),
 ];

@@ -32,6 +32,7 @@ export const CapabilityKind = z.enum([
    * a streaming box) advertises this the same way. A device commonly advertises BOTH
    * "media" (play/pause/volume) and "remote" (navigation) together. */
   "remote",
+  "display", // PJLink-class projector/display: power/input/mute/error/lamp
 ]);
 export type CapabilityKind = z.infer<typeof CapabilityKind>;
 
@@ -275,6 +276,80 @@ export const RemoteState = z.object({
     .nullable(),
 });
 
+/** One PJLink `ERST` status digit (0-3 per input class: warning severity, verbatim from
+ * the spec — never collapsed into a boolean, since "1" (warning) and "2" (error) are a
+ * real, distinct severity the device itself reports). */
+export const DisplayErrorLevel = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
+
+/** PJLink `ERST` — six independently-reported subsystems (spec §4.7). Only present once
+ * the device has actually answered an `ERST?` query at least once; `null` beforehand —
+ * never fabricated as "all clear." */
+export const DisplayErrorStatus = z.object({
+  fan: DisplayErrorLevel,
+  lamp: DisplayErrorLevel,
+  temperature: DisplayErrorLevel,
+  coverOpen: DisplayErrorLevel,
+  filter: DisplayErrorLevel,
+  other: DisplayErrorLevel,
+});
+
+/** A single PJLink input reference — `INPT`'s two-part address (source type 1-9 +
+ * source number 1-9, e.g. RGB-1, HDMI-2), never a synthesized "HDMI 1"-style numbering
+ * of Supreme's own invention (see module-level capability doc). */
+export const DisplayInputRef = z.object({
+  /** PJLink source-type digit: 1=RGB, 2=VIDEO, 3=DIGITAL, 4=STORAGE, 5=NETWORK. */
+  source: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+  /** PJLink source number, 1-9. */
+  number: z.number().int().min(1).max(9),
+});
+
+export const DisplayInputOption = DisplayInputRef.extend({
+  /** Class 2 `INNM` (per-input name), when the device reports one; otherwise a generic
+   * "<source label> N" fallback built by the codec — never a guessed model-specific name. */
+  label: z.string(),
+});
+
+/** One PJLink `LAMP` entry — a lamp's cumulative runtime + current on/off state. PJLink
+ * supports multiple lamps per unit (spec §4.6); index in the array is the reporting order,
+ * not a stable id (the protocol has none). */
+export const DisplayLampState = z.object({
+  hours: z.number().nonnegative(),
+  on: z.boolean(),
+});
+
+export const DisplayState = z.object({
+  /** PJLink `POWR` — four real states, not a boolean (spec §4.1): a projector genuinely
+   * spends measurable time warming up / cooling down, during which most other commands
+   * are rejected by the device itself (`ERR3`). `unknown` = not yet queried/reported. */
+  power: z.enum(["off", "warming", "on", "cooling", "unknown"]),
+  /** Current `INPT` selection; `null` when not yet queried or the device reported no
+   * current input. */
+  input: DisplayInputRef.nullable(),
+  /** Class 2 `INST` — the device's own reported list of switchable inputs. Empty array
+   * (not a guessed default) until a real `INST?` reply has been parsed. */
+  availableInputs: z.array(DisplayInputOption),
+  /** PJLink `AVMT` video-mute component; `null` until queried. */
+  videoMuted: z.boolean().nullable(),
+  /** PJLink `AVMT` audio-mute component; `null` until queried. */
+  audioMuted: z.boolean().nullable(),
+  /** PJLink `ERST`; `null` until queried at least once. */
+  errorStatus: DisplayErrorStatus.nullable(),
+  /** PJLink `LAMP`; `null` until queried, `[]` for a lamp-less (e.g. laser/LED) unit that
+   * genuinely reports zero lamps. */
+  lampHours: z.array(DisplayLampState).nullable(),
+  /** Class 2 `FREZ` — current freeze (paused-frame) state; `null` on a device/class that
+   * doesn't support `FREZ` (Class 1 has no such command) or hasn't been queried yet. */
+  frozen: z.boolean().nullable(),
+  /** `INF1`/`INF2`/`INFO`/`NAME` — informational strings, `null` until queried. */
+  manufacturer: z.string().nullable(),
+  product: z.string().nullable(),
+  productName: z.string().nullable(),
+  otherInfo: z.string().nullable(),
+  /** `CLSS` — PJLink class this unit actually answered with ("1" or "2"), independent of
+   * which class this driver attempted first (see pjlink-driver.ts's negotiation). */
+  pjlinkClass: z.enum(["1", "2"]).nullable(),
+});
+
 /** Discriminated union of all capability states, keyed by capability kind. */
 export const CapabilityState = z.discriminatedUnion("kind", [
   OnOffState.extend({ kind: z.literal("onoff") }),
@@ -288,6 +363,7 @@ export const CapabilityState = z.discriminatedUnion("kind", [
   VacuumState.extend({ kind: z.literal("vacuum") }),
   SensorState.extend({ kind: z.literal("sensor") }),
   RemoteState.extend({ kind: z.literal("remote") }),
+  DisplayState.extend({ kind: z.literal("display") }),
 ]);
 export type CapabilityState = z.infer<typeof CapabilityState>;
 
@@ -384,6 +460,16 @@ export const CapabilityCommand = z.discriminatedUnion("capability", [
   z.object({
     capability: z.literal("remote"),
     action: z.enum(["up", "down", "left", "right", "select", "back", "menu", "home"]),
+  }),
+  z.object({
+    capability: z.literal("display"),
+    action: z.enum([
+      "on", "off", "setInput", "muteVideo", "unmuteVideo", "muteAudio", "unmuteAudio",
+      "muteAv", "unmuteAv", "freeze", "unfreeze",
+    ]),
+    /** Used with action "setInput" — the exact PJLink source-type/number pair, normally
+     * chosen from the device's own reported `availableInputs` (never a guessed number). */
+    input: DisplayInputRef.optional(),
   }),
 ]);
 export type CapabilityCommand = z.infer<typeof CapabilityCommand>;
