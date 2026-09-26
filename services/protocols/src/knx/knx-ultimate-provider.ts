@@ -299,7 +299,7 @@ export class KnxUltimateProvider implements IKnxProvider {
   async execute(task: KnxTask): Promise<unknown> {
     if (!this.client) throw new Error("knx-ultimate: not connected");
     if (task.kind === "bus.group_write") {
-      this.client.write(task.groupAddress, task.value, task.dpt);
+      this.writeOrReportDead(() => this.client!.write(task.groupAddress, task.value, task.dpt));
       this.packetsSent++;
       this.lastCommandAt = new Date().toISOString();
       return undefined;
@@ -309,12 +309,35 @@ export class KnxUltimateProvider implements IKnxProvider {
       // KNXClient.read() in the installed knxultimate package). The value itself arrives
       // asynchronously via the existing "indication" handler/subscribe() path, exactly
       // like a spontaneous status telegram — this call only triggers the request.
-      this.client.read(task.groupAddress);
+      this.writeOrReportDead(() => this.client!.read(task.groupAddress));
       this.packetsSent++;
       this.lastCommandAt = new Date().toISOString();
       return undefined;
     }
     throw new Error(`knx-ultimate: unsupported task "${(task as KnxTask).kind}"`);
+  }
+
+  /** § production defect — a tunnel `knxultimate` drops WITHOUT emitting its own
+   * "error" event (observed live: a real socket write threw synchronously with "The
+   * socket is not connected. Unable to access the KNX BUS") left `this.client` non-null
+   * forever, so `execute()`'s only liveness check kept passing and the Connection
+   * Manager's self-healing reconnect (built for exactly this "lost tunnel" case, see
+   * `doConnect()`'s `client.on("error", ...)` handler) never even learned the tunnel was
+   * dead — every command after that first failure kept throwing the identical raw error
+   * until something else (a process restart) fixed it. This funnels a synchronous
+   * write()/read() throw through the SAME `reportDisconnected` recovery path the "error"
+   * event uses, so the very failure this call is about to raise ALSO kicks off
+   * reconnection instead of leaving the tunnel silently dead. */
+  private writeOrReportDead(fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.lastError = message;
+      this.client = null;
+      this.connectionManager?.reportDisconnected(message);
+      throw err;
+    }
   }
 
   subscribe(groupAddress: string, dpt: string, handler: (value: unknown) => void): void {
