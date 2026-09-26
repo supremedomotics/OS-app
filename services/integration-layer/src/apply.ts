@@ -112,5 +112,63 @@ export function applyCommand(
     }
     case "remote":
       return { kind: "remote", lastButton: command.action };
+    case "display": {
+      const base = prev?.kind === "display" ? prev : null;
+      const emptyDisplay = {
+        kind: "display" as const,
+        power: "unknown" as const,
+        input: null,
+        availableInputs: [],
+        videoMuted: null,
+        audioMuted: null,
+        errorStatus: null,
+        lampHours: null,
+        frozen: null,
+        manufacturer: null,
+        product: null,
+        productName: null,
+        otherInfo: null,
+        pjlinkClass: null,
+      };
+      const next = { ...(base ?? emptyDisplay) };
+      switch (command.action) {
+        case "on":
+          next.power = "warming";
+          break;
+        case "off":
+          next.power = "cooling";
+          break;
+        case "setInput":
+          if (command.input) next.input = command.input;
+          break;
+        case "muteVideo":
+          next.videoMuted = true;
+          break;
+        case "unmuteVideo":
+          next.videoMuted = false;
+          break;
+        case "muteAudio":
+          next.audioMuted = true;
+          break;
+        case "unmuteAudio":
+          next.audioMuted = false;
+          break;
+        case "muteAv":
+          next.videoMuted = true;
+          next.audioMuted = true;
+          break;
+        case "unmuteAv":
+          next.videoMuted = false;
+          next.audioMuted = false;
+          break;
+        case "freeze":
+          next.frozen = true;
+          break;
+        case "unfreeze":
+          next.frozen = false;
+          break;
+      }
+      return next;
+    }
   }
 }
