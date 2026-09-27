@@ -74,3 +74,24 @@ describe("§ live-confirmed fix — Casambi API key falls back to the embedded d
     expect(loadConfig({ SUPREME_CASAMBI_API_KEY: "" }).casambiApiKey).toBe(loadConfig({}).casambiApiKey);
   });
 });
+
+describe("§ apps/new direct client channel — SUPREME_DIRECT_PORT resolution (fail-safe, never a boot-blocking value)", () => {
+  it("defaults to 7272 when unset", () => {
+    expect(loadConfig({}).directPort).toBe(7272);
+  });
+
+  it("honors an explicit valid port", () => {
+    expect(loadConfig({ SUPREME_DIRECT_PORT: "9000" }).directPort).toBe(9000);
+  });
+
+  it('treats "0" as a deliberate, explicit disable — never falls back to the default', () => {
+    expect(loadConfig({ SUPREME_DIRECT_PORT: "0" }).directPort).toBe(0);
+  });
+
+  it.each(["not-a-number", "-1", "70000", "3.5", ""])(
+    "falls back to the default for an invalid value (%s), never NaN or a garbage port",
+    (raw) => {
+      expect(loadConfig({ SUPREME_DIRECT_PORT: raw }).directPort).toBe(7272);
+    },
+  );
+});

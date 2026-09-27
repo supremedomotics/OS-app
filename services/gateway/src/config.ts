@@ -213,6 +213,15 @@ export interface GatewayConfig {
 /** The insecure development default — refused in production (fail-closed). */
 export const DEV_TOKEN_SECRET = "dev-only-insecure-secret-change-me-change-me";
 
+const DEFAULT_DIRECT_PORT = 7272;
+
+function parseDirectPort(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return DEFAULT_DIRECT_PORT;
+  if (raw === "0") return 0;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : DEFAULT_DIRECT_PORT;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   // ADR-0023 § Native Backend: "native" is the production default and the only real
   // backend — the SIL talks straight to native protocol drivers, no external hub.
@@ -221,7 +230,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
-    directPort: Number(env.SUPREME_DIRECT_PORT ?? 7272),
+    // `0` is a deliberate, explicit "disabled" value (kept as-is). Anything else that
+    // isn't a valid TCP port (non-numeric, negative, 0 < n < 1, or > 65535) fails safe
+    // to the documented default rather than silently disabling the listener or handing
+    // Fastify a garbage value — a typo in the env file should never look identical to
+    // "we meant to turn this off."
+    directPort: parseDirectPort(env.SUPREME_DIRECT_PORT),
     tokenSecret: secret(env, "SUPREME_TOKEN_SECRET") ?? DEV_TOKEN_SECRET,
     sessionTtlSeconds: Number(env.SUPREME_SESSION_TTL_SECONDS ?? 60 * 60 * 24 * 365),
     backend,

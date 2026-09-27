@@ -84,15 +84,29 @@ class DiscoveredHub {
   final String? protocolVersion;
   final bool available;
 
-  const DiscoveredHub({
+  /// When this Hub was last actually seen answering a discovery query — lets a
+  /// caller distinguish "currently on the LAN" from "was here a while ago"
+  /// (§ Hub disappearing/reappearing) without a separate liveness map keyed by
+  /// [identity]. Defaults to construction time so a freshly-discovered result
+  /// is honestly "just seen," not backdated.
+  final DateTime lastSeen;
+
+  DiscoveredHub({
     required this.identity,
     required this.address,
     this.port = SupremeOSHubDefaults.defaultPort,
     this.protocolVersion,
     this.available = true,
-  });
+    DateTime? lastSeen,
+  }) : lastSeen = lastSeen ?? DateTime.now();
 
-  Uri get controlUri => Uri.parse('https://$address:$port');
+  /// § production defect fix — this is the plain-HTTP direct client channel
+  /// (§7272 convention: the SAME gateway API as the existing 8080/Caddy-443
+  /// path, just on its own fixed port — see `services/gateway/src/main.ts`
+  /// and `mdns-responder.ts`'s module doc for the accepted LAN-plaintext
+  /// tradeoff). A `https://` scheme here would fail every real connection
+  /// attempt outright (TLS handshake against a plain HTTP listener).
+  Uri get controlUri => Uri.parse('http://$address:$port');
 }
 
 /// Discovers SupremeOS Hub(s) on the local network (§ discovery mechanism).

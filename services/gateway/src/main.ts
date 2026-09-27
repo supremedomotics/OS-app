@@ -51,8 +51,13 @@ async function main(): Promise<void> {
   const ctx = await createHubContext(config);
   const app = await buildServer(ctx);
 
+  // Set once the direct-channel listener/responder actually start (below) — declared
+  // here so `shutdown` can stop them even though it closes over this before they exist.
+  let mdnsResponder: { stop(): void } | null = null;
+
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "shutting down");
+    mdnsResponder?.stop();
     await app.close();
     await ctx.shutdown();
     await stopTracing();
@@ -108,7 +113,7 @@ async function main(): Promise<void> {
     // independent of Setup Wizard commissioning (a fresh client needs to FIND the hub
     // before a home even exists, so `projectId` is simply omitted until one does).
     const identity = loadOrCreateHubIdentity(createSecretStore(config.secretsDir || undefined));
-    startMdnsResponder({
+    mdnsResponder = startMdnsResponder({
       hubId: identity.hubUuid,
       projectId: ctx.setupRequired ? undefined : ctx.homeId,
       protocolVersion: config.hubVersion,

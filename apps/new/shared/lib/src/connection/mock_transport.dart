@@ -12,8 +12,8 @@ class MockHubDiscovery implements HubDiscovery {
   final bool hubPresent;
   const MockHubDiscovery({this.hubPresent = true});
 
-  static const _mockHub = DiscoveredHub(
-    identity: HubIdentity(hubId: 'mock-hub-1', displayName: 'SupremeOS Hub'),
+  static final _mockHub = DiscoveredHub(
+    identity: const HubIdentity(hubId: 'mock-hub-1', displayName: 'SupremeOS Hub'),
     address: '192.168.0.117',
     port: SupremeOSHubDefaults.defaultPort,
   );
@@ -29,7 +29,7 @@ class MockHubDiscovery implements HubDiscovery {
   Future<List<DiscoveredHub>> discoverAllLan(
       {Duration timeout = const Duration(seconds: 3)}) async {
     await Future.delayed(const Duration(milliseconds: 300));
-    return hubPresent ? const [_mockHub] : const [];
+    return hubPresent ? [_mockHub] : const [];
   }
 }
 
