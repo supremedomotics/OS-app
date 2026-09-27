@@ -17,7 +17,23 @@ import os from "node:os";
  * Query-triggered only (replies when asked, like every real mDNS responder should);
  * no periodic unsolicited announcements — `MdnsHubDiscovery` always sends its own
  * PTR query first, so nothing needs the extra complexity of a proactive announce
- * loop.
+ * loop. Idempotent by construction (no state beyond the socket itself), so a
+ * restart never risks a "duplicate" advertisement — the next query after restart
+ * gets the exact same answer as before, from a fresh, single responder.
+ *
+ * § Security model (§ LAN discovery must never equal authorization) — this reply
+ * is UNAUTHENTICATED, unencrypted UDP anyone on the LAN can see, by the nature of
+ * mDNS itself. It carries ONLY `hubId`/`version`/`txtvers`/optional `projectId`
+ * (see `MDNS_TXT_SCHEMA_VERSION`'s doc for the full contract and what is
+ * deliberately excluded) — never a credential, token, or anything that grants
+ * access on its own. The actual API on the advertised port goes through the
+ * SAME Fastify instance (and therefore the SAME auth middleware/route guards) as
+ * the existing 8080/Caddy-443 path — discovering the hub's address is not, by
+ * itself, a way to control it. That connection itself is still plain HTTP (not
+ * TLS) on this port, matching the existing internal 8080 listener Caddy already
+ * fronts for browser clients — a LAN-local tradeoff accepted for this client
+ * architecture, not a gap introduced here; upgrading it to TLS (mirroring
+ * Caddy's on-demand internal-CA policy) is future work if that posture changes.
  */
 
 const MDNS_HOST = "224.0.0.251";
@@ -26,6 +42,35 @@ const SERVICE_TYPE = "_supremeos._tcp.local";
 const RECORD_TTL_SECONDS = 120;
 
 const TYPE = { A: 1, PTR: 12, TXT: 16, SRV: 33 } as const;
+
+/** § TXT record contract (locked, versioned) — every key a client may rely on,
+ * exactly mirroring `HubMdnsTxtKeys` in apps/new/shared/lib/src/connection/
+ * mdns_hub_discovery.dart. Bump `SCHEMA_VERSION` only for a BREAKING change to
+ * this set (a key removed, or an existing key's meaning changed) — adding a new
+ * optional key is not breaking and doesn't need a bump. A client must ignore
+ * unknown TXT keys and tolerate any of the optional ones being absent.
+ *
+ * - `hubId` (required) — stable identity, survives reinstall/IP change. The ONLY
+ *   safe way to recognize "the same hub" across sessions; never key off `host`.
+ * - `version` (required) — this hub's software version (`config.hubVersion`),
+ *   for a client that wants to gate a feature on a minimum hub version.
+ * - `txtvers` (required) — THIS contract's schema version (see above), separate
+ *   from `version` (which is the hub's own release, unrelated to the TXT shape).
+ * - `projectId` (optional) — the commissioned home's id; absent before Setup
+ *   Wizard commissioning (discovery must work pre-setup).
+ *
+ * Deliberately NOT included, and never to be added casually (§ "don't add
+ * fields just because they're possible"): any credential/token/secret (auth
+ * happens over the connection itself, never via a broadcast, unencrypted
+ * UDP packet anyone on the LAN can see — see mdns-responder's module doc);
+ * a display name (installer-set, home-scoped, lives behind the authenticated
+ * API, not broadcast pre-auth); device/model/capabilities (same reasoning —
+ * a client asks the authenticated API once connected, it doesn't need to know
+ * before it even connects). If a future client genuinely needs an unauthenticated
+ * hint (e.g. "setup required: yes/no" so a fresh app can distinguish a
+ * ready-to-pair hub from an already-commissioned one before connecting), add it
+ * as its own reviewed key — don't default to more surface than asked for. */
+export const MDNS_TXT_SCHEMA_VERSION = "1";
 
 export interface MdnsResponderOptions {
   /** This hub's stable identity (survives reinstall/rename) — advertised as the
@@ -149,16 +194,20 @@ export function decodeQuestionNames(buf: Buffer): string[] {
   return names;
 }
 
-/** This host's real, non-internal, non-virtual IPv4 addresses — the same "never
+/** This host's real, non-internal, non-virtual IPv4 interfaces — the same "never
  * fabricate a network identity" posture the rest of this codebase's LAN discovery
  * already follows (see `knx-discovery.ts`'s `listKnxNetworkInterfaces`). Excludes
  * loopback/link-local; a Hyper-V/WSL/Docker-only host simply advertises nothing,
- * which is honest (no real LAN interface to be found on). */
-function localIPv4Addresses(): string[] {
-  const out: string[] = [];
-  for (const addrs of Object.values(os.networkInterfaces())) {
+ * which is honest (no real LAN interface to be found on). Returns per-interface
+ * name too — a multi-NIC hub (Ethernet + Wi-Fi both up) needs to JOIN the
+ * multicast group on each one individually (an unqualified `addMembership` only
+ * joins on the OS's single default-route interface, so a query arriving on the
+ * OTHER interface would never be seen at all). */
+function localIPv4Interfaces(): { name: string; address: string }[] {
+  const out: { name: string; address: string }[] = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
     for (const addr of addrs ?? []) {
-      if (addr.family === "IPv4" && !addr.internal) out.push(addr.address);
+      if (addr.family === "IPv4" && !addr.internal) out.push({ name, address: addr.address });
     }
   }
   return out;
@@ -167,25 +216,59 @@ function localIPv4Addresses(): string[] {
 /** Starts the responder. Best-effort: a sandboxed/CI network with no
  * multicast-capable interface simply never answers anything (matches this
  * codebase's existing `mdnsBrowse`/`knxSearch` posture) — never a boot-blocking
- * failure. */
+ * failure. Interface membership is re-resolved on every incoming query (not
+ * cached at start), so a hub that gains/loses a NIC after boot (Wi-Fi
+ * reconnects, a USB Ethernet dongle is plugged in, DHCP renews to a new
+ * address) is always answered with its CURRENT real addresses, never a stale
+ * snapshot from startup. */
 export function startMdnsResponder(opts: MdnsResponderOptions): MdnsResponderHandle {
   const hostname = `${opts.hubId}.local`;
   const instanceName = `${opts.hubId}.${SERVICE_TYPE}`;
   const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+  const joinedInterfaces = new Set<string>();
+
+  /** Join every currently-known interface's multicast membership that we haven't
+   * already joined — safe to call repeatedly (already-joined addresses are
+   * simply skipped), so a NIC that appears after boot still gets picked up the
+   * next time a query arrives, without needing a separate poll/watch loop. */
+  function ensureMembershipsCurrent(interfaces: { name: string; address: string }[]): void {
+    for (const iface of interfaces) {
+      if (joinedInterfaces.has(iface.address)) continue;
+      try {
+        socket.addMembership(MDNS_HOST, iface.address);
+        joinedInterfaces.add(iface.address);
+        opts.onLog?.(`mdns-responder: joined multicast group on interface ${iface.name} (${iface.address})`);
+      } catch (err) {
+        // Not multicast-capable, or already a member via another path — never fatal.
+        opts.onLog?.(`mdns-responder: could not join multicast on ${iface.name} (${iface.address}) — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
 
   socket.on("message", (msg, rinfo) => {
+    let questionNames: string[];
     try {
-      if (!decodeQuestionNames(msg).some((n) => n === SERVICE_TYPE)) return;
-      const addresses = localIPv4Addresses();
-      if (addresses.length === 0) return;
-      const txt: Record<string, string> = { hubId: opts.hubId, version: opts.protocolVersion };
+      questionNames = decodeQuestionNames(msg);
+    } catch (err) {
+      // A malformed/truncated packet on port 5353 (this port sees ALL mDNS traffic
+      // on the LAN, not just ours) — reject it quietly, never crash the responder.
+      opts.onLog?.(`mdns-responder: rejected malformed packet from ${rinfo.address} — ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!questionNames.some((n) => n === SERVICE_TYPE)) return;
+    try {
+      const interfaces = localIPv4Interfaces();
+      if (interfaces.length === 0) return;
+      ensureMembershipsCurrent(interfaces);
+      const txt: Record<string, string> = { hubId: opts.hubId, version: opts.protocolVersion, txtvers: MDNS_TXT_SCHEMA_VERSION };
       if (opts.projectId) txt.projectId = opts.projectId;
       const answers = [
         encodePtrAnswer(SERVICE_TYPE, instanceName),
         encodeSrvAnswer(instanceName, hostname, opts.port),
         encodeTxtAnswer(instanceName, txt),
-        ...addresses.map((a) => encodeAAnswer(hostname, a)),
+        ...interfaces.map((iface) => encodeAAnswer(hostname, iface.address)),
       ];
+      opts.onLog?.(`mdns-responder: discovery request from ${rinfo.address} — answering with ${interfaces.length} address(es)`);
       socket.send(encodeResponse(answers), MDNS_PORT, MDNS_HOST);
     } catch (err) {
       opts.onLog?.(`mdns-responder: failed to answer query from ${rinfo.address} — ${err instanceof Error ? err.message : String(err)}`);
@@ -193,19 +276,16 @@ export function startMdnsResponder(opts: MdnsResponderOptions): MdnsResponderHan
   });
   socket.on("error", (err) => opts.onLog?.(`mdns-responder: socket error — ${err.message}`));
   socket.bind(MDNS_PORT, () => {
-    try {
-      socket.addMembership(MDNS_HOST);
-      opts.onLog?.(`mdns-responder: advertising ${SERVICE_TYPE} as ${instanceName} on port ${opts.port}`);
-    } catch (err) {
-      // No usable multicast-capable interface — never a boot-blocking failure.
-      opts.onLog?.(`mdns-responder: no multicast-capable interface — ${err instanceof Error ? err.message : String(err)}`);
-    }
+    const interfaces = localIPv4Interfaces();
+    ensureMembershipsCurrent(interfaces);
+    opts.onLog?.(`mdns-responder: started — advertising ${SERVICE_TYPE} as ${instanceName} on port ${opts.port} (${interfaces.length} interface(s) known at startup)`);
   });
 
   return {
     stop: () => {
       try {
         socket.close();
+        opts.onLog?.("mdns-responder: stopped");
       } catch {
         /* already closed */
       }

@@ -199,8 +199,8 @@ class _MutableHubDiscovery implements HubDiscovery {
   bool present;
   _MutableHubDiscovery({required this.present});
 
-  static const _hub = DiscoveredHub(
-    identity: HubIdentity(hubId: 'mock-hub-1', displayName: 'SupremeOS Hub'),
+  static final _hub = DiscoveredHub(
+    identity: const HubIdentity(hubId: 'mock-hub-1', displayName: 'SupremeOS Hub'),
     address: '192.168.0.117',
     port: SupremeOSHubDefaults.defaultPort,
   );

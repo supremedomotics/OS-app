@@ -20,11 +20,11 @@ void main() {
   group(
       'SingleHubDiscovery — scopes a multi-Hub LAN to exactly one Home (§Phase12.2 §11/§12)',
       () {
-    final hubA = const DiscoveredHub(
-        identity: HubIdentity(hubId: 'hub-a', displayName: 'A'),
+    final hubA = DiscoveredHub(
+        identity: const HubIdentity(hubId: 'hub-a', displayName: 'A'),
         address: '10.0.0.1');
-    final hubB = const DiscoveredHub(
-        identity: HubIdentity(hubId: 'hub-b', displayName: 'B'),
+    final hubB = DiscoveredHub(
+        identity: const HubIdentity(hubId: 'hub-b', displayName: 'B'),
         address: '10.0.0.2');
 
     test('discoverLan returns only the address of the targeted hubId',

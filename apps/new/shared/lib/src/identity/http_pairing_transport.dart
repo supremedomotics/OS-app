@@ -9,22 +9,24 @@ import 'pairing.dart';
 /// piece Phase 11/12's doc comments named as the one thing still missing from
 /// `PairingClient` — a transport that actually talks to a Hub, not a fake.
 ///
-/// `baseUrl` is a plain LAN Hub address (e.g. `https://192.168.1.50`, from
-/// `DiscoveredHub.controlUri` — but see the class-level note on port below), never a
-/// broker/remote URL: initial pairing is deliberately a LAN-only ceremony (§Phase12.2 §8) —
-/// the Hub's own `/v1/pairing/*` routes are reachable over the broker's
-/// `/v1/route/:hubId/*` forward too, but forwarding through the broker requires a Mobile
-/// bearer token that does not exist yet at pairing time (a chicken-and-egg the real broker
-/// authorizer would otherwise have to weaken to solve — see `mobile-pairing.ts`'s own doc
-/// comment on this exact point). This is a deliberate security boundary, not an oversight.
+/// `baseUrl` is a plain LAN Hub address (e.g. `http://192.168.1.50:7272`, from
+/// `DiscoveredHub.controlUri`), never a broker/remote URL: initial pairing is
+/// deliberately a LAN-only ceremony (§Phase12.2 §8) — the Hub's own
+/// `/v1/pairing/*` routes are reachable over the broker's `/v1/route/:hubId/*`
+/// forward too, but forwarding through the broker requires a Mobile bearer
+/// token that does not exist yet at pairing time (a chicken-and-egg the real
+/// broker authorizer would otherwise have to weaken to solve — see
+/// `mobile-pairing.ts`'s own doc comment on this exact point). This is a
+/// deliberate security boundary, not an oversight.
 ///
-/// HONEST STATUS: `DiscoveredHub.controlUri` defaults to
-/// [SupremeOSHubDefaults.defaultPort] (7272, the native/local client port), but the real
-/// `/v1/pairing/*` routes are served by the existing gateway (Caddy :443 / internal :8080),
-/// NOT :7272 — no native 7272 pairing listener exists yet (§Phase9's own documented gap).
-/// Callers must therefore pass the Hub's actual gateway base URL (typically `https://<lan-ip>`
-/// on 443), not blindly `discoveredHub.controlUri` — this class does not paper over that
-/// mismatch by guessing a port.
+/// STATUS (§Phase9-2, resolved): the Hub's direct client port (7272,
+/// `SupremeOSHubDefaults.defaultPort`) now serves the SAME gateway Fastify
+/// instance/router as the existing Caddy :443 / internal :8080 path
+/// (`services/gateway/src/main.ts` — a second `app.listen()` on the identical
+/// app), so `/v1/pairing/*` — and every other route, under the same auth —
+/// is genuinely reachable there. `discoveredHub.controlUri` is safe to use
+/// directly as `baseUrl` for this transport; it is plain HTTP, not HTTPS (see
+/// `DiscoveredHub.controlUri`'s own doc for why).
 class HttpPairingTransport implements PairingTransport {
   final Uri baseUrl;
   final http.Client _client;

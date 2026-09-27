@@ -28,18 +28,27 @@ void main() {
     });
 
     test('a discovery result uses 7272 when no custom port is specified', () {
-      const hub = DiscoveredHub(
-        identity: HubIdentity(hubId: 'hub-1', displayName: 'SupremeOS Hub'),
+      final hub = DiscoveredHub(
+        identity: const HubIdentity(hubId: 'hub-1', displayName: 'SupremeOS Hub'),
         address: '192.168.1.50',
       );
       expect(hub.port, 7272);
       expect(hub.controlUri.port, 7272);
     });
 
+    test('discovery uses plain HTTP on 7272, never HTTPS (§ production defect fix — a https:// scheme here would fail every real connection attempt)',
+        () {
+      final hub = DiscoveredHub(
+        identity: const HubIdentity(hubId: 'hub-1', displayName: 'SupremeOS Hub'),
+        address: '192.168.1.50',
+      );
+      expect(hub.controlUri.scheme, 'http');
+    });
+
     test('a custom port on one Hub does not change the shared default constant',
         () {
-      const hub = DiscoveredHub(
-        identity: HubIdentity(hubId: 'hub-1', displayName: 'SupremeOS Hub'),
+      final hub = DiscoveredHub(
+        identity: const HubIdentity(hubId: 'hub-1', displayName: 'SupremeOS Hub'),
         address: '192.168.1.50',
         port: 9999,
       );
@@ -50,7 +59,7 @@ void main() {
 
   group('multiple Hubs on the LAN (§ multiple Hubs)', () {
     test('discovery can represent more than one Hub at once', () async {
-      const discovery = _FakeDiscovery([
+      final discovery = _FakeDiscovery([
         DiscoveredHub(
           identity: HubIdentity(
               hubId: 'hub-1',
@@ -73,7 +82,7 @@ void main() {
     });
 
     test('discoverLan takes the single-Hub view for the common case', () async {
-      const discovery = _FakeDiscovery([
+      final discovery = _FakeDiscovery([
         DiscoveredHub(
           identity: HubIdentity(hubId: 'hub-1', displayName: 'Hub'),
           address: '192.168.1.10',
@@ -97,14 +106,14 @@ void main() {
     test(
         'reconnect after an address change recognizes it as the same Hub (§ reconnect)',
         () {
-      const beforeMove = DiscoveredHub(
-        identity: HubIdentity(
+      final beforeMove = DiscoveredHub(
+        identity: const HubIdentity(
             hubId: 'hub-1', displayName: 'Hub', projectId: 'proj-a'),
         address: '192.168.1.10',
       );
       // DHCP handed out a new address after a router reboot.
-      const afterMove = DiscoveredHub(
-        identity: HubIdentity(
+      final afterMove = DiscoveredHub(
+        identity: const HubIdentity(
             hubId: 'hub-1', displayName: 'Hub', projectId: 'proj-a'),
         address: '192.168.1.77',
       );
