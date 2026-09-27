@@ -5,9 +5,10 @@ import { initTracing } from "./tracing.js";
 import { RelayTunnelClient } from "./relay-tunnel.js";
 import { OtaChecker } from "./ota.js";
 import { MtlsTunnelClient, type TunnelRequest, type TunnelResponse } from "@supreme/tunnel-broker";
-import { HubAgent } from "./hub-agent.js";
+import { HubAgent, loadOrCreateHubIdentity } from "./hub-agent.js";
 import { BrokerTunnelClient } from "./tunnel-client.js";
 import { createSecretStore } from "./secrets.js";
+import { startMdnsResponder } from "./mdns-responder.js";
 
 /**
  * Proxy a request forwarded over the tunnel to this hub's OWN local gateway, so identity + RBAC
@@ -91,6 +92,30 @@ async function main(): Promise<void> {
     { backend: config.backend, port: config.port },
     "Supreme API Gateway listening",
   );
+
+  // § apps/new direct client control channel (§7272 convention) — the SAME Fastify
+  // instance/router, just bound to a second fixed port so a Mobile/Touch Panel
+  // client that found this hub via mDNS can connect directly, without Caddy/443 in
+  // the loop. `directPort: 0` (e.g. some test harnesses) disables this second
+  // listener entirely.
+  if (config.directPort > 0) {
+    await app.listen({ host: config.host, port: config.directPort });
+    app.log.info({ port: config.directPort }, "Supreme API Gateway also listening (direct client channel)");
+
+    // Hub-side mDNS responder (§Phase9-2) — the missing half of apps/new's already-real
+    // MdnsHubDiscovery. Uses a stable local hub identity that exists independent of cloud
+    // registry enrollment (invariant I1: local-first, zero internet dependency) and
+    // independent of Setup Wizard commissioning (a fresh client needs to FIND the hub
+    // before a home even exists, so `projectId` is simply omitted until one does).
+    const identity = loadOrCreateHubIdentity(createSecretStore(config.secretsDir || undefined));
+    startMdnsResponder({
+      hubId: identity.hubUuid,
+      projectId: ctx.setupRequired ? undefined : ctx.homeId,
+      protocolVersion: config.hubVersion,
+      port: config.directPort,
+      onLog: (message) => app.log.info({}, message),
+    });
+  }
 
   // Remote access (§8): dial out to the cloud relay and hold the tunnel open. Outbound
   // only — no inbound ports. Off-LAN clients reach this hub through the relay.

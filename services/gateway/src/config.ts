@@ -18,6 +18,12 @@ function secret(env: NodeJS.ProcessEnv, name: string): string | undefined {
 export interface GatewayConfig {
   host: string;
   port: number;
+  /** § apps/new direct client control channel (SupremeOSHubDefaults.defaultPort on the
+   * Dart side) — the same gateway API, on its own fixed port so a Mobile/Touch Panel
+   * client that found the hub via mDNS (`_supremeos._tcp`, see mdns-responder.ts) can
+   * connect without needing Caddy/443 in the loop. `0` disables the second listener
+   * entirely (e.g. a test harness that only wants one ephemeral port). */
+  directPort: number;
   tokenSecret: string;
   /** How long a login session (refresh token) stays valid without use, in seconds — the real
    * "stay signed in" duration; the access token itself stays short-lived (15 min, TokenService's
@@ -215,6 +221,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
   return {
     host: env.SUPREME_HOST ?? "0.0.0.0",
     port: Number(env.SUPREME_PORT ?? 8080),
+    directPort: Number(env.SUPREME_DIRECT_PORT ?? 7272),
     tokenSecret: secret(env, "SUPREME_TOKEN_SECRET") ?? DEV_TOKEN_SECRET,
     sessionTtlSeconds: Number(env.SUPREME_SESSION_TTL_SECONDS ?? 60 * 60 * 24 * 365),
     backend,
