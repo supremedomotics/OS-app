@@ -1088,6 +1088,21 @@
   owning driver instance's config when ONVIF reports a second profile, but no UI/CameraService
   surface exposes it yet (main-stream-only today).
 
+### RTSP Camera driver — hardening pass follow-ups (§ hardening session)
+- **DONE this session:** MAC-address identity tier — `rtsp-mac-lookup.ts` reads `/proc/net/arp`
+  best-effort, `rtsp-identity.ts`/`rtsp-camera-service.ts` wired it in as the tier between ONVIF
+  UUID and manufacturer+model+IP. See SESSION_HANDOFF.md for the full feasibility writeup.
+- **Still open — probe-timing tuning:** the ~9.6s full-/24 default was re-confirmed bounded/
+  cancellable but not re-tuned this session (no real LAN reachable from this sandbox to get
+  better before/after numbers). Validate 400ms-per-probe-timeout / 32-concurrency against a real
+  large flat residential subnet before treating the defaults as final.
+- **Still open — real hardware validation:** no ONVIF/RTSP camera has been reachable from any
+  sandbox session so far. This remains the single largest gap before field deployment — do not
+  claim production readiness until at least one real camera (ideally 2-3 different manufacturers)
+  has been discovered, commissioned, and streamed successfully.
+- **Still open, unchanged from prior session:** Extension Center card duplication, mobile
+  Extension Center screen, IPv6 support, substream-not-surfaced-in-UI (all as listed above).
+
 ### AVR renamed-input capability-config race condition
 - **Description:** `AvrProtocolDriver.refreshInputEnrichment()` is called fire-and-forget (`void
   this.refreshInputEnrichment(...)`) at both `installer-context.ts:412` and

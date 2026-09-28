@@ -56,18 +56,26 @@ export function resolveOnvifAddress(match: OnvifProbeMatch, sourceAddress: strin
 }
 
 /** Identity key for dedup (§ STEP 6 priority: ONVIF UUID -> device UUID -> MAC ->
- * manufacturer+model+IP -> IP+service fingerprint). This driver never has a MAC-layer view (pure
- * IP discovery), so that tier is skipped honestly rather than fabricated; the remaining tiers are
- * exactly what real signals here support. */
-function identityKey(r: {
-  onvifUuid: string | null;
-  manufacturer: string | null;
-  model: string | null;
-  ipAddress: string;
-  onvifAvailable: boolean;
-  rtspAvailable: boolean;
-}): string {
+ * manufacturer+model+IP -> IP+service fingerprint). MAC is an OPTIONAL, best-effort tier: when a
+ * `macByIp` table is supplied (read from the kernel neighbor table — see rtsp-mac-lookup.ts) and
+ * has an entry for this camera's IP, it is used ahead of manufacturer+model+IP, since a MAC
+ * survives a DHCP-assigned IP change across a discovery re-run while manufacturer+model+IP does
+ * not. Lookup failure (no table, or no entry for this IP) simply skips the tier — it is never
+ * required. */
+function identityKey(
+  r: {
+    onvifUuid: string | null;
+    manufacturer: string | null;
+    model: string | null;
+    ipAddress: string;
+    onvifAvailable: boolean;
+    rtspAvailable: boolean;
+  },
+  macByIp?: Map<string, string>,
+): string {
   if (r.onvifUuid) return `uuid:${r.onvifUuid}`;
+  const mac = macByIp?.get(r.ipAddress);
+  if (mac) return `mac:${mac}`;
   if (r.manufacturer && r.model) return `mm:${r.manufacturer.toLowerCase()}:${r.model.toLowerCase()}:${r.ipAddress}`;
   return `ipfp:${r.ipAddress}:${r.onvifAvailable ? "o" : ""}${r.rtspAvailable ? "r" : ""}`;
 }
@@ -75,7 +83,7 @@ function identityKey(r: {
 /** Builds ONE deduplicated, best-named {@link RtspDiscoveryResult} per real camera from every raw
  * signal collected this discovery session (§ STEP 4/5/6). Never crashes on a partial/malformed
  * signal — each is folded independently. */
-export function mergeSignals(signals: RawSignal[]): RtspDiscoveryResult[] {
+export function mergeSignals(signals: RawSignal[], macByIp?: Map<string, string>): RtspDiscoveryResult[] {
   const byKey = new Map<string, RtspDiscoveryResult & { _mdns?: string | null }>();
 
   for (const sig of signals) {
@@ -83,14 +91,17 @@ export function mergeSignals(signals: RawSignal[]): RtspDiscoveryResult[] {
       const manufacturer = scopeValue(sig.match.scopes, "hardware") ? null : scopeValue(sig.match.scopes, "manufacturer");
       const model = scopeValue(sig.match.scopes, "hardware");
       const onvifName = scopeValue(sig.match.scopes, "name");
-      const key = identityKey({
-        onvifUuid: sig.match.uuid,
-        manufacturer,
-        model,
-        ipAddress: sig.ipAddress,
-        onvifAvailable: true,
-        rtspAvailable: false,
-      });
+      const key = identityKey(
+        {
+          onvifUuid: sig.match.uuid,
+          manufacturer,
+          model,
+          ipAddress: sig.ipAddress,
+          onvifAvailable: true,
+          rtspAvailable: false,
+        },
+        macByIp,
+      );
       const existing = byKey.get(key);
       const name = bestName({ onvifName, manufacturer, model, hostname: sig.hostname, ipAddress: sig.ipAddress });
       if (existing) {
@@ -122,14 +133,17 @@ export function mergeSignals(signals: RawSignal[]): RtspDiscoveryResult[] {
         });
       }
     } else {
-      const key = identityKey({
-        onvifUuid: null,
-        manufacturer: null,
-        model: null,
-        ipAddress: sig.ipAddress,
-        onvifAvailable: false,
-        rtspAvailable: true,
-      });
+      const key = identityKey(
+        {
+          onvifUuid: null,
+          manufacturer: null,
+          model: null,
+          ipAddress: sig.ipAddress,
+          onvifAvailable: false,
+          rtspAvailable: true,
+        },
+        macByIp,
+      );
       // A bare RTSP hit merges into an existing ONVIF result at the SAME ip:port fingerprint key
       // too — the ONVIF-keyed entry above didn't use the `ipfp` key, so look it up explicitly.
       const onvifSibling = [...byKey.values()].find((v) => v.ipAddress === sig.ipAddress && v.onvifAvailable);

@@ -109,4 +109,32 @@ describe("mergeSignals — § STEP 6 dedup", () => {
   it("never crashes on an empty signal list", () => {
     expect(mergeSignals([])).toEqual([]);
   });
+
+  it("uses MAC (when supplied) ahead of manufacturer+model+IP, surviving an IP change across re-scans", () => {
+    const macByIp = new Map([
+      ["192.168.1.60", "aa:bb:cc:dd:ee:ff"],
+      ["192.168.1.61", "aa:bb:cc:dd:ee:ff"], // same camera, new DHCP-leased IP on a re-scan
+    ]);
+    const signals: RawSignal[] = [
+      { method: "onvif", ipAddress: "192.168.1.60", port: 80, match: onvifMatch({ uuid: null, scopes: ["onvif://www.onvif.org/hardware/DS-2CD"] }) },
+      { method: "onvif", ipAddress: "192.168.1.61", port: 80, match: onvifMatch({ uuid: null, scopes: ["onvif://www.onvif.org/hardware/DS-2CD"] }) },
+    ];
+    // Without a MAC table these would be two distinct manufacturer+model+IP results; with it,
+    // they resolve to the SAME camera. (mergeSignals doesn't itself reconcile the differing
+    // ipAddress field here — this asserts the identity KEY collapses them into one map entry.)
+    const withoutMac = mergeSignals(signals);
+    expect(withoutMac).toHaveLength(2);
+    const withMac = mergeSignals(signals, macByIp);
+    expect(withMac).toHaveLength(1);
+  });
+
+  it("MAC lookup with no entry for an IP falls back to the next tier untouched", () => {
+    const macByIp = new Map([["10.0.0.9", "aa:bb:cc:dd:ee:ff"]]); // unrelated IP
+    const signals: RawSignal[] = [
+      { method: "onvif", ipAddress: "192.168.1.60", port: 80, match: onvifMatch({ uuid: null, scopes: ["onvif://www.onvif.org/hardware/DS-2CD"] }) },
+    ];
+    const results = mergeSignals(signals, macByIp);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.manufacturer).toBeNull(); // hardware scope maps to model, not manufacturer here
+  });
 });

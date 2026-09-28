@@ -4913,3 +4913,81 @@ src/cameras.e2e.test.ts` (pre-existing) — 2/2 still pass unmodified, confirmin
   complete and mobile-ready; this is pure Flutter UI work, intentionally not started here).
 - No Docker/infra changes were made or needed — the driver runs entirely inside the existing
   gateway process.
+
+## Session: RTSP Camera driver — hardening + production validation pass
+
+Reviewed commits b4b698a/15abcf9 file-by-file against the 13-point hardening checklist (discovery
+edge cases, ONVIF/RTSP protocol hardening, dedup/identity, security, persistence, performance).
+Conclusion: the prior implementation was already solid — real WS-Discovery, real WS-Security
+digest auth, real RTSP OPTIONS/DESCRIBE/Digest/Basic handshake, real SSRF guard, real encrypted
+credential storage via the existing driver secret store, bounded/cancellable/per-interface-
+isolated discovery, honest installer-facing error strings, zero logging calls anywhere in the
+`rtsp/` module (so there was never a credential-logging risk to begin with). This pass therefore
+made ONE targeted change rather than a broad rewrite:
+
+**MAC-address identity tier — implemented (the flagged gap from the previous handoff).**
+Investigated feasibility directly in this sandbox: `/proc/net/arp` is world-readable with no
+elevated privileges (confirmed: `cat /proc/net/arp` succeeds unprivileged in this container),
+requires no raw socket or active ARP scanning — it only reads the kernel neighbor table already
+populated as a side effect of the discovery traffic (WS-Discovery multicast, RTSP TCP probes)
+this driver already sends. `ip neigh` was considered too (more modern) but rejected in favor of
+`/proc/net/arp` because it depends on `iproute2` being installed in the hub image, which
+`/proc/net/arp` does not — the `ip` binary was in fact absent from this very sandbox
+(`ip: command not found`), confirming the point in practice, not just in theory.
+- New: `services/protocols/src/rtsp/rtsp-mac-lookup.ts` — `readArpTable()`, parses
+  `/proc/net/arp`, skips incomplete (`0x0` flag) and all-zero-MAC entries, wrapped in a 500ms
+  race-timeout and a catch-all that resolves to an empty `Map` on ANY failure (missing file,
+  permission denied, non-Linux, malformed line) — never throws, never blocks discovery.
+- `rtsp-identity.ts`: `identityKey()` now takes an optional `macByIp: Map<string,string>` and
+  uses it as the tier between ONVIF UUID and manufacturer+model+IP, exactly matching the spec's
+  priority chain (ONVIF UUID -> device UUID -> MAC -> manufacturer+model+IP -> IP+fingerprint) —
+  MAC survives a DHCP-reassigned IP across re-scans, which manufacturer+model+IP does not.
+  `RtspDiscoveryResult` intentionally still has NO `mac` field — the tier only strengthens the
+  internal dedup key, it is never returned to installer-facing API responses or the UI, matching
+  how discovery results already exclude credentials.
+- `rtsp-camera-service.ts`: `discoverCameras()` kicks off `readArpTable()` in parallel with (never
+  blocking) the ONVIF/RTSP probes, gives it a 50ms grace window after both probes finish, then
+  merges with whatever resolved (or nothing, if it didn't land in time) — the MAC tier can only
+  ever help identity, never delay or fail discovery.
+- Tests: 5 new unit tests in `rtsp-mac-lookup.test.ts` (parse, skip-incomplete, skip-malformed,
+  file-unreadable, timeout — all resolve to an empty map, never throw) + 2 new tests in
+  `rtsp-identity.test.ts` (MAC tier collapses two different IPs for the same physical camera; a
+  MAC table with no entry for the camera's IP falls through to the existing tier untouched).
+  68 -> 75 RTSP protocol tests, all passing.
+
+**Everything else reviewed and found already correct, no change needed**: ONVIF malformed-XML/
+missing-field/multi-XAddr/multi-profile/no-profile handling (all already regex-tolerant, already
+tested); RTSP auth-failure/timeout/malformed-SDP/no-video-track/TCP-accepts-no-media paths (all
+already produce the exact plain installer-facing strings this task asked for — "Camera not
+reachable" etc. — verified against `rtsp-handshake.ts` directly); the RTSP-only manual fallback
+path (verified it is a real TCP/RTSP handshake, not a mock — `rtsp-handshake.ts` is the one
+shared validation path for BOTH ONVIF and RTSP-only flows, `testConnection()` in
+`rtsp-camera-service.ts`); discovery reliability (per-interface isolation via
+`Promise.all(...map(...try/catch...))` so one bad interface/socket never blocks the others,
+already tested); SSRF/XXE (no XML parser is used at all — hand-rolled regex extraction, so
+classic XXE entity-expansion attacks have no vector to begin with; `validateRtspUrl` already
+blocks public/non-private hosts and non-`rtsp(s)` schemes). No credential-logging risk found
+(grepped the entire `rtsp/` module and the gateway route for any `console.*`/`logger.*` call —
+there are none).
+
+**Performance**: did not re-tune the ~9.6s full-/24 probe default this session — re-verified it is
+bounded/cancellable/concurrency-limited as designed, and the previous handoff's documented
+follow-up (validate 400ms/32-concurrency defaults against a real large flat subnet) still stands;
+no real LAN is reachable from this sandbox to get better before/after numbers than what the prior
+session already recorded.
+
+**Real-hardware validation**: no ONVIF/RTSP camera is reachable from this sandbox (confirmed — no
+LAN, cloud container). Automated protocol validation passed; hardware interoperability remains
+unverified. Do not treat this as production-ready on the strength of automated tests alone.
+
+**Verification**: `@supreme/protocols` rtsp suite — 75/75 pass in isolation. `@supreme/protocols`
+typecheck and build — clean. `services/gateway` full suite — 563/563 pass (includes the 8 RTSP
+gateway e2e tests). One RTSP e2e test (`discovery runs without throwing on a real
+(loopback-scoped) network scan`) times out when that single file is run in total isolation in
+this sandbox — confirmed via `git stash` that this is PRE-EXISTING sandbox behavior unrelated to
+this session's change (a real full-/24 network scan needs more than the test's 5s budget when run
+without the rest of the suite warming up the event loop/socket pool); it passes reliably within
+the full 563-test gateway run, both before and after this session's change.
+
+`git diff --name-only` confirmed: no `apps/mobile`/`*.dart` files touched, no Docker/Dockerfile/
+docker-compose/`infra/hub-compose` files touched — only `services/protocols/src/rtsp/*`.

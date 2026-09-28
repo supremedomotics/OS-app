@@ -2,6 +2,7 @@ import { probeOnvif, type ProbeOnvifOptions } from "./onvif-wsdiscovery.js";
 import { probeRtspPorts, DEFAULT_RTSP_PORTS, type TcpProbe } from "./rtsp-port-probe.js";
 import { localIPv4Interfaces, subnetHosts } from "./network-interfaces.js";
 import { mergeSignals, resolveOnvifAddress, type RawSignal } from "./rtsp-identity.js";
+import { readArpTable } from "./rtsp-mac-lookup.js";
 import { getDeviceInformation, getMediaServiceEndpoint, getMediaProfiles, getStreamUri, type SoapFetch, OnvifSoapError } from "./onvif-soap.js";
 import { validateRtspStream, type RtspSocketFactory } from "./rtsp-handshake.js";
 import { validateRtspUrl } from "./rtsp-url-safety.js";
@@ -40,7 +41,19 @@ export async function discoverCameras(opts: DiscoverCamerasOptions = {}): Promis
   const interfaces = opts.interfaces ?? localIPv4Interfaces();
   const signals: RawSignal[] = [];
 
-  const publish = () => opts.onResult?.(mergeSignals(signals));
+  // Best-effort MAC-address tier (§ dedup/identity) — kicked off in parallel with discovery
+  // itself, never awaited by it. If it resolves before discovery finishes, later incremental
+  // publishes and the final merge get the stronger identity key; if it's still pending, or fails
+  // outright, discovery and the returned results are entirely unaffected (see rtsp-mac-lookup.ts).
+  let macByIp: Map<string, string> | undefined;
+  const macPromise = readArpTable()
+    .then((table) => {
+      macByIp = table;
+      publish();
+    })
+    .catch(() => undefined);
+
+  const publish = () => opts.onResult?.(mergeSignals(signals, macByIp));
 
   const onvifPromise =
     interfaces.length > 0
@@ -85,7 +98,10 @@ export async function discoverCameras(opts: DiscoverCamerasOptions = {}): Promis
       : Promise.resolve(new Map<string, number[]>());
 
   await Promise.all([onvifPromise, rtspPromise]);
-  return mergeSignals(signals);
+  // Give the (already short, independently timed-out) MAC lookup a brief grace window to land
+  // before the final merge, without letting it extend discovery's own timeout budget.
+  await Promise.race([macPromise, new Promise((resolve) => setTimeout(resolve, 50))]);
+  return mergeSignals(signals, macByIp);
 }
 
 // ── Commissioning ────────────────────────────────────────────────────────────────
