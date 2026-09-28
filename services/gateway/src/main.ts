@@ -1,3 +1,4 @@
+import net from "node:net";
 import { loadConfig } from "./config.js";
 import { createHubContext } from "./bootstrap.js";
 import { buildServer } from "./server.js";
@@ -54,10 +55,12 @@ async function main(): Promise<void> {
   // Set once the direct-channel listener/responder actually start (below) — declared
   // here so `shutdown` can stop them even though it closes over this before they exist.
   let mdnsResponder: { stop(): void } | null = null;
+  let directProxyServer: net.Server | null = null;
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "shutting down");
     mdnsResponder?.stop();
+    directProxyServer?.close();
     await app.close();
     await ctx.shutdown();
     await stopTracing();
@@ -98,13 +101,37 @@ async function main(): Promise<void> {
     "Supreme API Gateway listening",
   );
 
-  // § apps/new direct client control channel (§7272 convention) — the SAME Fastify
-  // instance/router, just bound to a second fixed port so a Mobile/Touch Panel
-  // client that found this hub via mDNS can connect directly, without Caddy/443 in
-  // the loop. `directPort: 0` (e.g. some test harnesses) disables this second
-  // listener entirely.
+  // § apps/new direct client control channel (§7272 convention) — the SAME gateway
+  // API, reachable on a second fixed port so a Mobile/Touch Panel client that found
+  // this hub via mDNS can connect directly, without Caddy/443 in the loop.
+  // `directPort: 0` (e.g. some test harnesses) disables this second listener
+  // entirely.
+  //
+  // § production defect fix — this does NOT call `app.listen()` a second time.
+  // Fastify v5 refuses that outright (confirmed live: every restart crash-looped
+  // with `FastifyError: Fastify is already listening` / `FST_ERR_REOPENED_SERVER`
+  // until systemd's restart-rate limit tripped and the deploy auto-rolled back).
+  // A raw TCP byte-for-byte proxy to the already-listening main port sidesteps
+  // Fastify's one-listen-per-instance rule entirely — it doesn't touch Fastify at
+  // all, so it transparently carries both plain HTTP and WebSocket upgrades (the
+  // "same REST/WSS API" promise) without needing any HTTP-semantic logic of its
+  // own, unlike the existing `proxyLocal()` above (which only proxies REST, for
+  // the tunnel broker's different, request/response-shaped need).
   if (config.directPort > 0) {
-    await app.listen({ host: config.host, port: config.directPort });
+    const directProxy = net.createServer((client) => {
+      const upstream = net.connect(config.port, "127.0.0.1");
+      client.pipe(upstream);
+      upstream.pipe(client);
+      const closeBoth = () => {
+        client.destroy();
+        upstream.destroy();
+      };
+      client.on("error", closeBoth);
+      upstream.on("error", closeBoth);
+    });
+    directProxy.on("error", (err) => app.log.error({ err: err.message, port: config.directPort }, "direct client channel proxy failed"));
+    await new Promise<void>((resolve) => directProxy.listen(config.directPort, config.host, resolve));
+    directProxyServer = directProxy;
     app.log.info({ port: config.directPort }, "Supreme API Gateway also listening (direct client channel)");
 
     // Hub-side mDNS responder (§Phase9-2) — the missing half of apps/new's already-real
