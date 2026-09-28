@@ -14,6 +14,7 @@ import {
   withCredentials,
   stripCredentials,
   validateRtspUrl,
+  validateOnvifEndpointUrl,
   CommissioningError,
 } from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
@@ -66,6 +67,13 @@ export function registerRtspCameraRoutes(app: FastifyInstance, ctx: AppContext):
       const body = RtspTestConnectionRequest.parse(req.body);
 
       if (body.mode === "onvif") {
+        const endpointValidation = await validateOnvifEndpointUrl(body.onvifEndpoint);
+        if (!endpointValidation.ok) {
+          reply.send({
+            result: { ok: false, checklist: [{ label: "Valid ONVIF endpoint", pass: false }], reason: endpointValidation.reason, diagnostics: [], codec: null },
+          } satisfies RtspTestConnectionResponse);
+          return;
+        }
         let info;
         try {
           info = await getOnvifStreamInfo({ deviceEndpoint: body.onvifEndpoint, credentials: { username: body.username, password: body.password } });
@@ -88,7 +96,7 @@ export function registerRtspCameraRoutes(app: FastifyInstance, ctx: AppContext):
         return;
       }
 
-      const validation = validateRtspUrl(body.rtspUrl);
+      const validation = await validateRtspUrl(body.rtspUrl);
       if (!validation.ok) {
         reply.send({
           result: { ok: false, checklist: [{ label: "Valid RTSP URL", pass: false }], reason: validation.reason, diagnostics: [], codec: null },
@@ -124,6 +132,10 @@ export function registerRtspCameraRoutes(app: FastifyInstance, ctx: AppContext):
         if (!body.onvifEndpoint || !body.username || !body.password) {
           throw new SupremeError("validation_failed", "ONVIF endpoint and credentials are required.");
         }
+        const endpointValidation = await validateOnvifEndpointUrl(body.onvifEndpoint);
+        if (!endpointValidation.ok) {
+          throw new SupremeError("validation_failed", endpointValidation.reason ?? "Invalid ONVIF endpoint.");
+        }
         const info = await getOnvifStreamInfo({ deviceEndpoint: body.onvifEndpoint, credentials: { username: body.username, password: body.password } });
         if (!info.mainStreamUri) throw new SupremeError("validation_failed", "This camera didn't return a stream address.");
         mainStreamUrl = info.mainStreamUri;
@@ -132,7 +144,7 @@ export function registerRtspCameraRoutes(app: FastifyInstance, ctx: AppContext):
         model = info.model;
       } else {
         if (!body.rtspUrl) throw new SupremeError("validation_failed", "An RTSP URL is required.");
-        const validation = validateRtspUrl(body.rtspUrl);
+        const validation = await validateRtspUrl(body.rtspUrl);
         if (!validation.ok) throw new SupremeError("validation_failed", validation.reason ?? "Invalid RTSP URL.");
         mainStreamUrl = body.rtspUrl;
       }

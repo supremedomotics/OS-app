@@ -147,6 +147,10 @@ export interface ProbeOnvifOptions {
   timeoutMs?: number;
   /** Injectable socket factory (tests only) — default opens a real multicast UDP socket. */
   socketFactory?: (localAddress: string) => Promise<OnvifDiscoverySocket>;
+  /** `fromAddress` is the UDP responder's real source address (`rinfo.address`) — the fallback
+   * used when a ProbeMatch's XAddr can't be parsed (§ FINDING 6). It is NOT the local interface
+   * address the probe was sent from; using the local interface here would misidentify a camera
+   * with a malformed XAddr as the hub itself. */
   onMatch?: (match: OnvifProbeMatch, fromAddress: string) => void;
   /** AbortSignal — cancels the probe early, returning whatever was found so far (§ STEP 13). */
   signal?: AbortSignal;
@@ -169,11 +173,14 @@ export async function probeOnvif(opts: ProbeOnvifOptions): Promise<{ matches: On
       try {
         const sock = await factory(iface);
         sockets.push(sock);
-        sock.onMessage((msg) => {
+        sock.onMessage((msg, rinfo) => {
           const match = parseProbeMatch(msg.toString("utf8"));
           if (match) {
             matches.push(match);
-            opts.onMatch?.(match, iface);
+            // § FINDING 6 — the responder's real UDP source address, not the local interface we
+            // sent the probe from; resolveOnvifAddress() falls back to this only when the
+            // ProbeMatch's own XAddr is unparseable.
+            opts.onMatch?.(match, rinfo.address);
           }
         });
         sock.send(Buffer.from(buildProbeMessage(), "utf8"));

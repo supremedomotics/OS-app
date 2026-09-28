@@ -123,6 +123,31 @@ describe("probeOnvif", () => {
     expect(Date.now() - started).toBeLessThan(500);
   });
 
+  it("§ FINDING 6 — passes the UDP responder's real source address (rinfo.address) to onMatch, not the local interface address", async () => {
+    const sockets = new Map<string, ReturnType<typeof fakeSocket>>();
+    const factory = vi.fn(async (iface: string) => {
+      const s = fakeSocket();
+      sockets.set(iface, s);
+      return s.socket;
+    });
+    const seen: { fromAddress: string }[] = [];
+    const promise = probeOnvif({
+      interfaces: ["192.168.1.10"],
+      timeoutMs: 20,
+      socketFactory: factory,
+      onMatch: (_match, fromAddress) => seen.push({ fromAddress }),
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    // The probe was sent FROM the local interface 192.168.1.10, but the camera that actually
+    // answered has a different address (e.g. it's on the same L2 segment but not the hub itself).
+    sockets.get("192.168.1.10")!.emit(Buffer.from(SAMPLE_PROBE_MATCH), "192.168.1.77");
+
+    await promise;
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.fromAddress).toBe("192.168.1.77");
+    expect(seen[0]!.fromAddress).not.toBe("192.168.1.10");
+  });
+
   it("does nothing (no throw) with zero interfaces", async () => {
     const { matches, errors } = await probeOnvif({ interfaces: [], timeoutMs: 5 });
     expect(matches).toEqual([]);

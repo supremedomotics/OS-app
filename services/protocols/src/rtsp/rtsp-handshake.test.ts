@@ -26,6 +26,34 @@ const SDP_BODY = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=stream\r\nm=video 0 RTP/AVP
 const DESCRIBE_OK = `RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n${SDP_BODY}`;
 const DESCRIBE_401 = `RTSP/1.0 401 Unauthorized\r\nCSeq: 2\r\nWWW-Authenticate: Digest realm="camera", nonce="abc123"\r\n\r\n`;
 
+/** A scripted fake socket whose "responses" are pre-split into literal chunks (rather than one
+ * string per write) — used to simulate a camera whose headers and SDP body arrive as separate TCP
+ * packets, which write() boundaries do not represent (§ FINDING 2). `chunkedResponses[i]` is the
+ * array of chunks delivered, in order with a microtask between each, for the i-th write. */
+function chunkedSocketFactory(chunkedResponses: string[][]): RtspSocketFactory {
+  return vi.fn(async () => {
+    let i = 0;
+    let dataCb: ((chunk: string) => void) | null = null;
+    const sock: RtspSocketLike = {
+      write: () => {
+        const chunks = chunkedResponses[i++];
+        if (!chunks) return;
+        (async () => {
+          for (const c of chunks) {
+            await Promise.resolve();
+            dataCb?.(c);
+          }
+        })();
+      },
+      onData: (cb) => {
+        dataCb = cb;
+      },
+      close: () => {},
+    };
+    return sock;
+  });
+}
+
 describe("validateRtspStream — § STEP 8", () => {
   it("passes for a reachable, unauthenticated camera with a real video SDP line", async () => {
     const socketFactory = scriptedSocketFactory([OPTIONS_OK, DESCRIBE_OK]);
@@ -83,6 +111,25 @@ describe("validateRtspStream — § STEP 8", () => {
     const result = await validateRtspStream({ url: "http://192.168.1.50/stream", socketFactory: socketFactory as any });
     expect(result.ok).toBe(false);
     expect(socketFactory).not.toHaveBeenCalled();
+  });
+
+  it("§ FINDING 2 — parses a DESCRIBE response whose headers and SDP body arrive in separate TCP chunks", async () => {
+    const headerPart = `RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\nContent-Length: ${Buffer.byteLength(SDP_BODY, "utf8")}\r\n\r\n`;
+    const bodyPart = SDP_BODY;
+    const socketFactory = chunkedSocketFactory([[OPTIONS_OK], [headerPart, bodyPart]]);
+    const result = await validateRtspStream({ url: "rtsp://192.168.1.50:554/stream1", socketFactory });
+    expect(result.ok).toBe(true);
+    expect(result.codec).toBe("H264");
+  });
+
+  it("§ FINDING 2 — waits for the full Content-Length body even when it arrives in three fragments", async () => {
+    const headerPart = `RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\nContent-Length: ${Buffer.byteLength(SDP_BODY, "utf8")}\r\n\r\n`;
+    const bodyFragment1 = SDP_BODY.slice(0, 10);
+    const bodyFragment2 = SDP_BODY.slice(10);
+    const socketFactory = chunkedSocketFactory([[OPTIONS_OK], [headerPart, bodyFragment1, bodyFragment2]]);
+    const result = await validateRtspStream({ url: "rtsp://192.168.1.50:554/stream1", socketFactory });
+    expect(result.ok).toBe(true);
+    expect(result.codec).toBe("H264");
   });
 
   it("never throws when the camera stops responding mid-handshake", async () => {

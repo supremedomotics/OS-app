@@ -75,8 +75,12 @@ function basicAuthHeader(username: string, password: string): string {
 }
 
 /** One request/response over an already-open RTSP socket, collecting response text until the
- * headers section (`\r\n\r\n`) is seen or `timeoutMs` elapses. Bounded and cancellable — a
- * non-responding camera never hangs commissioning (§ STEP 8/12). */
+ * headers section (`\r\n\r\n`) is seen AND, when a `Content-Length` header is present (as it
+ * always is on a real DESCRIBE response's SDP body), until that many body bytes have actually
+ * arrived — or `timeoutMs` elapses. Bounded and cancellable — a non-responding camera never hangs
+ * commissioning (§ STEP 8/12). TCP doesn't preserve write boundaries, so a camera splitting
+ * headers and the SDP body across two packets must not be parsed as an empty/incomplete body
+ * (§ FINDING 2) — waiting on Content-Length, not just the delimiter, fixes that. */
 function requestResponse(sock: RtspSocketLike, request: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -89,11 +93,16 @@ function requestResponse(sock: RtspSocketLike, request: string, timeoutMs: numbe
     sock.onData((chunk) => {
       if (settled) return;
       buf += chunk;
-      if (buf.includes("\r\n\r\n")) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(buf);
-      }
+      const headerEnd = buf.indexOf("\r\n\r\n");
+      if (headerEnd === -1) return;
+      const headers = buf.slice(0, headerEnd);
+      const lengthMatch = headers.match(/^Content-Length:\s*(\d+)/im);
+      const contentLength = lengthMatch ? Number(lengthMatch[1]) : 0;
+      const bodyBytesReceived = Buffer.byteLength(buf.slice(headerEnd + 4), "utf8");
+      if (bodyBytesReceived < contentLength) return; // headers arrived, body still incomplete
+      settled = true;
+      clearTimeout(timer);
+      resolve(buf);
     });
     sock.write(request);
   });
@@ -116,7 +125,7 @@ export interface ValidateRtspOptions {
 export async function validateRtspStream(opts: ValidateRtspOptions): Promise<RtspStreamCheck> {
   const checklist: { label: string; pass: boolean }[] = [];
   const diagnostics: string[] = [];
-  const validation = validateRtspUrl(opts.url);
+  const validation = await validateRtspUrl(opts.url);
   checklist.push({ label: "Valid RTSP URL", pass: validation.ok });
   if (!validation.ok || !validation.host) {
     return { ok: false, checklist, reason: validation.reason ?? "The RTSP URL is not valid.", diagnostics, codec: null };
