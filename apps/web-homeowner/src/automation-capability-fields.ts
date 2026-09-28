@@ -64,6 +64,7 @@ export const CAPABILITY_LABELS: Record<CapabilityKind, string> = {
   vacuum: "Vacuum",
   sensor: "Sensor",
   remote: "Remote",
+  display: "Display",
 };
 
 /** Capabilities that can never be the target of a `device_command` action (read-only). */
@@ -119,6 +120,12 @@ export const STATE_FIELDS: Record<CapabilityKind, FieldDef[]> = {
   ],
   remote: [
     { key: "lastButton", label: "Last button", type: "enum", enumValues: ["up", "down", "left", "right", "select", "back", "menu", "home"] },
+  ],
+  display: [
+    { key: "power", label: "Power", type: "enum", enumValues: ["off", "warming", "on", "cooling", "unknown"] },
+    { key: "videoMuted", label: "Video muted", type: "boolean", widget: "toggle", advanced: true },
+    { key: "audioMuted", label: "Audio muted", type: "boolean", widget: "toggle", advanced: true },
+    { key: "frozen", label: "Frozen", type: "boolean", widget: "toggle", advanced: true },
   ],
 };
 
@@ -241,6 +248,18 @@ export const COMMAND_DEFINITIONS: Record<CapabilityKind, CommandDefinition[]> = 
     label: `Press ${action}`,
     params: [],
   })),
+  display: [
+    { capability: "display", action: "on", label: "Turn on", params: [] },
+    { capability: "display", action: "off", label: "Turn off", params: [] },
+    { capability: "display", action: "muteVideo", label: "Mute video", params: [] },
+    { capability: "display", action: "unmuteVideo", label: "Unmute video", params: [] },
+    { capability: "display", action: "muteAudio", label: "Mute audio", params: [] },
+    { capability: "display", action: "unmuteAudio", label: "Unmute audio", params: [] },
+    { capability: "display", action: "muteAv", label: "Mute A/V", params: [] },
+    { capability: "display", action: "unmuteAv", label: "Unmute A/V", params: [] },
+    { capability: "display", action: "freeze", label: "Freeze", params: [] },
+    { capability: "display", action: "unfreeze", label: "Unfreeze", params: [] },
+  ],
 };
 
 export function commandableCapabilities(kinds: readonly CapabilityKind[]): CapabilityKind[] {
