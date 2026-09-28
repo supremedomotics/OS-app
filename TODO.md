@@ -1062,6 +1062,47 @@
 
 ## Medium
 
+### RTSP Camera driver — follow-up items (§ RTSP Camera Extension session)
+- **Extension Center card duplication:** `RtspCameraDiscoveryPanel` renders on every driver-
+  registry row for the `supreme-rtsp-camera` key, including each per-camera instance card (each
+  commissioned camera is its own `InstalledDriver` instance, so it gets its own Extension Center
+  card, mirroring Casambi's multi-network instances) — the same Discover panel visually repeats
+  per camera card. Not a correctness issue; fix is to gate the panel to only the lowest
+  `instanceIndex`/base row once a clean "is this the base row" signal exists in the registry.
+- **RTSP fallback probe tuning:** the RTSP-port fallback scan sweeps every local interface's full
+  /24 (up to 254 hosts × the configured port list). Bounded/cancellable as required, but real
+  field deployments should validate the default 400ms-per-probe timeout / 32-concurrency values
+  against real large flat subnets, and the web Discover panel should consume the API's existing
+  incremental-result streaming (`onResult` in `discoverCameras()`) instead of awaiting the final
+  list only.
+- **Mobile Extension Center:** no `apps/mobile`/Flutter Discover Devices screen exists for this
+  driver (out of scope per this session's hard constraints) — the REST surface
+  (`/v1/drivers/rtsp/discover|test-connection|commission`) is complete and ready for a Flutter
+  screen to consume.
+- **IPv6 cameras:** explicitly rejected by `rtsp-url-safety.ts` (honest gap, not a silent
+  security bypass) — no IPv6 support exists anywhere in the discovery/commissioning path yet.
+- **Real-hardware verification:** every test uses an injectable socket/fetch or a real minimal
+  RTSP-over-TCP fixture server; nothing has been verified against a real ONVIF/RTSP camera yet
+  (none was available in this environment). Recommended before first field deployment.
+- **Substream not surfaced in UI:** the ONVIF substream URI IS retrieved and persisted in the
+  owning driver instance's config when ONVIF reports a second profile, but no UI/CameraService
+  surface exposes it yet (main-stream-only today).
+
+### RTSP Camera driver — hardening pass follow-ups (§ hardening session)
+- **DONE this session:** MAC-address identity tier — `rtsp-mac-lookup.ts` reads `/proc/net/arp`
+  best-effort, `rtsp-identity.ts`/`rtsp-camera-service.ts` wired it in as the tier between ONVIF
+  UUID and manufacturer+model+IP. See SESSION_HANDOFF.md for the full feasibility writeup.
+- **Still open — probe-timing tuning:** the ~9.6s full-/24 default was re-confirmed bounded/
+  cancellable but not re-tuned this session (no real LAN reachable from this sandbox to get
+  better before/after numbers). Validate 400ms-per-probe-timeout / 32-concurrency against a real
+  large flat residential subnet before treating the defaults as final.
+- **Still open — real hardware validation:** no ONVIF/RTSP camera has been reachable from any
+  sandbox session so far. This remains the single largest gap before field deployment — do not
+  claim production readiness until at least one real camera (ideally 2-3 different manufacturers)
+  has been discovered, commissioned, and streamed successfully.
+- **Still open, unchanged from prior session:** Extension Center card duplication, mobile
+  Extension Center screen, IPv6 support, substream-not-surfaced-in-UI (all as listed above).
+
 ### AVR renamed-input capability-config race condition
 - **Description:** `AvrProtocolDriver.refreshInputEnrichment()` is called fire-and-forget (`void
   this.refreshInputEnrichment(...)`) at both `installer-context.ts:412` and

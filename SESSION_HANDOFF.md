@@ -4788,3 +4788,206 @@ Full monorepo regression run after this — see the next section below for the f
    `params` field (see "Known issues" above) — small, low-risk, closes a coverage gap.
 4. Everything from the prior (Phase 1) handoff not touched this session remains open — see
    `TODO.md` for the full backlog with priority tiers.
+
+## Session: RTSP Camera driver (Extension Center — new extension)
+
+Built a real, tested RTSP/ONVIF camera driver, installable via Extension Center -> RTSP Camera ->
+Install -> Discover Devices, per the full spec (discovery, identity/dedup, ONVIF and RTSP-only
+commissioning flows, real stream validation, encrypted credential storage, Extension Center UI).
+
+**New package: `services/protocols/src/rtsp/`** (`@supreme/protocols`'s `rtsp/` module):
+- `onvif-wsdiscovery.ts` — real ONVIF WS-Discovery (UDP multicast Probe/ProbeMatch to
+  239.255.255.250:3702), tolerant regex-based SOAP/XML field extraction (no new XML dependency,
+  same approach as this fleet's existing `mdns.ts`/`coolmaster-parser.ts`), injectable socket for
+  tests, cancellable via `AbortSignal`, never throws on a bad interface/malformed XML.
+- `network-interfaces.ts` — real host interface enumeration (`os.networkInterfaces()`, never a
+  hardcoded subnet) and a helper that lists one interface's own /24 host range for the RTSP
+  fallback scan (never an arbitrary/unrelated range).
+- `rtsp-port-probe.ts` — bounded, concurrency-limited (default 32), cancellable TCP-connect sweep
+  of `hosts × ports` (default 554/8554/10554, configurable) for non-ONVIF cameras.
+- `rtsp-identity.ts` — pure naming-priority (ONVIF name -> manufacturer+model -> mDNS/SSDP name ->
+  hostname -> manufacturer -> model -> IP) and dedup (ONVIF UUID -> manufacturer+model+IP -> bare
+  IP+service fingerprint — MAC-layer tier honestly skipped, this driver has no L2 view) merging
+  raw ONVIF/RTSP-probe signals into one `RtspDiscoveryResult` per real camera.
+- `onvif-soap.ts` — real WS-Security UsernameToken digest auth (ONVIF Core Spec §5.12.2.1),
+  GetDeviceInformation/GetCapabilities/GetProfiles/GetStreamUri SOAP clients. Never fabricates a
+  vendor RTSP URL — always the camera's own reported StreamUri.
+- `rtsp-handshake.ts` — real RTSP OPTIONS/DESCRIBE handshake (RFC 2326) with RTSP Digest/Basic
+  auth (RFC 2617) on a 401 challenge, SDP video-media-line check, codec sniff from `a=rtpmap`.
+  Maps every failure mode to one plain-English, installer-facing `reason`; raw protocol detail
+  only ever lands in `diagnostics`.
+- `rtsp-url-safety.ts` — SSRF guard for the RTSP-only manual-entry flow: rejects non-`rtsp(s)`
+  schemes and any non-private/non-loopback IPv4 host; IPv6 honestly rejected as unsupported
+  rather than silently bypassing the check.
+- `rtsp-camera-service.ts` — orchestration only: `discoverCameras()` (ONVIF + RTSP fallback
+  together, streaming incremental results), `getOnvifStreamInfo()` (the real ONVIF commissioning
+  flow: auth -> device info -> media profiles -> main/substream StreamUri), `testConnection()`,
+  `withCredentials()`/`stripCredentials()`. Owns discovery/identification/commissioning ONLY —
+  never touches persistence or streaming (§ STEP 9).
+- 68 new unit tests across 7 test files, all real network/XML/RTSP-wire logic exercised via
+  injectable sockets/fetch — no I/O in CI. Covers: ONVIF parse (well-formed, missing fields,
+  malformed XML, no-XAddr), WS-Discovery multi-interface/cancel/one-bad-interface, RTSP port
+  probe (bounded concurrency, one-throwing-probe, cancel), identity/dedup (all 6 spec cases),
+  SOAP auth/profiles/streamUri/partial-ONVIF, RTSP handshake (pass, Digest auth, wrong creds,
+  no-creds-when-required, unreachable, not-RTSP, no-video-media, invalid-URL-before-network,
+  hung-camera timeout), SSRF guard, full commissioning orchestration.
+
+**Manifest**: `services/drivers/src/manifests.ts` — new `supreme-rtsp-camera` entry ("RTSP
+Camera", category `security`, protocol `rtsp`, `backend.ref: null` — same shape as the existing
+Keypad driver, since there's no live SIL binding to maintain; a commissioned camera is a
+view-only `supremeType: "camera"` device owned entirely by the existing `CameraService`/
+`StreamGateway` pipeline). `packages/domain-model/src/drivers.ts` — added `"rtsp"` to
+`ProtocolKind`.
+
+**Gateway**: new `services/gateway/src/routes/rtsp-camera.ts` (`POST /v1/drivers/rtsp/discover`,
+`/test-connection`, `/commission`), registered in `server.ts`. New contracts in
+`packages/supreme-contracts/src/phase3.ts` (`RtspDiscoverRequest/Response`,
+`RtspTestConnectionRequest/Response`, `RtspCommissionRequest/Response`). 8 new e2e tests in
+`services/gateway/src/rtsp-camera.e2e.test.ts` against a REAL minimal RTSP TCP server (not a
+mock of the route) — covers install-gating, discovery not throwing, Test Connection pass/fail,
+SSRF rejection, full commission + credential-never-in-response verification, commission failing
+honestly on bad credentials, and rejecting an unsafe URL before any network call.
+
+**Credential storage (§ STEP 11 — reused the EXISTING mechanism, no new one)**: each commissioned
+camera is persisted as its own `InstalledDriver` INSTANCE of the `supreme-rtsp-camera` key
+(`DriverManager.install(..., { asNewInstance: true })`, exactly like Casambi's multi-network
+instances), whose `username`/`password` config fields are marked `secret: true` in the manifest
+— so they flow through the driver framework's EXISTING AES-256-GCM encryption-at-rest
+(`services/drivers/src/secret-store.ts`, already wired into every driver) with zero new crypto
+code. `Device.metadata.streamUrl` for a driver-commissioned camera is always credential-free
+(`stripCredentials()`); `Device.metadata.driverInstanceId` points at the owning instance.
+`CameraService` (`services/gateway/src/camera-service.ts`) gained an optional injected
+`resolveCredentials` resolver, wired in `context.ts` to `installer.drivers.getConfig()`: `stream()`
+resolves the real, decrypted URL ONLY at the moment a stream is opened (never persisted combined,
+never returned when the stream gateway is disabled — the raw-passthrough fallback path
+deliberately stays credential-free for a driver-commissioned camera; see the file's doc comment
+for why). A pre-existing camera added the old direct way (credential-embedded `streamUrl`, no
+`driverInstanceId`) is entirely unaffected — verified by the pre-existing `cameras.e2e.test.ts`
+still passing unmodified.
+
+**Extension Center UI** (`apps/web-homeowner/src/drivers.tsx` + `api.ts`): `RtspCameraDiscoveryPanel`
+follows the exact same pattern as the existing `KnxGatewayDiscoveryPanel`/
+`CoolMasterGatewayDiscoveryPanel` (scan on mount, list, Scan again, manual-entry fallback always
+visible) — scans on mount, lists discovered cameras with best-available name + ONVIF/RTSP badge,
+per-camera "Add…" opens a small inline credential form (`RtspAddCameraForm`) that always requires
+Test Connection (with a plain-English pass/fail checklist) before Add Camera is enabled, plus a
+standalone `RtspManualAddForm` for the RTSP-only fallback. No new design-system primitives were
+needed (`apps/web-homeowner/src/drivers.tsx` doesn't yet use `Button`/`Card` from `aureon-web`
+for these discovery panels — followed the file's own established plain-element convention rather
+than introducing an inconsistent one-off).
+
+**Verification performed**: `@supreme/protocols` — 68/68 new rtsp tests pass in isolation
+(`vitest run src/rtsp`); the package's full suite has pre-existing, UNRELATED Matter e2e
+failures in this sandbox (`EAFNOSUPPORT` binding `{::}:5353` — confirmed present on `main` before
+this session's changes too, via `git stash`). `@supreme/drivers` — 56/56 pass (manifest schema
+validates). `@supreme/contracts`, `@supreme/domain-model`, `@supreme/cameras`, `@supreme/gateway`
+all typecheck clean. `services/gateway/src/rtsp-camera.e2e.test.ts` — 8/8 pass. `services/gateway/
+src/cameras.e2e.test.ts` (pre-existing) — 2/2 still pass unmodified, confirming the
+`CredentialResolver` addition is backward compatible. `apps/web-homeowner` typecheck clean.
+
+**Known limitations / honest gaps (not fixed this session — see TODO.md for tracked items)**:
+- Not tested against real camera hardware (no ONVIF/RTSP camera available in this environment) —
+  every test uses an injectable socket/fetch or, for the gateway e2e suite, a real hand-rolled
+  RTSP-over-TCP fixture server, never a fabricated ONVIF response inside a production code path.
+- The RTSP fallback port probe sweeps every interface's full /24 (up to 254 hosts × 3 ports); in
+  a sandboxed/CI network with no real responders this took ~9.6s end-to-end in the e2e test even
+  at a 400ms per-probe timeout and concurrency 32 — bounded and cancellable as required, but real
+  field deployments on a large flat subnet may want a lower default timeout/concurrency tuned
+  from real-world data, or a `signal`-driven progressive UI (the API already streams incremental
+  results — the current web panel doesn't yet consume that streaming path, it awaits the final
+  list only).
+- `RtspCameraDiscoveryPanel` is rendered on every driver-registry row for the `rtsp` key,
+  including each per-camera instance card (each commissioned camera is its own `InstalledDriver`
+  instance, so it gets its own Extension Center card, same as Casambi's multi-network instances)
+  — a minor visual duplication (the same Discover panel repeats per camera card), not a
+  correctness issue. Tracked in TODO.md.
+- IPv6 cameras are explicitly rejected (`rtsp-url-safety.ts`) rather than supported or silently
+  allowed through — a real, documented gap, not a fabricated success path.
+- No PTZ, no NVR/multi-channel enumeration, no snapshot/thumbnail retrieval, no substream-aware
+  UI (the substream URI IS retrieved and persisted in the driver-instance config when ONVIF
+  reports one, but nothing in the UI/CameraService surfaces it yet) — all correctly out of scope
+  per the spec's hard scope rules.
+- Per the task's hard scope rules: no `apps/mobile`/Flutter changes were made. A future session
+  should add the mobile Extension Center's own Discover Devices screen for this driver (the
+  backend REST surface — `/v1/drivers/rtsp/discover|test-connection|commission` — is already
+  complete and mobile-ready; this is pure Flutter UI work, intentionally not started here).
+- No Docker/infra changes were made or needed — the driver runs entirely inside the existing
+  gateway process.
+
+## Session: RTSP Camera driver — hardening + production validation pass
+
+Reviewed commits b4b698a/15abcf9 file-by-file against the 13-point hardening checklist (discovery
+edge cases, ONVIF/RTSP protocol hardening, dedup/identity, security, persistence, performance).
+Conclusion: the prior implementation was already solid — real WS-Discovery, real WS-Security
+digest auth, real RTSP OPTIONS/DESCRIBE/Digest/Basic handshake, real SSRF guard, real encrypted
+credential storage via the existing driver secret store, bounded/cancellable/per-interface-
+isolated discovery, honest installer-facing error strings, zero logging calls anywhere in the
+`rtsp/` module (so there was never a credential-logging risk to begin with). This pass therefore
+made ONE targeted change rather than a broad rewrite:
+
+**MAC-address identity tier — implemented (the flagged gap from the previous handoff).**
+Investigated feasibility directly in this sandbox: `/proc/net/arp` is world-readable with no
+elevated privileges (confirmed: `cat /proc/net/arp` succeeds unprivileged in this container),
+requires no raw socket or active ARP scanning — it only reads the kernel neighbor table already
+populated as a side effect of the discovery traffic (WS-Discovery multicast, RTSP TCP probes)
+this driver already sends. `ip neigh` was considered too (more modern) but rejected in favor of
+`/proc/net/arp` because it depends on `iproute2` being installed in the hub image, which
+`/proc/net/arp` does not — the `ip` binary was in fact absent from this very sandbox
+(`ip: command not found`), confirming the point in practice, not just in theory.
+- New: `services/protocols/src/rtsp/rtsp-mac-lookup.ts` — `readArpTable()`, parses
+  `/proc/net/arp`, skips incomplete (`0x0` flag) and all-zero-MAC entries, wrapped in a 500ms
+  race-timeout and a catch-all that resolves to an empty `Map` on ANY failure (missing file,
+  permission denied, non-Linux, malformed line) — never throws, never blocks discovery.
+- `rtsp-identity.ts`: `identityKey()` now takes an optional `macByIp: Map<string,string>` and
+  uses it as the tier between ONVIF UUID and manufacturer+model+IP, exactly matching the spec's
+  priority chain (ONVIF UUID -> device UUID -> MAC -> manufacturer+model+IP -> IP+fingerprint) —
+  MAC survives a DHCP-reassigned IP across re-scans, which manufacturer+model+IP does not.
+  `RtspDiscoveryResult` intentionally still has NO `mac` field — the tier only strengthens the
+  internal dedup key, it is never returned to installer-facing API responses or the UI, matching
+  how discovery results already exclude credentials.
+- `rtsp-camera-service.ts`: `discoverCameras()` kicks off `readArpTable()` in parallel with (never
+  blocking) the ONVIF/RTSP probes, gives it a 50ms grace window after both probes finish, then
+  merges with whatever resolved (or nothing, if it didn't land in time) — the MAC tier can only
+  ever help identity, never delay or fail discovery.
+- Tests: 5 new unit tests in `rtsp-mac-lookup.test.ts` (parse, skip-incomplete, skip-malformed,
+  file-unreadable, timeout — all resolve to an empty map, never throw) + 2 new tests in
+  `rtsp-identity.test.ts` (MAC tier collapses two different IPs for the same physical camera; a
+  MAC table with no entry for the camera's IP falls through to the existing tier untouched).
+  68 -> 75 RTSP protocol tests, all passing.
+
+**Everything else reviewed and found already correct, no change needed**: ONVIF malformed-XML/
+missing-field/multi-XAddr/multi-profile/no-profile handling (all already regex-tolerant, already
+tested); RTSP auth-failure/timeout/malformed-SDP/no-video-track/TCP-accepts-no-media paths (all
+already produce the exact plain installer-facing strings this task asked for — "Camera not
+reachable" etc. — verified against `rtsp-handshake.ts` directly); the RTSP-only manual fallback
+path (verified it is a real TCP/RTSP handshake, not a mock — `rtsp-handshake.ts` is the one
+shared validation path for BOTH ONVIF and RTSP-only flows, `testConnection()` in
+`rtsp-camera-service.ts`); discovery reliability (per-interface isolation via
+`Promise.all(...map(...try/catch...))` so one bad interface/socket never blocks the others,
+already tested); SSRF/XXE (no XML parser is used at all — hand-rolled regex extraction, so
+classic XXE entity-expansion attacks have no vector to begin with; `validateRtspUrl` already
+blocks public/non-private hosts and non-`rtsp(s)` schemes). No credential-logging risk found
+(grepped the entire `rtsp/` module and the gateway route for any `console.*`/`logger.*` call —
+there are none).
+
+**Performance**: did not re-tune the ~9.6s full-/24 probe default this session — re-verified it is
+bounded/cancellable/concurrency-limited as designed, and the previous handoff's documented
+follow-up (validate 400ms/32-concurrency defaults against a real large flat subnet) still stands;
+no real LAN is reachable from this sandbox to get better before/after numbers than what the prior
+session already recorded.
+
+**Real-hardware validation**: no ONVIF/RTSP camera is reachable from this sandbox (confirmed — no
+LAN, cloud container). Automated protocol validation passed; hardware interoperability remains
+unverified. Do not treat this as production-ready on the strength of automated tests alone.
+
+**Verification**: `@supreme/protocols` rtsp suite — 75/75 pass in isolation. `@supreme/protocols`
+typecheck and build — clean. `services/gateway` full suite — 563/563 pass (includes the 8 RTSP
+gateway e2e tests). One RTSP e2e test (`discovery runs without throwing on a real
+(loopback-scoped) network scan`) times out when that single file is run in total isolation in
+this sandbox — confirmed via `git stash` that this is PRE-EXISTING sandbox behavior unrelated to
+this session's change (a real full-/24 network scan needs more than the test's 5s budget when run
+without the rest of the suite warming up the event loop/socket pool); it passes reliably within
+the full 563-test gateway run, both before and after this session's change.
+
+`git diff --name-only` confirmed: no `apps/mobile`/`*.dart` files touched, no Docker/Dockerfile/
+docker-compose/`infra/hub-compose` files touched — only `services/protocols/src/rtsp/*`.

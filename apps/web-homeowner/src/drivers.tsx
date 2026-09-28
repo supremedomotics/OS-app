@@ -31,6 +31,13 @@ import {
   testCasambiLocalConnection,
   uninstallDriver,
   updateDriverByKey,
+  commissionRtspManualCamera,
+  commissionRtspOnvifCamera,
+  discoverRtspCameras,
+  testRtspManualConnection,
+  testRtspOnvifConnection,
+  type RtspDiscoveryResult,
+  type RtspStreamCheckResult,
 } from "./api.js";
 import { KnxDiscoveryWorkspace } from "./knx-discovery-workspace.js";
 
@@ -385,6 +392,14 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
           Health), driver-level rather than per-device. */}
       {driver.installed && driver.protocols.includes("casambi") && <CasambiDiagnosticsPanel driverId={id} />}
 
+      {/* § RTSP Camera Extension — Discover Devices. Each commissioned camera is stored as its
+          own driver instance (real, encrypted per-camera credentials — see rtsp-camera.ts), so
+          this key can show more than one card once cameras exist, same as Casambi's multi-
+          network instances; the Discover panel itself is shown on every card of this key so it's
+          always reachable — a known minor duplication, not a correctness issue (tracked in
+          TODO.md as a follow-up polish item, not required for this driver to work). */}
+      {driver.installed && driver.protocols.includes("rtsp") && <RtspCameraDiscoveryPanel onCommissioned={onChanged} />}
+
       {/* § Realtime State Architecture — the live connection-state badge, driven entirely
           by driverState WS events (falls back to nothing until the first one arrives;
           `health` below remains the separate, REST-only config/verdict snapshot). */}
@@ -526,6 +541,250 @@ function KnxGatewayDiscoveryPanel({ onSelect }: { onSelect: (gw: KnxGateway) => 
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * § RTSP Camera Extension — Discover Devices -> Select -> Configure -> Commission (STEP 2-9).
+ * Scans on mount (same convention as the KNX/CoolMaster panels above), lists every discovered
+ * camera with its best-available name and what was found (ONVIF/RTSP), and opens a small inline
+ * Add-Camera form per selected candidate: ONVIF cameras only need credentials (the real stream
+ * URI is resolved server-side, never hand-typed); RTSP-only cameras get a manual URL field.
+ * Test Connection always runs before Commit — never silently skipped.
+ */
+function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => void }) {
+  const [status, setStatus] = useState<"scanning" | "done" | "error">("scanning");
+  const [cameras, setCameras] = useState<RtspDiscoveryResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const scan = useCallback(async () => {
+    setStatus("scanning");
+    setError(null);
+    try {
+      setCameras(await discoverRtspCameras());
+      setStatus("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Camera discovery failed.");
+      setStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    void scan();
+  }, [scan]);
+
+  return (
+    <div className="drv-field" style={{ marginBottom: 14 }}>
+      <span className="lbl">Discover Devices</span>
+      {status === "scanning" && <p className="muted" aria-busy="true">Scanning the local network for ONVIF/RTSP cameras…</p>}
+      {status === "error" && (
+        <p className="err">
+          {error}{" "}
+          <button type="button" className="link" onClick={() => void scan()}>try again</button>.
+        </p>
+      )}
+      {status === "done" && cameras.length === 0 && (
+        <p className="muted">
+          No cameras found on this network.{" "}
+          <button type="button" className="link" onClick={() => void scan()}>Scan again</button>, or add one manually below.
+        </p>
+      )}
+      {status === "done" && cameras.length > 0 && (
+        <>
+          <p className="muted">
+            {cameras.length} camera{cameras.length === 1 ? "" : "s"} found.{" "}
+            <button type="button" className="link" onClick={() => void scan()}>Scan again</button>
+          </p>
+          <div className="knx-gw-list">
+            {cameras.map((cam) => (
+              <div key={cam.id} className={`knx-gw-item${openId === cam.id ? " selected" : ""}`} style={{ cursor: "default" }}>
+                <div className="knx-gw-name">{cam.name}</div>
+                <div className="knx-gw-meta">
+                  {cam.ipAddress}{cam.manufacturer ? ` · ${cam.manufacturer}${cam.model ? ` ${cam.model}` : ""}` : ""}
+                  {" · "}
+                  {cam.onvifAvailable ? "ONVIF" : "RTSP"}
+                  {cam.onvifAvailable && cam.rtspAvailable ? " + RTSP" : ""}
+                </div>
+                {openId !== cam.id ? (
+                  <button type="button" className="link" onClick={() => setOpenId(cam.id)}>Add…</button>
+                ) : (
+                  <RtspAddCameraForm
+                    camera={cam}
+                    onDone={() => {
+                      setOpenId(null);
+                      onCommissioned();
+                    }}
+                    onCancel={() => setOpenId(null)}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <RtspManualAddForm onDone={onCommissioned} />
+    </div>
+  );
+}
+
+/** One discovered candidate's credential + Test Connection + Add flow (§ STEP 7/8). */
+function RtspAddCameraForm({ camera, onDone, onCancel }: { camera: RtspDiscoveryResult; onDone: () => void; onCancel: () => void }) {
+  const [name, setName] = useState(camera.name);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [rtspUrl, setRtspUrl] = useState("");
+  const [check, setCheck] = useState<RtspStreamCheckResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const useOnvif = camera.onvifAvailable && Boolean(camera.onvifEndpoint);
+
+  async function test() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = useOnvif
+        ? await testRtspOnvifConnection(camera.onvifEndpoint!, username, password)
+        : await testRtspManualConnection(rtspUrl || `rtsp://${camera.ipAddress}:${camera.rtspPorts[0] ?? 554}/`, username || undefined, password || undefined);
+      setCheck(res.result);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Test Connection failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    setBusy(true);
+    setErr(null);
+    try {
+      if (useOnvif) {
+        await commissionRtspOnvifCamera({ name, onvifEndpoint: camera.onvifEndpoint!, onvifUuid: camera.onvifUuid ?? undefined, username, password });
+      } else {
+        await commissionRtspManualCamera({
+          name,
+          rtspUrl: rtspUrl || `rtsp://${camera.ipAddress}:${camera.rtspPorts[0] ?? 554}/`,
+          username: username || undefined,
+          password: password || undefined,
+        });
+      }
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not add this camera.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+      <input placeholder="Camera name" value={name} onChange={(e) => setName(e.target.value)} />
+      {!useOnvif && (
+        <input
+          placeholder={`rtsp://${camera.ipAddress}:${camera.rtspPorts[0] ?? 554}/…`}
+          value={rtspUrl}
+          onChange={(e) => setRtspUrl(e.target.value)}
+        />
+      )}
+      <input placeholder="Username (if required)" value={username} onChange={(e) => setUsername(e.target.value)} />
+      <input type="password" placeholder="Password (if required)" value={password} onChange={(e) => setPassword(e.target.value)} />
+      {check && (
+        <ul className="muted" style={{ margin: 0, paddingLeft: 18 }}>
+          {check.checklist.map((c, i) => (
+            <li key={i} style={{ color: c.pass ? undefined : "var(--aureon-color-status-critical, #e5484d)" }}>
+              {c.pass ? "✓" : "✗"} {c.label}
+            </li>
+          ))}
+          {!check.ok && check.reason && <li>{check.reason}</li>}
+        </ul>
+      )}
+      {err && <p className="err">{err}</p>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" disabled={busy} onClick={() => void test()}>Test Connection</button>
+        <button type="button" className="primary" disabled={busy || !check?.ok} onClick={() => void add()}>Add Camera</button>
+        <button type="button" className="link" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/** § STEP 7 fallback — a camera with no ONVIF at all: full manual entry, still gated by a real
+ * Test Connection before Add. */
+function RtspManualAddForm({ onDone }: { onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [rtspUrl, setRtspUrl] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [check, setCheck] = useState<RtspStreamCheckResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <p className="muted" style={{ marginTop: 10 }}>
+        <button type="button" className="link" onClick={() => setOpen(true)}>Add a camera manually by RTSP URL</button>
+      </p>
+    );
+  }
+
+  async function test() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await testRtspManualConnection(rtspUrl, username || undefined, password || undefined);
+      setCheck(res.result);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Test Connection failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await commissionRtspManualCamera({ name, rtspUrl, username: username || undefined, password: password || undefined });
+      setOpen(false);
+      setName("");
+      setRtspUrl("");
+      setUsername("");
+      setPassword("");
+      setCheck(null);
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not add this camera.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+      <span className="lbl">Add a camera manually</span>
+      <input placeholder="Camera name" value={name} onChange={(e) => setName(e.target.value)} />
+      <input placeholder="rtsp://192.168.1.50:554/stream1" value={rtspUrl} onChange={(e) => setRtspUrl(e.target.value)} />
+      <input placeholder="Username (if required)" value={username} onChange={(e) => setUsername(e.target.value)} />
+      <input type="password" placeholder="Password (if required)" value={password} onChange={(e) => setPassword(e.target.value)} />
+      {check && (
+        <ul className="muted" style={{ margin: 0, paddingLeft: 18 }}>
+          {check.checklist.map((c, i) => (
+            <li key={i} style={{ color: c.pass ? undefined : "var(--aureon-color-status-critical, #e5484d)" }}>
+              {c.pass ? "✓" : "✗"} {c.label}
+            </li>
+          ))}
+          {!check.ok && check.reason && <li>{check.reason}</li>}
+        </ul>
+      )}
+      {err && <p className="err">{err}</p>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" disabled={busy || !rtspUrl} onClick={() => void test()}>Test Connection</button>
+        <button type="button" className="primary" disabled={busy || !check?.ok || !name} onClick={() => void add()}>Add Camera</button>
+        <button type="button" className="link" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { registerPhase3Routes } from "./routes/phase3.js";
 import { registerKeypadRoutes } from "./routes/keypad.js";
 import { registerIntentRoutes } from "./routes/intents.js";
 import { registerSecurityRoutes } from "./routes/security.js";
+import { registerRtspCameraRoutes } from "./routes/rtsp-camera.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerSystemUpdateRoutes } from "./routes/system-update.js";
 import { registerMigrationRoutes } from "./routes/migration.js";
@@ -152,6 +153,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   registerKeypadRoutes(app, ctx);
   registerIntentRoutes(app, ctx);
   registerSecurityRoutes(app, ctx);
+  registerRtspCameraRoutes(app, ctx);
   registerMigrationRoutes(app, ctx);
   registerMatterRoutes(app, ctx);
   registerMatterBridgeRoutes(app, ctx);
