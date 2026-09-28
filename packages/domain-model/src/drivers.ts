@@ -46,6 +46,7 @@ export const ProtocolKind = z.enum([
   "devialet",
   "appletv",
   "rtsp",
+  "pjlink",
 ]);
 export type ProtocolKind = z.infer<typeof ProtocolKind>;
 
