@@ -564,3 +564,4 @@ export {
 } from "./pjlink-codec.js";
 export { discoverPjlinkClass2, type PjlinkDiscoveryCandidate, type PjlinkDiscoveryOptions } from "./pjlink-discovery.js";
 export { PjlinkSimulator, startPjlinkFarm, stopPjlinkFarm, type PjlinkSimulatorOptions } from "./pjlink-simulator.js";
+export * from "./rtsp/index.js";

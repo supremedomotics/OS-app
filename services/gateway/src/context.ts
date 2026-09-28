@@ -702,7 +702,20 @@ export class AppContext {
           apiUrl: config.streamApiUrl || undefined,
         })
       : new NullStreamGateway();
-    this.cameras = new CameraService(this.home, streamGateway, this.homeId);
+    this.cameras = new CameraService(this.home, streamGateway, this.homeId, {
+      // § RTSP Camera Extension — resolves a commissioned camera's encrypted, per-instance RTSP
+      // credentials (never stored in Device.metadata) only at the moment a stream is opened.
+      resolveCredentials: async (driverInstanceId) => {
+        try {
+          const config = await this.installer.drivers.getConfig(driverInstanceId as any);
+          const username = typeof config.username === "string" ? config.username : null;
+          const password = typeof config.password === "string" ? config.password : null;
+          return username && password ? { username, password } : null;
+        } catch {
+          return null; // driver instance gone/uninstalled — camera falls back to its stored source
+        }
+      },
+    });
 
     await this.security.hydrate(this.homeId);
 

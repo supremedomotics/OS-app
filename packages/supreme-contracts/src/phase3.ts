@@ -218,6 +218,77 @@ export type SetCameraStreamRequest = z.infer<typeof SetCameraStreamRequest>;
 export const CameraResponse = z.object({ camera: CameraView });
 export type CameraResponse = z.infer<typeof CameraResponse>;
 
+// ── RTSP Camera driver: discovery + commissioning (§ RTSP Camera Extension) ─────────
+
+export const RtspDiscoveryResultSchema = z.object({
+  id: z.string(),
+  discoveryMethod: z.enum(["onvif", "rtsp-probe"]),
+  discoveryMethods: z.array(z.enum(["onvif", "rtsp-probe"])),
+  ipAddress: z.string(),
+  port: z.number(),
+  name: z.string(),
+  manufacturer: z.string().nullable(),
+  model: z.string().nullable(),
+  hostname: z.string().nullable(),
+  onvifUuid: z.string().nullable(),
+  onvifEndpoint: z.string().nullable(),
+  rtspAvailable: z.boolean(),
+  onvifAvailable: z.boolean(),
+  rtspPorts: z.array(z.number()),
+});
+export type RtspDiscoveryResultDto = z.infer<typeof RtspDiscoveryResultSchema>;
+
+export const RtspDiscoverRequest = z.object({ timeoutMs: z.number().min(500).max(15_000).optional() });
+export type RtspDiscoverRequest = z.infer<typeof RtspDiscoverRequest>;
+
+export const RtspDiscoverResponse = z.object({ cameras: z.array(RtspDiscoveryResultSchema) });
+export type RtspDiscoverResponse = z.infer<typeof RtspDiscoverResponse>;
+
+/** § STEP 8 — plain-English validation checklist, shared by the ONVIF and manual RTSP flows. */
+export const RtspStreamCheckSchema = z.object({
+  ok: z.boolean(),
+  checklist: z.array(z.object({ label: z.string(), pass: z.boolean() })),
+  reason: z.string().nullable(),
+  diagnostics: z.array(z.string()),
+  codec: z.string().nullable(),
+});
+export type RtspStreamCheckDto = z.infer<typeof RtspStreamCheckSchema>;
+
+/** Test Connection — either an ONVIF candidate (endpoint + credentials, profile/stream resolved
+ * server-side) or a manual RTSP-only URL + optional credentials. Passwords never round-trip back
+ * out in any response (§ STEP 11). */
+export const RtspTestConnectionRequest = z.union([
+  z.object({ mode: z.literal("onvif"), onvifEndpoint: z.string().min(1), username: z.string().min(1), password: z.string().min(1) }),
+  z.object({ mode: z.literal("manual"), rtspUrl: z.string().min(1), username: z.string().optional(), password: z.string().optional() }),
+]);
+export type RtspTestConnectionRequest = z.infer<typeof RtspTestConnectionRequest>;
+
+export const RtspTestConnectionResponse = z.object({
+  result: RtspStreamCheckSchema,
+  // Populated only for a successful ONVIF test — lets the Add-Camera UI show what will actually
+  // be commissioned before the installer confirms.
+  resolvedMainStreamUrl: z.string().nullable().optional(),
+  resolvedSubStreamUrl: z.string().nullable().optional(),
+  manufacturer: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+});
+export type RtspTestConnectionResponse = z.infer<typeof RtspTestConnectionResponse>;
+
+export const RtspCommissionRequest = z.object({
+  name: z.string().min(1),
+  roomId: z.string().nullable().optional(),
+  mode: z.enum(["onvif", "manual"]),
+  onvifEndpoint: z.string().optional(),
+  onvifUuid: z.string().optional(),
+  rtspUrl: z.string().optional(),
+  username: z.string().optional(),
+  password: z.string().optional(),
+});
+export type RtspCommissionRequest = z.infer<typeof RtspCommissionRequest>;
+
+export const RtspCommissionResponse = z.object({ camera: CameraView, validation: RtspStreamCheckSchema });
+export type RtspCommissionResponse = z.infer<typeof RtspCommissionResponse>;
+
 /** Register this client's push token so it can receive notifications while backgrounded. */
 export const RegisterPushTokenRequest = z.object({
   platform: z.enum(["fcm", "apns", "webpush"]),

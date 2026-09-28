@@ -597,4 +597,46 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       },
     ],
   }),
+  defineManifest({
+    // § RTSP Camera Extension — a pure discovery/commissioning driver, same shape as Keypad's
+    // `backend.ref: null` entry above: there is no live SIL binding to maintain (a commissioned
+    // camera is a view-only `supremeType: "camera"` Supreme device owned by the EXISTING
+    // CameraService/StreamGateway pipeline, never a capability bound through this driver). This
+    // manifest's only job is to make "RTSP Camera" installable and unlock its Discover Devices
+    // panel in the Extension Center — see `services/gateway/src/routes/rtsp-camera.ts` for the
+    // real ONVIF/RTSP discovery + commissioning routes, and `services/protocols/src/rtsp/` for
+    // the driver logic itself.
+    key: "supreme-rtsp-camera",
+    name: "RTSP Camera",
+    description: "ONVIF/RTSP IP cameras — local-network discovery, ONVIF-driven commissioning, and RTSP-only manual add.",
+    category: "security",
+    channel: "official",
+    publisher: PUBLISHER,
+    version: "1.0.0",
+    capabilities: [],
+    protocols: ["rtsp"],
+    compat: { hubMinVersion: "0.1.0", requiresSku: null },
+    backend: { type: "native", ref: null },
+    operations: [...DEFAULT_DRIVER_OPERATIONS],
+    documentationUrl: "https://docs.supreme.local/extensions/rtsp-camera",
+    releaseNotes:
+      "Real ONVIF WS-Discovery (multicast probe across every local interface) plus a bounded, rate-limited RTSP-port fallback for non-ONVIF cameras. ONVIF cameras are commissioned by authenticating, querying device info and media profiles, and retrieving the real main/substream RTSP URIs — never a hand-constructed vendor URL. RTSP-only cameras use a manual URL + Test Connection flow. Stream validation performs a real RTSP DESCRIBE handshake (with Digest/Basic auth) and checks the SDP body for an actual video media line. Credentials are stored through the existing encrypted driver-config secret store, never in camera metadata.",
+    changelog: [
+      { version: "1.0.0", date: "2026-09-28", notes: "First release: ONVIF WS-Discovery, RTSP fallback probing, ONVIF/manual commissioning flows, real stream validation, encrypted credential storage." },
+    ],
+    // Per-camera credentials/URL are entered through the Discover Devices / Add Camera flow, not
+    // a static driver-level config form — this schema exists only so a manual per-camera
+    // commission (no ONVIF) has a place for the secret fields to be validated/encrypted the same
+    // way every other driver's secret config field is (§ STEP 11 — existing secret mechanism,
+    // never a new one). Each commissioned camera is its own installed instance of this key
+    // (`asNewInstance`), exactly like Casambi's multi-network instances.
+    configSchema: [
+      { key: "rtspUrl", label: "RTSP URL (credential-free)", type: "text", required: false, secret: false },
+      { key: "username", label: "Username", type: "text", required: false, secret: false },
+      { key: "password", label: "Password", type: "password", required: false, secret: true },
+      { key: "onvifEndpoint", label: "ONVIF device endpoint", type: "text", required: false, secret: false },
+      { key: "onvifUuid", label: "ONVIF UUID", type: "text", required: false, secret: false },
+      { key: "subStreamUrl", label: "Substream URL (credential-free)", type: "text", required: false, secret: false },
+    ],
+  }),
 ];

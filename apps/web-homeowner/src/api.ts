@@ -372,6 +372,96 @@ export async function discoverCoolMasterGateways(): Promise<CoolMasterGateway[]>
   return ((await res.json()) as { gateways: CoolMasterGateway[] }).gateways;
 }
 
+// ── RTSP Camera driver (§ RTSP Camera Extension) ───────────────────────────────────
+export interface RtspDiscoveryResult {
+  id: string;
+  discoveryMethod: "onvif" | "rtsp-probe";
+  discoveryMethods: ("onvif" | "rtsp-probe")[];
+  ipAddress: string;
+  port: number;
+  name: string;
+  manufacturer: string | null;
+  model: string | null;
+  hostname: string | null;
+  onvifUuid: string | null;
+  onvifEndpoint: string | null;
+  rtspAvailable: boolean;
+  onvifAvailable: boolean;
+  rtspPorts: number[];
+}
+export interface RtspStreamCheckResult {
+  ok: boolean;
+  checklist: { label: string; pass: boolean }[];
+  reason: string | null;
+  diagnostics: string[];
+  codec: string | null;
+}
+export interface RtspTestConnectionResult {
+  result: RtspStreamCheckResult;
+  resolvedMainStreamUrl?: string | null;
+  resolvedSubStreamUrl?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
+}
+
+/** § STEP 3 — real ONVIF + RTSP-fallback LAN discovery. Defaults to a short timeout so the
+ * Discover Devices panel never feels stuck. */
+export async function discoverRtspCameras(timeoutMs = 4000): Promise<RtspDiscoveryResult[]> {
+  const res = await authed("/v1/drivers/rtsp/discover", { method: "POST", body: JSON.stringify({ timeoutMs }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Camera discovery failed."));
+  return ((await res.json()) as { cameras: RtspDiscoveryResult[] }).cameras;
+}
+
+export async function testRtspOnvifConnection(onvifEndpoint: string, username: string, password: string): Promise<RtspTestConnectionResult> {
+  const res = await authed("/v1/drivers/rtsp/test-connection", {
+    method: "POST",
+    body: JSON.stringify({ mode: "onvif", onvifEndpoint, username, password }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Test Connection failed."));
+  return (await res.json()) as RtspTestConnectionResult;
+}
+
+export async function testRtspManualConnection(rtspUrl: string, username?: string, password?: string): Promise<RtspTestConnectionResult> {
+  const res = await authed("/v1/drivers/rtsp/test-connection", {
+    method: "POST",
+    body: JSON.stringify({ mode: "manual", rtspUrl, username, password }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Test Connection failed."));
+  return (await res.json()) as RtspTestConnectionResult;
+}
+
+export interface RtspCommissionResult {
+  camera: { id: string; name: string; roomId: string | null; snapshotUrl: string | null; streamUrl: string | null };
+  validation: RtspStreamCheckResult;
+}
+
+export async function commissionRtspOnvifCamera(input: {
+  name: string;
+  roomId?: string | null;
+  onvifEndpoint: string;
+  onvifUuid?: string;
+  username: string;
+  password: string;
+}): Promise<RtspCommissionResult> {
+  const res = await authed("/v1/drivers/rtsp/commission", { method: "POST", body: JSON.stringify({ mode: "onvif", ...input }) });
+  const body = (await res.json()) as RtspCommissionResult;
+  if (!res.ok) throw new Error(body.validation?.reason ?? "Could not add this camera.");
+  return body;
+}
+
+export async function commissionRtspManualCamera(input: {
+  name: string;
+  roomId?: string | null;
+  rtspUrl: string;
+  username?: string;
+  password?: string;
+}): Promise<RtspCommissionResult> {
+  const res = await authed("/v1/drivers/rtsp/commission", { method: "POST", body: JSON.stringify({ mode: "manual", ...input }) });
+  const body = (await res.json()) as RtspCommissionResult;
+  if (!res.ok) throw new Error(body.validation?.reason ?? "Could not add this camera.");
+  return body;
+}
+
 // ── Casambi Driver Refactor — Foundation (authenticated) ──────────────────────────
 /** One entry in the bounded UDP protocol trace (§ UDP Receive Pipeline Audit) — recorded for
  * every datagram received, parsed or not, so a real capture (e.g. Wireshark) can be cross-checked
