@@ -49,7 +49,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Experiences'), findsWidgets);
-    expect(find.text('No Experiences yet'), findsOneWidget);
+    expect(find.text('Your residence isn’t reachable right now.'), findsOneWidget);
   });
 
   testWidgets(
@@ -70,7 +70,7 @@ void main() {
     nothingInert();
     for (final entry in {
       'Spaces': 'Your residence isn’t reachable right now.',
-      'Experiences': 'No Experiences yet',
+      'Experiences': 'Your residence isn’t reachable right now.',
       'Settings': 'Manage your paired Homes',
     }.entries) {
       await tester.tap(find.text(entry.key));

@@ -15,9 +15,16 @@ class SimApp {
   final int hour;
   SimApp({this.hour = 15});
 
+  /// Every route the app sent to the Hub, in order (device commands and scene activations).
+  final List<String> sent = [];
+
   List<Override> get overrides => [
         simulatedResidenceProvider.overrideWithValue(sim),
         commandScheduleProvider.overrideWithValue(clock.schedule),
+        hubSendProvider.overrideWithValue((path, body) {
+          sent.add(path);
+          return sim.transport.sendCommand(path, body);
+        }),
         residenceHourProvider.overrideWithValue(hour),
         // No OS in a widget test: these two would open platform channels that do not exist here.
         pushTokenSourceProvider.overrideWithValue(null),

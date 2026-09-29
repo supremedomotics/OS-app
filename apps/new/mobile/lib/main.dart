@@ -289,21 +289,29 @@ final activeHomeStreamUriProvider =
 final residenceHourProvider = Provider<int>((ref) => DateTime.now().hour);
 
 /// Every homeowner action goes through this one tracker: requested → pending → confirmed|failed.
+/// The one way a homeowner action reaches the Hub: a command route + body. Used by the command
+/// tracker for device commands and by Experience activation for the Hub's scene route, so both
+/// take the same path in production and in the simulated residence.
+typedef HubSend = Future<Map<String, dynamic>> Function(
+    String path, Map<String, dynamic> body);
+
+final hubSendProvider = Provider<HubSend>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  if (sim != null) return sim.transport.sendCommand;
+  return ref.watch(connectionManagerProvider).sendCommand;
+});
+
 /// Timer source for command timeouts; null = real timers. Tests replace it with a manual clock.
 final commandScheduleProvider = Provider<Schedule?>((ref) => null);
 
 final commandTrackerProvider = Provider<CommandTracker>((ref) {
   final state = ref.watch(residenceStateProvider);
-  final sim = ref.watch(simulatedResidenceProvider);
-  final manager = sim == null ? ref.watch(connectionManagerProvider) : null;
+  final send = ref.watch(hubSendProvider);
   final tracker = CommandTracker(
     state: state,
     schedule: ref.watch(commandScheduleProvider),
-    send: (deviceId, command) => sim != null
-        ? sim.transport
-            .sendCommand('v1/devices/$deviceId/command', {'command': command})
-        : manager!.sendCommand(
-            'v1/devices/$deviceId/command', {'command': command}),
+    send: (deviceId, command) =>
+        send('v1/devices/$deviceId/command', {'command': command}),
   );
   ref.onDispose(tracker.dispose);
   return tracker;
@@ -750,6 +758,9 @@ class _RootShellState extends ConsumerState<RootShell>
                 ? residence!.name
                 : homes.activeHome?.displayName ?? '',
             residenceReachable: simulated || (snap.data?.isConnected ?? false),
+            // Home and a space are photo-led: the picture runs under the header.
+            bodyUnderHeader: _current == ShellDestination.home ||
+                (_current == ShellDestination.spaces && _openSpace != null),
             body: _page(homes),
           ),
         ),

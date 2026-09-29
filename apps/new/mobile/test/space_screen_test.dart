@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supreme_mobile_next/features/spaces/space_screen.dart';
-import 'package:supreme_mobile_next/main.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import 'support/sim_app.dart';

@@ -5,6 +5,7 @@ import 'package:supreme_os_ui/supreme_os_ui.dart';
 import '../../main.dart';
 import '../_shared/residence_presentation.dart';
 import '../control/control_blocks.dart';
+import '../experiences/activate.dart';
 
 /// A space, photo-led (Golden Master `space.js`): how it feels → Change. The page says what the
 /// space is like and offers its Experiences; "Feels like" is DERIVED from the devices, never from
@@ -27,10 +28,7 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
   bool _changeOpen = false;
 
   void _activate(ResidenceView v, Experience e) {
-    // A space's share of an Experience has no Hub route (flagged); its steps go as tracked
-    // commands, so the lifecycle and the derived state are identical to a whole-residence run.
-    final plan = experiencePlan(e, v.snapshot, spaceId: widget.spaceId);
-    runCommands(v, plan);
+    activateExperience(ref, v, e, spaceId: widget.spaceId);
   }
 
   @override
@@ -57,6 +55,8 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
         profile.role == SurfaceRole.roomPanel;
     final look = lookFor(lightOf(snap.devicesIn(space.id)));
     final pad = watch ? 12.0 : phone ? 20.0 : 32.0;
+    // The photograph runs under the header; the words start below it.
+    final top = ShellInsets.of(context).top;
 
     return Stack(
       key: ValueKey('space-page-${space.id}'),
@@ -80,9 +80,9 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
         ),
         LayoutBuilder(
           builder: (context, c) => SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 16),
+            padding: EdgeInsets.fromLTRB(pad, pad + top, pad, pad + 16),
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: c.maxHeight - pad * 2 - 16),
+              constraints: BoxConstraints(minHeight: c.maxHeight - pad * 2 - 16 - top),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.start,

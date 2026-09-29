@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/sim_app.dart';
-import 'package:supreme_mobile_next/main.dart';
 
 void main() {
   testWidgets('Spaces shows the residence by floor, in words derived from device state',
