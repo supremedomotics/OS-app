@@ -5,6 +5,7 @@ export 'src/semantic_model.dart';
 export 'src/experiences.dart';
 export 'src/design/tokens.dart';
 export 'src/design/adaptive.dart';
+export 'src/design/surface_profile.dart';
 export 'src/connection/hub_defaults.dart';
 export 'src/connection/transport.dart';
 export 'src/connection/connection_manager.dart';

@@ -1,15 +1,17 @@
 import 'package:flutter/widgets.dart';
 import 'package:supreme_os_core/supreme_os_core.dart';
 
-/// Reads `MediaQuery` once and exposes the resolved [AdaptiveProfile] to the
-/// subtree via `AdaptiveScope.of(context)`. This is the ONLY place
-/// `MediaQuery.size` should be read for layout decisions — every component
-/// below asks the profile "what composition/capacity/touch target," never
-/// re-derives it from raw pixels itself (§Phase7-5).
+import 'surface_scope.dart';
+
+/// COMPATIBILITY ADAPTER — the legacy [AdaptiveProfile] view, derived from the one
+/// [SurfaceProfile]. New code reads `SurfaceScope.of(context)`; this stays only until every
+/// consumer has migrated (then `AdaptiveProfile`, `DeviceClass` and `PanelPresentationMode`
+/// can go).
 ///
-/// `physicalSizeInchesHint` lets a Touch Panel that knows its own registered
-/// hardware size (§9-10) override the dp heuristic — wire it from the
-/// panel's `PanelConfig`/registry entry once that plumbing exists.
+/// It no longer reads `MediaQuery` itself: it uses the [SurfaceScope] above it, or creates one
+/// when the app root has none, so the raw inputs are still read in exactly one place.
+/// `physicalSizeInchesHint` only applies when this widget creates the [SurfaceScope]; an
+/// ancestor [SurfaceScope] is authoritative.
 class AdaptiveScope extends StatelessWidget {
   final Widget child;
   final double? physicalSizeInchesHint;
@@ -28,13 +30,18 @@ class AdaptiveScope extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
-    final profile = classifyAdaptive(
-      widthDp: size.width,
-      heightDp: size.height,
-      physicalSizeInchesHint: physicalSizeInchesHint,
-    );
-    return _AdaptiveProfileProvider(profile: profile, child: child);
+    final adapted = Builder(builder: (context) {
+      final surface = SurfaceScope.of(context);
+      final profile = classifyAdaptive(
+        widthDp: surface.widthDp,
+        heightDp: surface.heightDp,
+        physicalSizeInchesHint: physicalSizeInchesHint,
+      );
+      return _AdaptiveProfileProvider(profile: profile, child: child);
+    });
+    if (SurfaceScope.maybeOf(context) != null) return adapted;
+    return SurfaceScope(
+        physicalSizeInches: physicalSizeInchesHint, child: adapted);
   }
 }
 
