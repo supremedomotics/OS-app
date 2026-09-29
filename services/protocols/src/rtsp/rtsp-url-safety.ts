@@ -44,14 +44,13 @@ export async function validateRtspUrl(raw: string): Promise<RtspUrlValidation> {
   } catch {
     return { ok: false, reason: "Not a valid URL.", host: null, port: 0, resolvedAddress: null };
   }
-  if (url.protocol === "rtsps:") {
-    // § FINDING 4 — the only transport this driver implements is a plain unencrypted net.Socket
-    // (rtsp-handshake.ts); accepting rtsps: here would silently drop straight to plaintext instead
-    // of the TLS the installer's URL asked for. Reject cleanly rather than half-implementing TLS.
-    return { ok: false, reason: "rtsps:// (RTSP over TLS) is not supported by this driver yet — use rtsp:// instead.", host: null, port: 0, resolvedAddress: null };
-  }
-  if (url.protocol !== "rtsp:") {
-    return { ok: false, reason: "Only rtsp:// URLs are allowed.", host: null, port: 0, resolvedAddress: null };
+  // § TLS transport — `rtsp-handshake.ts` now opens a real `tls.connect()` when the scheme is
+  // `rtsps:` (previously rejected here per § FINDING 4, because only a plaintext net.Socket
+  // existed and silently falling back to it would have contradicted what the installer's URL
+  // asked for). `rtsps:` is validated identically to `rtsp:` below — same SSRF/private-network/
+  // DNS-resolution guard, just a different default port and a TLS handshake once connected.
+  if (url.protocol !== "rtsp:" && url.protocol !== "rtsps:") {
+    return { ok: false, reason: "Only rtsp:// or rtsps:// URLs are allowed.", host: null, port: 0, resolvedAddress: null };
   }
   const rawHost = url.hostname;
   if (!rawHost) return { ok: false, reason: "URL has no host.", host: null, port: 0, resolvedAddress: null };

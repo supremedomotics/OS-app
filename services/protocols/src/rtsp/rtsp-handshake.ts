@@ -1,4 +1,5 @@
 import net from "node:net";
+import tls from "node:tls";
 import { createHash } from "node:crypto";
 import type { RtspStreamCheck } from "./rtsp-types.js";
 import { validateRtspUrl } from "./rtsp-url-safety.js";
@@ -45,6 +46,67 @@ export const realRtspSocket: RtspSocketFactory = (host, port, timeoutMs) =>
     });
     sock.connect(port, host);
   });
+
+/**
+ * TLS transport for `rtsps://` (§ TLS transport — restores the encryption an installer's
+ * `rtsps://` URL asks for, after `rtsp-url-safety.ts` previously rejected the scheme outright
+ * because only a plaintext `net.Socket` existed). Deliberately `rejectUnauthorized: false`:
+ * these are LAN security cameras, which overwhelmingly ship a self-signed certificate with no
+ * relationship to any browser-trusted CA — hard-failing on that would make "Secure RTSP" simply
+ * not work for the cameras installers actually own, the same tradeoff most NVR/VMS software
+ * makes for LAN cameras. This is safe here specifically because the connection is already scoped
+ * to a validated local/private address by `validateRtspUrl`'s SSRF guard before this ever runs —
+ * it is not exposed to an arbitrary internet host an attacker could MITM at will. The security
+ * property actually being restored is confidentiality-in-transit (credentials and the SDP/stream
+ * exchange are no longer sent as cleartext on the LAN, defeating passive snooping), not
+ * CA-validated PKI identity — that tradeoff is real and intentional, not an oversight.
+ */
+export const tlsRtspSocket: RtspSocketFactory = (host, port, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    let settled = false;
+    const sock = tls.connect({
+      host,
+      port,
+      rejectUnauthorized: false,
+      timeout: timeoutMs,
+    });
+    sock.once("secureConnect", () => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        write: (data) => sock.write(data, "utf8"),
+        onData: (cb) => sock.on("data", (chunk) => cb(chunk.toString("utf8"))),
+        close: () => sock.destroy(),
+      });
+    });
+    sock.once("timeout", () => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      reject(new Error("connection timed out"));
+    });
+    sock.once("error", (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    sock.once("close", () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("connection reset during TLS handshake"));
+    });
+  });
+
+/** Picks the plaintext or TLS transport based on the URL's scheme (`rtsp:`/`rtsps:`) — the only
+ * thing that differs between the two paths; every OPTIONS/DESCRIBE/auth/SDP step above is shared. */
+function socketFactoryForScheme(url: string, override?: RtspSocketFactory): RtspSocketFactory {
+  if (override) return override;
+  try {
+    return new URL(url).protocol === "rtsps:" ? tlsRtspSocket : realRtspSocket;
+  } catch {
+    return realRtspSocket;
+  }
+}
 
 function parseWwwAuthenticate(headers: string): { scheme: "digest" | "basic"; realm: string; nonce: string | null } | null {
   const m = headers.match(/WWW-Authenticate:\s*(Digest|Basic)\s+([^\r\n]+)/i);
@@ -132,7 +194,7 @@ export async function validateRtspStream(opts: ValidateRtspOptions): Promise<Rts
   }
 
   const timeoutMs = opts.timeoutMs ?? 4000;
-  const factory = opts.socketFactory ?? realRtspSocket;
+  const factory = socketFactoryForScheme(opts.url, opts.socketFactory);
   const uri = opts.url;
   const cseqBase = 1;
 
