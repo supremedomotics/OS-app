@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import '../experience/room_experience_screen.dart';
+import '../residence/panel_residence.dart';
 
 /// The panel's normal, locked UI (§7, §Phase8-1). CRITICAL: never exposes
 /// "Change Room" / "Change Assignment" / "Reassign Panel" (§19) —
@@ -15,11 +16,16 @@ class AssignedScreen extends StatefulWidget {
   final Future<List<AreaSummary>> Function() fetchAreas;
   final ConnectionManager connection;
 
+  /// The panel's residence. When present it is the truth about the Hub link and about every
+  /// control; [connection] is then only the legacy link indicator source for a panel without one.
+  final PanelResidence? residence;
+
   const AssignedScreen({
     super.key,
     required this.config,
     required this.fetchAreas,
     required this.connection,
+    this.residence,
   });
 
   @override
@@ -53,18 +59,26 @@ class _AssignedScreenState extends State<AssignedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PanelResidenceScope(
+      residence: widget.residence,
+      child: Scaffold(
       backgroundColor: SupremeColorScheme.voidBg,
       body: SafeArea(
         child: StreamBuilder<HubConnectionState>(
           stream: widget.connection.state,
           initialData: widget.connection.current,
-          builder: (context, snap) {
-            final status = snap.data?.status ?? ConnectionStatus.offline;
-            final connected = snap.data?.isConnected ?? false;
+          builder: (context, snap) => PanelResidenceBuilder(builder: (context, residence) {
+            // With a residence, the Hub link IS the residence's reachability; the mock
+            // connection manager says nothing true about it.
+            final connected =
+                residence != null ? residence.connected : (snap.data?.isConnected ?? false);
+            final status = residence != null
+                ? (connected ? ConnectionStatus.connectedLocal : ConnectionStatus.offline)
+                : (snap.data?.status ?? ConnectionStatus.offline);
             return switch (_assignment.scope) {
               ControlScope.room => RoomExperienceScreen(
                   roomName: _assignment.displayName,
+                  spaceId: _assignment.assignedRoomId ?? '',
                   connected: connected,
                   headerTrailing: ConnectionStateIndicator(status: status),
                 ),
@@ -78,10 +92,10 @@ class _AssignedScreenState extends State<AssignedScreen> {
                   status: status,
                 ),
             };
-          },
+          }),
         ),
       ),
-    );
+    ));
   }
 }
 
@@ -154,7 +168,7 @@ class _ScopedRoomSwitcher extends StatelessWidget {
           child: selected == null
               ? const SizedBox.shrink()
               : RoomExperienceScreen(
-                  roomName: selected.name, connected: connected),
+                  roomName: selected.name, spaceId: selected.id, connected: connected),
         ),
       ],
     );

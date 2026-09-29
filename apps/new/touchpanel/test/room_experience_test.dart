@@ -3,22 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 import 'package:supreme_touchpanel/experience/room_experience_screen.dart';
 
-Widget _panelAt(Size size, {bool connected = true}) {
-  return MediaQuery(
-    data: MediaQueryData(size: size),
-    child: MaterialApp(
-      theme: buildSupremeTheme(),
-      // Scaffold, not bare Material — matches the real app: AssignedScreen
-      // wraps RoomExperienceScreen in a Scaffold too.
-      home: Scaffold(
-        body: AdaptiveScope(
-          child: RoomExperienceScreen(
-              roomName: 'Living Room', connected: connected),
-        ),
-      ),
-    ),
-  );
-}
+import 'support/panel_rig.dart';
+
+Widget _room({bool connected = true, String id = 'living', String name = 'Living Room'}) =>
+    RoomExperienceScreen(roomName: name, spaceId: id, connected: connected);
 
 /// The Phase 7/8 completion criteria (§17, §Phase8-2..7): the SAME semantic
 /// room experience composes itself differently across Touch Panel sizes,
@@ -28,8 +16,8 @@ void main() {
   testWidgets(
       'micro (3-4in): room identity + one dominant Experience action, no domain grid',
       (tester) async {
-    await tester.pumpWidget(_panelAt(const Size(240, 320)));
-    await tester.pumpAndSettle();
+    final rig = PanelRig();
+    await rig.mount(tester, _room(), size: const Size(240, 320));
 
     expect(find.text('Living Room'), findsOneWidget);
     expect(find.byType(ExperienceControl),
@@ -42,8 +30,8 @@ void main() {
 
   testWidgets('compact (5-7in): Lighting/Shades/Climate/Experience, no Audio',
       (tester) async {
-    await tester.pumpWidget(_panelAt(const Size(360, 640)));
-    await tester.pumpAndSettle();
+    final rig = PanelRig();
+    await rig.mount(tester, _room(), size: const Size(360, 640));
 
     expect(find.byType(LightingControl), findsOneWidget);
     expect(find.byType(ShadesControl), findsOneWidget);
@@ -55,8 +43,8 @@ void main() {
   testWidgets(
       'standard (8-12in): balanced composition including Audio and multiple Experiences',
       (tester) async {
-    await tester.pumpWidget(_panelAt(const Size(800, 1280)));
-    await tester.pumpAndSettle();
+    final rig = PanelRig();
+    await rig.mount(tester, _room(), size: const Size(800, 1280));
 
     expect(find.byType(LightingControl), findsOneWidget);
     expect(find.byType(ShadesControl), findsOneWidget);
@@ -73,8 +61,8 @@ void main() {
   testWidgets(
       'expanded (13-20in): atmosphere panel + primary controls + Experiences',
       (tester) async {
-    await tester.pumpWidget(_panelAt(const Size(1600, 1000)));
-    await tester.pumpAndSettle();
+    final rig = PanelRig();
+    await rig.mount(tester, _room(), size: const Size(1600, 1000));
 
     expect(find.text('Atmosphere'), findsOneWidget);
     expect(find.byType(LightingControl), findsOneWidget);
@@ -85,8 +73,8 @@ void main() {
   testWidgets(
       'immersive (21-30in+): atmosphere + Lighting/Climate + Shades/Audio + Experiences panels '
       '(§Phase7-8 — not an enlarged small-screen layout)', (tester) async {
-    await tester.pumpWidget(_panelAt(const Size(2400, 1500)));
-    await tester.pumpAndSettle();
+    final rig = PanelRig();
+    await rig.mount(tester, _room(), size: const Size(2400, 1500));
 
     expect(find.text('Atmosphere'), findsOneWidget);
     expect(find.text('Experiences'), findsOneWidget);
@@ -102,12 +90,12 @@ void main() {
   testWidgets(
       'the same room renders materially different widget trees across sizes',
       (tester) async {
-    await tester.pumpWidget(_panelAt(const Size(240, 320)));
-    await tester.pumpAndSettle();
+    final rig = PanelRig();
+    await rig.mount(tester, _room(), size: const Size(240, 320));
     final microCardCount = find.byType(SupremeCard).evaluate().length;
 
-    await tester.pumpWidget(_panelAt(const Size(2400, 1500)));
-    await tester.pumpAndSettle();
+    tester.view.physicalSize = const Size(2400, 1500);
+    await rig.settle(tester);
     final immersiveCardCount = find.byType(SupremeCard).evaluate().length;
 
     expect(immersiveCardCount, greaterThan(microCardCount));
@@ -115,37 +103,78 @@ void main() {
 
   group('state feedback (§Phase8-14)', () {
     testWidgets(
-        'activating an Experience shows Applying… then the Experience name',
+        'activating an Experience shows Applying…, and is active only when the devices report it',
         (tester) async {
-      await tester.pumpWidget(_panelAt(const Size(240, 320)));
-      await tester.pumpAndSettle();
+      final rig = PanelRig();
+      await rig.mount(tester, _room(), size: const Size(240, 320));
 
       expect(find.text('Relax'), findsOneWidget);
       expect(find.text('Applying…'), findsNothing);
 
       await tester.tap(find.byType(ExperienceControl));
-      await tester.pump(); // one frame: requested state shows immediately
+      await rig.settle(tester, 10);
 
       expect(find.text('Applying…'), findsOneWidget);
       expect(find.text('Relax'), findsNothing);
+      expect(rig.sim.deviceJson('living-shade')['state']['position']['position'], 100,
+          reason: 'a tap (and a request) move nothing; the Hub sequences the curtains first');
 
-      // Hub "confirms" after the mock delay. Advance it explicitly: settling used to run long
-      // enough only because of Material's ink-splash animation, which the SupremeOS theme
-      // deliberately does not have.
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Relax'), findsOneWidget);
+      // The Hub runs it (curtains first, then light and music); devices report as they finish.
+      await rig.settle(tester, 1000);
+      expect(find.text('Applying…'), findsOneWidget, reason: 'still moving: not confirmed yet');
+      await rig.settle(tester, 30000);
+      expect(find.text('Relax · Active'), findsOneWidget);
       expect(find.text('Applying…'), findsNothing);
+    });
+
+    testWidgets('the light switch is confirmed by the device, not by the tap', (tester) async {
+      final rig = PanelRig();
+      await rig.mount(tester, _room(), size: const Size(800, 1280));
+      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue, reason: 'lights reported on');
+
+      await tester.tap(find.byType(Switch));
+      await rig.settle(tester, 10);
+      expect(find.text('Applying…'), findsWidgets);
+      expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue,
+          reason: 'still what the device reports');
+
+      await rig.settle(tester, 1000);
+      expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+      expect(find.text('Applying…'), findsNothing);
+    });
+  });
+
+  group('honest without a residence', () {
+    testWidgets('no residence: the room says so and draws no control', (tester) async {
+      final rig = PanelRig();
+      await rig.mount(tester, _room(), inScope: false);
+      expect(find.byKey(const ValueKey('panel-waiting')), findsOneWidget);
+      expect(find.byType(LightingControl), findsNothing);
+      expect(find.byType(ExperienceControl), findsNothing);
+      expect(find.text('Living Room'), findsOneWidget);
+    });
+
+    testWidgets('a room the Hub does not have is said, not drawn', (tester) async {
+      final rig = PanelRig();
+      await rig.mount(tester, _room(id: 'cellar', name: 'Cellar'));
+      expect(find.text('This room is not part of the residence.'), findsOneWidget);
+    });
+
+    testWidgets('a device the room does not have gets no control (dining has no climate)',
+        (tester) async {
+      final rig = PanelRig();
+      await rig.mount(tester, _room(id: 'dining', name: 'Dining Room'));
+      expect(find.byType(LightingControl), findsOneWidget);
+      expect(find.byType(ClimateControl), findsNothing);
+      expect(find.byType(AudioControl), findsNothing);
     });
   });
 
   group('connection loss disables commands (§Phase8-15)', () {
     testWidgets('disconnected: Lighting/Shades/Climate become non-interactive',
         (tester) async {
-      await tester
-          .pumpWidget(_panelAt(const Size(800, 1280), connected: false));
-      await tester.pumpAndSettle();
+      final rig = PanelRig();
+      await rig.mount(tester, _room(connected: false));
 
       final lightSwitch = tester.widget<Switch>(find.byType(Switch));
       expect(lightSwitch.onChanged, isNull);
@@ -156,8 +185,8 @@ void main() {
     });
 
     testWidgets('connected: the same controls are interactive', (tester) async {
-      await tester.pumpWidget(_panelAt(const Size(800, 1280)));
-      await tester.pumpAndSettle();
+      final rig = PanelRig();
+      await rig.mount(tester, _room());
 
       final lightSwitch = tester.widget<Switch>(find.byType(Switch));
       expect(lightSwitch.onChanged, isNotNull);
@@ -168,8 +197,8 @@ void main() {
       () {
     testWidgets('micro Experience action clears its tier minimum',
         (tester) async {
-      await tester.pumpWidget(_panelAt(const Size(240, 320)));
-      await tester.pumpAndSettle();
+      final rig = PanelRig();
+      await rig.mount(tester, _room(), size: const Size(240, 320));
 
       final size = tester.getSize(find.byType(ExperienceControl));
       expect(size.height, greaterThanOrEqualTo(72));
@@ -179,11 +208,11 @@ void main() {
   group('no machine ids in homeowner UI (§Phase7.1)', () {
     testWidgets('room name renders as given (a display name, never a raw id)',
         (tester) async {
-      await tester.pumpWidget(_panelAt(const Size(800, 1280)));
-      await tester.pumpAndSettle();
+      final rig = PanelRig();
+      await rig.mount(tester, _room());
 
       expect(find.text('Living Room'), findsWidgets);
-      expect(find.text('living-room'), findsNothing);
+      expect(find.text('living'), findsNothing);
     });
   });
 }
