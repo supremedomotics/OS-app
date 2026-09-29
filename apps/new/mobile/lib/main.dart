@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -300,6 +301,30 @@ final commandTrackerProvider = Provider<CommandTracker>((ref) {
   );
   ref.onDispose(tracker.dispose);
   return tracker;
+});
+
+/// Hub-served pictures (ADR 0102): authenticated bytes, cached by their hash-versioned URL.
+final heroImageStoreProvider = Provider<HeroImageStore>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  final store = HeroImageStore(
+      fetch: sim != null
+          ? sim.transport.getBytes
+          : ref.watch(connectionManagerProvider).getBytes);
+  ref.onDispose(() => unawaited(store.dispose()));
+  return store;
+});
+
+/// One picture's bytes; null while loading or when the Hub cannot supply it (the caller then shows
+/// its tonal plate). A miss is tried again after the store's pause, so a Hub that was unreachable at
+/// start still gets its photographs once it is.
+final heroBytesProvider = FutureProvider.family<Uint8List?, String>((ref, path) async {
+  final store = ref.watch(heroImageStoreProvider);
+  final bytes = await store.load(path);
+  if (bytes == null && HeroImageStore.isHubPath(path)) {
+    final t = Timer(store.retryAfter + const Duration(seconds: 1), ref.invalidateSelf);
+    ref.onDispose(t.cancel);
+  }
+  return bytes;
 });
 
 /// Setting an Experience: the Hub orchestrates; this only asks and follows the run (ADR 0102, D8).

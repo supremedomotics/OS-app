@@ -37,7 +37,7 @@ class SpacesScreen extends ConsumerWidget {
           label: floorLabel(group.floorId),
           plates: [
             for (final s in group.spaces)
-              plateFor(context, s, snap, view!.inFlight, hour, () => onOpenSpace(s)),
+              plateFor(context, ref, s, snap, view!.inFlight, hour, () => onOpenSpace(s)),
           ],
         ));
       }

@@ -63,7 +63,7 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
       key: ValueKey('space-page-${space.id}'),
       fit: StackFit.expand,
       children: [
-        if (!watch) ToneSurface(look: look, image: heroImageFor(space)),
+        if (!watch) ToneSurface(look: look, image: heroImageFor(ref, space)),
         // The scrim the prototype lays over the photograph so the words always read.
         DecoratedBox(
           decoration: BoxDecoration(

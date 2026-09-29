@@ -7,6 +7,15 @@
 
 ## Critical
 
+### apps/new — Phase 3 follow-ups (Phase 3 closed, see `docs/design/phase-3-closure-report.md`)
+- **Completed in Phase 3 (moved, not deleted):** Hub-orchestrated Experience activation; Dart contract parity +
+  simulator conformance + drift gate; Touch Panel off hardcoded state; Devices inventory + Device Sheet;
+  authenticated room photographs; per-capability deadlines; stream subscription fix.
+- **Open:** per-driver device-report proof (live test is mock-backend); panel commissioning (real Hub
+  transport for `PanelResidence`); residence photograph on Home/Experiences; photograph disk cache; subscription
+  ack frame + `rev`/resume; per-space permission on scoped activation; persistent runs; broker binary
+  transport verification; Touch Panel fakes still present in provisioning (`panel-demo-1`, test signature).
+
 ### SupremeOS Flutter migration (apps/new) — Phase 1C onward
 - **Description:** Phases 0, 1A (SurfaceProfile), 1B (Golden Master design foundation) and 1C (navigation shell, glyphs, Control layer) are done and verified — see
   `SESSION_HANDOFF.md`. Phase 2 closed — see `docs/design/phase-2-closure-report.md` (entry criteria for 3). Remaining, in order: ~~2~~ core homeowner surfaces (Home, Spaces, Space, Control, Experiences,

@@ -24,6 +24,7 @@ export 'src/residence/state_expectation.dart';
 export 'src/residence/residence_state.dart';
 export 'src/residence/residence_stream_link.dart';
 export 'src/residence/scene_run.dart';
+export 'src/assets/hero_image_store.dart';
 export 'src/residence/command_deadlines.dart';
 export 'src/residence/command_tracker.dart';
 export 'src/residence/experience_status.dart';

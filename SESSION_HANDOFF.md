@@ -4,6 +4,34 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: apps/new Phase 3 — Hub-orchestrated Experiences, drift gate, live-gateway lifecycle, Devices
+
+Full record: `docs/design/phase-3-closure-report.md` (completed / deferred / risks / contract gaps / Phase 4
+entry). Branch `ccr-9def36f2-4lfmxo`.
+
+**Changed:** Hub runs Experiences (`scene-runs.ts`, 202 + `SceneRun`, `run` frames, phases, per-capability
+deadlines, supersession); client only asks and follows (`ExperienceActivations`); Touch Panel now reads a
+`PanelResidence` (it never used `HomeStateRepository` — it used hardcoded state and a timer "confirmation");
+drift gate (`wire-shapes.e2e.test.ts` ↔ `wire_conformance_test.dart`); live-gateway test
+(`services/gateway/tools/test-hub.ts` + `live_hub_lifecycle_test.dart`); per-capability command deadlines
+shared with the Hub; Devices inventory + Device Sheet; authenticated photographs (`HeroImageStore`).
+
+**Architecture decisions:** D8 Hub-owned orchestration; confirmation only from device reports via one shared
+`expectationOf` (TS + Dart, fixture-pinned); one stream↔state wiring (`ResidenceStreamLink`) used by every
+client; subscription is confirmed by the Hub's `pong` (no new frame); stacked layers are opaque.
+
+**Bug found by the live test (fixed):** no client ever sent the stream `subscribe`; on a real Hub
+`ResidenceState` would have gone silent after its snapshot. A speculative server-side "buffer early frames"
+change was tried, shown unnecessary (the test passed without it) and **reverted**.
+
+**Known issues / blockers:** live test uses the gateway's mock backend — no physical driver proof; runs are
+in memory; no per-space permission check on scoped activation; remote (broker) binary transport unverified;
+Touch Panel cannot reach a real Hub until commissioning; Home has no residence photograph yet; phone-landscape
+Devices and the Touch Panel screens were not visually re-verified.
+
+**Next:** see Phase 4 entry criteria in the closure report; run `pnpm install && pnpm -r build` before
+`dart test` so the live test executes (it skips loudly otherwise).
+
 ## Session: SupremeOS Flutter migration — Phase 0 audit, Phase 1A (SurfaceProfile), Phase 1B (design foundation)
 
 Migration of the approved SupremeOS-10 HTML prototype into the production Flutter generation

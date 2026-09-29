@@ -460,8 +460,15 @@ class SimulatedResidence {
     }
   }
 
+  /// Every asset path the Hub was asked for, exactly as asked (query included).
+  final byteReads = <String>[];
+
+  /// The content version currently in the URL of [roomId]'s (or the residence's) picture.
+  String heroVersion(String? roomId) => _hash(_heroImages[roomId]!);
+
   /// The serving contract for assets: bytes + strong ETag, `notModified` on a matching tag.
   HubBytes readBytes(String path, {String? ifNoneMatch}) {
+    byteReads.add(path);
     final p = (path.startsWith('/') ? path.substring(1) : path).split('?').first;
     String? room;
     if (p == 'v1/home/hero-image') {

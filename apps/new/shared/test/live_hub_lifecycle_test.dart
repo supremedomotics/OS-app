@@ -136,6 +136,15 @@ void main() {
     expect(created.statusCode, 201, reason: created.body);
     final sceneId = ((jsonDecode(created.body) as Map)['scene'] as Map)['id'] as String;
 
+    // A room photograph, uploaded by the owner as the Hub's asset slot allows.
+    final png = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==');
+    final photoRoom = chosen.first['roomId'] as String;
+    final put = await client.put(h.baseUrl.resolve('v1/rooms/$photoRoom/hero-image'),
+        headers: {'content-type': 'application/json', 'authorization': 'Bearer $owner'},
+        body: jsonEncode({'dataBase64': base64Encode(png), 'contentType': 'image/png'}));
+    expect(put.statusCode, 200, reason: put.body);
+
     // The client stack, on the real transport.
     final transport = HttpHubTransport(baseUrl: h.baseUrl, bearerToken: () => h.token);
     await transport.authenticate();
@@ -173,6 +182,15 @@ void main() {
       [0],
       [1]
     ]);
+
+    // ── Photography: authenticated, versioned, served by the Hub to a paired Mobile ─────────
+    final url = state.snapshot.space(photoRoom)!.imageUrl!;
+    expect(url, matches(RegExp(r'^/v1/rooms/.+/hero-image\?v=[0-9a-f]{32}$')));
+    final store = HeroImageStore(fetch: transport.getBytes);
+    expect(await store.load(url), png);
+    final refused = await client.get(h.baseUrl.resolve(url.substring(1)),
+        headers: {'authorization': 'Bearer junk'});
+    expect(refused.statusCode, 401, reason: 'no valid authorization, no picture');
 
     // ── A. one device command ──────────────────────────────────────────────────────────────
     final d0 = state.snapshot.devices[chosen.first['id']]!;
