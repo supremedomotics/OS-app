@@ -3,6 +3,7 @@ import type { CameraList, CameraStreamResponse } from "@supreme/contracts";
 import { Card, CapabilityGrid, Icon, QuickActions } from "@supreme/aureon-web";
 import { client } from "../../api.js";
 import { HlsPlayer, WebRtcPlayer } from "../../players.js";
+import { toSameOriginStreamUrl } from "../../stream-url.js";
 
 type CameraView = CameraList["cameras"][number];
 
@@ -49,8 +50,10 @@ export function CameraDetail({ camera, roomName, onBack }: {
       try {
         const { streams } = (await client.cameraStream(camera.id)) as CameraStreamResponse;
         if (cancelled) return;
-        const webrtc = streams.find((s) => s.kind === "webrtc")?.url ?? null;
-        const hls = streams.find((s) => s.kind === "hls")?.url ?? null;
+        const webrtcUrl = streams.find((s) => s.kind === "webrtc")?.url;
+        const hlsUrl = streams.find((s) => s.kind === "hls")?.url;
+        const webrtc = webrtcUrl ? toSameOriginStreamUrl(webrtcUrl) : null;
+        const hls = hlsUrl ? toSameOriginStreamUrl(hlsUrl) : null;
         if (webrtc || hls) setActive({ webrtc, hls, mode: webrtc ? "webrtc" : "hls" });
         else setFailed(true);
       } catch {
