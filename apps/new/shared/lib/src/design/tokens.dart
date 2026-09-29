@@ -44,8 +44,31 @@ class SupremeColors {
   /// White at 9 % — the hairline the reference draws between layers.
   static const rule = 0x17FFFFFF;
 
+  /// White at 5 % — the fainter hairline under the header.
+  static const faintRule = 0x0DFFFFFF;
+
   /// Brass at 20 % — the wash behind a pressed / current chip or tab.
   static const brassWash = 0x33B48A4F;
+
+  /// Ivory at 62 % — an idle navigation item (between `text2` 72 % and `text3` 56 %).
+  static const textIdle = 0x9EF7F6F2;
+
+  /// White at 13 % — the plate behind the current navigation item.
+  static const plate = 0x21FFFFFF;
+
+  /// The Golden Master's `panel-glass`: near-black at 88 % with a white 8 % edge. Its 28 px blur is
+  /// switched off by the user's "Transparency: solid" preference, which uses [glassSolid].
+  static const glass = 0xE00C0E10;
+  static const glassEdge = 0x14FFFFFF;
+  static const glassSolid = 0xF70C0D0F;
+
+  /// The navigation rail (tablet, TV, phone on its side) at 92 %, and the phone's bottom bar at 94 %.
+  static const rail = 0xEB0A0B0D;
+  static const bar = 0xF00A0B0D;
+
+  /// Night at 45 % — the veil under the header's Control button; its brass edge is brass-light at 45 %.
+  static const veil = 0x7308090A;
+  static const brassEdge = 0x73C9A66B;
 
   // ── Legacy names (mapped onto the Golden Master where an equivalent exists) ──
   static const voidBg = night;
@@ -149,6 +172,9 @@ class SupremeMotion {
 
   /// Fold / unfold, or a panel taking its role: a cross-fade of the whole composition.
   static const compositionMs = 380;
+
+  /// A layer (the Control drawer or sheet) sliding in or out.
+  static const layerMs = 500;
 
   static const pendingTravelMs = 1400;
   static const confirmBreatheMs = 900;

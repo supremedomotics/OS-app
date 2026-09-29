@@ -4,8 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supreme_mobile_next/main.dart';
 
-/// §QA-05 regression — reproduces the ORIGINAL bug exactly as observed: navigate
-/// More -> Settings (a real `Navigator.push`), which used to crash with
+/// §QA-05 regression — reproduces the ORIGINAL bug exactly as observed: navigate to a screen
+/// reached by a real `Navigator.push` (originally More -> Settings -> Home; Settings is now a
+/// primary destination and its Home entry is the pushed route), which used to crash with
 /// "Null check operator used on a null value" because the pushed route's `BuildContext` had no
 /// `AdaptiveScope` ancestor (only `home` was wrapped). Fixed by wrapping the WHOLE app —
 /// `MaterialApp.builder`, so every current and future pushed route inherits it.
@@ -22,12 +23,9 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   testWidgets(
-      'navigating More -> Settings never throws and renders the real Settings screen (§QA-05)',
+      'navigating to Settings never throws and renders the real Settings page (§QA-05)',
       (tester) async {
     await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('More'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
@@ -37,20 +35,20 @@ void main() {
     // The real crash this test reproduces would throw during this pump — takeException()
     // returns the FIRST uncaught exception recorded, or null if none occurred.
     expect(tester.takeException(), isNull);
-    expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-page')), findsOneWidget);
+    expect(find.text('Manage your paired Homes'), findsOneWidget);
   });
 
   testWidgets(
-      'navigating More -> Settings -> Home never throws, even with no Home paired (§QA-05)',
+      'navigating Settings -> Home (a pushed route) never throws, even with no Home paired (§QA-05)',
       (tester) async {
     await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('More'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Home'));
+    // "Home" is also the first destination's label: tap the Settings ENTRY, not the label.
+    await tester.tap(find.widgetWithText(ListTile, 'Home'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);

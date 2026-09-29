@@ -13,8 +13,8 @@ import 'data/shared_prefs_paired_home_store.dart';
 import 'features/home/home_screen.dart';
 import 'features/spaces/spaces_screen.dart';
 import 'features/spaces/room_screen.dart';
+import 'features/control/control_layer.dart';
 import 'features/experiences/experiences_screen.dart';
-import 'features/now/now_screen.dart';
 import 'features/settings/home_settings_screen.dart';
 import 'features/settings/paired_home_controller.dart';
 import 'features/settings/settings_screen.dart';
@@ -436,14 +436,20 @@ class SupremeMobileApp extends StatelessWidget {
       // null value" rather than the assertion message). `MaterialApp.builder` wraps the
       // Navigator's ENTIRE output — every route, every dialog, present and future — in exactly
       // one `AdaptiveScope`, so this bug class cannot recur for a new screen either.
-      builder: (context, child) => AdaptiveScope(child: child!),
+      builder: (context, child) =>
+          SurfaceScope(child: AdaptiveScope(child: child!)),
       home: const RootShell(),
     );
   }
 }
 
-/// The residence-first primary navigation (§5): Home / Spaces / Experiences /
-/// Now / More. Never device-centric — nothing here lists devices directly.
+/// The residence-first primary navigation (§5) in the SupremeOS-10 information architecture:
+/// Home · Spaces · Control · Experiences · Settings. Never device-centric — nothing here lists
+/// devices directly. Control is a layer opened over the page, not a page.
+///
+/// What the old `Now` / `More` shell held was classified, not dropped: `Now` was an empty
+/// placeholder; More › Devices belongs to Control (the physical-objects layer); More › Automations
+/// to Settings; More › Professional Mode to SupremeOS Pro (not the homeowner shell).
 class RootShell extends ConsumerStatefulWidget {
   const RootShell({super.key});
   @override
@@ -452,7 +458,7 @@ class RootShell extends ConsumerStatefulWidget {
 
 class _RootShellState extends ConsumerState<RootShell>
     with WidgetsBindingObserver {
-  int _index = 0;
+  ShellDestination _current = ShellDestination.home;
   Space? _openSpace;
   StreamSubscription<NativeRuntimeEvent>? _nativeEventsSub;
 
@@ -532,168 +538,83 @@ class _RootShellState extends ConsumerState<RootShell>
     super.dispose();
   }
 
-  static const _destinations = [
-    NavigationDestination(
-        icon: Icon(Icons.home_outlined),
-        selectedIcon: Icon(Icons.home),
-        label: 'Home'),
-    NavigationDestination(
-        icon: Icon(Icons.door_front_door_outlined),
-        selectedIcon: Icon(Icons.door_front_door),
-        label: 'Spaces'),
-    NavigationDestination(
-        icon: Icon(Icons.auto_awesome_outlined),
-        selectedIcon: Icon(Icons.auto_awesome),
-        label: 'Experiences'),
-    NavigationDestination(
-        icon: Icon(Icons.dashboard_outlined),
-        selectedIcon: Icon(Icons.dashboard),
-        label: 'Now'),
-    NavigationDestination(
-        icon: Icon(Icons.more_horiz),
-        selectedIcon: Icon(Icons.more_horiz),
-        label: 'More'),
-  ];
+  void _select(ShellDestination d) {
+    if (d == ShellDestination.control) return; // Control is a layer; see _openControl
+    setState(() {
+      _current = d;
+      _openSpace = null; // Spaces from inside a space returns to the list
+    });
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_openSpace != null) {
-      return RoomScreen(
-          space: _openSpace!, onBack: () => setState(() => _openSpace = null));
-    }
-
-    final screens = [
-      const HomeScreen(),
-      SpacesScreen(onOpenSpace: (s) => setState(() => _openSpace = s)),
-      const ExperiencesScreen(),
-      const NowScreen(),
-      const _MoreScreen(),
-    ];
-
-    return Scaffold(
-      body: SafeArea(child: screens[_index]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: _destinations,
-      ),
+  void _openControl(BuildContext context) {
+    final profile = SurfaceScope.of(context);
+    final nav = shellNavigationFor(profile);
+    showSupremeLayer<void>(
+      context,
+      presentation: nav.controlPresentation,
+      fold: profile.fold,
+      semanticLabel: 'Residence control',
+      builder: (_) => const ControlLayerBody(),
     );
   }
-}
 
-class _MoreScreen extends ConsumerWidget {
-  const _MoreScreen();
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final profile = AdaptiveScope.of(context);
-    final text = SupremeTextStyles.resolve(profile.density);
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text('More', style: text.title),
-        const SizedBox(height: 24),
-        // §QA-03/QA-04 — brought into the established SupremeOS design system
-        // (SupremeCard + Icon, same primitives Spaces already uses) and unimplemented
-        // items are visually inert/muted rather than looking identical to "Settings",
-        // the only item that actually does something.
-        _MoreRow(
-          icon: Icons.tune,
-          label: 'Devices',
-          enabled: false,
-          profile: profile,
-          text: text,
-        ),
-        const SizedBox(height: 12),
-        _MoreRow(
-          icon: Icons.auto_awesome_motion_outlined,
-          label: 'Automations',
-          enabled: false,
-          profile: profile,
-          text: text,
-        ),
-        const SizedBox(height: 12),
-        _MoreRow(
-          icon: Icons.settings_outlined,
-          label: 'Settings',
-          enabled: true,
-          profile: profile,
-          text: text,
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => SettingsScreen(
-              homeController: ref.read(pairedHomeControllerProvider),
-              onPairHome: (code) => realPairHome(
-                discovery: ref.read(platformDiscoveryProvider),
-                identity: ref.read(mobileIdentityProvider),
-                authStore: ref.read(pairedHomeAuthStoreProvider),
-                pairingCode: code,
-              ),
-              activeConnectionManager: ref.read(connectionManagerProvider),
+  Widget _page(PairedHomeController homes) => switch (_current) {
+        ShellDestination.home => const HomeScreen(),
+        ShellDestination.spaces => _openSpace == null
+            ? SpacesScreen(onOpenSpace: (s) => setState(() => _openSpace = s))
+            : RoomScreen(
+                space: _openSpace!,
+                onBack: () => setState(() => _openSpace = null)),
+        ShellDestination.experiences => const ExperiencesScreen(),
+        ShellDestination.settings => SettingsScreen(
+            embedded: true,
+            homeController: homes,
+            onPairHome: (code) => realPairHome(
+              discovery: ref.read(platformDiscoveryProvider),
+              identity: ref.read(mobileIdentityProvider),
+              authStore: ref.read(pairedHomeAuthStoreProvider),
+              pairingCode: code,
             ),
-          )),
-        ),
-        const SizedBox(height: 12),
-        _MoreRow(
-          icon: Icons.workspace_premium_outlined,
-          label: 'Professional Mode',
-          enabled: false,
-          profile: profile,
-          text: text,
-        ),
-      ],
-    );
-  }
-}
-
-class _MoreRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool enabled;
-  final AdaptiveProfile profile;
-  final SupremeTextStyles text;
-  final VoidCallback? onTap;
-
-  const _MoreRow({
-    required this.icon,
-    required this.label,
-    required this.enabled,
-    required this.profile,
-    required this.text,
-    this.onTap,
-  });
+            activeConnectionManager: ref.read(connectionManagerProvider),
+          ),
+        ShellDestination.control => const SizedBox.shrink(), // never a page
+      };
 
   @override
   Widget build(BuildContext context) {
-    final color = enabled
-        ? SupremeColorScheme.textPrimary
-        : SupremeColorScheme.textSecondary;
-    final row = ConstrainedBox(
-      constraints: BoxConstraints(minHeight: profile.minTouchTarget),
-      child: SupremeCard(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Row(
-            children: [
-              Icon(icon, color: color),
-              const SizedBox(width: 16),
-              Expanded(child: Text(label, style: text.body.copyWith(color: color))),
-              if (enabled)
-                const Icon(Icons.chevron_right,
-                    color: SupremeColorScheme.textSecondary)
-              else
-                Text('Not available yet',
-                    style: text.caption
-                        .copyWith(color: SupremeColorScheme.textSecondary)),
-            ],
+    final nav = shellNavigationFor(SurfaceScope.of(context));
+    final homes = ref.watch(pairedHomeControllerProvider);
+    final manager = ref.watch(connectionManagerProvider);
+
+    // Back goes up one level at a time: out of a space, then to Home, then leaves the app.
+    return PopScope(
+      canPop: _current == ShellDestination.home && _openSpace == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        setState(() {
+          if (_openSpace != null) {
+            _openSpace = null;
+          } else {
+            _current = ShellDestination.home;
+          }
+        });
+      },
+      child: ListenableBuilder(
+        listenable: homes,
+        builder: (context, _) => StreamBuilder<HubConnectionState>(
+          stream: manager.state,
+          initialData: manager.current,
+          builder: (context, snap) => SupremeShell(
+            navigation: nav,
+            current: _current,
+            onSelect: _select,
+            onOpenControl: () => _openControl(context),
+            residenceName: homes.activeHome?.displayName ?? '',
+            residenceReachable: snap.data?.isConnected ?? false,
+            body: _page(homes),
           ),
         ),
       ),
-    );
-    if (!enabled) return row;
-    return Semantics(
-      button: true,
-      label: label,
-      excludeSemantics: true,
-      child: InkWell(onTap: onTap, child: row),
     );
   }
 }

@@ -50,7 +50,18 @@ void main() {
       expect(_alpha(SupremeColors.text3), closeTo(0.56, 0.003));
       expect(SupremeColors.rule & 0xFFFFFF, 0xFFFFFF);
       expect(_alpha(SupremeColors.rule), closeTo(0.09, 0.003));
+      expect(_alpha(SupremeColors.faintRule), closeTo(0.05, 0.003));
       expect(_alpha(SupremeColors.brassWash), closeTo(0.20, 0.003));
+      expect(_alpha(SupremeColors.textIdle), closeTo(0.62, 0.003));
+      expect(_alpha(SupremeColors.plate), closeTo(0.13, 0.003));
+      expect(_alpha(SupremeColors.glass), closeTo(0.88, 0.003));
+      expect(_alpha(SupremeColors.glassEdge), closeTo(0.08, 0.003));
+      expect(_alpha(SupremeColors.glassSolid), closeTo(0.97, 0.003));
+      expect(_alpha(SupremeColors.rail), closeTo(0.92, 0.003));
+      expect(_alpha(SupremeColors.bar), closeTo(0.94, 0.003));
+      expect(_alpha(SupremeColors.veil), closeTo(0.45, 0.003));
+      expect(_alpha(SupremeColors.brassEdge), closeTo(0.45, 0.003));
+      expect(SupremeColors.brassEdge & 0xFFFFFF, SupremeColors.brassLight & 0xFFFFFF);
     });
 
     test('legacy names carry the Golden Master value where an equivalent exists', () {
@@ -72,6 +83,7 @@ void main() {
       'text': SupremeColors.text,
       'text2': SupremeColors.text2,
       'text3': SupremeColors.text3,
+      'textIdle': SupremeColors.textIdle,
       'brassPale': SupremeColors.brassPale,
       'brassLight': SupremeColors.brassLight,
       'champagne': SupremeColors.champagne,
@@ -96,6 +108,7 @@ void main() {
       expect(SupremeMotion.confirmBreatheMs, 900);
       expect(SupremeMotion.failReturnMs, 900);
       expect(SupremeMotion.compositionMs, 380);
+      expect(SupremeMotion.layerMs, 500);
       expect(SupremeMotion.chipMs, lessThan(SupremeMotion.controlMs));
       expect(SupremeMotion.controlMs, lessThan(SupremeMotion.sheetMs));
     });

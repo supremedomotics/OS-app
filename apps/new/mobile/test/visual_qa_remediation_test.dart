@@ -53,41 +53,47 @@ void main() {
   });
 
   testWidgets(
-      'More renders every destination with an icon, and unimplemented ones say so (§QA-03/QA-04)',
+      'every destination of the shell is real: nothing inert or placeholder is drawn (§QA-03/QA-04)',
       (tester) async {
     await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('More'));
-    await tester.pumpAndSettle();
-
-    for (final label in ['Devices', 'Automations', 'Settings', 'Professional Mode']) {
-      expect(find.text(label), findsOneWidget);
+    // The old shell drew "Not available yet" rows. Under the SupremeOS-10 rule an unsupported
+    // destination is not drawn at all — and Professional Mode is not a homeowner destination.
+    void nothingInert() {
+      expect(find.text('Not available yet'), findsNothing);
+      expect(find.text('Professional Mode'), findsNothing);
+      expect(find.text('Devices'), findsNothing,
+          reason: 'devices are reached through Control, not a top-level row');
     }
-    // Unimplemented rows are honestly labeled, not silently identical to Settings.
-    expect(find.text('Not available yet'), findsNWidgets(3));
-    expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
 
-    // The one real destination still works.
-    await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
+    nothingInert();
+    for (final entry in {
+      'Spaces': 'No Spaces yet',
+      'Experiences': 'No Experiences yet',
+      'Settings': 'Manage your paired Homes',
+    }.entries) {
+      await tester.tap(find.text(entry.key));
+      await tester.pumpAndSettle();
+      // Each destination changes the page to something real.
+      expect(find.text(entry.value), findsOneWidget, reason: entry.key);
+      nothingInert();
+    }
   });
 
-  testWidgets('unimplemented More items do not navigate anywhere on tap (§QA-04)',
+  testWidgets('Control opens a layer and never navigates away from the page (§QA-04)',
       (tester) async {
     await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('More'));
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Control'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Devices'));
-    await tester.pumpAndSettle();
-
-    // Still on More — no route was pushed.
-    expect(find.text('Devices'), findsOneWidget);
-    expect(find.text('Not available yet'), findsNWidgets(3));
+    expect(find.byKey(const ValueKey('control-layer')), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-page')), findsOneWidget,
+        reason: 'the page underneath is unchanged');
   });
 
   testWidgets('offline Home status offers a real, working retry action (§QA-07)',
@@ -120,13 +126,11 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('More'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-page')), findsOneWidget);
   });
 
   testWidgets('Settings -> Home renders with a paired Home present (§Settings-with-home)',
@@ -148,14 +152,12 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('More'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Home'));
+    await tester.tap(find.widgetWithText(ListTile, 'Home'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Test Home'), findsOneWidget);
+    expect(find.text('Test Home'), findsWidgets);
   });
 }

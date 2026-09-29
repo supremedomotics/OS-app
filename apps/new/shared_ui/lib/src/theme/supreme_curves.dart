@@ -25,6 +25,7 @@ class SupremeMotionCurves {
   static const rise = Duration(milliseconds: SupremeMotion.riseMs);
   static const image = Duration(milliseconds: SupremeMotion.imageMs);
   static const composition = Duration(milliseconds: SupremeMotion.compositionMs);
+  static const layer = Duration(milliseconds: SupremeMotion.layerMs);
 
   /// Pending travels · confirmation breathes · failure returns.
   static const pendingTravel = Duration(milliseconds: SupremeMotion.pendingTravelMs);

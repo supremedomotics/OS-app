@@ -18,7 +18,17 @@ class SupremeColorScheme {
   static const text2 = Color(SupremeColors.text2);
   static const text3 = Color(SupremeColors.text3);
   static const rule = Color(SupremeColors.rule);
+  static const faintRule = Color(SupremeColors.faintRule);
   static const brassWash = Color(SupremeColors.brassWash);
+  static const textIdle = Color(SupremeColors.textIdle);
+  static const plate = Color(SupremeColors.plate);
+  static const glass = Color(SupremeColors.glass);
+  static const glassEdge = Color(SupremeColors.glassEdge);
+  static const glassSolid = Color(SupremeColors.glassSolid);
+  static const rail = Color(SupremeColors.rail);
+  static const bar = Color(SupremeColors.bar);
+  static const veil = Color(SupremeColors.veil);
+  static const brassEdge = Color(SupremeColors.brassEdge);
 
   // Legacy names — see SupremeColors.
   static const voidBg = Color(SupremeColors.voidBg);

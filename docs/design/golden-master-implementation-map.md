@@ -21,7 +21,8 @@ body, `sheet.js` after line 60, `automations.js`, `integrations.js`, `bus.js`, t
 
   | Skeleton | Frame | Control |
   |---|---|---|
-  | phone | bottom bar (64 + safe area), five equal items; label under glyph 10.5 px | centre item, glyph in a 44×30 pill ringed in brass, label champagne |
+  | phone (upright) | bottom bar (64 + safe area), five equal items; label under glyph 10.5 px | centre item, glyph in a 44×30 pill ringed in brass, label champagne |
+  | phone (on its side) | the bar moves to a **76 px side rail**, header 48 px, glyph 20 / label 10 — "so the photo keeps its height" | same item, in the rail |
   | tablet | left rail 92 px, header offset by the rail, item plate 62 px min, 14 px radius | in the rail, glyph brass-light |
   | tv | same rail at 112 px, item min 74, focus ring 3 px + 8 px halo | in the rail |
   | desktop | top pill group (Home · Spaces · Experiences · Settings) + outlined **"Residence control"** button | the button; the Control *nav item* is `display:none` |
@@ -83,7 +84,7 @@ body, `sheet.js` after line 60, `automations.js`, `integrations.js`, `bus.js`, t
 | **Control** | Layer, scoped, three entry contexts. Its "systems" resolve from capabilities/categories; **"Protection" needs alarm-arming and contact state that production capabilities do not clearly carry** (see §4). |
 | **Experiences** | Larger than the plan: choreography (phases), per-system convergence, Shape/Keep, own-experience edit/rename/duplicate/delete, scopes of one / several spaces / residence. |
 | **Settings** | Bigger than a list: hosts **Automations** and **Hubs** (homeowner-language) and, on panels, **This panel**. |
-| **Phone nav** | Bottom bar, ringed centre Control. Layer = bottom sheet. Confirmed. |
+| **Phone nav** | Bottom bar with ringed centre Control when upright; a 76 px side rail on its side (found during implementation — the first draft of the plan missed it). Layer = bottom sheet upright, drawer on its side. |
 | **Tablet nav** | Left rail with Control in it. Confirmed. |
 | **Desktop nav** | Top pill group **without** a Control pill + a separate "Residence control" button. Confirmed (my earlier summary matched). |
 | **Watch nav** | No nav. See ambiguity A2. |

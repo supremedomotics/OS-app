@@ -22,6 +22,16 @@ compatibility adapter over it. Dart `CapabilityKind` gained `remote` + `display`
 `packages/domain-model/src/capabilities.ts`. A static authority test fails if anything but `SurfaceScope` reads raw
 surface inputs (planted-rogue negative control). Floor scope has its own `floorPanel` role.
 
+**Phase 1C — shell (verified by test run, visual check vs Golden Master captures).** Inspection pass over
+photos/tone/sky/spaces/settings/devices/panelui/formfactor/onboarding/icons recorded in
+`docs/design/golden-master-implementation-map.md` (conflicts C1–C5, ambiguities A1–A5, decisions D1–D8; no IA change).
+New: `shellNavigationFor(SurfaceProfile)` (pure, `shared`), `SupremeShell`/`SupremeLayer`/`PresenceMark`/`SupremeGlyph`
+(`shared_ui`), mobile `RootShell` = Home · Spaces · Control · Experiences · Settings; Control is a layer (sheet/drawer/
+hinge-docked), content is an honest empty state. `Now`/`More` removed (Now was an empty placeholder; More's rows live
+in Settings). Tests: shared 289, shared_ui 86, mobile 92, touchpanel 23 pass. Known gaps: no panel role wired in any
+app root; no `isTelevision` signal; touchpanel still fakes production behaviour; no backdrop blur; wordmark is a
+synthesized w600 (Jost has no static 600 bundled); Control content pending Phase 2/3. Open owner decisions D1–D8 in the map.
+
 **Phase 1B — design foundation (verified).** Inspected the Golden Master's stylesheet, page modules and rendered
 it (captures in `docs/design/golden-master/`); derived tokens are in `docs/design/supremeos-golden-master-tokens.md`.
 Palette is night `#08090A` / ivory / brass (not the old gold-on-black); fonts are Cormorant Garamond Light + Jost

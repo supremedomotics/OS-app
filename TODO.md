@@ -8,9 +8,8 @@
 ## Critical
 
 ### SupremeOS Flutter migration (apps/new) — Phase 1C onward
-- **Description:** Phases 0, 1A (SurfaceProfile) and 1B (Golden Master design foundation) are done and verified — see
-  `SESSION_HANDOFF.md`. Remaining, in order: **1C** navigation shell (Home · Spaces · Control · Experiences · Settings;
-  port the `SupremeGlyph` icon set first); **2** core homeowner surfaces (Home, Spaces, Space, Control, Experiences,
+- **Description:** Phases 0, 1A (SurfaceProfile), 1B (Golden Master design foundation) and 1C (navigation shell, glyphs, Control layer) are done and verified — see
+  `SESSION_HANDOFF.md`. Remaining, in order: **2** core homeowner surfaces (Home, Spaces, Space, Control, Experiences,
   Settings) on shared control renderers (switch · value · step · options · act) with unsupported capabilities not drawn;
   **3** backend contract gate → device-level Residence State read model, command tracker (requested → pending → confirmed
   | failed, confirmation only from authoritative device state), freshness timestamps, derived Experience state (needs
@@ -19,7 +18,7 @@
   recovery (Hub + local + backup), TV focus model, watch, foldable hinge; **5** hardening + visual regression against
   `docs/design/golden-master/`.
 - **Blockers / open:** touchpanel fakes (`panel-demo-1`, fixed areas, test signature, timer-based "confirmation") must be
-  replaced, not extended; no platform TV signal; Golden Master modules listed in the handoff still need inspection.
+  replaced, not extended; no platform TV signal; owner decisions D1–D8 (floor-panel nav, watch depth, Homes/Remote Access placement, onboarding vs pairing, Shape, add/remove Hub, incoming call, Experience orchestration) in `docs/design/golden-master-implementation-map.md`.
 
 ### Matter Controller Extension — Phase 4 (Subscriptions + Capability Adapters)
 - **Description:** Phase 3 (generic cluster engine) is done — `services/protocols/src/
