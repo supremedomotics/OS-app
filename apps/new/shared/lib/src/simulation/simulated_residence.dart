@@ -79,6 +79,21 @@ class SimulatedResidence {
   void setReachability(String deviceId, String status) =>
       _devices[deviceId]!['status'] = status;
 
+  /// Declares [capability] of [deviceId] as having NO feedback (a KNX actuator with no status
+  /// address): its config says `feedback: none`, it accepts commands, and nothing is ever reported.
+  void declareNoFeedback(String deviceId, String capability) {
+    for (final c in (_devices[deviceId]!['capabilities'] as List).cast<Map<String, dynamic>>()) {
+      if (c['kind'] == capability) c['config'] = <String, dynamic>{...Map<String, dynamic>.from(c['config'] as Map), 'feedback': 'none'};
+    }
+    _noFeedback.add('$deviceId:$capability');
+  }
+
+  /// Puts an arbitrary frame on the stream — for what a real Hub can send that this simulator's
+  /// devices never do (a `commanded` or `assumed` state frame).
+  void injectFrame(Map<String, dynamic> frame) => _frames.add(frame);
+
+  final _noFeedback = <String>{};
+
   /// A change that did not come from a command — a wall switch, a manual override.
   void changePhysically(String deviceId, Map<String, dynamic> command) {
     _apply(deviceId, command, immediate: true);
@@ -170,6 +185,7 @@ class SimulatedResidence {
       return; // capability not on this device: nothing reports.
     }
     final after = immediate ? Duration.zero : reportLatency;
+    if (!immediate && _noFeedback.contains('$id:$cap')) return; // accepted; nothing ever reports
 
     // The device applies the command to ITS state when it acts, not to the state it had when the
     // command was sent — two commands in flight compose, they do not overwrite each other.
@@ -280,6 +296,7 @@ class SimulatedResidence {
       'roomId': device['roomId'],
       'deviceId': id,
       'state': full,
+      'provenance': 'observed',
       'seq': seq,
       'ts': _now().toUtc().toIso8601String(),
     });

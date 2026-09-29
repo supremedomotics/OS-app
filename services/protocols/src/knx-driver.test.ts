@@ -133,12 +133,17 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
 
     await driver.command(dev, { capability: "position", action: "set", position: 60 });
     expect(bus.writes).toEqual([{ ga: "1/2/0", value: 60, dpt: "DPT5.001" }]);
-    // Optimistic state recorded on command.
-    expect(driver.getState(dev, "position")).toEqual({ kind: "position", position: 60, moving: false });
+    // What was asked for is announced as `commanded` and is NOT the device's state.
+    expect(driver.getState(dev, "position")).toBeNull();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ provenance: "commanded", state: { kind: "position", position: 60 } });
 
-    // Actuator reports final position on the status GA → bubbles up.
+    // Actuator reports on the status GA → observed. DPT 5.001 carries no motion flag, so `moving`
+    // is UNKNOWN (null), never `false`.
     bus.push("1/2/1", 100);
-    expect(events.at(-1)?.state).toEqual({ kind: "position", position: 100, moving: false });
+    expect(events.at(-1)?.provenance).toBe("observed");
+    expect(events.at(-1)?.state).toEqual({ kind: "position", position: 100, moving: null });
+    expect(driver.getState(dev, "position")).toEqual({ kind: "position", position: 100, moving: null });
   });
 
   it("group-writes a colour command using the binding's own DPT", async () => {
@@ -151,19 +156,13 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
       deviceId: dev,
       capability: "color",
       address: "1/5/0",
-      config: { dpt: "DPT232.600" },
+      config: { dpt: "DPT232.600", statusAddress: "1/5/1" },
     });
 
     await driver.command(dev, { capability: "color", hue: 240, saturation: 100, level: 100 });
     expect(bus.writes).toEqual([{ ga: "1/5/0", value: { red: 0, green: 0, blue: 255 }, dpt: "DPT232.600" }]);
-    expect(driver.getState(dev, "color")).toEqual({
-      kind: "color",
-      on: true,
-      level: 100,
-      hue: 240,
-      saturation: 100,
-      kelvin: null,
-    });
+    // The command is not the device's state; only its own status telegram is.
+    expect(driver.getState(dev, "color")).toBeNull();
   });
 
   it("getCapabilityConfig reports colorModes from the binding's own DPT (§ live-confirmed fix — this is the driver actually bound in production, not just the discovery-time driver)", async () => {
@@ -172,12 +171,17 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
     await driver.connect();
 
     const cct = "device-knx-cct" as DeviceId;
-    await driver.bind({ deviceId: cct, capability: "color", address: "5/1/5", config: { dpt: "DPT7.600" } });
+    await driver.bind({ deviceId: cct, capability: "color", address: "5/1/5", config: { dpt: "DPT7.600", statusAddress: "5/1/6" } });
     expect(driver.getCapabilityConfig(cct, "color")).toEqual({ colorModes: { rgb: false, cct: true } });
 
     const rgb = "device-knx-rgb2" as DeviceId;
-    await driver.bind({ deviceId: rgb, capability: "color", address: "1/5/0", config: { dpt: "DPT232.600" } });
+    await driver.bind({ deviceId: rgb, capability: "color", address: "1/5/0", config: { dpt: "DPT232.600", statusAddress: "1/5/1" } });
     expect(driver.getCapabilityConfig(rgb, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
+
+    // A colour control with NO declared status address says so, structurally.
+    const blind = "device-knx-rgb-nofb" as DeviceId;
+    await driver.bind({ deviceId: blind, capability: "color", address: "2/5/0", config: { dpt: "DPT232.600" } });
+    expect(driver.getCapabilityConfig(blind, "color")).toEqual({ colorModes: { rgb: true, cct: false }, feedback: "none" });
 
     // Never fabricated for a capability this device isn't bound for, or a device with no binding at all.
     expect(driver.getCapabilityConfig(cct, "brightness")).toBeNull();
@@ -199,9 +203,9 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
     await driver.connect();
 
     const dev = "device-knx-light" as DeviceId;
-    await driver.bind({ deviceId: dev, capability: "onoff", address: "1/1/0" });
+    await driver.bind({ deviceId: dev, capability: "onoff", address: "1/1/0", config: { statusAddress: "1/1/1" } });
     expect(driver.getState(dev, "onoff")).toBeNull();
-    bus.push("1/1/0", true);
+    bus.push("1/1/1", true);
     expect(driver.getState(dev, "onoff")).toEqual({ kind: "onoff", on: true });
 
     await driver.unbind(dev);
@@ -212,7 +216,7 @@ describe("KnxProtocolDriver (fake KNXnet/IP bus)", () => {
     // a telegram on the now-unbound GA must not resurrect any state or fire a listener.
     const events: BackendStateEvent[] = [];
     driver.onState((e) => events.push(e));
-    bus.push("1/1/0", false);
+    bus.push("1/1/1", false);
     expect(events).toEqual([]);
     expect(driver.getState(dev, "onoff")).toBeNull();
 

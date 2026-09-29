@@ -81,7 +81,11 @@ export class SupremeNativeAdapter implements IBackendAdapter {
       return;
     }
     const unsubState = driver.onState((event) => {
-      this.states.set(key(event.deviceId, event.capability), event.state);
+      // The cache answers `getState()`: only a device's own report belongs in it (a value that was
+      // merely commanded / assumed is forwarded to listeners, labelled, but is not the device's state).
+      if ((event.provenance ?? "observed") === "observed") {
+        this.states.set(key(event.deviceId, event.capability), event.state);
+      }
       for (const l of this.listeners) l(event);
     });
     // Universal Input Engine feed: a keypad-capable driver's raw/derived input is

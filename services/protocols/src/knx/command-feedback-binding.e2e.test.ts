@@ -83,31 +83,36 @@ describe("Command/Feedback Binding — Device 1.1.12, Channel 1: Switch + Dimmin
     expect(brightness.config.stepAddress).toBe("1/2/2"); // DPT 3.007 relative dimming — a step control, not the write address
   });
 
-  it("end to end: Power command actually writes the SEND GA (1/2/1), and REAL feedback on the RECEIVE GA (1/2/4) is authoritative — it corrects state even when it disagrees with the optimistic guess", async () => {
+  it("end to end: Power command writes the SEND GA (1/2/1); ONLY the RECEIVE GA (1/2/4) is the device's report — a command is never its state", async () => {
     const provider = new FakeKnxProvider();
     const devices = mapUnifiedDevices({ ets: buildEts() });
     const { driver, deviceId } = await bindDevice(provider, devices);
-    const events: unknown[] = [];
-    driver.onState((e) => events.push(e));
+    const events: { state: { on: boolean }; provenance?: string }[] = [];
+    driver.onState((e) => events.push(e as never));
 
     await driver.command(deviceId, { capability: "onoff", action: "on" });
     expect(provider.writes).toHaveLength(1);
     expect(provider.writes[0]).toMatchObject({ kind: "bus.group_write", groupAddress: "1/2/1" });
-    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true }); // optimistic, pending real confirmation
+    // The request is announced as COMMANDED and is not the device's state.
+    expect(driver.getState(deviceId, "onoff")).toBeNull();
+    expect(events.map((e) => e.provenance)).toEqual(["commanded"]);
 
-    // Real feedback on the RECEIVE ga disagrees with the optimistic guess (e.g. the
-    // physical actuator didn't actually switch) — the feedback GA is authoritative and
-    // must correct Supreme's state, never leave the optimistic guess standing.
+    // The device's own status object reports — this is the only thing that is observed state.
+    provider.emit("1/2/4", true);
+    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true });
+    expect(events.at(-1)?.provenance).toBe("observed");
+
+    // Real feedback that disagrees with the request (the actuator did not switch) is simply what it is.
     provider.emit("1/2/4", false);
     expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: false });
-    expect(events.some((e) => (e as { state: { on: boolean } }).state.on === false)).toBe(true);
+    expect(events.at(-1)).toMatchObject({ provenance: "observed", state: { on: false } });
 
-    // The SEND ga is a write-only target — a telegram arriving there must never be
-    // interpreted as this device's status (the driver never subscribed to it).
+    // The SEND ga is a write-only target — a telegram there (another switch, an automation) is
+    // never interpreted as this device's status (the driver never subscribed to it).
     const eventsBefore = events.length;
     provider.emit("1/2/1", true);
     expect(events).toHaveLength(eventsBefore);
-    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: false }); // unchanged by the SEND-ga telegram
+    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: false });
   });
 
   it("end to end: Brightness command writes 1/2/3 (Absolute Value SEND), feedback comes from 1/2/5 (Absolute Feedback RECEIVE)", async () => {

@@ -7,6 +7,12 @@
 
 ## Critical
 
+### Phase 3.5 physical-driver gate — OPEN (hardware) + driver audit
+- Run KNX switch, KNX shade and Sonos/HEOS/AVR lifecycles against REAL hardware (nothing physical verified).
+- Audit every legacy driver for provenance (commanded-as-state, hardcoded `moving:false`: Shelly, Lutron,
+  Casambi, apply.ts, home-service seed; CoolMaster optimistic); decide single-GA temperature; Sonos G3.
+- Completed: provenance model + KNX fix + regression tests (see the gate document).
+
 ### apps/new — Phase 3 follow-ups (Phase 3 closed, see `docs/design/phase-3-closure-report.md`)
 - **Completed in Phase 3 (moved, not deleted):** Hub-orchestrated Experience activation; Dart contract parity +
   simulator conformance + drift gate; Touch Panel off hardcoded state; Devices inventory + Device Sheet;

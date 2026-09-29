@@ -4,6 +4,16 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Phase 3.5 — state provenance (Option A) after the physical-driver gate found G1
+
+Full record: `docs/design/phase-3.5-physical-validation-gate.md`. **Physical-driver validation is NOT done** (no
+hardware reachable); this session fixed the architecture the gate exposed. `StateProvenance`
+(observed/commanded/assumed/unknown) on `BackendStateEvent` and the stream frame; Hub persists/feeds consumers
+only for `observed`; KNX drivers stop publishing commands as state, observe only a declared status address
+(command address never), report `feedback:"none"` when none, and emit `moving: null` (unknown); client ignores
+non-observed frames and gives a declared no-feedback control the `sentOnly` outcome. Open: audit every other
+(legacy) driver; hardware runs; single-GA temperature; Sonos G3. Phase 4 NOT started.
+
 ## Session: apps/new Phase 3 — Hub-orchestrated Experiences, drift gate, live-gateway lifecycle, Devices
 
 Full record: `docs/design/phase-3-closure-report.md` (completed / deferred / risks / contract gaps / Phase 4

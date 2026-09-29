@@ -21,6 +21,7 @@ import {
   defaultDpt,
   encodeHeatCool,
   encodeHvacOperatingMode,
+  hasAttributableFeedback,
   stateFromValue,
   valueFromCommand,
   type KnxValue,
@@ -115,8 +116,18 @@ interface KnxBinding {
   capability: CapabilityKind;
   /** Group address commands are written to. */
   writeGa: string;
-  /** Group address status is read from (defaults to writeGa). */
+  /** Group address status is read from. Equals `writeGa` only as a placeholder when no feedback is
+   * declared — see `hasFeedback`. */
   statusGa: string;
+  /**
+   * True only when the integration DECLARES a status/feedback address for this capability: a
+   * `statusAddress` distinct from the command address (or the installer explicitly marking a
+   * shared one with `feedbackOnCommandAddress`). A telegram on the command address may be another
+   * switch, an automation or any other writer, so it is never attributable to this device's state;
+   * without a declared feedback address the driver observes NOTHING for this capability and never
+   * claims a state — a transmitted command is not a report.
+   */
+  hasFeedback: boolean;
   dpt: string;
   config: Record<string, unknown>;
   unsubscribe?: () => void;
@@ -211,11 +222,13 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
   async bind(binding: ProtocolBinding): Promise<void> {
     const cfg = binding.config ?? {};
     const dpt = typeof cfg.dpt === "string" ? cfg.dpt : defaultDpt(binding.capability as CapabilityState["kind"]);
+    const declared = typeof cfg.statusAddress === "string" ? cfg.statusAddress : null;
     const entry: KnxBinding = {
       deviceId: binding.deviceId,
       capability: binding.capability,
       writeGa: binding.address,
-      statusGa: typeof cfg.statusAddress === "string" ? cfg.statusAddress : binding.address,
+      statusGa: declared ?? binding.address,
+      hasFeedback: hasAttributableFeedback(binding.capability, binding.address, declared, cfg.feedbackOnCommandAddress === true),
       dpt,
       config: cfg,
       hvacRoles: parseHvacRoles(cfg, dpt),
@@ -239,11 +252,17 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
    * permanently `{}` regardless of what the scan/binding correctly computed. See
    * `colorModesFromDpt`'s own doc comment for the DPT-major evidence rule. */
   getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
-    if (capability !== "color") return null;
-    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
+    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === capability);
     if (!b) return null;
-    const modes = colorModesFromDpt(b.dpt);
-    return modes ? { colorModes: modes } : null;
+    const out: Record<string, unknown> = {};
+    // A control with no declared feedback says so, structurally: clients then use the separate
+    // "sent, unverified" lifecycle instead of waiting for a report that can never come.
+    if (!b.hasFeedback && b.hvacRoles.length === 0) out.feedback = "none";
+    if (capability === "color") {
+      const modes = colorModesFromDpt(b.dpt);
+      if (modes) out.colorModes = modes;
+    }
+    return Object.keys(out).length > 0 ? out : null;
   }
 
   /** § Driver Lifecycle Completion — unsubscribes this device's group-address
@@ -327,12 +346,11 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
     const value = valueFromCommand(command, prev, b.dpt);
     if (value === null) throw new Error(`knx: unsupported command for ${command.capability}`);
     await this.conn.write(b.writeGa, value, b.dpt);
-    // Optimistically reflect the command; a status telegram will confirm/correct it.
-    // § Phase 3.3C-1 — re-apply the hvacRoles overlay here too, for the same reason as
-    // `observe()`'s primary handler: this optimistic write must not silently clobber a
-    // previously-decoded `operatingMode` back to `undefined`.
-    const optimistic = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
-    if (optimistic) this.record(b, this.applyHvacRoleOverlay(b, optimistic));
+    // What was asked for is NOT the device's state. It is announced as `commanded` (never stored as
+    // this driver's state, never observed, never a confirmation): only a telegram on the declared
+    // status address — the device's own report — becomes observed state (see `observe()`).
+    const asked = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
+    if (asked) this.announceCommanded(b, asked);
   }
 
   getState(deviceId: DeviceId, capability: CapabilityKind): CapabilityState | null {
@@ -352,7 +370,8 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
 
   private observe(b: KnxBinding): void {
     if (!this.conn) return;
-    b.unsubscribe = this.conn.observe(b.statusGa, b.dpt, (value) => {
+    // No declared feedback address → nothing on the bus is attributable to this device's state.
+    if (b.hasFeedback) b.unsubscribe = this.conn.observe(b.statusGa, b.dpt, (value) => {
       const state = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
       // § Phase 3.3C-1 fix — `stateFromValue` always returns a FRESH object built only
       // from this one telegram; without re-applying the hvacRoles overlay here, a new
@@ -456,13 +475,20 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
     await this.conn.write(r.address, value, r.dpt);
   }
 
+  /** Publishes a value a command asked for, labelled `commanded`. Not stored, not de-duplicated. */
+  private announceCommanded(b: KnxBinding, state: CapabilityState): void {
+    for (const l of this.listeners) {
+      l({ deviceId: b.deviceId, capability: b.capability, state, provenance: "commanded", ts: new Date().toISOString() });
+    }
+  }
+
   private record(b: KnxBinding, state: CapabilityState): void {
     const k = bindingKey(b.deviceId, b.capability);
     const prev = this.states.get(k);
     if (prev && JSON.stringify(prev) === JSON.stringify(state)) return;
     this.states.set(k, state);
     for (const l of this.listeners) {
-      l({ deviceId: b.deviceId, capability: b.capability, state, ts: new Date().toISOString() });
+      l({ deviceId: b.deviceId, capability: b.capability, state, provenance: "observed", ts: new Date().toISOString() });
     }
   }
 }

@@ -33,7 +33,13 @@ enum CommandFailure {
   superseded
 }
 
-enum ConfirmedBy { deviceReport, alreadyInState }
+/// How a command reached `confirmed`.
+///
+/// * `deviceReport` / `alreadyInState` — the device's own observed state satisfies the target.
+/// * `sentOnly` — ONLY for a control that DECLARES it has no feedback (`capabilities[c].feedback ==
+///   "none"`): the Hub accepted the transmit and nothing can ever be reported. This is "sent,
+///   unverified", never physical confirmation — see [CommandRecord.physicallyConfirmed].
+enum ConfirmedBy { deviceReport, alreadyInState, sentOnly }
 
 class CommandRecord {
   final int id;
@@ -60,6 +66,10 @@ class CommandRecord {
 
   bool get inFlight =>
       phase == CommandPhase.requested || phase == CommandPhase.pending;
+
+  /// The device itself reported the requested state. False for `sentOnly` (transmitted, unverified).
+  bool get physicallyConfirmed =>
+      phase == CommandPhase.confirmed && confirmedBy != ConfirmedBy.sentOnly;
 
   CommandRecord _to(CommandPhase p,
           {DateTime? at, CommandFailure? failure, ConfirmedBy? by}) =>
@@ -229,6 +239,14 @@ class CommandTracker {
     // A report may already have confirmed it while the ack was in flight.
     _records[id] = current._to(CommandPhase.pending);
     _emit(_records[id]!);
+
+    // A control that declares it has no feedback can never be confirmed by a report. It gets the
+    // separate "sent, unverified" outcome instead of waiting out a deadline that would wrongly say
+    // the device "didn't respond" — and it is never presented as physical confirmation.
+    if (_state.snapshot.devices[rec.deviceId]?.capabilities[rec.capability]?['feedback'] == 'none') {
+      _settleId(id, CommandPhase.confirmed, by: ConfirmedBy.sentOnly);
+      return;
+    }
 
     final now = _state.snapshot.devices[rec.deviceId]?.state[rec.capability];
     if (now != null && _expect[id]!.matches(now)) {

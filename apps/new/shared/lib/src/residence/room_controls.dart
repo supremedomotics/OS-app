@@ -132,11 +132,18 @@ class RoomShades {
   final List<DeviceRecord> online;
   final int? position;
   final int? pendingPosition;
+  /// True only when a shade REPORTS travel (`moving == true`). False does not mean "standing
+  /// still": see [motionKnown].
   final bool moving;
+
+  /// Whether every responding shade reports motion at all. A protocol that only reports position
+  /// (KNX DPT 5.001) leaves `moving` unknown (null): that is neither "moving" nor "not moving", and
+  /// no word or deadline may treat it as either.
+  final bool motionKnown;
   final List<String> unresponsive;
 
   const RoomShades._(this.shades, this.online, this.position,
-      this.pendingPosition, this.moving, this.unresponsive);
+      this.pendingPosition, this.moving, this.motionKnown, this.unresponsive);
 
   static RoomShades? of(
       Iterable<DeviceRecord> devices, Iterable<CommandRecord> inFlight) {
@@ -158,6 +165,7 @@ class RoomShades {
       _avg([for (final d in online) (d.state['position']?['position'] as num?) ?? 0])?.round(),
       pp?.round(),
       online.any((d) => d.state['position']?['moving'] == true),
+      online.isNotEmpty && online.every((d) => d.state['position']?['moving'] is bool),
       [for (final d in shades) if (!d.isOnline) d.name],
     );
   }

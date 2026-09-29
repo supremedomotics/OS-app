@@ -205,6 +205,9 @@ class ResidenceState {
   /// stale; triggers a refresh instead of being silently applied.
   int unknownDeviceFrames = 0;
 
+  /// State frames the Hub labelled commanded / assumed / unknown (not the device's own report).
+  int nonObservedFrames = 0;
+
   ResidenceState({
     required ResidenceGet get,
     required Stream<Map<String, dynamic>> frames,
@@ -349,6 +352,16 @@ class ResidenceState {
     if (id is! String || st is! Map<String, dynamic> || ts is! String) return;
     final kind = st['kind'];
     if (kind is! String) return;
+    // Only a device's own report is the device's state. A value the Hub says was merely
+    // `commanded`, `assumed` or is `unknown` is NOT state and NOT a report: it must not change the
+    // snapshot, must not reach `reports` (so it can never confirm a command), and must not advance
+    // the device's sequence. A frame with no provenance comes from a Hub that predates it and is
+    // an observed report, as before.
+    final provenance = f['provenance'];
+    if (provenance is String && provenance != 'observed') {
+      nonObservedFrames++;
+      return;
+    }
     final at = DateTime.tryParse(ts);
     if (at == null) return;
     final device = _snapshot.devices[id];

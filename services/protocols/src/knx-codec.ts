@@ -151,7 +151,7 @@ export function stateFromValue(
       return { kind: "brightness", on: level > 0, level };
     }
     case "position":
-      return { kind: "position", position: clampPct(Number(value)), moving: false };
+      return { kind: "position", position: clampPct(Number(value)), moving: null };
     case "color": {
       if (typeof value === "number") {
         // § live-confirmed fix (Matter Bridge Phase 1.3) — DPT7.600 (colour-temperature-only,
@@ -556,4 +556,31 @@ function rgbToHsv(red: number, green: number, blue: number): { hue: number; satu
   const saturation = max === 0 ? 0 : (d / max) * 100;
   const level = max * 100;
   return { hue: Math.round(hue), saturation: Math.round(saturation), level: Math.round(level) };
+}
+
+/**
+ * Capabilities a group write can ACTUATE. For these, a value on the command address is not
+ * attributable to the device's state (it may be another switch, an automation, any writer), so a
+ * device is only observed through a DECLARED status/feedback address. Measurement capabilities
+ * (`sensor` …) have no command path: their one address is a status object by nature.
+ * Single-GA `temperature` (reading and setpoint on one address) is deliberately not in this set —
+ * its ambiguity is reported in the physical-validation gate, not silently reinterpreted here.
+ */
+export const KNX_ACTUATED_CAPABILITIES: ReadonlySet<string> = new Set([
+  "onoff", "brightness", "position", "color", "lock", "fan",
+]);
+
+/**
+ * Whether this binding has a declared feedback address attributable to the device's own state.
+ * `declaredStatus` is the configured status address (or null); `explicitShared` is the installer's
+ * explicit declaration that the command address is also the device's status object.
+ */
+export function hasAttributableFeedback(
+  capability: string,
+  commandGa: string,
+  declaredStatus: string | null,
+  explicitShared: boolean,
+): boolean {
+  if (!KNX_ACTUATED_CAPABILITIES.has(capability)) return true;
+  return declaredStatus !== null && (declaredStatus !== commandGa || explicitShared);
 }

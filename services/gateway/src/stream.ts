@@ -68,6 +68,7 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
         roomId,
         deviceId: event.deviceId,
         state: event.state,
+        provenance: event.provenance ?? "observed",
         seq,
         ts: event.ts,
       });

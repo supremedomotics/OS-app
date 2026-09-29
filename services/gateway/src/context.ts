@@ -966,6 +966,17 @@ export class AppContext {
     // on a physical keypad press, the break is upstream (driver → native adapter →
     // SIL), not in this gateway at all.
     this.recordFeedbackHop(this.lastBackendState, event);
+    // § State provenance — ONLY an observed report is the device's state. A value a driver merely
+    // wrote (`commanded`), inferred (`assumed`) or cannot vouch for (`unknown`) is forwarded to
+    // clients labelled as such (so they can refuse to treat it as state or as confirmation) but is
+    // never persisted as the device's state and never feeds automations, voice, HomeKit, analytics
+    // or keypad feedback: each of those would otherwise act on something no device said.
+    // A legacy driver that declares nothing is treated as observed (an audit item, see
+    // `StateProvenance`).
+    if ((event.provenance ?? "observed") !== "observed") {
+      await this.bus.publish(subjects.deviceState(this.homeId), event);
+      return;
+    }
     await this.home.applyState(event.deviceId, event.state);
     // § Decisive KNX Feedback Diagnostic, hop 2 — recorded only once `applyState()`
     // above has actually returned, so a nonzero snapshot here is proof the state
@@ -1109,7 +1120,12 @@ export class AppContext {
         },
         command: (id, command) => this.sil.command(id as DeviceId, command),
         onState: (sub) =>
-          this.onState((e) => sub({ deviceId: e.deviceId, capability: e.capability, state: e.state as unknown as Record<string, unknown> })),
+          this.onState((e) => {
+            // A run step is confirmed by a device's own report, never by a value that was only
+            // commanded / assumed (see StateProvenance).
+            if ((e.provenance ?? "observed") !== "observed") return;
+            sub({ deviceId: e.deviceId, capability: e.capability, state: e.state as unknown as Record<string, unknown> });
+          }),
         publish: (run) => {
           for (const sub of this.sceneRunSubs) sub(run);
         },
@@ -1192,6 +1208,8 @@ export class AppContext {
       getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
       onState: (listener) =>
         this.sil.subscribe((e) => {
+          // Apple Home must not be told a value only a command asked for (see StateProvenance).
+          if ((e.provenance ?? "observed") !== "observed") return;
           console.log(`matter-bridge TRACE F->G: SIL state event — ts=${Date.now()} device.id=${e.deviceId} capability=${e.capability} state=${JSON.stringify(e.state)}`);
           listener({ deviceId: e.deviceId, capability: e.capability, state: e.state });
         }),

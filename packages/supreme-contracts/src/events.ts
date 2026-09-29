@@ -1,4 +1,4 @@
-import { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
+import { CapabilityCommand, CapabilityState, StateProvenance } from "@supreme/domain-model";
 import { z } from "zod";
 import { RunFrame } from "./scene-runs.js";
 
@@ -52,6 +52,11 @@ export const StateDeltaFrame = z.object({
   roomId: z.string().nullable(),
   deviceId: z.string(),
   state: CapabilityState,
+  /**
+   * Where `state` came from. Only `observed` is the device's own report; a client must not treat
+   * `commanded` / `assumed` / `unknown` as the device's state or as confirmation of a command.
+   */
+  provenance: StateProvenance.default("observed"),
   /** Monotonic per-device sequence so clients drop stale/out-of-order deltas. */
   seq: z.number().int().nonnegative(),
   ts: z.string().datetime(),

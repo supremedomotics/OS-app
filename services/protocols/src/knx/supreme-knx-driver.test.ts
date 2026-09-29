@@ -92,12 +92,13 @@ describe("SupremeKnxDriver", () => {
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
     await driver.connect();
-    const events: unknown[] = [];
+    const events: { provenance?: string }[] = [];
     driver.onState((e) => events.push(e));
-    provider.emit("1/1/1", true);
+    provider.emit("1/1/2", true);
     expect(events).toHaveLength(1);
+    expect(events[0]!.provenance).toBe("observed");
     expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true });
   });
 
@@ -273,7 +274,7 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "color", address: "5/3/5", config: { dpt: "DPT7.600" } });
+    await driver.bind({ deviceId, capability: "color", address: "5/3/5", config: { dpt: "DPT7.600", statusAddress: "5/3/5/s" } });
     expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: false, cct: true } });
   });
 
@@ -281,7 +282,7 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "color", address: "2/1/1", config: { dpt: "DPT232.600" } });
+    await driver.bind({ deviceId, capability: "color", address: "2/1/1", config: { dpt: "DPT232.600", statusAddress: "2/1/1/s" } });
     expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
   });
 
@@ -289,7 +290,7 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "color", address: "2/1/2", config: { dpt: "DPT251.600" } });
+    await driver.bind({ deviceId, capability: "color", address: "2/1/2", config: { dpt: "DPT251.600", statusAddress: "2/1/2/s" } });
     expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
   });
 
@@ -301,7 +302,7 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "color", address: "5/3/6", config: { dpt: "DPT9.022" } });
+    await driver.bind({ deviceId, capability: "color", address: "5/3/6", config: { dpt: "DPT9.022", statusAddress: "5/3/6/s" } });
     expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: false, cct: true } });
   });
 
@@ -309,7 +310,7 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "color", address: "2/1/3", config: { dpt: "DPT233.600" } });
+    await driver.bind({ deviceId, capability: "color", address: "2/1/3", config: { dpt: "DPT233.600", statusAddress: "2/1/3/s" } });
     expect(driver.getCapabilityConfig?.(deviceId, "color")).toEqual({ colorModes: { rgb: true, cct: false } });
   });
 
@@ -317,8 +318,16 @@ describe("SupremeKnxDriver.getCapabilityConfig (§ PASS 17 — structural colorM
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
     expect(driver.getCapabilityConfig?.(deviceId, "onoff")).toBeNull();
+  });
+
+  it("an actuator with no declared status address reports feedback: none, structurally", async () => {
+    const provider = new FakeKnxProvider();
+    const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
+    const deviceId = newId("device") as DeviceId;
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    expect(driver.getCapabilityConfig?.(deviceId, "onoff")).toEqual({ feedback: "none" });
   });
 
   it("returns null for an unmanaged device — never fabricated", () => {
@@ -334,8 +343,8 @@ describe("SupremeKnxDriver.unbind (§ Driver Lifecycle Completion)", () => {
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     await driver.connect();
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
-    provider.emit("1/1/1", true);
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    provider.emit("1/1/2", true);
     expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true });
 
     await driver.unbind(deviceId);
@@ -344,7 +353,7 @@ describe("SupremeKnxDriver.unbind (§ Driver Lifecycle Completion)", () => {
 
     const events: unknown[] = [];
     driver.onState((e) => events.push(e));
-    provider.emit("1/1/1", false);
+    provider.emit("1/1/2", false);
     expect(events).toEqual([]);
     expect(driver.getState(deviceId, "onoff")).toBeNull();
   });
@@ -356,15 +365,15 @@ describe("SupremeKnxDriver.unbind (§ Driver Lifecycle Completion)", () => {
     const devA = newId("device") as DeviceId;
     const devB = newId("device") as DeviceId;
     // Both devices bound to the same status GA (unusual but possible — a shared sensor GA).
-    await driver.bind({ deviceId: devA, capability: "onoff", address: "1/1/1" });
-    await driver.bind({ deviceId: devB, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId: devA, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/9" } });
+    await driver.bind({ deviceId: devB, capability: "onoff", address: "1/1/2", config: { statusAddress: "1/1/9" } });
 
     await driver.unbind(devA);
     expect(driver.manages(devA)).toBe(false);
 
     const events: unknown[] = [];
     driver.onState((e) => events.push(e));
-    provider.emit("1/1/1", true);
+    provider.emit("1/1/9", true);
     expect(events).toHaveLength(1); // devB's binding is still live
     expect(driver.getState(devB, "onoff")).toMatchObject({ on: true });
   });
@@ -454,12 +463,15 @@ describe("SupremeKnxDriver.syncAll (§ Phase 7 State Synchronization)", () => {
     await driver.connect();
     const d1 = newId("device") as DeviceId;
     const d2 = newId("device") as DeviceId;
-    await driver.bind({ deviceId: d1, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId: d1, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/0" } });
     await driver.bind({ deviceId: d2, capability: "brightness", address: "1/1/2", config: { statusAddress: "1/1/3" } });
+    // An actuator with NO declared status address has nothing to read: reading its command address
+    // would return another writer's value, not the device's.
+    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/7" });
 
     const result = await driver.syncAll();
     expect(result).toEqual({ requested: 2, failed: 0 });
-    expect(provider.reads.sort()).toEqual(["1/1/1", "1/1/3"]);
+    expect(provider.reads.sort()).toEqual(["1/1/0", "1/1/3"]);
 
     const diag = driver.diagnostics();
     expect(diag.lastSyncCount).toBe(2);
@@ -472,8 +484,8 @@ describe("SupremeKnxDriver.syncAll (§ Phase 7 State Synchronization)", () => {
     provider.failReads = true;
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     await driver.connect();
-    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/1" });
-    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/2" });
+    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/8" } });
+    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/2", config: { statusAddress: "1/1/9" } });
     const result = await driver.syncAll();
     expect(result).toEqual({ requested: 2, failed: 2 });
   });
@@ -482,27 +494,30 @@ describe("SupremeKnxDriver.syncAll (§ Phase 7 State Synchronization)", () => {
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     await driver.connect();
-    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId: newId("device") as DeviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/8" } });
 
     expect(driver.diagnostics().lastSyncAt).toBeNull(); // nothing triggered a sync yet
     provider.fireConnectionState("connected", "recovering"); // simulate the Connection Manager's real reconnect event
     await new Promise((r) => setTimeout(r, 0)); // let the fire-and-forget syncAll() settle
     expect(driver.diagnostics().lastSyncAt).not.toBeNull();
-    expect(provider.reads).toEqual(["1/1/1"]);
+    expect(provider.reads).toEqual(["1/1/8"]);
   });
 });
 
 describe("SupremeKnxDriver offline command queue (§ Enterprise Reliability — Queue Recovery)", () => {
-  it("queues a command issued while disconnected instead of throwing, and reflects it optimistically", async () => {
+  it("queues a command issued while disconnected instead of throwing, and announces it as commanded — never as state", async () => {
     const provider = new FakeKnxProvider();
     const driver = new SupremeKnxDriver({ host: "10.0.0.1", ultimateProvider: provider });
     // Deliberately never connected.
     const deviceId = newId("device") as DeviceId;
-    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1" });
+    await driver.bind({ deviceId, capability: "onoff", address: "1/1/1", config: { statusAddress: "1/1/2" } });
+    const events: { provenance?: string }[] = [];
+    driver.onState((e) => events.push(e));
     await driver.command(deviceId, { capability: "onoff", action: "on" });
     expect(provider.writes).toEqual([]); // nothing sent to the bus yet — offline
     expect(driver.diagnostics().queuedCommandCount).toBe(1);
-    expect(driver.getState(deviceId, "onoff")).toMatchObject({ on: true }); // optimistic UI reflection
+    expect(driver.getState(deviceId, "onoff")).toBeNull(); // intent is not the device's state
+    expect(events.map((e) => e.provenance)).toEqual(["commanded"]);
   });
 
   it("MERGE: turning a light on then off while offline only ever applies OFF once reconnected", async () => {

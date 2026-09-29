@@ -13,7 +13,7 @@ import {
   type ProtocolBinding,
   type StateListener,
 } from "@supreme/integration-layer";
-import { defaultDpt, stateFromValue, valueFromCommand } from "../knx-codec.js";
+import { defaultDpt, hasAttributableFeedback, stateFromValue, valueFromCommand } from "../knx-codec.js";
 import { KnxTaskRouter } from "./task-router.js";
 import { KnxUltimateProvider } from "./knx-ultimate-provider.js";
 import { KnxIotProvider } from "./knx-iot-provider.js";
@@ -59,6 +59,14 @@ interface KnxDeviceBinding {
    * same `record()` — never a second event system, just more subscriptions on the
    * SAME provider fan-out `KnxUltimateProvider` already supports. */
   extraStatusGas: string[];
+  /**
+   * The group addresses whose telegrams are attributable to this capability's state: the declared
+   * status address (only when distinct from the command address, or explicitly marked with
+   * `feedbackOnCommandAddress`) plus any ETS-declared extra status addresses. Empty = the device
+   * has no declared feedback: nothing is observed and no state is claimed. A value seen on the
+   * COMMAND address may be another switch, an automation or any other writer.
+   */
+  feedbackGas: string[];
   dpt: string;
   config: Record<string, unknown>;
 }
@@ -171,12 +179,18 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
 
   async bind(binding: ProtocolBinding): Promise<void> {
     const cfg = binding.config ?? {};
+    const declared = typeof cfg.statusAddress === "string" ? cfg.statusAddress : null;
+    const extra = Array.isArray(cfg.extraStatusAddresses) ? cfg.extraStatusAddresses.filter((g): g is string => typeof g === "string") : [];
     const entry: KnxDeviceBinding = {
       deviceId: binding.deviceId,
       capability: binding.capability,
       writeGa: binding.address,
-      statusGa: typeof cfg.statusAddress === "string" ? cfg.statusAddress : binding.address,
-      extraStatusGas: Array.isArray(cfg.extraStatusAddresses) ? cfg.extraStatusAddresses.filter((g): g is string => typeof g === "string") : [],
+      statusGa: declared ?? binding.address,
+      extraStatusGas: extra,
+      feedbackGas: [
+        ...(hasAttributableFeedback(binding.capability, binding.address, declared, cfg.feedbackOnCommandAddress === true) ? [declared ?? binding.address] : []),
+        ...extra.filter((g) => g !== binding.address),
+      ],
       dpt: typeof cfg.dpt === "string" ? cfg.dpt : defaultDpt(binding.capability as CapabilityState["kind"]),
       config: cfg,
     };
@@ -202,8 +216,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
    * fallback (§ ADR 0017). `null` for every other capability/unmanaged device — never
    * fabricated, mirrors `AvrDriver.getCapabilityConfig`'s own contract. */
   getCapabilityConfig(deviceId: DeviceId, capability: CapabilityKind): Record<string, unknown> | null {
-    if (capability !== "color") return null;
-    const b = this.bindings.find((x) => x.deviceId === deviceId && x.capability === "color");
+    const bound = this.bindings.find((x) => x.deviceId === deviceId && x.capability === capability);
+    // A control with no declared feedback says so, structurally, so clients use the separate
+    // "sent, unverified" lifecycle instead of waiting for a report that can never come.
+    const noFeedback = bound && bound.feedbackGas.length === 0 ? { feedback: "none" } : null;
+    if (capability !== "color") return noFeedback;
+    const b = bound;
     if (!b) return null;
     // § P0-C (Pass 28) — `colorModesFromDpt` is the single shared evidence function (also
     // used by `planBindings` at discovery/review time, before this driver's binding even
@@ -211,7 +229,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     // An unrecognized/unknown DPT for this capability honestly reports nothing rather
     // than guess — the frontend's existing state-nullability fallback still applies.
     const modes = colorModesFromDpt(b.dpt);
-    return modes ? { colorModes: modes } : null;
+    return modes || noFeedback ? { ...(modes ? { colorModes: modes } : {}), ...(noFeedback ?? {}) } : null;
   }
 
   /** § Driver Lifecycle Completion — releases everything THIS device holds without
@@ -234,11 +252,11 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     this.devices.delete(deviceId);
     removeDeviceStates(this.states, deviceId);
     this.offlineQueue.evict((subject) => subject === deviceId);
-    const releasedGas = new Set(removed.flatMap((b) => [b.statusGa, ...b.extraStatusGas]));
+    const releasedGas = new Set(removed.flatMap((b) => b.feedbackGas));
     for (const b of removedButtons) releasedGas.add(b.ga);
     for (const ga of releasedGas) {
       const stillUsed =
-        this.bindings.some((b) => b.statusGa === ga || b.extraStatusGas.includes(ga)) ||
+        this.bindings.some((b) => b.feedbackGas.includes(ga)) ||
         this.keypadButtons.some((b) => b.ga === ga);
       if (stillUsed) continue;
       this.ultimate.unsubscribe(ga);
@@ -322,13 +340,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     if (!this.connected) {
       // Queue Recovery (§ Enterprise Reliability): accepted, not lost — flushed (MERGE +
       // TTL-EXPIRE) the moment the connection returns, per {@link OfflineCommandQueue}'s
-      // documented policy. Still optimistically reflects the command so the UI shows the
-      // homeowner's intent immediately, exactly like the connected path below.
+      // documented policy. The intent is announced as `commanded` (never as the device's state).
       this.offlineQueue.enqueue(deviceId, command);
       const prev = this.states.get(bindingKey(deviceId, command.capability)) ?? null;
       const value = valueFromCommand(command, prev, b.dpt);
-      const optimistic = value !== null ? stateFromValue(b.capability as CapabilityState["kind"], value, b.config) : null;
-      if (optimistic) this.record(b, optimistic);
+      const asked = value !== null ? stateFromValue(b.capability as CapabilityState["kind"], value, b.config) : null;
+      if (asked) this.announceCommanded(b, asked);
       return;
     }
     await this.executeCommand(b, command);
@@ -339,10 +356,11 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     const value = valueFromCommand(command, prev, b.dpt);
     if (value === null) throw new Error(`supreme-knx: unsupported command for ${command.capability}`);
     await this.router.execute({ kind: "bus.group_write", groupAddress: b.writeGa, dpt: b.dpt, value });
-    // Optimistically reflect the command; a status telegram will confirm/correct it —
-    // identical contract to every other native driver in this codebase.
-    const optimistic = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
-    if (optimistic) this.record(b, optimistic);
+    // What was asked for is NOT the device's state: announced as `commanded`, never stored, never
+    // observed, never a confirmation. Only a telegram on a declared feedback address (see `observe`)
+    // becomes observed state.
+    const asked = stateFromValue(b.capability as CapabilityState["kind"], value, b.config);
+    if (asked) this.announceCommanded(b, asked);
   }
 
   /** Flushes whatever commands queued while disconnected (§ Queue Recovery), executing
@@ -449,7 +467,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   async syncAll(): Promise<{ requested: number; failed: number }> {
     let failed = 0;
     for (const b of this.bindings) {
-      for (const ga of [b.statusGa, ...b.extraStatusGas]) {
+      for (const ga of b.feedbackGas) {
         try {
           await this.router.execute({ kind: "bus.group_read", groupAddress: ga, dpt: b.dpt });
         } catch {
@@ -458,10 +476,13 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
         }
       }
     }
+    // Only bindings with a declared feedback address are read: a device with none has nothing whose
+    // value would be ITS state (its command address may carry any writer's value).
+    const readable = this.bindings.filter((b) => b.feedbackGas.length > 0).length;
     this.lastSyncAt = new Date().toISOString();
-    this.lastSyncCount = this.bindings.length;
+    this.lastSyncCount = readable;
     this.lastSyncErrorCount = failed;
-    return { requested: this.bindings.length, failed };
+    return { requested: readable, failed };
   }
 
   /** Diagnostics (§ Diagnostics) — this driver's own ownership/registration facts, every
@@ -530,7 +551,7 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
   }
 
   private observe(b: KnxDeviceBinding): void {
-    for (const ga of [b.statusGa, ...b.extraStatusGas]) {
+    for (const ga of b.feedbackGas) {
       this.ultimate.subscribe(ga, b.dpt, (value) => {
         // § Live Feedback Diagnostic Pass — record BEFORE decode/record() so this
         // reflects "a subscribed telegram for THIS device's GA reached the driver's own
@@ -614,6 +635,12 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     };
   }
 
+  /** Publishes a value a command asked for, labelled `commanded`. Not stored, not de-duplicated. */
+  private announceCommanded(b: KnxDeviceBinding, state: CapabilityState): void {
+    const ts = new Date().toISOString();
+    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, provenance: "commanded", ts });
+  }
+
   private record(b: KnxDeviceBinding, state: CapabilityState): void {
     const k = bindingKey(b.deviceId, b.capability);
     const prev = this.states.get(k);
@@ -623,6 +650,6 @@ export class SupremeKnxDriver implements INativeProtocolDriver {
     // § PASS 20 diagnostic (Part D) — record BEFORE fan-out, so this reflects state
     // that genuinely reached this point even if a listener throws downstream.
     this.lastRecordedState = { deviceId: b.deviceId, capability: b.capability, kind: state.kind, ts };
-    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, ts });
+    for (const l of this.listeners) l({ deviceId: b.deviceId, capability: b.capability, state, provenance: "observed", ts });
   }
 }

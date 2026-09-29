@@ -6,6 +6,7 @@ import type {
   KeypadCapabilityDeclaration,
   KeypadFeedbackCommand,
   KeypadInputEvent,
+  StateProvenance,
 } from "@supreme/domain-model";
 
 /**
@@ -25,6 +26,12 @@ export interface BackendStateEvent {
   state: CapabilityState;
   /** Backend event timestamp (ISO-8601). */
   ts: string;
+  /**
+   * Where `state` came from (see `StateProvenance`). Absent = a legacy driver that has not
+   * declared it; the Hub treats that as `observed`. A driver MUST declare `commanded` for a value it
+   * only wrote, and MUST NOT let a command's value reach the Hub as `observed`.
+   */
+  provenance?: StateProvenance;
   /** § AVR Diagnostic Mode — optional correlation ID (e.g. "AVR-000023"), present only
    * when the owning driver has diagnostics enabled and chose to tag this event. Lets
    * the gateway/WebSocket layers append their own stage to the SAME per-event trace the
