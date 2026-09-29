@@ -40,6 +40,23 @@ function trimSlash(s: string): string {
   return s.replace(/\/+$/, "");
 }
 
+/**
+ * UniFi Protect's RTSPS URLs end in `?enableSrtp`, which makes the console encrypt the video
+ * packets (SRTP). go2rtc does not decrypt them, so the browser receives scrambled H.264 and shows
+ * a black then green picture (Chrome: MEDIA_ERR_DECODE on a keyframe). Verified on a real console:
+ * the same URL without the parameter plays clean video. Only that one parameter is removed.
+ */
+export function withoutEnableSrtp(source: string): string {
+  try {
+    const url = new URL(source);
+    if (!url.searchParams.has("enableSrtp")) return source;
+    url.searchParams.delete("enableSrtp");
+    return url.toString();
+  } catch {
+    return source;
+  }
+}
+
 /** Derive the client-playable HLS + WebRTC URLs for a stream name per engine convention. */
 export function playableUrls(engine: StreamEngine, baseUrl: string, name: string): CameraStream[] {
   const b = trimSlash(baseUrl);
@@ -78,7 +95,7 @@ export class StreamGateway implements ICameraStreamGateway {
     if (this.apiUrl && this.engine === "go2rtc") {
       try {
         await this.fetchImpl(
-          `${trimSlash(this.apiUrl)}/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(rtspSource)}`,
+          `${trimSlash(this.apiUrl)}/api/streams?name=${encodeURIComponent(name)}&src=${encodeURIComponent(withoutEnableSrtp(rtspSource))}`,
           { method: "PUT" },
         );
       } catch {
