@@ -9,7 +9,7 @@
 
 ### SupremeOS Flutter migration (apps/new) — Phase 1C onward
 - **Description:** Phases 0, 1A (SurfaceProfile), 1B (Golden Master design foundation) and 1C (navigation shell, glyphs, Control layer) are done and verified — see
-  `SESSION_HANDOFF.md`. Remaining, in order: **2** core homeowner surfaces (Home, Spaces, Space, Control, Experiences,
+  `SESSION_HANDOFF.md`. Phase 2 closed — see `docs/design/phase-2-closure-report.md` (entry criteria for 3). Remaining, in order: ~~2~~ core homeowner surfaces (Home, Spaces, Space, Control, Experiences,
   Settings) on shared control renderers (switch · value · step · options · act) with unsupported capabilities not drawn;
   **3** backend contract gate → device-level Residence State read model, command tracker (requested → pending → confirmed
   | failed, confirmation only from authoritative device state), freshness timestamps, derived Experience state (needs

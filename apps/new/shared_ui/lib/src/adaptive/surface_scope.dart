@@ -87,3 +87,20 @@ class _SurfaceProfileProvider extends InheritedWidget {
   bool updateShouldNotify(_SurfaceProfileProvider oldWidget) =>
       oldWidget.profile != profile;
 }
+
+/// Forces reduced motion for everything beneath it when [reduce] is set (a device preference),
+/// on top of whatever the OS already asks for. Lives here because this file is the only place
+/// allowed to read the raw `MediaQueryData` (see `test/surface_authority_test.dart`).
+class MotionScope extends StatelessWidget {
+  final bool reduce;
+  final Widget child;
+  const MotionScope({super.key, required this.reduce, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return MediaQuery(
+        data: mq.copyWith(disableAnimations: mq.disableAnimations || reduce),
+        child: child);
+  }
+}

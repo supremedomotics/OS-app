@@ -31,7 +31,7 @@ language (`describeHome`, `spaceCondition`, `spaceFeel`), `room_controls`/`contr
 opt-in via `--dart-define=SUPREME_SIMULATED_RESIDENCE=true`). `shared_ui`: control grammar, `SpacePlate`, `ToneSurface`,
 `SupremePage`/`PageGeometry`. `mobile`: Home, Spaces, Space, Control (scoped layer), Experiences; old `RoomScreen` and its
 ambiguity heuristic removed. Tests: shared 344, shared_ui 87, mobile 119 (+7 capture, skipped without CAPTURE_DIR),
-touchpanel 23. Known gaps: Settings not yet rebuilt to the Golden Master; no photography (Hub `heroImageUrl` relative
+touchpanel 23. Closure: Settings rebuilt (`settings_screen.dart`, hub sub-page, real Motion preference); contract gate + ADR 0102 written; see `docs/design/phase-2-closure-report.md`. Known gaps: no photography (Hub `heroImageUrl` relative
 paths need an authenticated fetch) so plates are tonal; no occupancy/protection/sun line (no contract); Control has no
 instruments/Devices/device sheet; watch glance, TV focus, residence-panel map, panel identity are Phase 4; a space's share of
 an Experience is client-orchestrated (no Hub route, D8); Shape/authoring undecided (D5); capture harness 'watch' case fails.

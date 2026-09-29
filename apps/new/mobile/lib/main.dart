@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supreme_os_ui/supreme_os_ui.dart';
@@ -553,6 +554,40 @@ Future<PairHomeResult> realPairHome({
   );
 }
 
+/// How this device wants motion: as the OS says, or always reduced. A preference about THIS
+/// person and THIS device (Golden Master `settings.js`): it lives on the device and never holds
+/// residence or device state. It acts for real — every animation in the app reads
+/// `MediaQuery.disableAnimations`.
+enum MotionPref { system, reduce }
+
+class MotionPrefController extends StateNotifier<MotionPref> {
+  static const _key = 'supremeos_pref_motion_v1';
+  MotionPrefController() : super(MotionPref.system) {
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final v = p.getString(_key);
+      if (mounted && v == 'reduce') state = MotionPref.reduce;
+    } catch (_) {
+      // No preferences store (a test, a locked-down web view): the OS setting stands.
+    }
+  }
+
+  Future<void> set(MotionPref pref) async {
+    state = pref;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_key, pref.name);
+    } catch (_) {}
+  }
+}
+
+final motionPrefProvider =
+    StateNotifierProvider<MotionPrefController, MotionPref>((ref) => MotionPrefController());
+
 void main() {
   runApp(const ProviderScope(child: SupremeMobileApp()));
 }
@@ -576,8 +611,13 @@ class SupremeMobileApp extends StatelessWidget {
       // null value" rather than the assertion message). `MaterialApp.builder` wraps the
       // Navigator's ENTIRE output — every route, every dialog, present and future — in exactly
       // one `AdaptiveScope`, so this bug class cannot recur for a new screen either.
-      builder: (context, child) =>
-          SurfaceScope(child: AdaptiveScope(child: child!)),
+      builder: (context, child) => Consumer(builder: (context, ref, _) {
+        final reduce = ref.watch(motionPrefProvider) == MotionPref.reduce;
+        return MotionScope(
+          reduce: reduce,
+          child: SurfaceScope(child: AdaptiveScope(child: child!)),
+        );
+      }),
       home: const RootShell(),
     );
   }

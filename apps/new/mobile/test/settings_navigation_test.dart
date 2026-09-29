@@ -36,7 +36,8 @@ void main() {
     // returns the FIRST uncaught exception recorded, or null if none occurred.
     expect(tester.takeException(), isNull);
     expect(find.byKey(const ValueKey('settings-page')), findsOneWidget);
-    expect(find.text('Manage your paired Homes'), findsOneWidget);
+    expect(find.text('The residence and its Hubs'), findsOneWidget);
+    expect(find.text('Settings'), findsWidgets);
   });
 
   testWidgets(
@@ -47,8 +48,7 @@ void main() {
 
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
-    // "Home" is also the first destination's label: tap the Settings ENTRY, not the label.
-    await tester.tap(find.widgetWithText(ListTile, 'Home'));
+    await tester.tap(find.text('The residence and its Hubs'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);

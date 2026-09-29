@@ -37,6 +37,7 @@ class _Rig {
 }
 
 void main() {
+  movementTests();
   test('hydrates spaces, devices and experiences from the real read routes',
       () async {
     final r = _Rig();
@@ -361,5 +362,32 @@ void main() {
               .phase,
           ExperiencePhase.indeterminate);
     });
+  });
+}
+
+void movementTests() {
+  test('a shade that keeps reporting movement is not failed by the deadline', () async {
+    final r = _Rig(timeout: const Duration(seconds: 3));
+    await r.start();
+    // 100 → 0 takes 10 steps × 0.5 s = ~5 s, longer than the 3 s timeout, but it keeps reporting.
+    r.tracker.submit('living-shade', {'capability': 'position', 'action': 'close'});
+    await r.advance(4800);
+    expect(r.tracker.latestFor('living-shade', 'position')!.phase, CommandPhase.pending);
+    await r.advance(2000);
+    final rec = r.tracker.latestFor('living-shade', 'position')!;
+    expect(rec.phase, CommandPhase.confirmed);
+    expect(r.cap('living-shade', 'position')!['position'], 0);
+  });
+
+  test('a shade that stops reporting mid-travel still fails on the deadline', () async {
+    final r = _Rig(timeout: const Duration(seconds: 3));
+    await r.start();
+    r.tracker.submit('living-shade', {'capability': 'position', 'action': 'close'});
+    await r.advance(1200);
+    r.sim.setSilent('living-shade', true); // jammed: no more reports
+    await r.advance(5000);
+    final rec = r.tracker.latestFor('living-shade', 'position')!;
+    expect(rec.phase, CommandPhase.failed);
+    expect(rec.failure, CommandFailure.timeout);
   });
 }

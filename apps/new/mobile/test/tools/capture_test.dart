@@ -44,11 +44,8 @@ class _Shot {
   final Size size;
   final double dpr;
   final TargetPlatform platform;
-  final bool panel;
   const _Shot(this.name, this.size,
-      {this.dpr = 2,
-      this.platform = TargetPlatform.android,
-      this.panel = false});
+      {this.dpr = 2, this.platform = TargetPlatform.android});
 }
 
 const _sizes = [
@@ -102,6 +99,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 1200));
 
         await _write(tester, key, '${s.name}-home');
+      // The watch has no navigation (its glance is Phase 4): Home is all there is to capture.
+      if (s.name == 'watch') {
+        debugDefaultTargetPlatformOverride = null;
+        return;
+      }
 
         await tester.tap(find.text('Spaces').last);
         await app.settle(tester);
@@ -145,6 +147,11 @@ void main() {
         await app.settle(tester);
         await tester.pump(const Duration(milliseconds: 1200));
         await _write(tester, key, '${s.name}-experiences');
+
+      await tester.tap(find.text('Settings').last);
+      await app.settle(tester);
+      await tester.pump(const Duration(milliseconds: 1200));
+      await _write(tester, key, '${s.name}-settings');
       } finally {
         // Must be undone inside the test: the framework checks foundation variables on exit.
         debugDefaultTargetPlatformOverride = null;

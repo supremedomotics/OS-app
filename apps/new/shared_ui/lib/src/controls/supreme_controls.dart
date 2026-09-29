@@ -149,9 +149,17 @@ class SupremeAct extends StatelessWidget {
   final VoidCallback? onTap;
   final bool pending;
   final bool quiet;
+
+  /// A destructive act (forget, delete): the same word, in the critical colour.
+  final bool danger;
   final double? fontSize;
   const SupremeAct(this.text,
-      {super.key, required this.onTap, this.pending = false, this.quiet = false, this.fontSize});
+      {super.key,
+      required this.onTap,
+      this.pending = false,
+      this.quiet = false,
+      this.danger = false,
+      this.fontSize});
 
   @override
   Widget build(BuildContext context) {
@@ -170,9 +178,11 @@ class SupremeAct extends StatelessWidget {
             child: Text(pending ? '$text…' : text,
                 style: _t.body.copyWith(
                     fontSize: fontSize ?? (quiet ? 13 : 14),
-                    color: quiet
-                        ? const Color(0x75F7F4EE)
-                        : SupremeColorScheme.brassPale)),
+                    color: danger
+                        ? SupremeColorScheme.statusCritical
+                        : quiet
+                            ? const Color(0x75F7F4EE)
+                            : SupremeColorScheme.brassPale)),
           ),
         ),
       ),

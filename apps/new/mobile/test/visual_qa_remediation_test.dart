@@ -71,7 +71,7 @@ void main() {
     for (final entry in {
       'Spaces': 'Your residence isn’t reachable right now.',
       'Experiences': 'Your residence isn’t reachable right now.',
-      'Settings': 'Manage your paired Homes',
+      'Settings': 'The residence and its Hubs',
     }.entries) {
       await tester.tap(find.text(entry.key));
       await tester.pumpAndSettle();
@@ -154,7 +154,7 @@ void main() {
 
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ListTile, 'Home'));
+    await tester.tap(find.text('The residence and its Hubs'));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);

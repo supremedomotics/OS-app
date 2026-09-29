@@ -14,6 +14,7 @@ export 'src/shell/supreme_layer.dart';
 export 'src/shell/supreme_shell.dart';
 export 'src/shell/supreme_tappable.dart';
 export 'src/controls/supreme_controls.dart';
+export 'src/settings/settings_widgets.dart';
 export 'src/space/page_head.dart';
 export 'src/space/space_plate.dart';
 export 'src/space/tone_surface.dart';

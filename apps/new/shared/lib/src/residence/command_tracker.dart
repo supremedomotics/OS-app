@@ -250,6 +250,11 @@ class CommandTracker {
       }
       if (_expect[rec.id]!.matches(r.state)) {
         _settle(rec, CommandPhase.confirmed, by: ConfirmedBy.deviceReport);
+      } else if (r.state['moving'] == true) {
+        // The device is visibly on its way (a shade in travel): it is answering, so the deadline
+        // restarts from this report instead of failing a slow but genuine movement.
+        _timers.remove(rec.id)?.cancel();
+        _timers[rec.id] = _schedule(timeout, () => _onTimeout(rec.id));
       }
     }
   }

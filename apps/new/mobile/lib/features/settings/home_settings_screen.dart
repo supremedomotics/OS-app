@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' show Material, MaterialType, TextField, InputDecoration, UnderlineInputBorder, BorderSide, TextInputType;
+import 'package:flutter/widgets.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import 'paired_home_controller.dart';
@@ -31,11 +32,15 @@ class HomeSettingsScreen extends StatefulWidget {
   final ConnectionManager? activeConnectionManager;
   final PairingCodeHandler onPair;
 
+  /// Set when this is a sub-page of Settings (its back chip returns there).
+  final VoidCallback? onBack;
+
   const HomeSettingsScreen({
     super.key,
     required this.controller,
     required this.onPair,
     this.activeConnectionManager,
+    this.onBack,
   });
 
   @override
@@ -43,6 +48,9 @@ class HomeSettingsScreen extends StatefulWidget {
 }
 
 class _HomeSettingsScreenState extends State<HomeSettingsScreen> {
+  // A sentence said after an action (a failed pairing, a duplicate) — presentation only.
+  String? _said;
+
   @override
   void initState() {
     super.initState();
@@ -59,39 +67,35 @@ class _HomeSettingsScreenState extends State<HomeSettingsScreen> {
   void _onChanged() => setState(() {});
 
   Future<void> _editName(PairedHome home) async {
-    final result = await showDialog<String>(
-      context: context,
-      builder: (_) => _EditHomeNameDialog(initialValue: home.displayName),
+    final result = await showDialog2<String>(
+      context,
+      (_) => _EditHomeNameDialog(initialValue: home.displayName),
     );
     if (result == null) return;
     await widget.controller.renameHome(home.hubId, result);
   }
 
   Future<void> _remove(PairedHome home) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Forget this Home?'),
-        content: Text('"${home.displayName}" will be removed from this device. '
-            'This does not revoke your access — you can pair again anytime.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Forget Home')),
-        ],
-      ),
+    final confirmed = await showSupremeDialog<bool>(
+      context,
+      title: 'Forget this Home?',
+      body: (c) => Text(
+          '"${home.displayName}" will be removed from this device. '
+          'This does not revoke your access — you can pair again anytime.',
+          style: SupremeTextStyles.resolve(SupremeDensity.comfortable)
+              .body
+              .copyWith(fontSize: 15, color: SupremeColorScheme.text2)),
+      actions: (c) => [
+        SupremeAct('Cancel', quiet: true, onTap: () => Navigator.pop(c, false)),
+        SupremeAct('Forget Home', danger: true, onTap: () => Navigator.pop(c, true)),
+      ],
     );
     if (confirmed == true) await widget.controller.removeHome(home.hubId);
   }
 
   Future<void> _addHome() async {
-    final code = await showDialog<String>(
-      context: context,
-      builder: (_) => const _EnterPairingCodeDialog(),
-    );
+    setState(() => _said = null);
+    final code = await showDialog2<String>(context, (_) => const _EnterPairingCodeDialog());
     if (code == null || code.trim().isEmpty) return;
 
     PairHomeResult result;
@@ -99,21 +103,19 @@ class _HomeSettingsScreenState extends State<HomeSettingsScreen> {
       result = await widget.onPair(code.trim());
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Pairing failed: $e')));
+      setState(() => _said = 'Pairing failed: $e');
       return;
     }
     if (widget.controller.homes.any((h) => h.hubId == result.hubId)) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('This Home is already paired.')));
+      setState(() => _said = 'This Home is already paired.');
       return;
     }
 
     if (!mounted) return;
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => _EditHomeNameDialog(
+    final name = await showDialog2<String>(
+      context,
+      (_) => _EditHomeNameDialog(
         initialValue: result.suggestedDisplayName ?? 'Home',
         title: 'Name your Home',
       ),
@@ -144,100 +146,152 @@ class _HomeSettingsScreenState extends State<HomeSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final text = SupremeTextStyles.resolve(AdaptiveScope.of(context).density);
+    final text = SupremeTextStyles.resolve(SupremeDensity.comfortable);
     final homes = widget.controller.homes;
+    final loaded = widget.controller.isLoaded;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Home')),
-      body: !widget.controller.isLoaded
-          ? const Center(child: CircularProgressIndicator())
-          : homes.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('No Home paired yet', style: text.body),
-                        const SizedBox(height: 16),
-                        FilledButton(
-                            onPressed: _addHome,
-                            child: const Text('+ Add Home')),
-                      ],
-                    ),
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    for (final home in homes)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Semantics(
-                          selected:
-                              home.hubId == widget.controller.activeHomeId,
-                          label: '${home.displayName}, ${_statusFor(home)}'
-                              '${home.hubId == widget.controller.activeHomeId ? ", selected" : ""}',
-                          child: Card(
-                            child: Column(
-                              children: [
-                                ListTile(
-                                  minVerticalPadding: 16,
-                                  title: Text(home.displayName,
-                                      style: text.body),
-                                  subtitle: Text(_statusFor(home)),
-                                  trailing: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      if (home.hubId ==
-                                          widget.controller.activeHomeId)
-                                        const Icon(Icons.check_circle,
-                                            semanticLabel: 'Selected'),
-                                      IconButton(
-                                        icon: const Icon(Icons.edit_outlined),
-                                        tooltip: 'Rename ${home.displayName}',
-                                        onPressed: () => _editName(home),
-                                      ),
-                                      IconButton(
-                                        icon:
-                                            const Icon(Icons.delete_outline),
-                                        tooltip: 'Forget ${home.displayName}',
-                                        onPressed: () => _remove(home),
-                                      ),
-                                    ],
-                                  ),
-                                  onTap: home.hubId ==
-                                          widget.controller.activeHomeId
-                                      ? null
-                                      : () => widget.controller
-                                          .setActiveHome(home.hubId),
-                                ),
-                                // §Phase12.10 §3 — homeowner-relevant concepts only: no broker
-                                // URL, public key, bearer token, or tunnel/routing detail ever
-                                // appears here. OFF by default per Home; never toggled by
-                                // anything but this explicit switch.
-                                SwitchListTile(
-                                  value: home.remoteAccessEnabled,
-                                  title: const Text('Remote Access'),
-                                  subtitle: const Text(
-                                      'Keep this Home reachable when your phone is away '
-                                      'from its local network.'),
-                                  onChanged: (v) => widget.controller
-                                      .setRemoteAccessEnabled(home.hubId, v),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    const SizedBox(height: 8),
-                    OutlinedButton(
-                        onPressed: _addHome, child: const Text('+ Add Home')),
-                  ],
+    final children = <Widget>[
+      SettingsSubHead(
+        back: 'Settings',
+        onBack: widget.onBack ?? () => Navigator.of(context).maybePop(),
+        kicker: 'Hubs',
+        title: 'The residence and its Hubs',
+        lede: 'The Homes this device is paired with.',
+      ),
+    ];
+    if (!loaded) {
+      children.add(Text('Loading…',
+          style: text.body.copyWith(color: SupremeColorScheme.text2)));
+    } else if (homes.isEmpty) {
+      children.addAll([
+        Text('No Home paired yet',
+            style: text.name.copyWith(fontSize: 22)),
+        const SizedBox(height: 8),
+        SupremeAct('+ Add Home', fontSize: 16, onTap: _addHome),
+      ]);
+    } else {
+      for (final home in homes) {
+        final active = home.hubId == widget.controller.activeHomeId;
+        children.add(Semantics(
+          selected: active,
+          label: '${home.displayName}, ${_statusFor(home)}${active ? ", selected" : ""}',
+          child: Container(
+            key: ValueKey('home-${home.hubId}'),
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: SupremeColorScheme.rule))),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(home.displayName, style: text.name.copyWith(fontSize: 24)),
+                    const SizedBox(height: 2),
+                    Text(_statusFor(home),
+                        style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.text3)),
+                  ]),
                 ),
-    );
+                if (active)
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                            shape: BoxShape.circle, color: SupremeColorScheme.brassLight)),
+                    const SizedBox(width: 8),
+                    Text('Selected',
+                        style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.brassPale)),
+                  ]),
+              ]),
+              Wrap(spacing: 8, children: [
+                if (!active)
+                  SupremeAct('Use ${home.displayName}',
+                      onTap: () => widget.controller.setActiveHome(home.hubId)),
+                SupremeAct('Rename', quiet: true, onTap: () => _editName(home)),
+                SupremeAct('Forget', quiet: true, onTap: () => _remove(home)),
+              ]),
+              // §Phase12.10 §3 — homeowner-relevant concepts only: no broker URL, public key,
+              // bearer token, or tunnel/routing detail ever appears here. OFF by default per
+              // Home; never toggled by anything but this explicit switch.
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Remote Access', style: text.name.copyWith(fontSize: 19)),
+                    Text('Keep this Home reachable when your phone is away from its local network.',
+                        style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.text3)),
+                  ]),
+                ),
+                SupremeSwitch(
+                  key: ValueKey('remote-${home.hubId}'),
+                  on: home.remoteAccessEnabled,
+                  label: 'Remote Access',
+                  showWord: false,
+                  onTap: () => widget.controller
+                      .setRemoteAccessEnabled(home.hubId, !home.remoteAccessEnabled),
+                ),
+              ]),
+            ]),
+          ),
+        ));
+      }
+      children.add(Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Align(
+            alignment: Alignment.centerLeft,
+            child: SupremeAct('+ Add Home', fontSize: 16, onTap: _addHome)),
+      ));
+    }
+    if (_said != null) {
+      children.add(Padding(
+        padding: const EdgeInsets.only(top: 16),
+        child: Text(_said!,
+            key: const ValueKey('settings-said'),
+            style: text.body.copyWith(fontSize: 14, color: SupremeColorScheme.brassPale)),
+      ));
+    }
+    return SupremePage(key: const ValueKey('hubs-page'), children: children);
   }
 }
+
+/// Runs a dialog whose body is a stateful widget popping a value.
+Future<T?> showDialog2<T>(BuildContext context, WidgetBuilder builder) =>
+    showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close',
+      barrierColor: SupremeColorScheme.veil,
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (c, _, __) => SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Container(
+                margin: const EdgeInsets.all(20),
+                padding: const EdgeInsets.fromLTRB(24, 22, 24, 12),
+                decoration: BoxDecoration(
+                  color: SupremeColorScheme.glassSolid,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: SupremeColorScheme.glassEdge),
+                ),
+                child: builder(c),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+InputDecoration _fieldDecoration(String label, {String? error}) => InputDecoration(
+      labelText: label,
+      errorText: error,
+      labelStyle: const TextStyle(color: SupremeColorScheme.text3),
+      enabledBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: SupremeColorScheme.rule)),
+      focusedBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: SupremeColorScheme.brass)),
+      counterStyle: const TextStyle(color: SupremeColorScheme.text3),
+    );
 
 class _EditHomeNameDialog extends StatefulWidget {
   final String initialValue;
@@ -271,22 +325,25 @@ class _EditHomeNameDialogState extends State<_EditHomeNameDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: TextField(
+    final t = SupremeTextStyles.resolve(SupremeDensity.comfortable);
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(widget.title, style: t.name.copyWith(fontSize: 24)),
+      const SizedBox(height: 12),
+      TextField(
         controller: _controller,
         autofocus: true,
         maxLength: HomeNameValidation.maxLength,
-        decoration: InputDecoration(labelText: 'Home name', errorText: _error),
+        style: t.body,
+        cursorColor: SupremeColorScheme.brassLight,
+        decoration: _fieldDecoration('Home name', error: _error),
         onSubmitted: (_) => _submit(),
       ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        FilledButton(onPressed: _submit, child: const Text('Save')),
-      ],
-    );
+      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        SupremeAct('Cancel', quiet: true, onTap: () => Navigator.pop(context)),
+        const SizedBox(width: 8),
+        SupremeAct('Save', onTap: _submit),
+      ]),
+    ]);
   }
 }
 
@@ -308,24 +365,25 @@ class _EnterPairingCodeDialogState extends State<_EnterPairingCodeDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Add Home'),
-      content: TextField(
+    final t = SupremeTextStyles.resolve(SupremeDensity.comfortable);
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Add Home', style: t.name.copyWith(fontSize: 24)),
+      const SizedBox(height: 12),
+      TextField(
         controller: _controller,
         autofocus: true,
         keyboardType: TextInputType.number,
-        decoration: const InputDecoration(
-            labelText: 'Enter the pairing code shown on your Hub'),
+        style: t.body,
+        cursorColor: SupremeColorScheme.brassLight,
+        decoration: _fieldDecoration('Enter the pairing code shown on your Hub'),
         onSubmitted: (v) => Navigator.pop(context, v),
       ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        FilledButton(
-            onPressed: () => Navigator.pop(context, _controller.text),
-            child: const Text('Continue')),
-      ],
-    );
+      const SizedBox(height: 8),
+      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        SupremeAct('Cancel', quiet: true, onTap: () => Navigator.pop(context)),
+        const SizedBox(width: 8),
+        SupremeAct('Continue', onTap: () => Navigator.pop(context, _controller.text)),
+      ]),
+    ]);
   }
 }
