@@ -27,6 +27,8 @@ export 'src/residence/experience_status.dart';
 export 'src/residence/residence_description.dart';
 export 'src/residence/room_tone.dart';
 export 'src/residence/room_controls.dart';
+export 'src/residence/experience_plan.dart';
+export 'src/residence/control_systems.dart';
 export 'src/simulation/simulated_residence.dart';
 export 'src/simulation/manual_scheduler.dart';
 export 'src/runtime/home_event.dart';

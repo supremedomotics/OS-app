@@ -230,9 +230,19 @@ class ResidenceState {
   }
 
   Future<void> _refresh() async {
-    final home = await _get('v1/home');
-    final devicesRes = await _get('v1/devices');
-    final scenesRes = await _get('v1/scenes');
+    // An unreachable Hub (no connection yet, a dropped socket) is "no data yet", never a crash:
+    // the caller learns why from [ResidenceSnapshot.reachable].
+    Future<Map<String, dynamic>> read(String path) async {
+      try {
+        return await _get(path);
+      } catch (_) {
+        return const {};
+      }
+    }
+
+    final home = await read('v1/home');
+    final devicesRes = await read('v1/devices');
+    final scenesRes = await read('v1/scenes');
     if (_disposed) return;
 
     final rooms = home['rooms'];
@@ -241,7 +251,7 @@ class ResidenceState {
     // replacing real state with nothing.
     if (rooms is! List || rawDevices is! List) {
       _snapshot = _snapshot._with(reachable: false);
-      _changes.add(_snapshot);
+      _emit();
       return;
     }
 
@@ -268,11 +278,15 @@ class ResidenceState {
       experiences: _experiences(scenesRes['scenes']),
       loadedAt: _now(),
     );
-    _changes.add(_snapshot);
+    _emit();
+  }
+
+  void _emit() {
+    if (!_disposed) _changes.add(_snapshot);
   }
 
   void _onFrame(Map<String, dynamic> f) {
-    if (f['type'] != 'state') return;
+    if (_disposed || f['type'] != 'state') return;
     final id = f['deviceId'];
     final st = f['state'];
     final seq = f['seq'];
@@ -298,8 +312,8 @@ class ResidenceState {
       ..._snapshot.devices,
       id: device.copyWith(state: next, reportedAt: at, seq: s),
     });
-    _changes.add(_snapshot);
-    _reports.add(DeviceReport(id, kind, st, at));
+    _emit();
+    if (!_disposed) _reports.add(DeviceReport(id, kind, st, at));
   }
 
   static List<Space> _spaces(

@@ -46,16 +46,29 @@ class ExperienceStatus {
       this.unreachable = 0});
 }
 
+bool _sameCommand(Map<String, dynamic> a, Map<String, dynamic> b) {
+  if (a.length != b.length) return false;
+  for (final k in a.keys) {
+    if (!b.containsKey(k) || a[k] != b[k]) return false;
+  }
+  return true;
+}
+
+/// [spaceId] evaluates only this Experience's steps that act in that space — "is this space in
+/// Relax" — the same test the Golden Master's `activeInSpace` makes; null evaluates the whole
+/// residence.
 ExperienceStatus experienceStatus(
   Experience e,
   ResidenceSnapshot s, {
   Iterable<CommandRecord> commands = const [],
+  String? spaceId,
 }) {
   var verifiable = 0, matched = 0, unverifiable = 0, unreachable = 0;
   var reachableVerifiable = 0;
   var moving = false;
 
   for (final step in e.steps) {
+    if (spaceId != null && s.devices[step.deviceId]?.roomId != spaceId) continue;
     final expectation = expectationOf(step.capability, step.values);
     if (expectation == null) {
       unverifiable++;
@@ -74,7 +87,9 @@ ExperienceStatus experienceStatus(
     } else if (commands.any((c) =>
         c.inFlight &&
         c.deviceId == step.deviceId &&
-        c.capability == step.capability)) {
+        _sameCommand(c.command, {'capability': step.capability, ...step.values}))) {
+      // Only a command toward THIS Experience's own target makes it "becoming" — a different
+      // command on the same device is a different intent.
       moving = true;
     }
   }
@@ -90,7 +105,5 @@ ExperienceStatus experienceStatus(
   if (matched == verifiable) return of(ExperiencePhase.active);
   if (moving) return of(ExperiencePhase.becoming);
   if (matched > 0) return of(ExperiencePhase.partial);
-  // Reachable steps all match but some device is unreachable: partially in effect.
-  if (matched == reachableVerifiable) return of(ExperiencePhase.partial);
   return of(ExperiencePhase.inactive);
 }

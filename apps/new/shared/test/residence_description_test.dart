@@ -68,10 +68,11 @@ void main() {
     test('names the Experience in effect, derived from devices', () async {
       final r = _Rig();
       await r.start();
-      expect(spaceCondition(r.state.snapshot, 'kitchen').experience, isNull);
+      // Dining's light is at 40 %, which no Good Night step accepts.
+      expect(spaceCondition(r.state.snapshot, 'dining').experience, isNull);
       r.sim.command('v1/scenes/good-night/activate', const {});
       await r.advance(6000);
-      expect(spaceCondition(r.state.snapshot, 'kitchen').experience?.name, 'Good Night');
+      expect(spaceCondition(r.state.snapshot, 'dining').experience?.name, 'Good Night');
     });
   });
 

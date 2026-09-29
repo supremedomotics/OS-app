@@ -12,7 +12,7 @@ import 'data/secure_mobile_storage.dart';
 import 'data/shared_prefs_paired_home_store.dart';
 import 'features/home/home_screen.dart';
 import 'features/spaces/spaces_screen.dart';
-import 'features/spaces/room_screen.dart';
+import 'features/spaces/space_screen.dart';
 import 'features/control/control_layer.dart';
 import 'features/experiences/experiences_screen.dart';
 import 'features/settings/home_settings_screen.dart';
@@ -191,7 +191,8 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     remoteAccessEnabled: remoteAccessEnabled,
   );
   ref.onDispose(manager.dispose);
-  manager.start();
+  // A simulated residence has no Hub to find: never start discovery/backoff against nothing.
+  if (ref.watch(simulatedResidenceProvider) == null) manager.start();
   return manager;
 });
 
@@ -203,6 +204,137 @@ final homeStateRepositoryProvider = Provider<HomeStateRepository>((ref) {
   final repo = HubHomeStateRepository(ref.watch(connectionManagerProvider));
   ref.onDispose(repo.dispose);
   return repo;
+});
+
+/// Explicit, opt-in simulated residence for development and visual QA:
+/// `--dart-define=SUPREME_SIMULATED_RESIDENCE=true`. It replaces only the transport boundary —
+/// `ResidenceState`, `CommandTracker` and every screen above it are the production code. Never
+/// on by default, and never reachable in a release build that does not pass the flag.
+const _simulatedResidenceEnabled =
+    bool.fromEnvironment('SUPREME_SIMULATED_RESIDENCE');
+
+final simulatedResidenceProvider = Provider<SimulatedResidence?>((ref) {
+  if (!_simulatedResidenceEnabled) return null;
+  final sim = SimulatedResidence();
+  ref.onDispose(sim.dispose);
+  return sim;
+});
+
+/// The canonical Residence State for the active Home (the Hub's own records, read and streamed).
+/// Rebuilds — and releases the previous Home's state — whenever the active connection does.
+final residenceStateProvider = Provider<ResidenceState>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  if (sim != null) {
+    final state = ResidenceState(
+        get: sim.transport.get, frames: sim.stream.frames);
+    unawaited(sim.transport.authenticate().then((_) => state.start()));
+    ref.onDispose(state.dispose);
+    return state;
+  }
+  final manager = ref.watch(connectionManagerProvider);
+  final hubId = ref.watch(activeHomeIdProvider);
+  final frames = StreamController<Map<String, dynamic>>.broadcast();
+  late final ResidenceState state;
+  state = ResidenceState(get: manager.get, frames: frames.stream);
+  WebSocketHubEventStream? stream;
+  StreamSubscription<HubEventStreamState>? stateSub;
+  StreamSubscription<Map<String, dynamic>>? frameSub;
+  var seenSubscribed = false;
+  unawaited(() async {
+    await state.start();
+    if (hubId == null) return;
+    final uri = await ref.read(activeHomeStreamUriProvider(hubId).future);
+    if (uri == null) return;
+    final session = ref.read(pairedHomeAuthStoreProvider).sessionFor(hubId);
+    if (session == null) return;
+    stream = WebSocketHubEventStream(
+        streamUri: uri, bearerToken: () => session.bearerToken());
+    frameSub = stream!.frames.listen(frames.add);
+    // Sequence numbers restart with every connection, and whatever changed while the stream was
+    // down is only recoverable from a snapshot.
+    stateSub = stream!.state.listen((s) {
+      if (s != HubEventStreamState.subscribed) return;
+      if (seenSubscribed) unawaited(state.streamRestarted());
+      seenSubscribed = true;
+    });
+    unawaited(stream!.connect());
+  }());
+  ref.onDispose(() {
+    unawaited(stateSub?.cancel());
+    unawaited(frameSub?.cancel());
+    unawaited(stream?.dispose());
+    unawaited(frames.close());
+    unawaited(state.dispose());
+  });
+  return state;
+});
+
+/// The active Home's live-stream address, resolved the same way the background runtime does
+/// (LAN first; the tunnel only when this Home's own Remote Access switch is on).
+final activeHomeStreamUriProvider =
+    FutureProvider.family<Uri?, String>((ref, hubId) async {
+  final discovery = ref.read(platformDiscoveryProvider);
+  final lan = await resolveHomeBaseUrl(discovery, hubId);
+  if (lan != null) return lan.replace(scheme: 'wss', path: '/v1/stream');
+  if (!_remoteAccessEnabledFor(ref.read(pairedHomeControllerProvider), hubId)) {
+    return null;
+  }
+  return remoteHubConfigFor(hubId, ref.read(pairedHomeAuthStoreProvider),
+          ref.read(brokerUrlProvider))
+      .streamUri();
+});
+
+/// The hour the residence is described at. A provider so tests (and, later, the residence's own
+/// time zone) can replace it; today it is this device's clock — see `residence_description.dart`.
+final residenceHourProvider = Provider<int>((ref) => DateTime.now().hour);
+
+/// Every homeowner action goes through this one tracker: requested → pending → confirmed|failed.
+/// Timer source for command timeouts; null = real timers. Tests replace it with a manual clock.
+final commandScheduleProvider = Provider<Schedule?>((ref) => null);
+
+final commandTrackerProvider = Provider<CommandTracker>((ref) {
+  final state = ref.watch(residenceStateProvider);
+  final sim = ref.watch(simulatedResidenceProvider);
+  final manager = sim == null ? ref.watch(connectionManagerProvider) : null;
+  final tracker = CommandTracker(
+    state: state,
+    schedule: ref.watch(commandScheduleProvider),
+    send: (deviceId, command) => sim != null
+        ? sim.transport
+            .sendCommand('v1/devices/$deviceId/command', {'command': command})
+        : manager!.sendCommand(
+            'v1/devices/$deviceId/command', {'command': command}),
+  );
+  ref.onDispose(tracker.dispose);
+  return tracker;
+});
+
+/// What a screen renders: the confirmed residence + what is still in flight. Rebuilds when either
+/// changes; a screen holds no state of its own about a device.
+class ResidenceView {
+  final ResidenceSnapshot snapshot;
+  final List<CommandRecord> inFlight;
+  final CommandTracker tracker;
+  const ResidenceView(this.snapshot, this.inFlight, this.tracker);
+}
+
+final residenceViewProvider = StreamProvider<ResidenceView>((ref) async* {
+  final state = ref.watch(residenceStateProvider);
+  final tracker = ref.watch(commandTrackerProvider);
+  ResidenceView now() =>
+      ResidenceView(state.snapshot, tracker.inFlight, tracker);
+  yield now();
+  final merged = StreamController<void>();
+  final a = state.changes.listen((_) => merged.add(null));
+  final b = tracker.updates.listen((_) => merged.add(null));
+  ref.onDispose(() {
+    a.cancel();
+    b.cancel();
+    merged.close();
+  });
+  await for (final _ in merged.stream) {
+    yield now();
+  }
 });
 
 /// §Phase12.3 NETWORK CHANGES — wires the real OS connectivity signal
@@ -547,6 +679,9 @@ class _RootShellState extends ConsumerState<RootShell>
   }
 
   void _openControl(BuildContext context) {
+    // Control opens in the scope of where it was called from: the open space, else the residence.
+    final spaceId =
+        _current == ShellDestination.spaces ? _openSpace?.id : null;
     final profile = SurfaceScope.of(context);
     final nav = shellNavigationFor(profile);
     showSupremeLayer<void>(
@@ -554,7 +689,7 @@ class _RootShellState extends ConsumerState<RootShell>
       presentation: nav.controlPresentation,
       fold: profile.fold,
       semanticLabel: 'Residence control',
-      builder: (_) => const ControlLayerBody(),
+      builder: (_) => ControlLayerBody(spaceId: spaceId),
     );
   }
 
@@ -562,8 +697,8 @@ class _RootShellState extends ConsumerState<RootShell>
         ShellDestination.home => const HomeScreen(),
         ShellDestination.spaces => _openSpace == null
             ? SpacesScreen(onOpenSpace: (s) => setState(() => _openSpace = s))
-            : RoomScreen(
-                space: _openSpace!,
+            : SpaceScreen(
+                spaceId: _openSpace!.id,
                 onBack: () => setState(() => _openSpace = null)),
         ShellDestination.experiences => const ExperiencesScreen(),
         ShellDestination.settings => SettingsScreen(
@@ -585,6 +720,8 @@ class _RootShellState extends ConsumerState<RootShell>
     final nav = shellNavigationFor(SurfaceScope.of(context));
     final homes = ref.watch(pairedHomeControllerProvider);
     final manager = ref.watch(connectionManagerProvider);
+    final simulated = ref.watch(simulatedResidenceProvider) != null;
+    final residence = ref.watch(residenceViewProvider).valueOrNull?.snapshot;
 
     // Back goes up one level at a time: out of a space, then to Home, then leaves the app.
     return PopScope(
@@ -609,8 +746,10 @@ class _RootShellState extends ConsumerState<RootShell>
             current: _current,
             onSelect: _select,
             onOpenControl: () => _openControl(context),
-            residenceName: homes.activeHome?.displayName ?? '',
-            residenceReachable: snap.data?.isConnected ?? false,
+            residenceName: (residence?.name.isNotEmpty ?? false)
+                ? residence!.name
+                : homes.activeHome?.displayName ?? '',
+            residenceReachable: simulated || (snap.data?.isConnected ?? false),
             body: _page(homes),
           ),
         ),

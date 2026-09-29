@@ -117,7 +117,7 @@ Experience? activeExperienceIn(ResidenceSnapshot s, String spaceId,
     final touches = e.spaceIds.contains(spaceId) ||
         e.steps.any((st) => s.devices[st.deviceId]?.roomId == spaceId);
     if (!touches) continue;
-    final st = experienceStatus(e, s, commands: commands);
+    final st = experienceStatus(e, s, commands: commands, spaceId: spaceId);
     if (st.phase == ExperiencePhase.active && st.matched > bestMatched) {
       best = e;
       bestMatched = st.matched;
@@ -373,3 +373,74 @@ String floorLabel(String? floorId) {
 /// Whether the sun is plausibly up at [hour] — the stand-in for the residence's own sun (see
 /// DIVERGENCES: the residence location has no read path).
 bool sunUpAt(int hour) => hour >= 6 && hour < 20;
+
+// ── the space page ────────────────────────────────────────────────────────────────────────
+
+/// "Soft light · 22.5° · Curtains open · Music playing" — what a space is like in one line
+/// (Golden Master `spaceState().summary`, with curtains said in words, not percentages).
+/// Empty when nothing in the space is on; the caller says "Nothing is on".
+String spaceSummary(ResidenceSnapshot s, String spaceId) {
+  final ds = s.devicesIn(spaceId);
+  final parts = <String>[];
+  final light = lightOf(ds);
+  if (light.lightsTotal > 0) {
+    final k = light.kelvin;
+    parts.add(!light.on
+        ? 'Lights off'
+        : k != null && k <= 3200
+            ? 'Warm light'
+            : light.level < 45
+                ? 'Soft light'
+                : light.level < 75
+                    ? 'Lights on'
+                    : 'Bright light');
+  }
+  final climate = _first(ds.where((d) => d.isOnline), 'temperature');
+  final amb = climate?.state['temperature']?['ambientC'] as num?;
+  if (amb != null) parts.add(fmtTemp(amb));
+  final shades = ds
+      .where((d) => d.isOnline && d.capabilities.containsKey('position'))
+      .map((d) => (d.state['position']?['position'] as num?) ?? 0)
+      .toList();
+  if (shades.isNotEmpty) {
+    final p = (shades.reduce((a, b) => a + b) / shades.length).round();
+    parts.add(p >= 95
+        ? 'Curtains open'
+        : p <= 5
+            ? 'Curtains drawn'
+            : p <= 35
+                ? 'Curtains mostly drawn'
+                : p >= 65
+                    ? 'Curtains mostly open'
+                    : 'Curtains partly drawn');
+  }
+  if (ds.any(_playing)) parts.add('Music playing');
+  // Nothing is on → no sentence (the caller says "Nothing is on"), even though a temperature or
+  // a curtain position is known.
+  return light.on || ds.any(_playing) ? parts.join(' · ') : '';
+}
+
+/// How the space feels, said as a sentence (Golden Master `renderSpace`): derived, never chosen.
+String spaceFeel(ResidenceSnapshot s, String spaceId,
+    {Iterable<CommandRecord> commands = const []}) {
+  final becoming = <Experience>[
+    for (final e in spaceExperiences(s, spaceId))
+      if (experienceStatus(e, s, commands: commands, spaceId: spaceId).phase ==
+          ExperiencePhase.becoming)
+        e
+  ];
+  if (becoming.isNotEmpty) return 'Becoming ${becoming.first.name}…';
+  final c = spaceCondition(s, spaceId, commands: commands);
+  if (c.adjusting) return 'Adjusting…';
+  if (c.experience != null) return 'Feels like ${c.experience!.name}.';
+  return spaceSummary(s, spaceId).isNotEmpty ? 'Its own atmosphere.' : 'Resting.';
+}
+
+/// Experiences that act in a space: room-scoped to it, or home-scoped with a step on a device
+/// there.
+List<Experience> spaceExperiences(ResidenceSnapshot s, String spaceId) => [
+      for (final e in s.experiences)
+        if (e.spaceIds.contains(spaceId) ||
+            e.steps.any((st) => s.devices[st.deviceId]?.roomId == spaceId))
+          e
+    ];

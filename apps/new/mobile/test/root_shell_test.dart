@@ -38,18 +38,19 @@ void main() {
 
     await tester.tap(find.text('Spaces'));
     await tester.pumpAndSettle();
-    expect(find.text('No Spaces yet'), findsOneWidget);
+    expect(find.text('Your residence isn’t reachable right now.'), findsOneWidget);
 
     await tester.tap(find.text('Control'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('control-layer')), findsOneWidget);
-    // Still on Spaces underneath: Control never replaced the page.
-    expect(find.text('No Spaces yet'), findsOneWidget);
+    // Still on Spaces underneath: Control never replaced the page (the layer says the same of its
+    // own scope, so the message now appears twice).
+    expect(find.text('Your residence isn’t reachable right now.'), findsNWidgets(2));
 
     await tester.tap(find.byKey(const ValueKey('control-close')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('control-layer')), findsNothing);
-    expect(find.text('No Spaces yet'), findsOneWidget);
+    expect(find.text('Your residence isn’t reachable right now.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -38,7 +38,7 @@ CommandFailure? failedRecently(
 
 // ── lights ────────────────────────────────────────────────────────────────────────────────
 
-class LightsControl {
+class RoomLights {
   final List<DeviceRecord> lights;
   final List<DeviceRecord> online;
 
@@ -57,7 +57,7 @@ class LightsControl {
   final bool pendingPower;
   final List<String> unresponsive;
 
-  const LightsControl._(this.lights, this.online, this.allOn, this.onCount,
+  const RoomLights._(this.lights, this.online, this.allOn, this.onCount,
       this.dimmable, this.level, this.pendingLevel, this.pendingPower, this.unresponsive);
 
   static bool _isLight(DeviceRecord d) =>
@@ -71,7 +71,7 @@ class LightsControl {
       (d.state['brightness']?['on'] ?? d.state['onoff']?['on']) == true;
 
   /// Null when [devices] hold no light — the control is then not drawn at all.
-  static LightsControl? of(
+  static RoomLights? of(
       Iterable<DeviceRecord> devices, Iterable<CommandRecord> inFlight) {
     final lights = devices.where(_isLight).toList();
     if (lights.isEmpty) return null;
@@ -88,7 +88,7 @@ class LightsControl {
       for (final c in _for(inFlight, ids, 'brightness'))
         if (c.command['level'] is num) c.command['level'] as num
     ]);
-    return LightsControl._(
+    return RoomLights._(
       lights,
       online,
       online.isEmpty ? false : on.isEmpty ? false : on.length == online.length ? true : null,
@@ -127,7 +127,7 @@ class LightsControl {
 
 // ── curtains & shades ─────────────────────────────────────────────────────────────────────
 
-class ShadesControl {
+class RoomShades {
   final List<DeviceRecord> shades;
   final List<DeviceRecord> online;
   final int? position;
@@ -135,10 +135,10 @@ class ShadesControl {
   final bool moving;
   final List<String> unresponsive;
 
-  const ShadesControl._(this.shades, this.online, this.position,
+  const RoomShades._(this.shades, this.online, this.position,
       this.pendingPosition, this.moving, this.unresponsive);
 
-  static ShadesControl? of(
+  static RoomShades? of(
       Iterable<DeviceRecord> devices, Iterable<CommandRecord> inFlight) {
     final shades = devices.where((d) => d.capabilities.containsKey('position')).toList();
     if (shades.isEmpty) return null;
@@ -152,7 +152,7 @@ class ShadesControl {
           _ => (c.command['position'] as num?) ?? 0
         }
     ]);
-    return ShadesControl._(
+    return RoomShades._(
       shades,
       online,
       _avg([for (final d in online) (d.state['position']?['position'] as num?) ?? 0])?.round(),
@@ -174,7 +174,7 @@ class ShadesControl {
 
 // ── climate (one zone per thermostat) ─────────────────────────────────────────────────────
 
-class ClimateControl {
+class RoomClimate {
   final DeviceRecord device;
   final double? ambientC;
   final double? targetC;
@@ -185,15 +185,15 @@ class ClimateControl {
   final double minC, maxC, step;
   final List<String> modes;
 
-  const ClimateControl._(this.device, this.ambientC, this.targetC, this.pendingTargetC,
+  const RoomClimate._(this.device, this.ambientC, this.targetC, this.pendingTargetC,
       this.mode, this.on, this.pendingPower, this.minC, this.maxC, this.step, this.modes);
 
   bool get online => device.isOnline;
   bool get canSetTarget => targetC != null;
 
-  static List<ClimateControl> allOf(
+  static List<RoomClimate> allOf(
       Iterable<DeviceRecord> devices, Iterable<CommandRecord> inFlight) {
-    final out = <ClimateControl>[];
+    final out = <RoomClimate>[];
     for (final d in devices) {
       if (!d.capabilities.containsKey('temperature')) continue;
       final s = d.state['temperature'];
@@ -208,7 +208,7 @@ class ClimateControl {
         if (c.command['mode'] != null) pp = true;
       }
       final mode = s?['mode'] as String?;
-      out.add(ClimateControl._(
+      out.add(RoomClimate._(
         d,
         (s?['ambientC'] as num?)?.toDouble(),
         (s?['targetC'] as num?)?.toDouble(),
@@ -244,7 +244,7 @@ class ClimateControl {
 
 // ── music ─────────────────────────────────────────────────────────────────────────────────
 
-class MusicControl {
+class RoomMusic {
   final DeviceRecord device;
   final bool playing;
   final String? title;
@@ -253,14 +253,14 @@ class MusicControl {
   final int? pendingVolume;
   final bool? pendingPlaying;
 
-  const MusicControl._(this.device, this.playing, this.title, this.artist,
+  const RoomMusic._(this.device, this.playing, this.title, this.artist,
       this.volume, this.pendingVolume, this.pendingPlaying);
 
   bool get online => device.isOnline;
 
-  static List<MusicControl> allOf(
+  static List<RoomMusic> allOf(
       Iterable<DeviceRecord> devices, Iterable<CommandRecord> inFlight) {
-    final out = <MusicControl>[];
+    final out = <RoomMusic>[];
     for (final d in devices) {
       if (!d.capabilities.containsKey('media')) continue;
       final s = d.state['media'];
@@ -278,7 +278,7 @@ class MusicControl {
             pp = false;
         }
       }
-      out.add(MusicControl._(
+      out.add(RoomMusic._(
         d,
         s?['playback'] == 'playing',
         s?['title'] as String?,

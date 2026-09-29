@@ -108,6 +108,12 @@ class CommandTracker {
     _reportSub = state.reports.listen(_onReport);
   }
 
+  bool _disposed = false;
+
+  void _emit(CommandRecord r) {
+    if (!_disposed) _updates.add(r);
+  }
+
   Stream<CommandRecord> get updates => _updates.stream;
 
   /// Commands still requested or pending.
@@ -130,10 +136,28 @@ class CommandTracker {
     return best;
   }
 
+  /// Tracks several device effects that ONE Hub call produces (activating a scene): every step
+  /// gets its own record, expectation and confirmation from its own device's report; the single
+  /// [send] answers for all of them (rejected/unreachable fails them together). Steps whose
+  /// effect cannot be verified must not be passed.
+  List<CommandRecord> submitGroup(
+      List<({String deviceId, Map<String, dynamic> command})> steps,
+      Future<Map<String, dynamic>> Function() send) {
+    Future<Map<String, dynamic>>? shared;
+    Future<Map<String, dynamic>> once() => shared ??= send();
+    return [
+      for (final s in steps) _submit(s.deviceId, s.command, sender: (_, __) => once())
+    ];
+  }
+
   /// Returns the record immediately (phase `requested`); progress arrives on [updates].
   /// Throws [ArgumentError] for a command whose effect cannot be verified from device state —
   /// the UI must not offer such a control as confirmable.
-  CommandRecord submit(String deviceId, Map<String, dynamic> command) {
+  CommandRecord submit(String deviceId, Map<String, dynamic> command) =>
+      _submit(deviceId, command);
+
+  CommandRecord _submit(String deviceId, Map<String, dynamic> command,
+      {CommandSender? sender}) {
     final capability = command['capability'] as String?;
     final expectation =
         capability == null ? null : expectationOf(capability, command);
@@ -166,9 +190,9 @@ class CommandTracker {
     _records[rec.id] = rec;
     _expect[rec.id] = expectation;
     _facet[rec.id] = facet;
-    _updates.add(rec);
+    _emit(rec);
     _timers[rec.id] = _schedule(timeout, () => _onTimeout(rec.id));
-    unawaited(_dispatch(rec.id));
+    unawaited(_dispatch(rec.id, sender ?? _send));
     return rec;
   }
 
@@ -187,7 +211,7 @@ class CommandTracker {
     }
   }
 
-  Future<void> _dispatch(int id) async {
+  Future<void> _dispatch(int id, CommandSender send) async {
     final rec = _records[id]!;
     final device = _state.snapshot.devices[rec.deviceId];
     if (device != null && !device.isOnline) {
@@ -196,7 +220,7 @@ class CommandTracker {
     }
     Map<String, dynamic> res;
     try {
-      res = await _send(rec.deviceId, rec.command);
+      res = await send(rec.deviceId, rec.command);
     } catch (_) {
       _settleId(id, CommandPhase.failed, failure: CommandFailure.unreachable);
       return;
@@ -209,7 +233,7 @@ class CommandTracker {
     }
     // A report may already have confirmed it while the ack was in flight.
     _records[id] = current._to(CommandPhase.pending);
-    _updates.add(_records[id]!);
+    _emit(_records[id]!);
 
     final now = _state.snapshot.devices[rec.deviceId]?.state[rec.capability];
     if (now != null && _expect[id]!.matches(now)) {
@@ -248,10 +272,11 @@ class CommandTracker {
     _timers.remove(rec.id)?.cancel();
     final done = rec._to(p, at: _now(), failure: failure, by: by);
     _records[rec.id] = done;
-    _updates.add(done);
+    _emit(done);
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     for (final t in _timers.values) {
       t.cancel();
     }
