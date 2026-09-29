@@ -41,7 +41,9 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is required: go2rtc's WebRTC stack enumerates interfaces/routes over netlink, and
+# without it every WebRTC session fails ("netlinkrib: address family not supported by protocol").
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictRealtime=yes
 CapabilityBoundingSet=
 # MemoryDenyWriteExecute is deliberately NOT set: go2rtc v1.9.14 crashes on start (SIGSEGV,
