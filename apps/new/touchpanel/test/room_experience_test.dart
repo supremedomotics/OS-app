@@ -129,7 +129,11 @@ void main() {
       expect(find.text('Applying…'), findsOneWidget);
       expect(find.text('Relax'), findsNothing);
 
-      await tester.pumpAndSettle(); // Hub "confirms" after the mock delay
+      // Hub "confirms" after the mock delay. Advance it explicitly: settling used to run long
+      // enough only because of Material's ink-splash animation, which the SupremeOS theme
+      // deliberately does not have.
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
 
       expect(find.text('Relax'), findsOneWidget);
       expect(find.text('Applying…'), findsNothing);

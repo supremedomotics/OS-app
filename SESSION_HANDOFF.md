@@ -4,6 +4,56 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: SupremeOS Flutter migration — Phase 0 audit, Phase 1A (SurfaceProfile), Phase 1B (design foundation)
+
+Migration of the approved SupremeOS-10 HTML prototype into the production Flutter generation
+(`apps/new/{shared,shared_ui,mobile,touchpanel}`). Decisions made with the owner (final):
+`apps/new` is the production Flutter target; `apps/mobile` and `packages/aureon-flutter` are
+FROZEN (kept building, not extended, not deleted); homeowner Flutter UI does **not render
+unsupported capabilities** (Pro may show them); floor scope is kept; the Hub may gain a panel
+identity/commissioning API; the Golden Master wins for homeowner visual expression; navigation is
+Home · Spaces · Control · Experiences · Settings (old Now/More to be classified, not blindly deleted).
+
+**Phase 1A — one authoritative SurfaceProfile (verified).**
+`surfaceProfileOf(SurfaceInputs)` (`shared/lib/src/design/surface_profile.dart`, pure Dart; authority
+role > input > fold > dimensions, ports `surface.js`) + `SurfaceScope` (`shared_ui`, the only reader of raw
+`MediaQuery` surface inputs). `AdaptiveScope`/`AdaptiveProfile`/`DeviceClass`/`PanelPresentationMode` remain as a
+compatibility adapter over it. Dart `CapabilityKind` gained `remote` + `display`; a parity test reads
+`packages/domain-model/src/capabilities.ts`. A static authority test fails if anything but `SurfaceScope` reads raw
+surface inputs (planted-rogue negative control). Floor scope has its own `floorPanel` role.
+
+**Phase 1B — design foundation (verified).** Inspected the Golden Master's stylesheet, page modules and rendered
+it (captures in `docs/design/golden-master/`); derived tokens are in `docs/design/supremeos-golden-master-tokens.md`.
+Palette is night `#08090A` / ivory / brass (not the old gold-on-black); fonts are Cormorant Garamond Light + Jost
+(both OFL, bundled in `shared_ui/assets/fonts`); motion timings and the `settle` curve are tokens; the theme is
+Golden Master and disables Material ink. Legacy token names remain, mapped to Golden Master values. Legacy
+`headline/title/display` sizes are unchanged (34 dp titles overflow the 3" panel tests); new UI uses `name` /
+`pageTitle` / `hero`. `docs/responsive-interaction-grammar.md` was added to the repo (it was only in the prototype archive).
+
+**Tests (actually run, this session):** `flutter analyze` + tests — shared 262 pass (analyze: 3 pre-existing infos in
+`test/hub_discovery_test.dart`), shared_ui 39 pass / analyze clean, mobile 90 pass / clean, touchpanel 23 pass / clean.
+One existing test changed: `touchpanel/test/room_experience_test.dart` now advances the mock Hub delay explicitly — it
+had only passed because Material's ink-splash animation kept `pumpAndSettle` running (the theme no longer has ripples).
+NOT run: Android/iOS builds, gateway/TS tests (no TS changed), visual comparison of Flutter against the Golden Master
+(no Flutter screens rebuilt yet).
+
+**Known issues / gaps found (not fixed):**
+- `touchpanel` still fakes production behaviour: `panel-demo-1`, a fixed area list, the `'test-hub-signature-v1'`
+  literal, and `ExperienceActivation`'s 400 ms timer that stands in for Hub confirmation. All violate the no-fake-production
+  rule; replaced in Phase 3/4 (real command tracker, Hub panel API).
+- `isTelevision` is never true: no platform bridge yet, so a real Android TV is classified by size.
+- No app root passes a panel role / physical size into `SurfaceScope` yet (waits for the Hub panel API).
+- Golden Master modules still to inspect: `photos.js`, `tone.js`, `sky.js`, `spaces.js`, `settings.js`, `devices.js`,
+  `panelui.js`, `formfactor.js`, `hubs.js`, onboarding, and the `SupremeGlyph` icon set (must be ported; Material icons are not the Golden Master's).
+- Cormorant Garamond static instance is ~770 KB; subset if app size matters.
+
+**Architecture decisions:** see the two bullets above (one SurfaceProfile; Golden Master tokens with legacy aliases).
+
+**Recommended next steps:** Phase 1C navigation shell (Home · Spaces · Control · Experiences · Settings; phone bar with
+ringed centre Control, tablet rail, desktop pills + "Residence control", watch list) — first port the glyph set and inspect
+`formfactor.js`; then Phase 2 core surfaces; Phase 3 starts with the backend contract gate (see the table at the end of
+`docs/design/supremeos-golden-master-tokens.md`).
+
 ## Session: Matter Controller Extension — Phase 3.4/3.5 PASE + Cluster-Engine Fixes (RESOLVED)
 
 Picked back up per a peer session's report that the exact Phase 3.3 PASE failures were now
