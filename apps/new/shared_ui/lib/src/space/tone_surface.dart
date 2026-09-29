@@ -45,8 +45,9 @@ class _LookTween extends Tween<RoomLook> {
   RoomLook lerp(double t) => RoomLook.lerp(begin ?? end!, end!, t);
 }
 
-/// A dark ground with a pool of the room's own light: brightness follows exposure, warmth follows
-/// the reported colour temperature's gain. Lights off → the ground alone.
+/// A dark ground with a pool of the room's light: the residence's own brass, stronger as the
+/// confirmed light is brighter. It states brightness only — never a colour temperature the devices
+/// did not report — and is not a picture of the room. Lights off → the ground alone.
 class _Plate extends StatelessWidget {
   final RoomLook look;
   const _Plate({required this.look});
@@ -54,11 +55,6 @@ class _Plate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lit = look.exposure > .45;
-    final tint = Color.fromRGBO(
-        (255 * look.gain[0].clamp(0, 1.2) / 1.2).round().clamp(0, 255),
-        (255 * look.gain[1].clamp(0, 1.2) / 1.2).round().clamp(0, 255),
-        (255 * look.gain[2].clamp(0, 1.2) / 1.2).round().clamp(0, 255),
-        1);
     final strength = lit ? ((look.exposure - .5) * 1.1 + .16).clamp(0.0, .5) : 0.0;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -67,7 +63,7 @@ class _Plate extends StatelessWidget {
           center: const Alignment(.35, -.45),
           radius: 1.15,
           colors: [
-            Color.lerp(SupremeColorScheme.glassSolid, tint, strength)!,
+            Color.lerp(SupremeColorScheme.glassSolid, SupremeColorScheme.brass, strength * .9)!,
             SupremeColorScheme.glassSolid,
           ],
         ),

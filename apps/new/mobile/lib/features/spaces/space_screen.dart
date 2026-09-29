@@ -54,9 +54,9 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
     final immediate = profile.mode == SurfaceMode.compact ||
         profile.role == SurfaceRole.roomPanel;
     final look = lookFor(lightOf(snap.devicesIn(space.id)));
-    final pad = watch ? 12.0 : phone ? 20.0 : 32.0;
+    final m = PageGeometry.of(profile);
     // The photograph runs under the header; the words start below it.
-    final top = ShellInsets.of(context).top;
+    final top = ShellInsets.of(context).top + m.top;
 
     return Stack(
       key: ValueKey('space-page-${space.id}'),
@@ -80,9 +80,9 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
         ),
         LayoutBuilder(
           builder: (context, c) => SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(pad, pad + top, pad, pad + 16),
+            padding: EdgeInsets.fromLTRB(m.gutter, top, m.gutter, m.bottom + 8),
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: c.maxHeight - pad * 2 - 16 - top),
+              constraints: BoxConstraints(minHeight: c.maxHeight - top - m.bottom - 8),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.start,

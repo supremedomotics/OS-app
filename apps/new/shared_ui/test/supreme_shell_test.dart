@@ -29,6 +29,7 @@ Widget _shell(
   List<DisplayFeature> features = const [],
   EdgeInsets padding = EdgeInsets.zero,
   ValueChanged<EdgeInsets>? onBodyPadding,
+  bool underHeader = false,
 }) {
   return MediaQuery(
     data: MediaQueryData(
@@ -49,6 +50,7 @@ Widget _shell(
             onOpenControl: () => probe.control++,
             residenceName: _name,
             residenceReachable: reachable,
+            bodyUnderHeader: underHeader,
             body: Builder(builder: (c) {
               probe.insets = ShellInsets.of(c);
               onBodyPadding?.call(MediaQuery.paddingOf(c));
@@ -73,10 +75,12 @@ Future<void> _pump(
   ShellDestination current = ShellDestination.home,
   String? room,
   bool reachable = true,
+  bool underHeader = false,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(_shell(size, probe,
+      underHeader: underHeader,
       panel: panel,
       tv: tv,
       pointer: pointer,
@@ -261,14 +265,20 @@ void main() {
   });
 
   group('insets for full-bleed pages', () {
-    testWidgets('a page can read the space the header takes', (tester) async {
+    testWidgets('a page that runs under the header can read the space it takes', (tester) async {
       final probe = _Probe();
-      await _pump(tester, _desktop, probe, pointer: SurfacePointer.fine);
+      await _pump(tester, _desktop, probe, pointer: SurfacePointer.fine, underHeader: true);
       expect(probe.insets!.top, 80);
-      await _pump(tester, _phone, probe);
+      await _pump(tester, _phone, probe, underHeader: true);
       expect(probe.insets!.top, 56);
-      await _pump(tester, _tablet, probe);
+      await _pump(tester, _tablet, probe, underHeader: true);
       expect(probe.insets!.top, 72);
+    });
+
+    testWidgets('a page that starts below the header has nothing to clear', (tester) async {
+      final probe = _Probe();
+      await _pump(tester, _phone, probe);
+      expect(probe.insets!.top, 0);
     });
   });
 

@@ -154,8 +154,8 @@ class _Root extends StatelessWidget {
                                 fontSize: 14, color: SupremeColorScheme.text2)),
                       ]),
                 ),
-                const Text('›',
-                    style: TextStyle(fontSize: 22, color: Color(0x8FF7F4EE))),
+                // Drawn, not typeset: no glyph the font lacks can turn into a box.
+                const SizedBox(width: 10, height: 16, child: CustomPaint(painter: _Chevron())),
               ]),
             ),
           ),
@@ -209,4 +209,26 @@ class _System extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: 32),
         children: blocks);
   }
+}
+
+class _Chevron extends CustomPainter {
+  const _Chevron();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = const Color(0x8FF7F4EE)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(
+        Path()
+          ..moveTo(1.5, 1.5)
+          ..lineTo(size.width - 1.5, size.height / 2)
+          ..lineTo(1.5, size.height - 1.5),
+        p);
+  }
+
+  @override
+  bool shouldRepaint(_Chevron o) => false;
 }

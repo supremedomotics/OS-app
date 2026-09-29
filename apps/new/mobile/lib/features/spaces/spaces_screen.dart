@@ -17,10 +17,8 @@ class SpacesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final view = ref.watch(residenceViewProvider).valueOrNull;
     final hour = ref.watch(residenceHourProvider);
-    final profile = SurfaceScope.of(context);
     final text = SupremeTextStyles.resolve(SupremeDensity.comfortable);
     final snap = view?.snapshot;
-    final pad = profile.skeleton == SurfaceSkeleton.watch ? 12.0 : 24.0;
 
     final children = <Widget>[
       SupremePageHead(kicker: snap?.name ?? '', title: 'Spaces'),
@@ -44,11 +42,7 @@ class SpacesScreen extends ConsumerWidget {
         ));
       }
     }
-    return ListView(
-      key: const ValueKey('spaces-page'),
-      padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 24),
-      children: children,
-    );
+    return SupremePage(key: const ValueKey('spaces-page'), children: children);
   }
 }
 

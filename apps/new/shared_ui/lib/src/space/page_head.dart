@@ -17,6 +17,8 @@ class SupremePageHead extends StatelessWidget {
     final text = SupremeTextStyles.resolve(SupremeDensity.comfortable);
     final watch = p.skeleton == SurfaceSkeleton.watch;
     final phone = p.skeleton == SurfaceSkeleton.phone;
+    // Golden Master: h1 clamp(44px, 5.2vw, 76px); 34 on a phone; 24 on a watch.
+    final size = watch ? 24.0 : phone ? 34.0 : (p.widthDp * .052).clamp(44.0, 76.0);
     return Padding(
       padding: EdgeInsets.only(bottom: watch ? 10 : 26),
       child: Column(
@@ -24,11 +26,11 @@ class SupremePageHead extends StatelessWidget {
         children: [
           if (kicker.isNotEmpty)
             Text(kicker.toUpperCase(),
-                style: text.kicker.copyWith(fontSize: watch ? 9 : null)),
+                style: text.kicker.copyWith(
+                    fontSize: watch ? 9 : null, letterSpacing: (watch ? 9 : 12) * .24)),
           SizedBox(height: watch ? 2 : 4),
           Text(title,
-              style: text.pageTitle.copyWith(
-                  fontSize: watch ? 24 : phone ? 34 : null, height: 1.05)),
+              style: text.pageTitle.copyWith(fontSize: size, height: 1.0)),
         ],
       ),
     );

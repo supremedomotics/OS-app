@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show Material, MaterialType;
 import 'package:flutter/widgets.dart';
 import 'package:supreme_os_core/supreme_os_core.dart';
 
@@ -169,7 +170,11 @@ class _Surface extends StatelessWidget {
         border: edge,
         borderRadius: radius,
       ),
-      child: ClipRRect(
+      // A layer is a route: it has no Material ancestor of its own, so without one its text would
+      // draw with the framework's default (yellow double underline) and controls could not paint ink.
+      child: Material(
+        type: MaterialType.transparency,
+        child: ClipRRect(
         borderRadius: radius,
         child: Padding(
           padding: EdgeInsets.only(top: topInset, bottom: bottomInset),
@@ -189,6 +194,7 @@ class _Surface extends StatelessWidget {
               Expanded(child: child),
             ],
           ),
+        ),
         ),
       ),
     );

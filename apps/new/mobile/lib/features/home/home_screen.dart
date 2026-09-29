@@ -26,8 +26,9 @@ class HomeScreen extends ConsumerWidget {
     final snap = view?.snapshot;
     final w = profile.widthDp;
     final phone = profile.skeleton == SurfaceSkeleton.phone;
-    final pad = phone ? 20.0 : 32.0;
-    final top = ShellInsets.of(context).top;
+    final m = PageGeometry.of(profile);
+    final top = ShellInsets.of(context).top + m.top;
+    final watch = profile.skeleton == SurfaceSkeleton.watch;
 
     final name = (snap?.name.isNotEmpty ?? false)
         ? snap!.name
@@ -45,9 +46,11 @@ class HomeScreen extends ConsumerWidget {
     final look = lookFor(loaded ? lightOf(snap.devices.values) : const RoomLight(lightsTotal: 0, lightsOn: 0, level: 0, kelvin: null));
     final stale = loaded && snap.reachable == false;
 
-    final nameSize = phone
-        ? (w * .12).clamp(40.0, 56.0)
-        : (w * .064).clamp(48.0, 92.0);
+    final nameSize = watch
+        ? 26.0
+        : phone
+            ? (w * .12).clamp(40.0, 56.0)
+            : (w * .064).clamp(48.0, 92.0);
 
     return Stack(
       key: const ValueKey('home-page'),
@@ -71,9 +74,9 @@ class HomeScreen extends ConsumerWidget {
         ),
         LayoutBuilder(
           builder: (context, c) => SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(pad, top + pad, pad, pad + 24),
+            padding: EdgeInsets.fromLTRB(m.gutter, top, m.gutter, m.bottom + 8),
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: c.maxHeight - top - pad * 2 - 24),
+              constraints: BoxConstraints(minHeight: c.maxHeight - top - m.bottom - 8),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 crossAxisAlignment: CrossAxisAlignment.start,

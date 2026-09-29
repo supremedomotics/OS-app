@@ -33,7 +33,7 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
     final snap = view?.snapshot;
     final phone = profile.skeleton == SurfaceSkeleton.phone;
     final watch = profile.skeleton == SurfaceSkeleton.watch;
-    final pad = watch ? 12.0 : 24.0;
+    final wide = profile.widthDp >= 700 && !watch;
 
     final children = <Widget>[
       SupremePageHead(kicker: snap?.name ?? '', title: 'Experiences'),
@@ -45,7 +45,7 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
               ? 'Your residence isn’t reachable right now.'
               : 'Loading your experiences…',
           style: text.body.copyWith(color: SupremeColorScheme.text2)));
-      return _page(pad, children);
+      return _page(children);
     }
 
     // Where: the whole residence, or one of the spaces an Experience acts in.
@@ -68,20 +68,18 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
       padding: const EdgeInsets.only(bottom: 4),
       child: Wrap(
         crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 8,
         children: [
-          Text('Shape', style: text.body.copyWith(fontSize: 17, color: SupremeColorScheme.text2)),
-          SupremeOptions<String?>(
-            label: 'Where',
-            options: scopes,
+          Text('Shape ', style: text.body.copyWith(fontSize: 17, color: SupremeColorScheme.text2)),
+          _WherePicker(
+            scopes: scopes,
+            current: _spaceId,
             name: scopeName,
-            value: _spaceId,
-            fontSize: 17,
-            onSelect: (id) => setState(() {
+            onPick: (id) => setState(() {
               _spaceId = id;
               _selected = null;
             }),
           ),
+          Text('.', style: text.body.copyWith(fontSize: 17, color: SupremeColorScheme.text2)),
         ],
       ),
     ));
@@ -92,7 +90,7 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
         child: Text('No experiences are set up here yet.',
             style: text.body.copyWith(color: SupremeColorScheme.text2)),
       ));
-      return _page(pad, children);
+      return _page(children);
     }
 
     final activeHere = _spaceId == null
@@ -157,94 +155,146 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
     ));
 
     // hero
-    final heroName = text.hero.copyWith(fontSize: phone ? 40 : 56, height: 1);
-    children.add(ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: SizedBox(
-        height: watch ? 120 : phone ? 280 : 340,
-        child: Stack(fit: StackFit.expand, children: [
-          if (!watch) ToneSurface(look: look),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-                stops: [0, .55, 1],
-                colors: [Color(0xEB08090A), Color(0x5908090A), Color(0x2608090A)],
-              ),
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.all(watch ? 10 : phone ? 18 : 32),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                    (_spaceId == null ? 'Whole residence' : snap.space(_spaceId!)!.name)
-                        .toUpperCase(),
-                    style: text.kicker.copyWith(letterSpacing: 2.4)),
-                const SizedBox(height: 4),
-                Text(sel.name, key: const ValueKey('exp-name'), style: heroName),
-                const SizedBox(height: 6),
-                Text(experienceLine(sel, snap, spaceId: _spaceId),
-                    style: text.body.copyWith(fontSize: 16, color: SupremeColorScheme.text2)),
-              ],
-            ),
-          ),
-        ]),
-      ),
-    ));
-
-    // status + the one action
     final statusText = experienceStatusText(st);
-    children.add(Padding(
-      padding: const EdgeInsets.only(top: 16, bottom: 8),
-      child: Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        alignment: WrapAlignment.spaceBetween,
-        runSpacing: 12,
-        spacing: 12,
-        children: [
-          if (statusText.isNotEmpty)
-            Text(statusText,
-                key: const ValueKey('exp-status'),
-                style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.brassPale)),
-          Opacity(
-            opacity: plan.isEmpty || becoming ? .5 : 1,
-            child: SupremeTappable(
-              key: const ValueKey('exp-set'),
-              onTap: plan.isEmpty || becoming
-                  ? () {}
-                  : () => activateExperience(ref, view, sel, spaceId: _spaceId),
-              semanticLabel: becoming
-                  ? 'Setting ${sel.name}'
-                  : st.phase == ExperiencePhase.active
-                      ? 'Set ${sel.name} again'
-                      : 'Set ${sel.name}',
-              radius: 999,
-              child: Container(
-                height: 46,
-                padding: const EdgeInsets.symmetric(horizontal: 26),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: const Color(0x6B08090A),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: const Color(0x99C9A66B)),
-                ),
-                child: Text(
-                    becoming
-                        ? 'Setting…'
-                        : st.phase == ExperiencePhase.active
-                            ? 'Set again'
-                            : 'Set ${sel.name}',
-                    style: text.body.copyWith(fontSize: 15, color: SupremeColorScheme.text)),
+    final scopeKicker =
+        (_spaceId == null ? 'Whole residence' : snap.space(_spaceId!)!.name).toUpperCase();
+    final line = experienceLine(sel, snap, spaceId: _spaceId);
+    final setLabel = becoming
+        ? 'Setting…'
+        : st.phase == ExperiencePhase.active
+            ? 'Set again'
+            : 'Set ${sel.name}';
+    Widget setButton() => IntrinsicWidth(
+        child: Opacity(
+          opacity: plan.isEmpty || becoming ? .5 : 1,
+          child: SupremeTappable(
+            key: const ValueKey('exp-set'),
+            onTap: plan.isEmpty || becoming
+                ? () {}
+                : () => activateExperience(ref, view, sel, spaceId: _spaceId),
+            semanticLabel: becoming
+                ? 'Setting ${sel.name}'
+                : st.phase == ExperiencePhase.active
+                    ? 'Set ${sel.name} again'
+                    : 'Set ${sel.name}',
+            radius: 999,
+            child: Container(
+              height: 46,
+              padding: const EdgeInsets.symmetric(horizontal: 26),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0x6B08090A),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0x99C9A66B)),
               ),
+              child: Text(setLabel,
+                  style: text.body.copyWith(fontSize: 15, color: SupremeColorScheme.text)),
             ),
           ),
-        ],
+        ));
+    Widget status() => statusText.isEmpty
+        ? const SizedBox.shrink()
+        : Text(statusText,
+            key: const ValueKey('exp-status'),
+            textAlign: wide ? TextAlign.end : TextAlign.center,
+            style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.brassPale));
+
+    final heroPicture = ToneSurface(look: look);
+    const scrim = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          stops: [0, .55, 1],
+          colors: [Color(0xEB08090A), Color(0x5908090A), Color(0x2608090A)],
+        ),
       ),
-    ));
+    );
+    final words = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(scopeKicker,
+            style: text.body.copyWith(
+                fontSize: wide ? 16 : 15,
+                letterSpacing: (wide ? 16 : 15) * .2,
+                color: SupremeColorScheme.text2)),
+        const SizedBox(height: 4),
+        Text(sel.name,
+            key: const ValueKey('exp-name'),
+            style: text.hero.copyWith(fontSize: phone ? 40 : (profile.widthDp * .05).clamp(40.0, 64.0), height: 1)),
+        const SizedBox(height: 6),
+        Text(line,
+            style: text.body.copyWith(fontSize: 16, color: SupremeColorScheme.text2)),
+      ],
+    );
+
+    if (wide) {
+      // A wide surface: the picture carries the words, and the one action sits in its corner.
+      children.add(ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          height: (profile.heightDp * .42).clamp(300.0, 460.0),
+          child: Stack(fit: StackFit.expand, children: [
+            heroPicture,
+            scrim,
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(child: words),
+                  const SizedBox(width: 20),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [status(), const SizedBox(height: 10), setButton()],
+                  ),
+                ],
+              ),
+            ),
+          ]),
+        ),
+      ));
+    } else if (watch) {
+      children.add(Container(
+        padding: const EdgeInsets.all(10),
+        color: SupremeColorScheme.glassSolid,
+        child: words,
+      ));
+      children.add(Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Center(child: setButton())));
+    } else {
+      // A phone: the picture on its own (16:9), then the words, then the one action, centred.
+      children.add(ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Stack(fit: StackFit.expand, children: [
+              heroPicture,
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.center,
+                    colors: [Color(0x5908090A), Color(0x0008090A)],
+                  ),
+                ),
+              ),
+            ])),
+      ));
+      children.add(Padding(padding: const EdgeInsets.only(top: 16), child: words));
+      children.add(Padding(
+        padding: const EdgeInsets.only(top: 16),
+        child: Column(children: [
+          status(),
+          if (statusText.isNotEmpty) const SizedBox(height: 10),
+          setButton(),
+        ]),
+      ));
+    }
 
     // What changes
     children.add(_Label('What changes'));
@@ -318,14 +368,11 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
         }
       }
     }
-    return _page(pad, children);
+    return _page(children);
   }
 
-  Widget _page(double pad, List<Widget> children) => ListView(
-        key: const ValueKey('experiences-page'),
-        padding: EdgeInsets.fromLTRB(pad, pad, pad, pad + 32),
-        children: children,
-      );
+  Widget _page(List<Widget> children) =>
+      SupremePage(key: const ValueKey('experiences-page'), children: children);
 }
 
 class _Label extends StatelessWidget {
@@ -339,4 +386,70 @@ class _Label extends StatelessWidget {
                 .body
                 .copyWith(fontSize: 12, letterSpacing: 2.4, color: const Color(0x8FF7F4EE))),
       );
+}
+
+/// "the whole residence ▾" — the Golden Master's one sentence with one choice in it (a native
+/// select there). A quiet underlined phrase; the list opens as a menu in the shell's own surface.
+class _WherePicker extends StatelessWidget {
+  final List<String?> scopes;
+  final String? current;
+  final String Function(String?) name;
+  final ValueChanged<String?> onPick;
+  const _WherePicker(
+      {required this.scopes,
+      required this.current,
+      required this.name,
+      required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = SupremeTextStyles.resolve(SupremeDensity.comfortable);
+    return PopupMenuButton<String>(
+      key: const ValueKey('exp-where-picker'),
+      tooltip: 'Where',
+      color: SupremeColorScheme.glassSolid,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: const BorderSide(color: SupremeColorScheme.glassEdge)),
+      onSelected: (v) => onPick(v.isEmpty ? null : v),
+      itemBuilder: (_) => [
+        for (final s in scopes)
+          PopupMenuItem<String>(
+            value: s ?? '',
+            child: Text(name(s),
+                style: text.body.copyWith(
+                    fontSize: 16,
+                    color: s == current ? SupremeColorScheme.text : SupremeColorScheme.text2)),
+          ),
+      ],
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: SupremeColorScheme.brass))),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(name(current), style: text.body.copyWith(fontSize: 17, color: SupremeColorScheme.text)),
+          const SizedBox(width: 6),
+          const SizedBox(width: 10, height: 6, child: CustomPaint(painter: _Caret())),
+        ]),
+      ),
+    );
+  }
+}
+
+class _Caret extends CustomPainter {
+  const _Caret();
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawPath(
+        Path()
+          ..moveTo(0, 0)
+          ..lineTo(size.width, 0)
+          ..lineTo(size.width / 2, size.height)
+          ..close(),
+        Paint()..color = SupremeColorScheme.text2);
+  }
+
+  @override
+  bool shouldRepaint(_Caret o) => false;
 }

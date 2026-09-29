@@ -22,6 +22,20 @@ compatibility adapter over it. Dart `CapabilityKind` gained `remote` + `display`
 `packages/domain-model/src/capabilities.ts`. A static authority test fails if anything but `SurfaceScope` reads raw
 surface inputs (planted-rogue negative control). Floor scope has its own `floorPanel` role.
 
+**Phase 2 — homeowner surfaces on the canonical Residence State (verified by test run + captures reviewed).**
+`shared`: `ResidenceState` (read model of the Hub's rooms/devices/scenes, hydrated by REST, kept current by `/v1/stream`
+deltas, stale frames dropped), `CommandTracker` (requested → pending → confirmed|failed; confirmation ONLY from a device
+report satisfying `expectationOf`; timeouts; group calls for scene activation), derived `experienceStatus`, homeowner
+language (`describeHome`, `spaceCondition`, `spaceFeel`), `room_controls`/`control_systems` (capability-driven),
+`experience_preview`, `room_tone`, and `SimulatedResidence` (transport-level, real REST/stream shapes, fault injection;
+opt-in via `--dart-define=SUPREME_SIMULATED_RESIDENCE=true`). `shared_ui`: control grammar, `SpacePlate`, `ToneSurface`,
+`SupremePage`/`PageGeometry`. `mobile`: Home, Spaces, Space, Control (scoped layer), Experiences; old `RoomScreen` and its
+ambiguity heuristic removed. Tests: shared 344, shared_ui 87, mobile 119 (+7 capture, skipped without CAPTURE_DIR),
+touchpanel 23. Known gaps: Settings not yet rebuilt to the Golden Master; no photography (Hub `heroImageUrl` relative
+paths need an authenticated fetch) so plates are tonal; no occupancy/protection/sun line (no contract); Control has no
+instruments/Devices/device sheet; watch glance, TV focus, residence-panel map, panel identity are Phase 4; a space's share of
+an Experience is client-orchestrated (no Hub route, D8); Shape/authoring undecided (D5); capture harness 'watch' case fails.
+
 **Phase 1C — shell (verified by test run, visual check vs Golden Master captures).** Inspection pass over
 photos/tone/sky/spaces/settings/devices/panelui/formfactor/onboarding/icons recorded in
 `docs/design/golden-master-implementation-map.md` (conflicts C1–C5, ambiguities A1–A5, decisions D1–D8; no IA change).

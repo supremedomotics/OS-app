@@ -96,8 +96,12 @@ void main() {
       (tester) async {
     final app = SimApp();
     await _open(tester, app);
+    await tester.tap(find.byKey(const ValueKey('exp-where-picker')));
+    await app.settle(tester);
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('the dining room'));
     await app.settle(tester);
+    await tester.pump(const Duration(milliseconds: 400));
     expect(find.byKey(const ValueKey('exp-row-lighting')), findsOneWidget);
     expect(find.byKey(const ValueKey('exp-row-music')), findsNothing);
 

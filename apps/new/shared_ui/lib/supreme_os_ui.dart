@@ -8,6 +8,7 @@ export 'src/theme/supreme_theme.dart';
 export 'src/adaptive/surface_scope.dart';
 export 'src/adaptive/adaptive_scope.dart';
 export 'src/glyph/glyph.dart';
+export 'src/shell/page_metrics.dart';
 export 'src/shell/presence_mark.dart';
 export 'src/shell/supreme_layer.dart';
 export 'src/shell/supreme_shell.dart';

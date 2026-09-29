@@ -101,8 +101,9 @@ class SupremeShell extends StatelessWidget {
             right: 0,
             top: 0,
             bottom: c.bar,
+            // What the page must clear itself: the header only when the page runs under it.
             child: ShellInsets(
-              padding: EdgeInsets.only(top: c.header),
+              padding: EdgeInsets.only(top: bodyUnderHeader ? c.header : 0),
               child: Padding(padding: pagePad, child: pageBody),
             ),
           ),
@@ -183,8 +184,8 @@ class _Chrome {
               railItemMin: 44, railItemMax: 72);
         }
         return p.skeleton == SurfaceSkeleton.tv
-            ? const _Chrome(72, 112, 0, 48, railItemMin: 74)
-            : const _Chrome(72, 92, 0, 40);
+            ? const _Chrome(72, 112, 0, 48, railItemMin: 74, railItemMax: 84)
+            : const _Chrome(72, 92, 0, 40, railItemMax: 68);
       case ShellFrame.none:
         return const _Chrome(30, 0, 0, 10);
     }
