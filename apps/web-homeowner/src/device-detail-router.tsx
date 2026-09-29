@@ -13,6 +13,7 @@ import { mediaDeviceKind, usesRemoteMediaDetail, usesSimpleMediaDetail } from ".
 import { EnergyDeviceDetail } from "./features/infrastructure/energy/detail.js";
 import { isEnergyDevice } from "./features/infrastructure/energy/capability-mapper.js";
 import { DeviceSheet } from "./device-sheets.js";
+import { CameraDeviceDetail } from "./features/security/camera-detail.js";
 import { getDeviceUiCapabilities } from "./device-ui-capabilities.js";
 
 /**
@@ -115,6 +116,12 @@ function resolveCanonicalDetail(device: Device, ctx: RouterContext) {
         onBack={() => ctx.setScheduleDevice(null)}
       />
     );
+  }
+
+  // Cameras are `supremeType: "camera"` with no capabilities — they'd otherwise land on the
+  // generic DeviceSheet and get a fabricated power button.
+  if (device.supremeType === "camera") {
+    return <CameraDeviceDetail device={device} roomName={ctx.roomName ?? "Other"} onBack={ctx.onClose} onRemoved={ctx.onRemoved} onDeviceUpdated={ctx.onDeviceUpdated} />;
   }
 
   if (isLight(device)) {

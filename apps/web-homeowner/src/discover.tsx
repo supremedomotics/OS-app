@@ -1,3 +1,4 @@
+import { firstPerSingleCardKey } from "./single-card-drivers.js";
 import { useEffect, useRef, useState } from "react";
 import type { RoomId } from "@supreme/domain-model";
 import { Icon, ProgressBar, SegmentedControl, type ShadingKind } from "@supreme/aureon-web";
@@ -548,7 +549,7 @@ function CasambiGroupSection({
 
 /** Installed, enabled drivers with a real installedId — the only ones selectable for discovery. */
 export function discoverableDrivers(registry: DriverEntry[]): DriverEntry[] {
-  return registry.filter((d) => d.installed && d.enabled && d.installedId && d.protocols.length > 0);
+  return firstPerSingleCardKey(registry.filter((d) => d.installed && d.enabled && d.installedId && d.protocols.length > 0));
 }
 
 function DriverSelector({
