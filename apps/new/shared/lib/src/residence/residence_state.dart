@@ -107,6 +107,13 @@ class DeviceRecord {
 /// An immutable point-in-time view. Widgets read this; they never hold a copy of it.
 class ResidenceSnapshot {
   final bool loaded;
+
+  /// Whether the last snapshot read reached the Hub: null before the first attempt, false when
+  /// it failed (the last known state below is then kept, not blanked).
+  final bool? reachable;
+
+  /// The residence's own name, as the Hub reports it (`/v1/home`). Empty until first read.
+  final String name;
   final List<Space> spaces;
   final Map<String, DeviceRecord> devices;
   final List<Experience> experiences;
@@ -116,6 +123,8 @@ class ResidenceSnapshot {
 
   const ResidenceSnapshot({
     this.loaded = false,
+    this.reachable,
+    this.name = '',
     this.spaces = const [],
     this.devices = const {},
     this.experiences = const [],
@@ -136,6 +145,8 @@ class ResidenceSnapshot {
 
   ResidenceSnapshot _with({
     bool? loaded,
+    bool? reachable,
+    String? name,
     List<Space>? spaces,
     Map<String, DeviceRecord>? devices,
     List<Experience>? experiences,
@@ -143,6 +154,8 @@ class ResidenceSnapshot {
   }) =>
       ResidenceSnapshot(
         loaded: loaded ?? this.loaded,
+        reachable: reachable ?? this.reachable,
+        name: name ?? this.name,
         spaces: spaces ?? this.spaces,
         devices: devices ?? this.devices,
         experiences: experiences ?? this.experiences,
@@ -226,7 +239,11 @@ class ResidenceState {
     final rawDevices = devicesRes['devices'];
     // An unreachable Hub yields empty maps from the transport: keep what we know rather than
     // replacing real state with nothing.
-    if (rooms is! List || rawDevices is! List) return;
+    if (rooms is! List || rawDevices is! List) {
+      _snapshot = _snapshot._with(reachable: false);
+      _changes.add(_snapshot);
+      return;
+    }
 
     final previous = _snapshot.devices;
     final devices = <String, DeviceRecord>{};
@@ -244,6 +261,8 @@ class ResidenceState {
 
     _snapshot = ResidenceSnapshot(
       loaded: true,
+      reachable: true,
+      name: home['name'] as String? ?? _snapshot.name,
       spaces: _spaces(rooms.whereType<Map<String, dynamic>>(), devices.values),
       devices: devices,
       experiences: _experiences(scenesRes['scenes']),

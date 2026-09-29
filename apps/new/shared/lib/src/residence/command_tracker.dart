@@ -91,6 +91,7 @@ class CommandTracker {
   final _records = <int, CommandRecord>{};
   final _expect = <int, StateExpectation>{};
   final _timers = <int, Timer>{};
+  final _facet = <int, String>{};
   StreamSubscription<DeviceReport>? _reportSub;
   int _next = 1;
 
@@ -139,15 +140,21 @@ class CommandTracker {
     if (capability == null || expectation == null) {
       throw ArgumentError('command has no verifiable effect: $command');
     }
-    // A newer command for the same control replaces the older one (a dragged slider).
+    // A newer command for the same control replaces the older one (a dragged slider). A control
+    // is a facet of a capability: volume and playback are different controls on one speaker.
+    final facet = _facetOf(capability, command);
     for (final r in _records.values.toList()) {
-      if (r.inFlight && r.deviceId == deviceId && r.capability == capability) {
+      if (r.inFlight &&
+          r.deviceId == deviceId &&
+          r.capability == capability &&
+          _facet[r.id] == facet) {
         _settle(r, CommandPhase.failed, failure: CommandFailure.superseded);
       }
     }
     _records.removeWhere((_, r) =>
         !r.inFlight && r.deviceId == deviceId && r.capability == capability);
     _expect.removeWhere((id, _) => !_records.containsKey(id));
+    _facet.removeWhere((id, _) => !_records.containsKey(id));
     final rec = CommandRecord(
       id: _next++,
       deviceId: deviceId,
@@ -158,10 +165,26 @@ class CommandTracker {
     );
     _records[rec.id] = rec;
     _expect[rec.id] = expectation;
+    _facet[rec.id] = facet;
     _updates.add(rec);
     _timers[rec.id] = _schedule(timeout, () => _onTimeout(rec.id));
     unawaited(_dispatch(rec.id));
     return rec;
+  }
+
+  static String _facetOf(String capability, Map<String, dynamic> c) {
+    switch (capability) {
+      case 'media':
+        return switch (c['action']) {
+          'volume' => 'volume',
+          'mute' || 'unmute' => 'mute',
+          _ => 'playback',
+        };
+      case 'temperature':
+        return c['targetC'] != null ? 'target' : 'mode';
+      default:
+        return capability;
+    }
   }
 
   Future<void> _dispatch(int id) async {

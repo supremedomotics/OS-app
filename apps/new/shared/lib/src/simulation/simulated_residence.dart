@@ -124,41 +124,45 @@ class SimulatedResidence {
   void _apply(String id, Map<String, dynamic> cmd, {bool immediate = false}) {
     final cap = cmd['capability'] as String;
     final device = _devices[id]!;
-    final state = Map<String, dynamic>.from((device['state']
-            as Map<String, dynamic>)[cap] as Map<String, dynamic>? ??
-        {});
-    if (state.isEmpty)
+    if ((device['state'] as Map<String, dynamic>)[cap] == null) {
       return; // capability not on this device: nothing reports.
+    }
     final after = immediate ? Duration.zero : reportLatency;
 
-    void report(Map<String, dynamic> s) => _schedule(after, () {
+    // The device applies the command to ITS state when it acts, not to the state it had when the
+    // command was sent — two commands in flight compose, they do not overwrite each other.
+    void report(Map<String, dynamic> Function(Map<String, dynamic> s) change) =>
+        _schedule(after, () {
           if (_silent.contains(id) && !immediate) return;
-          _publish(id, cap, s);
+          final now = Map<String, dynamic>.from(
+              (device['state'] as Map<String, dynamic>)[cap] as Map<String, dynamic>)
+            ..remove('kind');
+          _publish(id, cap, change(now));
         });
 
     switch (cap) {
       case 'onoff':
-        report({
-          ...state,
-          'on': cmd['action'] == 'on'
-              ? true
-              : cmd['action'] == 'off'
-                  ? false
-                  : !(state['on'] as bool)
-        });
+        report((s) => {
+              ...s,
+              'on': cmd['action'] == 'on'
+                  ? true
+                  : cmd['action'] == 'off'
+                      ? false
+                      : !(s['on'] as bool)
+            });
       case 'brightness':
         final a = cmd['action'];
         final lvl = (cmd['level'] as num?)?.toInt();
         if (a == 'off') {
-          report({...state, 'on': false});
+          report((s) => {...s, 'on': false});
         } else if (a == 'on') {
-          report({
-            ...state,
-            'on': true,
-            if ((state['level'] as num) == 0) 'level': 100
-          });
+          report((s) => {
+                ...s,
+                'on': true,
+                if ((s['level'] as num) == 0) 'level': 100
+              });
         } else if (lvl != null) {
-          report({...state, 'on': lvl > 0, 'level': lvl});
+          report((s) => {...s, 'on': lvl > 0, 'level': lvl});
         }
       case 'position':
         final target = switch (cmd['action']) {
@@ -168,43 +172,49 @@ class SimulatedResidence {
           _ => null
         };
         if (target == null) return;
-        _travel(id, state, target, after);
+        _travel(id, target, after);
       case 'temperature':
-        report({
-          ...state,
-          if (cmd['targetC'] != null)
-            'targetC': (cmd['targetC'] as num).toDouble(),
-          if (cmd['mode'] != null) 'mode': cmd['mode'],
-        });
+        report((s) => {
+              ...s,
+              if (cmd['targetC'] != null)
+                'targetC': (cmd['targetC'] as num).toDouble(),
+              if (cmd['mode'] != null) 'mode': cmd['mode'],
+            });
       case 'media':
-        final next = {...state};
-        switch (cmd['action']) {
-          case 'play':
-            next['playback'] = 'playing';
-          case 'pause':
-            next['playback'] = 'paused';
-          case 'stop':
-            next['playback'] = 'stopped';
-          case 'volume':
-            next['volume'] = (cmd['volume'] as num).toInt();
-          case 'mute':
-            next['muted'] = true;
-          case 'unmute':
-            next['muted'] = false;
-        }
-        report(next);
+        report((s) {
+          final next = {...s};
+          switch (cmd['action']) {
+            case 'play':
+              next['playback'] = 'playing';
+            case 'pause':
+              next['playback'] = 'paused';
+            case 'stop':
+              next['playback'] = 'stopped';
+            case 'volume':
+              next['volume'] = (cmd['volume'] as num).toInt();
+            case 'mute':
+              next['muted'] = true;
+            case 'unmute':
+              next['muted'] = false;
+          }
+          return next;
+        });
     }
   }
 
   /// A shade is physical: it reports `moving` and passes through intermediate positions.
-  void _travel(
-      String id, Map<String, dynamic> from, int target, Duration lead) {
-    var pos = (from['position'] as num).toInt();
+  void _travel(String id, int target, Duration lead) {
+    Map<String, dynamic> current() => Map<String, dynamic>.from(
+        (_devices[id]!['state'] as Map<String, dynamic>)['position']
+            as Map<String, dynamic>)
+      ..remove('kind');
     void step() {
       if (_silent.contains(id)) return;
+      final from = current();
+      var pos = (from['position'] as num).toInt();
       final delta = target - pos;
       if (delta == 0) {
-        _publish(id, 'position', {...from, 'position': pos, 'moving': false});
+        _publish(id, 'position', {...from, 'moving': false});
         return;
       }
       pos += delta.abs() <= 10 ? delta : (delta > 0 ? 10 : -10);
