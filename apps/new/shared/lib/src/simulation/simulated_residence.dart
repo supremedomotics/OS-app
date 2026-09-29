@@ -1,0 +1,408 @@
+/// A simulated residence that speaks the REAL Hub contract at the transport boundary — the same
+/// REST reads (`/v1/home`, `/v1/devices`, `/v1/rooms/:id/devices`, `/v1/scenes`), the same command
+/// routes (`POST /v1/devices/:id/command`, `POST /v1/scenes/:id/activate`) and the same
+/// `/v1/stream` `state` frames (`{type, deviceId, roomId, state:{kind,…}, seq, ts}`).
+///
+/// It is NOT a Hub replacement and lives entirely client-side, so nothing above the transport can
+/// tell it from a Hub: `ResidenceState`, `CommandTracker` and every screen are the production
+/// code. (ADR-0023 removed the *silent* Hub-side simulator; this is explicit, opt-in, and
+/// never reachable unless composed in.)
+///
+/// What makes it a real state flow rather than static data: a command is only *accepted* on the
+/// route; the device then reports its new state some latency later as a stream frame — shades
+/// travel through intermediate positions — and it can be told to misbehave (never report, go
+/// offline, change on its own like a wall switch), which is how the failure paths are proven.
+library;
+
+import 'dart:async';
+
+import '../connection/transport.dart';
+import '../residence/command_tracker.dart';
+import '../runtime/event_stream_transport.dart';
+
+class SimulatedResidence {
+  final Schedule _schedule;
+  final DateTime Function() _now;
+  final Duration reportLatency;
+
+  /// Time a shade takes per 10 percentage points of travel.
+  final Duration shadeStep;
+
+  final _rooms = <Map<String, dynamic>>[];
+  final _devices = <String, Map<String, dynamic>>{};
+  final _scenes = <Map<String, dynamic>>[];
+  final _seq = <String, int>{};
+  final _frames = StreamController<Map<String, dynamic>>.broadcast();
+  final _silent = <String>{};
+
+  SimulatedResidence({
+    Schedule? schedule,
+    DateTime Function()? now,
+    this.reportLatency = const Duration(milliseconds: 450),
+    this.shadeStep = const Duration(milliseconds: 500),
+  })  : _schedule = schedule ?? ((d, f) => Timer(d, f)),
+        _now = now ?? DateTime.now {
+    _seedVilla();
+  }
+
+  late final SimulatedHubTransport transport = SimulatedHubTransport(this);
+  late final SimulatedEventStream stream = SimulatedEventStream(_frames.stream);
+
+  // ── fault injection (what a real residence does that a happy path never shows) ──────────
+
+  /// The device accepts commands but never reports back.
+  void setSilent(String deviceId, bool silent) =>
+      silent ? _silent.add(deviceId) : _silent.remove(deviceId);
+
+  /// Takes a device off the network. The stream has no reachability frame; a client learns this
+  /// on its next snapshot read.
+  void setReachability(String deviceId, String status) =>
+      _devices[deviceId]!['status'] = status;
+
+  /// A change that did not come from a command — a wall switch, a manual override.
+  void changePhysically(String deviceId, Map<String, dynamic> command) {
+    _apply(deviceId, command, immediate: true);
+  }
+
+  Map<String, dynamic> deviceJson(String id) => _devices[id]!;
+
+  // ── routes ────────────────────────────────────────────────────────────────────────────
+
+  Map<String, dynamic> read(String path) {
+    final p = path.startsWith('/') ? path.substring(1) : path;
+    if (p == 'v1/home') {
+      return {'id': 'sim-home', 'name': 'Villa Son Vida', 'rooms': _rooms};
+    }
+    if (p == 'v1/devices') return {'devices': _devices.values.toList()};
+    if (p == 'v1/scenes') return {'scenes': _scenes};
+    final m = RegExp(r'^v1/rooms/([^/]+)/devices$').firstMatch(p);
+    if (m != null) {
+      return {
+        'devices': [
+          for (final d in _devices.values)
+            if (d['roomId'] == m.group(1)) d
+        ]
+      };
+    }
+    throw StateError('simulated Hub has no route GET $path');
+  }
+
+  Map<String, dynamic> command(String path, Map<String, dynamic> body) {
+    final p = path.startsWith('/') ? path.substring(1) : path;
+    final dev = RegExp(r'^v1/devices/([^/]+)/command$').firstMatch(p);
+    if (dev != null) {
+      final id = dev.group(1)!;
+      final device = _devices[id];
+      if (device == null) throw StateError('device not found');
+      if (device['status'] != 'online') {
+        throw StateError('device is ${device['status']}');
+      }
+      _apply(id, Map<String, dynamic>.from(body['command'] as Map));
+      // The route's answer is the state BEFORE the device reports — never the outcome.
+      return {'accepted': true, 'device': device};
+    }
+    final scene = RegExp(r'^v1/scenes/([^/]+)/activate$').firstMatch(p);
+    if (scene != null) {
+      final s = _scenes.firstWhere((s) => s['id'] == scene.group(1),
+          orElse: () => throw StateError('scene not found'));
+      for (final step in (s['steps'] as List).cast<Map<String, dynamic>>()) {
+        final id = step['deviceId'] as String;
+        if (_devices[id]?['status'] != 'online')
+          continue; // best-effort, like the Hub.
+        _apply(id, {
+          'capability': step['capability'],
+          ...(step['values'] as Map<String, dynamic>)
+        });
+      }
+      return {'accepted': true};
+    }
+    throw StateError('simulated Hub has no route POST $path');
+  }
+
+  // ── device behaviour ──────────────────────────────────────────────────────────────────
+
+  void _apply(String id, Map<String, dynamic> cmd, {bool immediate = false}) {
+    final cap = cmd['capability'] as String;
+    final device = _devices[id]!;
+    final state = Map<String, dynamic>.from((device['state']
+            as Map<String, dynamic>)[cap] as Map<String, dynamic>? ??
+        {});
+    if (state.isEmpty)
+      return; // capability not on this device: nothing reports.
+    final after = immediate ? Duration.zero : reportLatency;
+
+    void report(Map<String, dynamic> s) => _schedule(after, () {
+          if (_silent.contains(id) && !immediate) return;
+          _publish(id, cap, s);
+        });
+
+    switch (cap) {
+      case 'onoff':
+        report({
+          ...state,
+          'on': cmd['action'] == 'on'
+              ? true
+              : cmd['action'] == 'off'
+                  ? false
+                  : !(state['on'] as bool)
+        });
+      case 'brightness':
+        final a = cmd['action'];
+        final lvl = (cmd['level'] as num?)?.toInt();
+        if (a == 'off') {
+          report({...state, 'on': false});
+        } else if (a == 'on') {
+          report({
+            ...state,
+            'on': true,
+            if ((state['level'] as num) == 0) 'level': 100
+          });
+        } else if (lvl != null) {
+          report({...state, 'on': lvl > 0, 'level': lvl});
+        }
+      case 'position':
+        final target = switch (cmd['action']) {
+          'open' => 100,
+          'close' => 0,
+          'set' => (cmd['position'] as num).toInt(),
+          _ => null
+        };
+        if (target == null) return;
+        _travel(id, state, target, after);
+      case 'temperature':
+        report({
+          ...state,
+          if (cmd['targetC'] != null)
+            'targetC': (cmd['targetC'] as num).toDouble(),
+          if (cmd['mode'] != null) 'mode': cmd['mode'],
+        });
+      case 'media':
+        final next = {...state};
+        switch (cmd['action']) {
+          case 'play':
+            next['playback'] = 'playing';
+          case 'pause':
+            next['playback'] = 'paused';
+          case 'stop':
+            next['playback'] = 'stopped';
+          case 'volume':
+            next['volume'] = (cmd['volume'] as num).toInt();
+          case 'mute':
+            next['muted'] = true;
+          case 'unmute':
+            next['muted'] = false;
+        }
+        report(next);
+    }
+  }
+
+  /// A shade is physical: it reports `moving` and passes through intermediate positions.
+  void _travel(
+      String id, Map<String, dynamic> from, int target, Duration lead) {
+    var pos = (from['position'] as num).toInt();
+    void step() {
+      if (_silent.contains(id)) return;
+      final delta = target - pos;
+      if (delta == 0) {
+        _publish(id, 'position', {...from, 'position': pos, 'moving': false});
+        return;
+      }
+      pos += delta.abs() <= 10 ? delta : (delta > 0 ? 10 : -10);
+      final done = pos == target;
+      _publish(id, 'position', {...from, 'position': pos, 'moving': !done});
+      if (!done) _schedule(shadeStep, step);
+    }
+
+    _schedule(lead, step);
+  }
+
+  void _publish(String id, String cap, Map<String, dynamic> s) {
+    final device = _devices[id]!;
+    final full = {'kind': cap, ...s};
+    (device['state'] as Map<String, dynamic>)[cap] = full;
+    final seq = (_seq[id] ?? 0) + 1;
+    _seq[id] = seq;
+    _frames.add({
+      'type': 'state',
+      'homeId': 'sim-home',
+      'roomId': device['roomId'],
+      'deviceId': id,
+      'state': full,
+      'seq': seq,
+      'ts': _now().toUtc().toIso8601String(),
+    });
+  }
+
+  // ── the residence ─────────────────────────────────────────────────────────────────────
+
+  void _seedVilla() {
+    void room(String id, String name, int floor) => _rooms.add({
+          'id': id,
+          'homeId': 'sim-home',
+          'name': name,
+          'floor': floor,
+          'icon': null,
+          'heroImageUrl': null,
+          'parentRoomId': null,
+        });
+    void device(String id, String room, String name, String type,
+        Map<String, Map<String, dynamic>> caps) {
+      _devices[id] = {
+        'id': id,
+        'homeId': 'sim-home',
+        'roomId': room,
+        'name': name,
+        'supremeType': type,
+        'manufacturer': null,
+        'model': null,
+        'driverId': null,
+        'status': 'online',
+        'capabilities': [
+          for (final e in caps.entries)
+            {'kind': e.key, 'config': <String, dynamic>{}}
+        ],
+        'state': {
+          for (final e in caps.entries) e.key: {'kind': e.key, ...e.value}
+        },
+        'metadata': <String, dynamic>{},
+      };
+    }
+
+    Map<String, Map<String, dynamic>> dimmer(int level) => {
+          'onoff': {'on': level > 0},
+          'brightness': {'on': level > 0, 'level': level},
+        };
+    Map<String, dynamic> shade(int p) => {'position': p, 'moving': false};
+    Map<String, dynamic> climate(double a, double t) =>
+        {'ambientC': a, 'targetC': t, 'mode': 'auto'};
+    Map<String, dynamic> media(bool playing) => {
+          'playback': playing ? 'playing' : 'paused',
+          'volume': 30,
+          'muted': false,
+          'title': playing ? 'Clair de Lune' : null,
+          'artist': playing ? 'Debussy' : null,
+          'album': null,
+          'source': null,
+          'artworkUrl': null,
+        };
+
+    room('living', 'Living Room', 0);
+    room('dining', 'Dining Room', 0);
+    room('kitchen', 'Kitchen', 0);
+    room('terrace', 'Terrace', 0);
+    room('master', 'Master Bedroom', 1);
+
+    device(
+        'living-light', 'living', 'Living Room lights', 'dimmer', dimmer(60));
+    device('living-shade', 'living', 'Living Room shades', 'cover',
+        {'position': shade(100)});
+    device('living-climate', 'living', 'Living Room climate', 'thermostat',
+        {'temperature': climate(22.5, 22.0)});
+    device('living-audio', 'living', 'Living Room speaker', 'media_player',
+        {'media': media(true)});
+    device(
+        'dining-light', 'dining', 'Dining Room lights', 'dimmer', dimmer(40));
+    device('dining-shade', 'dining', 'Dining Room shades', 'cover',
+        {'position': shade(100)});
+    device('kitchen-light', 'kitchen', 'Kitchen lights', 'dimmer', dimmer(0));
+    device('terrace-light', 'terrace', 'Terrace lights', 'light', {
+      'onoff': {'on': false}
+    });
+    device('terrace-audio', 'terrace', 'Terrace speaker', 'media_player',
+        {'media': media(false)});
+    device(
+        'master-light', 'master', 'Master Bedroom lights', 'dimmer', dimmer(0));
+    device('master-shade', 'master', 'Master Bedroom shades', 'cover',
+        {'position': shade(0)});
+    device('master-climate', 'master', 'Master Bedroom climate', 'thermostat',
+        {'temperature': climate(21.0, 20.0)});
+
+    Map<String, dynamic> step(String dev, String cap, Map<String, dynamic> v) =>
+        {'deviceId': dev, 'capability': cap, 'values': v};
+    void scene(String id, String name, String scope, String? roomId,
+            List<Map<String, dynamic>> steps) =>
+        _scenes.add({
+          'id': id,
+          'homeId': 'sim-home',
+          'name': name,
+          'scope': scope,
+          'roomId': roomId,
+          'ownerUserId': null,
+          'icon': null,
+          'aiGenerated': false,
+          'steps': steps,
+        });
+
+    scene('relax', 'Relax', 'home', null, [
+      step('living-light', 'brightness', {'action': 'set', 'level': 30}),
+      step('living-shade', 'position', {'action': 'set', 'position': 60}),
+      step('living-audio', 'media', {'action': 'play'}),
+      step('dining-light', 'brightness', {'action': 'set', 'level': 20}),
+    ]);
+    scene('dinner', 'Dinner', 'home', null, [
+      step('dining-light', 'brightness', {'action': 'set', 'level': 55}),
+      step('living-light', 'brightness', {'action': 'set', 'level': 15}),
+      step('kitchen-light', 'brightness', {'action': 'set', 'level': 35}),
+      step('living-audio', 'media', {'action': 'volume', 'volume': 18}),
+    ]);
+    scene('good-night', 'Good Night', 'home', null, [
+      step('living-light', 'brightness', {'action': 'off'}),
+      step('dining-light', 'brightness', {'action': 'off'}),
+      step('kitchen-light', 'brightness', {'action': 'off'}),
+      step('terrace-light', 'onoff', {'action': 'off'}),
+      step('master-shade', 'position', {'action': 'close'}),
+      step('living-audio', 'media', {'action': 'pause'}),
+    ]);
+  }
+
+  Future<void> dispose() async => _frames.close();
+}
+
+class SimulatedHubTransport implements HubTransport {
+  final SimulatedResidence _r;
+  bool _up = false;
+  SimulatedHubTransport(this._r);
+
+  @override
+  bool get isConnected => _up;
+  @override
+  Future<void> connect() async {}
+  @override
+  Future<void> authenticate() async => _up = true;
+  @override
+  Future<void> disconnect() async => _up = false;
+
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    if (!_up) throw StateError('not authenticated');
+    return _r.read(path);
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendCommand(
+      String path, Map<String, dynamic> body) async {
+    if (!_up) throw StateError('not authenticated');
+    return _r.command(path, body);
+  }
+
+  @override
+  Stream<Map<String, dynamic>> events() => _r._frames.stream;
+}
+
+class SimulatedEventStream implements EventStreamTransport {
+  final Stream<Map<String, dynamic>> _frames;
+  SimulatedEventStream(this._frames);
+  @override
+  Stream<HubEventStreamState> get state =>
+      Stream.value(HubEventStreamState.subscribed);
+  @override
+  Stream<Map<String, dynamic>> get frames => _frames;
+  @override
+  Future<void> connect() async {}
+  @override
+  Future<void> disconnect() async {}
+  @override
+  void send(Map<String, dynamic> frame) {}
+  @override
+  Future<void> dispose() async {}
+}
