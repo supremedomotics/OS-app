@@ -62,8 +62,8 @@ void main() {
         'id': 'd',
         'name': 'n',
         'status': v,
-        'capabilities': [],
-        'state': {}
+        'capabilities': <dynamic>[],
+        'state': <String, dynamic>{}
       })!;
       expect(d.reachability.name, v);
     }
