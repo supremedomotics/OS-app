@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchDriverRegistry, type DriverEntry } from "./api.js";
 import { DriverDetail, statusLabel } from "./drivers.js";
 import { MatterBridgePanel, MatterBridgeDevicesPage } from "./matter-bridge.js";
+import { SINGLE_CARD_KEYS } from "./single-card-drivers.js";
 
 /**
  * Extension Center (§ Extension Center) — the central place for every integration and protocol
@@ -25,11 +26,6 @@ const CATS: { id: Cat; label: string }[] = [
 ];
 
 const DEVICE_CATEGORIES = ["lighting", "climate", "shades", "media", "security", "energy"];
-
-// Each commissioned camera is its own installed instance of this driver (per-camera encrypted
-// credentials), but a homeowner should see ONE "RTSP Camera" extension; the cameras themselves
-// live in the Devices tab where they get a room like any other device.
-const SINGLE_CARD_KEYS = new Set(["supreme-rtsp-camera"]);
 
 /** Collapse the per-camera instances of a SINGLE_CARD_KEYS driver into one entry (an installed
  * one when any exists, so the card reads "Active"), with the camera count alongside. */

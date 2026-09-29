@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CameraList, CameraStreamResponse } from "@supreme/contracts";
+import type { Device } from "@supreme/domain-model";
 import { Card, CapabilityGrid, Icon, QuickActions } from "@supreme/aureon-web";
 import { client } from "../../api.js";
 import { HlsPlayer, WebRtcPlayer } from "../../players.js";
 import { toSameOriginStreamUrl } from "../../stream-url.js";
+import { DeviceManageActions } from "../../device-detail-sections.js";
 
 type CameraView = CameraList["cameras"][number];
 
@@ -32,10 +34,12 @@ function downloadSnapshot(camera: CameraView): void {
  * of a premium camera's expected control set renders as capability-gated placeholders, same as
  * every other module (§ "the UI is the contract").
  */
-export function CameraDetail({ camera, roomName, onBack }: {
+export function CameraDetail({ camera, roomName, onBack, manage }: {
   camera: CameraView;
   roomName: string;
   onBack: () => void;
+  /** Rename/Remove, when opened as a Device from the Devices tab (see CameraDeviceDetail). */
+  manage?: ReactNode;
 }) {
   const [active, setActive] = useState<{ webrtc: string | null; hls: string | null; mode: "webrtc" | "hls" } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -128,8 +132,55 @@ export function CameraDetail({ camera, roomName, onBack }: {
             <div className="sheet-row"><span className="muted">Live stream</span><strong>{camera.streamUrl ? "Configured" : "Not configured"}</strong></div>
             <div className="sheet-row"><span className="muted">Snapshot</span><strong>{camera.snapshotUrl ? "Configured" : "Not configured"}</strong></div>
           </Card>
+          {manage && (
+            <>
+              <h2 className="section">Advanced settings</h2>
+              <Card>{manage}</Card>
+            </>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * A camera opened as a Device (Devices tab → tile). Cameras have no controllable capabilities, so
+ * the generic DeviceSheet's power button was a fabricated control; this renders the real camera
+ * page instead, keeping Rename/Remove available.
+ */
+export function CameraDeviceDetail({ device, roomName, onBack, onRemoved, onDeviceUpdated }: {
+  device: Device;
+  roomName: string;
+  onBack: () => void;
+  onRemoved: () => void;
+  onDeviceUpdated: (device: Device) => void;
+}) {
+  const [camera, setCamera] = useState<CameraView | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    setCamera(undefined);
+    void client.cameras().then((r) => {
+      if (!cancelled) setCamera(r.cameras.find((c) => c.id === device.id) ?? null);
+    }).catch(() => { if (!cancelled) setCamera(null); });
+    return () => { cancelled = true; };
+  }, [device.id, device.name]);
+
+  if (camera === undefined) return <div className="page" />;
+  if (camera === null) {
+    return (
+      <div className="page">
+        <button className="avr-back" onClick={onBack} aria-label="Back">←</button>
+        <p className="muted">This camera could not be loaded.</p>
+      </div>
+    );
+  }
+  return (
+    <CameraDetail
+      camera={camera}
+      roomName={roomName}
+      onBack={onBack}
+      manage={<DeviceManageActions device={device} onRemoved={onRemoved} onRenamed={onDeviceUpdated} />}
+    />
   );
 }
