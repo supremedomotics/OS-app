@@ -56,3 +56,21 @@ describe("probeRtspPorts", () => {
     expect(results.size).toBe(0);
   });
 });
+
+describe("default ports (§ UniFi Protect)", () => {
+  it("includes the classic RTSP ports plus the UniFi Protect console ports 7447/7441", async () => {
+    const { DEFAULT_RTSP_PORTS, UNIFI_PROTECT_PORTS } = await import("./rtsp-port-probe.js");
+    expect(DEFAULT_RTSP_PORTS).toEqual(expect.arrayContaining([554, 8554, 10554, 7447, 7441]));
+    expect([...UNIFI_PROTECT_PORTS].sort()).toEqual([7441, 7447]);
+  });
+
+  it("probes the UniFi ports by default and stays bounded/overridable", async () => {
+    const seen: number[] = [];
+    const probe = async (_h: string, port: number) => (seen.push(port), false);
+    await probeRtspPorts({ hosts: ["10.0.0.1"], probe });
+    expect(seen.sort((a, b) => a - b)).toEqual([554, 7441, 7447, 8554, 10554]);
+    const only: number[] = [];
+    await probeRtspPorts({ hosts: ["10.0.0.1"], ports: [554], probe: async (_h, p) => (only.push(p), false) });
+    expect(only).toEqual([554]);
+  });
+});

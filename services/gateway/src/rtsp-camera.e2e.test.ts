@@ -1,6 +1,11 @@
 import type { CameraList } from "@supreme/contracts";
 import type { FastifyInstance } from "fastify";
 import net from "node:net";
+import https from "node:https";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import { AppContext } from "./context.js";
@@ -174,5 +179,106 @@ describe("RTSP Camera driver — discovery + commissioning", () => {
       body: JSON.stringify({ name: "Unsafe", mode: "manual", rtspUrl: "http://192.168.1.1/evil" }),
     });
     expect(res.status).toBe(422);
+  });
+  // ── UniFi Protect mode: a REAL self-signed https server standing in for the console and a real
+  // RTSP listener for the stream, exercised through the real routes. (Nothing here proves it works
+  // against genuine UniFi hardware — the console's endpoint shapes are unverified.)
+  describe("UniFi Protect mode", () => {
+    const API_KEY = "unifi-secret-key-xyz";
+    let console_: https.Server;
+    let consolePort = 0;
+    let cameraA: { port: number; close: () => Promise<void> };
+    let certDir: string;
+    const seenKeys: string[] = [];
+    let postCount = 0;
+
+    beforeAll(async () => {
+      cameraA = await startFakeRtspServer({});
+      certDir = mkdtempSync(path.join(tmpdir(), "unifi-e2e-"));
+      execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", path.join(certDir, "k.pem"), "-out", path.join(certDir, "c.pem"), "-days", "1", "-subj", "/CN=console"]);
+      console_ = https.createServer({ key: readFileSync(path.join(certDir, "k.pem")), cert: readFileSync(path.join(certDir, "c.pem")) }, (req, res) => {
+        seenKeys.push(String(req.headers["x-api-key"]));
+        res.setHeader("content-type", "application/json");
+        if (req.headers["x-api-key"] !== API_KEY) {
+          res.statusCode = 401;
+          res.end("{}");
+          return;
+        }
+        if (req.url === "/proxy/protect/integration/v1/cameras") {
+          res.end(JSON.stringify([{ id: "uc1", name: "Driveway", state: "CONNECTED", marketName: "G5 Bullet" }, { id: "uc2", name: "Garage" }]));
+          return;
+        }
+        const m = req.url?.match(/^\/proxy\/protect\/integration\/v1\/cameras\/(\w+)\/rtsps-stream$/);
+        if (m) {
+          if (req.method === "POST" && m[1] === "uc1") postCount++;
+          if (m[1] === "uc2") {
+            res.statusCode = 404;
+            res.end("{}");
+            return;
+          }
+          res.end(JSON.stringify({ high: `rtsp://127.0.0.1:${cameraA.port}/tokenHIGH`, low: `rtsp://127.0.0.1:${cameraA.port}/tokenLOW` }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end("{}");
+      });
+      await new Promise<void>((r) => console_.listen(0, "127.0.0.1", r));
+      consolePort = (console_.address() as { port: number }).port;
+    });
+    afterAll(async () => {
+      await new Promise<void>((r) => console_.close(() => r()));
+      await cameraA.close();
+      rmSync(certDir, { recursive: true, force: true });
+    });
+
+    const post = (p: string, body: unknown) => fetch(`${baseUrl}${p}`, { method: "POST", headers: auth(), body: JSON.stringify(body) });
+
+    it("lists cameras (id/name/model/state only) and never echoes the API key", async () => {
+      const res = await post("/v1/drivers/rtsp/unifi/cameras", { host: `127.0.0.1:${consolePort}`, apiKey: API_KEY });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).not.toContain(API_KEY);
+      const { cameras } = JSON.parse(text) as { cameras: { id: string; model: string | null }[] };
+      expect(cameras.map((c) => c.id)).toEqual(["uc1", "uc2"]);
+      expect(cameras[0]!.model).toBe("G5 Bullet");
+    });
+
+    it("gives a plain-English error for a wrong API key and rejects a public console host", async () => {
+      const bad = await post("/v1/drivers/rtsp/unifi/cameras", { host: `127.0.0.1:${consolePort}`, apiKey: "nope" });
+      expect(bad.status).toBe(422);
+      expect(((await bad.json()) as { message: string }).message).toMatch(/API key/);
+      const pub = await post("/v1/drivers/rtsp/unifi/cameras", { host: "8.8.8.8", apiKey: API_KEY });
+      expect(pub.status).toBe(422);
+      expect(((await pub.json()) as { message: string }).message).toMatch(/local-network/);
+    });
+
+    it("commissions selected cameras, isolates a failing one, and is idempotent on re-run", async () => {
+      const body = {
+        host: `127.0.0.1:${consolePort}`,
+        apiKey: API_KEY,
+        cameras: [{ id: "uc1", name: "Driveway", model: "G5 Bullet" }, { id: "uc2", name: "Garage" }],
+      };
+      const before = ((await (await fetch(`${baseUrl}/v1/cameras`, { headers: auth() })).json()) as CameraList).cameras.length;
+      const r1 = await post("/v1/drivers/rtsp/unifi/commission", body);
+      expect(r1.status).toBe(200);
+      const t1 = await r1.text();
+      expect(t1).not.toContain(API_KEY);
+      expect(t1).not.toContain("tokenHIGH");
+      const res1 = (JSON.parse(t1) as { results: { status: string }[] }).results;
+      expect(res1.map((r) => r.status)).toEqual(["added", "failed"]);
+
+      const r2 = await post("/v1/drivers/rtsp/unifi/commission", body);
+      const res2 = ((await r2.json()) as { results: { status: string }[] }).results;
+      expect(res2.map((r) => r.status)).toEqual(["already-added", "failed"]);
+
+      const after = ((await (await fetch(`${baseUrl}/v1/cameras`, { headers: auth() })).json()) as CameraList).cameras;
+      expect(after.length).toBe(before + 1); // exactly one new device despite two commissions
+      const cam = after.find((c) => c.name === "Driveway")!;
+      expect(cam.streamUrl).toBe(`rtsp://127.0.0.1:${cameraA.port}/tokenHIGH`);
+      expect(postCount).toBe(0); // existing streams are read, never re-created
+      // The API key is never persisted: not in any driver config.
+      const instances = await ctx.installer.drivers.listInstances("supreme-rtsp-camera");
+      expect(JSON.stringify(instances)).not.toContain(API_KEY);
+    });
   });
 });

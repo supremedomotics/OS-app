@@ -235,6 +235,8 @@ export const RtspDiscoveryResultSchema = z.object({
   rtspAvailable: z.boolean(),
   onvifAvailable: z.boolean(),
   rtspPorts: z.array(z.number()),
+  /** § UniFi Protect — a host that answered on 7441/7447: the console, not a camera. */
+  unifiProtectConsole: z.boolean().optional(),
 });
 export type RtspDiscoveryResultDto = z.infer<typeof RtspDiscoveryResultSchema>;
 
@@ -288,6 +290,44 @@ export type RtspCommissionRequest = z.infer<typeof RtspCommissionRequest>;
 
 export const RtspCommissionResponse = z.object({ camera: CameraView, validation: RtspStreamCheckSchema });
 export type RtspCommissionResponse = z.infer<typeof RtspCommissionResponse>;
+
+// ── UniFi Protect mode (§ RTSP Camera Extension) ─────────────────────────────────────
+// The API key is request-only: it is never stored, logged, or returned.
+
+export const UnifiProtectListRequest = z.object({ host: z.string().min(1).max(255), apiKey: z.string().min(1).max(512) });
+export type UnifiProtectListRequest = z.infer<typeof UnifiProtectListRequest>;
+
+export const UnifiProtectCameraSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  model: z.string().nullable(),
+  state: z.string().nullable(),
+});
+export type UnifiProtectCameraDto = z.infer<typeof UnifiProtectCameraSchema>;
+
+export const UnifiProtectListResponse = z.object({ cameras: z.array(UnifiProtectCameraSchema) });
+export type UnifiProtectListResponse = z.infer<typeof UnifiProtectListResponse>;
+
+export const UnifiProtectCommissionRequest = z.object({
+  host: z.string().min(1).max(255),
+  apiKey: z.string().min(1).max(512),
+  roomId: z.string().nullable().optional(),
+  cameras: z.array(z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(200), model: z.string().nullable().optional() })).min(1).max(64),
+});
+export type UnifiProtectCommissionRequest = z.infer<typeof UnifiProtectCommissionRequest>;
+
+export const UnifiProtectCommissionResultSchema = z.object({
+  unifiCameraId: z.string(),
+  name: z.string(),
+  status: z.enum(["added", "already-added", "failed"]),
+  deviceId: z.string().nullable(),
+  reason: z.string().nullable(),
+  diagnostics: z.array(z.string()),
+});
+export type UnifiProtectCommissionResultDto = z.infer<typeof UnifiProtectCommissionResultSchema>;
+
+export const UnifiProtectCommissionResponse = z.object({ results: z.array(UnifiProtectCommissionResultSchema) });
+export type UnifiProtectCommissionResponse = z.infer<typeof UnifiProtectCommissionResponse>;
 
 /** Register this client's push token so it can receive notifications while backgrounded. */
 export const RegisterPushTokenRequest = z.object({

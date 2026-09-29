@@ -2,10 +2,14 @@ import {
   RtspDiscoverRequest,
   RtspTestConnectionRequest,
   RtspCommissionRequest,
+  UnifiProtectListRequest,
+  UnifiProtectCommissionRequest,
   SupremeError,
   type RtspDiscoverResponse,
   type RtspTestConnectionResponse,
   type RtspCommissionResponse,
+  type UnifiProtectListResponse,
+  type UnifiProtectCommissionResponse,
 } from "@supreme/contracts";
 import {
   discoverCameras,
@@ -16,6 +20,9 @@ import {
   validateRtspUrl,
   validateOnvifEndpointUrl,
   CommissioningError,
+  listUnifiCameras,
+  commissionUnifiCameras,
+  UnifiProtectError,
 } from "@supreme/protocols";
 import type { FastifyInstance } from "fastify";
 import { authenticate, enforce } from "../auth.js";
@@ -190,6 +197,101 @@ export function registerRtspCameraRoutes(app: FastifyInstance, ctx: AppContext):
       });
 
       reply.code(201).send({ camera, validation } satisfies RtspCommissionResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+  /** Maps a UniFi failure to the shared error envelope with the plain-English message only —
+   * diagnostics (never the API key/token) ride along in `details`. */
+  function unifiError(err: unknown): unknown {
+    if (!(err instanceof UnifiProtectError)) return err;
+    const code = err.kind === "unreachable" || err.kind === "rate-limited" ? "backend_unavailable" : "validation_failed";
+    return new SupremeError(code, err.message);
+  }
+
+  // § UniFi Protect mode — list the console's cameras (id/name/model/state only). The API key is
+  // used for this one request and never stored, logged or echoed.
+  app.post("/v1/drivers/rtsp/unifi/cameras", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "camera", null, "create");
+      await requireInstalled();
+      const body = UnifiProtectListRequest.parse(req.body);
+      const cameras = await listUnifiCameras({ host: body.host, apiKey: body.apiKey }).catch((e) => {
+        throw unifiError(e);
+      });
+      reply.send({ cameras } satisfies UnifiProtectListResponse);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  // § UniFi Protect mode — commission selected cameras. Each is validated with the real RTSP
+  // handshake and registered through the same path as `mode:"rtsp"` commission; the UniFi camera id
+  // is the identity, so re-commissioning never duplicates a device.
+  app.post("/v1/drivers/rtsp/unifi/commission", async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "camera", null, "create");
+      await requireInstalled();
+      const body = UnifiProtectCommissionRequest.parse(req.body);
+
+      const results = await commissionUnifiCameras({
+        host: body.host,
+        apiKey: body.apiKey,
+        cameras: body.cameras,
+        deps: {
+          // Identity = the UniFi camera id stored on the per-camera driver instance. An instance
+          // whose device was removed is reused (not duplicated) by `register` below.
+          findExisting: async (unifiCameraId) => {
+            const instances = await ctx.installer.drivers.listInstances(RTSP_CAMERA_DRIVER_KEY);
+            const ids = new Set(instances.filter((i) => (i.config as Record<string, unknown>).unifiCameraId === unifiCameraId).map((i) => String(i.id)));
+            if (ids.size === 0) return null;
+            const device = (await ctx.home.listDevices()).find(
+              (d) => d.supremeType === "camera" && ids.has(String(d.metadata?.driverInstanceId ?? "")),
+            );
+            return device ? { deviceId: device.id } : null;
+          },
+          register: async ({ unifiCameraId, name, model, mainUrl, subUrl }) => {
+            // The RTSPS URL carries a secret token in its path and there is no credential-injection
+            // hook for that (CameraService only injects userinfo), so — exactly like a manual add —
+            // the URL is stored as the camera's streamUrl. It is never logged.
+            const instances = await ctx.installer.drivers.listInstances(RTSP_CAMERA_DRIVER_KEY);
+            let instance = instances.find((i) => (i.config as Record<string, unknown>).unifiCameraId === unifiCameraId);
+            if (!instance) instance = await ctx.installer.installDriver(RTSP_CAMERA_DRIVER_KEY, undefined, { asNewInstance: true, label: name });
+            await ctx.installer.setDriverConfig(instance.id, {
+              rtspUrl: mainUrl,
+              subStreamUrl: subUrl,
+              username: "",
+              password: "",
+              onvifEndpoint: "",
+              onvifUuid: "",
+              unifiCameraId,
+            });
+            const camera = await ctx.cameras.register({
+              name,
+              roomId: body.roomId,
+              streamUrl: mainUrl,
+              driverInstanceId: instance.id,
+              manufacturer: "Ubiquiti",
+              model,
+            });
+            await ctx.audit?.record({
+              homeId: ctx.homeId,
+              actorUserId: user.id,
+              action: "camera.rtsp.commission",
+              resourceType: "device",
+              resourceId: camera.id,
+              metadata: { mode: "unifi-protect", unifiCameraId },
+            });
+            return { deviceId: camera.id };
+          },
+        },
+      }).catch((e) => {
+        throw unifiError(e);
+      });
+
+      reply.send({ results } satisfies UnifiProtectCommissionResponse);
     } catch (err) {
       sendError(reply, err);
     }

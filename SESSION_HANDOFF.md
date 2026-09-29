@@ -4,6 +4,30 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: RTSP Camera Extension — UniFi Protect mode + console port probe
+
+User-approved UniFi-specific feature (overrides the "no manufacturer-specific drivers" rule for
+this one integration). Branch `unifi-protect-cameras`.
+
+**Added**: `services/protocols/src/rtsp/unifi-protect.ts` (Integration API client, tolerant
+parsing, `commissionUnifiCameras`), `validateConsoleHost` in `rtsp-url-safety.ts`, gateway routes
+`POST /v1/drivers/rtsp/unifi/cameras` and `/unifi/commission` (in `routes/rtsp-camera.ts`), contracts
+in `phase3.ts`, manifest field `unifiCameraId`, `unifi-protect-section.tsx` (UI, mounted from the
+RTSP Discover panel), and UniFi ports 7447/7441 in `DEFAULT_RTSP_PORTS`. A 7441/7447-only hit is
+labeled "UniFi Protect console" (`unifiProtectConsole: true`, `rtspAvailable: false`) and pre-fills
+the console address in the UI.
+
+**Decisions**: identity/dedupe = UniFi camera id stored in the per-camera driver instance config
+(`unifiCameraId`); GET existing rtsps-stream first, POST only if none enabled (POST can rotate
+tokens); the API key is request-only and never stored/logged/returned; TLS verification is disabled
+only via a per-request `https.Agent` to the single validated private address. The tokenized RTSPS
+URL is stored as `Device.metadata.streamUrl` (and driver config `rtspUrl`), same as a manual add —
+CameraService only injects userinfo credentials, so a token-in-path placeholder would need a
+CameraService change. It is returned by camera APIs to authorized users; never logged.
+
+**Unverified**: endpoint/field shapes come from community clients of the official Integration API
+(developer.ui.com was unreachable from the sandbox). Never tested against a real console.
+
 ## Session: Matter Controller Extension — Phase 3.4/3.5 PASE + Cluster-Engine Fixes (RESOLVED)
 
 Picked back up per a peer session's report that the exact Phase 3.3 PASE failures were now
