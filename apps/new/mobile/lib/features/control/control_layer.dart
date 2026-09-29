@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import '../../main.dart';
+import '../devices/devices_layer.dart';
 import 'control_blocks.dart';
 
 /// The body of the Control layer (Golden Master `control.js`): not a page and not a dashboard — a
@@ -12,9 +13,12 @@ import 'control_blocks.dart';
 ///
 /// Everything shown is read from the Residence State; every action is a tracked command.
 ///
+/// Beneath the systems, "Physical objects" opens the Devices inventory (and from it a device's
+/// sheet) in the same scope.
+///
 /// NOT YET BUILT (flagged in the implementation map, not drawn inert): Protection (no arming /
-/// contact contract), the Devices inventory and the device sheet, the Experience scope, and the
-/// line-drawing instruments that head each system.
+/// contact contract), the Experience scope, and the line-drawing instruments that head each
+/// system.
 class ControlLayerBody extends ConsumerStatefulWidget {
   /// The space Control was opened from; null = the whole residence.
   final String? spaceId;
@@ -42,6 +46,9 @@ class _ControlLayerBodyState extends ConsumerState<ControlLayerBody> {
     final systems =
         view == null ? const <ControlSystem>[] : controlSystems(devices, view.inFlight);
     final open = systems.where((s) => s.id == _system).firstOrNull;
+    final inv = snap == null || !snap.loaded
+        ? null
+        : inventoryOf(snap, inFlight: view!.inFlight, spaceId: widget.spaceId);
 
     return Padding(
       key: const ValueKey('control-layer'),
@@ -52,7 +59,9 @@ class _ControlLayerBodyState extends ConsumerState<ControlLayerBody> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(open == null ? 'CONTROL' : title.toUpperCase(), style: text.kicker),
+              Expanded(
+                  child: Text(open == null ? 'CONTROL' : title.toUpperCase(),
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: text.kicker)),
               SupremeTappable(
                 key: const ValueKey('control-close'),
                 onTap: () => Navigator.of(context).maybePop(),
@@ -96,12 +105,15 @@ class _ControlLayerBodyState extends ConsumerState<ControlLayerBody> {
                     style: text.body.copyWith(color: SupremeColorScheme.text2))
                 : open != null
                     ? _System(system: open, devices: devices, view: view, snap: snap)
-                    : systems.isEmpty
+                    : systems.isEmpty && (inv == null || inv.total == 0)
                         ? Text('Nothing to adjust here.',
                             style: text.body.copyWith(color: SupremeColorScheme.text2))
                         : _Root(
                             systems: systems,
-                            onOpen: (s) => setState(() => _system = s.id)),
+                            inventory: inv,
+                            onOpen: (s) => setState(() => _system = s.id),
+                            onOpenDevices: () =>
+                                openDevices(context, spaceId: widget.spaceId, stacked: true)),
           ),
         ],
       ),
@@ -111,8 +123,14 @@ class _ControlLayerBodyState extends ConsumerState<ControlLayerBody> {
 
 class _Root extends StatelessWidget {
   final List<ControlSystem> systems;
+  final DeviceInventory? inventory;
   final ValueChanged<ControlSystem> onOpen;
-  const _Root({required this.systems, required this.onOpen});
+  final VoidCallback onOpenDevices;
+  const _Root(
+      {required this.systems,
+      required this.inventory,
+      required this.onOpen,
+      required this.onOpenDevices});
 
   @override
   Widget build(BuildContext context) {
@@ -160,9 +178,52 @@ class _Root extends StatelessWidget {
             ),
           ),
       ],
+      if (inventory != null && inventory!.total > 0) ...[
+        Padding(
+          padding: const EdgeInsets.only(top: 18, bottom: 4),
+          child: Text('PHYSICAL OBJECTS',
+              style: text.body.copyWith(
+                  fontSize: 11, letterSpacing: 2.2, color: const Color(0x66F7F4EE))),
+        ),
+        SupremeTappable(
+          key: const ValueKey('control-devices'),
+          onTap: onOpenDevices,
+          semanticLabel: 'Devices. ${_devicesSummary(inventory!)}',
+          radius: 4,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 68),
+            decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: SupremeColorScheme.rule))),
+            child: Row(children: [
+              const SupremeGlyph('object', size: 26, color: SupremeColorScheme.brassPale),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Devices', style: text.body.copyWith(fontSize: 17)),
+                      const SizedBox(height: 2),
+                      Text(_devicesSummary(inventory!),
+                          style: text.body.copyWith(
+                              fontSize: 14,
+                              color: inventory!.attention.isEmpty
+                                  ? SupremeColorScheme.text2
+                                  : SupremeColorScheme.brassPale)),
+                    ]),
+              ),
+              const SizedBox(width: 10, height: 16, child: CustomPaint(painter: _Chevron())),
+            ]),
+          ),
+        ),
+      ],
     ]);
   }
 }
+
+String _devicesSummary(DeviceInventory inv) =>
+    'All ${inv.total} ${inv.total == 1 ? 'device' : 'devices'}'
+    '${inv.attention.isEmpty ? '' : ' · ${inv.attention.length} not responding'}';
 
 class _System extends StatelessWidget {
   final ControlSystem system;

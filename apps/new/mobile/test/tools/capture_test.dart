@@ -134,6 +134,32 @@ void main() {
               await tester.pump(const Duration(milliseconds: 400));
               await _write(tester, key, '${s.name}-control-lighting');
             }
+            final back = find.byKey(const ValueKey('control-back'));
+            if (back.evaluate().isNotEmpty) {
+              await tester.tap(back);
+              await app.settle(tester);
+            }
+            final devices = find.byKey(const ValueKey('control-devices'));
+            if (devices.evaluate().isNotEmpty) {
+              await tester.tap(devices);
+              await app.settle(tester);
+              await tester.pump(const Duration(milliseconds: 700));
+              await _write(tester, key, '${s.name}-devices');
+              final row = find.byKey(const ValueKey('device-living-light'));
+              if (row.evaluate().isNotEmpty) {
+                await tester.ensureVisible(row.first);
+                await tester.tap(row.first);
+                await app.settle(tester);
+                await tester.pump(const Duration(milliseconds: 700));
+                await _write(tester, key, '${s.name}-device-sheet');
+                await tester.tap(find.byKey(const ValueKey('layer-close')).last);
+                await app.settle(tester);
+                await tester.pump(const Duration(milliseconds: 700));
+              }
+              await tester.tap(find.byKey(const ValueKey('layer-close')).last);
+              await app.settle(tester);
+              await tester.pump(const Duration(milliseconds: 700));
+            }
             final close = find.byKey(const ValueKey('control-close'));
             if (close.evaluate().isNotEmpty) {
               await tester.tap(close);

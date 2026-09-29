@@ -33,6 +33,7 @@ export 'src/residence/room_tone.dart';
 export 'src/residence/room_controls.dart';
 export 'src/residence/experience_plan.dart';
 export 'src/residence/control_systems.dart';
+export 'src/residence/devices_inventory.dart';
 export 'src/residence/experience_preview.dart';
 export 'src/simulation/simulated_residence.dart';
 export 'src/simulation/manual_scheduler.dart';

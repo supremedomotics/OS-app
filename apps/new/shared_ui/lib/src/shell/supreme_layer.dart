@@ -21,6 +21,11 @@ Future<T?> showSupremeLayer<T>(
   SurfaceFold? fold,
   required WidgetBuilder builder,
   String? semanticLabel,
+
+  /// Opened from inside another layer (the device sheet over Devices over Control): the surface is
+  /// fully opaque, so the layer beneath — which occupies the same rectangle on a drawer — cannot
+  /// show through as ghost text.
+  bool stacked = false,
 }) {
   final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
   // A plain route, not showGeneralDialog: a dialog wraps its page in DisplayFeatureSubScreen, which
@@ -38,7 +43,7 @@ Future<T?> showSupremeLayer<T>(
       explicitChildNodes: true,
       label: semanticLabel,
       child: SupremeLayerFrame(
-          presentation: presentation, fold: fold, child: builder(ctx)),
+          presentation: presentation, fold: fold, stacked: stacked, child: builder(ctx)),
     ),
     transitionsBuilder: (ctx, animation, _, child) {
       final curved = CurvedAnimation(
@@ -64,12 +69,14 @@ Future<T?> showSupremeLayer<T>(
 class SupremeLayerFrame extends StatelessWidget {
   final ControlLayerPresentation presentation;
   final SurfaceFold? fold;
+  final bool stacked;
   final Widget child;
   const SupremeLayerFrame(
       {super.key,
       required this.presentation,
       required this.fold,
-      required this.child});
+      required this.child,
+      this.stacked = false});
 
   static const drawerWidth = 520.0;
   static const sheetFraction = .88;
@@ -86,6 +93,7 @@ class SupremeLayerFrame extends StatelessWidget {
               height: box.maxHeight * sheetFraction,
               width: box.maxWidth,
               child: _Surface(
+                solid: stacked,
                 radius: const BorderRadius.vertical(top: Radius.circular(22)),
                 edge: const Border(
                     top: BorderSide(color: SupremeColorScheme.glassEdge)),
@@ -103,6 +111,7 @@ class SupremeLayerFrame extends StatelessWidget {
               width: box.maxWidth < drawerWidth ? box.maxWidth : drawerWidth,
               height: box.maxHeight,
               child: _Surface(
+                solid: stacked,
                 radius: BorderRadius.zero,
                 edge: const Border(
                     left: BorderSide(color: SupremeColorScheme.glassEdge)),
@@ -118,6 +127,7 @@ class SupremeLayerFrame extends StatelessWidget {
             Positioned.fill(
               left: start,
               child: _Surface(
+                solid: stacked,
                 radius: BorderRadius.zero,
                 edge: const Border(
                     left: BorderSide(color: SupremeColorScheme.glassEdge)),
@@ -133,6 +143,7 @@ class SupremeLayerFrame extends StatelessWidget {
             Positioned.fill(
               top: start,
               child: _Surface(
+                solid: stacked,
                 radius: BorderRadius.zero,
                 edge: const Border(
                     top: BorderSide(color: SupremeColorScheme.glassEdge)),
@@ -148,6 +159,7 @@ class SupremeLayerFrame extends StatelessWidget {
 }
 
 class _Surface extends StatelessWidget {
+  final bool solid;
   final BorderRadius radius;
   final Border edge;
   final double topInset;
@@ -155,7 +167,8 @@ class _Surface extends StatelessWidget {
   final bool grabHandle;
   final Widget child;
   const _Surface(
-      {required this.radius,
+      {required this.solid,
+      required this.radius,
       required this.edge,
       required this.topInset,
       required this.bottomInset,
@@ -166,7 +179,7 @@ class _Surface extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: SupremeColorScheme.glassSolid,
+        color: solid ? SupremeColorScheme.glassSolid.withValues(alpha: 1) : SupremeColorScheme.glassSolid,
         border: edge,
         borderRadius: radius,
       ),

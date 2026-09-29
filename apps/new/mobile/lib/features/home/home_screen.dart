@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import '../../main.dart';
+import '../devices/devices_layer.dart';
 
 /// Home — what is the residence like right now? (Golden Master `home.js`): the architectural cover
 /// page. Where am I · what is it like · does anything matter. One sentence, a few signals, the
@@ -144,9 +145,31 @@ class HomeScreen extends ConsumerWidget {
                           key: const ValueKey('home-stale'),
                           style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.text3))
                     else if (d.note != null)
-                      Text(d.note!,
-                          key: const ValueKey('home-note'),
-                          style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.text3)),
+                      // The way in to what is out: the Devices layer, showing only what is not
+                      // responding. (The watch has no inventories — its note stays a sentence.)
+                      profile.skeleton == SurfaceSkeleton.watch
+                          ? Text(d.note!,
+                              key: const ValueKey('home-note'),
+                              style: text.body.copyWith(fontSize: 13, color: SupremeColorScheme.text3))
+                          : SupremeTappable(
+                              key: const ValueKey('home-note-open'),
+                              onTap: () => openDevices(context, attentionOnly: true),
+                              semanticLabel: '${d.note!}. See which devices',
+                              radius: 4,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(minHeight: 44),
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(d.note!,
+                                      key: const ValueKey('home-note'),
+                                      style: text.body.copyWith(
+                                          fontSize: 13,
+                                          color: SupremeColorScheme.text3,
+                                          decoration: TextDecoration.underline,
+                                          decorationColor: const Color(0x55F7F4EE))),
+                                ),
+                              ),
+                            ),
                   ],
                   if (!loaded) _Connection(snap: snap, ref: ref),
                 ],

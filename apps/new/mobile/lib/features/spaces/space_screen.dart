@@ -5,6 +5,7 @@ import 'package:supreme_os_ui/supreme_os_ui.dart';
 import '../../main.dart';
 import '../_shared/residence_presentation.dart';
 import '../control/control_blocks.dart';
+import '../devices/devices_layer.dart';
 import '../experiences/activate.dart';
 
 /// A space, photo-led (Golden Master `space.js`): how it feels → Change. The page says what the
@@ -142,11 +143,25 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
                   if (cond.attention != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: Text(
-                          '${snap.devicesIn(space.id).where((d) => !d.isOnline).map((d) => d.name).join(', ')} ${snap.devicesIn(space.id).where((d) => !d.isOnline).length == 1 ? 'isn’t' : 'aren’t'} responding.',
-                          key: const ValueKey('space-attention'),
-                          style: text.body.copyWith(
-                              fontSize: 14, color: SupremeColorScheme.brassPale)),
+                      child: () {
+                        final said = Text(
+                            '${snap.devicesIn(space.id).where((d) => !d.isOnline).map((d) => d.name).join(', ')} ${snap.devicesIn(space.id).where((d) => !d.isOnline).length == 1 ? 'isn’t' : 'aren’t'} responding.',
+                            key: const ValueKey('space-attention'),
+                            style: text.body.copyWith(
+                                fontSize: 14, color: SupremeColorScheme.brassPale));
+                        // No inventories on the watch (grammar): there it stays a sentence.
+                        return watch
+                            ? said
+                            : SupremeTappable(
+                                key: const ValueKey('space-attention-open'),
+                                onTap: () => openDevices(context,
+                                    spaceId: space.id, attentionOnly: true),
+                                semanticLabel: 'See which devices in ${space.name}',
+                                radius: 4,
+                                child: ConstrainedBox(
+                                    constraints: const BoxConstraints(minHeight: 44),
+                                    child: Align(alignment: Alignment.centerLeft, child: said)));
+                      }(),
                     ),
                   if (xs.isNotEmpty)
                     SupremeAct('Change',
