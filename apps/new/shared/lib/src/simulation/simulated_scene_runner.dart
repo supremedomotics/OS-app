@@ -5,22 +5,17 @@
 /// `expectationOf`; per-capability deadlines that a moving device restarts; supersession; an
 /// unverifiable step ends at `sent`.
 ///
-/// Drift between this port and the gateway is caught by `test/hub_wire_conformance_test.dart`
+/// Drift between this port and the gateway is caught by `test/wire_conformance_test.dart`
 /// (shape) and by the live-gateway lifecycle test (behaviour).
 library;
 
 import 'dart:async';
 
+import '../residence/command_deadlines.dart';
 import '../residence/command_tracker.dart' show Schedule;
 import '../residence/state_expectation.dart';
 
-const _defaultDeadlines = <String, Duration>{
-  'onoff': Duration(seconds: 10),
-  'brightness': Duration(seconds: 10),
-  'media': Duration(seconds: 10),
-  'temperature': Duration(seconds: 15),
-  'position': Duration(seconds: 90),
-};
+const _defaultDeadlines = defaultCommandDeadlines;
 
 class _Step {
   final String stepId;
@@ -239,7 +234,7 @@ class SimulatedSceneRunner {
     }
 
     final key = '${s.deviceId}:${s.capability}';
-    final ms = deadlines[s.capability] ?? const Duration(seconds: 10);
+    final ms = deadlines[s.capability] ?? fallbackCommandDeadline;
     Timer? timer;
     late void Function(Map<String, dynamic>) listener;
     void conclude(String state, String? reason) {

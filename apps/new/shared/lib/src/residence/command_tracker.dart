@@ -19,6 +19,7 @@ library;
 
 import 'dart:async';
 
+import 'command_deadlines.dart';
 import 'residence_state.dart';
 import 'state_expectation.dart';
 
@@ -83,7 +84,13 @@ typedef Schedule = Timer Function(Duration after, void Function() run);
 class CommandTracker {
   final CommandSender _send;
   final ResidenceState _state;
-  final Duration timeout;
+
+  /// A uniform deadline for every capability — for tests and callers that must pin one. Null (the
+  /// default) means each capability's own deadline ([defaultCommandDeadlines] + [deadlines]).
+  final Duration? timeout;
+
+  /// Per-capability overrides of [defaultCommandDeadlines].
+  final Map<String, Duration> deadlines;
   final Schedule _schedule;
   final DateTime Function() _now;
 
@@ -98,7 +105,8 @@ class CommandTracker {
   CommandTracker({
     required CommandSender send,
     required ResidenceState state,
-    this.timeout = const Duration(seconds: 8),
+    this.timeout,
+    this.deadlines = const {},
     Schedule? schedule,
     DateTime Function()? now,
   })  : _send = send,
@@ -109,6 +117,10 @@ class CommandTracker {
   }
 
   bool _disposed = false;
+
+  /// How long a command on [capability] may go unanswered before it is called failed.
+  Duration deadlineFor(String capability) =>
+      timeout ?? commandDeadlineFor(capability, overrides: deadlines);
 
   void _emit(CommandRecord r) {
     if (!_disposed) _updates.add(r);
@@ -173,7 +185,8 @@ class CommandTracker {
     _expect[rec.id] = expectation;
     _facet[rec.id] = facet;
     _emit(rec);
-    _timers[rec.id] = _schedule(timeout, () => _onTimeout(rec.id));
+    _timers[rec.id] =
+        _schedule(deadlineFor(capability), () => _onTimeout(rec.id));
     unawaited(_dispatch(rec.id, _send));
     return rec;
   }
@@ -236,7 +249,8 @@ class CommandTracker {
         // The device is visibly on its way (a shade in travel): it is answering, so the deadline
         // restarts from this report instead of failing a slow but genuine movement.
         _timers.remove(rec.id)?.cancel();
-        _timers[rec.id] = _schedule(timeout, () => _onTimeout(rec.id));
+        _timers[rec.id] =
+            _schedule(deadlineFor(rec.capability), () => _onTimeout(rec.id));
       }
     }
   }

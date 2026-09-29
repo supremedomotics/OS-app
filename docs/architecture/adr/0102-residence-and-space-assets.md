@@ -2,8 +2,12 @@
 
 ## Status
 
-**Accepted** for the homeowner Flutter generation (`apps/new`). Records a decision only; no backend
-extension is implemented by this ADR (see `docs/architecture/homeowner-contract-gate.md` §7).
+**Accepted** for the homeowner Flutter generation (`apps/new`). **Backend implemented in Phase 3**
+(`services/gateway/src/routes/home.ts`, `room-hero.ts`; verified by `experience-runs.e2e.test.ts`): Mobile
+authorization on hero routes, strong ETag / `304`, hash-versioned `heroImageUrl`, `Home.heroImageUrl` and
+`GET|PUT /v1/home/hero-image`. Client side: `HubTransport.getBytes` + `HubBytes` exist; the on-device
+cache and the `ToneSurface(image:)` wiring are tracked in `docs/design/phase-3-closure-report.md`. See
+`docs/architecture/homeowner-contract-gate.md` §7.
 
 ## Context
 

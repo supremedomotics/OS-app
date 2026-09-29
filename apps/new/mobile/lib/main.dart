@@ -234,40 +234,24 @@ final residenceStateProvider = Provider<ResidenceState>((ref) {
   }
   final manager = ref.watch(connectionManagerProvider);
   final hubId = ref.watch(activeHomeIdProvider);
-  final frames = StreamController<Map<String, dynamic>>.broadcast();
-  late final ResidenceState state;
-  state = ResidenceState(get: manager.get, frames: frames.stream);
-  WebSocketHubEventStream? stream;
-  StreamSubscription<HubEventStreamState>? stateSub;
-  StreamSubscription<Map<String, dynamic>>? frameSub;
-  var seenSubscribed = false;
+  final link = ResidenceStreamLink(get: manager.get);
   unawaited(() async {
-    await state.start();
+    await link.state.start();
     if (hubId == null) return;
     final uri = await ref.read(activeHomeStreamUriProvider(hubId).future);
     if (uri == null) return;
     final session = ref.read(pairedHomeAuthStoreProvider).sessionFor(hubId);
     if (session == null) return;
-    stream = WebSocketHubEventStream(
-        streamUri: uri, bearerToken: () => session.bearerToken());
-    frameSub = stream!.frames.listen(frames.add);
-    // Sequence numbers restart with every connection, and whatever changed while the stream was
-    // down is only recoverable from a snapshot.
-    stateSub = stream!.state.listen((s) {
-      if (s != HubEventStreamState.subscribed) return;
-      if (seenSubscribed) unawaited(state.streamRestarted());
-      seenSubscribed = true;
-    });
-    unawaited(stream!.connect());
+    // Subscribed to every space this Mobile may view — the gateway sends no state or run frame
+    // to a client that has not subscribed. The link re-reads the residence after every live
+    // subscription (see `ResidenceStreamLink`).
+    link.attach(WebSocketHubEventStream(
+        streamUri: uri,
+        bearerToken: () => session.bearerToken(),
+        autoSubscribeRooms: const ['*']));
   }());
-  ref.onDispose(() {
-    unawaited(stateSub?.cancel());
-    unawaited(frameSub?.cancel());
-    unawaited(stream?.dispose());
-    unawaited(frames.close());
-    unawaited(state.dispose());
-  });
-  return state;
+  ref.onDispose(() => unawaited(link.dispose()));
+  return link.state;
 });
 
 /// The active Home's live-stream address, resolved the same way the background runtime does

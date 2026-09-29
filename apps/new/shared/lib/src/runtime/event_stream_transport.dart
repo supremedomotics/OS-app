@@ -60,12 +60,22 @@ class WebSocketHubEventStream implements EventStreamTransport {
   /// real").
   final WebSocketChannel Function(Uri uri) channelFactory;
 
+  /// Rooms to subscribe to on EVERY (re)connect, before anything else. The gateway delivers
+  /// `state` / `run` frames only to a client that has subscribed (`"*"` = every space it may
+  /// view; permission is still checked per frame), so a client that reads the stream without
+  /// subscribing gets a snapshot and then silence. Null = the caller subscribes itself.
+  final List<String>? autoSubscribeRooms;
+
   final _stateController = StreamController<HubEventStreamState>.broadcast();
   final _framesController = StreamController<Map<String, dynamic>>.broadcast();
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   int _backoffStep = 0;
+
+  /// True between sending the auto-subscription and its `pong`; a frame that is not the `pong`
+  /// does not yet prove the subscription is live, so it does not make the stream `subscribed`.
+  bool _awaitingSubscription = false;
   bool _disposed = false;
   HubEventStreamState _current = HubEventStreamState.disconnected;
 
@@ -73,6 +83,7 @@ class WebSocketHubEventStream implements EventStreamTransport {
     required this.streamUri,
     required this.bearerToken,
     WebSocketChannel Function(Uri uri)? channelFactory,
+    this.autoSubscribeRooms,
   }) : channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   @override
@@ -103,6 +114,15 @@ class WebSocketHubEventStream implements EventStreamTransport {
         onError: (_) => _scheduleReconnect(),
         cancelOnError: true,
       );
+      final rooms = autoSubscribeRooms;
+      if (rooms != null && rooms.isNotEmpty) {
+        send({'type': 'subscribe', 'rooms': rooms});
+        // The Hub handles a socket's frames in order, so its `pong` proves the subscription above
+        // is live: only then is the stream `subscribed` (a snapshot read after that moment cannot
+        // miss a change). Uses the existing ping/pong contract; no new frame type.
+        _awaitingSubscription = true;
+        send({'type': 'ping'});
+      }
     } catch (_) {
       _scheduleReconnect();
     }
@@ -121,8 +141,11 @@ class WebSocketHubEventStream implements EventStreamTransport {
       return;
     }
     _backoffStep = 0;
-    if (_current != HubEventStreamState.subscribed)
+    final provesSubscription = !_awaitingSubscription || frame['type'] == 'pong';
+    if (frame['type'] == 'pong') _awaitingSubscription = false;
+    if (provesSubscription && _current != HubEventStreamState.subscribed) {
       _emit(HubEventStreamState.subscribed);
+    }
     if (!_framesController.isClosed) _framesController.add(frame);
   }
 

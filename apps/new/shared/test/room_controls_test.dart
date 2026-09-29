@@ -145,6 +145,9 @@ void main() {
     r.sim.setSilent('living-light', true);
     r.run(RoomLights.of(r.devs('living'), [])!.setLevel(10));
     await r.advance(9000);
+    expect(failedRecently(r.tracker, ['living-light'], 'brightness'), isNull,
+        reason: 'a light gets its own 10 s before it is called unresponsive');
+    await r.advance(1500);
     expect(failedRecently(r.tracker, ['living-light'], 'brightness'), CommandFailure.timeout);
     expect(RoomLights.of(r.devs('living'), r.tracker.inFlight)!.level, 60);
   });

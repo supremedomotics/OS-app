@@ -11,8 +11,13 @@ class Rig {
   /// Every route the client sent, in order.
   final sent = <String>[];
 
-  Rig({Duration commandTimeout = const Duration(seconds: 8)}) {
-    sim = SimulatedResidence(schedule: clock.schedule, now: clock.now);
+  /// [commandTimeout] pins ONE deadline for every capability; null = each capability's own.
+  Rig({
+    Duration? commandTimeout,
+    Map<String, Duration> deadlines = const {},
+    Duration shadeStep = const Duration(milliseconds: 500),
+  }) {
+    sim = SimulatedResidence(schedule: clock.schedule, now: clock.now, shadeStep: shadeStep);
     state = ResidenceState(get: sim.transport.get, frames: sim.stream.frames, now: clock.now);
     Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
       sent.add(path);
@@ -23,6 +28,7 @@ class Rig {
       send: (id, c) => post('v1/devices/$id/command', {'command': c}),
       state: state,
       timeout: commandTimeout,
+      deadlines: deadlines,
       schedule: clock.schedule,
       now: clock.now,
     );

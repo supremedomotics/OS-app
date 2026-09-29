@@ -4,6 +4,26 @@ Scope: what `apps/new` (Mobile/Tablet/Panel) needs from the Hub so that the Resi
 lifecycle and Experience state are **truthful without client heuristics**. Written at the close of
 Phase 2, from reading the code, not from the prototype. Nothing here is implemented by this document.
 
+## Status after Phase 3
+
+| § | Contract | Status |
+|---|---|---|
+| 1 | `asOfRev`, floors, `Room.locative`, readable `Home.location` | **OPEN** (unchanged) |
+| 1 | `Home.heroImageUrl` | **DONE** — computed, hash-versioned |
+| 2 | device reachability frame, `stateAt`, normalised `TemperatureConfig` | **OPEN** |
+| 3 | durable `rev`, `sinceRev` resume, `hello`, `observedAt`/`receivedAt` | **OPEN** |
+| 4 | `commandId` / `causedBy` / Hub command `outcome`, idempotency, stable error codes | **OPEN** |
+| 5 | `Scene.roomIds`, `Scene.description`, `Scene.phases` | **DONE** (`SceneView`; `roomIds` derived from steps) |
+| 5 | per-step desired *state* (`SceneStep.target`) | **DEFERRED by design** — `expectationOf` (TS + Dart, pinned by `state-expectation.json`) derives it from the command; both sides use one predicate |
+| 6 | Hub-orchestrated activation: `spaceIds`, 202 + run, phases, per-capability deadlines, partial failure, supersession, `GET /v1/scenes/runs/:id`, `run` frames | **DONE** (`services/gateway/src/scene-runs.ts`) — see the "Phase 3 deviations" note in §6 |
+| 6 | client path retired | **DONE** — `CommandTracker.submitGroup` and the per-space command loop are deleted |
+| 7 | Mobile authorization on hero routes, ETag/304, versioned URL, `GET\|PUT /v1/home/hero-image` | **DONE**; masks / reference kelvin still LATER |
+| 8 | occupancy / arming / contacts / sun | **NOT BUILT** (re-verified: `occupancy.e2e.test.ts` covers an *away-from-home lighting simulation*, `security.e2e.test.ts` covers *gateway hardening*; neither is a sensing/alarm contract) |
+
+Drift gate: `services/gateway/src/wire-shapes.e2e.test.ts` records the gateway's real wire shapes to
+`packages/domain-model/fixtures/wire-shapes.json`; `apps/new/shared/test/wire_conformance_test.dart` holds the
+Dart simulator to that same fixture.
+
 Legend — **EXISTS** works today · **EXTEND** an existing contract gains a field/route · **NEW** a new
 contract · **LATER** only when a driver backs it (never faked meanwhile).
 
@@ -104,6 +124,13 @@ Minimum Hub contract:
 * **Permissions** — `scene:control`, additionally checked per space for scoped activation.
 * **Retirement of the client path** — when this lands, `activateExperience` calls it for every scope and the
   per-space command loop is deleted; the tests that prove Becoming/Active/Partial from device reports stay.
+
+**Phase 3 deviations from this sketch (implemented shape):** the response is `202 {activated, steps, run}` with
+the whole `SceneRun` snapshot (not a bare id + step list); `run` frames are full idempotent snapshots rather than
+per-step deltas; phases are index groups into `steps` (`number[][]`), not `stepId` lists; a user command during a
+run is **not** recorded as `overridden` — a later activation over the same devices supersedes (`supersededBy`);
+the per-space permission check is **not** built (scene-level `scene:control` only); runs are in memory and do not
+survive a Hub restart. These are listed as risks in `docs/design/phase-3-closure-report.md`.
 
 ## 7. Residence / space assets and hero images
 

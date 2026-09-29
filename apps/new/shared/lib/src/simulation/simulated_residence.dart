@@ -295,6 +295,10 @@ class SimulatedResidence {
           'homeId': 'sim-home',
           'name': name,
           'floor': floor,
+          'building': null,
+          'area': null,
+          'areaType': 'other',
+          'sortOrder': _rooms.length,
           'icon': null,
           'heroImageUrl': null,
           'parentRoomId': null,
@@ -338,6 +342,9 @@ class SimulatedResidence {
           'album': null,
           'source': null,
           'artworkUrl': null,
+          'durationSec': null,
+          'positionSec': null,
+          'advanced': null,
         };
 
     room('living', 'Living Room', 0);
