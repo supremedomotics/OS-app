@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-ALL_SERVICES=("${SUPREME_THIRDPARTY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "supreme-nats")
+ALL_SERVICES=("${SUPREME_THIRDPARTY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" "supreme-nats" "supreme-streamer")
 
 usage() {
   echo "Usage: $0 <service> [journalctl args...]"
@@ -48,7 +48,7 @@ fi
 if [ "$SERVICE" = "all" ]; then
   # SupremeOS-owned only (not postgres/redis/mosquitto/caddy's own noisy logs) — the
   # cross-service view most useful for tracing one request through gateway → lan/commissioning.
-  exec journalctl -u supreme-gateway -u supreme-lan -u supreme-commissioning -u supreme-nats -n 100 "$@"
+  exec journalctl -u supreme-gateway -u supreme-lan -u supreme-commissioning -u supreme-nats -u supreme-streamer -n 100 "$@"
 fi
 
 case " ${ALL_SERVICES[*]} " in
