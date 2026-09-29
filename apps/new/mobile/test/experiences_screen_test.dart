@@ -107,11 +107,12 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('exp-set')));
     await app.settle(tester, 100);
-    expect(app.sent.where((p) => p.startsWith('v1/scenes/')), isEmpty,
-        reason: 'no Hub route for one space\'s share: steps go as tracked device commands');
-    expect(app.sent, contains('v1/devices/dining-light/command'));
-    expect(app.sent.any((p) => p.contains('living')), isFalse);
-    await app.settle(tester, 700);
+    expect(app.sent.where((p) => p.startsWith('v1/scenes/')), hasLength(1),
+        reason: 'the Hub orchestrates a space\'s share too');
+    expect(app.sent.where((p) => p.contains('/command')), isEmpty,
+        reason: 'the client sends no device commands for an Experience');
+    await app.settle(tester, 5000);
+    expect(((app.sim.deviceJson('living-light')['state'] as Map)['brightness'] as Map)['level'], isNot(30), reason: 'only the dining room\'s share was set');
     expect(_status(tester), 'Active now');
   });
 

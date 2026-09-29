@@ -22,6 +22,7 @@ library;
 import '../experiences.dart';
 import '../semantic_model.dart';
 import 'command_tracker.dart';
+import 'experience_activation.dart';
 import 'experience_status.dart';
 import 'residence_state.dart';
 
@@ -274,6 +275,7 @@ HomeDescription describeHome(
   ResidenceSnapshot s, {
   required int hour,
   Iterable<CommandRecord> commands = const [],
+  Iterable<Activation> activations = const [],
 }) {
   final all = s.devices.values.toList();
   final online = all.where((d) => d.isOnline).toList();
@@ -340,7 +342,7 @@ HomeDescription describeHome(
             'the ${(id == null ? null : s.space(id)?.name)?.toLowerCase() ?? 'residence'}'
         ]);
 
-  final pending = commands.any((c) => c.inFlight);
+  final pending = commands.any((c) => c.inFlight) || activations.any((a) => a.inFlight);
   final quiet = lit.isEmpty && music.isEmpty && pod == PartOfDay.night;
   final sentence = pending
       ? 'Adjusting the residence…'
@@ -422,10 +424,13 @@ String spaceSummary(ResidenceSnapshot s, String spaceId) {
 
 /// How the space feels, said as a sentence (Golden Master `renderSpace`): derived, never chosen.
 String spaceFeel(ResidenceSnapshot s, String spaceId,
-    {Iterable<CommandRecord> commands = const []}) {
+    {Iterable<CommandRecord> commands = const [],
+    Iterable<Activation> activations = const []}) {
   final becoming = <Experience>[
     for (final e in spaceExperiences(s, spaceId))
-      if (experienceStatus(e, s, commands: commands, spaceId: spaceId).phase ==
+      if (experienceStatus(e, s,
+                  commands: commands, spaceId: spaceId, activations: activations)
+              .phase ==
           ExperiencePhase.becoming)
         e
   ];

@@ -96,7 +96,7 @@ class _ExperiencesScreenState extends ConsumerState<ExperiencesScreen> {
     final activeHere = _spaceId == null
         ? activeExperienceInResidence(snap, commands: view.inFlight)
         : activeExperienceIn(snap, _spaceId!, commands: view.inFlight);
-    final st = experienceStatus(sel, snap, commands: view.inFlight, spaceId: _spaceId);
+    final st = experienceStatus(sel, snap, commands: view.inFlight, activations: view.activating, spaceId: _spaceId);
     final plan = experiencePlan(sel, snap, spaceId: _spaceId);
     final becoming = st.phase == ExperiencePhase.becoming;
     final rows = experiencePreview(sel, snap, commands: view.inFlight, spaceId: _spaceId);

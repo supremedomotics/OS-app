@@ -150,6 +150,24 @@ class RemoteHubTransport implements HubTransport {
   /// §Phase12.8 — the real Hub REST contract uses `GET` for reads
   /// (`/v1/home`, `/v1/devices`, `/v1/rooms/:id/devices`, `/v1/scenes`) — this is that verb,
   /// against the SAME broker route (`/v1/route/:hubId/*` forwards any HTTP verb).
+  ///
+  /// UNVERIFIED: whether the broker relays a binary response body intact has not been proven
+  /// (no test exercises it); until it is, a failure here just means the plate stays tonal.
+  @override
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) async {
+    if (!_authenticated) throw StateError('not authenticated');
+    final res = await _client.get(config.routeUri(path), headers: {
+      ..._authHeaders,
+      if (ifNoneMatch != null) 'if-none-match': ifNoneMatch,
+    });
+    if (res.statusCode == 304) return HubBytes(notModified: true, etag: ifNoneMatch);
+    if (res.statusCode >= 400) throw StateError('read failed: ${res.statusCode}');
+    return HubBytes(
+        bytes: res.bodyBytes,
+        contentType: res.headers['content-type'],
+        etag: res.headers['etag']);
+  }
+
   @override
   Future<Map<String, dynamic>> get(String path) async {
     if (!_authenticated) throw StateError('not authenticated');

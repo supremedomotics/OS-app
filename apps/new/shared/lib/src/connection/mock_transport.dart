@@ -93,5 +93,9 @@ class MockHubTransport implements HubTransport {
   }
 
   @override
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) async =>
+      throw UnsupportedError('the mock Hub serves no binary resources');
+
+  @override
   Stream<Map<String, dynamic>> events() => _events.stream;
 }

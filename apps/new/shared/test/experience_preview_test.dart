@@ -6,6 +6,7 @@ void main() {
   late SimulatedResidence sim;
   late ResidenceState state;
   late CommandTracker tracker;
+  late ExperienceActivations activations;
 
   Future<void> boot() async {
     clock = ManualScheduler();
@@ -16,6 +17,8 @@ void main() {
         state: state,
         schedule: clock.schedule,
         now: clock.now);
+    activations = ExperienceActivations(
+        post: (path, body) async => sim.command(path, body), state: state, now: clock.now);
     await state.start();
   }
 
@@ -52,13 +55,12 @@ void main() {
     expect(music.unreachable, 1);
     expect(music.arrived, 0);
 
-    for (final c in experiencePlan(exp('relax'), state.snapshot)) {
-      tracker.submit(c.deviceId, c.command);
-    }
+    // The Hub runs it: the lighting phase only starts once the curtains have settled.
+    activations.activate(exp('relax'));
     await clock.advance(const Duration(milliseconds: 100));
     rows = experiencePreview(exp('relax'), state.snapshot, commands: tracker.inFlight);
-    expect(rows.firstWhere((r) => r.system == PreviewSystem.lighting).changing, 2);
-    await clock.advance(const Duration(seconds: 6));
+    expect(rows.firstWhere((r) => r.system == PreviewSystem.lighting).arrived, 0);
+    await clock.advance(const Duration(seconds: 8));
     rows = experiencePreview(exp('relax'), state.snapshot, commands: tracker.inFlight);
     expect(rows.firstWhere((r) => r.system == PreviewSystem.lighting).allArrived, isTrue);
     expect(rows.firstWhere((r) => r.system == PreviewSystem.shades).allArrived, isTrue);
@@ -83,12 +85,10 @@ void main() {
     expect(experienceLine(exp('relax'), state.snapshot), 'Changes lighting, curtains and music.');
     expect(experienceStatusText(experienceStatus(exp('relax'), state.snapshot)), 'Partially active');
     expect(experienceStatusText(experienceStatus(exp('dinner'), state.snapshot)), 'Not active');
-    for (final c in experiencePlan(exp('dinner'), state.snapshot)) {
-      tracker.submit(c.deviceId, c.command);
-    }
+    activations.activate(exp('dinner'));
     await clock.advance(const Duration(milliseconds: 100));
     expect(
-        experienceStatusText(experienceStatus(exp('dinner'), state.snapshot, commands: tracker.inFlight)),
+        experienceStatusText(experienceStatus(exp('dinner'), state.snapshot, activations: activations.inFlight)),
         'Becoming…');
     await clock.advance(const Duration(seconds: 2));
     expect(experienceStatusText(experienceStatus(exp('dinner'), state.snapshot)), 'Active now');

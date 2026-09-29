@@ -12,12 +12,21 @@ class Experience {
   /// none — an Experience with no steps can never be reported Active (see `experienceStatus`).
   final List<ExperienceStep> steps;
 
+  /// An authored line ("Soft, warm light and quiet music"); null when nobody wrote one.
+  final String? description;
+
+  /// The Hub's choreography (ordered groups of step indices). Informational for the client — the
+  /// Hub runs the sequence.
+  final List<List<int>> phases;
+
   const Experience({
     required this.id,
     required this.name,
     required this.spaceIds,
     this.iconName,
     this.steps = const [],
+    this.description,
+    this.phases = const [],
   });
 }
 

@@ -74,7 +74,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ? snap!.name
         : widget.homeController.activeHome?.displayName ?? '';
     final lede = loaded
-        ? (describeHome(snap, hour: hour, commands: view!.inFlight).note ??
+        ? (describeHome(snap, hour: hour, commands: view!.inFlight, activations: view.activating).note ??
             'Everything is in order.')
         : null;
     final floors = loaded ? {for (final s in snap.spaces) s.floorId}.length : 0;

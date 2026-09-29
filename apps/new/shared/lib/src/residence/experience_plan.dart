@@ -1,9 +1,7 @@
-/// What activating an Experience means as device commands: the Hub's authored steps, filtered to
-/// those that can act (device reachable, effect verifiable), optionally to one space.
-///
-/// Whole-residence activation goes through the Hub's own route (`POST /v1/scenes/:id/activate`);
-/// a single space's share of a home-scoped Experience has no Hub route (flagged: D8 / backend gap
-/// "space-scoped activation"), so the same steps are sent as tracked device commands.
+/// What an Experience WOULD do, read-only: the Hub's authored steps that can act now (device
+/// reachable, effect verifiable), optionally within one space. Used to preview and to decide
+/// whether "Set" is offered. It is never sent: the Hub owns orchestration (D8) — see
+/// `ExperienceActivations`, which asks the Hub and follows its run.
 library;
 
 import '../experiences.dart';

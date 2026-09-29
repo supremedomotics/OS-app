@@ -10,6 +10,7 @@ library;
 
 import '../experiences.dart';
 import 'command_tracker.dart';
+import 'experience_activation.dart';
 import 'residence_state.dart';
 import 'state_expectation.dart';
 
@@ -62,6 +63,10 @@ ExperienceStatus experienceStatus(
   ResidenceSnapshot s, {
   Iterable<CommandRecord> commands = const [],
   String? spaceId,
+
+  /// Activations the Hub is carrying out for this Experience: while one is in flight and the
+  /// devices do not yet match, the Experience is becoming — even before the first command lands.
+  Iterable<Activation> activations = const [],
 }) {
   var verifiable = 0, matched = 0, unverifiable = 0, unreachable = 0;
   var reachableVerifiable = 0;
@@ -103,7 +108,13 @@ ExperienceStatus experienceStatus(
   if (verifiable == 0) return of(ExperiencePhase.indeterminate);
   if (reachableVerifiable == 0) return of(ExperiencePhase.unavailable);
   if (matched == verifiable) return of(ExperiencePhase.active);
-  if (moving) return of(ExperiencePhase.becoming);
+  if (moving ||
+      activations.any((a) =>
+          a.inFlight &&
+          a.experienceId == e.id &&
+          (spaceId == null || a.spaceIds.isEmpty || a.spaceIds.contains(spaceId)))) {
+    return of(ExperiencePhase.becoming);
+  }
   if (matched > 0) return of(ExperiencePhase.partial);
   return of(ExperiencePhase.inactive);
 }

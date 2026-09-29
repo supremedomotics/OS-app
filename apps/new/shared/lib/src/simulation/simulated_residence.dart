@@ -15,8 +15,10 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import '../connection/transport.dart';
+import 'simulated_scene_runner.dart';
 import '../residence/command_tracker.dart';
 import '../runtime/event_stream_transport.dart';
 
@@ -34,6 +36,8 @@ class SimulatedResidence {
   final _seq = <String, int>{};
   final _frames = StreamController<Map<String, dynamic>>.broadcast();
   final _silent = <String>{};
+  final _heroImages = <String?, Uint8List>{}; // null key = the residence
+  late final SimulatedSceneRunner _runner;
 
   SimulatedResidence({
     Schedule? schedule,
@@ -43,6 +47,22 @@ class SimulatedResidence {
   })  : _schedule = schedule ?? ((d, f) => Timer(d, f)),
         _now = now ?? DateTime.now {
     _seedVilla();
+    _runner = SimulatedSceneRunner(
+      schedule: _schedule,
+      now: _now,
+      sendCommand: (id, cmd) {
+        final d = _devices[id];
+        if (d == null) throw StateError('device not found');
+        if (d['status'] != 'online') throw StateError('device is ${d['status']}');
+        _apply(id, cmd);
+      },
+      device: (id) => _devices[id],
+      publish: (run) => _frames.add({
+        'type': 'run',
+        'run': run,
+        'ts': _now().toUtc().toIso8601String(),
+      }),
+    );
   }
 
   late final SimulatedHubTransport transport = SimulatedHubTransport(this);
@@ -71,10 +91,31 @@ class SimulatedResidence {
   Map<String, dynamic> read(String path) {
     final p = path.startsWith('/') ? path.substring(1) : path;
     if (p == 'v1/home') {
-      return {'id': 'sim-home', 'name': 'Villa Son Vida', 'rooms': _rooms};
+      return {
+        'home': {
+          'id': 'sim-home',
+          'name': 'Villa Son Vida',
+          'address': null,
+          'tier': 'signature',
+          'masterUserId': 'sim-owner',
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'heroImageUrl': _heroUrl(null),
+        },
+        'rooms': _rooms,
+      };
+    }
+    final run = RegExp(r'^v1/scenes/runs/([^/]+)$').firstMatch(p);
+    if (run != null) {
+      final r = _runner.get(run.group(1)!);
+      if (r == null) throw StateError('run not found');
+      return {'run': r};
     }
     if (p == 'v1/devices') return {'devices': _devices.values.toList()};
-    if (p == 'v1/scenes') return {'scenes': _scenes};
+    if (p == 'v1/scenes') {
+      return {
+        'scenes': [for (final sc in _scenes) {...sc, 'roomIds': _roomsOf(sc)}]
+      };
+    }
     final m = RegExp(r'^v1/rooms/([^/]+)/devices$').firstMatch(p);
     if (m != null) {
       return {
@@ -103,18 +144,19 @@ class SimulatedResidence {
     }
     final scene = RegExp(r'^v1/scenes/([^/]+)/activate$').firstMatch(p);
     if (scene != null) {
-      final s = _scenes.firstWhere((s) => s['id'] == scene.group(1),
+      final sc = _scenes.firstWhere((s) => s['id'] == scene.group(1),
           orElse: () => throw StateError('scene not found'));
-      for (final step in (s['steps'] as List).cast<Map<String, dynamic>>()) {
-        final id = step['deviceId'] as String;
-        if (_devices[id]?['status'] != 'online')
-          continue; // best-effort, like the Hub.
-        _apply(id, {
-          'capability': step['capability'],
-          ...(step['values'] as Map<String, dynamic>)
-        });
-      }
-      return {'accepted': true};
+      final spaces = [
+        ...((body['spaceIds'] as List?) ?? const []).cast<String>()
+      ];
+      final run = _runner.start(sc, spaces);
+      return {
+        'activated': true,
+        'steps': (run['steps'] as List)
+            .where((st) => (st as Map)['state'] != 'skipped')
+            .length,
+        'run': run,
+      };
     }
     throw StateError('simulated Hub has no route POST $path');
   }
@@ -241,6 +283,8 @@ class SimulatedResidence {
       'seq': seq,
       'ts': _now().toUtc().toIso8601String(),
     });
+    // The device's frame goes out first; a run that concludes on it follows (as on the gateway).
+    _runner.onReport(id, cap, full);
   }
 
   // ── the residence ─────────────────────────────────────────────────────────────────────
@@ -330,7 +374,8 @@ class SimulatedResidence {
     Map<String, dynamic> step(String dev, String cap, Map<String, dynamic> v) =>
         {'deviceId': dev, 'capability': cap, 'values': v};
     void scene(String id, String name, String scope, String? roomId,
-            List<Map<String, dynamic>> steps) =>
+            List<Map<String, dynamic>> steps,
+            {String? description, List<List<int>> phases = const []}) =>
         _scenes.add({
           'id': id,
           'homeId': 'sim-home',
@@ -340,6 +385,12 @@ class SimulatedResidence {
           'ownerUserId': null,
           'icon': null,
           'aiGenerated': false,
+          'description': description,
+          'phases': phases,
+          'sourceDriverId': null,
+          'sourceSceneId': null,
+          'imported': false,
+          'syncStatus': null,
           'steps': steps,
         });
 
@@ -348,7 +399,13 @@ class SimulatedResidence {
       step('living-shade', 'position', {'action': 'set', 'position': 60}),
       step('living-audio', 'media', {'action': 'play'}),
       step('dining-light', 'brightness', {'action': 'set', 'level': 20}),
-    ]);
+    ],
+        description: 'Soft, warm light and quiet music',
+        // The curtains settle first; then the light and the music follow.
+        phases: [
+          [1],
+          [0, 2, 3]
+        ]);
     scene('dinner', 'Dinner', 'home', null, [
       step('dining-light', 'brightness', {'action': 'set', 'level': 55}),
       step('living-light', 'brightness', {'action': 'set', 'level': 15}),
@@ -363,6 +420,55 @@ class SimulatedResidence {
       step('master-shade', 'position', {'action': 'close'}),
       step('living-audio', 'media', {'action': 'pause'}),
     ]);
+  }
+
+  List<String> _roomsOf(Map<String, dynamic> scene) => {
+        for (final st in (scene['steps'] as List).cast<Map<String, dynamic>>())
+          if (_devices[st['deviceId']]?['roomId'] is String)
+            _devices[st['deviceId']]!['roomId'] as String
+      }.toList();
+
+  String? _heroUrl(String? roomId) {
+    final b = _heroImages[roomId];
+    if (b == null) return null;
+    final path = roomId == null ? '/v1/home/hero-image' : '/v1/rooms/$roomId/hero-image';
+    return '$path?v=${_hash(b)}';
+  }
+
+  static String _hash(Uint8List b) {
+    // A stable content tag (the real Hub uses sha-256; only its stability matters here).
+    var h = 0xcbf29ce484222325;
+    for (final x in b) {
+      h = ((h ^ x) * 0x100000001b3) & 0x7fffffffffffffff;
+    }
+    return h.toRadixString(16).padLeft(32, '0');
+  }
+
+  /// Gives the residence ([roomId] null) or a space a photograph, as the Hub's asset slot does.
+  void setHeroImage(String? roomId, List<int> bytes) {
+    _heroImages[roomId] = Uint8List.fromList(bytes);
+    if (roomId != null) {
+      final room = _rooms.firstWhere((r) => r['id'] == roomId);
+      room['heroImageUrl'] = _heroUrl(roomId);
+    }
+  }
+
+  /// The serving contract for assets: bytes + strong ETag, `notModified` on a matching tag.
+  HubBytes readBytes(String path, {String? ifNoneMatch}) {
+    final p = (path.startsWith('/') ? path.substring(1) : path).split('?').first;
+    String? room;
+    if (p == 'v1/home/hero-image') {
+      room = null;
+    } else {
+      final m = RegExp(r'^v1/rooms/([^/]+)/hero-image$').firstMatch(p);
+      if (m == null) throw StateError('simulated Hub has no binary route $path');
+      room = m.group(1);
+    }
+    final b = _heroImages[room];
+    if (b == null) throw StateError('not_found');
+    final etag = '"${_hash(b)}"';
+    if (ifNoneMatch == etag) return HubBytes(notModified: true, etag: etag);
+    return HubBytes(bytes: b, contentType: 'image/png', etag: etag);
   }
 
   Future<void> dispose() async => _frames.close();
@@ -393,6 +499,12 @@ class SimulatedHubTransport implements HubTransport {
       String path, Map<String, dynamic> body) async {
     if (!_up) throw StateError('not authenticated');
     return _r.command(path, body);
+  }
+
+  @override
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) async {
+    if (!_up) throw StateError('not authenticated');
+    return _r.readBytes(path, ifNoneMatch: ifNoneMatch);
   }
 
   @override

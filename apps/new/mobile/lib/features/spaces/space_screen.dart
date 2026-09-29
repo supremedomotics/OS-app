@@ -44,7 +44,7 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
     }
     final watch = profile.skeleton == SurfaceSkeleton.watch;
     final phone = profile.skeleton == SurfaceSkeleton.phone;
-    final feel = spaceFeel(snap, space.id, commands: view.inFlight);
+    final feel = spaceFeel(snap, space.id, commands: view.inFlight, activations: view.activating);
     final settled = !feel.endsWith('…');
     final summary = spaceSummary(snap, space.id);
     final cond = spaceCondition(snap, space.id,
@@ -164,7 +164,7 @@ class _SpaceScreenState extends ConsumerState<SpaceScreen> {
                         value: active?.id,
                         pending: [
                           for (final e in xs)
-                            if (experienceStatus(e, snap, commands: view.inFlight, spaceId: space.id).phase ==
+                            if (experienceStatus(e, snap, commands: view.inFlight, activations: view.activating, spaceId: space.id).phase ==
                                 ExperiencePhase.becoming)
                               e.id
                         ].firstOrNull,

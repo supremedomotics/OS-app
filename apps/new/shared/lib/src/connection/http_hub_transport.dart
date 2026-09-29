@@ -76,6 +76,25 @@ class HttpHubTransport implements HubTransport {
   }
 
   @override
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) async {
+    if (!_authenticated) throw StateError('not authenticated');
+    final res = await _client.get(_routeUri(path), headers: {
+      ..._authHeaders,
+      if (ifNoneMatch != null) 'if-none-match': ifNoneMatch,
+    });
+    if (res.statusCode == 304) {
+      return HubBytes(notModified: true, etag: ifNoneMatch);
+    }
+    if (res.statusCode >= 400) {
+      throw StateError('read failed: ${res.statusCode}');
+    }
+    return HubBytes(
+        bytes: res.bodyBytes,
+        contentType: res.headers['content-type'],
+        etag: res.headers['etag']);
+  }
+
+  @override
   Future<Map<String, dynamic>> sendCommand(
       String path, Map<String, dynamic> body) async {
     if (!_authenticated) throw StateError('not authenticated');

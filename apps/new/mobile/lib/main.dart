@@ -318,27 +318,43 @@ final commandTrackerProvider = Provider<CommandTracker>((ref) {
   return tracker;
 });
 
+/// Setting an Experience: the Hub orchestrates; this only asks and follows the run (ADR 0102, D8).
+final experienceActivationsProvider = Provider<ExperienceActivations>((ref) {
+  final acts = ExperienceActivations(
+    post: ref.watch(hubSendProvider),
+    state: ref.watch(residenceStateProvider),
+  );
+  ref.onDispose(acts.dispose);
+  return acts;
+});
+
 /// What a screen renders: the confirmed residence + what is still in flight. Rebuilds when either
 /// changes; a screen holds no state of its own about a device.
 class ResidenceView {
   final ResidenceSnapshot snapshot;
   final List<CommandRecord> inFlight;
   final CommandTracker tracker;
-  const ResidenceView(this.snapshot, this.inFlight, this.tracker);
+  final ExperienceActivations activations;
+  const ResidenceView(this.snapshot, this.inFlight, this.tracker, this.activations);
+
+  List<Activation> get activating => activations.inFlight;
 }
 
 final residenceViewProvider = StreamProvider<ResidenceView>((ref) async* {
   final state = ref.watch(residenceStateProvider);
   final tracker = ref.watch(commandTrackerProvider);
+  final activations = ref.watch(experienceActivationsProvider);
   ResidenceView now() =>
-      ResidenceView(state.snapshot, tracker.inFlight, tracker);
+      ResidenceView(state.snapshot, tracker.inFlight, tracker, activations);
   yield now();
   final merged = StreamController<void>();
   final a = state.changes.listen((_) => merged.add(null));
   final b = tracker.updates.listen((_) => merged.add(null));
+  final c = activations.updates.listen((_) => merged.add(null));
   ref.onDispose(() {
     a.cancel();
     b.cancel();
+    c.cancel();
     merged.close();
   });
   await for (final _ in merged.stream) {

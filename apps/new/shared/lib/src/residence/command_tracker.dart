@@ -136,28 +136,10 @@ class CommandTracker {
     return best;
   }
 
-  /// Tracks several device effects that ONE Hub call produces (activating a scene): every step
-  /// gets its own record, expectation and confirmation from its own device's report; the single
-  /// [send] answers for all of them (rejected/unreachable fails them together). Steps whose
-  /// effect cannot be verified must not be passed.
-  List<CommandRecord> submitGroup(
-      List<({String deviceId, Map<String, dynamic> command})> steps,
-      Future<Map<String, dynamic>> Function() send) {
-    Future<Map<String, dynamic>>? shared;
-    Future<Map<String, dynamic>> once() => shared ??= send();
-    return [
-      for (final s in steps) _submit(s.deviceId, s.command, sender: (_, __) => once())
-    ];
-  }
-
   /// Returns the record immediately (phase `requested`); progress arrives on [updates].
   /// Throws [ArgumentError] for a command whose effect cannot be verified from device state —
   /// the UI must not offer such a control as confirmable.
-  CommandRecord submit(String deviceId, Map<String, dynamic> command) =>
-      _submit(deviceId, command);
-
-  CommandRecord _submit(String deviceId, Map<String, dynamic> command,
-      {CommandSender? sender}) {
+  CommandRecord submit(String deviceId, Map<String, dynamic> command) {
     final capability = command['capability'] as String?;
     final expectation =
         capability == null ? null : expectationOf(capability, command);
@@ -192,7 +174,7 @@ class CommandTracker {
     _facet[rec.id] = facet;
     _emit(rec);
     _timers[rec.id] = _schedule(timeout, () => _onTimeout(rec.id));
-    unawaited(_dispatch(rec.id, sender ?? _send));
+    unawaited(_dispatch(rec.id, _send));
     return rec;
   }
 

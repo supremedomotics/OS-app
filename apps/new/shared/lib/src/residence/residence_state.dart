@@ -15,6 +15,7 @@ import 'dart:async';
 import '../capabilities.dart';
 import '../experiences.dart';
 import '../semantic_model.dart';
+import 'scene_run.dart';
 
 enum DeviceReachability { online, offline, unavailable }
 
@@ -114,6 +115,12 @@ class ResidenceSnapshot {
 
   /// The residence's own name, as the Hub reports it (`/v1/home`). Empty until first read.
   final String name;
+
+  /// The Residence Asset (ADR 0102): a hub-relative path, or null when there is no photograph.
+  final String? heroImageUrl;
+
+  /// The latest Hub snapshot of each recent Experience run (most recent last). Explanation only.
+  final Map<String, SceneRun> runs;
   final List<Space> spaces;
   final Map<String, DeviceRecord> devices;
   final List<Experience> experiences;
@@ -125,6 +132,8 @@ class ResidenceSnapshot {
     this.loaded = false,
     this.reachable,
     this.name = '',
+    this.heroImageUrl,
+    this.runs = const {},
     this.spaces = const [],
     this.devices = const {},
     this.experiences = const [],
@@ -147,6 +156,8 @@ class ResidenceSnapshot {
     bool? loaded,
     bool? reachable,
     String? name,
+    String? heroImageUrl,
+    Map<String, SceneRun>? runs,
     List<Space>? spaces,
     Map<String, DeviceRecord>? devices,
     List<Experience>? experiences,
@@ -156,6 +167,8 @@ class ResidenceSnapshot {
         loaded: loaded ?? this.loaded,
         reachable: reachable ?? this.reachable,
         name: name ?? this.name,
+        heroImageUrl: heroImageUrl ?? this.heroImageUrl,
+        runs: runs ?? this.runs,
         spaces: spaces ?? this.spaces,
         devices: devices ?? this.devices,
         experiences: experiences ?? this.experiences,
@@ -272,7 +285,10 @@ class ResidenceState {
     _snapshot = ResidenceSnapshot(
       loaded: true,
       reachable: true,
-      name: home['name'] as String? ?? _snapshot.name,
+      name: (home['home'] is Map ? (home['home'] as Map)['name'] : null) as String? ??
+          _snapshot.name,
+      heroImageUrl: (home['home'] is Map ? (home['home'] as Map)['heroImageUrl'] : null) as String?,
+      runs: _snapshot.runs,
       spaces: _spaces(rooms.whereType<Map<String, dynamic>>(), devices.values),
       devices: devices,
       experiences: _experiences(scenesRes['scenes']),
@@ -285,8 +301,47 @@ class ResidenceState {
     if (!_disposed) _changes.add(_snapshot);
   }
 
+  final _runUpdates = StreamController<SceneRun>.broadcast();
+
+  /// Every Hub run snapshot as it arrives (`run` frames, and `refreshRun`).
+  Stream<SceneRun> get runUpdates => _runUpdates.stream;
+
+  void _applyRun(SceneRun run) {
+    final next = {..._snapshot.runs}..remove(run.runId);
+    next[run.runId] = run;
+    while (next.length > 20) {
+      next.remove(next.keys.first);
+    }
+    _snapshot = _snapshot._with(runs: next);
+    _emit();
+    if (!_disposed) _runUpdates.add(run);
+  }
+
+  /// Applies a run snapshot obtained another way (the activation response, `GET /runs/:id`).
+  void noteRun(Map<String, dynamic> json) {
+    final r = SceneRun.fromJson(json);
+    if (r != null && !_disposed) _applyRun(r);
+  }
+
+  /// Reads a run by id (it outlives the request and a reconnect).
+  Future<void> refreshRun(String runId) async {
+    try {
+      final res = await _get('v1/scenes/runs/$runId');
+      final run = res['run'];
+      if (run is Map<String, dynamic>) noteRun(run);
+    } catch (_) {
+      // Unreachable: the run stays as last seen.
+    }
+  }
+
   void _onFrame(Map<String, dynamic> f) {
-    if (_disposed || f['type'] != 'state') return;
+    if (_disposed) return;
+    if (f['type'] == 'run') {
+      final run = f['run'];
+      if (run is Map<String, dynamic>) noteRun(run);
+      return;
+    }
+    if (f['type'] != 'state') return;
     final id = f['deviceId'];
     final st = f['state'];
     final seq = f['seq'];
@@ -357,6 +412,11 @@ class ResidenceState {
             id: s['id'] as String,
             name: s['name'] as String,
             iconName: s['icon'] as String?,
+            description: s['description'] as String?,
+            phases: [
+              for (final ph in (s['phases'] as List<dynamic>? ?? const []))
+                if (ph is List) [for (final i in ph) if (i is num) i.toInt()]
+            ],
             spaceIds: [
               ...(s['roomIds'] as List<dynamic>? ?? const []).cast<String>(),
               if (s['roomId'] is String) s['roomId'] as String,
@@ -380,5 +440,6 @@ class ResidenceState {
     await _sub?.cancel();
     await _changes.close();
     await _reports.close();
+    await _runUpdates.close();
   }
 }

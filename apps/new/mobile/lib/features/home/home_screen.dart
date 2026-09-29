@@ -34,11 +34,11 @@ class HomeScreen extends ConsumerWidget {
         ? snap!.name
         : homes.activeHome?.displayName ?? '';
     final loaded = snap != null && snap.loaded;
-    final d = loaded ? describeHome(snap, hour: hour, commands: view!.inFlight) : null;
+    final d = loaded ? describeHome(snap, hour: hour, commands: view!.inFlight, activations: view.activating) : null;
     final settingWhole = loaded
         ? [
             for (final e in snap.experiences)
-              if (experienceStatus(e, snap, commands: view!.inFlight).phase ==
+              if (experienceStatus(e, snap, commands: view!.inFlight, activations: view.activating).phase ==
                   ExperiencePhase.becoming)
                 e
           ].firstOrNull
