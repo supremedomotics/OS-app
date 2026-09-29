@@ -216,6 +216,9 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const isProtocol = driver.protocols.length > 0;
   const isCasambi = driver.key === "supreme-casambi";
   const isCoolMaster = driver.key === "supreme-coolmaster";
+  // The single Extension Center card for this key stands for every commissioned camera (each is its
+  // own instance); per-camera URL/credentials/uninstall belong to the camera, not to this card.
+  const isRtspCamera = driver.key === "supreme-rtsp-camera";
 
   return (
     <div className="drv-detail">
@@ -302,7 +305,10 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
         {driver.installed && isCoolMaster && !showCoolMasterWizard && (
           <button disabled={busy} onClick={() => setShowCoolMasterWizard(true)}>Add gateway</button>
         )}
-        {driver.installed && (
+        {driver.installed && isRtspCamera && driver.updateAvailable && (
+          <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>
+        )}
+        {driver.installed && !isRtspCamera && (
           <>
             {driver.updateAvailable && <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>}
             {has("enable") && <button disabled={busy} onClick={() => run(() => setDriverEnabled(id, !driver.enabled), driver.enabled ? "Disabled" : "Enabled")}>{driver.enabled ? "Disable" : "Enable"}</button>}
@@ -320,7 +326,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
       </div>
 
       {/* Schema-generated config page */}
-      {driver.installed && schema.length > 0 && (
+      {driver.installed && schema.length > 0 && !isRtspCamera && (
         <div className="drv-config">
           <h4>Configuration</h4>
           {driver.protocols.includes("knx") && (

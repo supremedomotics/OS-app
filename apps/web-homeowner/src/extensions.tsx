@@ -26,6 +26,27 @@ const CATS: { id: Cat; label: string }[] = [
 
 const DEVICE_CATEGORIES = ["lighting", "climate", "shades", "media", "security", "energy"];
 
+// Each commissioned camera is its own installed instance of this driver (per-camera encrypted
+// credentials), but a homeowner should see ONE "RTSP Camera" extension; the cameras themselves
+// live in the Devices tab where they get a room like any other device.
+const SINGLE_CARD_KEYS = new Set(["supreme-rtsp-camera"]);
+
+/** Collapse the per-camera instances of a SINGLE_CARD_KEYS driver into one entry (an installed
+ * one when any exists, so the card reads "Active"), with the camera count alongside. */
+export function collapseSingleCardKeys(list: DriverEntry[]): { entry: DriverEntry; instances: number }[] {
+  const out: { entry: DriverEntry; instances: number }[] = [];
+  const seen = new Map<string, number>();
+  for (const d of list) {
+    if (!SINGLE_CARD_KEYS.has(d.key)) { out.push({ entry: d, instances: d.installed ? 1 : 0 }); continue; }
+    const at = seen.get(d.key);
+    if (at === undefined) { seen.set(d.key, out.length); out.push({ entry: d, instances: d.installed ? 1 : 0 }); continue; }
+    const cur = out[at]!;
+    cur.instances += d.installed ? 1 : 0;
+    if (!cur.entry.installed && d.installed) cur.entry = d;
+  }
+  return out;
+}
+
 /**
  * A prominent certification badge derived from the driver's registry `channel` — so homeowners can
  * tell at a glance whether an extension is vetted by Supreme, made by the community, or still
@@ -79,7 +100,7 @@ export function ExtensionCenter() {
     for (const c of CATS) m.set(c.id, (exts ?? []).filter((d) => matches(d, c.id)).length);
     return m;
   }, [exts]);
-  const shown = (exts ?? []).filter((d) => matches(d, cat));
+  const shown = collapseSingleCardKeys((exts ?? []).filter((d) => matches(d, cat)));
 
   if (matterDevicesOpen) {
     return <MatterBridgeDevicesPage onBack={() => setMatterDevicesOpen(false)} />;
@@ -105,7 +126,7 @@ export function ExtensionCenter() {
 
       <div className="ext-grid">
         <MatterBridgePanel onOpenDevices={() => setMatterDevicesOpen(true)} />
-        {shown.map((d) => {
+        {shown.map(({ entry: d, instances }) => {
           const s = statusLabel(d);
           const expanded = open === d.key;
           return (
@@ -125,6 +146,7 @@ export function ExtensionCenter() {
                     {d.updateAvailable && <span className="tag ok">Update available</span>}
                     {d.hubMinVersion && <span className="tag compat">hub ≥ v{d.hubMinVersion}</span>}
                     {d.dependencies.length > 0 && <span className="tag">{d.dependencies.length} dependenc{d.dependencies.length === 1 ? "y" : "ies"}</span>}
+                    {SINGLE_CARD_KEYS.has(d.key) && instances > 0 && <span className="tag soft">{instances} camera{instances === 1 ? "" : "s"}</span>}
                     {d.capabilities.length > 0 && <span className="tag soft">{d.capabilities.length} capabilit{d.capabilities.length === 1 ? "y" : "ies"}</span>}
                   </span>
                 </span>
