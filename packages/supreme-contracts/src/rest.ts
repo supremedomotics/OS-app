@@ -7,6 +7,7 @@ import {
   User,
 } from "@supreme/domain-model";
 import { z } from "zod";
+import { SceneView } from "./scene-runs.js";
 
 /**
  * REST contract for the Supreme API (`/v1`). Request/response schemas only — no
@@ -206,7 +207,7 @@ export type DeviceCapabilitiesRefreshResponse = z.infer<typeof DeviceCapabilitie
 
 // ── Scenes ───────────────────────────────────────────────────────────────────
 
-export const SceneList = z.object({ scenes: z.array(Scene) });
+export const SceneList = z.object({ scenes: z.array(SceneView) });
 export type SceneList = z.infer<typeof SceneList>;
 
 // ── Users ────────────────────────────────────────────────────────────────────

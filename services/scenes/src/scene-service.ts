@@ -33,6 +33,8 @@ export interface CreateSceneInput {
   ownerUserId?: UserId | null;
   aiGenerated?: boolean;
   steps: SceneStep[];
+  description?: string | null;
+  phases?: number[][];
   sourceDriverId?: string | null;
   sourceSceneId?: string | null;
   imported?: boolean;
@@ -77,6 +79,8 @@ export class SceneService {
       icon: input.icon ?? null,
       aiGenerated: input.aiGenerated ?? false,
       steps: input.steps,
+      description: input.description ?? null,
+      phases: input.phases ?? [],
       sourceDriverId: input.sourceDriverId ?? null,
       sourceSceneId: input.sourceSceneId ?? null,
       imported: input.imported ?? false,
@@ -128,6 +132,8 @@ export class SceneService {
       roomId: (patch.roomId ?? scene.roomId) as Scene["roomId"],
       icon: patch.icon ?? scene.icon,
       steps: patch.steps ?? scene.steps,
+      description: patch.description === undefined ? scene.description : patch.description,
+      phases: patch.phases ?? scene.phases,
     };
     await this.store.put(next);
     return next;

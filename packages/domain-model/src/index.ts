@@ -24,3 +24,4 @@ export * from "./keypad-events.js";
 export * from "./keypad-feedback.js";
 export * from "./keypad-mapping.js";
 export * from "./keypad-subscription.js";
+export * from "./state-expectation.js";

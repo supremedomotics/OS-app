@@ -1,4 +1,6 @@
 import type { BackendStateEvent } from "@supreme/integration-layer";
+import type { SceneRun } from "@supreme/contracts";
+import { SceneRunner } from "./scene-runs.js";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { IdentityService, type IIdentityStore, type ISessionStore, type IApiTokenStore, type IWebAuthnStore } from "@supreme/identity";
 import { SupremeError, type LoginResponse } from "@supreme/contracts";
@@ -369,6 +371,8 @@ export class AppContext {
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
   private readonly driverStateSubs = new Set<DriverStateSubscriber>();
+  private readonly sceneRunSubs = new Set<(run: SceneRun) => void>();
+  private sceneRunner: SceneRunner | null = null;
   /** Last value seen per event-sensor (deviceId:measure) for rising-edge detection. */
   private readonly lastEventValue = new Map<string, number>();
 
@@ -1092,6 +1096,30 @@ export class AppContext {
   onNotification(sub: NotificationSubscriber): () => void {
     this.notifySubs.add(sub);
     return () => this.notifySubs.delete(sub);
+  }
+  /** Hub-orchestrated Experience activation (ADR 0102). Built on first use so it can see the
+   * composed home, SIL and state feed; every snapshot is fanned out to `/v1/stream` clients. */
+  get sceneRuns(): SceneRunner {
+    if (!this.sceneRunner) {
+      this.sceneRunner = new SceneRunner({
+        roomOf: (id) => this.home.roomOf(id as DeviceId),
+        getDevice: async (id) => {
+          const d = await this.home.getDevice(id as DeviceId);
+          return d ? { status: d.status, state: d.state as Record<string, Record<string, unknown>> } : null;
+        },
+        command: (id, command) => this.sil.command(id as DeviceId, command),
+        onState: (sub) =>
+          this.onState((e) => sub({ deviceId: e.deviceId, capability: e.capability, state: e.state as unknown as Record<string, unknown> })),
+        publish: (run) => {
+          for (const sub of this.sceneRunSubs) sub(run);
+        },
+      });
+    }
+    return this.sceneRunner;
+  }
+  onSceneRun(sub: (run: SceneRun) => void): () => void {
+    this.sceneRunSubs.add(sub);
+    return () => this.sceneRunSubs.delete(sub);
   }
   onDriverState(sub: DriverStateSubscriber): () => void {
     this.driverStateSubs.add(sub);

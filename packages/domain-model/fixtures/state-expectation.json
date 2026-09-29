@@ -1,0 +1,555 @@
+{
+ "_doc": "Shared conformance fixture for expectationOf (TS: packages/domain-model/src/state-expectation.ts, Dart: apps/new/shared/lib/src/residence/state_expectation.dart). verifiable=false means expectationOf must return null.",
+ "cases": [
+  {
+   "capability": "onoff",
+   "command": {
+    "action": "on"
+   },
+   "states": [
+    {
+     "state": {
+      "on": true
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": false
+     },
+     "matches": false
+    },
+    {
+     "state": {},
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "onoff",
+   "command": {
+    "action": "off"
+   },
+   "states": [
+    {
+     "state": {
+      "on": false
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": true
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "onoff",
+   "command": {
+    "action": "toggle"
+   },
+   "states": [],
+   "verifiable": false
+  },
+  {
+   "capability": "brightness",
+   "command": {
+    "action": "on"
+   },
+   "states": [
+    {
+     "state": {
+      "on": true,
+      "level": 50
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": false,
+      "level": 0
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "brightness",
+   "command": {
+    "action": "off"
+   },
+   "states": [
+    {
+     "state": {
+      "on": false,
+      "level": 0
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": true,
+      "level": 10
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "brightness",
+   "command": {
+    "action": "set",
+    "level": 40
+   },
+   "states": [
+    {
+     "state": {
+      "on": true,
+      "level": 40
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": true,
+      "level": 42
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": true,
+      "level": 43
+     },
+     "matches": false
+    },
+    {
+     "state": {
+      "on": false,
+      "level": 40
+     },
+     "matches": false
+    },
+    {
+     "state": {
+      "on": true
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "brightness",
+   "command": {
+    "action": "set",
+    "level": 0
+   },
+   "states": [
+    {
+     "state": {
+      "on": false,
+      "level": 30
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": true,
+      "level": 0
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "on": true,
+      "level": 30
+     },
+     "matches": false
+    },
+    {
+     "state": {
+      "on": true
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "position",
+   "command": {
+    "action": "set",
+    "position": 40
+   },
+   "states": [
+    {
+     "state": {
+      "position": 40,
+      "moving": false
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "position": 41,
+      "moving": false
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "position": 43,
+      "moving": false
+     },
+     "matches": false
+    },
+    {
+     "state": {
+      "position": 40,
+      "moving": true
+     },
+     "matches": false
+    },
+    {
+     "state": {},
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "position",
+   "command": {
+    "action": "open"
+   },
+   "states": [
+    {
+     "state": {
+      "position": 100,
+      "moving": false
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "position": 98
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "position": 90
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "position",
+   "command": {
+    "action": "close"
+   },
+   "states": [
+    {
+     "state": {
+      "position": 0,
+      "moving": false
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "position": 2
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "position": 10
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "position",
+   "command": {
+    "action": "stop"
+   },
+   "states": [],
+   "verifiable": false
+  },
+  {
+   "capability": "temperature",
+   "command": {
+    "targetC": 22.0
+   },
+   "states": [
+    {
+     "state": {
+      "targetC": 22.0,
+      "mode": "auto"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "targetC": 22.2
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "targetC": 22.5
+     },
+     "matches": false
+    },
+    {
+     "state": {
+      "targetC": null
+     },
+     "matches": false
+    },
+    {
+     "state": {},
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "temperature",
+   "command": {
+    "mode": "off"
+   },
+   "states": [
+    {
+     "state": {
+      "mode": "off"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "mode": "auto"
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "temperature",
+   "command": {
+    "targetC": 21,
+    "mode": "heat"
+   },
+   "states": [
+    {
+     "state": {
+      "targetC": 21,
+      "mode": "heat"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "targetC": 21,
+      "mode": "cool"
+     },
+     "matches": false
+    },
+    {
+     "state": {
+      "targetC": 20,
+      "mode": "heat"
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "temperature",
+   "command": {},
+   "states": [],
+   "verifiable": false
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "play"
+   },
+   "states": [
+    {
+     "state": {
+      "playback": "playing"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "playback": "paused"
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "pause"
+   },
+   "states": [
+    {
+     "state": {
+      "playback": "paused"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "playback": "stopped"
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "stop"
+   },
+   "states": [
+    {
+     "state": {
+      "playback": "stopped"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "playback": "idle"
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "playback": "playing"
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "volume",
+    "volume": 30
+   },
+   "states": [
+    {
+     "state": {
+      "volume": 30
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "volume": 31
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "volume": 32
+     },
+     "matches": false
+    },
+    {
+     "state": {},
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "mute"
+   },
+   "states": [
+    {
+     "state": {
+      "muted": true
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "muted": false
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "unmute"
+   },
+   "states": [
+    {
+     "state": {
+      "muted": false
+     },
+     "matches": true
+    },
+    {
+     "state": {
+      "muted": true
+     },
+     "matches": false
+    }
+   ],
+   "verifiable": true
+  },
+  {
+   "capability": "media",
+   "command": {
+    "action": "next"
+   },
+   "states": [],
+   "verifiable": false
+  },
+  {
+   "capability": "lock",
+   "command": {
+    "action": "lock"
+   },
+   "states": [],
+   "verifiable": false
+  },
+  {
+   "capability": "color",
+   "command": {
+    "kelvin": 2700
+   },
+   "states": [],
+   "verifiable": false
+  }
+ ]
+}

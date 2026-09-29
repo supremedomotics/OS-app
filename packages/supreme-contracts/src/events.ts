@@ -1,5 +1,6 @@
 import { CapabilityCommand, CapabilityState } from "@supreme/domain-model";
 import { z } from "zod";
+import { RunFrame } from "./scene-runs.js";
 
 /**
  * Realtime contract for WSS `/v1/stream` (§6, §3.2).
@@ -123,6 +124,7 @@ export const ServerFrame = z.discriminatedUnion("type", [
   PongFrame,
   ErrorFrame,
   DriverStateFrame,
+  RunFrame,
 ]);
 export type ServerFrame = z.infer<typeof ServerFrame>;
 

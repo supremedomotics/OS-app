@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Room } from "@supreme/domain-model";
 
 /**
@@ -120,6 +121,20 @@ export interface StoredHeroImage {
 
 export const heroImageKey = (roomId: string): string => `room_hero:${roomId}`;
 export const heroImagePath = (roomId: string): string => `/v1/rooms/${roomId}/hero-image`;
+
+/** § ADR 0102 — the Residence Asset: same storage (homeConfig), same serving contract, one slot. */
+export const HOME_HERO_KEY = "home_hero_image";
+export const HOME_HERO_PATH = "/v1/home/hero-image";
+
+/** Strong content hash of the stored bytes: the ETag, and the `?v=` that versions the URL so a
+ * changed photograph is a new URL and an unchanged one can be cached forever. */
+export function heroImageHash(image: { dataBase64: string }): string {
+  return createHash("sha256").update(image.dataBase64).digest("hex").slice(0, 32);
+}
+
+/** A hub-relative URL that changes exactly when the picture does. */
+export const versionedHeroPath = (path: string, image: { dataBase64: string }): string =>
+  `${path}?v=${heroImageHash(image)}`;
 
 const MAX_IMAGE_BYTES = 5_000_000; // 5 MB — generous for a 1200×800 JPEG, bounds config growth.
 

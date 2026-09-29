@@ -83,6 +83,18 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
     })();
   });
 
+  // Hub-orchestrated Experience runs: the full snapshot on every change (idempotent). Scoped like
+  // state — a client hears about a run touching a space it subscribed to (or "*") and may view.
+  const unsubRun = ctx.onSceneRun((run) => {
+    void (async () => {
+      const rooms = new Set<string>([...run.spaceIds, ...run.steps.map((s) => s.roomId).filter((r): r is string => r !== null)]);
+      const scoped = subscribedRooms.has("*") || [...rooms].some((r) => subscribedRooms.has(r));
+      if (!scoped) return;
+      if (!(await can(ctx, user, "scene", run.sceneId as never, "view"))) return;
+      send(socket, { type: "run", run, ts: new Date().toISOString() });
+    })();
+  });
+
   const unsubNotify = ctx.onNotification((n) => {
     if (n.userId !== null && n.userId !== user.id) return;
     send(socket, {
@@ -117,6 +129,7 @@ async function handleConnection(ctx: AppContext, socket: WebSocket, url: string)
   socket.on("close", () => {
     unsubState();
     unsubNotify();
+    unsubRun();
     unsubDriverState();
     // Best-effort presence drop; the TTL is the real safety net if this never runs.
     void ctx.presence.markOffline(presenceHomeId, user.id);

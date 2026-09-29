@@ -153,6 +153,7 @@ export class IdentityService {
       tier: "signature",
       masterUserId: userId,
       createdAt: now,
+      heroImageUrl: null,
     };
 
     await this.store.putHome(home);
