@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { UnifiProtectSection } from "./unifi-protect-section";
 import { Button, StatusDot } from "@supreme/aureon-web";
 import { useLive, type DriverConnectionState } from "./live.js";
 import {
@@ -564,6 +565,7 @@ function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => vo
   const [cameras, setCameras] = useState<RtspDiscoveryResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const unifiConsole = cameras.find((c) => c.unifiProtectConsole);
 
   const scan = useCallback(async () => {
     setStatus("scanning");
@@ -613,7 +615,9 @@ function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => vo
                   {cam.onvifAvailable ? "ONVIF" : "RTSP"}
                   {cam.onvifAvailable && cam.rtspAvailable ? " + RTSP" : ""}
                 </div>
-                {openId !== cam.id ? (
+                {cam.unifiProtectConsole && !cam.rtspAvailable ? (
+                  <p className="muted" style={{ margin: 0 }}>UniFi Protect console detected — use the UniFi Protect option below.</p>
+                ) : openId !== cam.id ? (
                   <button type="button" className="link" onClick={() => setOpenId(cam.id)}>Add…</button>
                 ) : (
                   <RtspAddCameraForm
@@ -630,6 +634,7 @@ function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => vo
           </div>
         </>
       )}
+      <UnifiProtectSection detectedHost={unifiConsole?.ipAddress ?? null} onDone={onCommissioned} />
       <RtspManualAddForm onDone={onCommissioned} />
     </div>
   );

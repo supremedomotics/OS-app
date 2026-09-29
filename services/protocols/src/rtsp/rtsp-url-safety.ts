@@ -125,3 +125,38 @@ export async function validateOnvifEndpointUrl(raw: string): Promise<RtspUrlVali
   }
   return { ok: true, reason: null, host, port, resolvedAddress: resolved };
 }
+
+/**
+ * UniFi Protect console address (§ UniFi Protect mode): a bare host/IP, `host:port` or
+ * `https://host[:port]` entered by the installer. Same local-network-only SSRF guard as the RTSP
+ * and ONVIF validators — the RESOLVED address is what callers must connect to. Path/query/userinfo
+ * are ignored; the port defaults to 443.
+ */
+export async function validateConsoleHost(raw: string): Promise<RtspUrlValidation> {
+  const trimmed = raw.trim();
+  const fail = (reason: string, host: string | null = null, port = 0): RtspUrlValidation => ({ ok: false, reason, host, port, resolvedAddress: null });
+  if (!trimmed) return fail("Enter the UniFi console address.");
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) && !/^https:\/\//i.test(trimmed)) return fail("The console address must be a plain address or start with https://.");
+  let url: URL;
+  try {
+    url = new URL(/^https:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return fail("That console address isn't valid.");
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (!host) return fail("That console address isn't valid.");
+  if (net.isIP(host) === 6) return fail("IPv6 console addresses are not yet supported.", host);
+  const port = url.port ? Number(url.port) : 443;
+  if (net.isIP(host) === 4) {
+    if (!isPrivateOrLoopbackV4(host)) return fail("Only local-network console addresses are allowed.", host, port);
+    return { ok: true, reason: null, host, port, resolvedAddress: host };
+  }
+  let resolved: string;
+  try {
+    resolved = (await dns.promises.lookup(host, { family: 4 })).address;
+  } catch {
+    return fail("The console address could not be resolved.", host, port);
+  }
+  if (!isPrivateOrLoopbackV4(resolved)) return fail("Only local-network console addresses are allowed.", host, port);
+  return { ok: true, reason: null, host, port, resolvedAddress: resolved };
+}

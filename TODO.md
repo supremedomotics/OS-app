@@ -7,6 +7,13 @@
 
 ## Critical
 
+### UniFi Protect mode — real-console verification
+- [ ] Verify GET/POST `/proxy/protect/integration/v1/cameras[/{id}/rtsps-stream]` shapes and the
+  camera `marketName` field against a real console (currently unverified, tolerant parsing).
+- [ ] Consider moving the token-bearing RTSPS URL out of `Device.metadata.streamUrl` (needs a
+  CameraService secret-source hook; today it matches manual-add exposure).
+- [ ] Re-baseline the full-/24 discovery duration now that two more ports are probed.
+
 ### Matter Controller Extension — Phase 4 (Subscriptions + Capability Adapters)
 - **Description:** Phase 3 (generic cluster engine) is done — `services/protocols/src/
   matter-controller/cluster-engine.ts` performs real numeric-id (or real-runtime-name)

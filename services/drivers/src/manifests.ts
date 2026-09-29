@@ -637,6 +637,9 @@ export const FIRST_PARTY_MANIFESTS: DriverManifest[] = [
       { key: "onvifEndpoint", label: "ONVIF device endpoint", type: "text", required: false, secret: false },
       { key: "onvifUuid", label: "ONVIF UUID", type: "text", required: false, secret: false },
       { key: "subStreamUrl", label: "Substream URL (credential-free)", type: "text", required: false, secret: false },
+      // UniFi Protect mode: the console's own camera id is the identity used to dedupe
+      // re-commissioning. The console API key is deliberately NOT a config field — never stored.
+      { key: "unifiCameraId", label: "UniFi Protect camera id", type: "text", required: false, secret: false },
     ],
   }),
 ];

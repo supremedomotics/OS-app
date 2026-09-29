@@ -138,3 +138,26 @@ describe("mergeSignals — § STEP 6 dedup", () => {
     expect(results[0]!.manufacturer).toBeNull(); // hardware scope maps to model, not manufacturer here
   });
 });
+
+describe("UniFi Protect console labeling (§ UniFi Protect)", () => {
+  it("labels a host that only answers 7441/7447 as the console, not a working camera", () => {
+    const [r] = mergeSignals([{ method: "rtsp-probe", ipAddress: "192.168.0.1", ports: [7447, 7441] }]);
+    expect(r!.unifiProtectConsole).toBe(true);
+    expect(r!.name).toBe("UniFi Protect console");
+    expect(r!.rtspAvailable).toBe(false);
+    expect(r!.rtspPorts).toEqual([]);
+  });
+
+  it("a real RTSP port alongside 7441 stays a camera but is flagged", () => {
+    const [r] = mergeSignals([{ method: "rtsp-probe", ipAddress: "192.168.0.9", ports: [554, 7441] }]);
+    expect(r!.rtspAvailable).toBe(true);
+    expect(r!.rtspPorts).toEqual([554]);
+    expect(r!.unifiProtectConsole).toBe(true);
+  });
+
+  it("ordinary RTSP hits are unaffected", () => {
+    const [r] = mergeSignals([{ method: "rtsp-probe", ipAddress: "192.168.1.5", ports: [554] }]);
+    expect(r!.unifiProtectConsole).toBeUndefined();
+    expect(r!.rtspAvailable).toBe(true);
+  });
+});

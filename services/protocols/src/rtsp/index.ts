@@ -7,3 +7,4 @@ export * from "./rtsp-identity.js";
 export * from "./rtsp-handshake.js";
 export * from "./rtsp-url-safety.js";
 export * from "./rtsp-camera-service.js";
+export * from "./unifi-protect.js";
