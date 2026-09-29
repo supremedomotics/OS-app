@@ -23,7 +23,7 @@ echo "=== SupremeOS native-linux security audit ==="
 echo ""
 
 echo "--- Service user ---"
-for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" supreme-nats; do
+for svc in "${SUPREME_NODE_SERVICES[@]}" "${SUPREME_PY_SERVICES[@]}" supreme-nats supreme-streamer; do
   unit_file="/etc/systemd/system/${svc}.service"
   if [ -r "$unit_file" ]; then
     user="$(grep -m1 '^User=' "$unit_file" | cut -d= -f2)"

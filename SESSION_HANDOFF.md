@@ -4,6 +4,37 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Native Linux — cameras work out of the box (go2rtc ensured on every update)
+
+Branch `native-streamer-out-of-box`. NOT tested on a real hub or real systemd (sandbox only:
+`bash -n` + `tests/deployment-regression.test.sh`).
+
+**Changed**: go2rtc pin (`GO2RTC_VERSION`/`GO2RTC_LINUX_AMD64_SHA256`/`SUPREME_STREAMER_BIN`) moved
+from install.sh into `lib/common.sh` with one implementation, `streamer_install_binary` (used by
+install.sh's `install_streamer`, still fatal on failure there; phase validator unchanged) and
+`streamer_ensure_for_update` / `streamer_restart_for_update` (update.sh; warn-only, never rolls
+back). Unit is always re-rendered on update. New `rc_check_streamer` (WARNING-only) in the
+SUPREME SERVICES stage and `run_runtime_verification`. `supreme-streamer` added to logs, restore,
+factory-reset, recover, support bundle, security-audit. Regression tests added.
+
+**Decision**: go2rtc is optional; failures are warnings, not rollback triggers. An installed binary
+is judged by sha256 against the pin (a different hand-installed version is replaced on update).
+
+**Hub pickup**: `git pull` on main, then `sudo infra/native-linux/update.sh --no-verify`.
+
+**Real-hub findings (2026-09-29) and open items**
+- (a) `MemoryDenyWriteExecute=yes` made go2rtc v1.9.14 SIGSEGV on start; `RestrictAddressFamilies`
+  needs `AF_NETLINK` or every WebRTC session fails. Both found by `systemd-run` isolation; fixed in the unit template.
+- (b) UniFi `?enableSrtp` yields scrambled H.264 (black then green, MEDIA_ERR_DECODE) since go2rtc
+  doesn't decrypt SRTP; stripped in `stream-gateway.ts`; verified on a real console (`rtsps://` without the param and `rtspx://` both play clean).
+- (c) OPEN: stream base URL is `https://localhost/stream` on LAN-only installs (SUPREME_DOMAIN=localhost). The web app rebases it; mobile/other clients would still get localhost. Follow-up: derive from request host or make relative. Not done.
+- (d) OPEN: UniFi camera token is returned by camera APIs because CameraService's credential resolver only injects userinfo; tokenized URLs can't move to the secret store without a CameraService change.
+- (e) OPEN: UniFi Protect API shapes only partly verified (list worked on the real console, devices showed Ubiquiti / UVC G5 Dome Ultra); rtsps-stream GET/POST behavior and quality selection unconfirmed.
+- (f) OPEN: the UniFi option dedupes only its own additions; a camera added by hand then via UniFi can duplicate.
+- (g) OPEN: no `ffmpeg` on the hub, so no JPEG snapshots (Snapshot "Not configured") and no audio transcoding (live audio did play).
+- (h) OPEN: go2rtc v1.9.14 once panicked (`aac.RTPToADTS slice bounds out of range`) during HLS/AAC conversion; not reproduced.
+- (i) Extension Center shows one RTSP Camera card but each camera is its own driver instance (credentials per instance).
+
 ## Session: RTSP Camera Extension — UniFi Protect mode + console port probe
 
 User-approved UniFi-specific feature (overrides the "no manufacturer-specific drivers" rule for

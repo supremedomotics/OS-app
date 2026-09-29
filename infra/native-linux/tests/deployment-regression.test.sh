@@ -1036,6 +1036,49 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════════════
+section "go2rtc / supreme-streamer out-of-box (shared install + update step)"
+# ═══════════════════════════════════════════════════════════════════════════════════════
+_unit="${SCRIPT_DIR}/systemd/supreme-streamer.service"
+if grep -v '^[[:space:]]*#' "$_unit" | grep -q 'MemoryDenyWriteExecute'; then
+  fail "streamer unit does not set MemoryDenyWriteExecute (go2rtc v1.9.14 SIGSEGVs with it)"
+else
+  pass "streamer unit does not set MemoryDenyWriteExecute (go2rtc v1.9.14 SIGSEGVs with it)"
+fi
+if grep -v '^[[:space:]]*#' "$_unit" | grep -q '^RestrictAddressFamilies=.*AF_NETLINK'; then
+  pass "streamer unit RestrictAddressFamilies includes AF_NETLINK (WebRTC needs netlink)"
+else
+  fail "streamer unit RestrictAddressFamilies includes AF_NETLINK (WebRTC needs netlink)"
+fi
+grep -q 'streamer_ensure_for_update' "${SCRIPT_DIR}/update.sh" \
+  && pass "update.sh calls the shared streamer_ensure_for_update step" \
+  || fail "update.sh calls the shared streamer_ensure_for_update step"
+grep -q 'streamer_restart_for_update' "${SCRIPT_DIR}/update.sh" \
+  && pass "update.sh restarts supreme-streamer (restart_services)" \
+  || fail "update.sh restarts supreme-streamer (restart_services)"
+grep -q 'streamer_install_binary' "${SCRIPT_DIR}/install.sh" \
+  && pass "install.sh uses the shared streamer_install_binary" \
+  || fail "install.sh uses the shared streamer_install_binary"
+_hash_hits="$(grep -rEl '[0-9a-f]{64}' "${SCRIPT_DIR}"/*.sh "${SCRIPT_DIR}"/lib/*.sh | xargs grep -l '32d616af226bd731' 2>/dev/null | tr '\n' ' ')"
+assert_eq "pinned go2rtc hash appears only in lib/common.sh" "$_hash_hits" "${SCRIPT_DIR}/lib/common.sh "
+assert_eq "pinned go2rtc hash literal appears exactly once" "$(grep -rho '32d616af226bd731' "${SCRIPT_DIR}"/*.sh "${SCRIPT_DIR}"/lib/*.sh | wc -l | tr -d ' ')" "1"
+# Behavioral: checksum mismatch / offline-without-path must fail non-fatally and never install.
+(
+  export SUPREME_STREAMER_BIN="${SCRATCH}/go2rtc-bin" SUPREME_DATA_DIR="${SCRATCH}/sdata" SUPREME_OFFLINE=1
+  unset SUPREME_GO2RTC_BIN_PATH
+  streamer_install_binary && echo UNEXPECTED_OK
+  echo "err=${STREAMER_INSTALL_ERROR}"
+  echo "bad" > "${SCRATCH}/bad-go2rtc"
+  SUPREME_GO2RTC_BIN_PATH="${SCRATCH}/bad-go2rtc" streamer_install_binary && echo UNEXPECTED_OK2
+  echo "err2=${STREAMER_INSTALL_ERROR}"
+  [ -e "$SUPREME_STREAMER_BIN" ] && echo INSTALLED_BAD
+) > "${SCRATCH}/streamer-policy.out" 2>/dev/null
+grep -q 'UNEXPECTED_OK\|INSTALLED_BAD' "${SCRATCH}/streamer-policy.out" \
+  && fail "streamer_install_binary refuses offline-without-path and checksum mismatch, installs nothing" "$(cat "${SCRATCH}/streamer-policy.out")" \
+  || pass "streamer_install_binary refuses offline-without-path and checksum mismatch, installs nothing"
+grep -q 'err2=.*checksum mismatch' "${SCRATCH}/streamer-policy.out" \
+  && pass "checksum mismatch reports a clear error" || fail "checksum mismatch reports a clear error" "$(cat "${SCRATCH}/streamer-policy.out")"
+
+# ═══════════════════════════════════════════════════════════════════════════════════════
 section "Summary"
 # ═══════════════════════════════════════════════════════════════════════════════════════
 echo ""

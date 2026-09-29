@@ -162,6 +162,9 @@ detect_and_repair() {
     for svc in "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
       systemctl_restart "$svc" 2>/dev/null || note_issue "Could not restart ${svc} — see: journalctl -u ${svc} -n 50"
     done
+    if [ -x "$SUPREME_STREAMER_BIN" ]; then
+      systemctl restart supreme-streamer 2>/dev/null || note_issue "Could not restart supreme-streamer — see: journalctl -u supreme-streamer -n 50"
+    fi
     note_fixed "Services restarted"
   else
     log_warn "systemd is not live in this environment — cannot restart real services here."

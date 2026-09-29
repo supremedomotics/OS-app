@@ -80,6 +80,9 @@ restart_services() {
   # can never accidentally leave NATS broken (self-heals it if it was) — see requirement:
   # "update.sh must not accidentally break NATS".
   nats_ensure_ready
+  # go2rtc before the gateway: it forgets dynamically registered streams on restart and the
+  # gateway re-registers them on the next camera page load, so the end state stays consistent.
+  streamer_restart_for_update
   systemctl_restart supreme-commissioning
   systemctl_restart supreme-lan
   systemctl_restart supreme-gateway
@@ -127,6 +130,7 @@ rollback_update() {
   fi
 
   render_config
+  streamer_ensure_for_update
   restart_services
   wait_for_health
 

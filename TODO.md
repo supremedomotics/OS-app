@@ -7,6 +7,16 @@
 
 ## Critical
 
+### Cameras out of the box — open items after native go2rtc ensure-step (2026-09-29)
+- [x] update.sh installs/repairs go2rtc + unit, verifies it (warning-only). Needs a real-hub run to confirm.
+- [ ] Stream base URL is `https://localhost/stream` on LAN-only installs; only the web app rebases it. Derive from request host or make relative for mobile/other clients.
+- [ ] UniFi token returned by camera APIs; needs a CameraService change to move tokenized URLs to the secret store.
+- [ ] Verify UniFi Protect rtsps-stream GET/POST and quality selection on a real console.
+- [ ] UniFi dedupe only covers its own additions (hand-added + UniFi camera can duplicate).
+- [ ] No ffmpeg on hub: no JPEG snapshots, no audio transcoding.
+- [ ] go2rtc v1.9.14 `aac.RTPToADTS` panic seen once during HLS/AAC conversion; not reproduced.
+- [ ] Extension Center shows one RTSP Camera card but credentials are per driver instance.
+
 ### UniFi Protect mode — real-console verification
 - [ ] Verify GET/POST `/proxy/protect/integration/v1/cameras[/{id}/rtsps-stream]` shapes and the
   camera `marketName` field against a real console (currently unverified, tolerant parsing).

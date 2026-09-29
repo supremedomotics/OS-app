@@ -57,19 +57,9 @@ fi
 CADDY_VERSION="2.8.4"
 CADDY_DEB_SHA512="b2f101291ef1a9359717a6349b90ac44d43e3087b87f975f3d4eb5eb22d6bd8af0b1a3a85d7aa9a9b8ba2ad0fbc2ad165c8631c57e0dbf4ca3df986ee728e205"
 
-# § go2rtc (the `streamer` service — the one backend component in this repo that isn't
-# SupremeOS's own code, see infra/hub-compose/docker-compose.yml's `streamer` service,
-# which runs the upstream `alexxit/go2rtc:latest` image unmodified). DISCLOSED SUPPLY-CHAIN
-# CAVEAT: unlike NATS/Caddy above, go2rtc's GitHub releases do not publish a checksums.txt/
-# SHA256SUMS manifest (confirmed by inspecting the v1.9.14 release's own asset list during
-# this work) — there is no independent published hash to cross-check. The hash below was
-# computed directly from the real go2rtc_linux_amd64 binary downloaded from that exact
-# release during this work (trust-on-first-use pinning, not invented), which is a weaker
-# guarantee than NATS/Caddy's cross-checked manifest and is disclosed as such rather than
-# presented as equivalent.
-GO2RTC_VERSION="1.9.14"
-GO2RTC_LINUX_AMD64_SHA256="32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6"
-SUPREME_STREAMER_BIN="${SUPREME_STREAMER_BIN:-/usr/bin/go2rtc}"
+# § go2rtc pin (GO2RTC_VERSION / GO2RTC_LINUX_AMD64_SHA256 / SUPREME_STREAMER_BIN) and the
+# checksum-verified installer live in lib/common.sh (streamer_install_binary) — install.sh and
+# update.sh share that one implementation.
 
 # ── Answers ─────────────────────────────────────────────────────────────────────────────
 # Every field .env.example documents, plus the two purely-deployment questions Docker never
@@ -491,31 +481,9 @@ install_caddy() {
 }
 
 validate_phase_install_streamer() {
-  [ -x "$SUPREME_STREAMER_BIN" ]
-}
-
-install_streamer() {
   log_step "Installing go2rtc ${GO2RTC_VERSION} (camera/RTSP-to-WebRTC streaming bridge)"
-  if [ -x "$SUPREME_STREAMER_BIN" ]; then
-    log_info "go2rtc already installed at ${SUPREME_STREAMER_BIN} — skipping."
-    return
-  fi
-  local tmp
-  tmp="$(mktemp -d)"
-  if [ "$SUPREME_OFFLINE" = "1" ]; then
-    local bin_path="${SUPREME_GO2RTC_BIN_PATH:?SUPREME_OFFLINE=1 requires SUPREME_GO2RTC_BIN_PATH pointing at a local go2rtc_linux_amd64 binary (no network download in offline mode)}"
-    [ -r "$bin_path" ] || die "SUPREME_GO2RTC_BIN_PATH=${bin_path} is not readable."
-    cp "$bin_path" "${tmp}/go2rtc"
-  else
-    curl -fsSL "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_amd64" -o "${tmp}/go2rtc"
-  fi
-  echo "${GO2RTC_LINUX_AMD64_SHA256}  ${tmp}/go2rtc" | sha256sum -c - \
-    || die "go2rtc binary checksum mismatch — refusing to install a binary that doesn't match the pinned hash (see this script's GO2RTC_* constants for the disclosed supply-chain caveat)."
-  install -o root -g root -m 0755 "${tmp}/go2rtc" "$SUPREME_STREAMER_BIN"
-  rm -rf "$tmp"
-  mkdir -p "${SUPREME_DATA_DIR}/streamer"
-  chown "${SUPREME_USER}:${SUPREME_GROUP}" "${SUPREME_DATA_DIR}/streamer"
-  log_info "go2rtc ${GO2RTC_VERSION} installed and checksum-verified at ${SUPREME_STREAMER_BIN}."
+  # A fresh install keeps the original contract: no verified go2rtc binary is fatal here.
+  streamer_install_binary || die "go2rtc install failed: ${STREAMER_INSTALL_ERROR:-unknown error}"
 }
 
 validate_phase_install_ai_venv() {

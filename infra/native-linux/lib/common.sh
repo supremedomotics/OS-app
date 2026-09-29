@@ -296,6 +296,94 @@ systemctl_enable_now() {
   systemctl enable --now "$unit" || die "Failed to enable/start ${unit} — see: journalctl -u ${unit} -n 50"
 }
 
+# § go2rtc (the `streamer` service — the one backend component in this repo that isn't
+# SupremeOS's own code, see infra/hub-compose/docker-compose.yml's `streamer` service,
+# which runs the upstream `alexxit/go2rtc:latest` image unmodified). DISCLOSED SUPPLY-CHAIN
+# CAVEAT: unlike NATS/Caddy above, go2rtc's GitHub releases do not publish a checksums.txt/
+# SHA256SUMS manifest (confirmed by inspecting the v1.9.14 release's own asset list during
+# this work) — there is no independent published hash to cross-check. The hash below was
+# computed directly from the real go2rtc_linux_amd64 binary downloaded from that exact
+# release during this work (trust-on-first-use pinning, not invented), which is a weaker
+# guarantee than NATS/Caddy's cross-checked manifest and is disclosed as such rather than
+# presented as equivalent.
+GO2RTC_VERSION="1.9.14"
+GO2RTC_LINUX_AMD64_SHA256="32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6"
+SUPREME_STREAMER_BIN="${SUPREME_STREAMER_BIN:-/usr/bin/go2rtc}"
+
+# Prints/sets STREAMER_INSTALL_ERROR and returns 1 on any failure (never dies) so install.sh can
+# treat it as fatal while update.sh treats it as a loud warning. A checksum mismatch never
+# installs the binary. Idempotent: an installed binary whose hash already equals the pin is kept.
+streamer_install_binary() {
+  STREAMER_INSTALL_ERROR=""
+  local tmp actual
+  actual="$(sha256sum "$SUPREME_STREAMER_BIN" 2>/dev/null | cut -d' ' -f1)"
+  if [ "$actual" = "$GO2RTC_LINUX_AMD64_SHA256" ]; then
+    log_info "go2rtc ${GO2RTC_VERSION} already installed at ${SUPREME_STREAMER_BIN} (hash matches pin) — skipping download."
+  else
+    [ -e "$SUPREME_STREAMER_BIN" ] && log_info "${SUPREME_STREAMER_BIN} is not the pinned go2rtc ${GO2RTC_VERSION} — replacing it."
+    tmp="$(mktemp -d)"
+    if [ "${SUPREME_OFFLINE:-0}" = "1" ]; then
+      if [ -z "${SUPREME_GO2RTC_BIN_PATH:-}" ]; then
+        STREAMER_INSTALL_ERROR="SUPREME_OFFLINE=1 requires SUPREME_GO2RTC_BIN_PATH pointing at a local go2rtc_linux_amd64 binary (no network download in offline mode)"
+      elif [ ! -r "$SUPREME_GO2RTC_BIN_PATH" ]; then
+        STREAMER_INSTALL_ERROR="SUPREME_GO2RTC_BIN_PATH=${SUPREME_GO2RTC_BIN_PATH} is not readable"
+      else
+        cp "$SUPREME_GO2RTC_BIN_PATH" "${tmp}/go2rtc" || STREAMER_INSTALL_ERROR="could not copy ${SUPREME_GO2RTC_BIN_PATH}"
+      fi
+    else
+      curl -fsSL "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_amd64" -o "${tmp}/go2rtc" \
+        || STREAMER_INSTALL_ERROR="could not download go2rtc ${GO2RTC_VERSION} from GitHub (no network?)"
+    fi
+    if [ -z "$STREAMER_INSTALL_ERROR" ]; then
+      echo "${GO2RTC_LINUX_AMD64_SHA256}  ${tmp}/go2rtc" | sha256sum -c - >/dev/null 2>&1 \
+        || STREAMER_INSTALL_ERROR="go2rtc binary checksum mismatch — refusing to install a binary that doesn't match the pinned hash (see the GO2RTC_* constants in lib/common.sh for the disclosed supply-chain caveat)"
+    fi
+    if [ -z "$STREAMER_INSTALL_ERROR" ]; then
+      install -o root -g root -m 0755 "${tmp}/go2rtc" "$SUPREME_STREAMER_BIN" \
+        || STREAMER_INSTALL_ERROR="could not install to ${SUPREME_STREAMER_BIN}"
+    fi
+    rm -rf "$tmp"
+    [ -z "$STREAMER_INSTALL_ERROR" ] || return 1
+    log_info "go2rtc ${GO2RTC_VERSION} installed and checksum-verified at ${SUPREME_STREAMER_BIN}."
+  fi
+  mkdir -p "${SUPREME_DATA_DIR}/streamer"
+  chown "${SUPREME_USER}:${SUPREME_GROUP}" "${SUPREME_DATA_DIR}/streamer" 2>/dev/null || true
+  return 0
+}
+
+# update.sh's idempotent go2rtc step (§ cameras work out of the box on hubs installed before
+# go2rtc existed): ensure binary, ALWAYS re-render the unit (repairs older/hand-edited units),
+# daemon-reload, enable. go2rtc is optional (Caddy's /stream/* just 502s without it), so every
+# failure here is a loud warning and never aborts or rolls back the update. Always returns 0.
+streamer_ensure_for_update() {
+  local template="${SCRIPT_DIR}/systemd/supreme-streamer.service"
+  if ! streamer_install_binary; then
+    log_warn "go2rtc is NOT installed: ${STREAMER_INSTALL_ERROR}"
+    log_warn "Cameras will NOT play live video until go2rtc is installed. Fix: ensure network access to github.com and re-run 'sudo ./update.sh', or for offline installs set SUPREME_GO2RTC_BIN_PATH to a go2rtc_linux_amd64 v${GO2RTC_VERSION} binary."
+  fi
+  render_template "$template" /etc/systemd/system/supreme-streamer.service \
+    || log_warn "Could not render supreme-streamer.service from ${template}."
+  if systemd_is_live; then
+    systemctl daemon-reload || log_warn "systemctl daemon-reload failed."
+    if [ -x "$SUPREME_STREAMER_BIN" ]; then
+      systemctl enable supreme-streamer >/dev/null 2>&1 || log_warn "Could not enable supreme-streamer — see: journalctl -u supreme-streamer -n 50"
+    fi
+  fi
+  return 0
+}
+
+# Restart (not just start) so a re-rendered unit takes effect. Warn-only, like the rest of the
+# streamer policy. Called by update.sh's restart_services BEFORE the gateway restart.
+streamer_restart_for_update() {
+  [ -x "$SUPREME_STREAMER_BIN" ] || return 0
+  if ! systemd_is_live; then
+    log_warn "systemd is not live in this environment — skipping 'systemctl restart supreme-streamer'."
+    return 0
+  fi
+  systemctl restart supreme-streamer || log_warn "Could not (re)start supreme-streamer — cameras won't play live. See: journalctl -u supreme-streamer -n 50"
+  return 0
+}
+
 # Same guard for update.sh's restart-an-already-installed-unit case.
 systemctl_restart() {
   local unit="$1"
@@ -773,6 +861,36 @@ rc_check_service() {
   fi
 }
 
+# go2rtc is optional (cameras only), so every outcome here is PASS/WARNING/N-A, never FAIL —
+# it must not trigger update.sh's rollback.
+rc_check_streamer() {
+  if [ ! -x "$SUPREME_STREAMER_BIN" ]; then
+    rc_warn "go2rtc is not installed at ${SUPREME_STREAMER_BIN} — cameras will NOT play live. Re-run 'sudo ./update.sh' with network access (or set SUPREME_GO2RTC_BIN_PATH for offline)."
+    return
+  fi
+  if ! systemd_is_live; then
+    rc_not_evaluated "supreme-streamer (go2rtc) — systemd is not live in this environment"
+    return
+  fi
+  local i up=0 restarts
+  for i in 1 2 3 4 5 6; do
+    : "$i"
+    if systemctl is-active --quiet supreme-streamer && curl -fsS --max-time 2 "http://127.0.0.1:1984/api" >/dev/null 2>&1; then up=1; break; fi
+    sleep 1
+  done
+  if [ "$up" != "1" ]; then
+    rc_warn "supreme-streamer (go2rtc) is not active/answering on 127.0.0.1:1984 — cameras will NOT play live. See: journalctl -u supreme-streamer -n 50"
+    return
+  fi
+  sleep 3
+  restarts="$(systemctl show -p NRestarts --value supreme-streamer 2>/dev/null || echo 0)"
+  if systemctl is-active --quiet supreme-streamer && [ "${restarts:-0}" = "0" ]; then
+    rc_pass "supreme-streamer (go2rtc) active, answering on 127.0.0.1:1984, not restarting"
+  else
+    rc_warn "supreme-streamer (go2rtc) is crash-looping (NRestarts=${restarts:-?}) — cameras will NOT play reliably. See: journalctl -u supreme-streamer -n 50"
+  fi
+}
+
 rc_check_tcp() {
   local label="$1" host="$2" port="$3"
   if command_exists nc; then
@@ -902,6 +1020,7 @@ run_runtime_verification() {
   for svc in "${SUPREME_NODE_SERVICES[@]}"; do rc_check_service "$svc"; done
   for svc in "${SUPREME_PY_SERVICES[@]}"; do rc_check_service "$svc"; done
   rc_check_service "supreme-nats"
+  rc_check_streamer
 
   echo ""
   echo "--- Runtime dependencies (loopback — matches this deployment's binding policy) ---"
@@ -990,6 +1109,7 @@ _stage_supreme_services() {
   rc_check_service supreme-gateway
   rc_check_service supreme-lan
   rc_check_service supreme-commissioning
+  rc_check_streamer
 }
 _stage_protocols() {
   # § Bug fix — /v1/drivers/diagnostics requires an authenticated user (services/gateway/

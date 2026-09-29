@@ -73,13 +73,13 @@ else
 fi
 
 SVC="${WORK}/service-status.txt"
-for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}" supreme-nats "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
+for svc in "${SUPREME_THIRDPARTY_SERVICES[@]}" supreme-nats supreme-streamer "${SUPREME_PY_SERVICES[@]}" "${SUPREME_NODE_SERVICES[@]}"; do
   collect "$SVC" "systemctl status ${svc}" systemctl status "$svc" --no-pager -l
 done
 
 LOGS_DIR="${WORK}/logs"
 mkdir -p "$LOGS_DIR"
-for svc in supreme-gateway supreme-lan supreme-commissioning supreme-homeassistant; do
+for svc in supreme-gateway supreme-lan supreme-commissioning supreme-streamer supreme-homeassistant; do
   if command_exists journalctl; then
     journalctl -u "$svc" -n 500 --no-pager > "${LOGS_DIR}/${svc}.log" 2>&1 || echo "(unavailable)" > "${LOGS_DIR}/${svc}.log"
   fi
