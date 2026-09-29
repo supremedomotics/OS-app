@@ -143,6 +143,15 @@ class ConnectionManager {
     return t.get(path);
   }
 
+  /// Passthrough for [HubTransport.getBytes] (Hub-served pictures), same guard as [get].
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) {
+    final t = _active;
+    if (t == null || !t.isConnected) {
+      throw StateError('No active Hub connection ($_state)');
+    }
+    return t.getBytes(path, ifNoneMatch: ifNoneMatch);
+  }
+
   void _emit(ConnectionStatus status, {String? error}) {
     _state = HubConnectionState(status, lastError: error);
     _controller.add(_state);

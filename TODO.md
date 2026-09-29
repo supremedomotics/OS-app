@@ -7,6 +7,34 @@
 
 ## Critical
 
+### Phase 3.5 physical-driver gate — OPEN (hardware) + driver audit
+- Run KNX switch, KNX shade and Sonos/HEOS/AVR lifecycles against REAL hardware (nothing physical verified).
+- Audit every legacy driver for provenance (commanded-as-state, hardcoded `moving:false`: Shelly, Lutron,
+  Casambi, apply.ts, home-service seed; CoolMaster optimistic); decide single-GA temperature; Sonos G3.
+- Completed: provenance model + KNX fix + regression tests (see the gate document).
+
+### apps/new — Phase 3 follow-ups (Phase 3 closed, see `docs/design/phase-3-closure-report.md`)
+- **Completed in Phase 3 (moved, not deleted):** Hub-orchestrated Experience activation; Dart contract parity +
+  simulator conformance + drift gate; Touch Panel off hardcoded state; Devices inventory + Device Sheet;
+  authenticated room photographs; per-capability deadlines; stream subscription fix.
+- **Open:** per-driver device-report proof (live test is mock-backend); panel commissioning (real Hub
+  transport for `PanelResidence`); residence photograph on Home/Experiences; photograph disk cache; subscription
+  ack frame + `rev`/resume; per-space permission on scoped activation; persistent runs; broker binary
+  transport verification; Touch Panel fakes still present in provisioning (`panel-demo-1`, test signature).
+
+### SupremeOS Flutter migration (apps/new) — Phase 1C onward
+- **Description:** Phases 0, 1A (SurfaceProfile), 1B (Golden Master design foundation) and 1C (navigation shell, glyphs, Control layer) are done and verified — see
+  `SESSION_HANDOFF.md`. Phase 2 closed — see `docs/design/phase-2-closure-report.md` (entry criteria for 3). Remaining, in order: ~~2~~ core homeowner surfaces (Home, Spaces, Space, Control, Experiences,
+  Settings) on shared control renderers (switch · value · step · options · act) with unsupported capabilities not drawn;
+  **3** backend contract gate → device-level Residence State read model, command tracker (requested → pending → confirmed
+  | failed, confirmation only from authoritative device state), freshness timestamps, derived Experience state (needs
+  per-scene semantic targets — verify `/v1/scenes`), replace `HubHomeStateRepository`'s room-domain model behind a facade;
+  **4** Hub panel identity/commissioning API + installer authentication via the existing pairing/PKI architecture, panel
+  recovery (Hub + local + backup), TV focus model, watch, foldable hinge; **5** hardening + visual regression against
+  `docs/design/golden-master/`.
+- **Blockers / open:** touchpanel fakes (`panel-demo-1`, fixed areas, test signature, timer-based "confirmation") must be
+  replaced, not extended; no platform TV signal; owner decisions D1–D8 (floor-panel nav, watch depth, Homes/Remote Access placement, onboarding vs pairing, Shape, add/remove Hub, incoming call, Experience orchestration) in `docs/design/golden-master-implementation-map.md`.
+
 ### Cameras out of the box — open items after native go2rtc ensure-step (2026-09-29)
 - [x] update.sh installs/repairs go2rtc + unit, verifies it (warning-only). Needs a real-hub run to confirm.
 - [ ] Stream base URL is `https://localhost/stream` on LAN-only installs; only the web app rebases it. Derive from request host or make relative for mobile/other clients.

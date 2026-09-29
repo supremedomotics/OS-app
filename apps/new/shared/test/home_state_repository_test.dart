@@ -7,6 +7,10 @@ import 'package:supreme_os_core/supreme_os_core.dart';
 /// (`services/gateway/src/routes/{home,devices,scenes}.ts`, §Phase12.8) — scoped per-instance
 /// so two instances can represent two completely independent Hubs (state isolation).
 class _FakeHubTransport implements HubTransport {
+  @override
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) async =>
+      throw UnsupportedError('fake');
+
   final Map<String, Map<String, dynamic>> getResponses;
   final List<MapEntry<String, Map<String, dynamic>>> commandsReceived = [];
   bool _connected = true;

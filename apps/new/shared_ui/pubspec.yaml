@@ -26,3 +26,15 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    # SupremeOS-10 Golden Master families (both SIL OFL 1.1 — see assets/fonts/README.md).
+    - family: SOSSerif
+      fonts:
+        - asset: assets/fonts/CormorantGaramond-Light.ttf
+          weight: 300
+    - family: SOSSans
+      fonts:
+        - asset: assets/fonts/Jost-Light.ttf
+          weight: 300
+        - asset: assets/fonts/Jost-Regular.ttf
+          weight: 400

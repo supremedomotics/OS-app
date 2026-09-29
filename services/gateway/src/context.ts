@@ -1,4 +1,6 @@
 import type { BackendStateEvent } from "@supreme/integration-layer";
+import type { SceneRun } from "@supreme/contracts";
+import { SceneRunner } from "./scene-runs.js";
 import { MockAdapter, SupremeIntegrationLayer } from "@supreme/integration-layer";
 import { IdentityService, type IIdentityStore, type ISessionStore, type IApiTokenStore, type IWebAuthnStore } from "@supreme/identity";
 import { SupremeError, type LoginResponse } from "@supreme/contracts";
@@ -369,6 +371,8 @@ export class AppContext {
   private readonly stateSubs = new Set<StateSubscriber>();
   private readonly notifySubs = new Set<NotificationSubscriber>();
   private readonly driverStateSubs = new Set<DriverStateSubscriber>();
+  private readonly sceneRunSubs = new Set<(run: SceneRun) => void>();
+  private sceneRunner: SceneRunner | null = null;
   /** Last value seen per event-sensor (deviceId:measure) for rising-edge detection. */
   private readonly lastEventValue = new Map<string, number>();
 
@@ -962,6 +966,17 @@ export class AppContext {
     // on a physical keypad press, the break is upstream (driver → native adapter →
     // SIL), not in this gateway at all.
     this.recordFeedbackHop(this.lastBackendState, event);
+    // § State provenance — ONLY an observed report is the device's state. A value a driver merely
+    // wrote (`commanded`), inferred (`assumed`) or cannot vouch for (`unknown`) is forwarded to
+    // clients labelled as such (so they can refuse to treat it as state or as confirmation) but is
+    // never persisted as the device's state and never feeds automations, voice, HomeKit, analytics
+    // or keypad feedback: each of those would otherwise act on something no device said.
+    // A legacy driver that declares nothing is treated as observed (an audit item, see
+    // `StateProvenance`).
+    if ((event.provenance ?? "observed") !== "observed") {
+      await this.bus.publish(subjects.deviceState(this.homeId), event);
+      return;
+    }
     await this.home.applyState(event.deviceId, event.state);
     // § Decisive KNX Feedback Diagnostic, hop 2 — recorded only once `applyState()`
     // above has actually returned, so a nonzero snapshot here is proof the state
@@ -1093,6 +1108,35 @@ export class AppContext {
     this.notifySubs.add(sub);
     return () => this.notifySubs.delete(sub);
   }
+  /** Hub-orchestrated Experience activation (ADR 0102). Built on first use so it can see the
+   * composed home, SIL and state feed; every snapshot is fanned out to `/v1/stream` clients. */
+  get sceneRuns(): SceneRunner {
+    if (!this.sceneRunner) {
+      this.sceneRunner = new SceneRunner({
+        roomOf: (id) => this.home.roomOf(id as DeviceId),
+        getDevice: async (id) => {
+          const d = await this.home.getDevice(id as DeviceId);
+          return d ? { status: d.status, state: d.state as Record<string, Record<string, unknown>> } : null;
+        },
+        command: (id, command) => this.sil.command(id as DeviceId, command),
+        onState: (sub) =>
+          this.onState((e) => {
+            // A run step is confirmed by a device's own report, never by a value that was only
+            // commanded / assumed (see StateProvenance).
+            if ((e.provenance ?? "observed") !== "observed") return;
+            sub({ deviceId: e.deviceId, capability: e.capability, state: e.state as unknown as Record<string, unknown> });
+          }),
+        publish: (run) => {
+          for (const sub of this.sceneRunSubs) sub(run);
+        },
+      });
+    }
+    return this.sceneRunner;
+  }
+  onSceneRun(sub: (run: SceneRun) => void): () => void {
+    this.sceneRunSubs.add(sub);
+    return () => this.sceneRunSubs.delete(sub);
+  }
   onDriverState(sub: DriverStateSubscriber): () => void {
     this.driverStateSubs.add(sub);
     return () => this.driverStateSubs.delete(sub);
@@ -1164,6 +1208,8 @@ export class AppContext {
       getState: (deviceId, capability) => this.sil.getState(deviceId, capability),
       onState: (listener) =>
         this.sil.subscribe((e) => {
+          // Apple Home must not be told a value only a command asked for (see StateProvenance).
+          if ((e.provenance ?? "observed") !== "observed") return;
           console.log(`matter-bridge TRACE F->G: SIL state event — ts=${Date.now()} device.id=${e.deviceId} capability=${e.capability} state=${JSON.stringify(e.state)}`);
           listener({ deviceId: e.deviceId, capability: e.capability, state: e.state });
         }),

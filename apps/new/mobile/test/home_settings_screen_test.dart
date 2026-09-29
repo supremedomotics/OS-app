@@ -8,7 +8,11 @@ import 'package:supreme_mobile_next/features/settings/paired_home_controller.dar
 /// imported by or run against `apps/new/touchpanel` (§20's exclusion is structural: this
 /// screen doesn't exist in that package at all).
 void main() {
-  Widget wrap(Widget child) => MaterialApp(home: AdaptiveScope(child: child));
+  Widget wrap(Widget child) => MaterialApp(
+        theme: buildSupremeTheme(),
+        builder: (c, page) => SurfaceScope(child: AdaptiveScope(child: page!)),
+        home: Material(color: SupremeColorScheme.night, child: child),
+      );
 
   testWidgets(
       'shows "no Home paired yet" and an Add Home action on first install (§23)',
@@ -67,9 +71,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.activeHomeId, 'hub-a');
-    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    expect(find.text('Selected'), findsOneWidget);
 
-    await tester.tap(find.text('Home B'));
+    await tester.tap(find.text('Use Home B'));
     await tester.pumpAndSettle();
 
     expect(controller.activeHomeId, 'hub-b');
@@ -90,7 +94,7 @@ void main() {
     )));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.tap(find.text('Rename').first);
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'Sea View Residence');
     await tester.tap(find.text('Save'));
@@ -115,7 +119,7 @@ void main() {
     )));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.tap(find.text('Rename').first);
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '   ');
     await tester.tap(find.text('Save'));
@@ -143,7 +147,7 @@ void main() {
     )));
     await tester.pumpAndSettle();
 
-    final deleteButtons = find.byIcon(Icons.delete_outline);
+    final deleteButtons = find.text('Forget');
     await tester.tap(deleteButtons.first);
     await tester.pumpAndSettle();
     expect(find.text('Forget this Home?'), findsOneWidget);

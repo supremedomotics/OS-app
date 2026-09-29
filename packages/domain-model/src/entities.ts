@@ -24,6 +24,10 @@ export const Home = z.object({
   tier: z.enum(["essential", "signature", "estate"]).default("signature"),
   masterUserId: UserId,
   createdAt: z.string().datetime(),
+  /** § ADR 0102 — the Residence Asset: a hub-relative path served by `GET /v1/home/hero-image`.
+   * Null when the residence has no photograph; never an external URL. Derived by the gateway from
+   * the stored asset, not persisted on the home row. */
+  heroImageUrl: z.string().min(1).nullable().default(null),
 });
 export type Home = z.infer<typeof Home>;
 
@@ -134,6 +138,13 @@ export const Scene = z.object({
   icon: z.string().nullable(),
   aiGenerated: z.boolean().default(false),
   steps: z.array(SceneStep),
+  /** One authored line about what the Experience is ("Soft, warm light and quiet music"). Null when
+   * nobody wrote one; clients then say only what the steps show. */
+  description: z.string().nullable().default(null),
+  /** Choreography: ordered groups of step INDICES. A phase starts only when every step of the
+   * previous phase has concluded (confirmed, failed or timed out) as decided from device state —
+   * never by a timer. Steps in no phase start at once. Empty = everything at once. */
+  phases: z.array(z.array(z.number().int().nonnegative())).default([]),
   /** § ADR 0101 Part 1 — Scene Runtime. Null/false for every scene authored the existing way
    * (capture-current-state). Only set when a scene was discovered from an external system
    * (e.g. an ETS project's DPT 17/18 scene group addresses) — never fabricated for a

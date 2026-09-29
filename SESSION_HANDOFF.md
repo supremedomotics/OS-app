@@ -4,6 +4,118 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: Phase 3.5 — state provenance (Option A) after the physical-driver gate found G1
+
+Full record: `docs/design/phase-3.5-physical-validation-gate.md`. **Physical-driver validation is NOT done** (no
+hardware reachable); this session fixed the architecture the gate exposed. `StateProvenance`
+(observed/commanded/assumed/unknown) on `BackendStateEvent` and the stream frame; Hub persists/feeds consumers
+only for `observed`; KNX drivers stop publishing commands as state, observe only a declared status address
+(command address never), report `feedback:"none"` when none, and emit `moving: null` (unknown); client ignores
+non-observed frames and gives a declared no-feedback control the `sentOnly` outcome. Open: audit every other
+(legacy) driver; hardware runs; single-GA temperature; Sonos G3. Phase 4 NOT started.
+
+## Session: apps/new Phase 3 — Hub-orchestrated Experiences, drift gate, live-gateway lifecycle, Devices
+
+Full record: `docs/design/phase-3-closure-report.md` (completed / deferred / risks / contract gaps / Phase 4
+entry). Branch `ccr-9def36f2-4lfmxo`.
+
+**Changed:** Hub runs Experiences (`scene-runs.ts`, 202 + `SceneRun`, `run` frames, phases, per-capability
+deadlines, supersession); client only asks and follows (`ExperienceActivations`); Touch Panel now reads a
+`PanelResidence` (it never used `HomeStateRepository` — it used hardcoded state and a timer "confirmation");
+drift gate (`wire-shapes.e2e.test.ts` ↔ `wire_conformance_test.dart`); live-gateway test
+(`services/gateway/tools/test-hub.ts` + `live_hub_lifecycle_test.dart`); per-capability command deadlines
+shared with the Hub; Devices inventory + Device Sheet; authenticated photographs (`HeroImageStore`).
+
+**Architecture decisions:** D8 Hub-owned orchestration; confirmation only from device reports via one shared
+`expectationOf` (TS + Dart, fixture-pinned); one stream↔state wiring (`ResidenceStreamLink`) used by every
+client; subscription is confirmed by the Hub's `pong` (no new frame); stacked layers are opaque.
+
+**Bug found by the live test (fixed):** no client ever sent the stream `subscribe`; on a real Hub
+`ResidenceState` would have gone silent after its snapshot. A speculative server-side "buffer early frames"
+change was tried, shown unnecessary (the test passed without it) and **reverted**.
+
+**Known issues / blockers:** live test uses the gateway's mock backend — no physical driver proof; runs are
+in memory; no per-space permission check on scoped activation; remote (broker) binary transport unverified;
+Touch Panel cannot reach a real Hub until commissioning; Home has no residence photograph yet; phone-landscape
+Devices and the Touch Panel screens were not visually re-verified.
+
+**Next:** see Phase 4 entry criteria in the closure report; run `pnpm install && pnpm -r build` before
+`dart test` so the live test executes (it skips loudly otherwise).
+
+## Session: SupremeOS Flutter migration — Phase 0 audit, Phase 1A (SurfaceProfile), Phase 1B (design foundation)
+
+Migration of the approved SupremeOS-10 HTML prototype into the production Flutter generation
+(`apps/new/{shared,shared_ui,mobile,touchpanel}`). Decisions made with the owner (final):
+`apps/new` is the production Flutter target; `apps/mobile` and `packages/aureon-flutter` are
+FROZEN (kept building, not extended, not deleted); homeowner Flutter UI does **not render
+unsupported capabilities** (Pro may show them); floor scope is kept; the Hub may gain a panel
+identity/commissioning API; the Golden Master wins for homeowner visual expression; navigation is
+Home · Spaces · Control · Experiences · Settings (old Now/More to be classified, not blindly deleted).
+
+**Phase 1A — one authoritative SurfaceProfile (verified).**
+`surfaceProfileOf(SurfaceInputs)` (`shared/lib/src/design/surface_profile.dart`, pure Dart; authority
+role > input > fold > dimensions, ports `surface.js`) + `SurfaceScope` (`shared_ui`, the only reader of raw
+`MediaQuery` surface inputs). `AdaptiveScope`/`AdaptiveProfile`/`DeviceClass`/`PanelPresentationMode` remain as a
+compatibility adapter over it. Dart `CapabilityKind` gained `remote` + `display`; a parity test reads
+`packages/domain-model/src/capabilities.ts`. A static authority test fails if anything but `SurfaceScope` reads raw
+surface inputs (planted-rogue negative control). Floor scope has its own `floorPanel` role.
+
+**Phase 2 — homeowner surfaces on the canonical Residence State (verified by test run + captures reviewed).**
+`shared`: `ResidenceState` (read model of the Hub's rooms/devices/scenes, hydrated by REST, kept current by `/v1/stream`
+deltas, stale frames dropped), `CommandTracker` (requested → pending → confirmed|failed; confirmation ONLY from a device
+report satisfying `expectationOf`; timeouts; group calls for scene activation), derived `experienceStatus`, homeowner
+language (`describeHome`, `spaceCondition`, `spaceFeel`), `room_controls`/`control_systems` (capability-driven),
+`experience_preview`, `room_tone`, and `SimulatedResidence` (transport-level, real REST/stream shapes, fault injection;
+opt-in via `--dart-define=SUPREME_SIMULATED_RESIDENCE=true`). `shared_ui`: control grammar, `SpacePlate`, `ToneSurface`,
+`SupremePage`/`PageGeometry`. `mobile`: Home, Spaces, Space, Control (scoped layer), Experiences; old `RoomScreen` and its
+ambiguity heuristic removed. Tests: shared 344, shared_ui 87, mobile 119 (+7 capture, skipped without CAPTURE_DIR),
+touchpanel 23. Closure: Settings rebuilt (`settings_screen.dart`, hub sub-page, real Motion preference); contract gate + ADR 0102 written; see `docs/design/phase-2-closure-report.md`. Known gaps: no photography (Hub `heroImageUrl` relative
+paths need an authenticated fetch) so plates are tonal; no occupancy/protection/sun line (no contract); Control has no
+instruments/Devices/device sheet; watch glance, TV focus, residence-panel map, panel identity are Phase 4; a space's share of
+an Experience is client-orchestrated (no Hub route, D8); Shape/authoring undecided (D5); capture harness 'watch' case fails.
+
+**Phase 1C — shell (verified by test run, visual check vs Golden Master captures).** Inspection pass over
+photos/tone/sky/spaces/settings/devices/panelui/formfactor/onboarding/icons recorded in
+`docs/design/golden-master-implementation-map.md` (conflicts C1–C5, ambiguities A1–A5, decisions D1–D8; no IA change).
+New: `shellNavigationFor(SurfaceProfile)` (pure, `shared`), `SupremeShell`/`SupremeLayer`/`PresenceMark`/`SupremeGlyph`
+(`shared_ui`), mobile `RootShell` = Home · Spaces · Control · Experiences · Settings; Control is a layer (sheet/drawer/
+hinge-docked), content is an honest empty state. `Now`/`More` removed (Now was an empty placeholder; More's rows live
+in Settings). Tests: shared 289, shared_ui 86, mobile 92, touchpanel 23 pass. Known gaps: no panel role wired in any
+app root; no `isTelevision` signal; touchpanel still fakes production behaviour; no backdrop blur; wordmark is a
+synthesized w600 (Jost has no static 600 bundled); Control content pending Phase 2/3. Open owner decisions D1–D8 in the map.
+
+**Phase 1B — design foundation (verified).** Inspected the Golden Master's stylesheet, page modules and rendered
+it (captures in `docs/design/golden-master/`); derived tokens are in `docs/design/supremeos-golden-master-tokens.md`.
+Palette is night `#08090A` / ivory / brass (not the old gold-on-black); fonts are Cormorant Garamond Light + Jost
+(both OFL, bundled in `shared_ui/assets/fonts`); motion timings and the `settle` curve are tokens; the theme is
+Golden Master and disables Material ink. Legacy token names remain, mapped to Golden Master values. Legacy
+`headline/title/display` sizes are unchanged (34 dp titles overflow the 3" panel tests); new UI uses `name` /
+`pageTitle` / `hero`. `docs/responsive-interaction-grammar.md` was added to the repo (it was only in the prototype archive).
+
+**Tests (actually run, this session):** `flutter analyze` + tests — shared 262 pass (analyze: 3 pre-existing infos in
+`test/hub_discovery_test.dart`), shared_ui 39 pass / analyze clean, mobile 90 pass / clean, touchpanel 23 pass / clean.
+One existing test changed: `touchpanel/test/room_experience_test.dart` now advances the mock Hub delay explicitly — it
+had only passed because Material's ink-splash animation kept `pumpAndSettle` running (the theme no longer has ripples).
+NOT run: Android/iOS builds, gateway/TS tests (no TS changed), visual comparison of Flutter against the Golden Master
+(no Flutter screens rebuilt yet).
+
+**Known issues / gaps found (not fixed):**
+- `touchpanel` still fakes production behaviour: `panel-demo-1`, a fixed area list, the `'test-hub-signature-v1'`
+  literal, and `ExperienceActivation`'s 400 ms timer that stands in for Hub confirmation. All violate the no-fake-production
+  rule; replaced in Phase 3/4 (real command tracker, Hub panel API).
+- `isTelevision` is never true: no platform bridge yet, so a real Android TV is classified by size.
+- No app root passes a panel role / physical size into `SurfaceScope` yet (waits for the Hub panel API).
+- Golden Master modules still to inspect: `photos.js`, `tone.js`, `sky.js`, `spaces.js`, `settings.js`, `devices.js`,
+  `panelui.js`, `formfactor.js`, `hubs.js`, onboarding, and the `SupremeGlyph` icon set (must be ported; Material icons are not the Golden Master's).
+- Cormorant Garamond static instance is ~770 KB; subset if app size matters.
+
+**Architecture decisions:** see the two bullets above (one SurfaceProfile; Golden Master tokens with legacy aliases).
+
+**Recommended next steps:** Phase 1C navigation shell (Home · Spaces · Control · Experiences · Settings; phone bar with
+ringed centre Control, tablet rail, desktop pills + "Residence control", watch list) — first port the glyph set and inspect
+`formfactor.js`; then Phase 2 core surfaces; Phase 3 starts with the backend contract gate (see the table at the end of
+`docs/design/supremeos-golden-master-tokens.md`).
+
 ## Session: Native Linux — cameras work out of the box (go2rtc ensured on every update)
 
 Branch `native-streamer-out-of-box`. NOT tested on a real hub or real systemd (sandbox only:

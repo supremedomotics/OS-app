@@ -36,6 +36,7 @@ const MIGRATIONS = [
   "0026_username.sql",
   "0027_driver_instances.sql",
   "0028_keypad_mappings.sql",
+  "0029_scene_choreography.sql",
 ] as const;
 
 /**

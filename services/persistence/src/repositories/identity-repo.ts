@@ -38,6 +38,7 @@ export function rowToHome(r: HomeRow): Home {
     tier: r.tier as Home["tier"],
     masterUserId: r.master_user_id as UserId,
     createdAt: r.created_at,
+    heroImageUrl: null,
   };
 }
 

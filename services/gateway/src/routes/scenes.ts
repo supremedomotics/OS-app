@@ -1,18 +1,31 @@
 import {
+  ActivateSceneRequest,
   CreateSceneRequest,
   SupremeError,
   UpdateSceneRequest,
   type ActivateSceneResponse,
   type SceneList,
   type SceneResponse,
+  type SceneRunResponse,
+  type SceneView,
 } from "@supreme/contracts";
-import type { SceneId } from "@supreme/domain-model";
+import type { Scene, SceneId } from "@supreme/domain-model";
 import { validateSchedule, ScheduleError } from "@supreme/scenes";
 import type { FastifyInstance } from "fastify";
 import { authenticate, can, enforce } from "../auth.js";
 import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+
+/** A scene plus what the Hub derives from its steps: every space a step acts in. */
+async function sceneView(ctx: AppContext, scene: Scene): Promise<SceneView> {
+  const rooms = new Set<string>();
+  for (const st of scene.steps) {
+    const room = await ctx.home.roomOf(st.deviceId);
+    if (room) rooms.add(room);
+  }
+  return { ...scene, roomIds: [...rooms] };
+}
 
 /** Scene CRUD + activation (§10). */
 export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -23,7 +36,7 @@ export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void
       const user = await authenticateMobileOrUser(ctx, req);
       const all = await ctx.scenes.list();
       const visible = [];
-      for (const s of all) if (await can(ctx, user, "scene", s.id, "view")) visible.push(s);
+      for (const s of all) if (await can(ctx, user, "scene", s.id, "view")) visible.push(await sceneView(ctx, s));
       const body: SceneList = { scenes: visible };
       reply.send(body);
     } catch (err) {
@@ -73,6 +86,20 @@ export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void
     }
   });
 
+  // Observe a run by id (it outlives the request and a client reconnect).
+  app.get<{ Params: { runId: string } }>("/v1/scenes/runs/:runId", async (req, reply) => {
+    try {
+      const user = await authenticateMobileOrUser(ctx, req);
+      const run = ctx.sceneRuns.get(req.params.runId);
+      if (!run) throw new SupremeError("not_found", "run not found");
+      await enforce(ctx, user, "scene", run.sceneId as SceneId, "view");
+      const body: SceneRunResponse = { run };
+      reply.send(body);
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
   app.post<{ Params: { id: string } }>("/v1/scenes/:id/activate", async (req, reply) => {
     try {
       // §Phase12.4 — "invoke Experience" for a paired Mobile.
@@ -80,8 +107,15 @@ export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void
       const id = req.params.id as SceneId;
       await ctx.scenes.get(id);
       await enforce(ctx, user, "scene", id, "control");
-      const steps = await ctx.scenes.activate(id);
-      const body: ActivateSceneResponse = { activated: true, steps };
+      const scene = await ctx.scenes.get(id);
+      const { spaceIds } = ActivateSceneRequest.parse(req.body ?? {});
+      const run = await ctx.sceneRuns.start(scene, spaceIds ?? []);
+      const body: ActivateSceneResponse = {
+        activated: true,
+        steps: run.steps.filter((s) => s.state !== "skipped").length,
+        run,
+      };
+      reply.code(202);
       reply.send(body);
     } catch (err) {
       sendError(reply, err);

@@ -1,0 +1,6 @@
+tags:
+  # Drives the real gateway (services/gateway/tools/test-hub.ts). Runs with the rest of the suite;
+  # skips loudly when the gateway's node dependencies are not installed. `dart test -t live-hub`
+  # runs only these.
+  live-hub:
+    timeout: 3x

@@ -3,16 +3,27 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
+
 import 'data/prefs_panel_config_store.dart';
+import 'residence/panel_residence.dart';
 import 'provisioning/provisioning_flow.dart';
 import 'provisioning/assigned_screen.dart';
+
+/// Explicit, opt-in simulated residence for development and visual QA:
+/// `--dart-define=SUPREME_SIMULATED_RESIDENCE=true`. Never on by default. A panel is not
+/// commissioned to a real Hub yet (see TODO.md), so without the flag — or an injected
+/// [PanelResidence] — the panel honestly has no residence.
+const _simulatedResidenceEnabled =
+    bool.fromEnvironment('SUPREME_SIMULATED_RESIDENCE');
 
 void main() {
   runApp(const SupremeTouchPanelApp());
 }
 
 class SupremeTouchPanelApp extends StatelessWidget {
-  const SupremeTouchPanelApp({super.key});
+  /// The panel's residence; null = none (or the dev-flag simulator).
+  final PanelResidence? residence;
+  const SupremeTouchPanelApp({super.key, this.residence});
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +31,7 @@ class SupremeTouchPanelApp extends StatelessWidget {
       title: 'SupremeOS Touch Panel',
       debugShowCheckedModeBanner: false,
       theme: buildSupremeTheme(),
-      home: const AdaptiveScope(child: PanelBoot()),
+      home: AdaptiveScope(child: PanelBoot(residence: residence)),
     );
   }
 }
@@ -29,23 +40,21 @@ class SupremeTouchPanelApp extends StatelessWidget {
 /// otherwise enter first-boot provisioning. This is the ONLY branch point —
 /// a provisioned panel must never see the provisioning UI again.
 class PanelBoot extends StatefulWidget {
-  const PanelBoot({super.key});
+  final PanelResidence? residence;
+  const PanelBoot({super.key, this.residence});
   @override
   State<PanelBoot> createState() => _PanelBootState();
 }
 
-/// Hub-authoritative area list, mocked until gateway wiring lands (§43) —
-/// shared by provisioning (§6) and Floor/Whole Home scope navigation
-/// (§Phase8-18), never duplicated or hardcoded per screen.
-Future<List<AreaSummary>> _fetchAreas() async => const [
-      AreaSummary(id: 'living-room', name: 'Living Room', floorId: 'ground'),
-      AreaSummary(id: 'dining', name: 'Dining', floorId: 'ground'),
-      AreaSummary(id: 'kitchen', name: 'Kitchen', floorId: 'ground'),
-      AreaSummary(
-          id: 'master-bedroom', name: 'Master Bedroom', floorId: 'first'),
-    ];
-
 class _PanelBootState extends State<PanelBoot> {
+  /// The Hub's own rooms — shared by provisioning (§6) and Floor/Whole Home scope navigation
+  /// (§Phase8-18), never a hardcoded list. Without a residence there is nothing to assign.
+  Future<List<AreaSummary>> _fetchAreas() async =>
+      _residence == null ? const [] : _residence!.areas();
+
+  PanelResidence? _residence;
+  bool _ownsResidence = false;
+
   late final ProvisioningController _controller = ProvisioningController(
     store: PrefsPanelConfigStore(),
     fetchAreas: _fetchAreas,
@@ -72,6 +81,12 @@ class _PanelBootState extends State<PanelBoot> {
   @override
   void initState() {
     super.initState();
+    _residence = widget.residence;
+    if (_residence == null && _simulatedResidenceEnabled) {
+      final sim = SimulatedResidence();
+      _residence = PanelResidence.simulated(sim);
+      _ownsResidence = true;
+    }
     _connection = ConnectionManager(
       discovery: const MockHubDiscovery(),
       makeLanTransport: (_) => MockHubTransport(),
@@ -127,6 +142,7 @@ class _PanelBootState extends State<PanelBoot> {
 
   @override
   void dispose() {
+    if (_ownsResidence) unawaited(_residence?.dispose());
     _connection.dispose();
     super.dispose();
   }
@@ -146,6 +162,7 @@ class _PanelBootState extends State<PanelBoot> {
         config: _config!,
         fetchAreas: _fetchAreas,
         connection: _connection,
+        residence: _residence,
       );
     }
     return ProvisioningFlow(

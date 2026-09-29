@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supreme_touchpanel/main.dart';
 
+import 'support/panel_rig.dart';
+
 /// Exercises the real boot widget end-to-end against the real (mocked-out
 /// SharedPreferences) persistence path — this is the actual §40 acceptance
 /// test: a locked assignment must survive an app restart, and the assigned
@@ -15,8 +17,11 @@ void main() {
 
   testWidgets('fresh panel enters first-boot provisioning', (tester) async {
     SharedPreferences.setMockInitialValues({});
+    final rig = PanelRig();
+    addTearDown(() => rig.dispose(tester));
 
-    await tester.pumpWidget(const SupremeTouchPanelApp());
+    await tester.pumpWidget(SupremeTouchPanelApp(residence: rig.residence));
+    await rig.settle(tester);
     await tester.pumpAndSettle();
     await tester.pump(settleConnection);
 
@@ -30,8 +35,12 @@ void main() {
       (tester) async {
     SharedPreferences.setMockInitialValues({});
 
+    final rig = PanelRig();
+    addTearDown(() => rig.dispose(tester));
+
     // First boot: provision as Room Control -> Living Room.
-    await tester.pumpWidget(const SupremeTouchPanelApp());
+    await tester.pumpWidget(SupremeTouchPanelApp(residence: rig.residence));
+    await rig.settle(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Room Control'));
     await tester.pumpAndSettle();
@@ -55,7 +64,8 @@ void main() {
     // Simulate an app/device restart: tear down and remount a fresh widget
     // tree, backed by the same (persisted) SharedPreferences store.
     await tester.pumpWidget(const SizedBox());
-    await tester.pumpWidget(const SupremeTouchPanelApp());
+    await tester.pumpWidget(SupremeTouchPanelApp(residence: rig.residence));
+    await rig.settle(tester);
     await tester.pumpAndSettle();
     await tester.pump(settleConnection);
 

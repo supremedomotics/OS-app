@@ -12,6 +12,7 @@ import {
   UserType,
 } from "@supreme/domain-model";
 import { z } from "zod";
+import { SceneRun } from "./scene-runs.js";
 
 /**
  * Phase-1 management contracts (§6, §8, §10, §11): scenes, user management,
@@ -26,6 +27,8 @@ export const CreateSceneRequest = z.object({
   roomId: z.string().nullable().default(null),
   icon: z.string().nullable().default(null),
   steps: z.array(SceneStep),
+  description: z.string().nullable().optional(),
+  phases: z.array(z.array(z.number().int().nonnegative())).optional(),
 });
 export type CreateSceneRequest = z.infer<typeof CreateSceneRequest>;
 
@@ -39,6 +42,9 @@ export const ActivateSceneResponse = z.object({
   activated: z.boolean(),
   /** How many of the scene's steps were dispatched to the SIL. */
   steps: z.number().int().nonnegative(),
+  /** The run that now tracks every step to its device's confirmation (poll `GET /v1/scenes/runs/:id`
+   * or follow `run` frames on `/v1/stream`). */
+  run: SceneRun,
 });
 export type ActivateSceneResponse = z.infer<typeof ActivateSceneResponse>;
 

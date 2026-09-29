@@ -2,6 +2,10 @@
 /// `packages/domain-model/src/capabilities.ts`. This file must stay in lockstep
 /// with that schema — it is not a new vocabulary, it is the Dart projection of
 /// the existing one. Never add a capability here that isn't in the TS source.
+/// `test/capability_parity_test.dart` reads the TS enum and fails on any drift.
+///
+/// `remote` (directional/menu input) and `display` (PJLink-class projector/display) have no
+/// [HomeDomain] yet, so they are deliberately absent from [domainCapabilities].
 enum CapabilityKind {
   onoff,
   brightness,
@@ -13,6 +17,8 @@ enum CapabilityKind {
   fan,
   vacuum,
   sensor,
+  remote,
+  display,
 }
 
 /// A homeowner-facing domain groups one or more raw capabilities. The UI

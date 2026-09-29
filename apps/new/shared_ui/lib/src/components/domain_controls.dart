@@ -71,7 +71,10 @@ class _DomainControlShell extends StatelessWidget {
 /// styling (greyed switch/chips) applies, not just a silently-ignored tap.
 class LightingControl extends StatelessWidget {
   final bool on;
-  final LightingMood mood;
+
+  /// Null when the residence reports no tone for these lights: the mood chips are then not
+  /// drawn at all (nothing is invented to fill them).
+  final LightingMood? mood;
   final ConfirmationState confirmation;
   final ValueChanged<bool>? onToggle;
   final ValueChanged<LightingMood>? onMoodChanged;
@@ -79,7 +82,7 @@ class LightingControl extends StatelessWidget {
   const LightingControl({
     super.key,
     required this.on,
-    required this.mood,
+    this.mood,
     required this.confirmation,
     required this.onToggle,
     required this.onMoodChanged,
@@ -98,7 +101,7 @@ class LightingControl extends StatelessWidget {
     return _DomainControlShell(
       title: 'Lighting',
       icon: Icons.wb_incandescent_outlined,
-      stateLabel: on ? _moodLabels[mood]! : 'Off',
+      stateLabel: on ? (mood == null ? 'On' : _moodLabels[mood]!) : 'Off',
       confirmation: confirmation,
       body: Row(children: [
         Semantics(
@@ -109,7 +112,8 @@ class LightingControl extends StatelessWidget {
           child: Wrap(
             spacing: 8,
             children: [
-              for (final entry in _moodLabels.entries)
+              if (mood != null)
+                for (final entry in _moodLabels.entries)
                 if (entry.key != LightingMood.custom)
                   ChoiceChip(
                     label: Text(entry.value),
@@ -133,12 +137,16 @@ class ShadesControl extends StatelessWidget {
   final ConfirmationState confirmation;
   final ValueChanged<ShadePosition>? onPositionChanged;
 
+  /// The presets the residence can honestly set (open/closed for a plain position device).
+  final Set<ShadePosition> offered;
+
   const ShadesControl({
     super.key,
     required this.position,
     required this.positionPercent,
     required this.confirmation,
     required this.onPositionChanged,
+    this.offered = const {ShadePosition.open, ShadePosition.relaxed, ShadePosition.closed},
   });
 
   static const _labels = {
@@ -160,7 +168,7 @@ class ShadesControl extends StatelessWidget {
           spacing: 8,
           children: [
             for (final entry in _labels.entries)
-              if (entry.key != ShadePosition.custom)
+              if (offered.contains(entry.key))
                 ChoiceChip(
                   label: Text(entry.value),
                   selected: position == entry.key,
@@ -183,7 +191,7 @@ class ShadesControl extends StatelessWidget {
 
 /// Climate control (§21) — current temperature, comfort state, +/-.
 class ClimateControl extends StatelessWidget {
-  final double ambientC;
+  final double? ambientC;
   final double? targetC;
   final ClimateMode mode;
   final ConfirmationState confirmation;
@@ -193,7 +201,7 @@ class ClimateControl extends StatelessWidget {
 
   const ClimateControl({
     super.key,
-    required this.ambientC,
+    this.ambientC,
     required this.targetC,
     required this.mode,
     required this.confirmation,
@@ -201,6 +209,8 @@ class ClimateControl extends StatelessWidget {
     required this.onDecrease,
     required this.onModeChanged,
   });
+
+  static String _temp(double? c) => c == null ? '—' : '${c.round()}°';
 
   static const _modeLabels = {
     ClimateMode.auto: 'Auto',
@@ -214,8 +224,7 @@ class ClimateControl extends StatelessWidget {
     return _DomainControlShell(
       title: 'Climate',
       icon: Icons.thermostat_outlined,
-      stateLabel:
-          targetC != null ? '${targetC!.round()}°' : '${ambientC.round()}°',
+      stateLabel: _temp(targetC ?? ambientC),
       confirmation: confirmation,
       // Wrap, not Row+Spacer: this control renders inside cards as narrow as
       // a Touch Panel's side-panel column (§Phase7-8), where a fixed Row
@@ -231,7 +240,7 @@ class ClimateControl extends StatelessWidget {
             child: IconButton(
                 onPressed: onDecrease, icon: const Icon(Icons.remove)),
           ),
-          Text('${(targetC ?? ambientC).round()}°'),
+          Text(_temp(targetC ?? ambientC)),
           Semantics(
             button: true,
             label: 'Increase temperature',
@@ -243,6 +252,7 @@ class ClimateControl extends StatelessWidget {
           // sits in, which genuinely overflows in a narrow side-panel
           // column (§Phase7-8) — bounding it lets the label ellipsize
           // instead of overflowing the row it's in.
+          if (onModeChanged != null)
           SizedBox(
             width: 96,
             child: DropdownButtonHideUnderline(
@@ -279,7 +289,7 @@ class AudioControl extends StatelessWidget {
   final bool playing;
   final String? title;
   final String? artist;
-  final double volumePercent;
+  final double? volumePercent;
   final ConfirmationState confirmation;
   final VoidCallback? onPlayPause;
 
@@ -323,15 +333,19 @@ class AudioControl extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 140),
               child: Text(artist!, overflow: TextOverflow.ellipsis),
             ),
-          Semantics(
-            label: 'Volume, $volumePercent percent',
-            slider: true,
-            child: SizedBox(
-              width: 96,
-              child: Slider(
-                  value: volumePercent, min: 0, max: 100, onChanged: null),
+          if (volumePercent != null)
+            Semantics(
+              label: 'Volume, ${volumePercent!.round()} percent',
+              slider: true,
+              child: SizedBox(
+                width: 96,
+                child: Slider(
+                    value: volumePercent!.clamp(0, 100).toDouble(),
+                    min: 0,
+                    max: 100,
+                    onChanged: null),
+              ),
             ),
-          ),
         ],
       ),
     );

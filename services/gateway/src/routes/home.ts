@@ -8,15 +8,19 @@ import {
 import { FavoriteRef, newId, Room, type RoomId } from "@supreme/domain-model";
 import type { FastifyInstance } from "fastify";
 import { authenticate, canViewDevice, enforce } from "../auth.js";
-import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
+import { authenticateMobileOrUser, resolveMobileOrSessionUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
 import {
   downloadHeroImage,
   heroImageFromUpload,
   heroImageKey,
+  heroImageHash,
   heroImagePath,
   HeroImageError,
+  HOME_HERO_KEY,
+  HOME_HERO_PATH,
+  versionedHeroPath,
   type StoredHeroImage,
 } from "../room-hero.js";
 
@@ -42,7 +46,11 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
       await enforce(ctx, user, "home", null, "view");
       const home = await ctx.home.getHome();
       if (!home) throw new SupremeError("not_found", "home not commissioned");
-      const body: HomeView = { home, rooms: await ctx.home.listRooms() };
+      const hero = (await ctx.homeConfig.get(ctx.homeId, HOME_HERO_KEY)) as StoredHeroImage | undefined;
+      const body: HomeView = {
+        home: { ...home, heroImageUrl: hero ? versionedHeroPath(HOME_HERO_PATH, hero) : null },
+        rooms: await ctx.home.listRooms(),
+      };
       reply.send(body);
     } catch (err) {
       sendError(reply, err);
@@ -126,34 +134,83 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
   // The hub downloads ONE stock photo per room (by name) and stores the bytes locally, so every
   // client shows the identical image offline. Owners can replace it with a live photo (PUT).
 
-  // Serve the stored bytes. `<img>` can't send an Authorization header, so this also accepts the
-  // access token as a query param (?access_token=) — the same pattern the WSS upgrade uses.
+  // Serve the stored bytes (§ ADR 0102 — one serving contract for every asset).
+  //  * auth: a session OR a paired Mobile's authorization, from `Authorization: Bearer …`; the
+  //    `?access_token=` fallback stays for `<img>` on the web, which cannot send a header;
+  //  * a strong ETag (`If-None-Match` → 304) and a content-versioned URL, so an unchanged picture is
+  //    cached for good and a changed one is a new URL.
+  const serveHero = async (
+    req: { headers: { authorization?: string; "if-none-match"?: string }; query: { access_token?: string } },
+    reply: import("fastify").FastifyReply,
+    load: () => Promise<StoredHeroImage | undefined>,
+    authorize: (user: import("@supreme/domain-model").User) => Promise<void>,
+  ): Promise<void> => {
+    const header = req.headers.authorization;
+    const token = header?.startsWith("Bearer ") ? header.slice(7) : req.query.access_token;
+    if (!token) throw new SupremeError("unauthorized", "missing token");
+    const user = await resolveMobileOrSessionUser(ctx, token, (t) => ctx.identity.authenticate(t));
+    await authorize(user);
+    const stored = await load();
+    if (!stored) throw new SupremeError("not_found", "no hero image");
+    const etag = `"${heroImageHash(stored)}"`;
+    reply
+      .header("etag", etag)
+      .header("cache-control", "private, max-age=86400")
+      // The homeowner web app / cloud may be a different origin than the hub; allow the image to
+      // be embedded cross-origin (an <img>/background load).
+      .header("cross-origin-resource-policy", "cross-origin");
+    if (req.headers["if-none-match"] === etag) {
+      reply.code(304).send();
+      return;
+    }
+    reply.header("content-type", stored.contentType).send(Buffer.from(stored.dataBase64, "base64"));
+  };
+
   app.get<{ Params: { id: string }; Querystring: { access_token?: string } }>(
     "/v1/rooms/:id/hero-image",
     async (req, reply) => {
       try {
-        const header = req.headers.authorization;
-        const token = header?.startsWith("Bearer ") ? header.slice(7) : req.query.access_token;
-        if (!token) throw new SupremeError("unauthorized", "missing token");
-        const user = await ctx.identity.authenticate(token);
         const roomId = req.params.id as RoomId;
-        await ctx.home.requireRoom(roomId);
-        await enforce(ctx, user, "room", roomId, "view");
-        const stored = (await ctx.homeConfig.get(ctx.homeId, heroImageKey(roomId))) as StoredHeroImage | undefined;
-        if (!stored) throw new SupremeError("not_found", "no hero image for room");
-        reply
-          .header("content-type", stored.contentType)
-          .header("cache-control", "private, max-age=86400")
-          // The homeowner web app / cloud may be a different origin than the hub; allow the image
-          // to be embedded cross-origin (an <img>/background load) — without this a strict CORP
-          // policy blocks it (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin).
-          .header("cross-origin-resource-policy", "cross-origin")
-          .send(Buffer.from(stored.dataBase64, "base64"));
+        await serveHero(
+          req,
+          reply,
+          async () => (await ctx.homeConfig.get(ctx.homeId, heroImageKey(roomId))) as StoredHeroImage | undefined,
+          async (user) => {
+            await ctx.home.requireRoom(roomId);
+            await enforce(ctx, user, "room", roomId, "view");
+          },
+        );
       } catch (err) {
         sendError(reply, err);
       }
     },
   );
+
+  // The residence's own photograph (Home and whole-residence Experiences lead with it).
+  app.get<{ Querystring: { access_token?: string } }>(HOME_HERO_PATH, async (req, reply) => {
+    try {
+      await serveHero(
+        req,
+        reply,
+        async () => (await ctx.homeConfig.get(ctx.homeId, HOME_HERO_KEY)) as StoredHeroImage | undefined,
+        async (user) => enforce(ctx, user, "home", null, "view"),
+      );
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
+
+  app.put<{ Body: Record<string, unknown> }>(HOME_HERO_PATH, { bodyLimit: 8_000_000 }, async (req, reply) => {
+    try {
+      const user = await authenticate(ctx, req);
+      await enforce(ctx, user, "home", null, "update");
+      const image = heroImageFromUpload((req.body ?? {}) as Record<string, unknown>);
+      await ctx.homeConfig.set(ctx.homeId, HOME_HERO_KEY, image);
+      reply.send({ heroImageUrl: versionedHeroPath(HOME_HERO_PATH, image) });
+    } catch (err) {
+      sendError(reply, err);
+    }
+  });
 
   // Auto-pin: download a stock photo by room name and store it locally. Idempotent — skips if one is
   // already stored unless `?force=1`. Best-effort: a fetch failure leaves the hero unset (200 with
@@ -174,7 +231,7 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
         try {
           const image = await downloadHeroImage(room);
           await ctx.homeConfig.set(ctx.homeId, heroImageKey(roomId), image);
-          const updated = parseRoom({ ...room, heroImageUrl: heroImagePath(roomId) });
+          const updated = parseRoom({ ...room, heroImageUrl: versionedHeroPath(heroImagePath(roomId), image) });
           await ctx.home.addRoom(updated);
           reply.send({ pinned: true, room: updated });
         } catch (imgErr) {
@@ -199,7 +256,7 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
         await enforce(ctx, user, "room", roomId, "update");
         const image = heroImageFromUpload((req.body ?? {}) as Record<string, unknown>);
         await ctx.homeConfig.set(ctx.homeId, heroImageKey(roomId), image);
-        const updated = parseRoom({ ...room, heroImageUrl: heroImagePath(roomId) });
+        const updated = parseRoom({ ...room, heroImageUrl: versionedHeroPath(heroImagePath(roomId), image) });
         await ctx.home.addRoom(updated);
         reply.send({ room: updated });
       } catch (err) {

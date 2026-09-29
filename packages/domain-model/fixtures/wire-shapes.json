@@ -1,0 +1,315 @@
+{
+  "home": {
+    "home": {
+      "address": "null",
+      "createdAt": "string",
+      "heroImageUrl": "null",
+      "id": "string",
+      "masterUserId": "string",
+      "name": "string",
+      "tier": "string"
+    },
+    "rooms": [
+      {
+        "area": "null",
+        "areaType": "string",
+        "building": "null",
+        "floor": "number",
+        "heroImageUrl": "null",
+        "homeId": "string",
+        "icon": "string",
+        "id": "string",
+        "name": "string",
+        "parentRoomId": "null",
+        "sortOrder": "number"
+      }
+    ]
+  },
+  "devices": {
+    "devices": [
+      {
+        "capabilities": [
+          {
+            "config": "object",
+            "kind": "string"
+          }
+        ],
+        "driverId": "null",
+        "homeId": "string",
+        "id": "string",
+        "manufacturer": "string",
+        "metadata": "object",
+        "model": "string",
+        "name": "string",
+        "roomId": "string",
+        "state": {
+          "brightness?": {
+            "kind": "string",
+            "level": "number",
+            "on": "boolean"
+          },
+          "color?": {
+            "hue": "number",
+            "kelvin": "number",
+            "kind": "string",
+            "level": "number",
+            "on": "boolean",
+            "saturation": "number"
+          },
+          "fan?": {
+            "direction": "string",
+            "kind": "string",
+            "on": "boolean",
+            "preset": "string"
+          },
+          "lock?": {
+            "jammed": "boolean",
+            "kind": "string",
+            "locked": "boolean"
+          },
+          "media?": {
+            "advanced": {
+              "sleepMinutes": "number",
+              "soundMode": "string"
+            },
+            "album": "string",
+            "artist": "string",
+            "artworkUrl": "null",
+            "durationSec": "number",
+            "kind": "string",
+            "muted": "boolean",
+            "playback": "string",
+            "positionSec": "number",
+            "source": "string",
+            "title": "string",
+            "volume": "number"
+          },
+          "onoff?": {
+            "kind": "string",
+            "on": "boolean"
+          },
+          "position?": {
+            "kind": "string",
+            "moving": "boolean",
+            "position": "number"
+          },
+          "temperature?": {
+            "advanced?": {
+              "demand": "boolean",
+              "fanSpeed": "string",
+              "faultCode": "null",
+              "filterWarning": "boolean",
+              "inhibited": "boolean",
+              "locked": "boolean",
+              "swing": "string"
+            },
+            "ambientC": "number",
+            "kind": "string",
+            "mode": "string",
+            "targetC": "number"
+          },
+          "vacuum?": {
+            "fanSpeed": "string",
+            "kind": "string",
+            "status": "string"
+          }
+        },
+        "status": "string",
+        "supremeType": "string"
+      }
+    ]
+  },
+  "scenes": {
+    "scenes": [
+      {
+        "aiGenerated": "boolean",
+        "description": "string",
+        "homeId": "string",
+        "icon": "null",
+        "id": "string",
+        "imported": "boolean",
+        "name": "string",
+        "ownerUserId": "string",
+        "phases": [
+          [
+            "number"
+          ]
+        ],
+        "roomId": "null",
+        "roomIds": [
+          "string"
+        ],
+        "scope": "string",
+        "sourceDriverId": "null",
+        "sourceSceneId": "null",
+        "steps": [
+          {
+            "capability": "string",
+            "deviceId": "string",
+            "values": "object"
+          }
+        ],
+        "syncStatus": "null"
+      }
+    ]
+  },
+  "activate": {
+    "activated": "boolean",
+    "run": {
+      "finishedAt": "null",
+      "phase": "number",
+      "phases": "number",
+      "runId": "string",
+      "sceneId": "string",
+      "spaceIds": [
+        "empty"
+      ],
+      "startedAt": "string",
+      "status": "string",
+      "steps": [
+        {
+          "capability": "string",
+          "deviceId": "string",
+          "reason": "null",
+          "roomId": "string",
+          "state": "string",
+          "stepId": "string",
+          "verifiable": "boolean"
+        }
+      ],
+      "supersededBy": "null"
+    },
+    "steps": "number"
+  },
+  "runFrame": {
+    "run": {
+      "finishedAt": "string",
+      "phase": "number",
+      "phases": "number",
+      "runId": "string",
+      "sceneId": "string",
+      "spaceIds": [
+        "empty"
+      ],
+      "startedAt": "string",
+      "status": "string",
+      "steps": [
+        {
+          "capability": "string",
+          "deviceId": "string",
+          "reason": "null",
+          "roomId": "string",
+          "state": "string",
+          "stepId": "string",
+          "verifiable": "boolean"
+        }
+      ],
+      "supersededBy": "null"
+    },
+    "ts": "string",
+    "type": "string"
+  },
+  "stateFrame": {
+    "deviceId": "string",
+    "homeId": "string",
+    "provenance": "string",
+    "roomId": "string",
+    "seq": "number",
+    "state": "object",
+    "ts": "string",
+    "type": "string"
+  },
+  "command": {
+    "accepted": "boolean",
+    "device": {
+      "capabilities": [
+        {
+          "config": "object",
+          "kind": "string"
+        }
+      ],
+      "driverId": "null",
+      "homeId": "string",
+      "id": "string",
+      "manufacturer": "string",
+      "metadata": "object",
+      "model": "string",
+      "name": "string",
+      "roomId": "string",
+      "state": {
+        "brightness?": {
+          "kind": "string",
+          "level": "number",
+          "on": "boolean"
+        },
+        "color?": {
+          "hue": "number",
+          "kelvin": "number",
+          "kind": "string",
+          "level": "number",
+          "on": "boolean",
+          "saturation": "number"
+        },
+        "fan?": {
+          "direction": "string",
+          "kind": "string",
+          "on": "boolean",
+          "preset": "string"
+        },
+        "lock?": {
+          "jammed": "boolean",
+          "kind": "string",
+          "locked": "boolean"
+        },
+        "media?": {
+          "advanced": {
+            "sleepMinutes": "number",
+            "soundMode": "string"
+          },
+          "album": "string",
+          "artist": "string",
+          "artworkUrl": "null",
+          "durationSec": "number",
+          "kind": "string",
+          "muted": "boolean",
+          "playback": "string",
+          "positionSec": "number",
+          "source": "string",
+          "title": "string",
+          "volume": "number"
+        },
+        "onoff?": {
+          "kind": "string",
+          "on": "boolean"
+        },
+        "position?": {
+          "kind": "string",
+          "moving": "boolean",
+          "position": "number"
+        },
+        "temperature?": {
+          "advanced?": {
+            "demand": "boolean",
+            "fanSpeed": "string",
+            "faultCode": "null",
+            "filterWarning": "boolean",
+            "inhibited": "boolean",
+            "locked": "boolean",
+            "swing": "string"
+          },
+          "ambientC": "number",
+          "kind": "string",
+          "mode": "string",
+          "targetC": "number"
+        },
+        "vacuum?": {
+          "fanSpeed": "string",
+          "kind": "string",
+          "status": "string"
+        }
+      },
+      "status": "string",
+      "supremeType": "string"
+    }
+  }
+}

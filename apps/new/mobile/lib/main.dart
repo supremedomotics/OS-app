@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supreme_os_ui/supreme_os_ui.dart';
@@ -12,9 +14,9 @@ import 'data/secure_mobile_storage.dart';
 import 'data/shared_prefs_paired_home_store.dart';
 import 'features/home/home_screen.dart';
 import 'features/spaces/spaces_screen.dart';
-import 'features/spaces/room_screen.dart';
+import 'features/spaces/space_screen.dart';
+import 'features/control/control_layer.dart';
 import 'features/experiences/experiences_screen.dart';
-import 'features/now/now_screen.dart';
 import 'features/settings/home_settings_screen.dart';
 import 'features/settings/paired_home_controller.dart';
 import 'features/settings/settings_screen.dart';
@@ -191,7 +193,8 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     remoteAccessEnabled: remoteAccessEnabled,
   );
   ref.onDispose(manager.dispose);
-  manager.start();
+  // A simulated residence has no Hub to find: never start discovery/backoff against nothing.
+  if (ref.watch(simulatedResidenceProvider) == null) manager.start();
   return manager;
 });
 
@@ -203,6 +206,169 @@ final homeStateRepositoryProvider = Provider<HomeStateRepository>((ref) {
   final repo = HubHomeStateRepository(ref.watch(connectionManagerProvider));
   ref.onDispose(repo.dispose);
   return repo;
+});
+
+/// Explicit, opt-in simulated residence for development and visual QA:
+/// `--dart-define=SUPREME_SIMULATED_RESIDENCE=true`. It replaces only the transport boundary —
+/// `ResidenceState`, `CommandTracker` and every screen above it are the production code. Never
+/// on by default, and never reachable in a release build that does not pass the flag.
+const _simulatedResidenceEnabled =
+    bool.fromEnvironment('SUPREME_SIMULATED_RESIDENCE');
+
+final simulatedResidenceProvider = Provider<SimulatedResidence?>((ref) {
+  if (!_simulatedResidenceEnabled) return null;
+  final sim = SimulatedResidence();
+  ref.onDispose(sim.dispose);
+  return sim;
+});
+
+/// The canonical Residence State for the active Home (the Hub's own records, read and streamed).
+/// Rebuilds — and releases the previous Home's state — whenever the active connection does.
+final residenceStateProvider = Provider<ResidenceState>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  if (sim != null) {
+    final state = ResidenceState(
+        get: sim.transport.get, frames: sim.stream.frames);
+    unawaited(sim.transport.authenticate().then((_) => state.start()));
+    ref.onDispose(state.dispose);
+    return state;
+  }
+  final manager = ref.watch(connectionManagerProvider);
+  final hubId = ref.watch(activeHomeIdProvider);
+  final link = ResidenceStreamLink(get: manager.get);
+  unawaited(() async {
+    await link.state.start();
+    if (hubId == null) return;
+    final uri = await ref.read(activeHomeStreamUriProvider(hubId).future);
+    if (uri == null) return;
+    final session = ref.read(pairedHomeAuthStoreProvider).sessionFor(hubId);
+    if (session == null) return;
+    // Subscribed to every space this Mobile may view — the gateway sends no state or run frame
+    // to a client that has not subscribed. The link re-reads the residence after every live
+    // subscription (see `ResidenceStreamLink`).
+    link.attach(WebSocketHubEventStream(
+        streamUri: uri,
+        bearerToken: () => session.bearerToken(),
+        autoSubscribeRooms: const ['*']));
+  }());
+  ref.onDispose(() => unawaited(link.dispose()));
+  return link.state;
+});
+
+/// The active Home's live-stream address, resolved the same way the background runtime does
+/// (LAN first; the tunnel only when this Home's own Remote Access switch is on).
+final activeHomeStreamUriProvider =
+    FutureProvider.family<Uri?, String>((ref, hubId) async {
+  final discovery = ref.read(platformDiscoveryProvider);
+  final lan = await resolveHomeBaseUrl(discovery, hubId);
+  if (lan != null) return lan.replace(scheme: 'wss', path: '/v1/stream');
+  if (!_remoteAccessEnabledFor(ref.read(pairedHomeControllerProvider), hubId)) {
+    return null;
+  }
+  return remoteHubConfigFor(hubId, ref.read(pairedHomeAuthStoreProvider),
+          ref.read(brokerUrlProvider))
+      .streamUri();
+});
+
+/// The hour the residence is described at. A provider so tests (and, later, the residence's own
+/// time zone) can replace it; today it is this device's clock — see `residence_description.dart`.
+final residenceHourProvider = Provider<int>((ref) => DateTime.now().hour);
+
+/// Every homeowner action goes through this one tracker: requested → pending → confirmed|failed.
+/// The one way a homeowner action reaches the Hub: a command route + body. Used by the command
+/// tracker for device commands and by Experience activation for the Hub's scene route, so both
+/// take the same path in production and in the simulated residence.
+typedef HubSend = Future<Map<String, dynamic>> Function(
+    String path, Map<String, dynamic> body);
+
+final hubSendProvider = Provider<HubSend>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  if (sim != null) return sim.transport.sendCommand;
+  return ref.watch(connectionManagerProvider).sendCommand;
+});
+
+/// Timer source for command timeouts; null = real timers. Tests replace it with a manual clock.
+final commandScheduleProvider = Provider<Schedule?>((ref) => null);
+
+final commandTrackerProvider = Provider<CommandTracker>((ref) {
+  final state = ref.watch(residenceStateProvider);
+  final send = ref.watch(hubSendProvider);
+  final tracker = CommandTracker(
+    state: state,
+    schedule: ref.watch(commandScheduleProvider),
+    send: (deviceId, command) =>
+        send('v1/devices/$deviceId/command', {'command': command}),
+  );
+  ref.onDispose(tracker.dispose);
+  return tracker;
+});
+
+/// Hub-served pictures (ADR 0102): authenticated bytes, cached by their hash-versioned URL.
+final heroImageStoreProvider = Provider<HeroImageStore>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  final store = HeroImageStore(
+      fetch: sim != null
+          ? sim.transport.getBytes
+          : ref.watch(connectionManagerProvider).getBytes);
+  ref.onDispose(() => unawaited(store.dispose()));
+  return store;
+});
+
+/// One picture's bytes; null while loading or when the Hub cannot supply it (the caller then shows
+/// its tonal plate). A miss is tried again after the store's pause, so a Hub that was unreachable at
+/// start still gets its photographs once it is.
+final heroBytesProvider = FutureProvider.family<Uint8List?, String>((ref, path) async {
+  final store = ref.watch(heroImageStoreProvider);
+  final bytes = await store.load(path);
+  if (bytes == null && HeroImageStore.isHubPath(path)) {
+    final t = Timer(store.retryAfter + const Duration(seconds: 1), ref.invalidateSelf);
+    ref.onDispose(t.cancel);
+  }
+  return bytes;
+});
+
+/// Setting an Experience: the Hub orchestrates; this only asks and follows the run (ADR 0102, D8).
+final experienceActivationsProvider = Provider<ExperienceActivations>((ref) {
+  final acts = ExperienceActivations(
+    post: ref.watch(hubSendProvider),
+    state: ref.watch(residenceStateProvider),
+  );
+  ref.onDispose(acts.dispose);
+  return acts;
+});
+
+/// What a screen renders: the confirmed residence + what is still in flight. Rebuilds when either
+/// changes; a screen holds no state of its own about a device.
+class ResidenceView {
+  final ResidenceSnapshot snapshot;
+  final List<CommandRecord> inFlight;
+  final CommandTracker tracker;
+  final ExperienceActivations activations;
+  const ResidenceView(this.snapshot, this.inFlight, this.tracker, this.activations);
+
+  List<Activation> get activating => activations.inFlight;
+}
+
+final residenceViewProvider = StreamProvider<ResidenceView>((ref) async* {
+  final state = ref.watch(residenceStateProvider);
+  final tracker = ref.watch(commandTrackerProvider);
+  final activations = ref.watch(experienceActivationsProvider);
+  ResidenceView now() =>
+      ResidenceView(state.snapshot, tracker.inFlight, tracker, activations);
+  yield now();
+  final merged = StreamController<void>();
+  final a = state.changes.listen((_) => merged.add(null));
+  final b = tracker.updates.listen((_) => merged.add(null));
+  final c = activations.updates.listen((_) => merged.add(null));
+  ref.onDispose(() {
+    a.cancel();
+    b.cancel();
+    c.cancel();
+    merged.close();
+  });
+  await for (final _ in merged.stream) {
+    yield now();
+  }
 });
 
 /// §Phase12.3 NETWORK CHANGES — wires the real OS connectivity signal
@@ -413,6 +579,40 @@ Future<PairHomeResult> realPairHome({
   );
 }
 
+/// How this device wants motion: as the OS says, or always reduced. A preference about THIS
+/// person and THIS device (Golden Master `settings.js`): it lives on the device and never holds
+/// residence or device state. It acts for real — every animation in the app reads
+/// `MediaQuery.disableAnimations`.
+enum MotionPref { system, reduce }
+
+class MotionPrefController extends StateNotifier<MotionPref> {
+  static const _key = 'supremeos_pref_motion_v1';
+  MotionPrefController() : super(MotionPref.system) {
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final v = p.getString(_key);
+      if (mounted && v == 'reduce') state = MotionPref.reduce;
+    } catch (_) {
+      // No preferences store (a test, a locked-down web view): the OS setting stands.
+    }
+  }
+
+  Future<void> set(MotionPref pref) async {
+    state = pref;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_key, pref.name);
+    } catch (_) {}
+  }
+}
+
+final motionPrefProvider =
+    StateNotifierProvider<MotionPrefController, MotionPref>((ref) => MotionPrefController());
+
 void main() {
   runApp(const ProviderScope(child: SupremeMobileApp()));
 }
@@ -436,14 +636,25 @@ class SupremeMobileApp extends StatelessWidget {
       // null value" rather than the assertion message). `MaterialApp.builder` wraps the
       // Navigator's ENTIRE output — every route, every dialog, present and future — in exactly
       // one `AdaptiveScope`, so this bug class cannot recur for a new screen either.
-      builder: (context, child) => AdaptiveScope(child: child!),
+      builder: (context, child) => Consumer(builder: (context, ref, _) {
+        final reduce = ref.watch(motionPrefProvider) == MotionPref.reduce;
+        return MotionScope(
+          reduce: reduce,
+          child: SurfaceScope(child: AdaptiveScope(child: child!)),
+        );
+      }),
       home: const RootShell(),
     );
   }
 }
 
-/// The residence-first primary navigation (§5): Home / Spaces / Experiences /
-/// Now / More. Never device-centric — nothing here lists devices directly.
+/// The residence-first primary navigation (§5) in the SupremeOS-10 information architecture:
+/// Home · Spaces · Control · Experiences · Settings. Never device-centric — nothing here lists
+/// devices directly. Control is a layer opened over the page, not a page.
+///
+/// What the old `Now` / `More` shell held was classified, not dropped: `Now` was an empty
+/// placeholder; More › Devices belongs to Control (the physical-objects layer); More › Automations
+/// to Settings; More › Professional Mode to SupremeOS Pro (not the homeowner shell).
 class RootShell extends ConsumerStatefulWidget {
   const RootShell({super.key});
   @override
@@ -452,7 +663,7 @@ class RootShell extends ConsumerStatefulWidget {
 
 class _RootShellState extends ConsumerState<RootShell>
     with WidgetsBindingObserver {
-  int _index = 0;
+  ShellDestination _current = ShellDestination.home;
   Space? _openSpace;
   StreamSubscription<NativeRuntimeEvent>? _nativeEventsSub;
 
@@ -532,168 +743,93 @@ class _RootShellState extends ConsumerState<RootShell>
     super.dispose();
   }
 
-  static const _destinations = [
-    NavigationDestination(
-        icon: Icon(Icons.home_outlined),
-        selectedIcon: Icon(Icons.home),
-        label: 'Home'),
-    NavigationDestination(
-        icon: Icon(Icons.door_front_door_outlined),
-        selectedIcon: Icon(Icons.door_front_door),
-        label: 'Spaces'),
-    NavigationDestination(
-        icon: Icon(Icons.auto_awesome_outlined),
-        selectedIcon: Icon(Icons.auto_awesome),
-        label: 'Experiences'),
-    NavigationDestination(
-        icon: Icon(Icons.dashboard_outlined),
-        selectedIcon: Icon(Icons.dashboard),
-        label: 'Now'),
-    NavigationDestination(
-        icon: Icon(Icons.more_horiz),
-        selectedIcon: Icon(Icons.more_horiz),
-        label: 'More'),
-  ];
+  void _select(ShellDestination d) {
+    if (d == ShellDestination.control) return; // Control is a layer; see _openControl
+    setState(() {
+      _current = d;
+      _openSpace = null; // Spaces from inside a space returns to the list
+    });
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_openSpace != null) {
-      return RoomScreen(
-          space: _openSpace!, onBack: () => setState(() => _openSpace = null));
-    }
-
-    final screens = [
-      const HomeScreen(),
-      SpacesScreen(onOpenSpace: (s) => setState(() => _openSpace = s)),
-      const ExperiencesScreen(),
-      const NowScreen(),
-      const _MoreScreen(),
-    ];
-
-    return Scaffold(
-      body: SafeArea(child: screens[_index]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: _destinations,
-      ),
+  void _openControl(BuildContext context) {
+    // Control opens in the scope of where it was called from: the open space, else the residence.
+    final spaceId =
+        _current == ShellDestination.spaces ? _openSpace?.id : null;
+    final profile = SurfaceScope.of(context);
+    final nav = shellNavigationFor(profile);
+    showSupremeLayer<void>(
+      context,
+      presentation: nav.controlPresentation,
+      fold: profile.fold,
+      semanticLabel: 'Residence control',
+      builder: (_) => ControlLayerBody(spaceId: spaceId),
     );
   }
-}
 
-class _MoreScreen extends ConsumerWidget {
-  const _MoreScreen();
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final profile = AdaptiveScope.of(context);
-    final text = SupremeTextStyles.resolve(profile.density);
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Text('More', style: text.title),
-        const SizedBox(height: 24),
-        // §QA-03/QA-04 — brought into the established SupremeOS design system
-        // (SupremeCard + Icon, same primitives Spaces already uses) and unimplemented
-        // items are visually inert/muted rather than looking identical to "Settings",
-        // the only item that actually does something.
-        _MoreRow(
-          icon: Icons.tune,
-          label: 'Devices',
-          enabled: false,
-          profile: profile,
-          text: text,
-        ),
-        const SizedBox(height: 12),
-        _MoreRow(
-          icon: Icons.auto_awesome_motion_outlined,
-          label: 'Automations',
-          enabled: false,
-          profile: profile,
-          text: text,
-        ),
-        const SizedBox(height: 12),
-        _MoreRow(
-          icon: Icons.settings_outlined,
-          label: 'Settings',
-          enabled: true,
-          profile: profile,
-          text: text,
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => SettingsScreen(
-              homeController: ref.read(pairedHomeControllerProvider),
-              onPairHome: (code) => realPairHome(
-                discovery: ref.read(platformDiscoveryProvider),
-                identity: ref.read(mobileIdentityProvider),
-                authStore: ref.read(pairedHomeAuthStoreProvider),
-                pairingCode: code,
-              ),
-              activeConnectionManager: ref.read(connectionManagerProvider),
+  Widget _page(PairedHomeController homes) => switch (_current) {
+        ShellDestination.home => const HomeScreen(),
+        ShellDestination.spaces => _openSpace == null
+            ? SpacesScreen(onOpenSpace: (s) => setState(() => _openSpace = s))
+            : SpaceScreen(
+                spaceId: _openSpace!.id,
+                onBack: () => setState(() => _openSpace = null)),
+        ShellDestination.experiences => const ExperiencesScreen(),
+        ShellDestination.settings => SettingsScreen(
+            embedded: true,
+            homeController: homes,
+            onPairHome: (code) => realPairHome(
+              discovery: ref.read(platformDiscoveryProvider),
+              identity: ref.read(mobileIdentityProvider),
+              authStore: ref.read(pairedHomeAuthStoreProvider),
+              pairingCode: code,
             ),
-          )),
-        ),
-        const SizedBox(height: 12),
-        _MoreRow(
-          icon: Icons.workspace_premium_outlined,
-          label: 'Professional Mode',
-          enabled: false,
-          profile: profile,
-          text: text,
-        ),
-      ],
-    );
-  }
-}
-
-class _MoreRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool enabled;
-  final AdaptiveProfile profile;
-  final SupremeTextStyles text;
-  final VoidCallback? onTap;
-
-  const _MoreRow({
-    required this.icon,
-    required this.label,
-    required this.enabled,
-    required this.profile,
-    required this.text,
-    this.onTap,
-  });
+            activeConnectionManager: ref.read(connectionManagerProvider),
+          ),
+        ShellDestination.control => const SizedBox.shrink(), // never a page
+      };
 
   @override
   Widget build(BuildContext context) {
-    final color = enabled
-        ? SupremeColorScheme.textPrimary
-        : SupremeColorScheme.textSecondary;
-    final row = ConstrainedBox(
-      constraints: BoxConstraints(minHeight: profile.minTouchTarget),
-      child: SupremeCard(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Row(
-            children: [
-              Icon(icon, color: color),
-              const SizedBox(width: 16),
-              Expanded(child: Text(label, style: text.body.copyWith(color: color))),
-              if (enabled)
-                const Icon(Icons.chevron_right,
-                    color: SupremeColorScheme.textSecondary)
-              else
-                Text('Not available yet',
-                    style: text.caption
-                        .copyWith(color: SupremeColorScheme.textSecondary)),
-            ],
+    final nav = shellNavigationFor(SurfaceScope.of(context));
+    final homes = ref.watch(pairedHomeControllerProvider);
+    final manager = ref.watch(connectionManagerProvider);
+    final simulated = ref.watch(simulatedResidenceProvider) != null;
+    final residence = ref.watch(residenceViewProvider).valueOrNull?.snapshot;
+
+    // Back goes up one level at a time: out of a space, then to Home, then leaves the app.
+    return PopScope(
+      canPop: _current == ShellDestination.home && _openSpace == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        setState(() {
+          if (_openSpace != null) {
+            _openSpace = null;
+          } else {
+            _current = ShellDestination.home;
+          }
+        });
+      },
+      child: ListenableBuilder(
+        listenable: homes,
+        builder: (context, _) => StreamBuilder<HubConnectionState>(
+          stream: manager.state,
+          initialData: manager.current,
+          builder: (context, snap) => SupremeShell(
+            navigation: nav,
+            current: _current,
+            onSelect: _select,
+            onOpenControl: () => _openControl(context),
+            residenceName: (residence?.name.isNotEmpty ?? false)
+                ? residence!.name
+                : homes.activeHome?.displayName ?? '',
+            residenceReachable: simulated || (snap.data?.isConnected ?? false),
+            // Home and a space are photo-led: the picture runs under the header.
+            bodyUnderHeader: _current == ShellDestination.home ||
+                (_current == ShellDestination.spaces && _openSpace != null),
+            body: _page(homes),
           ),
         ),
       ),
-    );
-    if (!enabled) return row;
-    return Semantics(
-      button: true,
-      label: label,
-      excludeSemantics: true,
-      child: InkWell(onTap: onTap, child: row),
     );
   }
 }

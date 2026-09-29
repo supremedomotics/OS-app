@@ -213,7 +213,13 @@ export const TemperatureState = z.object({
 export const PositionState = z.object({
   /** 0 = fully closed, 100 = fully open. */
   position: Percent,
-  moving: z.boolean().default(false),
+  /**
+   * Whether the device is in travel. `null` = UNKNOWN: the protocol does not say (KNX DPT 5.001
+   * position status carries no motion flag). Unknown is never `false` — "not moving" is a claim,
+   * and a client that hears it would treat a shade in travel as settled. Only a driver whose
+   * protocol reports motion may emit `true` or `false`. Absent parses to `null`, not `false`.
+   */
+  moving: z.boolean().nullable().default(null),
 });
 
 export const MediaState = z.object({
@@ -476,3 +482,23 @@ export type CapabilityCommand = z.infer<typeof CapabilityCommand>;
 
 /** Capabilities that are read-only (cannot be commanded). */
 export const READONLY_CAPABILITIES: readonly CapabilityKind[] = ["sensor"];
+
+/**
+ * Where a state value came from — the difference between "the device said so" and "we told it to".
+ *
+ *  - `observed`  — semantically attributable to the device's own report of the state (a status /
+ *    feedback object, a polled read of the device, a device-initiated event). ONLY this may be
+ *    persisted as the device's state, feed automations, or confirm a command. A received telegram
+ *    is not automatically observed: on a bus a value on the COMMAND address may be another writer's
+ *    command, so it is observed only when it arrives on an address the integration declares as the
+ *    device's status/feedback.
+ *  - `commanded` — the value a command asked for. Never the device's state and never a confirmation.
+ *  - `assumed`   — inferred from a successful transmit for a device that declares it has no
+ *    feedback. Never observed, never a confirmation of physical state.
+ *  - `unknown`   — the integration cannot say (link down, no feedback, field not provided).
+ *
+ * A driver that has not declared provenance is a legacy driver: the Hub treats its events as
+ * `observed` (unchanged behaviour) — that default is an audit item, not a guarantee.
+ */
+export const StateProvenance = z.enum(["observed", "commanded", "assumed", "unknown"]);
+export type StateProvenance = z.infer<typeof StateProvenance>;

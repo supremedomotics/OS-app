@@ -40,8 +40,23 @@ abstract class HubTransport {
   /// nothing else about the interface changes.
   Future<Map<String, dynamic>> get(String path);
 
+  /// An authenticated read of a binary resource the Hub serves (a hero image, ADR 0102), with the
+  /// ETag revalidation the serving contract defines. Throws for a transport that cannot carry
+  /// bytes — the caller then shows the absence honestly (a tonal plate), never a substitute.
+  Future<HubBytes> getBytes(String path, {String? ifNoneMatch});
+
   /// Live state/event stream from the Hub (WSS locally, tunnel remotely).
   Stream<Map<String, dynamic>> events();
+}
+
+/// A binary resource read from the Hub. [notModified] means the caller's cached copy (the one
+/// whose ETag it sent) is still current and [bytes] is null.
+class HubBytes {
+  final List<int>? bytes;
+  final String? contentType;
+  final String? etag;
+  final bool notModified;
+  const HubBytes({this.bytes, this.contentType, this.etag, this.notModified = false});
 }
 
 /// A Hub's persistent identity (§ Hub identity) — deliberately NOT just an
