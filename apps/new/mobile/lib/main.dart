@@ -17,6 +17,8 @@ import 'features/spaces/spaces_screen.dart';
 import 'features/spaces/space_screen.dart';
 import 'features/control/control_layer.dart';
 import 'features/experiences/experiences_screen.dart';
+import 'features/onboarding/app_entry.dart';
+import 'features/onboarding/simulation_banner.dart';
 import 'features/settings/home_settings_screen.dart';
 import 'features/settings/paired_home_controller.dart';
 import 'features/settings/settings_screen.dart';
@@ -221,6 +223,22 @@ final simulatedResidenceProvider = Provider<SimulatedResidence?>((ref) {
   ref.onDispose(sim.dispose);
   return sim;
 });
+
+/// Whether the person has chosen **Demo** on the arrival screen. This is not a way to turn the
+/// simulator on: it only records that the arrival flow has been passed. Whether a simulator exists
+/// at all is decided solely by [simulatedResidenceProvider], i.e. the compile-time
+/// `SUPREME_SIMULATED_RESIDENCE` flag. Without that flag no Demo is offered, and nothing reads this
+/// value to start one.
+final demoEnteredProvider = StateProvider<bool>((ref) => false);
+
+/// The one way the app pairs a Home: the existing pairing-code ceremony ([realPairHome]). Settings
+/// → Home and first-run onboarding both call this, so there is a single seam and no second sign-in.
+final pairHomeProvider = Provider<PairingCodeHandler>((ref) => (code) => realPairHome(
+      discovery: ref.read(platformDiscoveryProvider),
+      identity: ref.read(mobileIdentityProvider),
+      authStore: ref.read(pairedHomeAuthStoreProvider),
+      pairingCode: code,
+    ));
 
 /// The canonical Residence State for the active Home (the Hub's own records, read and streamed).
 /// Rebuilds — and releases the previous Home's state — whenever the active connection does.
@@ -618,7 +636,10 @@ void main() {
 }
 
 class SupremeMobileApp extends StatelessWidget {
-  const SupremeMobileApp({super.key});
+  /// What the app opens to. Production leaves this null and gets [AppEntry] (first-run arrival,
+  /// then the shell); a test of the shell itself passes [RootShell] directly.
+  final Widget? home;
+  const SupremeMobileApp({super.key, this.home});
 
   @override
   Widget build(BuildContext context) {
@@ -638,12 +659,17 @@ class SupremeMobileApp extends StatelessWidget {
       // one `AdaptiveScope`, so this bug class cannot recur for a new screen either.
       builder: (context, child) => Consumer(builder: (context, ref, _) {
         final reduce = ref.watch(motionPrefProvider) == MotionPref.reduce;
+        // Simulated state must never pass for a real residence: while the simulator feeds the app
+        // (a `SUPREME_SIMULATED_RESIDENCE` build) every route sits under the DEMO banner.
+        final simulated = ref.watch(simulatedResidenceProvider) != null;
         return MotionScope(
           reduce: reduce,
-          child: SurfaceScope(child: AdaptiveScope(child: child!)),
+          child: SurfaceScope(
+              child: AdaptiveScope(
+                  child: SimulationBanner(active: simulated, child: child!))),
         );
       }),
-      home: const RootShell(),
+      home: home ?? const AppEntry(),
     );
   }
 }
@@ -777,12 +803,7 @@ class _RootShellState extends ConsumerState<RootShell>
         ShellDestination.settings => SettingsScreen(
             embedded: true,
             homeController: homes,
-            onPairHome: (code) => realPairHome(
-              discovery: ref.read(platformDiscoveryProvider),
-              identity: ref.read(mobileIdentityProvider),
-              authStore: ref.read(pairedHomeAuthStoreProvider),
-              pairingCode: code,
-            ),
+            onPairHome: ref.read(pairHomeProvider),
             activeConnectionManager: ref.read(connectionManagerProvider),
           ),
         ShellDestination.control => const SizedBox.shrink(), // never a page

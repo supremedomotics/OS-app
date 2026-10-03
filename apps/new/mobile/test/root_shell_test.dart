@@ -12,7 +12,7 @@ void main() {
 
   testWidgets('shows all five primary destinations and can switch between them',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     for (final label in ['Home', 'Spaces', 'Control', 'Experiences', 'Settings']) {
@@ -33,7 +33,7 @@ void main() {
 
   testWidgets('Control is a layer over the page, not a page: the page underneath stays',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Spaces'));
@@ -56,7 +56,7 @@ void main() {
 
   testWidgets('the shell shows the mark of a residence that is not connected, not a fake state',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('shell-presence')), findsOneWidget);
     expect(find.byKey(const ValueKey('shell-wordmark')), findsOneWidget);

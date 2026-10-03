@@ -29,7 +29,7 @@ void main() {
 
   testWidgets('Spaces shows an honest empty state, not a blank screen (§QA-01)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Spaces'));
@@ -42,7 +42,7 @@ void main() {
   testWidgets(
       'Experiences shows its header and an honest empty state, not a blank screen (§QA-02)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Experiences'));
@@ -55,7 +55,7 @@ void main() {
   testWidgets(
       'every destination of the shell is real: nothing inert or placeholder is drawn (§QA-03/QA-04)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     // The old shell drew "Not available yet" rows. Under the SupremeOS-10 rule an unsupported
@@ -83,7 +83,7 @@ void main() {
 
   testWidgets('Control opens a layer and never navigates away from the page (§QA-04)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Settings'));
@@ -123,7 +123,7 @@ void main() {
   });
 
   testWidgets('Settings renders with no paired Home (§Settings-no-home)', (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Settings'));
@@ -149,7 +149,7 @@ void main() {
       'supreme_active_home_id_v1': 'hub-1',
     });
 
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Settings'));

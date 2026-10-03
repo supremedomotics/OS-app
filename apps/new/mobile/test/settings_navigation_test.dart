@@ -25,7 +25,7 @@ void main() {
   testWidgets(
       'navigating to Settings never throws and renders the real Settings page (§QA-05)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
@@ -43,7 +43,7 @@ void main() {
   testWidgets(
       'navigating Settings -> Home (a pushed route) never throws, even with no Home paired (§QA-05)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp()));
+    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Settings'));

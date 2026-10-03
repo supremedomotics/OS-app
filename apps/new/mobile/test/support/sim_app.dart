@@ -13,13 +13,19 @@ class SimApp {
   late final SimulatedResidence sim =
       SimulatedResidence(schedule: clock.schedule, now: clock.now);
   final int hour;
-  SimApp({this.hour = 15});
+
+  /// False starts on the arrival flow (a simulation build before Demo is chosen); true starts past
+  /// it, as a tap on Demo would.
+  final bool pastArrival;
+  final List<Override> extra;
+  SimApp({this.hour = 15, this.pastArrival = true, this.extra = const []});
 
   /// Every route the app sent to the Hub, in order (device commands and scene activations).
   final List<String> sent = [];
 
   List<Override> get overrides => [
         simulatedResidenceProvider.overrideWithValue(sim),
+        if (pastArrival) demoEnteredProvider.overrideWith((ref) => true),
         commandScheduleProvider.overrideWithValue(clock.schedule),
         hubSendProvider.overrideWithValue((path, body) {
           sent.add(path);
@@ -28,8 +34,10 @@ class SimApp {
         residenceHourProvider.overrideWithValue(hour),
         // No OS in a widget test: these two would open platform channels that do not exist here.
         pushTokenSourceProvider.overrideWithValue(null),
-        mobileRuntimePlatformProvider.overrideWithValue(NoOpMobileRuntimePlatform()),
+        mobileRuntimePlatformProvider
+            .overrideWithValue(NoOpMobileRuntimePlatform()),
         networkChangeListenerProvider.overrideWith((ref) {}),
+        ...extra,
       ];
 
   Future<void> pump(WidgetTester tester,
@@ -43,8 +51,8 @@ class SimApp {
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));
     });
-    await tester.pumpWidget(ProviderScope(
-        overrides: overrides, child: const SupremeMobileApp()));
+    await tester.pumpWidget(
+        ProviderScope(overrides: overrides, child: const SupremeMobileApp()));
     await settle(tester);
   }
 
