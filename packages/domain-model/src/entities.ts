@@ -28,6 +28,20 @@ export const Home = z.object({
    * Null when the residence has no photograph; never an external URL. Derived by the gateway from
    * the stored asset, not persisted on the home row. */
   heroImageUrl: z.string().min(1).nullable().default(null),
+  /** The residence's location (latitude/longitude for the sun, an IANA time zone, a display label).
+   * Derived by the gateway from the stored home config; null until one is set. */
+  location: z
+    .object({
+      lat: z.number().min(-90).max(90),
+      lon: z.number().min(-180).max(180),
+      timeZone: z.string().min(1).nullable(),
+      label: z.string().min(1).nullable(),
+      /** The zone's current offset from UTC in minutes (what a client without a time-zone database
+       * needs to show the residence's own clock). Null when the zone is unknown. */
+      utcOffsetMinutes: z.number().int().nullable().default(null),
+    })
+    .nullable()
+    .default(null),
 });
 export type Home = z.infer<typeof Home>;
 

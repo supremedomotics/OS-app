@@ -11,6 +11,7 @@ import { authenticate, canViewDevice, enforce } from "../auth.js";
 import { authenticateMobileOrUser, resolveMobileOrSessionUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
 import { sendError } from "../http-errors.js";
+import { readHomeLocation } from "../home-location.js";
 import {
   downloadHeroImage,
   heroImageFromUpload,
@@ -48,7 +49,7 @@ export function registerHomeRoutes(app: FastifyInstance, ctx: AppContext): void 
       if (!home) throw new SupremeError("not_found", "home not commissioned");
       const hero = (await ctx.homeConfig.get(ctx.homeId, HOME_HERO_KEY)) as StoredHeroImage | undefined;
       const body: HomeView = {
-        home: { ...home, heroImageUrl: hero ? versionedHeroPath(HOME_HERO_PATH, hero) : null },
+        home: { ...home, heroImageUrl: hero ? versionedHeroPath(HOME_HERO_PATH, hero) : null, location: await readHomeLocation(ctx) },
         rooms: await ctx.home.listRooms(),
       };
       reply.send(body);

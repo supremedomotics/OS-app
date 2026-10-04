@@ -55,6 +55,42 @@ describe("Mobile-authorization bridge on the real homeowner API", () => {
     expect(Array.isArray(body.rooms)).toBe(true);
   });
 
+  it("a paired Mobile sets the residence's location, and /v1/home reports it back", async () => {
+    const auth = { authorization: `Bearer ${tokenFor("m1")}`, "content-type": "application/json" };
+    const put = await fetch(`${base}/v1/home/location`, {
+      method: "PUT",
+      headers: auth,
+      body: JSON.stringify({ lat: 39.6953, lon: 3.0176, timeZone: "Europe/Madrid", label: "Palma, Spain" }),
+    });
+    expect(put.status).toBe(200);
+    const home = (await (await fetch(`${base}/v1/home`, { headers: auth })).json()) as {
+      home: { location: { lat: number; lon: number; timeZone: string | null; label: string | null; utcOffsetMinutes: number | null } | null };
+    };
+    expect(home.home.location).toMatchObject({ lat: 39.6953, lon: 3.0176, timeZone: "Europe/Madrid", label: "Palma, Spain" });
+    // Madrid is UTC+1 or +2 depending on the season; either way a whole number of minutes.
+    expect([60, 120]).toContain((home.home.location as { utcOffsetMinutes: number | null }).utcOffsetMinutes);
+  });
+
+  it("a paired Mobile can also POST the location (its transport only POSTs)", async () => {
+    const res = await fetch(`${base}/v1/home/location`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokenFor("m1")}`, "content-type": "application/json" },
+      body: JSON.stringify({ lat: 28.6139, lon: 77.209, timeZone: "Asia/Kolkata", label: "New Delhi, India" }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { location: { label: string } }).location.label).toBe("New Delhi, India");
+  });
+
+  it("refuses an impossible place or time zone, and an unpaired caller", async () => {
+    const auth = { authorization: `Bearer ${tokenFor("m1")}`, "content-type": "application/json" };
+    const put = (body: unknown, headers: Record<string, string> = auth) =>
+      fetch(`${base}/v1/home/location`, { method: "PUT", headers, body: JSON.stringify(body) });
+    expect((await put({ lat: 91, lon: 0 })).status).toBe(422);
+    expect((await put({ lat: 10, lon: 200 })).status).toBe(422);
+    expect((await put({ lat: 10, lon: 10, timeZone: "Not/AZone" })).status).toBe(422);
+    expect((await put({ lat: 10, lon: 10 }, { "content-type": "application/json" })).status).toBe(401);
+  });
+
   it("a valid Mobile token can list real devices via /v1/devices", async () => {
     const res = await fetch(`${base}/v1/devices`, { headers: { authorization: `Bearer ${tokenFor("m1")}` } });
     expect(res.status).toBe(200);

@@ -11,7 +11,7 @@ import {
 } from "@supreme/contracts";
 import type { Scene, SceneId } from "@supreme/domain-model";
 import { validateSchedule, ScheduleError } from "@supreme/scenes";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { authenticate, can, enforce } from "../auth.js";
 import { authenticateMobileOrUser } from "../mobile-auth-bridge.js";
 import type { AppContext } from "../context.js";
@@ -155,19 +155,34 @@ export function registerSceneRoutes(app: FastifyInstance, ctx: AppContext): void
     }
   });
 
-  // The home's geographic location — required for sunrise/sunset-anchored schedules.
-  app.put("/v1/home/location", async (req, reply) => {
+  // The home's geographic location — required for sunrise/sunset-anchored schedules and shown as the
+  // sun in the apps. A paired SupremeOS Mobile may set it (it is the home's owner, see the bridge);
+  // `timeZone` (IANA) and `label` (the place's name) are kept for display.
+  // `POST` is the same route for clients whose control transport only POSTs (the SupremeOS Mobile).
+  const setLocation = async (req: FastifyRequest, reply: FastifyReply) => {
     try {
-      const user = await authenticate(ctx, req);
+      const user = await authenticateMobileOrUser(ctx, req);
       await enforce(ctx, user, "home", null, "admin");
-      const b = (req.body ?? {}) as { lat?: number; lon?: number };
+      const b = (req.body ?? {}) as { lat?: number; lon?: number; timeZone?: unknown; label?: unknown };
       if (!Number.isFinite(b.lat) || !Number.isFinite(b.lon) || Math.abs(b.lat!) > 90 || Math.abs(b.lon!) > 180) {
         throw new SupremeError("validation_failed", "valid lat (-90..90) and lon (-180..180) are required");
       }
-      await ctx.homeConfig.set(ctx.homeId, "location", { lat: b.lat, lon: b.lon });
-      reply.send({ location: { lat: b.lat, lon: b.lon } });
+      const tz = typeof b.timeZone === "string" && b.timeZone.trim() ? b.timeZone.trim() : null;
+      if (tz) {
+        try {
+          new Intl.DateTimeFormat("en", { timeZone: tz });
+        } catch {
+          throw new SupremeError("validation_failed", "timeZone must be an IANA time zone, e.g. Europe/Madrid");
+        }
+      }
+      const label = typeof b.label === "string" && b.label.trim() ? b.label.trim().slice(0, 120) : null;
+      const location = { lat: b.lat!, lon: b.lon!, timeZone: tz, label };
+      await ctx.homeConfig.set(ctx.homeId, "location", location);
+      reply.send({ location });
     } catch (err) {
       sendError(reply, err);
     }
-  });
+  };
+  app.put("/v1/home/location", setLocation);
+  app.post("/v1/home/location", setLocation);
 }
