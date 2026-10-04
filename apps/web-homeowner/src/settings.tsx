@@ -12,6 +12,7 @@ import {
 } from "@supreme/aureon-web";
 import { activateLicense, client, devIssueLicense, fetchDriverRegistry, fetchLicense, fetchSystemLogs, logOut, setDevMode, type DriverEntry, type LicenseInfo, type SystemLogEntry } from "./api.js";
 import { PasskeysSection } from "./passkeys.js";
+import { PairPhoneSection } from "./phones.js";
 import { PasswordInput } from "./password-input.js";
 import { AdvancedSettings } from "./advanced.js";
 import {
@@ -903,6 +904,7 @@ function SecuritySettings() {
 
       {msg && <p className={msg.ok ? "muted" : "err"}>{msg.text}</p>}
 
+      <PairPhoneSection />
       <RecoveryCodes />
       <PasskeysSection />
       <ApiTokens />
