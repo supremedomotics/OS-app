@@ -390,3 +390,71 @@ describe("runtime driver registration (manifest↔runtime bridge)", () => {
     expect(network2.manages(device1)).toBe(false);
   });
 });
+
+/** A driver whose bus is not there: connect() does not settle until the test lets it. */
+class StalledDriver extends FakeDriver {
+  private release!: () => void;
+  private readonly gate = new Promise<void>((r) => {
+    this.release = r;
+  });
+  override async connect() {
+    await this.gate;
+    this.connected = true;
+  }
+  open() {
+    this.release();
+  }
+}
+
+describe("boot with an unreachable device (the hub must still serve)", () => {
+  it("connect() returns within the budget although a driver never answers", async () => {
+    const stalled = new StalledDriver("stalled");
+    const adapter = new SupremeNativeAdapter({ drivers: [stalled], bootConnectBudgetMs: 60 });
+    const t0 = Date.now();
+    await adapter.connect();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(adapter.isConnected()).toBe(true);
+    expect(adapter.protocolStatus()).toEqual([{ protocol: "stalled", connected: false, error: null }]);
+  });
+
+  it("a stalled driver does not hold up the others: they connect and wire up", async () => {
+    const stalled = new StalledDriver("stalled");
+    const ok = new FakeDriver("ok");
+    const adapter = new SupremeNativeAdapter({ drivers: [stalled, ok], bootConnectBudgetMs: 60 });
+    await adapter.connect();
+    expect(ok.isConnected()).toBe(true);
+    expect(stalled.isConnected()).toBe(false);
+  });
+
+  it("a driver that connects after boot still wires itself in", async () => {
+    const late = new StalledDriver("late");
+    const adapter = new SupremeNativeAdapter({ drivers: [late], bootConnectBudgetMs: 30 });
+    await adapter.connect();
+    late.open();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(adapter.protocolStatus()[0]!.connected).toBe(true);
+  });
+
+  it("a driver that connects after disconnect() wires nothing up", async () => {
+    const late = new StalledDriver("late");
+    const adapter = new SupremeNativeAdapter({ drivers: [late], bootConnectBudgetMs: 30 });
+    await adapter.connect();
+    await adapter.disconnect();
+    late.open();
+    await new Promise((r) => setTimeout(r, 20));
+    // it connected on its own, but nothing was subscribed to its state after the disconnect
+    expect((adapter as unknown as { unsubByProtocol: Map<string, unknown> }).unsubByProtocol.size).toBe(0);
+  });
+
+  it("a driver that fails to connect is recorded, not fatal", async () => {
+    class Failing extends FakeDriver {
+      override async connect() {
+        throw new Error("no route to host");
+      }
+    }
+    const adapter = new SupremeNativeAdapter({ drivers: [new Failing("bad"), new FakeDriver("ok")] });
+    await adapter.connect();
+    expect(adapter.protocolStatus().find((p) => p.protocol === "bad")?.error).toBe("no route to host");
+    expect(adapter.protocolStatus().find((p) => p.protocol === "ok")?.connected).toBe(true);
+  });
+});
