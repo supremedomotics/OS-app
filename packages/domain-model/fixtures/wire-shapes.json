@@ -5,6 +5,7 @@
       "createdAt": "string",
       "heroImageUrl": "null",
       "id": "string",
+      "location": "null",
       "masterUserId": "string",
       "name": "string",
       "tier": "string"
