@@ -194,6 +194,36 @@ in `packages/aureon-web`; every page inherits the improvement automatically.
   overflow, zero clipped controls, no broken layout at any tier. Use the `run` skill's Playwright
   pattern; screenshot and actually look at the result.
 
+## Flutter homeowner app (`apps/new`) — Golden Master fidelity (hard production requirement)
+
+The Golden Master is the HTML build `SupremeOS-10.html` (source: `SupremeOS_source.tar.gz`; the
+frozen onboarding is `SupremeOS_Onboarding_frozen.html`). It is the **visual and interaction
+authority** for every Flutter homeowner surface — not "the same design language", the same
+experience: boot/arrival, presence animation, wordmark, typography (family, weight, size,
+tracking), colours and opacities, backgrounds, gradients, room photography and its scrims,
+navigation, the Control layer, buttons, pills, sliders, every state (selected, pending,
+confirmed, failed), spacing, borders, blur, shadows, glyphs, motion and easing, responsive
+composition and accessibility semantics.
+
+- **Value → behaviour → Flutter equivalent.** Before changing a surface, read the Golden Master's
+  actual CSS/JS and determine the real value. Never approximate when the exact value can be read,
+  and never invent a look-alike. Use the Golden Master's own fonts and weights (no synthesized
+  weight, no Material/default typography), its own colour tokens and opacity relationships (no
+  parallel palette), and its own photography (no tonal placeholder plates once the asset exists;
+  if the Hub is the source, wire the real asset path — don't redesign around its absence).
+- **The boot/arrival choreography is part of the product** and is never skipped.
+- **Demo mode** is a special entry on onboarding page 1 only (and that page's "not found yet"
+  variant), only in a `SUPREME_SIMULATED_RESIDENCE=true` build. While active, the persistent
+  `DEMO · SIMULATED RESIDENCE` indicator stays, and Settings leads with **Exit Demo Mode**, which
+  ends the simulator and returns to page 1 without starting pairing, connecting to a Hub, or
+  touching any real paired Home.
+- **No architectural duplication.** `ResidenceState`, `CommandTracker`, state provenance,
+  `SurfaceProfile`/`SurfaceScope`, the Hub contracts, the simulator transport and real pairing stay
+  the single sources of truth. Fidelity work adds no HTML-specific domain model.
+- **Verify, don't assert.** A surface is not "visually complete" because it is functional. Run
+  `tools/golden-master-verify` (see `docs/architecture/Golden-Master-Fidelity.md`) and report every
+  meaningful mismatch as `Golden Master value → Flutter value → mismatch → correction`.
+
 ## Autonomous development environment (Claude Desktop)
 
 This section documents the local MCP-driven dev environment configured for this workstation

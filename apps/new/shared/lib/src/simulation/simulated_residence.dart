@@ -115,6 +115,13 @@ class SimulatedResidence {
           'masterUserId': 'sim-owner',
           'createdAt': '2026-01-01T00:00:00.000Z',
           'heroImageUrl': _heroUrl(null),
+          'location': {
+            'lat': 39.57,
+            'lon': 2.65,
+            'timeZone': 'Europe/Madrid',
+            'label': 'Palma, Spain',
+            'utcOffsetMinutes': 120,
+          },
         },
         'rooms': _rooms,
       };
@@ -499,7 +506,9 @@ class SimulatedResidence {
     if (b == null) throw StateError('not_found');
     final etag = '"${_hash(b)}"';
     if (ifNoneMatch == etag) return HubBytes(notModified: true, etag: etag);
-    return HubBytes(bytes: b, contentType: 'image/png', etag: etag);
+    // The type the bytes are (a Hub names it from the stored file): JPEG starts FF D8.
+    final jpeg = b.length > 2 && b[0] == 0xFF && b[1] == 0xD8;
+    return HubBytes(bytes: b, contentType: jpeg ? 'image/jpeg' : 'image/png', etag: etag);
   }
 
   Future<void> dispose() async => _frames.close();

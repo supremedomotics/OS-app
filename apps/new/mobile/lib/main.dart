@@ -4,14 +4,18 @@ import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import 'data/discovery_factory.dart';
+import 'data/home_location.dart';
+import 'data/manual_hub_store.dart';
 import 'data/secure_mobile_storage.dart';
 import 'data/shared_prefs_paired_home_store.dart';
+import 'data/simulation_photography.dart';
 import 'features/home/home_screen.dart';
 import 'features/spaces/spaces_screen.dart';
 import 'features/spaces/space_screen.dart';
@@ -81,8 +85,33 @@ final mobileIdentityProvider = Provider<Ed25519MobileIdentity>(
 /// `MdnsHubDiscovery` on platforms that support it (Android/iOS/desktop), with an honest,
 /// documented web fallback (`discovery_factory_web.dart`) where no UDP multicast socket API
 /// exists at all. `MockHubDiscovery` is untouched and still used directly by tests.
-final platformDiscoveryProvider =
-    Provider<HubDiscovery>((ref) => buildPlatformDiscovery());
+final platformDiscoveryProvider = Provider<HubDiscovery>((ref) => ManualAwareDiscovery(
+    inner: buildPlatformDiscovery(),
+    store: ref.read(manualHubStoreProvider),
+    probe: ref.read(hubProbeProvider)));
+
+/// "Palma, Spain" → coordinates and a time zone, for the residence step. A provider so a test can
+/// answer without a network.
+final placeLookupProvider = Provider<PlaceLookup>((ref) => openMeteoLookup);
+
+/// Tells a just-paired Hub where the residence is (the Hub keeps it; the sun is computed from it).
+final homeLocationWriterProvider =
+    Provider<Future<void> Function(String hubId, Place place)>((ref) => (hubId, place) async {
+          final lan = await resolveHomeBaseUrl(ref.read(platformDiscoveryProvider), hubId);
+          if (lan == null) throw StateError('The Hub could not be reached to save the location.');
+          final session = ref.read(pairedHomeAuthStoreProvider).sessionFor(hubId);
+          if (session == null) throw StateError('No authorization for this Home.');
+          await writeHubLocation(
+              hubBase: Uri(scheme: 'https', host: lan.host),
+              bearerToken: session.bearerToken,
+              place: place);
+        });
+
+/// Hubs the person typed in because discovery did not find theirs (onboarding's "connect manually").
+final manualHubStoreProvider = Provider<ManualHubStore>((ref) => ManualHubStore());
+
+/// Is a Hub answering at host:port? A provider so a test can say yes or no without a network.
+final hubProbeProvider = Provider<Future<bool> Function(String host, int port)>((ref) => probeHub);
 
 /// §Phase12.8 — resolves a Home's real LAN base URL by scoping the platform's real discovery
 /// (`platformDiscoveryProvider`) to exactly that `hubId` via `SingleHubDiscovery` (Phase 12.2)
@@ -196,7 +225,7 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
   );
   ref.onDispose(manager.dispose);
   // A simulated residence has no Hub to find: never start discovery/backoff against nothing.
-  if (ref.watch(simulatedResidenceProvider) == null) manager.start();
+  if (ref.watch(activeSimulationProvider) == null) manager.start();
   return manager;
 });
 
@@ -220,9 +249,17 @@ const _simulatedResidenceEnabled =
 final simulatedResidenceProvider = Provider<SimulatedResidence?>((ref) {
   if (!_simulatedResidenceEnabled) return null;
   final sim = SimulatedResidence();
+  // The Golden Master's photographs, served on the Hub's picture route like a real Hub's own.
+  applySimulationPhotography(sim, ref.read(simulationPhotographyProvider));
   ref.onDispose(sim.dispose);
   return sim;
 });
+
+/// The simulated residence's photographs, loaded once before the app runs (`main`). Empty unless
+/// the simulation build loaded them, so tests and production builds serve no picture they were not
+/// given.
+final simulationPhotographyProvider =
+    Provider<SimulationPhotographs>((ref) => const {});
 
 /// Whether the person has chosen **Demo** on the arrival screen. This is not a way to turn the
 /// simulator on: it only records that the arrival flow has been passed. Whether a simulator exists
@@ -230,6 +267,36 @@ final simulatedResidenceProvider = Provider<SimulatedResidence?>((ref) {
 /// `SUPREME_SIMULATED_RESIDENCE` flag. Without that flag no Demo is offered, and nothing reads this
 /// value to start one.
 final demoEnteredProvider = StateProvider<bool>((ref) => false);
+
+/// The simulated residence **while Demo is active** — null in a production build, and in a
+/// simulation build before Demo is entered (or after Exit Demo Mode). Everything that decides
+/// whether the app shows simulated or real data, and the DEMO indicator, reads this, so a
+/// simulation build behaves exactly like production until Demo is chosen.
+final activeSimulationProvider = Provider<SimulatedResidence?>((ref) {
+  final sim = ref.watch(simulatedResidenceProvider);
+  return sim != null && ref.watch(demoEnteredProvider) ? sim : null;
+});
+
+/// Set by [exitDemoModeProvider]: the person asked to leave the simulation, so the app returns to
+/// the first arrival page even when a real Home is paired on this device (the stored Home is not
+/// touched). Memory only — a cold start decides from the stored Homes as it always has — and
+/// cleared the moment the person passes the arrival flow again (Demo, or a finished sign-in).
+final arrivalRequestedProvider = StateProvider<bool>((ref) => false);
+
+/// Leaves Demo Mode: ends the simulated residence and everything built on it, then shows the first
+/// arrival page. Nothing real is touched — no paired Home, credential or Hub connection — and the
+/// real pairing flow is not started. A no-op in a build without the simulator, which has no Demo.
+///
+/// Invalidating [simulatedResidenceProvider] is the whole teardown: it disposes the simulator
+/// (`ref.onDispose(sim.dispose)`), and `ResidenceState`, the command tracker, the Hub send path
+/// and the picture store are all built on it, so they are released with it. The next Demo starts
+/// from a fresh residence.
+final exitDemoModeProvider = Provider<void Function()>((ref) => () {
+      if (ref.read(simulatedResidenceProvider) == null) return;
+      ref.read(arrivalRequestedProvider.notifier).state = true;
+      ref.read(demoEnteredProvider.notifier).state = false;
+      ref.invalidate(simulatedResidenceProvider);
+    });
 
 /// The one way the app pairs a Home: the existing pairing-code ceremony ([realPairHome]). Settings
 /// → Home and first-run onboarding both call this, so there is a single seam and no second sign-in.
@@ -243,7 +310,7 @@ final pairHomeProvider = Provider<PairingCodeHandler>((ref) => (code) => realPai
 /// The canonical Residence State for the active Home (the Hub's own records, read and streamed).
 /// Rebuilds — and releases the previous Home's state — whenever the active connection does.
 final residenceStateProvider = Provider<ResidenceState>((ref) {
-  final sim = ref.watch(simulatedResidenceProvider);
+  final sim = ref.watch(activeSimulationProvider);
   if (sim != null) {
     final state = ResidenceState(
         get: sim.transport.get, frames: sim.stream.frames);
@@ -292,6 +359,9 @@ final activeHomeStreamUriProvider =
 /// time zone) can replace it; today it is this device's clock — see `residence_description.dart`.
 final residenceHourProvider = Provider<int>((ref) => DateTime.now().hour);
 
+/// The instant the sun's line is drawn for. A provider so a test can pin the day.
+final residenceNowProvider = Provider<DateTime Function()>((ref) => DateTime.now);
+
 /// Every homeowner action goes through this one tracker: requested → pending → confirmed|failed.
 /// The one way a homeowner action reaches the Hub: a command route + body. Used by the command
 /// tracker for device commands and by Experience activation for the Hub's scene route, so both
@@ -300,7 +370,7 @@ typedef HubSend = Future<Map<String, dynamic>> Function(
     String path, Map<String, dynamic> body);
 
 final hubSendProvider = Provider<HubSend>((ref) {
-  final sim = ref.watch(simulatedResidenceProvider);
+  final sim = ref.watch(activeSimulationProvider);
   if (sim != null) return sim.transport.sendCommand;
   return ref.watch(connectionManagerProvider).sendCommand;
 });
@@ -323,7 +393,7 @@ final commandTrackerProvider = Provider<CommandTracker>((ref) {
 
 /// Hub-served pictures (ADR 0102): authenticated bytes, cached by their hash-versioned URL.
 final heroImageStoreProvider = Provider<HeroImageStore>((ref) {
-  final sim = ref.watch(simulatedResidenceProvider);
+  final sim = ref.watch(activeSimulationProvider);
   final store = HeroImageStore(
       fetch: sim != null
           ? sim.transport.getBytes
@@ -631,8 +701,16 @@ class MotionPrefController extends StateNotifier<MotionPref> {
 final motionPrefProvider =
     StateNotifierProvider<MotionPrefController, MotionPref>((ref) => MotionPrefController());
 
-void main() {
-  runApp(const ProviderScope(child: SupremeMobileApp()));
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Only a simulation build has a simulated residence, and so only it loads its photographs.
+  final photographs = _simulatedResidenceEnabled
+      ? await loadSimulationPhotography(rootBundle)
+      : const <String?, List<int>>{};
+  runApp(ProviderScope(
+    overrides: [simulationPhotographyProvider.overrideWithValue(photographs)],
+    child: const SupremeMobileApp(),
+  ));
 }
 
 class SupremeMobileApp extends StatelessWidget {
@@ -661,7 +739,7 @@ class SupremeMobileApp extends StatelessWidget {
         final reduce = ref.watch(motionPrefProvider) == MotionPref.reduce;
         // Simulated state must never pass for a real residence: while the simulator feeds the app
         // (a `SUPREME_SIMULATED_RESIDENCE` build) every route sits under the DEMO banner.
-        final simulated = ref.watch(simulatedResidenceProvider) != null;
+        final simulated = ref.watch(activeSimulationProvider) != null;
         return MotionScope(
           reduce: reduce,
           child: SurfaceScope(
@@ -814,7 +892,7 @@ class _RootShellState extends ConsumerState<RootShell>
     final nav = shellNavigationFor(SurfaceScope.of(context));
     final homes = ref.watch(pairedHomeControllerProvider);
     final manager = ref.watch(connectionManagerProvider);
-    final simulated = ref.watch(simulatedResidenceProvider) != null;
+    final simulated = ref.watch(activeSimulationProvider) != null;
     final residence = ref.watch(residenceViewProvider).valueOrNull?.snapshot;
 
     // Back goes up one level at a time: out of a space, then to Home, then leaves the app.

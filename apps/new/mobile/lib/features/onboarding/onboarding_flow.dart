@@ -1,33 +1,37 @@
-import 'package:flutter/material.dart'
-    show
-        Material,
-        MaterialType,
-        TextField,
-        InputDecoration,
-        UnderlineInputBorder,
-        BorderSide;
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart' show Material, MaterialType;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
+import '../../data/home_location.dart';
+import '../../data/manual_hub_store.dart' show validateHubIp, validateHubPort;
 import '../../main.dart';
 import '../settings/home_settings_screen.dart' show PairHomeResult;
+import 'field_panel.dart';
+import 'onboarding_tokens.dart';
+import 'presence_layer.dart';
 
 /// The first-run arrival flow, after the Golden Master's frozen onboarding
-/// (`SupremeOS_Onboarding_frozen.html`): Hub detection → Give this residence an identity →
-/// Sign in → Your residence is ready.
+/// (`SupremeOS_Onboarding_frozen.html`, embedded byte-for-byte in `SupremeOS-10.html`): the Presence
+/// boot choreography while the Hub is found → Welcome (page 1) → Give this residence an identity →
+/// Sign in → Welcome home. Its CSS values are used as they are (`onboarding_tokens.dart`).
 ///
 /// What this is, and what it deliberately is not:
 /// * **Sign in** is the existing production pairing flow (`pairHomeProvider`, i.e. `realPairHome`:
 ///   the pairing code, then the Mobile's Ed25519 identity). The Golden Master's Sign in is a
-///   passkey flow; this is not that, and the screen never says it is.
+///   passkey / email flow; this is not that, and the screen never says it is.
 /// * **Residence identity** is the existing `PairedHome.displayName`, written through
 ///   `PairedHomeController.addHome`. There is no account, no email/password, no location field —
-///   Flutter has no model for any of those, so they are not drawn.
+///   Flutter has no model for any of those, so they are not drawn (the Golden Master's "Identity"
+///   account step and the location/daylight rows are therefore absent).
 /// * **Manual connect** (IP/port) is not drawn: pairing finds the Hub through discovery, and there
 ///   is no manual-address path in production to route it to.
-/// * **Demo** appears only when `simulatedResidenceProvider` is non-null (the compile-time
-///   `SUPREME_SIMULATED_RESIDENCE` build). Entering it never touches pairing or any Home record.
+/// * **Demo** appears only on page 1 (and its "not found yet" variant) and only when
+///   `simulatedResidenceProvider` is non-null (the compile-time `SUPREME_SIMULATED_RESIDENCE`
+///   build). Entering it never touches pairing or any Home record.
 class OnboardingFlow extends ConsumerStatefulWidget {
   /// Tells the host to keep this flow on screen (true) even though a Home now exists, or release
   /// it (false) so the residence shell takes over.
@@ -38,45 +42,91 @@ class OnboardingFlow extends ConsumerStatefulWidget {
   ConsumerState<OnboardingFlow> createState() => _OnboardingFlowState();
 }
 
-enum _Step { detecting, found, noHub, identity, signIn, ready }
-
-// Golden Master onboarding values with no shared token yet (everything else reuses
-// `SupremeColorScheme`: ivory #F7F4EE, ink #2D2A25, brass #A78048).
-const _ink2 = Color(0xFF5B554C);
-const _ink3 = Color(0xFF8A8277);
-const _panel = Color(0xFFEFE9DF);
-const _errorInk = Color(0xFF9A3B2C);
-const _line = Color(0x232D2A25);
-const _lineStrong = Color(0x522D2A25);
+enum _Step { welcome, noHub, identity, signIn, ready }
 
 class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
-  _Step _step = _Step.detecting;
+  _Step _step = _Step.welcome;
+
+  /// Presence owns the first seconds: the Hub is searched for while it plays, and Welcome appears
+  /// when it has finished (or "not found" after a quiet pause).
+  bool _booting = true;
+  bool _entering = false;
+  bool _resting = false;
+  Key _presenceKey = UniqueKey();
+  final _presence = PresenceController();
+
   List<DiscoveredHub> _hubs = const [];
   final _name = TextEditingController();
   final _code = TextEditingController();
+
+  // The residence's location (the Hub keeps it; the sun is computed from it).
+  final _location = TextEditingController();
+  String? _locationError;
+  bool _locating = false;
+  Place? _place;
+  bool _locationNotSaved = false;
+
+  // "Or connect manually" on the not-found screen.
+  bool _manualOpen = false;
+  bool _connecting = false;
+  final _ip = TextEditingController();
+  final _port = TextEditingController(text: '${SupremeOSHubDefaults.defaultPort}');
+  String? _ipError, _portError, _manualMain, _manualSub;
+  ({String host, int port})? _manualHub;
   bool _busy = false;
   String? _error;
-  int _searchGeneration = 0;
+  String? _nameError;
+  int _generation = 0;
+  bool _setup = false; // the identity step was completed (vs. "Already known here?")
+  bool _started = false;
+  final _timers = <Timer>[];
+
+  bool get _reduced => MediaQuery.disableAnimationsOf(context);
 
   @override
-  void initState() {
-    super.initState();
-    _search();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    _launch();
   }
 
   @override
   void dispose() {
-    _searchGeneration++; // a search still in flight must not touch a disposed State
+    _generation++; // a search still in flight must not touch a disposed State
+    for (final t in _timers) {
+      t.cancel();
+    }
     _name.dispose();
+    _location.dispose();
     _code.dispose();
+    _ip.dispose();
+    _port.dispose();
     super.dispose();
   }
 
-  Future<void> _search() async {
-    final generation = ++_searchGeneration;
+  void _later(Duration d, VoidCallback f) {
+    if (d == Duration.zero) {
+      f();
+      return;
+    }
+    late final Timer t;
+    t = Timer(d, () {
+      _timers.remove(t);
+      if (mounted) f();
+    });
+    _timers.add(t);
+  }
+
+  /// `launch()` — Presence reaches out and holds in stillness while discovery searches. Found →
+  /// the residence answers inside the choreography → Welcome. Not found → Presence stops, a quiet
+  /// pause, then the recovery state settles in.
+  Future<void> _launch() async {
+    final generation = ++_generation;
     setState(() {
-      _step = _Step.detecting;
+      _booting = true;
       _error = null;
+      _presenceKey = UniqueKey();
     });
     List<DiscoveredHub> hubs;
     try {
@@ -85,22 +135,84 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
       hubs =
           const []; // a discovery failure reads as "not found", never as a raw exception
     }
-    if (!mounted || generation != _searchGeneration) return;
-    setState(() {
-      _hubs = hubs;
-      _step = hubs.isEmpty ? _Step.noHub : _Step.found;
+    if (!mounted || generation != _generation) return;
+    _hubs = hubs;
+    if (hubs.isNotEmpty) {
+      _presence.hubResponded();
+    } else {
+      _presence.stop();
+      _later(_reduced ? Duration.zero : const Duration(milliseconds: 700), () {
+        if (generation != _generation) return;
+        setState(() {
+          _booting = false;
+          _step = _Step.noHub;
+        });
+      });
+    }
+  }
+
+  /// `PRESENCE.onDone` → a beat, then the app is shown and Welcome opens.
+  void _presenceDone() {
+    final generation = _generation;
+    _later(
+        _reduced
+            ? const Duration(milliseconds: 600)
+            : const Duration(milliseconds: 1400), () {
+      if (generation != _generation || _hubs.isEmpty) return;
+      setState(() {
+        _booting = false;
+        _step = _Step.welcome;
+      });
     });
   }
 
-  String get _suggestedName {
-    if (_hubs.isEmpty) return '';
-    final n = _hubs.first.identity.displayName.trim();
-    return n;
-  }
+  void _go(_Step s) => setState(() {
+        _step = s;
+        _error = null;
+      });
 
-  void _toIdentity() {
-    if (_name.text.isEmpty) _name.text = _suggestedName;
-    setState(() => _step = _Step.identity);
+  void _toIdentity() => _go(_Step.identity);
+
+  Future<void> _submitIdentity() async {
+    if (_locating) return;
+    final nameEmpty = _name.text.trim().isEmpty;
+    final placeEmpty = _location.text.trim().isEmpty;
+    if (nameEmpty || placeEmpty) {
+      setState(() {
+        if (nameEmpty) _nameError = 'Please give your residence a name.';
+        if (placeEmpty) _locationError = 'Please enter the location.';
+      });
+      return;
+    }
+    // The place the person typed, found: coordinates and a time zone for the sun.
+    setState(() {
+      _locating = true;
+      _locationError = null;
+    });
+    Place? place;
+    try {
+      place = await ref.read(placeLookupProvider)(_location.text.trim());
+    } on PlaceLookupUnavailable {
+      if (!mounted) return;
+      setState(() {
+        _locating = false;
+        _locationError =
+            'Couldn’t reach the place search. Check this device’s internet connection and try again.';
+      });
+      return;
+    }
+    if (!mounted) return;
+    if (place == null) {
+      setState(() {
+        _locating = false;
+        _locationError = 'We couldn’t find that place. Try the city and country, e.g. Palma, Spain.';
+      });
+      return;
+    }
+    _place = place;
+    _setup = true;
+    setState(() => _locating = false);
+    _go(_Step.signIn);
   }
 
   Future<void> _signIn() async {
@@ -140,143 +252,296 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
       await controller.addHome(
           hubId: result.hubId, projectId: result.projectId, displayName: name);
     }
+    // The residence told where it is: the Hub keeps the location, every device reads it from there.
+    final place = _place;
+    var notSaved = false;
+    if (_setup && place != null) {
+      try {
+        await ref.read(homeLocationWriterProvider)(result.hubId, place);
+      } catch (_) {
+        notSaved = true; // said on the next screen, never silently dropped
+      }
+    }
+    // A Hub the person addressed by hand is now known by its identity, so it is found again by it.
+    final manual = _manualHub;
+    if (manual != null) {
+      await ref.read(manualHubStoreProvider).bindHubId(manual.host, manual.port, result.hubId);
+    }
     if (!mounted) return;
     setState(() {
       _busy = false;
+      _locationNotSaved = notSaved;
       _step = _Step.ready;
     });
   }
 
-  void _enterDemo() => ref.read(demoEnteredProvider.notifier).state = true;
+  /// The original's manual connect: check the address answers, remember it, then let Presence play
+  /// the recognition and open Welcome as it does for a Hub that was found.
+  Future<void> _connectManually() async {
+    if (_connecting) return;
+    final ipError = validateHubIp(_ip.text), portError = validateHubPort(_port.text);
+    setState(() {
+      _ipError = ipError;
+      _portError = portError;
+      _manualMain = _manualSub = null;
+    });
+    if (ipError != null || portError != null) return;
+    final host = _ip.text.trim(), port = int.parse(_port.text.trim());
+    setState(() => _connecting = true);
+    bool ok;
+    try {
+      ok = await ref.read(hubProbeProvider)(host, port);
+    } catch (_) {
+      ok = false;
+    }
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _connecting = false;
+        _manualMain = 'The residence didn’t respond at $host:$port. ';
+        _manualSub = 'Check that the SupremeOS Hub is switched on and connected to this network.';
+      });
+      return;
+    }
+    await ref.read(manualHubStoreProvider).add(host, port);
+    _manualHub = (host: host, port: port);
+    if (!mounted) return;
+    setState(() => _connecting = false);
+    _later(_reduced ? Duration.zero : const Duration(milliseconds: 700), _launch);
+  }
+
+  void _enterDemo() {
+    ref.read(arrivalRequestedProvider.notifier).state = false;
+    ref.read(demoEnteredProvider.notifier).state = true;
+  }
+
+  String get _residenceName => _name.text.trim().isNotEmpty && _setup
+      ? _name.text.trim()
+      : 'your residence';
+
+  /// Enter — the onboarding quietly withdraws; the story closes where Presence ended (one mark,
+  /// now named); then the residence opens.
+  void _enter() {
+    if (_entering) return;
+    final name = _residenceName;
+    setState(() => _entering = true);
+    _later(_reduced ? Duration.zero : const Duration(milliseconds: 700), () {
+      _presence.rest(name);
+      setState(() => _resting = true);
+    });
+    _later(_reduced ? Duration.zero : const Duration(milliseconds: 2400), () {
+      ref.read(arrivalRequestedProvider.notifier).state = false;
+      widget.onHold(false);
+    });
+  }
+
+  PanelGoal get _panelGoal => switch (_step) {
+        _Step.identity =>
+          PanelGoal(b: _name.text.trim().isEmpty ? 0 : 1),
+        _Step.signIn || _Step.ready => PanelGoal.resting,
+        _ => PanelGoal.alone,
+      };
 
   @override
   Widget build(BuildContext context) {
     final simulated = ref.watch(simulatedResidenceProvider) != null;
-    // A transparent Material: the text fields need one, and this surface owns no other.
+    final reduced = _reduced;
     return Material(
-        type: MaterialType.transparency,
-        child: ColoredBox(
-          color: SupremeColorScheme.ivory,
-          child: SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: SingleChildScrollView(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ..._content(),
-                      if (simulated && _step != _Step.ready) ...[
-                        const SizedBox(height: 24),
-                        _DemoEntry(onTap: _enterDemo),
-                      ],
-                    ],
+      type: MaterialType.transparency,
+      child: ColoredBox(
+        color: Gm.bg,
+        child: Stack(children: [
+          // The app: header, field panel and the screens. Inert while Presence is on.
+          ExcludeSemantics(
+            excluding: _booting || _resting,
+            child: IgnorePointer(
+              ignoring: _booting || _entering,
+              child: _Stage(
+                step: _step,
+                entering: _entering,
+                reduced: reduced,
+                panelGoal: _panelGoal,
+                // No page exists while Presence plays: Welcome is built when it hands over.
+                children: _booting ? const [] : _content(simulated),
+              ),
+            ),
+          ),
+          // Presence: fades out when the app is shown (opacity .6s), back in to close the story.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: (_booting || _resting) ? 1 : 0,
+                duration: reduced ? Duration.zero : const Duration(milliseconds: 600),
+                curve: Gm.ease,
+                child: ExcludeSemantics(
+                  excluding: !_booting && !_resting,
+                  child: PresenceLayer(
+                    key: _presenceKey,
+                    controller: _presence,
+                    reduced: reduced,
+                    onDone: _presenceDone,
                   ),
                 ),
               ),
             ),
           ),
-        ));
+        ]),
+      ),
+    );
   }
 
-  List<Widget> _content() => switch (_step) {
-        _Step.detecting => [
-            const _Kicker('Your residence'),
-            const _Heading('Looking for your Hub…'),
-            const _Body('Searching this network.'),
-          ],
-        _Step.found => [
-            const _Kicker('Your residence'),
-            const _Heading('Your SupremeOS Hub is here, on this network.'),
-            _Body(_suggestedName.isEmpty
-                ? 'Give it a name, and SupremeOS will know this residence as yours.'
-                : '$_suggestedName. Give it a name, and SupremeOS will know this residence as yours.'),
-            const SizedBox(height: 28),
-            _Btn('Begin', onTap: _toIdentity),
-            const SizedBox(height: 12),
-            _Btn('Already known here?',
-                quiet: true, onTap: () => setState(() => _step = _Step.signIn)),
-          ],
-        _Step.noHub => [
-            const _Kicker('Your residence'),
-            const _Heading('We haven’t found it yet.'),
-            const _Body(
-                'Make sure your SupremeOS Hub is switched on and connected to the same network as this device.'),
-            const SizedBox(height: 28),
-            _Btn('Search again', onTap: _search),
-          ],
-        _Step.identity => [
-            const _Kicker('Your residence'),
-            const _Heading('Give this residence an identity.'),
-            const _Body('The name you’ll know it by.'),
-            const SizedBox(height: 24),
-            _Field(
+  /// `#f-hub`: IP and port, a hint, and Connect — the original's, with its own words.
+  Widget _manualForm() => Builder(builder: (context) {
+    final m = GmScope.of(context);
+    final ip = GmField(
+      label: 'IP address',
+      hint: '192.168.1.20',
+      controller: _ip,
+      error: _ipError,
+      onChanged: (_) => setState(() => _ipError = null),
+      onSubmitted: (_) => _connectManually(),
+    );
+    final port = GmField(
+      label: 'Port',
+      hint: '${SupremeOSHubDefaults.defaultPort}',
+      controller: _port,
+      error: _portError,
+      onChanged: (_) => setState(() => _portError = null),
+      onSubmitted: (_) => _connectManually(),
+    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (_manualMain != null) GmFormNote(main: _manualMain!, sub: _manualSub ?? ''),
+      if (m.phone) ...[ip, port] else Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: ip),
+        const SizedBox(width: 24),
+        SizedBox(width: 150, child: port),
+      ]),
+      const GmLede('You’ll find the address in your router’s list of connected devices, or on the label underneath the Hub.'),
+      GmActions([
+        const SizedBox.shrink(),
+        GmButton(_connecting ? 'Connecting…' : 'Connect',
+            quiet: true, arrow: true, busy: _connecting, onTap: _connecting ? null : _connectManually),
+      ], top: 24),
+    ]);
+  });
+
+  List<Widget> _content(bool simulated) {
+    final demo = simulated && (_step == _Step.welcome || _step == _Step.noHub);
+    return switch (_step) {
+      _Step.welcome => [
+          const GmMeta('Your SupremeOS Hub is here, on this network.'),
+          const GmHeading('Your residence\nis here.', h1: true),
+          const GmLede(
+              'Give it a name, and SupremeOS will know this residence as yours.'),
+          GmActions([GmButton('Begin', onTap: _toIdentity, arrow: true)]),
+          GmAlt(
+              text: 'Already known here? ',
+              link: 'Sign in',
+              onTap: () => _go(_Step.signIn)),
+          if (demo) _DemoEntry(onTap: _enterDemo),
+        ],
+      _Step.noHub => [
+          const GmEyebrow('Your residence'),
+          const GmHeading('We haven’t found it yet.'),
+          const GmLede(
+              'Make sure your SupremeOS Hub is switched on and connected to the same network as this device.'),
+          GmActions(
+              [GmButton('Search again', onTap: _launch, arrow: true)],
+              top: 30),
+          GmDisclose(
+              label: 'or connect manually',
+              open: _manualOpen,
+              onTap: () => setState(() => _manualOpen = !_manualOpen)),
+          if (_manualOpen) _manualForm(),
+          if (demo) _DemoEntry(onTap: _enterDemo),
+        ],
+      _Step.identity => [
+          const GmEyebrow('Your residence'),
+          const GmHeading('Give this residence an identity.'),
+          const GmLede('The name you’ll know it by. Its location lets light and time follow the day outside.'),
+          const GmMeta('Connected to your SupremeOS Hub on this network.',
+              top: 22, bottom: 0),
+          GmForm([
+            GmField(
               label: 'Residence name',
               hint: 'e.g. Villa Son Vida',
               controller: _name,
-              onChanged: (_) => setState(() {}),
+              error: _nameError,
+              onChanged: (_) => setState(() {
+                if (_nameError != null) {
+                  _nameError = _name.text.trim().isEmpty
+                      ? 'Please give your residence a name.'
+                      : null;
+                }
+              }),
+              onSubmitted: (_) => _submitIdentity(),
             ),
-            const SizedBox(height: 28),
-            Row(children: [
-              _Btn('Back',
-                  quiet: true,
-                  onTap: () => setState(() => _step = _Step.found)),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: _Btn('Continue',
-                      onTap: _name.text.trim().isEmpty
-                          ? null
-                          : () => setState(() => _step = _Step.signIn))),
-            ]),
-          ],
-        _Step.signIn => [
-            const _Kicker('Welcome back'),
-            const _Heading('Sign in to your residence.'),
-            const _Body(
-                'Enter the pairing code from your SupremeOS Hub or the residence’s owner.'),
-            const SizedBox(height: 24),
-            _Field(
+            GmField(
+              label: 'Location',
+              hint: 'City, country',
+              controller: _location,
+              error: _locationError,
+              onChanged: (_) => setState(() {
+                if (_locationError != null) _locationError = null;
+              }),
+              onSubmitted: (_) => _submitIdentity(),
+            ),
+            GmActions([
+              GmBack(onTap: () => _go(_Step.welcome)),
+              GmButton(_locating ? 'Finding…' : 'Continue',
+                  onTap: _locating ? null : _submitIdentity, arrow: true, busy: _locating),
+            ], top: 36),
+          ]),
+        ],
+      _Step.signIn => [
+          const GmEyebrow('Welcome back'),
+          const GmHeading('Sign in to your residence.'),
+          GmForm([
+            GmField(
               label: 'Pairing code',
               hint: 'Pairing code',
               controller: _code,
+              hintBelow:
+                  'Enter the six-digit code from SupremeOS on the web: Settings, Security & sign-in, Pair a phone.',
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) => _signIn(),
             ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(_error!,
-                  textDirection: TextDirection.ltr,
-                  style: _sans(14, _errorInk, height: 1.4)),
-            ],
-            const SizedBox(height: 28),
-            Row(children: [
-              _Btn('Back',
-                  quiet: true,
+            if (_error != null) GmFormError(_error!),
+            GmActions([
+              GmBack(
                   onTap: _busy
                       ? null
-                      : () => setState(() => _step =
-                          _name.text.isEmpty ? _Step.found : _Step.identity)),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: _Btn(_busy ? 'Signing in…' : 'Sign in',
-                      onTap:
-                          _code.text.trim().isEmpty || _busy ? null : _signIn)),
-            ]),
-            const SizedBox(height: 24),
-            const _Body(
-                'Not yet known here? The residence’s owner can invite you from SupremeOS.',
-                muted: true),
-          ],
-        _Step.ready => [
-            const _Kicker('Welcome home'),
-            const _Heading('Your residence is ready.'),
-            const _Body('Everything is in place.'),
-            const SizedBox(height: 28),
-            _Btn('Enter', onTap: () => widget.onHold(false)),
-          ],
-      };
+                      : () => _go(_setup ? _Step.identity : _Step.welcome)),
+              GmButton(_busy ? 'Signing in…' : 'Sign in',
+                  quiet: true,
+                  arrow: true,
+                  busy: _busy,
+                  onTap: _code.text.trim().isEmpty || _busy ? null : _signIn),
+            ], top: 36),
+          ], top: 34),
+          const GmAlt(
+              text:
+                  'Not yet known here? The residence’s owner can invite you from SupremeOS.'),
+        ],
+      _Step.ready => [
+          GmEyebrow(_setup ? 'Welcome home' : 'Welcome back'),
+          GmHeading(_setup
+              ? '${_name.text.trim()} is yours.'
+              : 'Your residence knows you.'),
+          GmLede(_setup
+              ? 'SupremeOS now knows your residence — and you.'
+              : 'Everything is as you left it.'),
+          if (_locationNotSaved)
+            const GmAlt(
+                text:
+                    'The location couldn’t be saved to the Hub just now, so the sun will not follow it yet.'),
+          GmActions([
+            GmButton(_setup ? 'Enter ${_name.text.trim()}' : 'Enter',
+                onTap: _enter, arrow: true)
+          ]),
+        ],
+    };
+  }
 }
 
 // ── Demo entry (simulation builds only) ──────────────────────────────────────────────────
@@ -286,163 +551,179 @@ class _DemoEntry extends StatelessWidget {
   const _DemoEntry({required this.onTap});
 
   @override
-  Widget build(BuildContext context) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: _panel,
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: _line),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-                'A simulated residence. Nothing here is real, and nothing you do reaches a home.',
-                textDirection: TextDirection.ltr,
-                style: _sans(14, _ink3)),
-            const SizedBox(height: 10),
-            _Btn('Demo mode', quiet: true, onTap: onTap),
-          ],
-        ),
-      );
-}
-
-// ── Golden Master onboarding type and controls ───────────────────────────────────────────
-
-TextStyle _serif(double size, Color color) => TextStyle(
-      fontFamily: SupremeFonts.serif,
-      package: SupremeFonts.package,
-      fontWeight: FontWeight.w300,
-      fontSize: size,
-      height: 1.04,
-      letterSpacing: -0.2,
-      color: color,
-      decoration: TextDecoration.none,
-    );
-
-TextStyle _sans(double size, Color? color, {double height = 1.5}) => TextStyle(
-      fontFamily: SupremeFonts.sans,
-      package: SupremeFonts.package,
-      fontWeight: FontWeight.w400,
-      fontSize: size,
-      height: height,
-      color: color,
-      decoration: TextDecoration.none,
-    );
-
-class _Kicker extends StatelessWidget {
-  final String text;
-  const _Kicker(this.text);
-  @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Text(text.toUpperCase(),
-            textDirection: TextDirection.ltr,
-            style: _sans(11, SupremeColorScheme.brass)
-                .copyWith(letterSpacing: 2.4)),
-      );
-}
-
-class _Heading extends StatelessWidget {
-  final String text;
-  const _Heading(this.text);
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Semantics(
-          header: true,
-          child: Text(text,
-              textDirection: TextDirection.ltr,
-              style: _serif(38, SupremeColorScheme.ink)),
+        padding: const EdgeInsets.only(top: 28),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: GmButton('Demo mode', quiet: true, onTap: onTap),
         ),
       );
 }
 
-class _Body extends StatelessWidget {
-  final String text;
-  final bool muted;
-  const _Body(this.text, {this.muted = false});
-  @override
-  Widget build(BuildContext context) => Text(text,
-      textDirection: TextDirection.ltr,
-      style: _sans(16, muted ? _ink3 : _ink2));
-}
+// ── Stage: header · field panel · screens, composed as the Golden Master's CSS does ─────
 
-class _Field extends StatelessWidget {
-  final String label;
-  final String hint;
-  final TextEditingController controller;
-  final ValueChanged<String>? onChanged;
-  final ValueChanged<String>? onSubmitted;
-  const _Field({
-    required this.label,
-    required this.hint,
-    required this.controller,
-    this.onChanged,
-    this.onSubmitted,
+class _Stage extends StatelessWidget {
+  final _Step step;
+  final bool entering;
+  final bool reduced;
+  final PanelGoal panelGoal;
+  final List<Widget> children;
+  const _Stage({
+    required this.step,
+    required this.entering,
+    required this.reduced,
+    required this.panelGoal,
+    required this.children,
   });
 
   @override
-  Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label.toUpperCase(),
-              textDirection: TextDirection.ltr,
-              style: _sans(11, _ink3).copyWith(letterSpacing: 2.0)),
-          const SizedBox(height: 6),
-          TextField(
-            controller: controller,
-            onChanged: onChanged,
-            onSubmitted: onSubmitted,
-            autocorrect: false,
-            style: _sans(18, SupremeColorScheme.ink),
-            cursorColor: SupremeColorScheme.brass,
-            decoration: InputDecoration(
-              hintText: hint,
-              hintStyle: _sans(18, _ink3),
-              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              enabledBorder: const UnderlineInputBorder(
-                  borderSide: BorderSide(color: _lineStrong)),
-              focusedBorder: const UnderlineInputBorder(
-                  borderSide: BorderSide(color: SupremeColorScheme.ink)),
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final w = c.maxWidth, h = c.maxHeight;
+      final m = GmMetrics(w, h);
+      final fade = Duration(milliseconds: reduced ? 0 : 700);
+
+      final header = AnimatedOpacity(
+        opacity: entering ? 0 : 1,
+        duration: fade,
+        curve: Gm.ease,
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: m.gutter, vertical: m.headerPad),
+          decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Gm.line))),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Semantics(
+              label: 'SupremeOS',
+              excludeSemantics: true,
+              child: Text('SUPREMEOS',
+                  textDirection: TextDirection.ltr,
+                  style: Gm.sans(12, Gm.ink, weight: FontWeight.w400)
+                      .copyWith(letterSpacing: .28 * 12)),
             ),
           ),
-        ],
+        ),
       );
+
+      final screens = AnimatedOpacity(
+        opacity: entering ? 0 : 1,
+        duration: fade,
+        curve: Gm.ease,
+        child: _EnterAnimation(
+          key: ValueKey(step),
+          reduced: reduced,
+          settle: step == _Step.noHub,
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: children),
+        ),
+      );
+
+      Widget panel(double width) {
+        final height = m.panelHeight(width);
+        return SizedBox(
+          width: width,
+          height: height,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: ColoredBox(
+              color: entering ? Gm.bg : Gm.panel,
+              child: OnboardingFieldPanel(goal: panelGoal, reduced: reduced),
+            ),
+          ),
+        );
+      }
+
+      final inner = math.max(0.0, math.min(w, 1760.0) - 2 * m.gutter);
+      Widget body;
+      if (m.singleColumn) {
+        // The two grid rows stretch to the page (see GmGridRows); the page's minimum height
+        // reaches it through the padding.
+        body = Padding(
+          padding: EdgeInsets.symmetric(horizontal: m.gutter, vertical: m.mainPadV),
+          child: GmGridRows(gap: 28, first: panel(inner), second: screens),
+        );
+      } else {
+        final gap = m.columnGap;
+        final gapW = math.min(gap, inner);
+        final avail = inner - gapW;
+        final left = avail * m.leftFr / (m.leftFr + 1);
+        final right = avail - left;
+        body = Padding(
+          padding: EdgeInsets.symmetric(horizontal: m.gutter, vertical: m.mainPadV),
+          child: Align(
+            alignment: m.shortLandscape ? Alignment.topCenter : Alignment.center,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1760),
+              child: Row(
+                crossAxisAlignment: m.shortLandscape
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
+                children: [
+                  SizedBox(width: left, child: panel(left)),
+                  SizedBox(width: gapW),
+                  SizedBox(
+                      width: right,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: ConstrainedBox(
+                            constraints:
+                                BoxConstraints(maxWidth: m.screensMaxWidth),
+                            child: screens),
+                      )),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      // `.app { min-height: 100dvh; grid-template-rows: auto 1fr }` — the header, then the main
+      // area filling what is left (and scrolling when the content is taller).
+      return GmScope(
+        metrics: m,
+        child: CustomScrollView(slivers: [
+          SliverToBoxAdapter(child: header),
+          SliverFillRemaining(
+            hasScrollBody: false,
+            // One column: the body takes the page's height itself (its rows stretch to it).
+            child: m.singleColumn
+                ? body
+                : Align(
+                    alignment: m.shortLandscape
+                        ? Alignment.topCenter
+                        : Alignment.center,
+                    child: body),
+          ),
+        ]),
+      );
+    });
+  }
 }
 
-class _Btn extends StatelessWidget {
-  final String text;
-  final VoidCallback? onTap;
-  final bool quiet;
-  const _Btn(this.text, {required this.onTap, this.quiet = false});
+/// `.screen.active { animation: enter .42s cubic-bezier(.2,.7,.2,1) both }` — opacity 0→1 and a
+/// rise of 8; the recovery screen settles with opacity alone over .9s.
+class _EnterAnimation extends StatelessWidget {
+  final bool reduced;
+  final bool settle;
+  final Widget child;
+  const _EnterAnimation(
+      {super.key,
+      required this.reduced,
+      required this.settle,
+      required this.child});
 
   @override
-  Widget build(BuildContext context) {
-    final enabled = onTap != null;
-    return Opacity(
-      opacity: enabled ? 1 : .4,
-      child: SupremeTappable(
-        onTap: onTap ?? () {},
-        semanticLabel: text,
-        radius: 4,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 52, minWidth: 52),
-          padding: const EdgeInsets.symmetric(horizontal: 22),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: quiet ? null : SupremeColorScheme.ink,
-            borderRadius: BorderRadius.circular(4),
-            border: quiet ? Border.all(color: _lineStrong) : null,
-          ),
-          child: Text(text,
-              textDirection: TextDirection.ltr,
-              style: _sans(15,
-                      quiet ? SupremeColorScheme.ink : SupremeColorScheme.ivory)
-                  .copyWith(letterSpacing: .3)),
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+        tween: Tween(begin: reduced ? 1 : 0, end: 1),
+        duration: reduced
+            ? Duration.zero
+            : Duration(milliseconds: settle ? 900 : 420),
+        curve: Gm.ease,
+        builder: (context, t, c) => Opacity(
+          opacity: t,
+          child: Transform.translate(
+              offset: Offset(0, settle ? 0 : 8 * (1 - t)), child: c),
         ),
-      ),
-    );
-  }
+        child: child,
+      );
 }

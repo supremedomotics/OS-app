@@ -27,6 +27,7 @@ class _AppEntryState extends ConsumerState<AppEntry> {
   Widget build(BuildContext context) {
     final homes = ref.watch(pairedHomeControllerProvider);
     final demoEntered = ref.watch(demoEnteredProvider);
+    final arrivalRequested = ref.watch(arrivalRequestedProvider);
     return ListenableBuilder(
       listenable: homes,
       builder: (context, _) {
@@ -35,7 +36,8 @@ class _AppEntryState extends ConsumerState<AppEntry> {
         if (!homes.isLoaded) {
           return const ColoredBox(color: SupremeColorScheme.night);
         }
-        final arriving = _hold || (homes.homes.isEmpty && !demoEntered);
+        final arriving =
+            _hold || arrivalRequested || (homes.homes.isEmpty && !demoEntered);
         if (arriving) {
           return OnboardingFlow(onHold: (hold) => setState(() => _hold = hold));
         }

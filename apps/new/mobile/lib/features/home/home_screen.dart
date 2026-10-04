@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supreme_os_ui/supreme_os_ui.dart';
 
 import '../../main.dart';
+import '../_shared/residence_presentation.dart';
 import '../devices/devices_layer.dart';
 
 /// Home — what is the residence like right now? (Golden Master `home.js`): the architectural cover
@@ -11,8 +12,8 @@ import '../devices/devices_layer.dart';
 /// from confirmed device state (`describeHome`); nothing here is a dashboard and nothing is
 /// stored.
 ///
-/// NOT YET (flagged in the implementation map): the sun's line under the name (the residence has
-/// no readable location), protection ("Secure"/"Protected" — no arming/contact contract), the
+/// The sun's line sits under the name when the Hub holds a location. NOT YET (flagged in the
+/// implementation map): protection ("Secure"/"Protected" — no arming/contact contract), the
 /// watch glance and the residence panel's room-by-room map (Phases 4).
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -57,22 +58,10 @@ class HomeScreen extends ConsumerWidget {
       key: const ValueKey('home-page'),
       fit: StackFit.expand,
       children: [
-        ToneSurface(look: look),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              stops: const [0, .3, .62, .8],
-              colors: const [
-                Color(0xF008090A),
-                Color(0xB808090A),
-                Color(0x2E08090A),
-                Color(0x0008090A)
-              ],
-            ),
-          ),
-        ),
+        // The residence's own photograph (ADR 0102) when the Hub has one; otherwise its tonal plate.
+        ToneSurface(look: look, image: heroImageForUrl(ref, snap?.heroImageUrl)),
+        // The Golden Master's `#view-home.sos-view--hero::before`, as it states it.
+        ..._homeScrim(phone),
         LayoutBuilder(
           builder: (context, c) => SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(m.gutter, top, m.gutter, m.bottom + 8),
@@ -93,6 +82,11 @@ class HomeScreen extends ConsumerWidget {
                               shadows: const [
                                 Shadow(color: Color(0x8C000000), blurRadius: 14, offset: Offset(0, 1))
                               ])),
+                    ),
+                  if (snap?.location != null && !watch)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: SupremeDayLine(location: snap!.location!, now: ref.watch(residenceNowProvider)),
                     ),
                   if (d != null) ...[
                     Text(settingWhole != null ? 'Setting ${settingWhole.name}…' : d.sentence,
@@ -205,3 +199,46 @@ class _Connection extends StatelessWidget {
     );
   }
 }
+
+/// The scrim laid over Home's photograph so the words always read — the Golden Master's own:
+/// a phone gets one gradient from the foot (`rgba(8,9,10,.92)` → `.55` at 42% → clear at 72%);
+/// everything else gets the foot gradient (`.86` → `.45` at 34% → clear at 62%) and a second from
+/// the left (`.5` → clear at 55%).
+List<Widget> _homeScrim(bool phone) => phone
+    ? const [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              stops: [0, .42, .72],
+              colors: [Color(0xEB08090A), Color(0x8C08090A), Color(0x0008090A)],
+            ),
+          ),
+          child: SizedBox.expand(),
+        ),
+      ]
+    : const [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              stops: [0, .34, .62],
+              colors: [Color(0xDB08090A), Color(0x7308090A), Color(0x0008090A)],
+            ),
+          ),
+          child: SizedBox.expand(),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              stops: [0, .55],
+              colors: [Color(0x8008090A), Color(0x0008090A)],
+            ),
+          ),
+          child: SizedBox.expand(),
+        ),
+      ];

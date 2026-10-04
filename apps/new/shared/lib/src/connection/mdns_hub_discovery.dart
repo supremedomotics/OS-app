@@ -35,6 +35,102 @@ class HubMdnsTxtKeys {
   static const hubId = 'hubId';
   static const projectId = 'projectId';
   static const protocolVersion = 'version';
+
+  /// Optional, additive (no `txtvers` bump): the Hub's homeowner-facing product name.
+  static const name = 'name';
+}
+
+final _rawInstanceShape = RegExp(
+    r'\._(tcp|udp)\b|\.local\b|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-',
+    caseSensitive: false);
+
+/// The name a homeowner sees for a discovered Hub. Only an advertised `name` that reads like a
+/// name is used; anything absent, over-long, or shaped like a service instance / UUID (which is
+/// what a Hub that predates the `name` key exposes) falls back to the product name — the raw
+/// instance string is never homeowner copy.
+String friendlyHubName(String? advertisedName) {
+  final n = advertisedName?.trim() ?? '';
+  if (n.isEmpty || n.length > 64 || _rawInstanceShape.hasMatch(n)) {
+    return SupremeOSHubDefaults.friendlyHubName;
+  }
+  return n;
+}
+
+/// `key=value` lines of a TXT record (the `multicast_dns` package joins a record's strings with
+/// `\n`). Unknown keys are kept; the caller ignores what it doesn't know.
+Map<String, String> parseHubTxt(Iterable<String> texts) {
+  final out = <String, String>{};
+  for (final text in texts) {
+    for (final line in text.split('\n')) {
+      final eq = line.indexOf('=');
+      if (eq > 0) out[line.substring(0, eq)] = line.substring(eq + 1);
+    }
+  }
+  return out;
+}
+
+/// Builds the discovery result for one advertisement. Identity is the `hubId` TXT key; the
+/// instance name is only a last-resort identifier when a Hub's TXT was lost (its first label —
+/// for a Hub that predates the `name` key that label *is* the hubId) and is kept verbatim on
+/// [DiscoveredHub.rawInstanceName] for diagnostics, never as the display name.
+DiscoveredHub hubFromAdvertisement({
+  required String instanceName,
+  required String address,
+  required int port,
+  required Map<String, String> txt,
+}) {
+  final hubId = txt[HubMdnsTxtKeys.hubId] ?? instanceName.split('.').first;
+  return DiscoveredHub(
+    identity: HubIdentity(
+      hubId: hubId,
+      displayName: friendlyHubName(txt[HubMdnsTxtKeys.name]),
+      projectId: txt[HubMdnsTxtKeys.projectId],
+    ),
+    address: address,
+    port: port,
+    protocolVersion: txt[HubMdnsTxtKeys.protocolVersion],
+    rawInstanceName: instanceName,
+  );
+}
+
+/// Two Hubs on one LAN both read "SupremeOS Hub"; a homeowner (and the identity-name picker) must
+/// still tell them apart, so a name shared by distinct `hubId`s gets a short id suffix. Identity
+/// comparison never looks at the name, so this is presentation only.
+List<DiscoveredHub> disambiguateHubNames(List<DiscoveredHub> hubs) {
+  final idsByName = <String, Set<String>>{};
+  for (final h in hubs) {
+    idsByName
+        .putIfAbsent(h.identity.displayName, () => {})
+        .add(h.identity.hubId);
+  }
+  return [
+    for (final h in hubs)
+      if (idsByName[h.identity.displayName]!.length < 2)
+        h
+      else
+        DiscoveredHub(
+          identity: HubIdentity(
+            hubId: h.identity.hubId,
+            displayName: _withShortId(h.identity),
+            projectId: h.identity.projectId,
+          ),
+          address: h.address,
+          port: h.port,
+          protocolVersion: h.protocolVersion,
+          available: h.available,
+          lastSeen: h.lastSeen,
+          rawInstanceName: h.rawInstanceName,
+        ),
+  ];
+}
+
+String _withShortId(HubIdentity id) {
+  final short = id.hubId
+      .replaceAll(RegExp(r'[^0-9a-zA-Z]'), '')
+      .toUpperCase();
+  return short.isEmpty
+      ? id.displayName
+      : '${id.displayName} (${short.substring(0, short.length < 6 ? short.length : 6)})';
 }
 
 class MdnsHubDiscovery implements HubDiscovery {
@@ -83,30 +179,19 @@ class MdnsHubDiscovery implements HubDiscovery {
         }
         address ??= host;
 
-        var hubId = ptr.domainName;
-        String? projectId;
-        String? protocolVersion;
+        final texts = <String>[];
         await for (final txt in client
             .lookup<TxtResourceRecord>(ResourceRecordQuery.text(ptr.domainName))
             .timeout(const Duration(seconds: 1),
                 onTimeout: (sink) => sink.close())) {
-          for (final line in txt.text.split('\n')) {
-            final eq = line.indexOf('=');
-            if (eq < 0) continue;
-            final key = line.substring(0, eq);
-            final value = line.substring(eq + 1);
-            if (key == HubMdnsTxtKeys.hubId) hubId = value;
-            if (key == HubMdnsTxtKeys.projectId) projectId = value;
-            if (key == HubMdnsTxtKeys.protocolVersion) protocolVersion = value;
-          }
+          texts.add(txt.text);
         }
 
-        results.add(DiscoveredHub(
-          identity: HubIdentity(
-              hubId: hubId, displayName: ptr.domainName, projectId: projectId),
+        results.add(hubFromAdvertisement(
+          instanceName: ptr.domainName,
           address: address,
           port: port,
-          protocolVersion: protocolVersion,
+          txt: parseHubTxt(texts),
         ));
       }
     } on SocketException {
@@ -116,6 +201,6 @@ class MdnsHubDiscovery implements HubDiscovery {
     } finally {
       client.stop();
     }
-    return results;
+    return disambiguateHubNames(results);
   }
 }

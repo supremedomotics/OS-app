@@ -22,6 +22,12 @@ class SpacesScreen extends ConsumerWidget {
 
     final children = <Widget>[
       SupremePageHead(kicker: snap?.name ?? '', title: 'Spaces'),
+      if (snap?.location != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 28),
+          child: SupremeDayLine(
+              location: snap!.location!, now: ref.watch(residenceNowProvider), compact: true),
+        ),
     ];
     if (snap == null || !snap.loaded) {
       children.add(_Quiet(

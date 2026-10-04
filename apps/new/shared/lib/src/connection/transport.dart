@@ -106,6 +106,11 @@ class DiscoveredHub {
   /// is honestly "just seen," not backdated.
   final DateTime lastSeen;
 
+  /// The raw DNS-SD service-instance name as received (e.g. `<id>._supremeos._tcp.local`) —
+  /// diagnostics/Pro only. It is never an identity ([identity].hubId is) and never homeowner copy
+  /// ([identity].displayName is). Null for discovery that has no such thing (mock, simulator).
+  final String? rawInstanceName;
+
   DiscoveredHub({
     required this.identity,
     required this.address,
@@ -113,6 +118,7 @@ class DiscoveredHub {
     this.protocolVersion,
     this.available = true,
     DateTime? lastSeen,
+    this.rawInstanceName,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
   /// § production defect fix — this is the plain-HTTP direct client channel

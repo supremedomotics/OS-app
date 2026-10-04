@@ -36,4 +36,9 @@ class SupremeOSHubDefaults {
   /// `transport.dart`, the seam a real implementation plugs into); this is
   /// the name that implementation must use once it exists.
   static const String mdnsServiceType = '_supremeos._tcp';
+
+  /// The homeowner-facing name of a Hub — what a homeowner is shown for a discovered Hub, and
+  /// what the Hub itself advertises (`name` TXT key + instance label). It is a product name, not an
+  /// identity: identity is always `HubIdentity.hubId`, never this and never the raw mDNS instance.
+  static const String friendlyHubName = 'SupremeOS Hub';
 }

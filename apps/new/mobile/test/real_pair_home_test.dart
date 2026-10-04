@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+// ignore: implementation_imports
+import 'package:supreme_os_core/src/connection/mdns_hub_discovery.dart';
 import 'package:supreme_os_core/supreme_os_core.dart';
 import 'package:supreme_mobile_next/main.dart';
 
@@ -94,6 +96,56 @@ void main() {
       expect(result.projectId, 'proj-1');
       expect(result.suggestedDisplayName, 'Sea View Hub');
       expect(authStore.sessionFor('hub-real-1')!.bearerToken(), 'tok-real');
+    });
+
+    test(
+        'pairing keys on the real Hub identity (the Hub-issued hubId), not on the friendly or raw mDNS name',
+        () async {
+      // Discovered through the same function the mDNS client uses, from a legacy UUID-instance Hub.
+      final hub = hubFromAdvertisement(
+        instanceName: 'ignored-label._supremeos._tcp.local',
+        address: '192.168.1.50',
+        port: 7272,
+        txt: parseHubTxt(['hubId=hub-real-1']),
+      );
+      expect(hub.identity.displayName, 'SupremeOS Hub');
+      String? seenPublicKey;
+      final client = MockClient((req) async {
+        final body = jsonDecode(req.body) as Map<String, dynamic>;
+        if (req.url.path == '/v1/pairing/challenge') {
+          seenPublicKey = body['mobilePublicKeyBase64'] as String;
+          return http.Response(
+              jsonEncode({
+                'challengeId': 'c1',
+                'challengeBytes': base64Encode(utf8.encode('nonce')),
+                'hubId': 'hub-real-1',
+                'projectId': 'proj-1',
+              }),
+              200);
+        }
+        return http.Response(
+            jsonEncode({
+              'mobileId': 'mobile-1',
+              'hubId': 'hub-real-1',
+              'projectId': 'proj-1',
+              'token': 'tok-real',
+              'issuedAt': DateTime.now().toIso8601String(),
+            }),
+            200);
+      });
+      final authStore = InMemoryPairedHomeAuthorizationStore();
+      final result = await realPairHome(
+        discovery: _OneHubDiscovery(hub),
+        identity: Ed25519MobileIdentity(InMemorySecretBytesStore()),
+        authStore: authStore,
+        pairingCode: '482913',
+        httpClient: client,
+      );
+      expect(seenPublicKey, isNotNull);
+      expect(result.hubId, 'hub-real-1');
+      expect(result.suggestedDisplayName, 'SupremeOS Hub');
+      expect(authStore.sessionFor('hub-real-1'), isNotNull);
+      expect(authStore.sessionFor('SupremeOS Hub'), isNull);
     });
 
     test('a failed pairing (rejected signature) throws and stores no session',

@@ -1,0 +1,17 @@
+{
+  "_": "The ONE definition of what the Golden Master and Flutter are both captured at. Read by the Node tools (profiles.mjs) and by apps/new/mobile/test/golden_master/capture_test.dart.",
+  "profiles": {
+    "phone-portrait":  { "width": 390,  "height": 844,  "dpr": 2, "ff": "phone",   "mobile": true,  "note": "phone, portrait" },
+    "phone-landscape": { "width": 844,  "height": 390,  "dpr": 2, "ff": "phone",   "mobile": true,  "note": "phone, landscape" },
+    "tablet":          { "width": 834,  "height": 1194, "dpr": 2, "ff": "tablet",  "mobile": true,  "note": "tablet, portrait" },
+    "desktop":         { "width": 1440, "height": 900,  "dpr": 1, "ff": "desktop", "mobile": false, "note": "desktop" },
+    "ultrawide":       { "width": 2560, "height": 1080, "dpr": 1, "ff": "desktop", "mobile": false, "note": "ultrawide (the original composes it at 1.2x)" },
+    "room-panel":      { "width": 1280, "height": 800,  "dpr": 1, "ff": "tablet",  "mobile": false, "note": "installed room panel (a 7-13 inch wall panel is the original's tablet / side-rail form)" }
+  },
+  "boot": {
+    "stepMs": 16,
+    "hubAnswerMs": 3800,
+    "frames": [608, 2000, 3504, 4400, 5504, 6400, 7296, 8000, 9008, 10000, 10800]
+  },
+  "residence": { "hour": 15, "spaceId": "living_room", "spaceName": "Living Room" }
+}

@@ -19,6 +19,7 @@ export 'src/space/page_head.dart';
 export 'src/space/space_plate.dart';
 export 'src/space/tone_surface.dart';
 export 'src/components/status_indicator.dart';
+export 'src/components/day_line.dart';
 export 'src/components/room_header.dart';
 export 'src/components/domain_controls.dart';
 export 'src/components/supreme_card.dart';

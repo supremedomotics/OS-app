@@ -22,6 +22,7 @@ export 'src/connection/single_hub_discovery.dart';
 export 'src/semantic/home_state_repository.dart';
 export 'src/residence/state_expectation.dart';
 export 'src/residence/residence_state.dart';
+export 'src/residence/sun.dart';
 export 'src/residence/residence_stream_link.dart';
 export 'src/residence/scene_run.dart';
 export 'src/assets/hero_image_store.dart';

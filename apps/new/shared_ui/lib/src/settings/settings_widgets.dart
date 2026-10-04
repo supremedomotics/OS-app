@@ -105,6 +105,42 @@ class SettingsLink extends StatelessWidget {
       );
 }
 
+/// The Golden Master's consequential action (`.sos-danger`): one quiet pill set apart from the
+/// rows — 44 high, 18 across, a hairline border `rgba(220,150,130,.45)`, text `#e9c3b6` at 14,
+/// 12 above it. Used for the single act that ends something (leaving a simulated residence).
+class SettingsActionPill extends StatelessWidget {
+  final String text;
+  final VoidCallback onTap;
+  const SettingsActionPill(this.text, {super.key, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: IntrinsicWidth(
+            child: SupremeTappable(
+              onTap: onTap,
+              semanticLabel: text,
+              radius: 999,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 44),
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: const Color(0x73DC9682)),
+                ),
+                child: Text(text,
+                    style: _t.body
+                        .copyWith(fontSize: 14, color: const Color(0xFFE9C3B6))),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
 class _Chev extends CustomPainter {
   const _Chev();
   @override

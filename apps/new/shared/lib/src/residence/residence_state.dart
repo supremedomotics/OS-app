@@ -10,6 +10,7 @@
 /// (`test/residence_contract_parity_test.dart` reads the TS schema and fails on drift).
 library;
 
+import 'sun.dart';
 import 'dart:async';
 
 import '../capabilities.dart';
@@ -119,6 +120,9 @@ class ResidenceSnapshot {
   /// The Residence Asset (ADR 0102): a hub-relative path, or null when there is no photograph.
   final String? heroImageUrl;
 
+  /// Where the residence is, as the Hub keeps it; null until one has been set.
+  final ResidenceLocation? location;
+
   /// The latest Hub snapshot of each recent Experience run (most recent last). Explanation only.
   final Map<String, SceneRun> runs;
   final List<Space> spaces;
@@ -133,6 +137,7 @@ class ResidenceSnapshot {
     this.reachable,
     this.name = '',
     this.heroImageUrl,
+    this.location,
     this.runs = const {},
     this.spaces = const [],
     this.devices = const {},
@@ -157,6 +162,7 @@ class ResidenceSnapshot {
     bool? reachable,
     String? name,
     String? heroImageUrl,
+    ResidenceLocation? location,
     Map<String, SceneRun>? runs,
     List<Space>? spaces,
     Map<String, DeviceRecord>? devices,
@@ -168,6 +174,7 @@ class ResidenceSnapshot {
         reachable: reachable ?? this.reachable,
         name: name ?? this.name,
         heroImageUrl: heroImageUrl ?? this.heroImageUrl,
+        location: location ?? this.location,
         runs: runs ?? this.runs,
         spaces: spaces ?? this.spaces,
         devices: devices ?? this.devices,
@@ -291,6 +298,7 @@ class ResidenceState {
       name: (home['home'] is Map ? (home['home'] as Map)['name'] : null) as String? ??
           _snapshot.name,
       heroImageUrl: (home['home'] is Map ? (home['home'] as Map)['heroImageUrl'] : null) as String?,
+      location: ResidenceLocation.fromJson(home['home'] is Map ? (home['home'] as Map)['location'] : null),
       runs: _snapshot.runs,
       spaces: _spaces(rooms.whereType<Map<String, dynamic>>(), devices.values),
       devices: devices,

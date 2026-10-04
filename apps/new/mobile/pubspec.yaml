@@ -30,3 +30,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # The Golden Master's room photography (extracted byte for byte by
+    # tools/golden-master-verify/extract-photography.mjs). Only the simulated residence serves it,
+    # through the Hub's picture route; a real Hub supplies its own photographs.
+    - assets/golden_master/photography/

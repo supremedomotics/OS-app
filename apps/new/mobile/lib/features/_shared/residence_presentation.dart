@@ -24,8 +24,11 @@ List<({String? floorId, List<Space> spaces})> floorsOf(List<Space> spaces) {
 /// with the paired Mobile's authorization and cached by that versioned URL; until it arrives — or
 /// when the Hub cannot supply it — there is no picture and the space is its honest tonal plate. An
 /// absolute http(s) URL is shown as given.
-ImageProvider? heroImageFor(WidgetRef ref, Space space) {
-  final u = space.imageUrl;
+ImageProvider? heroImageFor(WidgetRef ref, Space space) =>
+    heroImageForUrl(ref, space.imageUrl);
+
+/// The same, for any picture address: a space's, or the residence's own (`heroImageUrl`).
+ImageProvider? heroImageForUrl(WidgetRef ref, String? u) {
   if (u == null) return null;
   if (HeroImageStore.isHubPath(u)) {
     final bytes = ref.watch(heroBytesProvider(u)).valueOrNull;

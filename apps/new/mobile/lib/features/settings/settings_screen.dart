@@ -44,7 +44,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final off = view == null
         ? 0
         : view.snapshot.devices.values.where((d) => !d.isOnline).length;
-    final simulated = ref.read(simulatedResidenceProvider) != null;
+    final simulated = ref.read(activeSimulationProvider) != null;
     if (simulated || (c?.isConnected ?? false)) {
       return off > 0 ? 'Connected · $off not responding' : 'Connected';
     }
@@ -97,6 +97,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       fontWeight: FontWeight.w300,
                       color: SupremeColorScheme.text2)),
             ),
+          // Demo Mode only: the one way out of the simulated residence, set apart at the top.
+          if (ref.watch(activeSimulationProvider) != null)
+            SettingsSection(title: 'Demo', children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                    'This is a simulated residence. Nothing here is real, and nothing you do reaches a home.',
+                    key: const ValueKey('settings-demo-note'),
+                    style: text.body.copyWith(
+                        fontSize: 14,
+                        height: 1.55,
+                        color: SupremeColorScheme.brassPale)),
+              ),
+              SettingsActionPill('Exit Demo Mode',
+                  onTap: ref.read(exitDemoModeProvider)),
+            ]),
           SettingsSection(title: 'Home', children: [
             if (name.isNotEmpty) SettingsFact('Residence', name),
             if (loaded)

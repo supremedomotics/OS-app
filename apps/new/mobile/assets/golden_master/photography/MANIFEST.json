@@ -1,0 +1,47 @@
+{
+  "source": "SupremeOS-10.html",
+  "assets": [
+    {
+      "name": "Residential",
+      "file": "residential.jpg",
+      "bytes": 217382,
+      "sha256": "eb724fa35c6a2334dace20d54c9f915799795bfe46ed5d1737016a0aa2ddeaad"
+    },
+    {
+      "name": "Living",
+      "file": "living.jpg",
+      "bytes": 222168,
+      "sha256": "f80a609d3944f0af110f965471b913e72bc0896d2f03bdef35bd19e04b6ac0d3"
+    },
+    {
+      "name": "Dining",
+      "file": "dining.jpg",
+      "bytes": 203391,
+      "sha256": "821ed905bfadb8fac31a5c36ae4fe6cd3165665b6aa3a7a4076348f464318fb3"
+    },
+    {
+      "name": "Kitchen",
+      "file": "kitchen.jpg",
+      "bytes": 196024,
+      "sha256": "036f8a18c1d2b9dede18633d8d68e9ae0c87be3bc314c64b158cfeac4ae36e38"
+    },
+    {
+      "name": "Master Bedroom",
+      "file": "master-bedroom.jpg",
+      "bytes": 188792,
+      "sha256": "f72d89d2a757ad4a92ac1395327fafd2de89aa051db68afd766b738652e3fcb1"
+    },
+    {
+      "name": "Bathroom",
+      "file": "bathroom.jpg",
+      "bytes": 210162,
+      "sha256": "7dc17ef58a9a18b10784b857c06c02d8d68dd61a644b9e2832920dafef3fee50"
+    },
+    {
+      "name": "Outdoor",
+      "file": "outdoor.jpg",
+      "bytes": 228942,
+      "sha256": "a434c56d90bd4cb04ba752b22c0f035bc865841f30d384f91258dcbefb5f41b3"
+    }
+  ]
+}

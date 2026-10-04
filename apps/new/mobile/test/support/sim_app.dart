@@ -18,7 +18,22 @@ class SimApp {
   /// it, as a tap on Demo would.
   final bool pastArrival;
   final List<Override> extra;
-  SimApp({this.hour = 15, this.pastArrival = true, this.extra = const []});
+
+  /// The OS asks for reduced motion. The arrival flow plays Presence first; under reduced motion it
+  /// shows the engine's settled mark and opens Welcome ~600 ms after the Hub answers, so a test
+  /// that is not about the choreography does not have to play it. Always on when the arrival flow
+  /// is shown from the start.
+  final bool reducedMotion;
+
+  /// When set, the app is wrapped in a `RepaintBoundary` with this key, so a test can snapshot it
+  /// (`test/golden_master/capture_test.dart`).
+  final GlobalKey? boundaryKey;
+  SimApp(
+      {this.hour = 15,
+      this.pastArrival = true,
+      this.extra = const [],
+      this.reducedMotion = false,
+      this.boundaryKey});
 
   /// Every route the app sent to the Hub, in order (device commands and scene activations).
   final List<String> sent = [];
@@ -43,6 +58,12 @@ class SimApp {
   Future<void> pump(WidgetTester tester,
       {Size logical = const Size(390, 844), double dpr = 2}) async {
     SharedPreferences.setMockInitialValues({});
+    if (reducedMotion || !pastArrival) {
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: true);
+      addTearDown(
+          tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    }
     tester.view.physicalSize = logical * dpr;
     tester.view.devicePixelRatio = dpr;
     addTearDown(tester.view.reset);
@@ -51,14 +72,29 @@ class SimApp {
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));
     });
-    await tester.pumpWidget(
-        ProviderScope(overrides: overrides, child: const SupremeMobileApp()));
+    const app = SupremeMobileApp();
+    await tester.pumpWidget(ProviderScope(
+        overrides: overrides,
+        child: boundaryKey == null
+            ? app
+            : RepaintBoundary(key: boundaryKey, child: app)));
+    await settle(tester);
+    if (!pastArrival) await arrive(tester);
+  }
+
+  /// Presence → Welcome under reduced motion: the Hub has answered, a beat later Welcome opens.
+  Future<void> arrive(WidgetTester tester) async {
+    await tester.pump(const Duration(milliseconds: 700));
     await settle(tester);
   }
 
   /// Opens the Control layer from the bar and lets its 500 ms slide finish.
   Future<void> openControl(WidgetTester tester) async {
-    await tester.tap(find.text('Control'));
+    // The bar says "Control"; a wide surface's header says "Residence control".
+    final label = find.text('Control').evaluate().isNotEmpty
+        ? find.text('Control')
+        : find.text('Residence control');
+    await tester.tap(label.first);
     await settle(tester);
     await tester.pump(const Duration(milliseconds: 600));
   }
