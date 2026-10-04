@@ -39,6 +39,8 @@ export function rowToHome(r: HomeRow): Home {
     masterUserId: r.master_user_id as UserId,
     createdAt: r.created_at,
     heroImageUrl: null,
+    // Not stored on the home row: it is read from the home config and filled in on /v1/home.
+    location: null,
   };
 }
 
