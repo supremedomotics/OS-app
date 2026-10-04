@@ -29,6 +29,10 @@ export interface RtspDiscoveryResult {
   onvifAvailable: boolean;
   /** Additional RTSP ports found responsive during fallback probing, when more than one. */
   rtspPorts: number[];
+  /** True when the host answered on a UniFi Protect console port (7441/7447). That identifies the
+   * console, not a camera — `rtspAvailable` stays false unless a real RTSP port also answered.
+   * Optional so older producers/consumers stay compatible. */
+  unifiProtectConsole?: boolean;
 }
 
 /** One ONVIF WS-Discovery ProbeMatch, already decoded from its SOAP envelope — everything is

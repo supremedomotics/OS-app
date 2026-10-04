@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { UnifiProtectSection } from "./unifi-protect-section";
 import { Button, StatusDot } from "@supreme/aureon-web";
 import { useLive, type DriverConnectionState } from "./live.js";
 import {
@@ -216,6 +217,9 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
   const isProtocol = driver.protocols.length > 0;
   const isCasambi = driver.key === "supreme-casambi";
   const isCoolMaster = driver.key === "supreme-coolmaster";
+  // The single Extension Center card for this key stands for every commissioned camera (each is its
+  // own instance); per-camera URL/credentials/uninstall belong to the camera, not to this card.
+  const isRtspCamera = driver.key === "supreme-rtsp-camera";
 
   return (
     <div className="drv-detail">
@@ -302,7 +306,10 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
         {driver.installed && isCoolMaster && !showCoolMasterWizard && (
           <button disabled={busy} onClick={() => setShowCoolMasterWizard(true)}>Add gateway</button>
         )}
-        {driver.installed && (
+        {driver.installed && isRtspCamera && driver.updateAvailable && (
+          <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>
+        )}
+        {driver.installed && !isRtspCamera && (
           <>
             {driver.updateAvailable && <button className="primary" disabled={busy} onClick={() => run(() => updateDriverByKey(driver.key), "Updated")}>Update to v{driver.version}</button>}
             {has("enable") && <button disabled={busy} onClick={() => run(() => setDriverEnabled(id, !driver.enabled), driver.enabled ? "Disabled" : "Enabled")}>{driver.enabled ? "Disable" : "Enable"}</button>}
@@ -320,7 +327,7 @@ export function DriverDetail({ driver, onChanged }: { driver: DriverEntry; onCha
       </div>
 
       {/* Schema-generated config page */}
-      {driver.installed && schema.length > 0 && (
+      {driver.installed && schema.length > 0 && !isRtspCamera && (
         <div className="drv-config">
           <h4>Configuration</h4>
           {driver.protocols.includes("knx") && (
@@ -558,6 +565,7 @@ function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => vo
   const [cameras, setCameras] = useState<RtspDiscoveryResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const unifiConsole = cameras.find((c) => c.unifiProtectConsole);
 
   const scan = useCallback(async () => {
     setStatus("scanning");
@@ -607,7 +615,9 @@ function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => vo
                   {cam.onvifAvailable ? "ONVIF" : "RTSP"}
                   {cam.onvifAvailable && cam.rtspAvailable ? " + RTSP" : ""}
                 </div>
-                {openId !== cam.id ? (
+                {cam.unifiProtectConsole && !cam.rtspAvailable ? (
+                  <p className="muted" style={{ margin: 0 }}>UniFi Protect console detected — use the UniFi Protect option below.</p>
+                ) : openId !== cam.id ? (
                   <button type="button" className="link" onClick={() => setOpenId(cam.id)}>Add…</button>
                 ) : (
                   <RtspAddCameraForm
@@ -624,6 +634,7 @@ function RtspCameraDiscoveryPanel({ onCommissioned }: { onCommissioned: () => vo
           </div>
         </>
       )}
+      <UnifiProtectSection detectedHost={unifiConsole?.ipAddress ?? null} onDone={onCommissioned} />
       <RtspManualAddForm onDone={onCommissioned} />
     </div>
   );
@@ -716,6 +727,7 @@ function RtspManualAddForm({ onDone }: { onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [rtspUrl, setRtspUrl] = useState("");
+  const [secure, setSecure] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [check, setCheck] = useState<RtspStreamCheckResult | null>(null);
@@ -730,11 +742,21 @@ function RtspManualAddForm({ onDone }: { onDone: () => void }) {
     );
   }
 
+  // § TLS transport — "Secure RTSP" swaps the URL's scheme to rtsps:// so what's actually sent to
+  // Test Connection/Add Camera reflects the checkbox regardless of whether the installer typed
+  // rtsp:// themselves, left the scheme off, or pasted an rtsps:// URL and unchecked the box.
+  function effectiveUrl(): string {
+    const trimmed = rtspUrl.trim();
+    if (!trimmed) return trimmed;
+    const withScheme = /^rtsps?:\/\//i.test(trimmed) ? trimmed : `rtsp://${trimmed}`;
+    return secure ? withScheme.replace(/^rtsp:\/\//i, "rtsps://") : withScheme.replace(/^rtsps:\/\//i, "rtsp://");
+  }
+
   async function test() {
     setBusy(true);
     setErr(null);
     try {
-      const res = await testRtspManualConnection(rtspUrl, username || undefined, password || undefined);
+      const res = await testRtspManualConnection(effectiveUrl(), username || undefined, password || undefined);
       setCheck(res.result);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Test Connection failed.");
@@ -747,10 +769,11 @@ function RtspManualAddForm({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      await commissionRtspManualCamera({ name, rtspUrl, username: username || undefined, password: password || undefined });
+      await commissionRtspManualCamera({ name, rtspUrl: effectiveUrl(), username: username || undefined, password: password || undefined });
       setOpen(false);
       setName("");
       setRtspUrl("");
+      setSecure(false);
       setUsername("");
       setPassword("");
       setCheck(null);
@@ -766,7 +789,15 @@ function RtspManualAddForm({ onDone }: { onDone: () => void }) {
     <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
       <span className="lbl">Add a camera manually</span>
       <input placeholder="Camera name" value={name} onChange={(e) => setName(e.target.value)} />
-      <input placeholder="rtsp://192.168.1.50:554/stream1" value={rtspUrl} onChange={(e) => setRtspUrl(e.target.value)} />
+      <input
+        placeholder={secure ? "rtsps://192.168.1.50:322/stream1" : "rtsp://192.168.1.50:554/stream1"}
+        value={rtspUrl}
+        onChange={(e) => setRtspUrl(e.target.value)}
+      />
+      <label className="drv-field" style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <input type="checkbox" checked={secure} onChange={(e) => setSecure(e.target.checked)} />
+        <span className="lbl" style={{ margin: 0 }}>Secure RTSP (rtsps:// — encrypted transport)</span>
+      </label>
       <input placeholder="Username (if required)" value={username} onChange={(e) => setUsername(e.target.value)} />
       <input type="password" placeholder="Password (if required)" value={password} onChange={(e) => setPassword(e.target.value)} />
       {check && (

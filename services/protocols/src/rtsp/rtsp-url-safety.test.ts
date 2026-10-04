@@ -30,12 +30,22 @@ describe("validateRtspUrl — § STEP 11 SSRF guard", () => {
     expect((await validateRtspUrl("rtsp://[::1]/stream")).ok).toBe(false);
   });
 
-  describe("§ FINDING 4 — rtsps:// scheme", () => {
-    it("rejects rtsps:// with a clear unsupported-scheme reason rather than silently accepting it", async () => {
+  describe("§ TLS transport — rtsps:// scheme", () => {
+    it("accepts a private-LAN rtsps:// URL the same way rtsp:// is accepted, now that real TLS transport exists", async () => {
       const r = await validateRtspUrl("rtsps://192.168.1.50:322/stream");
+      expect(r.ok).toBe(true);
+      expect(r.host).toBe("192.168.1.50");
+      expect(r.port).toBe(322);
+      expect(r.resolvedAddress).toBe("192.168.1.50");
+    });
+    it("applies the same public-internet SSRF rejection to rtsps://", async () => {
+      const r = await validateRtspUrl("rtsps://8.8.8.8/stream");
       expect(r.ok).toBe(false);
-      expect(r.reason).toMatch(/rtsps|tls/i);
-      expect(r.reason).toMatch(/not support/i);
+      expect(r.reason).toMatch(/local-network/i);
+    });
+    it("still rejects other non-rtsp(s) schemes (SSRF via http/file)", async () => {
+      expect((await validateRtspUrl("http://192.168.1.50/")).ok).toBe(false);
+      expect((await validateRtspUrl("file:///etc/passwd")).ok).toBe(false);
     });
   });
 

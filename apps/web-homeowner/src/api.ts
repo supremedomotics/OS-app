@@ -388,6 +388,8 @@ export interface RtspDiscoveryResult {
   rtspAvailable: boolean;
   onvifAvailable: boolean;
   rtspPorts: number[];
+  /** § UniFi Protect — host answered on 7441/7447: a console, not a camera. */
+  unifiProtectConsole?: boolean;
 }
 export interface RtspStreamCheckResult {
   ok: boolean;
@@ -460,6 +462,38 @@ export async function commissionRtspManualCamera(input: {
   const body = (await res.json()) as RtspCommissionResult;
   if (!res.ok) throw new Error(body.validation?.reason ?? "Could not add this camera.");
   return body;
+}
+
+// ── UniFi Protect mode (§ RTSP Camera Extension) — the API key is sent per request only ──
+export interface UnifiProtectCamera {
+  id: string;
+  name: string;
+  model: string | null;
+  state: string | null;
+}
+export interface UnifiProtectCommissionResult {
+  unifiCameraId: string;
+  name: string;
+  status: "added" | "already-added" | "failed";
+  deviceId: string | null;
+  reason: string | null;
+  diagnostics: string[];
+}
+
+export async function listUnifiProtectCameras(host: string, apiKey: string): Promise<UnifiProtectCamera[]> {
+  const res = await authed("/v1/drivers/rtsp/unifi/cameras", { method: "POST", body: JSON.stringify({ host, apiKey }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not list cameras from the UniFi console."));
+  return ((await res.json()) as { cameras: UnifiProtectCamera[] }).cameras;
+}
+
+export async function commissionUnifiProtectCameras(
+  host: string,
+  apiKey: string,
+  cameras: { id: string; name: string; model?: string | null }[],
+): Promise<UnifiProtectCommissionResult[]> {
+  const res = await authed("/v1/drivers/rtsp/unifi/commission", { method: "POST", body: JSON.stringify({ host, apiKey, cameras }) });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not add the selected cameras."));
+  return ((await res.json()) as { results: UnifiProtectCommissionResult[] }).results;
 }
 
 // ── Casambi Driver Refactor — Foundation (authenticated) ──────────────────────────

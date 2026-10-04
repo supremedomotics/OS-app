@@ -34,6 +34,22 @@
   `docs/design/golden-master/`.
 - **Blockers / open:** touchpanel fakes (`panel-demo-1`, fixed areas, test signature, timer-based "confirmation") must be
   replaced, not extended; no platform TV signal; owner decisions D1–D8 (floor-panel nav, watch depth, Homes/Remote Access placement, onboarding vs pairing, Shape, add/remove Hub, incoming call, Experience orchestration) in `docs/design/golden-master-implementation-map.md`.
+### Cameras out of the box — open items after native go2rtc ensure-step (2026-09-29)
+- [x] update.sh installs/repairs go2rtc + unit, verifies it (warning-only). Needs a real-hub run to confirm.
+- [ ] Stream base URL is `https://localhost/stream` on LAN-only installs; only the web app rebases it. Derive from request host or make relative for mobile/other clients.
+- [ ] UniFi token returned by camera APIs; needs a CameraService change to move tokenized URLs to the secret store.
+- [ ] Verify UniFi Protect rtsps-stream GET/POST and quality selection on a real console.
+- [ ] UniFi dedupe only covers its own additions (hand-added + UniFi camera can duplicate).
+- [ ] No ffmpeg on hub: no JPEG snapshots, no audio transcoding.
+- [ ] go2rtc v1.9.14 `aac.RTPToADTS` panic seen once during HLS/AAC conversion; not reproduced.
+- [ ] Extension Center shows one RTSP Camera card but credentials are per driver instance.
+
+### UniFi Protect mode — real-console verification
+- [ ] Verify GET/POST `/proxy/protect/integration/v1/cameras[/{id}/rtsps-stream]` shapes and the
+  camera `marketName` field against a real console (currently unverified, tolerant parsing).
+- [ ] Consider moving the token-bearing RTSPS URL out of `Device.metadata.streamUrl` (needs a
+  CameraService secret-source hook; today it matches manual-add exposure).
+- [ ] Re-baseline the full-/24 discovery duration now that two more ports are probed.
 
 ### Matter Controller Extension — Phase 4 (Subscriptions + Capability Adapters)
 - **Description:** Phase 3 (generic cluster engine) is done — `services/protocols/src/
@@ -2210,3 +2226,8 @@
   ultrawide-display layout bug.
 - Project memory system established: `CLAUDE.md`, `PROJECT_CONTEXT.md`, `SESSION_HANDOFF.md`,
   `TODO.md` (this file).
+
+
+- [x] Flutter sun line on Home and Spaces from the Hub-stored location.
+- [ ] Deploy the Hub location route/field to the Ubuntu Hub.
+- [ ] Port the Golden Master arrival hand-off animation; Flutter room-panel capture.

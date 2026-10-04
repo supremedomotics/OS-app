@@ -1,5 +1,6 @@
 import type { DiscoveryMethod, OnvifProbeMatch, RtspDiscoveryResult } from "./rtsp-types.js";
 import { scopeValue } from "./onvif-wsdiscovery.js";
+import { UNIFI_PROTECT_PORTS } from "./rtsp-port-probe.js";
 
 /** One raw discovery signal, before merge — an ONVIF ProbeMatch resolved to an address, or a bare
  * RTSP-port hit. `rtsp-camera-service.ts` builds these; this module turns them into deduplicated,
@@ -86,7 +87,7 @@ function identityKey(
 export function mergeSignals(signals: RawSignal[], macByIp?: Map<string, string>): RtspDiscoveryResult[] {
   const byKey = new Map<string, RtspDiscoveryResult & { _mdns?: string | null }>();
 
-  for (const sig of signals) {
+  for (let sig of signals) {
     if (sig.method === "onvif") {
       const manufacturer = scopeValue(sig.match.scopes, "hardware") ? null : scopeValue(sig.match.scopes, "manufacturer");
       const model = scopeValue(sig.match.scopes, "hardware");
@@ -133,6 +134,40 @@ export function mergeSignals(signals: RawSignal[], macByIp?: Map<string, string>
         });
       }
     } else {
+      // UniFi Protect console ports identify the console itself, never a camera, and 7441 is TLS
+      // (a plaintext RTSP probe would fail) — split them out so they never count as a camera's
+      // RTSP availability.
+      const unifiPorts = sig.ports.filter((p) => UNIFI_PROTECT_PORTS.includes(p));
+      const rtspPorts = sig.ports.filter((p) => !UNIFI_PROTECT_PORTS.includes(p));
+      if (unifiPorts.length > 0 && rtspPorts.length === 0) {
+        const sibling = [...byKey.values()].find((v) => v.ipAddress === sig.ipAddress);
+        if (sibling) {
+          sibling.unifiProtectConsole = true;
+          if (!sibling.discoveryMethods.includes("rtsp-probe")) sibling.discoveryMethods.push("rtsp-probe");
+        } else {
+          const key = `unifi:${sig.ipAddress}`;
+          byKey.set(key, {
+            id: key,
+            discoveryMethod: "rtsp-probe",
+            discoveryMethods: ["rtsp-probe"],
+            ipAddress: sig.ipAddress,
+            port: unifiPorts[0]!,
+            name: "UniFi Protect console",
+            manufacturer: "Ubiquiti",
+            model: null,
+            hostname: sig.hostname ?? null,
+            onvifUuid: null,
+            onvifEndpoint: null,
+            rtspAvailable: false,
+            onvifAvailable: false,
+            rtspPorts: [],
+            unifiProtectConsole: true,
+          });
+        }
+        continue;
+      }
+      const isConsoleToo = unifiPorts.length > 0;
+      sig = { ...sig, ports: rtspPorts };
       const key = identityKey(
         {
           onvifUuid: null,
@@ -149,6 +184,7 @@ export function mergeSignals(signals: RawSignal[], macByIp?: Map<string, string>
       const onvifSibling = [...byKey.values()].find((v) => v.ipAddress === sig.ipAddress && v.onvifAvailable);
       const existing = onvifSibling ?? byKey.get(key);
       if (existing) {
+        if (isConsoleToo) existing.unifiProtectConsole = true;
         existing.rtspAvailable = true;
         existing.rtspPorts = Array.from(new Set([...existing.rtspPorts, ...sig.ports]));
         existing.hostname = existing.hostname ?? sig.hostname ?? null;
@@ -169,6 +205,7 @@ export function mergeSignals(signals: RawSignal[], macByIp?: Map<string, string>
           rtspAvailable: true,
           onvifAvailable: false,
           rtspPorts: [...sig.ports],
+          ...(isConsoleToo ? { unifiProtectConsole: true } : {}),
         });
       }
     }

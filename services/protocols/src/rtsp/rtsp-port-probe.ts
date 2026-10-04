@@ -2,7 +2,13 @@ import net from "node:net";
 
 /** Default RTSP ports to fall back-probe when a camera has no usable ONVIF response (§ STEP 3) —
  * configurable/extensible, never a hardcoded single value baked into the scan loop itself. */
-export const DEFAULT_RTSP_PORTS = [554, 8554, 10554];
+export const DEFAULT_RTSP_PORTS = [554, 8554, 10554, 7447, 7441];
+
+/** UniFi Protect console ports: 7447 = plain RTSP, 7441 = RTSPS (TLS). A hit here identifies the
+ * CONSOLE (one host serving every camera under per-camera tokens), never an individual camera —
+ * and 7441 is TLS, so a plaintext RTSP OPTIONS against it would fail. Identity treats these
+ * separately; see rtsp-identity.ts. */
+export const UNIFI_PROTECT_PORTS: readonly number[] = [7447, 7441];
 
 export interface TcpProbe {
   (host: string, port: number, timeoutMs: number): Promise<boolean>;

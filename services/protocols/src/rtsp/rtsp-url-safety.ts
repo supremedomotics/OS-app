@@ -44,14 +44,13 @@ export async function validateRtspUrl(raw: string): Promise<RtspUrlValidation> {
   } catch {
     return { ok: false, reason: "Not a valid URL.", host: null, port: 0, resolvedAddress: null };
   }
-  if (url.protocol === "rtsps:") {
-    // § FINDING 4 — the only transport this driver implements is a plain unencrypted net.Socket
-    // (rtsp-handshake.ts); accepting rtsps: here would silently drop straight to plaintext instead
-    // of the TLS the installer's URL asked for. Reject cleanly rather than half-implementing TLS.
-    return { ok: false, reason: "rtsps:// (RTSP over TLS) is not supported by this driver yet — use rtsp:// instead.", host: null, port: 0, resolvedAddress: null };
-  }
-  if (url.protocol !== "rtsp:") {
-    return { ok: false, reason: "Only rtsp:// URLs are allowed.", host: null, port: 0, resolvedAddress: null };
+  // § TLS transport — `rtsp-handshake.ts` now opens a real `tls.connect()` when the scheme is
+  // `rtsps:` (previously rejected here per § FINDING 4, because only a plaintext net.Socket
+  // existed and silently falling back to it would have contradicted what the installer's URL
+  // asked for). `rtsps:` is validated identically to `rtsp:` below — same SSRF/private-network/
+  // DNS-resolution guard, just a different default port and a TLS handshake once connected.
+  if (url.protocol !== "rtsp:" && url.protocol !== "rtsps:") {
+    return { ok: false, reason: "Only rtsp:// or rtsps:// URLs are allowed.", host: null, port: 0, resolvedAddress: null };
   }
   const rawHost = url.hostname;
   if (!rawHost) return { ok: false, reason: "URL has no host.", host: null, port: 0, resolvedAddress: null };
@@ -124,5 +123,40 @@ export async function validateOnvifEndpointUrl(raw: string): Promise<RtspUrlVali
   if (!isPrivateOrLoopbackV4(resolved) && resolved !== "0.0.0.0") {
     return { ok: false, reason: "Only local-network ONVIF endpoints are allowed.", host, port, resolvedAddress: resolved };
   }
+  return { ok: true, reason: null, host, port, resolvedAddress: resolved };
+}
+
+/**
+ * UniFi Protect console address (§ UniFi Protect mode): a bare host/IP, `host:port` or
+ * `https://host[:port]` entered by the installer. Same local-network-only SSRF guard as the RTSP
+ * and ONVIF validators — the RESOLVED address is what callers must connect to. Path/query/userinfo
+ * are ignored; the port defaults to 443.
+ */
+export async function validateConsoleHost(raw: string): Promise<RtspUrlValidation> {
+  const trimmed = raw.trim();
+  const fail = (reason: string, host: string | null = null, port = 0): RtspUrlValidation => ({ ok: false, reason, host, port, resolvedAddress: null });
+  if (!trimmed) return fail("Enter the UniFi console address.");
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) && !/^https:\/\//i.test(trimmed)) return fail("The console address must be a plain address or start with https://.");
+  let url: URL;
+  try {
+    url = new URL(/^https:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return fail("That console address isn't valid.");
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (!host) return fail("That console address isn't valid.");
+  if (net.isIP(host) === 6) return fail("IPv6 console addresses are not yet supported.", host);
+  const port = url.port ? Number(url.port) : 443;
+  if (net.isIP(host) === 4) {
+    if (!isPrivateOrLoopbackV4(host)) return fail("Only local-network console addresses are allowed.", host, port);
+    return { ok: true, reason: null, host, port, resolvedAddress: host };
+  }
+  let resolved: string;
+  try {
+    resolved = (await dns.promises.lookup(host, { family: 4 })).address;
+  } catch {
+    return fail("The console address could not be resolved.", host, port);
+  }
+  if (!isPrivateOrLoopbackV4(resolved)) return fail("Only local-network console addresses are allowed.", host, port);
   return { ok: true, reason: null, host, port, resolvedAddress: resolved };
 }

@@ -115,6 +115,60 @@ NOT run: Android/iOS builds, gateway/TS tests (no TS changed), visual comparison
 ringed centre Control, tablet rail, desktop pills + "Residence control", watch list) — first port the glyph set and inspect
 `formfactor.js`; then Phase 2 core surfaces; Phase 3 starts with the backend contract gate (see the table at the end of
 `docs/design/supremeos-golden-master-tokens.md`).
+## Session: Native Linux — cameras work out of the box (go2rtc ensured on every update)
+
+Branch `native-streamer-out-of-box`. NOT tested on a real hub or real systemd (sandbox only:
+`bash -n` + `tests/deployment-regression.test.sh`).
+
+**Changed**: go2rtc pin (`GO2RTC_VERSION`/`GO2RTC_LINUX_AMD64_SHA256`/`SUPREME_STREAMER_BIN`) moved
+from install.sh into `lib/common.sh` with one implementation, `streamer_install_binary` (used by
+install.sh's `install_streamer`, still fatal on failure there; phase validator unchanged) and
+`streamer_ensure_for_update` / `streamer_restart_for_update` (update.sh; warn-only, never rolls
+back). Unit is always re-rendered on update. New `rc_check_streamer` (WARNING-only) in the
+SUPREME SERVICES stage and `run_runtime_verification`. `supreme-streamer` added to logs, restore,
+factory-reset, recover, support bundle, security-audit. Regression tests added.
+
+**Decision**: go2rtc is optional; failures are warnings, not rollback triggers. An installed binary
+is judged by sha256 against the pin (a different hand-installed version is replaced on update).
+
+**Hub pickup**: `git pull` on main, then `sudo infra/native-linux/update.sh --no-verify`.
+
+**Real-hub findings (2026-09-29) and open items**
+- (a) `MemoryDenyWriteExecute=yes` made go2rtc v1.9.14 SIGSEGV on start; `RestrictAddressFamilies`
+  needs `AF_NETLINK` or every WebRTC session fails. Both found by `systemd-run` isolation; fixed in the unit template.
+- (b) UniFi `?enableSrtp` yields scrambled H.264 (black then green, MEDIA_ERR_DECODE) since go2rtc
+  doesn't decrypt SRTP; stripped in `stream-gateway.ts`; verified on a real console (`rtsps://` without the param and `rtspx://` both play clean).
+- (c) OPEN: stream base URL is `https://localhost/stream` on LAN-only installs (SUPREME_DOMAIN=localhost). The web app rebases it; mobile/other clients would still get localhost. Follow-up: derive from request host or make relative. Not done.
+- (d) OPEN: UniFi camera token is returned by camera APIs because CameraService's credential resolver only injects userinfo; tokenized URLs can't move to the secret store without a CameraService change.
+- (e) OPEN: UniFi Protect API shapes only partly verified (list worked on the real console, devices showed Ubiquiti / UVC G5 Dome Ultra); rtsps-stream GET/POST behavior and quality selection unconfirmed.
+- (f) OPEN: the UniFi option dedupes only its own additions; a camera added by hand then via UniFi can duplicate.
+- (g) OPEN: no `ffmpeg` on the hub, so no JPEG snapshots (Snapshot "Not configured") and no audio transcoding (live audio did play).
+- (h) OPEN: go2rtc v1.9.14 once panicked (`aac.RTPToADTS slice bounds out of range`) during HLS/AAC conversion; not reproduced.
+- (i) Extension Center shows one RTSP Camera card but each camera is its own driver instance (credentials per instance).
+
+## Session: RTSP Camera Extension — UniFi Protect mode + console port probe
+
+User-approved UniFi-specific feature (overrides the "no manufacturer-specific drivers" rule for
+this one integration). Branch `unifi-protect-cameras`.
+
+**Added**: `services/protocols/src/rtsp/unifi-protect.ts` (Integration API client, tolerant
+parsing, `commissionUnifiCameras`), `validateConsoleHost` in `rtsp-url-safety.ts`, gateway routes
+`POST /v1/drivers/rtsp/unifi/cameras` and `/unifi/commission` (in `routes/rtsp-camera.ts`), contracts
+in `phase3.ts`, manifest field `unifiCameraId`, `unifi-protect-section.tsx` (UI, mounted from the
+RTSP Discover panel), and UniFi ports 7447/7441 in `DEFAULT_RTSP_PORTS`. A 7441/7447-only hit is
+labeled "UniFi Protect console" (`unifiProtectConsole: true`, `rtspAvailable: false`) and pre-fills
+the console address in the UI.
+
+**Decisions**: identity/dedupe = UniFi camera id stored in the per-camera driver instance config
+(`unifiCameraId`); GET existing rtsps-stream first, POST only if none enabled (POST can rotate
+tokens); the API key is request-only and never stored/logged/returned; TLS verification is disabled
+only via a per-request `https.Agent` to the single validated private address. The tokenized RTSPS
+URL is stored as `Device.metadata.streamUrl` (and driver config `rtspUrl`), same as a manual add —
+CameraService only injects userinfo credentials, so a token-in-path placeholder would need a
+CameraService change. It is returned by camera APIs to authorized users; never logged.
+
+**Unverified**: endpoint/field shapes come from community clients of the official Integration API
+(developer.ui.com was unreachable from the sandbox). Never tested against a real console.
 
 ## Session: Matter Controller Extension — Phase 3.4/3.5 PASE + Cluster-Engine Fixes (RESOLVED)
 
@@ -5103,3 +5157,10 @@ the full 563-test gateway run, both before and after this session's change.
 
 `git diff --name-only` confirmed: no `apps/mobile`/`*.dart` files touched, no Docker/Dockerfile/
 docker-compose/`infra/hub-compose` files touched — only `services/protocols/src/rtsp/*`.
+
+
+## Flutter: onboarding, Demo gating, Hub location and the sun line (live-android-test)
+- Onboarding rewritten to the Golden Master (Presence boot, manual Hub IP when not found, plain "Demo mode" button, location asked and written to the Hub after pairing).
+- Hub: `GET /v1/home` now returns `home.location` (incl. `utcOffsetMinutes`); `PUT/POST /v1/home/location` writes it. **Not yet deployed to the Ubuntu Hub** — run the update step there.
+- Sun line (arc, period name, "7:49 – 19:29") on Home and Spaces, drawn from the Hub location (`shared/.../sun.dart`, `SupremeDayLine`). Simulator is seeded with Palma, Spain.
+- Known: arrival hand-off animation (2.2s) not ported; web app typecheck not run on Ubuntu; stray local edits to `mdns-responder.*` left uncommitted.

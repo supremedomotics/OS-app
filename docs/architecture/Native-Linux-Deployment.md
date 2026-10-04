@@ -234,6 +234,18 @@ cleanup (delete the pre-update backup ONLY now — requirement 4's literal order
            then prune old release directories beyond SUPREME_RELEASE_RETAIN)
 ```
 
+**go2rtc (`supreme-streamer`) on every update.** `update.sh` calls `streamer_ensure_for_update`
+(lib/common.sh) after `render_config`: it installs the pinned go2rtc binary if the file at
+`SUPREME_STREAMER_BIN` doesn't hash to the pin (same checksum-verified `streamer_install_binary`
+that `install.sh` uses; the version/hash constants live only in lib/common.sh), always re-renders
+`supreme-streamer.service` from the template (repairing units from before the
+`MemoryDenyWriteExecute`/`AF_NETLINK` fixes, overwriting hand-edits), `daemon-reload`s and enables
+it. `restart_services` restarts it before the gateway. go2rtc is optional, so a failed download, an
+offline run without `SUPREME_GO2RTC_BIN_PATH`, or a checksum mismatch (bad binary never installed)
+logs a loud warning and does NOT abort or roll back the update. The verification SUPREME SERVICES
+stage warns (never fails) if go2rtc is missing, not answering on 127.0.0.1:1984, or restarting
+(`NRestarts` > 0); remediation: `journalctl -u supreme-streamer -n 50`.
+
 **If any stage from backup onward fails**, `update.sh`'s `rollback_update` runs
 automatically (triggered either by an explicit failed-verification check or an `ERR`
 trap catching any unexpected command failure):
