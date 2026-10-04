@@ -154,6 +154,8 @@ export class IdentityService {
       masterUserId: userId,
       createdAt: now,
       heroImageUrl: null,
+      // A new home has no location yet; the owner sets it (PUT /v1/home/location).
+      location: null,
     };
 
     await this.store.putHome(home);
