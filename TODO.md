@@ -34,6 +34,7 @@
   `docs/design/golden-master/`.
 - **Blockers / open:** touchpanel fakes (`panel-demo-1`, fixed areas, test signature, timer-based "confirmation") must be
   replaced, not extended; no platform TV signal; owner decisions D1–D8 (floor-panel nav, watch depth, Homes/Remote Access placement, onboarding vs pairing, Shape, add/remove Hub, incoming call, Experience orchestration) in `docs/design/golden-master-implementation-map.md`.
+
 ### Cameras out of the box — open items after native go2rtc ensure-step (2026-09-29)
 - [x] update.sh installs/repairs go2rtc + unit, verifies it (warning-only). Needs a real-hub run to confirm.
 - [ ] Stream base URL is `https://localhost/stream` on LAN-only installs; only the web app rebases it. Derive from request host or make relative for mobile/other clients.

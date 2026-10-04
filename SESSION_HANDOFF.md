@@ -115,6 +115,7 @@ NOT run: Android/iOS builds, gateway/TS tests (no TS changed), visual comparison
 ringed centre Control, tablet rail, desktop pills + "Residence control", watch list) — first port the glyph set and inspect
 `formfactor.js`; then Phase 2 core surfaces; Phase 3 starts with the backend contract gate (see the table at the end of
 `docs/design/supremeos-golden-master-tokens.md`).
+
 ## Session: Native Linux — cameras work out of the box (go2rtc ensured on every update)
 
 Branch `native-streamer-out-of-box`. NOT tested on a real hub or real systemd (sandbox only:
