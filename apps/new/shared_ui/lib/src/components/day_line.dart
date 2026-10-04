@@ -46,7 +46,7 @@ class _SupremeDayLineState extends State<SupremeDayLine> {
     final small = widget.compact;
     final label = TextStyle(
         fontSize: small ? 10.5 : 11.5,
-        letterSpacing: 2,
+        letterSpacing: 1.6,
         fontWeight: FontWeight.w500,
         color: SupremeColorScheme.brassPale);
     return Semantics(
@@ -55,12 +55,12 @@ class _SupremeDayLineState extends State<SupremeDayLine> {
       child: Wrap(
         key: const ValueKey('day-line'),
         crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: small ? 10 : 14,
+        spacing: 10,
         runSpacing: 4,
         children: [
           SizedBox(
-              width: small ? 120 : 160,
-              height: small ? 24 : 32,
+              width: small ? 96 : 104,
+              height: small ? 20 : 22,
               child: CustomPaint(painter: _DayArcPainter(d))),
           Text(d.phaseName.toUpperCase(), key: const ValueKey('day-phase'), style: label),
           if (span != null)
