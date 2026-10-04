@@ -28,6 +28,8 @@ export interface SupremeNativeAdapterOptions {
    * registers here identically. Bound devices route to their driver.
    */
   drivers?: INativeProtocolDriver[];
+  /** Boot waits at most this long for the drivers to connect (default 8 s) before serving anyway. */
+  bootConnectBudgetMs?: number;
   /**
    * ADR-0023 § Remove Runtime Simulation: when true, an unbound device's command
    * is served by an in-process deterministic model instead of failing loudly. This
@@ -50,6 +52,9 @@ export interface SupremeNativeAdapterOptions {
  * with or without hardware present. Devices are "provisioned" onto it (native
  * commissioning); commanding an unprovisioned, unbound device auto-provisions it.
  */
+/** How long hub boot waits for protocol drivers to connect (their connects run concurrently). */
+export const DEFAULT_BOOT_CONNECT_BUDGET_MS = 8_000;
+
 export class SupremeNativeAdapter implements IBackendAdapter {
   readonly kind = "supreme-native";
   private connected = false;
@@ -66,20 +71,28 @@ export class SupremeNativeAdapter implements IBackendAdapter {
   private readonly inputListeners = new Set<(event: KeypadInputEvent) => void>();
 
   private readonly simulate: boolean;
+  /** How long boot waits for the drivers to connect before the hub serves anyway (see `connect`). */
+  private readonly bootConnectBudgetMs: number;
+  /** Bumped by `disconnect()`, so a driver that finishes connecting afterwards wires nothing up. */
+  private epoch = 0;
 
   constructor(opts: SupremeNativeAdapterOptions = {}) {
     this.drivers = opts.drivers ?? [];
     this.simulate = opts.simulate ?? false;
+    this.bootConnectBudgetMs = opts.bootConnectBudgetMs ?? DEFAULT_BOOT_CONNECT_BUDGET_MS;
   }
 
   /** Connect a single driver and wire its state upward; a connect failure is recorded, not fatal. */
   private async wireDriver(driver: INativeProtocolDriver): Promise<void> {
+    const epoch = this.epoch;
     try {
       await driver.connect();
     } catch (err) {
       this.connectErrors.push({ protocol: driver.protocol, error: err as Error });
       return;
     }
+    // Disconnected while this driver was still connecting: it must not wire itself up afterwards.
+    if (epoch !== this.epoch) return;
     const unsubState = driver.onState((event) => {
       this.states.set(key(event.deviceId, event.capability), event.state);
       for (const l of this.listeners) l(event);
@@ -106,13 +119,28 @@ export class SupremeNativeAdapter implements IBackendAdapter {
     // Bring up every real protocol driver and re-emit its normalized state upward, so callers can't
     // tell a native engine event from an in-process one. A driver that can't reach its bus at boot
     // must NOT crash the hub — it's skipped and stays disconnected until the bus recovers.
-    for (const driver of this.drivers) await this.wireDriver(driver);
+    //
+    // § The hub must serve even when a device cannot be reached (an office LAN's devices while the
+    // hub sits on a home network, a unit that is switched off). Drivers connect CONCURRENTLY — one
+    // that never answers cannot hold up the others — and boot waits at most `bootConnectBudgetMs`
+    // for them. A driver still connecting after that carries on in the background and wires itself
+    // in when (if) it connects; until then it is simply disconnected, and the hub is already up.
+    const wiring = this.drivers.map((d) => this.wireDriver(d).catch(() => undefined));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all(wiring),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, this.bootConnectBudgetMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
     this.connected = true;
   }
 
   /** Drivers that failed to connect (diagnostics). */
   readonly connectErrors: Array<{ protocol: string; error: Error }> = [];
   async disconnect(): Promise<void> {
+    this.epoch++;
     for (const unsub of this.unsubByProtocol.values()) unsub();
     this.unsubByProtocol.clear();
     for (const driver of this.drivers) await driver.disconnect();
