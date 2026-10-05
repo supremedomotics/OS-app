@@ -102,7 +102,7 @@ final homeLocationWriterProvider =
           final session = ref.read(pairedHomeAuthStoreProvider).sessionFor(hubId);
           if (session == null) throw StateError('No authorization for this Home.');
           await writeHubLocation(
-              hubBase: Uri(scheme: 'https', host: lan.host),
+              hubBase: lan,
               bearerToken: session.bearerToken,
               place: place);
         });
@@ -122,7 +122,7 @@ final hubProbeProvider = Provider<Future<bool> Function(String host, int port)>(
 Future<Uri?> resolveHomeBaseUrl(HubDiscovery discovery, String hubId) async {
   final hubs = await SingleHubDiscovery(discovery, hubId).discoverAllLan();
   if (hubs.isEmpty) return null;
-  return Uri(scheme: 'https', host: hubs.first.address);
+  return hubs.first.controlUri;
 }
 
 /// §Phase12.11 §10 — the Tunnel Broker base URL, as a DEPLOYMENT configuration value, never a
@@ -205,7 +205,7 @@ final connectionManagerProvider = Provider<ConnectionManager>((ref) {
     discovery:
         SingleHubDiscovery(ref.watch(platformDiscoveryProvider), scopedHubId),
     makeLanTransport: (lanUri) => HttpHubTransport(
-      baseUrl: Uri(scheme: 'https', host: lanUri.host),
+      baseUrl: lanUri,
       bearerToken: () {
         if (hubId == null) throw StateError('No Home selected.');
         final session = authStore.sessionFor(hubId);
@@ -346,7 +346,7 @@ final activeHomeStreamUriProvider =
     FutureProvider.family<Uri?, String>((ref, hubId) async {
   final discovery = ref.read(platformDiscoveryProvider);
   final lan = await resolveHomeBaseUrl(discovery, hubId);
-  if (lan != null) return lan.replace(scheme: 'wss', path: '/v1/stream');
+  if (lan != null) return lan.replace(scheme: 'ws', path: '/v1/stream');
   if (!_remoteAccessEnabledFor(ref.read(pairedHomeControllerProvider), hubId)) {
     return null;
   }
@@ -535,7 +535,7 @@ Future<void> _refreshSnapshot({
   final manager = ConnectionManager(
     discovery: SingleHubDiscovery(discovery, hubId),
     makeLanTransport: (lanUri) => HttpHubTransport(
-      baseUrl: Uri(scheme: 'https', host: lanUri.host),
+      baseUrl: lanUri,
       bearerToken: session.bearerToken,
     ),
     makeRemoteTransport: remoteEnabled
@@ -579,7 +579,7 @@ final runtimeControllerProvider = Provider<RuntimeController>((ref) {
     // is decided for the event stream.
     resolveHomeStreamUri: (hubId) async {
       final lan = await resolveHomeBaseUrl(discovery, hubId);
-      if (lan != null) return lan.replace(scheme: 'wss', path: '/v1/stream');
+      if (lan != null) return lan.replace(scheme: 'ws', path: '/v1/stream');
       if (!_remoteAccessEnabledFor(homeController, hubId)) return null;
       return remoteHubConfigFor(hubId, authStore, brokerUrl).streamUri();
     },
