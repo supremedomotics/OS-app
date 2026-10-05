@@ -1811,7 +1811,33 @@ export class InstallerServices {
   /** The unified driver registry (catalog + installed state + config schema), secrets masked. */
   async driverRegistry() {
     const entries = await this.drivers.registry();
-    return entries.map((e) => ({ ...e, config: maskSecrets(e.config, e.configSchema) }));
+    return Promise.all(
+      entries.map(async (e) => {
+        const base = { ...e, config: maskSecrets(e.config, e.configSchema) };
+        // A driver whose stack failed to build/register/start stays installed but is shown as
+        // failed (Extension Center) — it never takes the rest of the hub down with it.
+        if (!e.installed) return base;
+        const runtime = await Promise.all(e.protocols.map((p) => this.runtimeProtocolFor(e, p)));
+        const failed = runtime.map((p) => this.lifecycleStatus.get(p)).find((s) => s?.stage === "failed");
+        return failed ? { ...base, status: "error" as const, failureReason: failed.lastError ?? "unknown error" } : base;
+      }),
+    );
+  }
+
+  /** Build a driver's native stack; a throw is recorded as that driver's failure, never propagated. */
+  private buildDriverSafely(
+    protocol: string,
+    key: string,
+    build: () => INativeProtocolDriver | null,
+  ): INativeProtocolDriver | null {
+    try {
+      return build();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.setStage(protocol, { key, stage: "failed", healthy: false, lastError: message });
+      this.appendLog(key, "error", `Failed to build native ${protocol} driver: ${message}`);
+      return null;
+    }
   }
 
   /** An installed driver's config schema + current (masked) values, for its config page. */
@@ -2132,11 +2158,18 @@ export class InstallerServices {
       // above, for CoolMaster's own gateway-local UID addressing (see
       // withCoolMasterInstanceAddressing's doc comment).
       const coolmasterInstanceId = buildProtocol === "coolmaster" && runtimeProtocol !== buildProtocol ? installedId : null;
-      const built = buildNativeDriver(buildProtocol, config, this.nativeDriverContext(key, casambiInstanceId));
-      const driver = built
-        ? withCoolMasterInstanceAddressing(withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId), coolmasterInstanceId)
-        : null;
-      await this.runDriverLifecycle(runtimeProtocol, driver, key, trigger);
+      const driver = this.buildDriverSafely(runtimeProtocol, key, () => {
+        const built = buildNativeDriver(buildProtocol, config, this.nativeDriverContext(key, casambiInstanceId));
+        return built
+          ? withCoolMasterInstanceAddressing(withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId), coolmasterInstanceId)
+          : null;
+      });
+      if (!driver && this.lifecycleStatus.get(runtimeProtocol)?.stage === "failed") continue; // build failed: recorded, move on
+      try {
+        await this.runDriverLifecycle(runtimeProtocol, driver, key, trigger);
+      } catch (err) {
+        this.setStage(runtimeProtocol, { key, stage: "failed", healthy: false, lastError: err instanceof Error ? err.message : String(err) });
+      }
     }
     for (const [runtimeProtocol, { key }] of [...this.desiredProtocols]) {
       if (runtimeProtocol.startsWith("env:")) continue;
@@ -2167,13 +2200,22 @@ export class InstallerServices {
         // as reconcileManifestDrivers above.
         const casambiInstanceId = protocol === "casambi" && runtimeProtocol !== protocol ? entry.installedId : null;
         const coolmasterInstanceId = protocol === "coolmaster" && runtimeProtocol !== protocol ? entry.installedId : null;
-        const built = runnable ? buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key, casambiInstanceId)) : null;
-        const driver = built
-          ? withCoolMasterInstanceAddressing(withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId), coolmasterInstanceId)
+        const driver = runnable
+          ? this.buildDriverSafely(runtimeProtocol, key, () => {
+              const built = buildNativeDriver(protocol, entry.config, this.nativeDriverContext(key, casambiInstanceId));
+              return built
+                ? withCoolMasterInstanceAddressing(withCasambiInstanceAddressing(withRuntimeProtocol(built, runtimeProtocol), casambiInstanceId), coolmasterInstanceId)
+                : null;
+            })
           : null;
         if (runnable) this.desiredProtocols.set(runtimeProtocol, { key, config: entry.config });
         else this.desiredProtocols.delete(runtimeProtocol);
-        await this.runDriverLifecycle(runtimeProtocol, driver, key, "config_change");
+        if (runnable && !driver) continue; // build failed: recorded as this driver's failure
+        try {
+          await this.runDriverLifecycle(runtimeProtocol, driver, key, "config_change");
+        } catch (err) {
+          this.setStage(runtimeProtocol, { key, stage: "failed", healthy: false, lastError: err instanceof Error ? err.message : String(err) });
+        }
       }
     }
   }
@@ -3070,7 +3112,12 @@ export class InstallerServices {
   async installDriver(key: string, version?: string, opts: { asNewInstance?: boolean; label?: string } = {}) {
     const d = await this.drivers.install(key, version, opts);
     this.appendLog(d.key, "info", opts.asNewInstance ? `Installed v${d.version} (${d.label ?? "new instance"})` : `Installed v${d.version}`);
-    await this.reregisterDriver(d.key);
+    try {
+      await this.reregisterDriver(d.key);
+    } catch (err) {
+      // Installed, but its stack would not start: report it as failed, do not fail the request.
+      this.appendLog(d.key, "error", `Installed, but failed to start: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return d;
   }
 
