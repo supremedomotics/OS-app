@@ -166,6 +166,8 @@ export interface DriverEntry {
   installed: boolean;
   enabled: boolean;
   status: string;
+  /** Why the driver failed to build/register/start (status "error"); absent otherwise. */
+  failureReason?: string;
   installedId: string | null;
   config: Record<string, unknown>;
   /** Installer-facing name for THIS instance when a catalog key is installed more than once

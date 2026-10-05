@@ -53,7 +53,7 @@ describe("statusLabel", () => {
   });
 
   it("reads 'Error' when the driver itself reports an error status", () => {
-    expect(statusLabel(driver({ status: "error" }), true)).toMatchObject({ text: "Error" });
+    expect(statusLabel(driver({ status: "error" }), true)).toMatchObject({ text: "Failed to install" });
   });
 
   it("§ production defect: installed+enabled with a real tunnel that never connected reads 'Disconnected', not 'Active'", () => {

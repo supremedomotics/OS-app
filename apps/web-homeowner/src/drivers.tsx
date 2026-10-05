@@ -98,7 +98,7 @@ export function DriverManager() {
 export function statusLabel(d: DriverEntry, connected?: boolean | null): { text: string; cls: string } {
   if (!d.installed) return { text: "Not installed", cls: "off" };
   if (!d.enabled) return { text: "Disabled", cls: "off" };
-  if (d.status === "error") return { text: "Error", cls: "err" };
+  if (d.status === "error") return { text: "Failed to install", cls: "err" };
   if (connected === false) return { text: "Disconnected", cls: "err" };
   return { text: "Active", cls: "ok" };
 }

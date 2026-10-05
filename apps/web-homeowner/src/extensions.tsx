@@ -137,6 +137,7 @@ export function ExtensionCenter() {
                   <span className="ext-sub">v{d.version} · {d.category}{d.protocols.length ? ` · ${d.protocols.join("/")}` : ""}</span>
                   <span className="ext-sub ext-pub">by {d.publisher}</span>
                   {d.description && <span className="ext-desc">{d.description}</span>}
+                  {d.status === "error" && <span className="ext-desc">Driver failed to install{d.failureReason ? `: ${d.failureReason}` : ""}. Everything else keeps working.</span>}
                   <span className="ext-tags">
                     {d.requiresSku && <span className="tag sku">{d.requiresSku}</span>}
                     {d.updateAvailable && <span className="tag ok">Update available</span>}
