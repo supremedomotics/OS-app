@@ -207,10 +207,24 @@ function localIPv4Interfaces(): { name: string; address: string }[] {
   const out: { name: string; address: string }[] = [];
   for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
     for (const addr of addrs ?? []) {
-      if (addr.family === "IPv4" && !addr.internal) out.push({ name, address: addr.address });
+      if (addr.family === "IPv4" && !addr.internal && isLanAdvertisable(name, addr.address)) {
+        out.push({ name, address: addr.address });
+      }
     }
   }
   return out;
+}
+
+/** A phone resolves the SRV host's A records and keeps the first one it gets, so every address
+ * advertised here must be reachable from the LAN. A VPN/overlay or container-bridge address
+ * (Tailscale's 100.64.0.0/10, `docker0`, `veth*`…) is not — advertising it made pairing fail with
+ * no Hub-side trace whenever the phone happened to pick it. Matched by interface name and by the
+ * CGNAT range, since neither signal alone covers every overlay. */
+const VIRTUAL_INTERFACE = /^(tailscale|ts|wg|zt|tun|tap|utun|docker|br-|veth|virbr)/;
+export function isLanAdvertisable(name: string, address: string): boolean {
+  if (VIRTUAL_INTERFACE.test(name)) return false;
+  const [a, b] = address.split(".").map(Number);
+  return !(a === 100 && b !== undefined && b >= 64 && b <= 127);
 }
 
 /** Starts the responder. Best-effort: a sandboxed/CI network with no

@@ -8,6 +8,7 @@ import {
   encodeResponse,
   encodeSrvAnswer,
   encodeTxtAnswer,
+  isLanAdvertisable,
   startMdnsResponder,
   type MdnsResponderHandle,
 } from "./mdns-responder.js";
@@ -100,4 +101,23 @@ describe("mDNS Hub Responder — real multicast socket", () => {
     expect(services[0]?.port).toBe(7272);
     expect(services[0]?.txt).toMatchObject({ hubId: "hub-test-1", projectId: "home-test-1", version: "9.9.9" });
   }, 10_000);
+});
+
+describe("mDNS Hub Responder — advertised addresses", () => {
+  it("advertises a real LAN address but never a VPN/overlay or container-bridge one", () => {
+    expect(isLanAdvertisable("ens160", "192.168.0.105")).toBe(true);
+    expect(isLanAdvertisable("eth0", "10.0.0.7")).toBe(true);
+    expect(isLanAdvertisable("wlan0", "172.20.1.5")).toBe(true);
+    // Tailscale: caught by name AND by the CGNAT range (an overlay with an unfamiliar name).
+    expect(isLanAdvertisable("tailscale0", "100.70.22.83")).toBe(false);
+    expect(isLanAdvertisable("overlay0", "100.100.1.1")).toBe(false);
+    expect(isLanAdvertisable("overlay0", "100.63.0.1")).toBe(true);
+    expect(isLanAdvertisable("overlay0", "100.128.0.1")).toBe(true);
+    expect(isLanAdvertisable("docker0", "172.17.0.1")).toBe(false);
+    expect(isLanAdvertisable("br-1a2b3c", "172.18.0.1")).toBe(false);
+    expect(isLanAdvertisable("veth12ab", "169.254.1.1")).toBe(false);
+    expect(isLanAdvertisable("wg0", "10.8.0.2")).toBe(false);
+    // Case-sensitive on purpose: Hyper-V's "vEthernet" is not Linux's "veth".
+    expect(isLanAdvertisable("vEthernet (Default Switch)", "172.29.16.1")).toBe(true);
+  });
 });
