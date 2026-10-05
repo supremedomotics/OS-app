@@ -14,6 +14,7 @@ import 'sun.dart';
 import 'dart:async';
 
 import '../capabilities.dart';
+import '../connection/transport.dart' show HubNotConnectedException;
 import '../experiences.dart';
 import '../semantic_model.dart';
 import 'scene_run.dart';
@@ -110,8 +111,10 @@ class DeviceRecord {
 class ResidenceSnapshot {
   final bool loaded;
 
-  /// Whether the last snapshot read reached the Hub: null before the first attempt, false when
-  /// it failed (the last known state below is then kept, not blanked).
+  /// Whether the last snapshot read reached the Hub: null while no read has been able to try
+  /// (still connecting), false when a read failed (the last known state below is then kept, not
+  /// blanked). A read that could not start because the connection is not up yet is not a failure:
+  /// before the first load it leaves this null, so the screen says Loading, not unreachable.
   final bool? reachable;
 
   /// The residence's own name, as the Hub reports it (`/v1/home`). Empty until first read.
@@ -233,6 +236,15 @@ class ResidenceState {
     await refresh();
   }
 
+  /// The connection has failed outright (no Hub found, credentials refused, dropped and now
+  /// retrying) — not merely "still connecting". A residence that never loaded is unreachable, not
+  /// Loading; one that loaded keeps everything it has and is marked stale.
+  void markUnreachable() {
+    if (_disposed || _snapshot.reachable == false) return;
+    _snapshot = _snapshot._with(reachable: false);
+    _emit();
+  }
+
   /// The stream (re)connected: its per-device sequence numbers restart, and anything that
   /// changed while it was down is only recoverable from a snapshot.
   Future<void> streamRestarted() async {
@@ -255,10 +267,18 @@ class ResidenceState {
   Future<void> _refresh() async {
     // An unreachable Hub (no connection yet, a dropped socket) is "no data yet", never a crash:
     // the caller learns why from [ResidenceSnapshot.reachable].
+    // "Not connected yet" is told apart from a real failure: the first read often runs before the
+    // connection has authenticated, and that must not be reported as an unreachable Hub.
+    var notConnected = false;
+    var failed = false;
     Future<Map<String, dynamic>> read(String path) async {
       try {
         return await _get(path);
+      } on HubNotConnectedException {
+        notConnected = true;
+        return const {};
       } catch (_) {
+        failed = true;
         return const {};
       }
     }
@@ -273,6 +293,9 @@ class ResidenceState {
     // An unreachable Hub yields empty maps from the transport: keep what we know rather than
     // replacing real state with nothing.
     if (rooms is! List || rawDevices is! List) {
+      // Still waiting for the connection and nothing loaded yet: stay Loading. The connection
+      // coming up re-reads (`ResidenceStreamLink.followConnection`).
+      if (notConnected && !failed && !_snapshot.loaded) return;
       _snapshot = _snapshot._with(reachable: false);
       _emit();
       return;

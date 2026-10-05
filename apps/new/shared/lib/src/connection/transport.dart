@@ -169,3 +169,12 @@ class AuthenticationException implements Exception {
   @override
   String toString() => 'AuthenticationException: $message';
 }
+
+/// A read or command was asked for before any transport finished authenticating. This is "not
+/// yet", not "cannot": a caller that is waiting for the connection (the residence's first read)
+/// must be able to tell it from a real Hub or network failure. A [StateError] subclass, so every
+/// existing `on StateError` / `isA<StateError>()` keeps working.
+class HubNotConnectedException extends StateError {
+  HubNotConnectedException(String detail)
+      : super('No active Hub connection ($detail)');
+}

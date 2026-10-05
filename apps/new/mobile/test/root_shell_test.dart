@@ -3,10 +3,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supreme_mobile_next/main.dart';
+import 'package:supreme_os_core/supreme_os_core.dart';
 
 /// Smoke test for the residence-first navigation shell (§5), in the SupremeOS-10 information
 /// architecture: Home · Spaces · Control · Experiences · Settings. The old `Now` / `More` shell is
 /// gone (classified, not dropped — see `RootShell`'s doc comment).
+/// "No LAN Hub found", answered at once — the real no-network outcome without this host's mDNS,
+/// which a widget test's fake clock never lets finish. The connection then goes offline and the
+/// residence screens say so.
+class _NoLanDiscovery implements HubDiscovery {
+  @override
+  Future<Uri?> discoverLan({Duration timeout = const Duration(seconds: 3)}) async => null;
+
+  @override
+  Future<List<DiscoveredHub>> discoverAllLan(
+          {Duration timeout = const Duration(seconds: 3)}) async =>
+      const [];
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -33,7 +47,9 @@ void main() {
 
   testWidgets('Control is a layer over the page, not a page: the page underneath stays',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
+    await tester.pumpWidget(ProviderScope(
+        overrides: [platformDiscoveryProvider.overrideWithValue(_NoLanDiscovery())],
+        child: const SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Spaces'));
