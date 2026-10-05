@@ -652,7 +652,7 @@ Future<PairHomeResult> realPairHome({
   // (§7: "user confirms intended Home") — this composition root pairs with the first result.
   final chosen = hubs.first;
   final transport = HttpPairingTransport(
-      baseUrl: Uri(scheme: 'https', host: chosen.address), client: httpClient);
+      baseUrl: chosen.controlUri, client: httpClient);
   final pairingClient = PairingClient(identity: identity, transport: transport);
 
   final authorization = await pairingClient.pairUsingCode(pairingCode);
