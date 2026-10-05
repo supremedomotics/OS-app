@@ -128,7 +128,7 @@ class ConnectionManager {
       String path, Map<String, dynamic> body) {
     final t = _active;
     if (t == null || !t.isConnected) {
-      throw StateError('No active Hub connection ($_state)');
+      throw HubNotConnectedException('$_state');
     }
     return t.sendCommand(path, body);
   }
@@ -138,7 +138,7 @@ class ConnectionManager {
   Future<Map<String, dynamic>> get(String path) {
     final t = _active;
     if (t == null || !t.isConnected) {
-      throw StateError('No active Hub connection ($_state)');
+      throw HubNotConnectedException('$_state');
     }
     return t.get(path);
   }
@@ -147,7 +147,7 @@ class ConnectionManager {
   Future<HubBytes> getBytes(String path, {String? ifNoneMatch}) {
     final t = _active;
     if (t == null || !t.isConnected) {
-      throw StateError('No active Hub connection ($_state)');
+      throw HubNotConnectedException('$_state');
     }
     return t.getBytes(path, ifNoneMatch: ifNoneMatch);
   }

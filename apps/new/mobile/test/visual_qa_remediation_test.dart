@@ -29,7 +29,9 @@ void main() {
 
   testWidgets('Spaces shows an honest empty state, not a blank screen (§QA-01)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
+    await tester.pumpWidget(ProviderScope(
+        overrides: [platformDiscoveryProvider.overrideWithValue(_NoLanDiscovery())],
+        child: const SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Spaces'));
@@ -42,7 +44,9 @@ void main() {
   testWidgets(
       'Experiences shows its header and an honest empty state, not a blank screen (§QA-02)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
+    await tester.pumpWidget(ProviderScope(
+        overrides: [platformDiscoveryProvider.overrideWithValue(_NoLanDiscovery())],
+        child: const SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Experiences'));
@@ -55,7 +59,9 @@ void main() {
   testWidgets(
       'every destination of the shell is real: nothing inert or placeholder is drawn (§QA-03/QA-04)',
       (tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SupremeMobileApp(home: RootShell())));
+    await tester.pumpWidget(ProviderScope(
+        overrides: [platformDiscoveryProvider.overrideWithValue(_NoLanDiscovery())],
+        child: const SupremeMobileApp(home: RootShell())));
     await tester.pumpAndSettle();
 
     // The old shell drew "Not available yet" rows. Under the SupremeOS-10 rule an unsupported

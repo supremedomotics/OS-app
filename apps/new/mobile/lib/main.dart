@@ -321,6 +321,9 @@ final residenceStateProvider = Provider<ResidenceState>((ref) {
   final manager = ref.watch(connectionManagerProvider);
   final hubId = ref.watch(activeHomeIdProvider);
   final link = ResidenceStreamLink(get: manager.get);
+  // The first read runs before the connection has authenticated and cannot succeed: read again the
+  // moment the connection is usable (and after every reconnect), and say unreachable if it fails.
+  link.followConnection(manager.state, initial: manager.current);
   unawaited(() async {
     await link.state.start();
     if (hubId == null) return;
