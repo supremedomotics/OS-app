@@ -558,6 +558,11 @@ _nats_fetch_and_install_deb() {
     || die "nats-server .deb checksum mismatch — refusing to install a package that doesn't match the pinned, verified hash."
   dpkg -i "${tmp}/nats-server.deb" || die "dpkg -i failed for the pinned nats-server .deb — see dpkg's own error above."
   rm -rf "$tmp"
+  # § Real production incident: nats-server later vanished from /usr/bin and the unit died with
+  # 203/EXEC on every boot (Hub 502). Ubuntu's own `nats-server` package shares this package
+  # name but installs at /usr/sbin; an apt/unattended upgrade replaced the pinned .deb with it.
+  # Hold the package so only this function (the pinned, checksum-verified .deb) ever changes it.
+  if command_exists apt-mark; then apt-mark hold nats-server >/dev/null 2>&1 || true; fi
   # § Original production bug, closed at the source: the .deb's own postinst ships the
   # compat symlink, but dpkg -i over an already-"installed" version does not reliably
   # re-run maintainer scripts identically on every dpkg version — recreate it explicitly
