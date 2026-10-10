@@ -620,7 +620,7 @@ nats_validate() {
     local dpkg_status
     dpkg_status="$(dpkg-query -W -f='${Status}' nats-server 2>/dev/null || true)"
     case "$dpkg_status" in
-      *"install ok installed"*) ;;
+      *"install ok installed"*|*"hold ok installed"*) ;; # hold = our own apt-mark hold
       *) NATS_VALIDATION_REASON="dpkg package state for nats-server is '${dpkg_status:-not installed}', not 'install ok installed' — package is absent, half-installed, or removed-but-not-purged"; return 1 ;;
     esac
   fi
