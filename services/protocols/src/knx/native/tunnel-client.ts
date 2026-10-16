@@ -27,6 +27,7 @@ import {
   encodeDisconnectRequest, encodeDisconnectResponse, encodeTunnellingAck, encodeTunnellingRequest, KnxFrameError,
   NAT_HPAI, ServiceType, StatusCode, TunnelLayer,
 } from "./knxnetip-frame.js";
+import { assertPolicySatisfiable, PLAIN_POLICY, type SecurityPolicy } from "./security/policy.js";
 import { systemClock, type Clock, type KnxDatagramSocket, type RemoteInfo, type SocketFactory, type TimerHandle } from "./transport.js";
 
 export type TunnelErrorCode =
@@ -63,6 +64,9 @@ export interface TunnelClientOptions {
   confirmationTimeoutMs?: number;
   maxQueuedSends?: number;
   maxPendingConfirmations?: number;
+  /** Declared security requirement. Anything other than plain makes construction FAIL
+   * (secure modes are not implemented) — there is no downgrade path. */
+  security?: SecurityPolicy;
 }
 
 export interface SendInput {
@@ -104,6 +108,9 @@ export interface TunnelDiagnostics {
   foreignDatagrams: number;
   wrongChannel: number;
   unexpectedServices: number;
+  /** Group-addressed telegrams whose APCI is not GroupValueRead/Response/Write and so were NOT
+   * decoded. Includes any secured traffic, but this counter does not claim to identify it. */
+  undecodedGroupTelegrams: number;
   /** Subscriber callbacks that threw; the session itself is never affected. */
   listenerErrors: number;
   malformedFrames: Record<string, number>;
@@ -181,6 +188,7 @@ export class KnxTunnelClient {
 
   constructor(private readonly opts: TunnelClientOptions) {
     if (!/^(\d{1,3})(\.\d{1,3}){3}$/.test(opts.host)) throw new KnxTunnelError("invalid_argument", `gateway host "${opts.host}" must be an IPv4 literal`);
+    assertPolicySatisfiable(opts.security ?? PLAIN_POLICY);
     this.clock = opts.clock ?? systemClock;
     this.port = opts.port ?? 3671;
     this.cfg = {
@@ -201,7 +209,7 @@ export class KnxTunnelClient {
       state: "idle", channelId: null, assignedAddress: null, gateway: `${opts.host}:${this.port}`, connectLatencyMs: null,
       heartbeat: { sent: 0, failures: 0, lastRttMs: null, lastOkAt: null },
       framesSent: 0, framesReceived: 0, telegramsDelivered: 0, acksReceived: 0, sendRetries: 0, staleAcks: 0,
-      duplicateInbound: 0, outOfOrderInbound: 0, foreignDatagrams: 0, wrongChannel: 0, unexpectedServices: 0, listenerErrors: 0,
+      duplicateInbound: 0, outOfOrderInbound: 0, foreignDatagrams: 0, wrongChannel: 0, unexpectedServices: 0, undecodedGroupTelegrams: 0, listenerErrors: 0,
       malformedFrames: {}, malformedCemi: {}, confirmations: { confirmed: 0, busError: 0, notConfirmed: 0 },
       lastActivityAt: null, closedReason: null, closedDetail: null,
     };
@@ -440,6 +448,7 @@ export class KnxTunnelClient {
     }
     if (cemi.messageCode === CemiMessageCode.L_DATA_CON) { this.onConfirmation(cemi); return; }
     if (cemi.messageCode !== CemiMessageCode.L_DATA_IND) { this.stats.unexpectedServices++; return; }
+    if (cemi.destinationIsGroup && cemi.group === null) { this.stats.undecodedGroupTelegrams++; return; }
     this.stats.telegramsDelivered++;
     this.notify(this.telegramListeners, cemi);
   }

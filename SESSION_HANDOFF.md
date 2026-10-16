@@ -4,6 +4,21 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX Secure — specification audit, secret handling foundation (Secure itself NOT implemented)
+
+**KNX IP Secure and KNX Data Secure are NOT implemented.** The normative specs could not be obtained (knx.org
+unreachable from the sandbox; no copy in repo; search results conflicted on document numbers), so per the rules no
+crypto/wire procedure was written. Deliverables in `docs/architecture/`: `knx-secure-requirements-matrix.md`
+(traceability; every protocol row BLOCKED-SPEC/HW), `knx-secure-architecture.md` (two layers + invariants),
+`knx-secure-keyring-threat-model.md`, `knx-secure-implementation-plan.md` (S0–S10), `knx-secure-security-test-report.md`.
+Code (`services/protocols/src/knx/native/security/`): `Secret` (redacting), `KeyStore` (scrypt + AES-256-GCM, 0600/0700,
+atomic, audited, no default passphrase), `policy.ts` (secure-required ⇒ construction fails; no downgrade),
+`KnxTunnelClient` now counts/withholds non-plain group APDUs (`undecodedGroupTelegrams`). 17 new tests; native suite 165
+pass/1 skipped; production untouched. **Known gaps:** no file lock on the key store; whole-file rollback undetected;
+write-failure test skipped as root (run in CI as non-root); Windows unsupported; legacy-driver behaviour on secure
+installations unaudited. **Needs from you:** the licensed KNX Secure documents/vectors (kept outside the repo), secure
+test hardware, and a decision on key-unlock strategy (threat model §4). Next: S2 once documents exist.
+
 ## Session: KNX clean-room driver — audit, native codecs, tunnelling client, simulator (foundation only)
 
 Branch `claude/great-keller-fmenbn` (brief named `feat/knx-clean-room-driver-foundation`; session branch kept).

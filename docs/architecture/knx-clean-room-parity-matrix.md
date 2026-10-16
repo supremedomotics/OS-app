@@ -56,7 +56,7 @@ Legend — Exists: ✔ verified in code · Tested: existing automated test · Na
 | Routing (multicast 224.0.23.12) | ✘ **not used** — both sites hard-code `hostProtocol:"TunnelUDP"` | — | not required | comment in `knx-driver.ts:50` mentions it; no code path |
 | Gateway discovery (SEARCH) | ✔ `knx-discovery.ts` (own dgram, no library) | ✔ `knx-discovery.test.ts` | already independent | to be rebased onto `native/knxnetip-frame.ts` later (optional) |
 | Local interface selection | ✔ `localAddress` option (provider only) | ✔ | todo | |
-| KNX IP Secure / Data Secure | ✘ none (provider doc comment mentions the library supports it; unused) | — | **out of scope / gap** | explicit accepted gap unless an installation uses it — Unknown |
+| KNX IP Secure / Data Secure | ✘ none in SupremeOS code (provider comment says the library supports it; never wired — **legacy behaviour with a secure installation is unaudited**) | — | **MANDATORY requirement, NOT IMPLEMENTED — BLOCKED on normative specs** | see `knx-secure-*.md`; fail-closed policy + key store foundation only. No longer an accepted gap: it gates removal of `knxultimate` |
 | KNX IoT Point API (CoAP) | ✔ `knx-iot-transport.ts`, `coap` pkg | ✔ | already independent | keep separate; not touched |
 | Reconnect / self-heal | ✔ `connection-manager.ts` (+ per-site glue) | ✔ | reusable as-is | native client will plug under it |
 | Offline command queue | ✔ `offline-command-queue.ts` | ✔ | reusable as-is | safety policy gaps — see §5 |
@@ -130,8 +130,9 @@ D1/D2 are fixed by construction in the native codec; they are **not** fixed in t
 
 ## 5. Removal gates (all must hold before `knxultimate` is deleted)
 
-1. Every row above that is deployed has `Native: done` or a signed-off documented gap (KNX Secure,
-   routing, string/date DPTs).
+1. Every row above that is deployed has `Native: done` or a signed-off documented gap (routing,
+   string/date DPTs). **KNX IP Secure and Data Secure are mandatory and cannot be waived** (see
+   `knx-secure-requirements-matrix.md`).
 2. Native tunnel client passes simulator suite **and** a hardware-in-the-loop run against a real
    KNX IP interface (reboot, outage, reconnect, soak/leak).
 3. Feature flag has run in shadow/parallel on a non-customer installation.
