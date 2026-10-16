@@ -52,7 +52,7 @@ Legend — Exists: ✔ verified in code · Tested: existing automated test · Na
 | KNXnet/IP frame encode/decode | ✔ library-internal | indirectly | **done** `native/knxnetip-frame.ts` | strict; 13 tests incl. fuzz |
 | cEMI L_Data + APCI group services | ✔ library-internal | indirectly | **done** `native/cemi.ts` | 14 tests incl. fuzz; TPCI/other APCI parsed as `group: null` |
 | GA / IA parse + canonicalize | ✔ library-internal | one real-lib GA round-trip test | **done** `native/address.ts` | 2-level & raw spellings canonicalize to 3-level |
-| Tunnelling session (connect, seq/ack, retry, heartbeat, disconnect) | ✔ library-internal | via fake only | **todo** (next stage) | see §4 |
+| Tunnelling session (connect, seq/ack, retry, heartbeat, disconnect) | ✔ library-internal | via fake only | **done — simulator + loopback-UDP validated only** `native/tunnel-client.ts` | 37 tests; **no real-gateway validation yet**; announced-data-endpoint handling for multi-port gateways unverified on hardware |
 | Routing (multicast 224.0.23.12) | ✘ **not used** — both sites hard-code `hostProtocol:"TunnelUDP"` | — | not required | comment in `knx-driver.ts:50` mentions it; no code path |
 | Gateway discovery (SEARCH) | ✔ `knx-discovery.ts` (own dgram, no library) | ✔ `knx-discovery.test.ts` | already independent | to be rebased onto `native/knxnetip-frame.ts` later (optional) |
 | Local interface selection | ✔ `localAddress` option (provider only) | ✔ | todo | |
@@ -119,13 +119,13 @@ D1/D2 are fixed by construction in the native codec; they are **not** fixed in t
 | # | Stage | Status |
 |---|---|---|
 | 1 | Audit + parity matrix | **done** (this document) |
-| 2 | Transport interfaces + deterministic harnesses | in progress |
+| 2 | Transport interfaces + deterministic harnesses | **done** (`transport.ts`, `udp-socket.ts`, `simulator/`) |
 | 3 | Framing | **done** (addresses, KNXnet/IP frames, cEMI) |
-| 4 | Tunnelling + group communication | todo |
+| 4 | Tunnelling + group communication | **partial**: session client done (simulator-validated); still todo: telegram bus (multi-subscriber, per-handle unsubscribe, feedback attribution), GA-bound read/write facade, supervisor/reconnect with restored subscriptions |
 | 5 | DPT parity | **done** for required set; gaps listed above |
 | 6 | Feature-flagged integration | todo |
 | 7 | Health diagnostics, troubleshooting, self-healing | todo |
-| 8 | Simulator validation + hardware-in-the-loop | simulator todo; **hardware: not started, no hardware** |
+| 8 | Simulator validation + hardware-in-the-loop | simulator foundation done (bus, actuators, tunnelling server, fault injection); extend with device-description reads for health; **hardware: not started, no hardware** |
 | 9 | Remove `knxultimate` | **blocked** on gates below |
 
 ## 5. Removal gates (all must hold before `knxultimate` is deleted)

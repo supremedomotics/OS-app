@@ -7,6 +7,16 @@
 
 ## Critical
 
+### KNX clean-room driver (replace `knxultimate`) — IN PROGRESS, production untouched
+See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, defects D1–D4).
+- Done: audit/matrix; native address/frame/cEMI/DPT codecs; tunnelling client; simulator foundation (simulator-validated only).
+- Next: telegram bus + provider/connection adapters behind a feature flag; supervisor + capability-aware replay
+  policy; Supreme KNX Health (gateway / device reachability / feedback) + troubleshooting engine; hardware-in-the-loop;
+  only then remove `knxultimate` (code, manifest, lockfile via pnpm, image, SBOM; delete `dpt-differential.test.ts`).
+- Decide: fix D1/D2 (HVAC status/setpoints never decode with the real library) in the legacy path now, or let the native
+  cut-over fix them.
+- Open questions needing field data: which installations use routing / KNX Secure / which DPTs in the wild.
+
 ### Phase 3.5 physical-driver gate — OPEN (hardware) + driver audit
 - Run KNX switch, KNX shade and Sonos/HEOS/AVR lifecycles against REAL hardware (nothing physical verified).
 - Audit every legacy driver for provenance (commanded-as-state, hardcoded `moving:false`: Shelly, Lutron,

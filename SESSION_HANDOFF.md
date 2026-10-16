@@ -4,6 +4,38 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX clean-room driver — audit, native codecs, tunnelling client, simulator (foundation only)
+
+Branch `claude/great-keller-fmenbn` (brief named `feat/knx-clean-room-driver-foundation`; session branch kept).
+Full matrix + removal gates: `docs/architecture/knx-clean-room-parity-matrix.md`. **Production is untouched:**
+`knxultimate` is still the only live transport, nothing imports `src/knx/native` yet, no feature flag exists yet.
+The brief's `…-blueprint.md` and `KNX-CLEAN-ROOM-CLAUDE-PROMPT.md` do not exist in the repo.
+
+**Added (`services/protocols/src/knx/native/`, 150 new tests, all passing; existing KNX suite 442/442 before and
+after):** `address.ts` (GA/IA), `knxnetip-frame.ts` (strict frame codec), `cemi.ts` (L_Data + group APCI),
+`dpt.ts` (1,5,6,7,8,9,12,13,14,17,20,22,222,232,251; others fail with explicit `unsupported_dpt`),
+`transport.ts` + `udp-socket.ts` (injectable socket/clock seams), `tunnel-client.ts` (single-use session:
+connect/heartbeat/ack-retry/duplicate handling/orderly disconnect; ACK and bus-confirmation reported separately),
+`simulator/` (manual clock, in-memory UDP fabric with drop/delay/duplicate/corrupt rules, virtual bus + actuators
+with injectable faults incl. an invisible physical-load fault, virtual KNXnet/IP tunnelling server).
+`dpt-differential.test.ts` compares the codec to `knxultimate` as a black-box oracle (TEMPORARY — delete at removal).
+
+**Findings about the EXISTING driver (not fixed — production untouched):** D1 DPT 22.101 and D2 DPT 222.100 arrive
+from the real library as objects/capitalised keys but `decodeHvacStatus`/`isKnxSetpoints` expect a number /
+lowercase keys, so HVAC `status` and `setpoints` very likely never populate in production (tests use numeric fake
+buses); D3 DPT 9 `0x7FFF` invalid marker published as 670760.96; D4 provider `unsubscribe(ga)` removes all
+observers of the GA. Offline queue exists only in `SupremeKnxDriver` (not the production `KnxProtocolDriver`) and
+has a single 5-min TTL for every capability. Install needed `pnpm install --frozen-lockfile --filter
+@supreme/protocols...` + `pnpm --filter @supreme/protocols^... build` before the KNX tests would run.
+
+**NOT done / NOT validated:** nothing run on real KNX hardware (the native stack is simulator- and loopback-
+validated only; golden vectors were authored from the public spec and need cross-checking against a real bus
+capture); routing, KNX IP Secure/Data Secure, string/date/3.007 DPTs not implemented; no telegram bus / supervisor /
+feature-flagged driver adapter; no health layers, troubleshooting engine, self-healing, device reachability checks;
+no lockfile/SBOM work; `knxultimate` still present everywhere. **Next:** telegram bus + `KnxConnection`/`IKnxProvider`
+adapters behind `SUPREME_KNX_NATIVE` flag with parity tests vs the existing driver tests; then supervisor/self-healing
+(capability-aware replay policy), then health/diagnosis; then hardware-in-the-loop before any removal.
+
 ## Session: Phase 3.5 — state provenance (Option A) after the physical-driver gate found G1
 
 Full record: `docs/design/phase-3.5-physical-validation-gate.md`. **Physical-driver validation is NOT done** (no

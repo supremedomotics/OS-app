@@ -1,0 +1,588 @@
+/**
+ * KNXnet/IP tunnelling session client (§ Clean-room KNX stack — session layer). Implements
+ * the connection-oriented tunnelling procedures from the published KNXnet/IP Core and
+ * Tunnelling specifications on top of the pure codecs in this directory:
+ *
+ *   - CONNECT / CONNECTIONSTATE (heartbeat) / DISCONNECT with the spec's timeouts
+ *   - one-outstanding-frame TUNNELLING_REQUEST flow with ACK wait, single retry, then
+ *     session termination (the spec's "tunnel is considered lost")
+ *   - inbound sequence handling: in-order → ACK + deliver, repeat of the previous → ACK
+ *     only (never delivered twice), anything else → ignored
+ *
+ * A client instance is SINGLE-USE: it goes idle → connecting → connected → closed once.
+ * Reconnection is the supervisor's job and always builds a fresh instance, so no timer,
+ * socket or listener can ever be carried across sessions (bounded resources by
+ * construction). Every outcome is reported through typed errors/events and counters —
+ * nothing is swallowed.
+ *
+ * Distinguishes two different facts the troubleshooting engine needs:
+ *   - the tunnel ACK       : the gateway accepted the frame (promise from {@link sendGroup})
+ *   - the L_Data.con       : the frame was actually put on the bus (`receipt.confirmation`)
+ */
+
+import { decodeCemi, encodeGroupCemi, KnxCemiError, CemiMessageCode, type CemiFrame, type GroupData, type GroupService, type Priority } from "./cemi.js";
+import {
+  decodeConnectResponse, decodeConnectionStateResponse, decodeDisconnectRequest, decodeDisconnectResponse, decodeFrame,
+  decodeTunnellingAck, decodeTunnellingRequest, describeStatus, encodeConnectRequest, encodeConnectionStateRequest,
+  encodeDisconnectRequest, encodeDisconnectResponse, encodeTunnellingAck, encodeTunnellingRequest, KnxFrameError,
+  NAT_HPAI, ServiceType, StatusCode, TunnelLayer,
+} from "./knxnetip-frame.js";
+import { systemClock, type Clock, type KnxDatagramSocket, type RemoteInfo, type SocketFactory, type TimerHandle } from "./transport.js";
+
+export type TunnelErrorCode =
+  | "invalid_argument" | "not_connected" | "connect_timeout" | "connect_rejected" | "socket_error"
+  | "heartbeat_lost" | "ack_timeout" | "ack_error" | "gateway_disconnect" | "queue_full" | "closed";
+
+export class KnxTunnelError extends Error {
+  constructor(readonly code: TunnelErrorCode, message: string, readonly status?: number) {
+    super(message);
+    this.name = "KnxTunnelError";
+  }
+}
+
+export type TunnelState = "idle" | "connecting" | "connected" | "disconnecting" | "closed";
+export type CloseReason = TunnelErrorCode | "local_disconnect";
+
+export interface TunnelClientOptions {
+  /** Gateway IPv4 literal (discovery returns addresses; no DNS inside the protocol layer). */
+  host: string;
+  port?: number;
+  socketFactory: SocketFactory;
+  clock?: Clock;
+  layer?: number;
+  /** Spec defaults: connect 10 s, ack 1 s (+1 retry), heartbeat 60 s / 10 s response / 3 tries,
+   * disconnect 5 s. */
+  connectTimeoutMs?: number;
+  ackTimeoutMs?: number;
+  maxSendAttempts?: number;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
+  heartbeatMaxFailures?: number;
+  disconnectTimeoutMs?: number;
+  /** How long to wait for the bus-level L_Data.con after the tunnel ACK. */
+  confirmationTimeoutMs?: number;
+  maxQueuedSends?: number;
+  maxPendingConfirmations?: number;
+}
+
+export interface SendInput {
+  destination: number;
+  service: GroupService;
+  data?: GroupData | null;
+  priority?: Priority;
+}
+
+export type ConfirmationOutcome = "confirmed" | "bus_error" | "not_confirmed";
+
+export interface SendReceipt {
+  /** Tunnel sequence number the gateway acknowledged. */
+  sequence: number;
+  ackedAt: number;
+  /** Time from first transmission to ACK (ms) — gateway responsiveness. */
+  ackLatencyMs: number;
+  attempts: number;
+  /** Never rejects. `confirmed` = L_Data.con without error; `bus_error` = L_Data.con with the
+   * error flag; `not_confirmed` = no matching L_Data.con arrived in time (or session ended). */
+  confirmation: Promise<ConfirmationOutcome>;
+}
+
+export interface TunnelDiagnostics {
+  state: TunnelState;
+  channelId: number | null;
+  assignedAddress: number | null;
+  gateway: string;
+  connectLatencyMs: number | null;
+  heartbeat: { sent: number; failures: number; lastRttMs: number | null; lastOkAt: number | null };
+  framesSent: number;
+  framesReceived: number;
+  telegramsDelivered: number;
+  acksReceived: number;
+  sendRetries: number;
+  staleAcks: number;
+  duplicateInbound: number;
+  outOfOrderInbound: number;
+  foreignDatagrams: number;
+  wrongChannel: number;
+  unexpectedServices: number;
+  /** Subscriber callbacks that threw; the session itself is never affected. */
+  listenerErrors: number;
+  malformedFrames: Record<string, number>;
+  malformedCemi: Record<string, number>;
+  confirmations: { confirmed: number; busError: number; notConfirmed: number };
+  lastActivityAt: number | null;
+  closedReason: CloseReason | null;
+  closedDetail: string | null;
+}
+
+export interface ClosedEvent {
+  reason: CloseReason;
+  error?: KnxTunnelError;
+}
+
+interface PendingSend {
+  input: SendInput;
+  resolve(r: SendReceipt): void;
+  reject(e: KnxTunnelError): void;
+}
+
+interface InFlight {
+  send: PendingSend;
+  sequence: number;
+  frame: Buffer;
+  attempts: number;
+  firstSentAt: number;
+  timer: TimerHandle | null;
+}
+
+interface PendingConfirmation {
+  destination: number;
+  service: GroupService;
+  settle(o: ConfirmationOutcome): void;
+  timer: TimerHandle | null;
+}
+
+type Listener<T> = (value: T) => void;
+
+const bump = (m: Record<string, number>, k: string): void => { m[k] = (m[k] ?? 0) + 1; };
+
+export class KnxTunnelClient {
+  private _state: TunnelState = "idle";
+  private readonly clock: Clock;
+  private readonly port: number;
+  private readonly cfg: Required<Pick<TunnelClientOptions,
+    "connectTimeoutMs" | "ackTimeoutMs" | "maxSendAttempts" | "heartbeatIntervalMs" | "heartbeatTimeoutMs" |
+    "heartbeatMaxFailures" | "disconnectTimeoutMs" | "confirmationTimeoutMs" | "maxQueuedSends" | "maxPendingConfirmations" | "layer">>;
+
+  private socket: KnxDatagramSocket | null = null;
+  private target: RemoteInfo | null = null;
+  private channelId: number | null = null;
+  private assigned: number | null = null;
+  private txSeq = 0;
+  private rxSeq = 0;
+
+  private connectWaiter: { resolve(): void; reject(e: KnxTunnelError): void; timer: TimerHandle | null; sentAt: number } | null = null;
+  private disconnectTimer: TimerHandle | null = null;
+  private readonly queue: PendingSend[] = [];
+  private inFlight: InFlight | null = null;
+  private readonly confirmations: PendingConfirmation[] = [];
+
+  private hbTimer: TimerHandle | null = null;
+  private hbRespTimer: TimerHandle | null = null;
+  private hbSentAt = 0;
+  private hbTry = 0;
+
+  private readonly telegramListeners = new Set<Listener<CemiFrame>>();
+  private readonly closedListeners = new Set<Listener<ClosedEvent>>();
+  private readonly decodeErrorListeners = new Set<Listener<{ layer: "frame" | "cemi"; code: string; raw: Buffer }>>();
+  private closedPromise: Promise<void>;
+  private resolveClosed!: () => void;
+
+  private readonly stats: TunnelDiagnostics;
+
+  constructor(private readonly opts: TunnelClientOptions) {
+    if (!/^(\d{1,3})(\.\d{1,3}){3}$/.test(opts.host)) throw new KnxTunnelError("invalid_argument", `gateway host "${opts.host}" must be an IPv4 literal`);
+    this.clock = opts.clock ?? systemClock;
+    this.port = opts.port ?? 3671;
+    this.cfg = {
+      connectTimeoutMs: opts.connectTimeoutMs ?? 10_000,
+      ackTimeoutMs: opts.ackTimeoutMs ?? 1_000,
+      maxSendAttempts: opts.maxSendAttempts ?? 2,
+      heartbeatIntervalMs: opts.heartbeatIntervalMs ?? 60_000,
+      heartbeatTimeoutMs: opts.heartbeatTimeoutMs ?? 10_000,
+      heartbeatMaxFailures: opts.heartbeatMaxFailures ?? 3,
+      disconnectTimeoutMs: opts.disconnectTimeoutMs ?? 5_000,
+      confirmationTimeoutMs: opts.confirmationTimeoutMs ?? 3_000,
+      maxQueuedSends: opts.maxQueuedSends ?? 64,
+      maxPendingConfirmations: opts.maxPendingConfirmations ?? 16,
+      layer: opts.layer ?? TunnelLayer.LINK,
+    };
+    this.closedPromise = new Promise<void>((r) => { this.resolveClosed = r; });
+    this.stats = {
+      state: "idle", channelId: null, assignedAddress: null, gateway: `${opts.host}:${this.port}`, connectLatencyMs: null,
+      heartbeat: { sent: 0, failures: 0, lastRttMs: null, lastOkAt: null },
+      framesSent: 0, framesReceived: 0, telegramsDelivered: 0, acksReceived: 0, sendRetries: 0, staleAcks: 0,
+      duplicateInbound: 0, outOfOrderInbound: 0, foreignDatagrams: 0, wrongChannel: 0, unexpectedServices: 0, listenerErrors: 0,
+      malformedFrames: {}, malformedCemi: {}, confirmations: { confirmed: 0, busError: 0, notConfirmed: 0 },
+      lastActivityAt: null, closedReason: null, closedDetail: null,
+    };
+  }
+
+  get state(): TunnelState { return this._state; }
+  /** Individual address the gateway assigned to this tunnel (raw 16-bit), once connected. */
+  get assignedAddress(): number | null { return this.assigned; }
+
+  diagnostics(): TunnelDiagnostics {
+    return {
+      ...this.stats, state: this._state, channelId: this.channelId, assignedAddress: this.assigned,
+      heartbeat: { ...this.stats.heartbeat }, malformedFrames: { ...this.stats.malformedFrames },
+      malformedCemi: { ...this.stats.malformedCemi }, confirmations: { ...this.stats.confirmations },
+    };
+  }
+
+  /** Subscribes to inbound L_Data.ind telegrams (from other bus participants). */
+  onTelegram(fn: Listener<CemiFrame>): () => void { this.telegramListeners.add(fn); return () => { this.telegramListeners.delete(fn); }; }
+  onClosed(fn: Listener<ClosedEvent>): () => void { this.closedListeners.add(fn); return () => { this.closedListeners.delete(fn); }; }
+  onDecodeError(fn: Listener<{ layer: "frame" | "cemi"; code: string; raw: Buffer }>): () => void { this.decodeErrorListeners.add(fn); return () => { this.decodeErrorListeners.delete(fn); }; }
+
+  // -------------------------------------------------------------------------------------
+  // connect
+
+  async connect(): Promise<void> {
+    if (this._state !== "idle") throw new KnxTunnelError("invalid_argument", `connect() called in state "${this._state}"; clients are single-use`);
+    this._state = "connecting";
+    try {
+      this.socket = await this.opts.socketFactory({
+        onMessage: (data, from) => this.onDatagram(data, from),
+        onError: (err) => this.onSocketError(err),
+      });
+    } catch (err) {
+      const e = new KnxTunnelError("socket_error", `cannot open UDP socket: ${err instanceof Error ? err.message : String(err)}`);
+      this.shutdown("socket_error", e);
+      throw e;
+    }
+    // shutdown() may have run while the socket was opening (e.g. disconnect() during connect).
+    if (this._state !== "connecting") {
+      this.socket?.close();
+      throw new KnxTunnelError("closed", "closed while connecting");
+    }
+    return new Promise<void>((resolve, reject) => {
+      const sentAt = this.clock.now();
+      this.connectWaiter = {
+        resolve, reject, sentAt,
+        timer: this.clock.setTimeout(() => {
+          const e = new KnxTunnelError("connect_timeout", `no CONNECT_RESPONSE from ${this.stats.gateway} within ${this.cfg.connectTimeoutMs}ms`);
+          this.shutdown("connect_timeout", e);
+        }, this.cfg.connectTimeoutMs),
+      };
+      this.transmit(encodeConnectRequest({ controlEndpoint: NAT_HPAI, dataEndpoint: NAT_HPAI, layer: this.cfg.layer }), { address: this.opts.host, port: this.port });
+    });
+  }
+
+  // -------------------------------------------------------------------------------------
+  // send
+
+  /** Queues one group telegram. Resolves when the gateway ACKs it (not when the bus
+   * confirms — see {@link SendReceipt.confirmation}); rejects with a {@link KnxTunnelError}. */
+  sendGroup(input: SendInput): Promise<SendReceipt> {
+    if (this._state !== "connected") return Promise.reject(new KnxTunnelError("not_connected", `cannot send in state "${this._state}"`));
+    if (this.queue.length >= this.cfg.maxQueuedSends) return Promise.reject(new KnxTunnelError("queue_full", `send queue holds ${this.cfg.maxQueuedSends} frames`));
+    try {
+      // Fail fast on invalid input, before it occupies a queue slot.
+      encodeGroupCemi({ source: this.assigned ?? 0, destination: input.destination, service: input.service, data: input.data ?? null });
+    } catch (err) {
+      return Promise.reject(new KnxTunnelError("invalid_argument", err instanceof Error ? err.message : String(err)));
+    }
+    return new Promise<SendReceipt>((resolve, reject) => {
+      this.queue.push({ input, resolve, reject });
+      this.pump();
+    });
+  }
+
+  private pump(): void {
+    if (this.inFlight || this._state !== "connected") return;
+    const next = this.queue.shift();
+    if (!next) return;
+    const cemi = encodeGroupCemi({
+      messageCode: CemiMessageCode.L_DATA_REQ, source: this.assigned ?? 0, destination: next.input.destination,
+      service: next.input.service, data: next.input.data ?? null, priority: next.input.priority,
+    });
+    const sequence = this.txSeq;
+    const flight: InFlight = {
+      send: next, sequence, attempts: 0, firstSentAt: this.clock.now(), timer: null,
+      frame: encodeTunnellingRequest({ channelId: this.channelId!, sequence, cemi }),
+    };
+    this.inFlight = flight;
+    this.transmitFlight(flight);
+  }
+
+  private transmitFlight(f: InFlight): void {
+    f.attempts++;
+    if (f.attempts > 1) this.stats.sendRetries++;
+    this.transmit(f.frame, this.target!);
+    f.timer = this.clock.setTimeout(() => {
+      if (this.inFlight !== f) return;
+      if (f.attempts < this.cfg.maxSendAttempts) { this.transmitFlight(f); return; }
+      this.shutdown("ack_timeout", new KnxTunnelError("ack_timeout", `no TUNNELLING_ACK for sequence ${f.sequence} after ${f.attempts} attempt(s); tunnel considered lost`));
+    }, this.cfg.ackTimeoutMs);
+  }
+
+  // -------------------------------------------------------------------------------------
+  // receive
+
+  private onDatagram(data: Buffer, from: RemoteInfo): void {
+    if (this._state === "closed" || this._state === "idle") return;
+    if (from.address !== this.opts.host) { this.stats.foreignDatagrams++; return; }
+    let frame;
+    try { frame = decodeFrame(data); } catch (e) {
+      if (e instanceof KnxFrameError) { bump(this.stats.malformedFrames, e.code); this.emitDecodeError("frame", e.code, data); }
+      return;
+    }
+    this.stats.framesReceived++;
+    this.stats.lastActivityAt = this.clock.now();
+    try {
+      this.dispatch(frame.service, frame.body, from);
+    } catch (e) {
+      if (e instanceof KnxFrameError) { bump(this.stats.malformedFrames, e.code); this.emitDecodeError("frame", e.code, data); return; }
+      throw e;
+    }
+  }
+
+  private dispatch(service: number, body: Buffer, from: RemoteInfo): void {
+    if (this._state === "connecting") {
+      if (service === ServiceType.CONNECT_RESPONSE) this.onConnectResponse(body, from);
+      else this.stats.unexpectedServices++;
+      return;
+    }
+    switch (service) {
+      case ServiceType.TUNNELLING_ACK: return this.onAck(body);
+      case ServiceType.TUNNELLING_REQUEST: return this.onTunnellingRequest(body);
+      case ServiceType.CONNECTIONSTATE_RESPONSE: return this.onHeartbeatResponse(body);
+      case ServiceType.DISCONNECT_REQUEST: return this.onGatewayDisconnect(body);
+      case ServiceType.DISCONNECT_RESPONSE: return this.onDisconnectResponse(body);
+      default: this.stats.unexpectedServices++;
+    }
+  }
+
+  private onConnectResponse(body: Buffer, from: RemoteInfo): void {
+    const r = decodeConnectResponse(body);
+    const w = this.connectWaiter;
+    if (!w) { this.stats.unexpectedServices++; return; }
+    if (r.status !== StatusCode.NO_ERROR) {
+      this.shutdown("connect_rejected", new KnxTunnelError("connect_rejected", `gateway refused the tunnel: ${describeStatus(r.status)}`, r.status));
+      return;
+    }
+    if (w.timer) this.clock.clearTimeout(w.timer);
+    this.connectWaiter = null;
+    this.channelId = r.channelId;
+    this.assigned = r.assignedAddress ?? null;
+    // Route-back mode: all further traffic goes to where the response came from.
+    // Use the announced data endpoint only when it is concrete and on the gateway's own address;
+    // a zero/foreign endpoint (NAT, or a gateway reporting an internal IP) means "answer where
+    // you heard from". Hardware validation of multi-port gateways is still outstanding.
+    const de = r.dataEndpoint;
+    const useAnnounced = de !== undefined && de.port !== 0 && de.address === this.opts.host;
+    this.target = { address: from.address, port: useAnnounced ? de.port : from.port };
+    this._state = "connected";
+    this.stats.connectLatencyMs = this.clock.now() - w.sentAt;
+    this.scheduleHeartbeat();
+    w.resolve();
+  }
+
+  private onAck(body: Buffer): void {
+    const a = decodeTunnellingAck(body);
+    if (a.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
+    const f = this.inFlight;
+    if (!f || a.sequence !== f.sequence) { this.stats.staleAcks++; return; }
+    if (f.timer) this.clock.clearTimeout(f.timer);
+    this.inFlight = null;
+    this.stats.acksReceived++;
+    if (a.status !== StatusCode.NO_ERROR) {
+      const err = new KnxTunnelError("ack_error", `gateway rejected frame: ${describeStatus(a.status)}`, a.status);
+      f.send.reject(err);
+      // 0x26/0x27: only this frame failed. Anything else (bad channel, sequence) means the
+      // session state is no longer trustworthy → recover by reconnecting.
+      if (a.status === StatusCode.DATA_CONNECTION || a.status === StatusCode.KNX_CONNECTION) {
+        this.txSeq = (this.txSeq + 1) & 0xff;
+        this.pump();
+      } else {
+        this.shutdown("ack_error", err);
+      }
+      return;
+    }
+    this.txSeq = (this.txSeq + 1) & 0xff;
+    const now = this.clock.now();
+    f.send.resolve({
+      sequence: f.sequence, ackedAt: now, ackLatencyMs: now - f.firstSentAt, attempts: f.attempts,
+      confirmation: this.expectConfirmation(f.send.input),
+    });
+    this.pump();
+  }
+
+  private expectConfirmation(input: SendInput): Promise<ConfirmationOutcome> {
+    return new Promise<ConfirmationOutcome>((resolve) => {
+      const entry: PendingConfirmation = {
+        destination: input.destination, service: input.service, timer: null,
+        settle: (o) => {
+          if (entry.timer) this.clock.clearTimeout(entry.timer);
+          const i = this.confirmations.indexOf(entry);
+          if (i >= 0) this.confirmations.splice(i, 1);
+          if (o === "confirmed") this.stats.confirmations.confirmed++;
+          else if (o === "bus_error") this.stats.confirmations.busError++;
+          else this.stats.confirmations.notConfirmed++;
+          resolve(o);
+        },
+      };
+      this.confirmations.push(entry);
+      if (this.confirmations.length > this.cfg.maxPendingConfirmations) this.confirmations[0]!.settle("not_confirmed");
+      entry.timer = this.clock.setTimeout(() => entry.settle("not_confirmed"), this.cfg.confirmationTimeoutMs);
+    });
+  }
+
+  private onTunnellingRequest(body: Buffer): void {
+    const req = decodeTunnellingRequest(body);
+    if (req.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
+    const ack = (): void => this.transmit(encodeTunnellingAck({ channelId: req.channelId, sequence: req.sequence, status: StatusCode.NO_ERROR }), this.target!);
+    if (req.sequence === this.rxSeq) {
+      this.rxSeq = (this.rxSeq + 1) & 0xff;
+      ack(); // transport-level ACK precedes (and is independent of) cEMI interpretation
+    } else if (req.sequence === ((this.rxSeq - 1) & 0xff)) {
+      this.stats.duplicateInbound++;
+      ack(); // our earlier ACK was lost; re-ACK but never deliver twice
+      return;
+    } else {
+      this.stats.outOfOrderInbound++;
+      return;
+    }
+    let cemi: CemiFrame;
+    try { cemi = decodeCemi(req.cemi); } catch (e) {
+      if (e instanceof KnxCemiError) { bump(this.stats.malformedCemi, e.code); this.emitDecodeError("cemi", e.code, req.cemi); return; }
+      throw e;
+    }
+    if (cemi.messageCode === CemiMessageCode.L_DATA_CON) { this.onConfirmation(cemi); return; }
+    if (cemi.messageCode !== CemiMessageCode.L_DATA_IND) { this.stats.unexpectedServices++; return; }
+    this.stats.telegramsDelivered++;
+    this.notify(this.telegramListeners, cemi);
+  }
+
+  private onConfirmation(c: CemiFrame): void {
+    if (!c.destinationIsGroup || !c.group) return;
+    const entry = this.confirmations.find((p) => p.destination === c.destination && p.service === c.group!.service);
+    entry?.settle(c.confirmError ? "bus_error" : "confirmed");
+  }
+
+  // -------------------------------------------------------------------------------------
+  // heartbeat
+
+  private scheduleHeartbeat(): void {
+    this.hbTry = 0;
+    this.hbTimer = this.clock.setTimeout(() => this.sendHeartbeat(), this.cfg.heartbeatIntervalMs);
+  }
+
+  private sendHeartbeat(): void {
+    if (this._state !== "connected") return;
+    this.hbSentAt = this.clock.now();
+    this.hbTry++;
+    this.stats.heartbeat.sent++;
+    this.transmit(encodeConnectionStateRequest({ channelId: this.channelId!, endpoint: NAT_HPAI }), this.target!);
+    this.hbRespTimer = this.clock.setTimeout(() => {
+      this.stats.heartbeat.failures++;
+      if (this.hbTry >= this.cfg.heartbeatMaxFailures) {
+        this.shutdown("heartbeat_lost", new KnxTunnelError("heartbeat_lost", `no CONNECTIONSTATE_RESPONSE after ${this.hbTry} attempts`));
+      } else {
+        this.sendHeartbeat();
+      }
+    }, this.cfg.heartbeatTimeoutMs);
+  }
+
+  private onHeartbeatResponse(body: Buffer): void {
+    const r = decodeConnectionStateResponse(body);
+    if (r.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
+    if (!this.hbRespTimer) { this.stats.unexpectedServices++; return; }
+    this.clock.clearTimeout(this.hbRespTimer);
+    this.hbRespTimer = null;
+    if (r.status !== StatusCode.NO_ERROR) {
+      this.shutdown("heartbeat_lost", new KnxTunnelError("heartbeat_lost", `gateway reports the connection as unhealthy: ${describeStatus(r.status)}`, r.status));
+      return;
+    }
+    const now = this.clock.now();
+    this.stats.heartbeat.lastRttMs = now - this.hbSentAt;
+    this.stats.heartbeat.lastOkAt = now;
+    this.scheduleHeartbeat();
+  }
+
+  // -------------------------------------------------------------------------------------
+  // disconnect / teardown
+
+  private onGatewayDisconnect(body: Buffer): void {
+    const r = decodeDisconnectRequest(body);
+    if (r.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
+    this.transmit(encodeDisconnectResponse({ channelId: r.channelId, status: StatusCode.NO_ERROR }), this.target!);
+    this.shutdown("gateway_disconnect", new KnxTunnelError("gateway_disconnect", "gateway terminated the tunnel"));
+  }
+
+  private onDisconnectResponse(body: Buffer): void {
+    const r = decodeDisconnectResponse(body);
+    if (r.channelId !== this.channelId || this._state !== "disconnecting") { this.stats.unexpectedServices++; return; }
+    this.shutdown("local_disconnect");
+  }
+
+  /** Orderly shutdown. Always ends `closed`, never throws, safe to call in any state. */
+  async disconnect(): Promise<void> {
+    if (this._state === "closed") return;
+    if (this._state === "idle") { this.shutdown("local_disconnect"); return; }
+    if (this._state === "disconnecting") { await this.closedPromise; return; }
+    if (this._state === "connecting") { this.shutdown("local_disconnect"); return; }
+    this._state = "disconnecting";
+    this.clearHeartbeat();
+    this.failPending(new KnxTunnelError("closed", "tunnel is disconnecting"));
+    this.transmit(encodeDisconnectRequest({ channelId: this.channelId!, endpoint: NAT_HPAI }), this.target!);
+    this.disconnectTimer = this.clock.setTimeout(() => this.shutdown("local_disconnect"), this.cfg.disconnectTimeoutMs);
+    await this.closedPromise;
+  }
+
+  /** Resolves when the session has fully closed (any reason). */
+  whenClosed(): Promise<void> { return this.closedPromise; }
+
+  private shutdown(reason: CloseReason, error?: KnxTunnelError): void {
+    if (this._state === "closed") return;
+    this._state = "closed";
+    this.stats.closedReason = reason;
+    this.stats.closedDetail = error?.message ?? null;
+    this.clearHeartbeat();
+    if (this.connectWaiter) {
+      if (this.connectWaiter.timer) this.clock.clearTimeout(this.connectWaiter.timer);
+      this.connectWaiter.reject(error ?? new KnxTunnelError("closed", "closed while connecting"));
+      this.connectWaiter = null;
+    }
+    if (this.disconnectTimer) this.clock.clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+    this.failPending(error ?? new KnxTunnelError("closed", "tunnel closed"));
+    for (const c of [...this.confirmations]) c.settle("not_confirmed");
+    this.socket?.close();
+    this.socket = null;
+    this.resolveClosed();
+    const ev: ClosedEvent = error ? { reason, error } : { reason };
+    this.notify(this.closedListeners, ev);
+    this.telegramListeners.clear();
+    this.closedListeners.clear();
+    this.decodeErrorListeners.clear();
+  }
+
+  private failPending(err: KnxTunnelError): void {
+    if (this.inFlight) {
+      if (this.inFlight.timer) this.clock.clearTimeout(this.inFlight.timer);
+      this.inFlight.send.reject(err);
+      this.inFlight = null;
+    }
+    for (const q of this.queue.splice(0)) q.reject(err);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.hbTimer) this.clock.clearTimeout(this.hbTimer);
+    if (this.hbRespTimer) this.clock.clearTimeout(this.hbRespTimer);
+    this.hbTimer = null;
+    this.hbRespTimer = null;
+  }
+
+  private onSocketError(err: Error): void {
+    if (this._state === "closed") return;
+    this.shutdown("socket_error", new KnxTunnelError("socket_error", `UDP socket error: ${err.message}`));
+  }
+
+  private transmit(frame: Buffer, to: RemoteInfo): void {
+    if (!this.socket) return;
+    this.stats.framesSent++;
+    this.socket.send(frame, to.port, to.address);
+  }
+
+  /** Calls every subscriber; one throwing never affects the others or the session. */
+  private notify<T>(set: Set<Listener<T>>, value: T): void {
+    for (const l of [...set]) {
+      try { l(value); } catch { this.stats.listenerErrors++; }
+    }
+  }
+
+  private emitDecodeError(layer: "frame" | "cemi", code: string, raw: Buffer): void {
+    this.notify(this.decodeErrorListeners, { layer, code, raw });
+  }
+}
