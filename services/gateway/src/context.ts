@@ -910,7 +910,15 @@ export class AppContext {
     const persistedEnabled = await this.homeConfig.get(this.homeId, MATTER_BRIDGE_ENABLED_KEY);
     const initialEnabled = typeof persistedEnabled === "boolean" ? persistedEnabled : this.config.matterBridgeEnabled;
     if (initialEnabled) {
-      await this.enableMatterBridge({ persist: false }); // already the persisted/default value
+      // § Live incident: a stale Matter storage lock (recycled pid after reboot) made this
+      // throw, and the uncaught error killed the whole gateway (502 for every client). The
+      // bridge is optional; the hub must boot without it. enableMatterBridge() already logged
+      // the detailed cause — the installer re-enables via the route once the cause is fixed.
+      try {
+        await this.enableMatterBridge({ persist: false }); // already the persisted/default value
+      } catch (err) {
+        console.error("matter-bridge: boot-time enable failed; gateway continues without it", err);
+      }
     }
 
     this.ready = true;
