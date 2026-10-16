@@ -82,6 +82,15 @@ describe("mDNS Hub Responder — real multicast socket", () => {
         // (same host, same group) — QR bit (top bit of the flags word) distinguishes
         // a real response from that self-echo.
         if ((msg.readUInt16BE(2) & 0x8000) === 0) return;
+        // A real hub (or avahi) on the same host also answers on this multicast group —
+        // only accept the reply from THIS test's responder, or verification on a live host
+        // fails on someone else's answer.
+        try {
+          const found = resolveServices(decodeMessage(msg).records, SERVICE_TYPE);
+          if (!found.some((s) => s.txt?.hubId === "hub-test-1")) return;
+        } catch {
+          return;
+        }
         clearTimeout(timer);
         resolve(msg);
       });
