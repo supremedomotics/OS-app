@@ -119,3 +119,20 @@ The pre-existing tunnel-client, udp-socket and tcp-socket assertions were not mo
 Mutation checks (each reverted): password guard off → 4 failures; wrapper-size check off → 1; simulator E03 branch off → 1; link: announced-address check → 1,
 foreign filter → 2, ignore route-back target → 2, shutdown without link close → 39, foreign counting after close → 1.
 Not tested anywhere: a real gateway (classic or secure).
+
+## Addendum 4 — simulator-only stream tunnelling (T2, 2026-10-17)
+Code commit: see the final report / `git log` (subject "feat(knx-native): simulator-only stream-mode tunnelling…"). Linux sandbox, Node 22, **simulator + loopback only; no hardware; no conformance run.**
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx` before (`51c8b0b`), with / without vectors | 769 / 747 | 0 / 0 | 0 / 22 |
+| `src/knx` after, **with** licensed vectors | **796** | 0 | 0 |
+| `src/knx` after, **without** vectors | **774** | 0 | **22** (spec-vector tests, never counted as passed) |
+| `src/knx/native/secure` with / without vectors | 128 / 106 | 0 / 0 | 0 / 22 |
+| `stream-tunnel.test.ts` (new, stable over 3 runs) | 27 | 0 | 0 |
+| classic: `tunnel-client` 37 + `wire` 11 + `udp-socket` 3 + `tcp-socket` 24 | 75 | 0 | 0 |
+| `tsc --noEmit`, `npm run build` | clean | — | — |
+
+Pre-existing assertions were not modified. Mutation checks (each reverted, each failed named tests): stream path ACKs/evaluates sequence (3), ACKs processed (1), heartbeat enabled (1),
+DISCONNECT_REQUEST path (2), construction guard removed (2), stream sequence counter (1), response to server DISCONNECT (1), `isSimulated` always true (2).
+Classes: simulator (all 27) — self-authored server; not conformance, not hardware.

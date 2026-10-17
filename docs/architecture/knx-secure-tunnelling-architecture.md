@@ -60,7 +60,7 @@ is marked **BLOCKED** and is *not* to be implemented from this document.
 |---|---|---|---|
 | T0 | This proposal + blocker matrix | – | **done** |
 | T1 | `TunnelLink` extraction, UDP behaviour unchanged (characterisation tests only; no secure code) | none technically | **DONE 2026-10-17** (`tunnel-link.ts`, commit `d1cff88`; see §7) |
-| T2 | Stream rules limited to the **N** subset (no ACK, ignore ACK, ignore rx seq, send seq 0/counter) in the simulator | T1 | no |
+| T2 | Stream rules limited to the **N** subset (no ACK, ignore ACK, ignore rx seq, send seq 0/counter) in the simulator | T1 | **DONE 2026-10-17** (see §8) |
 | T3 | TCP HPAI codec, CONNECTIONSTATE/DISCONNECT over TCP, status table, teardown order | **Core v2 + Overview** (B1,B3,B4,B5) | blocked |
 | T4 | Secure gateway simulator extended with tunnelling (CONNECT → TUNNELLING_REQUEST/L_Data.con → DISCONNECT), then loopback TCP | T2, T3 | blocked |
 | T5 | Driver adapter behind a **separate** secure sub-flag; `policy.ts` accepts secure only here | T4 + keyring (KR-*) + serial-number rule (B9) | blocked |
@@ -106,3 +106,17 @@ mid-send settles every promise exactly once; session close ⇒ tunnel closed ⇒
   37 tunnel-client tests and 27 udp/tcp tests unmodified; five mutations of the link/client each failed named tests (route-back address check, foreign
   filter, ignored target, missing close, foreign counting after close).
 * Not covered by any of this: real gateways. The classic UDP behaviour has never been run against hardware in this repository.
+
+## 8. T2 as built (2026-10-17) — simulator only
+
+* `tunnel-rules.ts`: `STREAM_RULES` registry; each rule is `{value, source}` (verified) or `{unverified: "B#", simulatorPlaceholder}`. Four rules verified (TUN §2.6.2), five blocked.
+* `tunnel-link.ts`: `kind` is now `"datagram" | "secure-stream"`; optional `simulated`; optional `onClosed` handler. `secure/secure-stream-link.ts`: `SecureStreamTunnelLink` wraps
+  `SecureSessionConnection` (open = full authenticated handshake; send = `sendInner`; inbound = `onInner`; session close ⇒ `onClosed` ⇒ tunnel `session_closed`).
+* `KnxTunnelClient`: for a stream link — no ACK wait/repeat, sequence 0, received ACK ignored (`ignoredAcks`), receive sequence not evaluated and nothing acknowledged, no heartbeat,
+  `disconnect()` closes the secure session only, received DISCONNECT_REQUEST closes without a reply, a refused send (e.g. counter exhaustion) rejects once and closes the tunnel.
+  Constructor fails closed on non-simulated transports (`transport.ts` `markSimulated`/`isSimulated`). Datagram paths untouched (golden traces and 48 classic tests unchanged).
+  Deviations from the §3 proposal: `SendReceipt` became a discriminated union (`transportAck: "ack" | "none"`); UDP receipts gained `transportAck: "ack"` (additive).
+* `simulator/virtual-stream-tunnel-server.ts`: in-session tunnelling server that records what the client sent (acks, heartbeats, disconnects) and can inject ACKs, odd sequences,
+  malformed frames and a disconnect.
+* **Not done / still blocked:** B1, B3, B4, B5, B8 (see blocker matrix §6); stream-mode `TUNNELLING_FEATURE_*`; Extended CRI; any real-socket run; production wiring (T5).
+* Next gate: T3 needs KNXnet/IP Core v2 + Overview.

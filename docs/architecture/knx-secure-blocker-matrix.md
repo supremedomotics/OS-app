@@ -188,3 +188,33 @@ counter increments in normal operation.
 * Licensed vectors live **outside Git** (`vectors.local.json` in a mode-0700 scratchpad directory next to the extracted spec text); `git ls-files` contains no `.pdf`, `.knxkeys` or vector file; `knx-licensed/` is git-ignored (verified with `git check-ignore`).
 * With `KNX_SECURE_VECTORS` unset the 22 vector tests are **skipped, not passed**.
 * Mutation: a copy of the local JSON with four expected values altered (`a2_mac`, `a2_session_key`, `a3_auth_mac`, `a3_wrap_key`; last hex digit flipped) made **5 tests fail** across `ccm.vectors`, `ip-frames.vectors`, `ip-keys.vectors`; the mutated copy was deleted. Expected values are never computed by repository code.
+
+## 6. Stream-mode tunnelling in the simulator (2026-10-17) — what is verified, what stays blocked
+
+Scope and conditions of TUN v01.07.01 §2.6.2 (read in full; three sentences): *"For connections inside a TCP connection, the sequence counter shall not be
+evaluated by the receiver. The sender may set the sequence counter to zero. For TCP communication, no TUNNELLING_ACK shall be sent. Received TUNNELLING_ACK
+Frames shall be ignored."* §3.1 applies the same to TUNNELLING_FEATURE_* (no ACK on TCP). The clause is conditioned on "a connection inside a TCP connection"; it
+says nothing about secure sessions specifically, nor about HPAI, liveness, disconnect or timeouts.
+
+| Rule (code: `tunnel-rules.ts`, `STREAM_RULES`) | Class | Source |
+|---|---|---|
+| Do not send TUNNELLING_ACK | **N** | TUN §2.6.2 |
+| Ignore received TUNNELLING_ACK (any status, any channel; counted as `ignoredAcks`) | **N** | TUN §2.6.2 |
+| Do not evaluate the receive sequence counter (no duplicate/out-of-order suppression) | **N** | TUN §2.6.2 |
+| Send sequence 0 | **N-permitted** ("may"); zero chosen because it is the simplest permitted value (I) | TUN §2.6.2 |
+| A send is complete when the secure session accepted the frame (no ACK wait, no repeat, no ACK timeout); receipt `transportAck: "none"` | **I** — consequence of "no ACK", not stated | – |
+| HPAI/addressing of CONNECT/CONNECTIONSTATE/DISCONNECT inside TCP | **U — B3** | Core v2 |
+| KNX-level heartbeat / liveness on TCP | **U — B4** | Core v2 |
+| DISCONNECT_REQUEST requirement/response, slot cleanup | **U — B5** | Core v2, Overview |
+| Numeric status/connection codes | **U — B1** | Overview |
+| Partial-frame receive timeout | **U — B8** | Core v2 |
+
+Simulator placeholders for the blocked rows (all marked in the registry and exercised only over an in-memory transport): UDP-form HPAIs in CONNECT_REQUEST
+(ignored by the simulated server); **no** KNX heartbeat (the secure session's KEEPALIVE, IPS §2.2.3.5.2, N, is the only liveness); **no** DISCONNECT_REQUEST on local
+disconnect — ending the secure session closes contained connections implicitly (IPS §2.4.2, N) — and a received DISCONNECT_REQUEST closes the tunnel **without** a
+response. **Fail closed:** `KnxTunnelClient` refuses a stream link at construction unless every rule is verified or the link's transport is simulated; "simulated" is
+derived from a symbol set only by `VirtualStreamNetwork.createStreamFactory` (a real `createTcpStreamFactory` and even an unmarked in-memory wrapper are refused). With
+five rules still unverified (B1, B3, B4, B5, B8) no real transport can ever run a stream tunnel.
+
+Ambiguities recorded (none resolved by guessing): (A1) §2.6.2 does not say how a sender knows a TCP send "succeeded"; (A2) "may set the sequence counter to zero" does not say whether a
+sender may *also* count — a receiver must accept either, so zero is safe; (A3) whether "ignored" ACKs should be logged is unspecified — they are counted, not acted on.

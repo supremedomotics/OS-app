@@ -20,6 +20,14 @@ Tests run (no code change): secure 87 pass with local vectors / 65 + 22 skipped 
 (4 values altered) → 5 failures, copy deleted. Vectors remain outside Git (`knx-licensed/` ignored; none tracked). `knxultimate`, production registration, package.json, lockfile, flags, policy.ts unchanged.
 Next: obtain Core v2 + Overview + AN183 statement (answers to the 11 questions); then T1/T2; then T3/T4 in the simulator; hardware bench list in the architecture doc §6. No PR opened.
 
+## Session: KNX stream-mode tunnelling over the secure session (T2) — simulator only
+
+Start HEAD `51c8b0b` (clean, in sync). Added `tunnel-rules.ts` (fail-closed registry: 4 rules verified from TUN v01.07.01 §2.6.2 — no ACK sent, received ACK ignored, receive sequence not evaluated,
+send sequence 0; 5 blocked: B1 status codes, B3 HPAI, B4 liveness, B5 disconnect/slot cleanup, B8 partial-frame timeout), `secure/secure-stream-link.ts`, `simulator/virtual-stream-tunnel-server.ts`,
+stream branches in `tunnel-client.ts` (datagram paths untouched; golden traces unchanged), `markSimulated`/`isSimulated` in `transport.ts`. A stream tunnel is refused on any non-simulated transport.
+`src/knx`: 796 pass with vectors / 774 + 22 skipped without (before 769 / 747+22); 8 mutations caught. Docs: blocker matrix §6, tunnelling architecture §8, security review §9, test report addendum 4.
+Production driver, `knxultimate`, lockfile, `policy.ts`, flags untouched; nothing wired to production; no hardware. Next: obtain Core v2 + Overview, verify B1/B3/B4/B5/B8, then T3.
+
 ## Session: KNX Secure blockers B6–B9 + classic tunnel transport extraction (T1) — no wire change, no hardware
 
 Start HEAD `502d4bc` on `claude/great-keller-fmenbn` (clean, in sync). Commits: `25d92cc` (B6 ASCII-only password guard `PASSWORD_ASCII_ONLY`, B7 resolved from IPS §2.2.3.5.2.5 E03 + simulator

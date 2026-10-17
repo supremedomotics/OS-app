@@ -131,3 +131,11 @@ conditions for promoting it are in blocker matrix §3.
   creation remains impossible (no wiring; `assertPolicySatisfiable` refuses secure policies).
 * New code path: `tunnel-link.ts` (classic UDP only; characterised and mutation-checked). No new security-relevant wire behaviour was added anywhere.
 * Unresolved security findings: F5 (partial-frame/liveness, blocked on Core), F7 (key bytes inside Node crypto not wipeable), F8 (non-ASCII passwords), B9.
+
+## 9. Addendum 2026-10-17 (T2: stream-mode tunnelling, simulator only)
+
+New security-relevant surface: a tunnel client that (a) sends no ACKs, (b) ignores ACKs, (c) does not evaluate receive sequence numbers. Consequences reviewed: duplicate/replayed *tunnel* frames are
+no longer suppressed at the tunnel layer — replay protection rests entirely on the secure session (unicast sequence ≤ stored ⇒ discard, MAC before state advance, fresh key per session; IPS §2.2.3.3),
+which the tests exercise unchanged. A server (or anything holding the session key) can therefore make the client deliver the same telegram repeatedly; that is within the trust of an authenticated
+session and is inherent in §2.6.2. The stream tunnel cannot start unless the secure session authenticated the server (D1) and cannot be constructed on a real transport (rules B1/B3/B4/B5/B8 unverified).
+No new wire format, no nonce or serial change (B9 unchanged), no credential handling change. Unresolved: F5, F7, F8, B9, plus the open stream blockers above.
