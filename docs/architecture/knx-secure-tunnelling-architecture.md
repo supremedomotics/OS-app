@@ -59,7 +59,7 @@ is marked **BLOCKED** and is *not* to be implemented from this document.
 | Stage | Content | Gate | Allowed in this milestone? |
 |---|---|---|---|
 | T0 | This proposal + blocker matrix | – | **done** |
-| T1 | `TunnelLink` extraction, UDP behaviour unchanged (characterisation tests only; no secure code) | none technically; sequenced after T0 review so the working classic client is not touched during a spec-blocked milestone | **deliberately not done** |
+| T1 | `TunnelLink` extraction, UDP behaviour unchanged (characterisation tests only; no secure code) | none technically | **DONE 2026-10-17** (`tunnel-link.ts`, commit `d1cff88`; see §7) |
 | T2 | Stream rules limited to the **N** subset (no ACK, ignore ACK, ignore rx seq, send seq 0/counter) in the simulator | T1 | no |
 | T3 | TCP HPAI codec, CONNECTIONSTATE/DISCONNECT over TCP, status table, teardown order | **Core v2 + Overview** (B1,B3,B4,B5) | blocked |
 | T4 | Secure gateway simulator extended with tunnelling (CONNECT → TUNNELLING_REQUEST/L_Data.con → DISCONNECT), then loopback TCP | T2, T3 | blocked |
@@ -91,3 +91,18 @@ mid-send settles every promise exactly once; session close ⇒ tunnel closed ⇒
    two clients competing for slots; 24 h soak; interface firmware variants.
 5. A rollback runbook (secure flag off ⇒ legacy `knxultimate` path, no data migration).
 6. Written KNX answers for B6, B7, B9 and the AN183 applicability statement.
+
+## 7. T1 as built (2026-10-17)
+
+* `native/tunnel-link.ts`: `TunnelLink` { `kind: "datagram"`, `open(handlers)`, `send(frame)`, `routeBack(announced?)`, `close()` } and `UdpTunnelLink`,
+  which holds exactly what used to live in `tunnel-client.ts`: the socket, the source-address filter, the gateway endpoint used for the first
+  CONNECT_REQUEST, and the route-back rule (announced data endpoint used only if concrete and on the gateway's own address, otherwise the address/port
+  the CONNECT_RESPONSE came from). The doc's earlier sketch (`onFrame`/`onClosed`, `close(kind)`) was reduced to what the existing behaviour needs;
+  `onClosed`/graceful-abort are not needed until a stream link exists (YAGNI).
+* `KnxTunnelClient` takes `socketFactory` (unchanged, now optional) **or** `link`; with `socketFactory` it builds a `UdpTunnelLink`. Everything else
+  — encoding, `NAT_HPAI`, ACK/retry, heartbeat, sequence handling, teardown, diagnostics — is unchanged. `kind` admits only `"datagram"`, so a stream link
+  cannot be injected by type; stream rules (T2) are not implemented and `SecureSessionConnection` is not connected.
+* Evidence of preservation: golden wire traces (time, destination, bytes) recorded **before** the change (`3dc6c31`) and unchanged after; the pre-existing
+  37 tunnel-client tests and 27 udp/tcp tests unmodified; five mutations of the link/client each failed named tests (route-back address check, foreign
+  filter, ignored target, missing close, foreign counting after close).
+* Not covered by any of this: real gateways. The classic UDP behaviour has never been run against hardware in this repository.

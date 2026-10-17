@@ -29,9 +29,9 @@ additional; not spec text) · **H** = test-harness/simulator behaviour · **U/BL
 | F3 | Medium (robustness) | `receive()` caught only frame-format errors; any other exception would have propagated into the socket `data` callback → process-level failure instead of fail-closed | **Fixed (I, D6):** any unexpected fault closes the session (`protocol_violation`). Test `F3/D6` |
 | F4 | Info | The simulated TCP stream discarded in-flight bytes on graceful close, which hid real behaviour | Fixed earlier in the simulator only (H) |
 | F5 | Info / U | No bound on a **partially received frame** and no client-side liveness check on an authenticated session (KEEPALIVE is unconfirmed by design, IPS §2.2.3.5.2). Receive/idle rules for TCP live in Core v2, which is absent | **BLOCKED-SPEC.** Mitigation present: 8 KiB frame cap, connect timeout, write-queue bound; tunnelling heartbeats (when integrated) would give liveness |
-| F6 | Info | `STATUS_CLOSE` is also sent when a client closes while still `awaiting_status`; whether the server accepts a CLOSE before authentication is not stated | Unverified (harmless: server answers UNAUTHENTICATED or ignores, then TCP closes) |
+| F6 | Info | `STATUS_CLOSE` is also sent when a client closes while still `awaiting_status` | **Resolved (N)**: IPS §2.2.3.5.2.5 E03 in UNAUTHENTICATED → A3 (server answers STATUS_CLOSE and deallocates). KEEPALIVE/other frames pre-auth would draw UNAUTHENTICATED; the client sends none |
 | F7 | Info | Key bytes handled by Node's `createCipheriv`/KeyObject and JS strings (passwords via `passwordSecret(text)`) cannot be wiped by us; `Secret.wipe()` is best-effort for our own buffers | Documented limitation (threat model §8) |
-| F8 | Info / U | Character encoding of user passwords is not specified in the text read (UTF-8 used) | **BLOCKED pending clarification** for non-ASCII passwords |
+| F8 | Info / U | Character encoding of user passwords is not specified in the text read | **Mitigated (I):** non-ASCII passwords are now refused before derivation (temporary guard `PASSWORD_ASCII_ONLY`); still **BLOCKED pending KNX clarification** for non-ASCII |
 | F9 | Info | Session renewal: none is automatic. Counter exhaustion closes the session (`sequence_exhausted`) instead of wrapping; a new session needs a new instance (new ECDH pair). 2^48 frames is unreachable in practice (IPS §2.2.3.3: ~9 years at 10^6 fps) | By design (N + D2) |
 | – | – | No logging calls exist in `secure/`; `Secret` redacts in `toString`/JSON/inspect; `diagnostics()` exposes counters and states only (never keys, hashes, DAC, plaintext) | Verified by grep + existing redaction tests |
 
@@ -122,3 +122,12 @@ New findings from reading the *existing* tunnelling client and the specification
 **D5** was re-reviewed against IPS §2.2.1.3.1–§2.2.3.3 and the TSSK cases: the specification is silent on unicast reflection, its nonce design presupposes
 distinct sender serials, and no TSSK case exercises reflection. It remains classified **I (implementation decision), not spec text, not conformance-tested**;
 conditions for promoting it are in blocker matrix §3.
+
+## 8. Addendum 2026-10-17 (milestone: B6–B9, T1)
+
+* F6 resolved from normative text (N); F8 mitigated by a guard (I); B8: the 4 118 / 4 080 bound is N-derived for the SECURE_WRAPPER only and is now enforced
+  on receive (discard as malformed) with boundary tests; the 8 192 stream cap remains a decision (I).
+* B9 unchanged: the serial's source for a software client is undefined (U). D5 is a collision/reflection **detector**, not a resolution; production session
+  creation remains impossible (no wiring; `assertPolicySatisfiable` refuses secure policies).
+* New code path: `tunnel-link.ts` (classic UDP only; characterised and mutation-checked). No new security-relevant wire behaviour was added anywhere.
+* Unresolved security findings: F5 (partial-frame/liveness, blocked on Core), F7 (key bytes inside Node crypto not wipeable), F8 (non-ASCII passwords), B9.

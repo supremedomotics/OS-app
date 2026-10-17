@@ -74,6 +74,12 @@ Columns: **Known** (N/T) · **Unknown** · **Current code** · **Risk of guessin
 
 ### B6 — Password encoding
 
+> **Status 2026-10-17 (still BLOCKED for non-ASCII; guard implemented, class I).** `ip-keys.ts` now refuses non-ASCII password text
+> (`unsupported_password_encoding`) and, by default, the empty password, *before any key derivation or connection*; no normalisation or
+> re-encoding is applied (NFC and NFD forms are both refused). Raw-byte `Secret`s are checked too, so the guard cannot be bypassed. One constant
+> (`PASSWORD_ASCII_ONLY`) removes it once KNX confirms the encoding. The empty password stays derivable (`allowEmpty`) because the spec's own
+> worked example defines its fixed hash (N). **ASCII acceptance is not an interoperability claim.** Tests: `ip-keys.test.ts` "password input guard".
+
 | | |
 |---|---|
 | Known | **N:** user password hash = PBKDF2-HMAC-SHA-256(password, salt `user-password.1.secure.ip.knx.org`, 65 536, 128 bit) (IPS §2.3.1.4.1/§2.3.1.4.3); the empty-password hash is fixed; vector (Annex A.3.1) uses ASCII text. **Searched IPS and TSSK for `UTF`, `ASCII`, `character`, `encod` — no statement of the character encoding of the password input.** |
@@ -83,6 +89,16 @@ Columns: **Known** (N/T) · **Unknown** · **Current code** · **Risk of guessin
 | Needed | Written KNX confirmation; keyring format (may carry the hash directly). **Recommendation (not applied — behaviour change, needs owner decision):** until confirmed, reject non-ASCII password input with a clear installer-facing message rather than silently authenticating with a guessed encoding. |
 
 ### B7 — Pre-authentication close behaviour
+
+> **Status 2026-10-17 — RESOLVED from normative text (N), no wire change.** IPS v01.01.02 §2.2.3.5.2.5 (transition table), column UNAUTHENTICATED:
+> **E03** ("valid SECURE_WRAPPER containing SESSION_STATUS with STATUS_CLOSE") → IDLE with **A3** (close contained connections, send SESSION_STATUS
+> STATUS_CLOSE, deallocate). So a wrapped STATUS_CLOSE before authentication is a defined, accepted event — the current client behaviour is
+> correct. In the same column **E04** (KEEPALIVE) and **E05** (any other frame) → IDLE with **A6** (STATUS_UNAUTHENTICATED), so a client must
+> **not** send KEEPALIVE before authentication success (it does not: the keep-alive timer starts only once authenticated). "Valid" requires a
+> verifiable MAC, i.e. the session key must already exist: before the SESSION_RESPONSE no wrapper can be built, so the client writes nothing
+> and only closes TCP (§2.4.2). The simulator now follows the table (it previously answered UNAUTHENTICATED to an early CLOSE). §2.4.2 words it
+> for an "established" session; the table is the more specific clause. Tests: `ip-session.test.ts` "B7 / B8 evidence". Residual question
+> (optional): none required.
 
 | | |
 |---|---|
@@ -94,6 +110,15 @@ Columns: **Known** (N/T) · **Unknown** · **Current code** · **Risk of guessin
 
 ### B8 — Frame-size and partial-frame limits
 
+> **Status 2026-10-17 — PARTLY RESOLVED.** IPS §2.2.1.3.2 note: the CCM payload **P = the encapsulated KNXnet/IP frame** is limited by B0 to 65 279
+> octets "but as [j] in Ctrj is only one octet, this practically limits the length of the payload to 255×16 = 4 080 octets" (N). The MAC (16)
+> and the 22 octets of header + session id + security info are *not* part of P. Arithmetic: outer SECURE_WRAPPER ≤ 6 + 16 + 4 080 + 16 = **4 118**;
+> encapsulated frame ≤ 4 080; MAC-only session frames are 24/56/8/36 fixed. This bounds **only the SECURE_WRAPPER** (and its nested frame); it is
+> silent about plain frames and about the stream. Implemented: encoding refuses P > 4 080 (and < 6); the client discards a received wrapper > 4 118
+> as malformed before any MAC work (`WRAPPER_MAX_SIZE`); boundary tests at 4 080/4 081, an independent AES-CTR check of the last keystream block
+> ([j] = FFh), and a >4 118 test. **The stream deframer cap stays 8 192 (class I)** — it is not tightened to 4 118 because it also sees non-wrapper
+> frames whose limit is Core v2 (U). Still BLOCKED: partial-frame receive timeout, client obligations for oversize plain frames.
+
 | | |
 |---|---|
 | Known | **N:** common header (06h, 10h, service, 2-octet total length) frames every message. **N (derived):** the CCM payload limit makes a SECURE_WRAPPER at most 6 + 16 + 4080 + 16 = **4118** octets (IPS §2.2.1.3.2 note: `[j]` is one octet ⇒ 255 blocks). **T:** server must skip a secure frame announcing length FFFFh without desynchronising (2.5.8), unknown service types do not close TCP (2.5.9), total length < 6 / wrong header size / wrong version close TCP (2.5.4–2.5.6), a 508-octet frame is handled (2.5.11), a partial frame is closed on receive timeout (2.5.7) while valid octets reset the idle timer (2.5.18). Half-closed ⇒ closed (2.5.10). |
@@ -103,6 +128,21 @@ Columns: **Known** (N/T) · **Unknown** · **Current code** · **Risk of guessin
 | Needed | Core v2 §2.2.3.2.3.1 (receive timeout, header validation list). |
 
 ### B9 — Client KNX serial number (found while reviewing D5)
+
+> **Status 2026-10-17 — BLOCKED; production session creation stays impossible.** Trace of the serial field (all from IPS v01.01.02 unless marked):
+> (1) *Encoding:* wrapper security information = SeqInf(6) ‖ SerialNr(6) ‖ Tag(2); SerialNr is "the KNX serial number of the device sending the frame"
+> (§2.2.1.3.1, N). (2) *Nonce:* B0 = SeqInf‖SerialNr‖Tag‖Q and Ctr0 = SeqInf‖SerialNr‖Tag‖FFh‖00h (§2.2.1.3.2, N) — the serial is part of the CCM
+> nonce *and* is MAC-protected. (3) *Session establishment:* SESSION_REQUEST (46 octets) and SESSION_RESPONSE (56) carry **no serial**; each side's
+> serial first appears in its first wrapper, so there is no negotiation or exchange to rely on (N, from the fixed frame layouts). (4) *Uniqueness:* each
+> peer has an independent unicast counter starting at 0 (§2.2.3.3, N) and the session key is fresh per session (§2.2.3.1.1, N); the text states the
+> purpose of the serial in the nonce only for *multicast* ("different … even on different devices in the same millisecond"). For *unicast*, two
+> directions sharing one key have equal (SeqInf, Tag=0000h) pairs, so nonce uniqueness between the directions rests on the two serials differing —
+> **an inference [Likely], not a stated requirement (U)**. (5) *Identity:* nothing read says a server validates the client's serial or binds a session to
+> it; the client is identified by the session (user id + password hash), not by serial. (6) *Source for a software client:* **not defined (U)**.
+> Therefore: `serialNumber` remains a mandatory option with no default; `assertConfigured` refuses a missing, mis-sized or all-zero value; the D5 guard
+> (drop wrappers bearing our own serial) is class **I** and is **not** a resolution of B9 — it detects a collision, it does not make a fabricated serial
+> legitimate. No production wiring exists, and `assertPolicySatisfiable` still refuses `ip_secure_required`, so no production session can be created.
+> No direction-specific nonce was introduced: the nonce layout is normative wire format (N) and the text does not permit altering it.
 
 | | |
 |---|---|

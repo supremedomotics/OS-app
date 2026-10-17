@@ -99,3 +99,23 @@ vector-mutation property. Linux sandbox, loopback only, no hardware.
 
 Git hygiene re-checked: `git ls-files` has no PDF/keyring/vector file; `knx-licensed/` is ignored. Conformance executed: none. Hardware: none.
 Not tested (blocked): everything in `knx-secure-blocker-matrix.md` B1–B9 — tunnelling in the session, TCP HPAI, heartbeat on TCP, E_CONNECTION_ID, pre-authentication close.
+
+## Addendum 3 — B6/B7/B8 guards and UDP transport extraction (2026-10-17)
+Commits `25d92cc` (guards), `3dc6c31` (pre-extraction characterisation), `d1cff88` (extraction). Linux sandbox, Node 22, simulator + loopback only. **No hardware, no conformance run.**
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx` at `502d4bc` (session start), **with** vectors | 744 | 0 | 0 |
+| `src/knx` at `502d4bc`, **without** vectors | 722 | 0 | 22 |
+| `src/knx` at `25d92cc` (before extraction), with vectors | 758 | 0 | 0 |
+| `src/knx` at `25d92cc` (before extraction), without vectors | 736 | 0 | 22 |
+| `src/knx` at `d1cff88` (**after** extraction + 11 wire tests), with vectors | **769** | 0 | 0 |
+| `src/knx` at `d1cff88`, without vectors | **747** | 0 | **22** |
+| `src/knx/native/secure` with / without vectors | 101 / 79 | 0 / 0 | 0 / 22 |
+| classic UDP + codec tunnelling: `tunnel-client` (37) + `tunnel-client.wire` (11) + `udp-socket` (3) + `tcp-socket` (24) | 75 | 0 | 0 |
+| `tsc --noEmit`, `npm run build` | clean | — | — |
+
+The pre-existing tunnel-client, udp-socket and tcp-socket assertions were not modified; the only new tests are additions (B6 ×7, B7 ×2, B8 ×4+1, wire/link ×11).
+Mutation checks (each reverted): password guard off → 4 failures; wrapper-size check off → 1; simulator E03 branch off → 1; link: announced-address check → 1,
+foreign filter → 2, ignore route-back target → 2, shutdown without link close → 39, foreign counting after close → 1.
+Not tested anywhere: a real gateway (classic or secure).

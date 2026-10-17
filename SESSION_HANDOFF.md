@@ -20,6 +20,14 @@ Tests run (no code change): secure 87 pass with local vectors / 65 + 22 skipped 
 (4 values altered) → 5 failures, copy deleted. Vectors remain outside Git (`knx-licensed/` ignored; none tracked). `knxultimate`, production registration, package.json, lockfile, flags, policy.ts unchanged.
 Next: obtain Core v2 + Overview + AN183 statement (answers to the 11 questions); then T1/T2; then T3/T4 in the simulator; hardware bench list in the architecture doc §6. No PR opened.
 
+## Session: KNX Secure blockers B6–B9 + classic tunnel transport extraction (T1) — no wire change, no hardware
+
+Start HEAD `502d4bc` on `claude/great-keller-fmenbn` (clean, in sync). Commits: `25d92cc` (B6 ASCII-only password guard `PASSWORD_ASCII_ONLY`, B7 resolved from IPS §2.2.3.5.2.5 E03 + simulator
+fix, B8 wrapper ≤ 4 118 enforced/tested), `3dc6c31` (golden wire-trace characterisation of the UDP client), `d1cff88` (`tunnel-link.ts`: `KnxTunnelClient` now runs over `TunnelLink`;
+`UdpTunnelLink` carries the old UDP behaviour verbatim). B9 (client serial) stays BLOCKED; no production session can be created. Counts: `src/knx` 769 pass with vectors / 747 + 22 skipped
+without (session start 744 / 722+22); mutation-checked. Docs: blocker matrix, tunnelling architecture §7, security review §8, acquisition §C (question register), test report addendum 3.
+Production driver, `knxultimate`, lockfile, `policy.ts`, flags untouched. Next: obtain Core v2 + Overview (needs KNX); then T2 stream rules (TUN §2.6.2) in the simulator.
+
 ## Session: KNX IP Secure — security review gate, review fixes, real TCP socket (loopback-verified; NOT hardware-tested, NOT production)
 
 Review: `docs/architecture/knx-ip-secure-security-review.md`. Found+fixed F1 (reflected client frame / shared nonce domain → D5: drop own serial, refuse zero serial)

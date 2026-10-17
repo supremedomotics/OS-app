@@ -104,6 +104,8 @@ property/cross-check test · **S** = simulator test (our own simulated gateway �
 | CCM primitive (IPS-03, DS-03) | implemented, `secure/ccm.ts` | V (IPS A.2–A.6, AL C.1.1–C.1.4) + I (Node CBC/CTR cross-check, tamper) |
 | Key derivation, ECDH, session key (IPS-04…) | implemented, `secure/ip-keys.ts` | V + I |
 | Frame codecs 0950–0955 | implemented, `secure/ip-frames.ts` | V (all spec binary examples) + I |
+| B6 ASCII-only password guard (temporary, I); B7 resolved (N, §2.2.3.5.2.5 E03); B8 wrapper ≤ 4 118 enforced (N-derived) | implemented | V-independent + S (13 tests, mutation-verified) |
+| Classic tunnel client over `TunnelLink` (UDP only) | implemented, behaviour-preserving | golden wire traces + route-back tests (11) |
 | Review fixes D5 (reflection/serial) and D6 (fail closed on faults) | implemented, not spec text | S (4 regression tests, mutation-verified) |
 | Session establishment, server auth, timeouts, sequence rules, close (IPS-05…13) | implemented client, `secure/ip-session.ts` | S only (35 tests); decisions D1–D4 |
 | TCP stream deframing (IPS-14/22 partial) | `secure/stream.ts` header-driven deframer | S; Core v2 stream rules remain **U** |
