@@ -51,3 +51,24 @@ export const systemClock: Clock = {
     clearTimeout(handle as unknown as NodeJS.Timeout);
   },
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Stream (TCP) seam — used by KNX IP Secure, whose unicast sessions "must use TCP and must not use UDP" (IPS §2.2.3.3).
+
+export interface KnxStreamSocket {
+  /** Queues bytes for the peer. Must not throw once connected; failures surface through {@link StreamHandlers.onClose}. */
+  write(data: Buffer): void;
+  /** Orderly close (FIN). Idempotent. */
+  end(): void;
+  /** Immediate close. Idempotent. After this no handler is invoked. */
+  destroy(): void;
+}
+
+export interface StreamHandlers {
+  onData(data: Buffer): void;
+  /** Called exactly once when the connection is gone (peer FIN, reset, local destroy never calls it). */
+  onClose(error?: Error): void;
+}
+
+/** Opens one connection to the (fixed) gateway endpoint. Rejects if the connection cannot be established. */
+export type StreamFactory = (handlers: StreamHandlers) => Promise<KnxStreamSocket> | KnxStreamSocket;
