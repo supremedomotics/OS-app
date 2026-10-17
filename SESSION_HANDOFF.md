@@ -4,6 +4,17 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX IP Secure — licensed-spec audit + clean-room client implementation (simulator-verified only; NOT production, NOT hardware-tested)
+
+Branch `claude/great-keller-fmenbn`; no PR. Licensed PDFs stay outside Git (`.gitignore` extended). Done: document inventory/provenance, requirements
+matrix, TSSK (202 tests) index, tunnelling audit (gaps G1/G2 fixed in `tunnel-client.ts`; G3 TCP, G4 features, G5 Extended CRI, G6 Core constants open);
+`secure/{ccm,ip-keys,ip-frames,stream,ip-session,secure-connection}.ts` + simulator `virtual-stream`/`virtual-secure-gateway`. 83 secure tests pass with local
+vectors (61 + 22 skipped without); 716 KNX tests pass. Decisions: D1 mandatory server auth, D2 single-use sessions, D3 fail-closed / sequence advances only after MAC,
+D4 no nesting. **Not done:** real `node:net` TCP factory, tunnelling inside a session (stream mode), discovery, routing/timer machine, Data Secure (BLOCKED: Resources
+and keyring format absent), keyring parser (not invented), any hardware test, production integration (`knxultimate` and the production driver untouched, secure mode not enabled).
+Docs: see `docs/architecture/knx-secure-requirements-matrix.md` §6 and `knx-secure-security-test-report.md` addendum. **Documents still needed:** KNXnet/IP Core v2,
+Overview, Resources (3/5/1), Volume 6 Profiles, ETS keyring format, standalone AN158, EITT templates. Next: TCP loopback factory + test, stream-mode tunnelling in the simulator.
+
 ## Session: KNX Secure research log updated with project-supplied official-page evidence (docs only, no code)
 
 Re-tested: `support.knx.org` (4 pages), `chatgpt.com` Navigator, `knx.org`, `my.knx.org` — all unreachable here (no DNS); **this tool

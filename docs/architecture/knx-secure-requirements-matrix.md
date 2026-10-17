@@ -94,9 +94,24 @@ serve as additional verification of that primitive.
 S-01…S-15: secret redaction, encrypted key store (unlock-mode bound, generation/lock), transactional import, fail-closed policy & flags,
 simulator isolation. These implement **decisions (D)**, not KNX requirements.
 
-## 6. Implementation status of this session's IP Secure work
-*(Filled in after implementation — see `knx-secure-security-test-report.md` for the authoritative, test-backed status. Until that
-section says otherwise, every row above reads "not started" / "spec only".)*
+## 6. Implementation status of the IP Secure work (authoritative: `knx-secure-security-test-report.md`)
+
+Evidence legend: **V** = reproduces the spec's own worked example (needs the local licensed vectors; skipped otherwise) · **I** = independent
+property/cross-check test · **S** = simulator test (our own simulated gateway — a self-authored peer) · **HW** = real hardware (none).
+
+| Req | Status | Evidence |
+|---|---|---|
+| CCM primitive (IPS-03, DS-03) | implemented, `secure/ccm.ts` | V (IPS A.2–A.6, AL C.1.1–C.1.4) + I (Node CBC/CTR cross-check, tamper) |
+| Key derivation, ECDH, session key (IPS-04…) | implemented, `secure/ip-keys.ts` | V + I |
+| Frame codecs 0950–0955 | implemented, `secure/ip-frames.ts` | V (all spec binary examples) + I |
+| Session establishment, server auth, timeouts, sequence rules, close (IPS-05…13) | implemented client, `secure/ip-session.ts` | S only (35 tests); decisions D1–D4 |
+| TCP stream deframing (IPS-14/22 partial) | `secure/stream.ts` header-driven deframer | S; Core v2 stream rules remain **U** |
+| Real TCP socket (`node:net`) | **not started** | — |
+| Tunnelling inside the session (IPS-15/23/24) | **not started** (no stream mode in tunnel client) | — |
+| Discovery (IPS-17), multicast routing runtime/timer machine (IPS-18…20) | **not started** (codec only for 0955) | — |
+| Data Secure S-AL (DS-01…08), keyring (KR-*) | **BLOCKED-SPEC** — nothing implemented | — |
+
+No row has HW evidence. Passing self-authored simulator tests is not interoperability with any real KNX IP Secure device.
 
 ## 7. Still-missing documents (ordered by what they unblock)
 

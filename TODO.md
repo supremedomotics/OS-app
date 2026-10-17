@@ -18,7 +18,8 @@ See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, 
 - **Unblock KNX Secure:** follow `docs/architecture/knx-secure-spec-acquisition.md` (inventory MyKNX/membership; request docs/revisions/conformance material; ETS licence; secure bench hardware).
 - Key store: TPM driver + recovery wrapper design (BLOCKED-HW); rollback resistance via trusted counter; cross-process lock test.
 - Removal gates: see `docs/architecture/knx-removal-gates.md` (all open/partial).
-- **KNX Secure (mandatory) — BLOCKED-SPEC/HW:** obtain normative docs + vectors; then keyring parser, IP Secure, Data Secure,
+- **KNX IP Secure:** client session + codecs + CCM done (simulator/vector verified). Next: real TCP factory + loopback test; stream-mode tunnelling in session; discovery/routing; hardware interop. Needs Core v2 + Overview docs.
+- **KNX Secure (mandatory) — Data Secure/keyring BLOCKED-SPEC/HW:** obtain normative docs + vectors; then keyring parser, IP Secure, Data Secure,
   routing; hardware interop; security review. Plan: `docs/architecture/knx-secure-implementation-plan.md`. Also: key-store file
   lock, rollback detection, non-root CI run of the skipped store test, audit legacy driver's secure-installation behaviour.
 - Open questions needing field data: which installations use routing / KNX Secure / which DPTs in the wild.

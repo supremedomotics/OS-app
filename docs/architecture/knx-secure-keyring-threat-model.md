@@ -63,3 +63,10 @@ ACL-restricted directory — **unverified, treat as unsupported for production**
 Backup = the encrypted store file + the passphrase held separately (losing the passphrase loses all keys; re-import the
 ETS keyring to recover). Passphrase rotation implemented; **key rotation is not**: group/interface keys change only through
 a new ETS commissioning and keyring re-import. Restoring an old store can resurrect revoked keys (T3 residual).
+
+## 8. Addendum — IP Secure transport (2026-10-17)
+Additional secrets, all handled as `Secret` (redacted, wipeable): Device Authentication Code, user-password hash (PBKDF2 output), ECDH private key, session key.
+Never logged; `diagnostics()` exposes counters/states only. Threats addressed in the simulator: impostor server (mandatory DAC verification, D1), replay and
+reordering (sequence ≤ stored discarded, MAC before state advance, D3), cross-session replay (fresh key per session, D2), nested wrappers (D4), TCP
+fragmentation/merging and oversized frames (deframer limits), counter wrap (closes at 2^48-1), low-order/zero peer keys (rejected). Residual/unverified: no real
+socket or gateway tested; Core v2 TCP rules (U); side-channel properties of Node crypto not assessed; passive traffic analysis is out of scope.

@@ -47,3 +47,21 @@ for a keyring parser (none exists) · 24 h soak.
 
 ## Verdict
 **KNX IP Secure: NOT IMPLEMENTED. KNX Data Secure: NOT IMPLEMENTED. Native driver: NOT production-ready.**
+
+
+## Addendum — IP Secure implementation stage (2026-10-17)
+Run on `claude/great-keller-fmenbn` in the Linux sandbox; simulator only; no hardware.
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx/native/secure` **with** local licensed vectors (`KNX_SECURE_VECTORS`) | **83** | 0 | 0 |
+| `src/knx/native/secure` **without** vectors (clean checkout/CI) | **61** | 0 | **22** (spec-vector tests; skipped, never reported as passed) |
+| `src/knx` regression with vectors | **716** | 0 | 0 |
+| `src/knx` regression without vectors | **694** | 0 | 22 |
+| `tsc --noEmit`, `npm run build` (`@supreme/protocols`) | clean | — | — |
+
+Per file: ccm 8 + ccm.vectors 10 · ip-keys 7 + vectors 5 · ip-frames 11 + vectors 7 · ip-session 35 (all simulator).
+Test classes: **vector** (spec worked examples) · **independent** (cross-checks against Node primitives, tamper/mutation) ·
+**simulator** (client vs our own `VirtualSecureGateway`) · **conformance** (none executed — TSSK is only mapped) · **hardware** (none).
+A bug found by these tests: the virtual TCP stream dropped in-flight data on graceful close (fixed in the simulator, not the driver).
+Not tested: real sockets, any real gateway, tunnelling inside a session, routing, Data Secure, keyring.

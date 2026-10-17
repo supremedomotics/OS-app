@@ -19,3 +19,6 @@
 Feature flags & rollback (to be exercised at S8): native stack OFF by default; secure support gated by its own flag;
 turning either off returns to the unchanged `knxultimate` path with no data migration (KeyStore is additive and unread by
 the legacy driver). Note: the legacy path's own handling of secure installations is not audited here.
+
+Status update 2026-10-17: IP Secure client layers (CCM, key derivation, frame codecs, session client, stream deframer) are implemented and simulator/vector-verified;
+see requirements matrix §6. Real TCP, in-session tunnelling, routing, Data Secure and keyring remain not started/BLOCKED.
